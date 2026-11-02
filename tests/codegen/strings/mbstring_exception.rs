@@ -13,6 +13,10 @@ use elephc::codegen_support::platform::{Arch, Target};
 use elephc_builtin_contract::mbstring_abi::{exception::{encode, Exception}, RESULT_ERROR, RESULT_VALUE_ERROR,
     RESULT_EXCEPTION_CHAIN};
 
+/// The native Throwable `previous` slot (`throwable_layout::PREVIOUS_OFFSET`, crate-private):
+/// header word plus six 16-byte properties (message, code, file, line, trace come first).
+const PREVIOUS: usize = 8 + 6 * 16;
+
 /// Checks native class/message/previous fields and releases the entire chain under heap debugging.
 #[test]
 fn test_mbstring_exception_chain_native_materialization() {
@@ -48,17 +52,17 @@ fn test_mbstring_exception_chain_native_materialization() {
     }
     assert_record(&mut emitter, "_spl_error_class_id", b"new\0\xfe");
     if arm {
-        emitter.instruction("ldr x11, [x11, #40]");                             // follow the latest error's raw previous pointer
+        emitter.instruction(&format!("ldr x11, [x11, #{PREVIOUS}]"));           // follow the latest error's raw previous pointer
     } else {
-        emitter.instruction("mov r11, QWORD PTR [r11 + 40]");                   // follow the previous owner without retaining another reference
+        emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {PREVIOUS}]")); // follow the previous owner without retaining another reference
     }
     assert_record(&mut emitter, "_spl_value_error_class_id", b"older\0\xff");
     if arm {
-        emitter.instruction("ldr x9, [x11, #40]");                              // inspect the oldest error's previous slot
+        emitter.instruction(&format!("ldr x9, [x11, #{PREVIOUS}]"));            // inspect the oldest error's previous slot
         emitter.instruction("cbnz x9, __mb_exception_test_fail");               // reject reversed, cyclic, or extra exception links
         emitter.instruction("ldr x0, [sp]");                                    // consume the complete chain through its single root owner
     } else {
-        emitter.instruction("cmp QWORD PTR [r11 + 40], 0");                     // require an exact two-error chain
+        emitter.instruction(&format!("cmp QWORD PTR [r11 + {PREVIOUS}], 0"));   // require an exact two-error chain
         emitter.instruction("jne __mb_exception_test_fail");                    // reject an extra or cyclic previous link
         emitter.instruction("mov rax, QWORD PTR [rsp]");                        // consume the complete chain's single root owner
     }

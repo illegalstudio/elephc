@@ -21,13 +21,30 @@ use super::{ListEntry, ListPattern, ListTarget};
 /// positional order; otherwise emits a chain of assignments through synthetic temporaries.
 pub(super) fn lower_list_unpack(pattern: ListPattern, value: Expr, span: Span) -> Stmt {
     if let Some(vars) = simple_local_positional_vars(&pattern) {
-        return Stmt::new(StmtKind::ListUnpack { vars, value }, span);
+        // `ListUnpack` reads each element straight out of `value`, so a pattern that ASSIGNS the
+        // variable it is reading from destroys the source mid-way: `[$m, $z] = $m;` stored element
+        // 0 into `$m` and then looked for element 1 in the scalar it had just written, answering
+        // `Warning: Undefined array key 1` and an empty `$z`. PHP evaluates the right-hand side
+        // ONCE and assigns from that value. Symfony's `PhpFilesAdapter` unpacks exactly this way
+        // (`[$expiresAt, $value] = $expiresAt;`). The general path below anchors the source in a
+        // temporary first, which is precisely the missing step.
+        if !list_unpack_target_shadows_source(&vars, &value) {
+            return Stmt::new(StmtKind::ListUnpack { vars, value }, span);
+        }
     }
 
     let mut lowerer = ListLowerer::new(span);
     let source = lowerer.bind_temp(value);
     lowerer.lower_pattern(&pattern, source);
     Stmt::new(StmtKind::Synthetic(lowerer.stmts), span)
+}
+
+/// Returns whether one of the unpack targets names the variable the value is read from.
+fn list_unpack_target_shadows_source(vars: &[String], value: &Expr) -> bool {
+    let ExprKind::Variable(source) = &value.kind else {
+        return false;
+    };
+    vars.iter().any(|var| var == source)
 }
 
 /// Returns `Some(vars)` if every entry in the pattern is a bare `$variable` with no key and

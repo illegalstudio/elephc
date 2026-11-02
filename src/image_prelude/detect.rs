@@ -409,6 +409,7 @@ fn expr_refs_image(expr: &Expr) -> bool {
             expr_refs_image(value) || instanceof_target_refs_image(target)
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -508,6 +509,9 @@ fn expr_refs_image(expr: &Expr) -> bool {
             expr_refs_image(object) || expr_refs_image(property)
         }
         ExprKind::StaticPropertyAccess { receiver, .. } => receiver_refs_image(receiver),
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            receiver_refs_image(receiver) || expr_refs_image(property)
+        }
         ExprKind::MethodCall { object, args, .. }
         | ExprKind::NullsafeMethodCall { object, args, .. } => {
             expr_refs_image(object) || args.iter().any(expr_refs_image)
@@ -527,6 +531,7 @@ fn expr_refs_image(expr: &Expr) -> bool {
         ExprKind::ClassConstant { receiver }
         | ExprKind::ScopedConstantAccess { receiver, .. } => receiver_refs_image(receiver),
         ExprKind::ObjectClassName { object } => expr_refs_image(object),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_refs_image(receiver),
         ExprKind::NewScopedObject { receiver, args } => {
             receiver_refs_image(receiver) || args.iter().any(expr_refs_image)
         }
@@ -716,6 +721,9 @@ fn stmt_refs_image(stmt: &Stmt) -> bool {
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_refs_image(object) || expr_refs_image(value)
         }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            expr_refs_image(object) || expr_refs_image(source)
+        }
         StmtKind::StaticPropertyAssign {
             receiver, value, ..
         }
@@ -728,6 +736,24 @@ fn stmt_refs_image(stmt: &Stmt) -> bool {
             value,
             ..
         } => receiver_refs_image(receiver) || expr_refs_image(index) || expr_refs_image(value),
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            index,
+            source,
+            ..
+        } => receiver_refs_image(receiver) || expr_refs_image(index) || expr_refs_image(source),
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            value,
+            ..
+        } => {
+            receiver_refs_image(receiver)
+                || expr_refs_image(property)
+                || index.as_ref().is_some_and(expr_refs_image)
+                || expr_refs_image(value)
+        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_image(object) || expr_refs_image(value)
         }
@@ -737,6 +763,7 @@ fn stmt_refs_image(stmt: &Stmt) -> bool {
             value,
             ..
         } => expr_refs_image(object) || expr_refs_image(index) || expr_refs_image(value),
+        StmtKind::ClassLikeActivate { .. } => false,
     }
 }
 

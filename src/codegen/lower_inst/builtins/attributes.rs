@@ -41,6 +41,8 @@ struct ReflectionAttributeLayout {
     target_hi: usize,
     repeated_lo: usize,
     repeated_hi: usize,
+    string_lo: usize,
+    string_hi: usize,
 }
 
 /// Lowers `class_attribute_names(class)` into an indexed string array.
@@ -146,17 +148,10 @@ pub(in crate::codegen::lower_inst) fn emit_reflection_attribute_array(
         &PhpType::Object("ReflectionAttribute".to_string()),
     );
 
-    // Number the program's attribute factories once for this array, and only when it has
-    // attributes to number: most reflected members carry none.
+    // The program's attribute factories are numbered once per module, and only asked for when
+    // this array has attributes: most reflected members carry none.
     let module = ctx.module;
-    let factory_ids = (!attr_names.is_empty()).then(|| {
-        let function_attrs =
-            crate::codegen::reflection::function_attribute_metadata(&module.functions);
-        crate::codegen::reflection::AttributeFactoryIds::new(
-            &module.class_infos,
-            &crate::codegen::reflection::borrow_attribute_metadata(&function_attrs),
-        )
-    });
+    let factory_ids = (!attr_names.is_empty()).then(|| module.attribute_factory_ids());
 
     for (idx, attr_name) in attr_names.iter().enumerate() {
         let attr_arg_list = attr_args
@@ -165,7 +160,7 @@ pub(in crate::codegen::lower_inst) fn emit_reflection_attribute_array(
             .unwrap_or(&[]);
         let factory_id = factory_ids
             .as_ref()
-            .map_or(0, |ids| ids.id(attr_name, attr_arg_list));
+            .map_or(0, |ids| ids.id(&module.class_infos, attr_name, attr_arg_list));
 
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_attribute_object(ctx, &layout);
@@ -179,6 +174,7 @@ pub(in crate::codegen::lower_inst) fn emit_reflection_attribute_array(
             reflection_attribute_name_is_repeated(attr_names, attr_name),
             &layout,
         );
+        emit_set_string_property(ctx, attr_name, attr_arg_list, &layout);
         emit_append_reflection_attribute_object(ctx);
     }
 
@@ -198,6 +194,7 @@ fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAt
     let factory_lo = reflection_property_offset(info, "__factory")?;
     let target_lo = reflection_property_offset(info, "__target")?;
     let repeated_lo = reflection_property_offset(info, "__is_repeated")?;
+    let string_lo = reflection_property_offset(info, "__string")?;
     Ok(ReflectionAttributeLayout {
         class_id: info.class_id,
         property_count: info.properties.len(),
@@ -213,6 +210,8 @@ fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAt
         target_hi: target_lo + 8,
         repeated_lo,
         repeated_hi: repeated_lo + 8,
+        string_lo,
+        string_hi: string_lo + 8,
     })
 }
 
@@ -301,6 +300,46 @@ fn emit_set_name_property(
                 abi::emit_store_to_address(ctx.emitter, "rax", object_reg, low_offset);
                 abi::emit_store_to_address(ctx.emitter, "rdx", object_reg, high_offset);
             }
+        }
+    }
+}
+
+/// Stores the rendering `ReflectionAttribute::__toString()` returns.
+///
+/// Computed here rather than at run time: the name and every argument are literals fixed at the
+/// attribute's declaration site, so the whole string is a compile-time constant. See
+/// [`crate::codegen_support::attribute_string`] for the format and how it was confirmed.
+///
+/// This emitter runs only when the eval bridge is OFF. With the bridge on, the objects come from
+/// `__elephc_eval_reflection_attribute_new`, which renders the same string from the interpreter's
+/// own metadata.
+fn emit_set_string_property(
+    ctx: &mut FunctionContext<'_>,
+    attr_name: &str,
+    attr_args: &[AttrArgEntry],
+    layout: &ReflectionAttributeLayout,
+) {
+    let rendered = crate::codegen_support::attribute_string::render_reflection_attribute_string(
+        attr_name, attr_args,
+    );
+    let (label, len) = ctx.data.add_string(rendered.as_bytes());
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+            abi::emit_store_to_address(ctx.emitter, "x1", object_reg, layout.string_lo);
+            abi::emit_store_to_address(ctx.emitter, "x2", object_reg, layout.string_hi);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rax", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, layout.string_lo);
+            abi::emit_store_to_address(ctx.emitter, "rdx", object_reg, layout.string_hi);
         }
     }
 }
@@ -565,9 +604,10 @@ fn emit_box_arg(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue) -> Result<()>
         // pointer as a Mixed cell. emit_mixed_array allocates a hash, so the
         // cell must carry the assoc tag or Mixed readers dispatch the payload
         // to the indexed-array helpers. The parent array being filled stays
-        // parked on the temporary stack across this.
+        // parked on the temporary stack across this. The box RETAINS its payload, so the fresh
+        // hash's own reference is released: one leaked nested array per reflected attribute.
         emit_mixed_array(ctx, entries)?;
-        crate::codegen::emit_box_current_value_as_mixed(
+        crate::codegen::emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::AssocArray {
                 key: Box::new(PhpType::Mixed),

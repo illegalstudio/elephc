@@ -6,7 +6,10 @@
 //!
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the one-shot file write helper.
-//! - `$flags` honours `FILE_APPEND` (8) and `LOCK_EX` (2), matching the AOT runtime. The lock
+//! - `$context` is accepted and ignored; array `$data` is written as its values concatenated, as
+//!   php does.
+//! - `$flags` honours `FILE_APPEND` (8) and `LOCK_EX` (2), matching the AOT runtime (Symfony's
+//!   `SodiumVault` writes its keys with `LOCK_EX`). The lock
 //!   is advisory and released when the handle drops, which is the same lifetime `close()`
 //!   gives the compiled path.
 //! - `LOCK_EX` WITHOUT `FILE_APPEND` opens without truncating and truncates once the lock is
@@ -42,7 +45,7 @@ pub(in crate::interpreter) fn eval_file_put_contents_declared_values_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
         [filename, data] => eval_file_put_contents_result(*filename, *data, 0, context, values),
-        [filename, data, flags] => {
+        [filename, data, flags] | [filename, data, flags, _] => {
             let flags = eval_int_value(*flags, values)?;
             eval_file_put_contents_result(*filename, *data, flags, context, values)
         }
@@ -50,28 +53,21 @@ pub(in crate::interpreter) fn eval_file_put_contents_declared_values_result(
     }
 }
 
-/// Evaluates PHP `file_put_contents($filename, $data)` over one eval expression.
+/// Evaluates PHP `file_put_contents($filename, $data, $flags = 0, $context = null)`.
 pub(in crate::interpreter) fn eval_builtin_file_put_contents(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (filename, data, flags) = match args {
-        [filename, data] => (filename, data, None),
-        [filename, data, flags] => (filename, data, Some(flags)),
-        _ => return Err(EvalStatus::RuntimeFatal),
-    };
-    let filename = eval_expr(filename, context, scope, values)?;
-    let data = eval_expr(data, context, scope, values)?;
-    let flags = match flags {
-        Some(flags) => {
-            let flags = eval_expr(flags, context, scope, values)?;
-            eval_int_value(flags, values)?
-        }
-        None => 0,
-    };
-    eval_file_put_contents_result(filename, data, flags, context, values)
+    if !(2..=4).contains(&args.len()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let mut evaluated = Vec::with_capacity(args.len());
+    for arg in args {
+        evaluated.push(eval_expr(arg, context, scope, values)?);
+    }
+    eval_file_put_contents_declared_values_result(&evaluated, context, values)
 }
 
 /// Writes a PHP string to a local file or supported wrapper and returns a byte count.
@@ -83,7 +79,13 @@ pub(in crate::interpreter) fn eval_file_put_contents_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
-    let data = values.string_bytes(data)?;
+    let data = if values.is_array_like(data)? {
+        let separator = values.string("")?;
+        let joined = eval_implode_result(separator, data, context, values)?;
+        values.string_bytes(joined)?
+    } else {
+        values.string_bytes(data)?
+    };
     if stream_wrappers::is_phar_stream(&path) {
         // A phar entry is rewritten whole, so FILE_APPEND has nothing to append to and
         // LOCK_EX has no descriptor to lock. Report failure rather than truncating what the

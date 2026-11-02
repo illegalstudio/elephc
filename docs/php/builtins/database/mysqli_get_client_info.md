@@ -2,7 +2,7 @@
 title: "mysqli_get_client_info()"
 description: "Returns the client library version as a string."
 sidebar:
-  order: 133
+  order: 144
 ---
 
 ## mysqli_get_client_info()

@@ -24,12 +24,13 @@ pub fn emit_fs(emitter: &mut Emitter) {
 
     // ================================================================
     // __rt_unlink: delete a file
-    // Input:  x1/x2=path
+    // Input:  x1/x2=path, x3=mode, x4=recursive
     // Output: x0=1 on success, 0 on failure
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: unlink ---");
     emitter.label_global("__rt_unlink");
+    super::emit_realpath_cache_invalidate(emitter);                          // a path may change: forget cached realpaths
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -66,6 +67,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mkdir ---");
     emitter.label_global("__rt_mkdir");
+    super::emit_realpath_cache_invalidate(emitter);                          // a path may change: forget cached realpaths
     emitter.instruction("mov x3, #0x1FF");                                      // PHP's default $permissions, 0777, masked by umask
     emitter.instruction("mov x4, #0");                                          // PHP's default $recursive, false
     emitter.instruction("b __rt_mkdir_ex");                                     // share one body with the argument-taking entry point
@@ -134,6 +136,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rmdir ---");
     emitter.label_global("__rt_rmdir");
+    super::emit_realpath_cache_invalidate(emitter);                          // a path may change: forget cached realpaths
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -188,6 +191,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rename ---");
     emitter.label_global("__rt_rename");
+    super::emit_realpath_cache_invalidate(emitter);                          // a path may change: forget cached realpaths
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
@@ -263,11 +267,13 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: unlink ---");
     emitter.label_global("__rt_unlink");
+    super::emit_realpath_cache_invalidate(emitter);                          // a path may change: forget cached realpaths
     emit_single_path_libc_bool_helper(emitter, "unlink", None);
 
     emitter.blank();
     emitter.comment("--- runtime: mkdir ---");
     emitter.label_global("__rt_mkdir");
+    super::emit_realpath_cache_invalidate(emitter);                          // a path may change: forget cached realpaths
     emitter.instruction("mov rcx, 0x1FF");                                      // PHP's default $permissions, 0777, masked by umask
     emitter.instruction("xor r8d, r8d");                                        // PHP's default $recursive, false
     emitter.instruction("jmp __rt_mkdir_ex");                                   // share one body with the argument-taking entry point
@@ -280,6 +286,7 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rmdir ---");
     emitter.label_global("__rt_rmdir");
+    super::emit_realpath_cache_invalidate(emitter);                          // a path may change: forget cached realpaths
     emit_single_path_libc_bool_helper(emitter, "rmdir", None);
 
     emitter.blank();
@@ -290,6 +297,7 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: rename ---");
     emitter.label_global("__rt_rename");
+    super::emit_realpath_cache_invalidate(emitter);                          // a path may change: forget cached realpaths
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while rename uses temporary path slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source and destination path temporaries
     emitter.instruction("sub rsp, 32");                                         // reserve aligned stack space for the saved destination and source C-string pointers
@@ -415,3 +423,4 @@ fn emit_single_path_libc_bool_helper(emitter: &mut Emitter, symbol: &str, extra_
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the libc helper returns
     emitter.instruction("ret");                                                 // return the file-system success predicate to the caller
 }
+

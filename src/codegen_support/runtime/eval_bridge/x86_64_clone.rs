@@ -103,6 +103,8 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("je __rt_object_clone_shallow_boxed_retain_x86");       // retained object slots need an extra owner reference
     emitter.instruction("cmp r11, 7");                                          // does the slot hold a retained boxed Mixed payload?
     emitter.instruction("je __rt_object_clone_shallow_boxed_retain_x86");       // retained Mixed slots need an extra owner reference
+    emitter.instruction("cmp r11, 10");                                         // does the slot hold a callable descriptor (a Closure)?
+    emitter.instruction("je __rt_object_clone_shallow_boxed_retain_x86");       // teardown releases it, so the clone needs its own share
     emitter.instruction("jmp __rt_object_clone_shallow_boxed_next_x86");        // scalar slots are copied without ownership changes
     emitter.label("__rt_object_clone_shallow_boxed_reference_x86");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the property index across reference-cell cloning
@@ -114,6 +116,11 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_object_clone_shallow_boxed_next_x86");        // continue after reference-aware slot cloning
 
     emitter.label("__rt_object_clone_shallow_boxed_string_x86");
+    // An uninitialized typed property carries the sentinel in its length word: there is no
+    // string to duplicate, and the verbatim copy above already gave the clone the same marker.
+    abi::emit_load_int_immediate(emitter, "r11", crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp rdx, r11");                                        // is the property still uninitialized?
+    emitter.instruction("je __rt_object_clone_shallow_boxed_next_x86");         // keep the copied sentinel and move on
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across string persistence
     emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // preserve the low-word slot offset across the helper
     emitter.instruction("call __rt_str_persist");                               // duplicate the string payload for clone ownership

@@ -16,7 +16,10 @@ use crate::codegen_support::platform::{Platform, Target};
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::iconv_constants::{iconv_impl, ICONV_VERSION};
 use crate::types::pcntl_constants::pcntl_int_constants;
-use crate::types::predefined_constants::{literal_of, php_type_of, registered_constants};
+use crate::types::predefined_constants::{
+    constant_defined_on_target, literal_of, php_type_of, registered_constants,
+};
+use crate::types::token_constants::{token_int_constant_value, TOKEN_INT_CONSTANTS};
 use crate::types::PhpType;
 
 /// Seeds the constant map with built-in PHP constants and user-defined constants.
@@ -25,7 +28,7 @@ use crate::types::PhpType;
 /// read through `types::predefined_constants`): fixed values are materialized as literals
 /// straight from their contract, while the TARGET- AND PROFILE-DEPENDENT ones
 /// (`ConstValue::TargetDependent`: `PHP_OS`, the `PHP_VERSION*` / `PHP_SAPI` version surface,
-/// `DIRECTORY_SEPARATOR`, `E_ALL`, the platform-specific `FNM_*` flags,
+/// `DIRECTORY_SEPARATOR`, `E_ALL`, the platform-specific `FNM_*` / `LC_*` families, `PHP_MAXPATHLEN`,
 /// `ICONV_IMPL` / `ICONV_VERSION`)
 /// are computed here under their catalogued names. The version surface reads the compilation's
 /// `--php-version` profile and `--web` mode from the codegen thread-local pair
@@ -44,6 +47,11 @@ pub(crate) fn collect_constants(
     let target_platform = target.platform;
     let mut constants = HashMap::new();
     for constant in registered_constants() {
+        // A name php does not define on this target gets no value: `defined()` then answers
+        // false, and a read throws `Undefined constant` (see `constant_defined_on_target`).
+        if !constant_defined_on_target(constant, target) {
+            continue;
+        }
         let value = elephc_builtin_contract::core_environment_constant(
             constant.name, target.platform == Platform::MacOS,
         ).unwrap_or(constant.value);
@@ -57,6 +65,14 @@ pub(crate) fn collect_constants(
     // The runtime materializer replaces this metadata slot at every observable fetch.
     constants.insert("PHP_BINARY".to_string(), (ExprKind::StringLiteral(String::new()), PhpType::Str));
     let php_version = crate::codegen_support::compile_php_version();
+    for (name, _values) in TOKEN_INT_CONSTANTS {
+        let value = token_int_constant_value(name, php_version)
+            .expect("registered tokenizer constant must have a profile value");
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(value), PhpType::Int),
+        );
+    }
     let (fnm_noescape, fnm_pathname) = match target_platform {
         Platform::MacOS => (1, 2),
         Platform::Linux => (2, 1),
@@ -64,14 +80,27 @@ pub(crate) fn collect_constants(
     };
     let str_const = |value: String| (ExprKind::StringLiteral(value), PhpType::Str);
     let int_const = |value: i64| (ExprKind::IntLiteral(value), PhpType::Int);
+    // `setlocale()`'s categories are plain C-library enumerators, and the two libcs number them
+    // differently: Darwin orders them alphabetically from `LC_ALL = 0`, glibc puts `LC_CTYPE`
+    // first and `LC_ALL` last. A program that passes `LC_NUMERIC` to `setlocale()` would select
+    // `LC_TIME` on Linux if the value were baked from the host's headers, so the whole family is
+    // target-dependent. `Platform::lc_ctype` answers for the one category the regex helpers
+    // select themselves, and agrees with the value baked here.
+    let per_platform = |macos: i64, linux: i64| {
+        int_const(match target_platform {
+            Platform::MacOS => macos,
+            Platform::Linux => linux,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        })
+    };
     let computed = [
         ("PHP_OS", str_const(target_platform.php_os_name().to_string())),
         ("PHP_OS_FAMILY", str_const(target_platform.php_os_family_name().to_string())),
-        ("PHP_VERSION", str_const(php_version.version_string().to_string())),
-        ("PHP_VERSION_ID", int_const(i64::from(php_version.version_id()))),
+        ("PHP_VERSION", str_const(php_version.reported_version_string())),
+        ("PHP_VERSION_ID", int_const(i64::from(php_version.reported_version_id()))),
         ("PHP_MAJOR_VERSION", int_const(i64::from(php_version.major()))),
         ("PHP_MINOR_VERSION", int_const(i64::from(php_version.minor()))),
-        ("PHP_RELEASE_VERSION", int_const(i64::from(php_version.release()))),
+        ("PHP_RELEASE_VERSION", int_const(i64::from(php_version.reported_release()))),
         ("PHP_EXTRA_VERSION", str_const(php_version.extra_version().to_string())),
         ("E_ALL", int_const(php_version.error_reporting_mask())),
         (
@@ -82,10 +111,25 @@ pub(crate) fn collect_constants(
             ),
         ),
         ("DIRECTORY_SEPARATOR", str_const(std::path::MAIN_SEPARATOR.to_string())),
+        // The `include_path` list separator: `;` where the directory separator is `\\`.
+        (
+            "PATH_SEPARATOR",
+            str_const(if std::path::MAIN_SEPARATOR == '\\' { ";" } else { ":" }.to_string()),
+        ),
         ("FNM_NOESCAPE", int_const(fnm_noescape)),
         ("FNM_PATHNAME", int_const(fnm_pathname)),
         ("ICONV_IMPL", str_const(iconv_impl(target_platform == Platform::MacOS).to_string())),
         ("ICONV_VERSION", str_const(ICONV_VERSION.to_string())),
+        ("LC_ALL", per_platform(0, 6)),
+        ("LC_COLLATE", per_platform(1, 3)),
+        ("LC_CTYPE", per_platform(2, 0)),
+        ("LC_MESSAGES", per_platform(6, 5)),
+        ("LC_MONETARY", per_platform(3, 4)),
+        ("LC_NUMERIC", per_platform(4, 1)),
+        ("LC_TIME", per_platform(5, 2)),
+        // php-src exposes `MAXPATHLEN` from the target's own headers: `PATH_MAX` is 1024 on
+        // Darwin and 4096 on Linux.
+        ("PHP_MAXPATHLEN", per_platform(1024, 4096)),
     ];
     for (name, value) in computed {
         debug_assert!(
@@ -190,6 +234,41 @@ mod tests {
         assert_eq!(int_constant(&linux, "FNM_CASEFOLD"), 16);
     }
 
+    /// Verifies the locale-category and path-length constants follow the target's own C library.
+    ///
+    /// Darwin numbers `setlocale()`'s categories alphabetically from `LC_ALL = 0`; glibc puts
+    /// `LC_CTYPE` first and `LC_ALL` last, so a program passing `LC_NUMERIC` would select
+    /// `LC_TIME` on Linux if one table were baked for both. `php -n` 8.5.10 on macOS prints the
+    /// Darwin column; `PATH_MAX` is 1024 there and 4096 on Linux.
+    #[test]
+    fn test_locale_and_path_constants_follow_target_platform() {
+        use crate::codegen_support::platform::Arch;
+
+        let mac = collect_constants(&vec![], Target::new(Platform::MacOS, Arch::AArch64));
+        assert_eq!(int_constant(&mac, "LC_ALL"), 0);
+        assert_eq!(int_constant(&mac, "LC_COLLATE"), 1);
+        assert_eq!(int_constant(&mac, "LC_CTYPE"), 2);
+        assert_eq!(int_constant(&mac, "LC_MONETARY"), 3);
+        assert_eq!(int_constant(&mac, "LC_NUMERIC"), 4);
+        assert_eq!(int_constant(&mac, "LC_TIME"), 5);
+        assert_eq!(int_constant(&mac, "LC_MESSAGES"), 6);
+        assert_eq!(int_constant(&mac, "PHP_MAXPATHLEN"), 1024);
+
+        let linux = collect_constants(&vec![], Target::new(Platform::Linux, Arch::AArch64));
+        assert_eq!(int_constant(&linux, "LC_CTYPE"), 0);
+        assert_eq!(int_constant(&linux, "LC_NUMERIC"), 1);
+        assert_eq!(int_constant(&linux, "LC_TIME"), 2);
+        assert_eq!(int_constant(&linux, "LC_COLLATE"), 3);
+        assert_eq!(int_constant(&linux, "LC_MONETARY"), 4);
+        assert_eq!(int_constant(&linux, "LC_MESSAGES"), 5);
+        assert_eq!(int_constant(&linux, "LC_ALL"), 6);
+        assert_eq!(int_constant(&linux, "PHP_MAXPATHLEN"), 4096);
+
+        // The runtime's own `setlocale()` call sites read the same category from `Platform`.
+        assert_eq!(i64::from(Platform::MacOS.lc_ctype()), int_constant(&mac, "LC_CTYPE"));
+        assert_eq!(i64::from(Platform::Linux.lc_ctype()), int_constant(&linux, "LC_CTYPE"));
+    }
+
     /// Verifies the prescanned `E_ALL` literal follows the selected PHP profile.
     #[test]
     fn test_error_all_follows_php_profile() {
@@ -209,7 +288,16 @@ mod tests {
                 &vec![],
                 Target::new(platform, crate::codegen_support::platform::Arch::AArch64),
             );
+            let target = Target::new(platform, crate::codegen_support::platform::Arch::AArch64);
             for constant in registered_constants() {
+                if !constant_defined_on_target(constant, target) {
+                    assert!(
+                        !constants.contains_key(constant.name),
+                        "{} is not defined on {platform:?} but has a value",
+                        constant.name
+                    );
+                    continue;
+                }
                 let (_, ty) = constants
                     .get(constant.name)
                     .unwrap_or_else(|| panic!("{} has no value on {platform:?}", constant.name));

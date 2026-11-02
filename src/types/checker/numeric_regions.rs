@@ -202,7 +202,7 @@ fn numeric_leaf_type(checker: &super::Checker, expr: &Expr, env: &crate::types::
         ExprKind::PropertyAccess { object, property } => {
             let PhpType::Object(class) = numeric_leaf_type(checker, object, env)? else { return None; };
             if !checker.classes.get(&class)?.visible_property_is_declared(property) { return None; }
-            checker.infer_property_on_class_type(&class, property, expr).ok()
+            checker.infer_property_on_class_type(&class, property, object, expr).ok()
         }
         ExprKind::ArrayAccess { array, .. } => {
             let PhpType::Buffer(element) = numeric_leaf_type(checker, array, env)? else { return None; };

@@ -65,6 +65,12 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     callable_descriptor::emit_load_invoker_from_descriptor(emitter, invoker, descriptor_arg);
     abi::emit_call_reg(emitter, invoker);
     abi::store_at_offset(emitter, result, RESULT);
+    // A bounded invoker (an instance-method descriptor the interpreter may call inside its own
+    // `try`) catches the callee's throw and RETURNS null with the Throwable left pending.
+    // `_exc_value` was cleared above, so anything there now is that throw: take the caught path,
+    // or restoring the previous exception below would overwrite it and the call would yield null.
+    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
+    abi::emit_branch_if_int_result_nonzero(emitter, caught);
 
     // -- release argument ownership before transferring a successful result --
     emitter.label(cleanup);

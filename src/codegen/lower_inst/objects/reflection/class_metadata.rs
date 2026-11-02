@@ -51,6 +51,14 @@ pub(super) fn reflection_enum_metadata(
         return Ok(empty_reflection_metadata());
     };
     let reflected_enum = const_string_or_class_operand(ctx, enum_operand, "ReflectionEnum")?;
+    reflection_enum_metadata_for_name(ctx, &reflected_enum)
+}
+
+/// Resolves ReflectionEnum metadata for a class-like name selected at runtime.
+pub(super) fn reflection_enum_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_enum: &str,
+) -> Result<ReflectionOwnerMetadata> {
     let mut metadata = reflection_class_metadata_for_name(ctx, &reflected_enum)?;
     let Some(enum_name) = metadata.reflected_name.as_deref() else {
         return Ok(empty_reflection_metadata());
@@ -71,6 +79,47 @@ pub(super) fn reflection_class_metadata_for_name(
     ctx: &FunctionContext<'_>,
     reflected_class: &str,
 ) -> Result<ReflectionOwnerMetadata> {
+    // `Closure` has no declaration to reflect. A program that names `fromCallable` at run time
+    // carries `__ElephcClosureFactory` (`crate::closure_from_callable_prelude`), whose static
+    // `fromCallable()` is the one `Closure` member such a program reflects: Symfony's container
+    // checks its `['Closure', 'fromCallable']` factories through `ReflectionClass('Closure')`.
+    if reflected_class.trim_start_matches('\\').eq_ignore_ascii_case("Closure") {
+        let factory = crate::closure_from_callable_prelude::CLOSURE_FACTORY_CLASS;
+        if resolve_reflection_class(ctx, factory).is_some() {
+            let mut metadata = reflection_class_metadata_for_name(ctx, factory)?;
+            metadata.reflected_name = Some("Closure".to_string());
+            metadata.is_final = true;
+            metadata.is_instantiable = false;
+            // php's own signature, `Closure::fromCallable(callable $callback): Closure`: the helper
+            // declares `mixed` so the conversion keeps its scope (see the prelude).
+            let named = |name: &str, is_builtin: bool| {
+                Some(super::ReflectionParameterTypeMetadata::Named(super::ReflectionNamedTypeMetadata {
+                    name: name.to_string(),
+                    allows_null: false,
+                    is_builtin,
+                }))
+            };
+            for method in &mut metadata.method_members {
+                method.declaring_class_name = Some("Closure".to_string());
+                method.type_metadata = named("Closure", false);
+                for parameter in &mut method.parameters {
+                    parameter.declaring_class_name = Some("Closure".to_string());
+                    parameter.type_metadata = named("callable", true);
+                    parameter.is_callable_type = true;
+                    if let Some(super::ReflectionDeclaringFunctionMember::Method {
+                        declaring_class_name,
+                        type_metadata,
+                        ..
+                    }) = &mut parameter.declaring_function
+                    {
+                        *declaring_class_name = Some("Closure".to_string());
+                        *type_metadata = named("Closure", false);
+                    }
+                }
+            }
+            return Ok(metadata);
+        }
+    }
     if let Some((class_name, info)) = resolve_reflection_class(ctx, &reflected_class) {
         let is_enum = is_reflection_enum(ctx, class_name);
         let method_names = reflection_class_method_names(ctx, class_name);
@@ -101,6 +150,7 @@ pub(super) fn reflection_class_metadata_for_name(
         return Ok(ReflectionOwnerMetadata {
             rendered_to_string: None,
             reflected_name: Some(class_name.to_string()),
+            doc_comment: info.doc_comment.clone(),
             attr_names: info.attribute_names.clone(),
             attr_args: info.attribute_args.clone(),
             interface_names: info.interfaces.clone(),
@@ -150,6 +200,7 @@ pub(super) fn reflection_class_metadata_for_name(
             member_flags: ReflectionMemberFlags::default(),
         });
     }
+
     if let Some(interface_name) = resolve_reflection_interface(ctx, &reflected_class) {
         let method_names = reflection_interface_method_names(ctx, interface_name);
         let property_names = reflection_interface_property_names(ctx, interface_name);
@@ -171,6 +222,13 @@ pub(super) fn reflection_class_metadata_for_name(
         return Ok(ReflectionOwnerMetadata {
             rendered_to_string: None,
             reflected_name: Some(interface_name.to_string()),
+            // `debug:autowiring` prints each interface's first doc line ("Describes a logger
+            // instance." for `Psr\Log\LoggerInterface`).
+            doc_comment: ctx
+                .module
+                .interface_infos
+                .get(interface_name)
+                .and_then(|info| info.doc_comment.clone()),
             attr_names: Vec::new(),
             attr_args: Vec::new(),
             interface_names: reflection_interface_parent_names(ctx, interface_name),
@@ -247,6 +305,7 @@ pub(super) fn reflection_class_metadata_for_name(
         return Ok(ReflectionOwnerMetadata {
             rendered_to_string: None,
             reflected_name: Some(trait_name.to_string()),
+            doc_comment: None,
             attr_names: Vec::new(),
             attr_args: Vec::new(),
             interface_names: Vec::new(),
@@ -306,6 +365,74 @@ pub(super) fn reflection_shallow_class_metadata_for_name(
     ctx: &FunctionContext<'_>,
     reflected_class: &str,
 ) -> Result<ReflectionOwnerMetadata> {
+    let metadata = reflection_direct_shallow_class_metadata_for_name(ctx, reflected_class)?;
+    #[cfg(test)]
+    assert_eq!(
+        metadata,
+        reflection_legacy_shallow_class_metadata_for_name(ctx, reflected_class)?,
+        "direct shallow Reflection metadata diverged for {reflected_class}"
+    );
+    Ok(metadata)
+}
+
+/// Resolves only the declaration identity needed for a source-file ReflectionObject query.
+pub(super) fn reflection_source_file_class_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+) -> Result<ReflectionOwnerMetadata> {
+    let Some((class_name, _)) = resolve_reflection_class(ctx, reflected_class) else {
+        return Ok(empty_reflection_metadata());
+    };
+    let mut metadata = empty_reflection_metadata();
+    metadata.reflected_name = Some(class_name.to_string());
+    metadata.doc_comment = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .and_then(|class| class.doc_comment.clone());
+    Ok(metadata)
+}
+
+/// Resolves shallow `ReflectionEnum` metadata for nested enum-case slots.
+pub(super) fn reflection_shallow_enum_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_enum: &str,
+) -> Result<ReflectionOwnerMetadata> {
+    let mut metadata = reflection_direct_shallow_class_metadata_for_name(ctx, reflected_enum)?;
+    let Some(enum_name) = metadata.reflected_name.as_deref() else {
+        return Ok(empty_reflection_metadata());
+    };
+    let Some(enum_info) = ctx.module.enum_infos.get(enum_name) else {
+        return Ok(empty_reflection_metadata());
+    };
+    metadata.type_metadata = enum_info
+        .backing_type
+        .as_ref()
+        .and_then(reflection_named_type_metadata)
+        .map(ReflectionParameterTypeMetadata::Named);
+    #[cfg(test)]
+    {
+        let mut expected =
+            reflection_legacy_shallow_class_metadata_for_name(ctx, reflected_enum)?;
+        expected.type_metadata = enum_info
+            .backing_type
+            .as_ref()
+            .and_then(reflection_named_type_metadata)
+            .map(ReflectionParameterTypeMetadata::Named);
+        assert_eq!(
+            metadata, expected,
+            "direct shallow ReflectionEnum metadata diverged for {reflected_enum}"
+        );
+    }
+    Ok(metadata)
+}
+
+/// Recreates the former full-then-clear projection for exact test-only equivalence checks.
+#[cfg(test)]
+fn reflection_legacy_shallow_class_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+) -> Result<ReflectionOwnerMetadata> {
     let mut metadata = reflection_class_metadata_for_name(ctx, reflected_class)?;
     metadata.method_names.clear();
     metadata.property_names.clear();
@@ -320,33 +447,86 @@ pub(super) fn reflection_shallow_class_metadata_for_name(
     Ok(metadata)
 }
 
-/// Resolves `ReflectionEnum` metadata for nested enum-case slots.
-pub(super) fn reflection_enum_metadata_for_name(
+/// Builds only the fields retained by nested shallow class-like Reflection objects.
+pub(super) fn reflection_direct_shallow_class_metadata_for_name(
     ctx: &FunctionContext<'_>,
-    reflected_enum: &str,
+    reflected_class: &str,
 ) -> Result<ReflectionOwnerMetadata> {
-    let mut metadata = reflection_class_metadata_for_name(ctx, reflected_enum)?;
-    let Some(enum_name) = metadata.reflected_name.as_deref() else {
-        return Ok(empty_reflection_metadata());
-    };
-    let Some(enum_info) = ctx.module.enum_infos.get(enum_name) else {
-        return Ok(empty_reflection_metadata());
-    };
-    metadata.type_metadata = enum_info
-        .backing_type
-        .as_ref()
-        .and_then(reflection_named_type_metadata)
-        .map(ReflectionParameterTypeMetadata::Named);
-    metadata.method_names.clear();
-    metadata.property_names.clear();
-    metadata.constant_names.clear();
-    metadata.constant_members.clear();
-    metadata.constant_reflection_members.clear();
-    metadata.enum_case_members.clear();
-    metadata.method_members.clear();
-    metadata.property_members.clear();
-    metadata.constructor_member = None;
-    metadata.parent_class_name = None;
-    Ok(metadata)
-}
+    if let Some((class_name, info)) = resolve_reflection_class(ctx, reflected_class) {
+        let is_enum = is_reflection_enum(ctx, class_name);
+        let property_names = reflection_class_property_names(ctx, class_name, info);
+        let constructor_member = reflection_class_method_member(
+            ctx,
+            class_name,
+            info,
+            &php_symbol_key("__construct"),
+        )?;
+        let mut metadata = empty_reflection_metadata();
+        metadata.reflected_name = Some(class_name.to_string());
+        metadata.doc_comment = info.doc_comment.clone();
+        metadata.attr_names = info.attribute_names.clone();
+        metadata.attr_args = info.attribute_args.clone();
+        metadata.interface_names = info.interfaces.clone();
+        metadata.trait_names = info.used_traits.clone();
+        metadata.trait_aliases = info.trait_aliases.clone();
+        metadata.parent_names = reflection_parent_class_names(ctx, info);
+        metadata.default_property_members =
+            reflection_class_default_property_members(ctx, info, &property_names);
+        metadata.static_property_members = reflection_class_static_property_members(class_name, info);
+        metadata.is_final = info.is_final;
+        metadata.is_abstract = info.is_abstract;
+        metadata.is_enum = is_enum;
+        metadata.is_readonly = info.is_readonly_class && !is_enum;
+        metadata.is_anonymous = is_reflection_anonymous_class_name(class_name);
+        metadata.is_instantiable =
+            reflection_class_is_instantiable(info, is_enum, constructor_member.as_ref());
+        metadata.is_cloneable = reflection_class_is_cloneable(class_name, info, is_enum, &ctx.module.class_infos);
+        metadata.is_iterable = reflection_class_is_iterable(info, is_enum);
+        metadata.modifiers = reflection_class_modifiers(
+            info.is_final,
+            info.is_abstract,
+            info.is_readonly_class,
+            is_enum,
+        );
+        return Ok(metadata);
+    }
 
+    if let Some(interface_name) = resolve_reflection_interface(ctx, reflected_class) {
+        let mut metadata = empty_reflection_metadata();
+        metadata.reflected_name = Some(interface_name.to_string());
+        metadata.interface_names = reflection_interface_parent_names(ctx, interface_name);
+        metadata.is_interface = true;
+        metadata.member_flags = reflection_member_flags(
+            false,
+            &Visibility::Public,
+            false,
+            false,
+            false,
+            false,
+        );
+        return Ok(metadata);
+    }
+
+    if let Some(trait_name) = resolve_reflection_trait(ctx, reflected_class) {
+        let mut metadata = empty_reflection_metadata();
+        metadata.reflected_name = Some(trait_name.to_string());
+        metadata.trait_names = ctx
+            .module
+            .declared_trait_uses
+            .get(trait_name)
+            .cloned()
+            .unwrap_or_default();
+        metadata.is_trait = true;
+        metadata.member_flags = reflection_member_flags(
+            false,
+            &Visibility::Public,
+            false,
+            false,
+            false,
+            false,
+        );
+        return Ok(metadata);
+    }
+
+    Ok(empty_reflection_metadata())
+}

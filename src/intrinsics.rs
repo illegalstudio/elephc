@@ -81,6 +81,18 @@ pub enum IntrinsicCallKind {
     SplRecursiveAssumeIterator,
 }
 
+impl IntrinsicCallKind {
+    /// Returns the operand index (the receiver is operand 0) of the boxed value the runtime helper
+    /// stores without retaining it: the SPL list and fixed-array writers adopt the caller's box.
+    pub fn adopted_value_operand(self) -> Option<usize> {
+        match self {
+            Self::SplDllPush | Self::SplDllUnshift | Self::SplQueueEnqueue => Some(1),
+            Self::SplDllAdd | Self::SplDllOffsetSet | Self::SplFixedOffsetSet => Some(2),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Intrinsic call representation.
 pub struct IntrinsicCall {

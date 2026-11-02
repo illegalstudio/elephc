@@ -115,6 +115,24 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                 .with_side_effects()
                 .with_may_throw()
         }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_effect(index)
+                .combine(expr_effect(source))
+                .with_side_effects()
+                .with_may_throw()
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            let mut effect = expr_effect(property).combine(expr_effect(value));
+            if let Some(index) = index {
+                effect = effect.combine(expr_effect(index));
+            }
+            effect.with_side_effects().with_may_throw()
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_effect(target)
                 .combine(expr_effect(value))
@@ -124,6 +142,12 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_effect(object)
                 .combine(expr_effect(value))
+                .with_side_effects()
+                .with_may_throw()
+        }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            expr_effect(object)
+                .combine(expr_effect(source))
                 .with_side_effects()
                 .with_may_throw()
         }
@@ -235,6 +259,7 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => Effect::PURE,
+        StmtKind::ClassLikeActivate { .. } => Effect::PURE.with_side_effects().with_may_throw().with_writes_globals(),
         StmtKind::FunctionVariantGroup { .. } => Effect::PURE,
         StmtKind::FunctionVariantMark { .. } => Effect::PURE.with_side_effects(),
         StmtKind::Include { .. } => Effect::PURE.with_side_effects().with_may_throw(),
@@ -262,6 +287,17 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::IncludeValue { .. } => unreachable!(
             "ExprKind::IncludeValue must be expanded by the resolver"
         ),
+        // A read may throw `Undefined constant` unless the catalog defines the name here: a name
+        // restricted to other platforms (`PHP_WINDOWS_VERSION_*`) or one nothing defines throws,
+        // so a `try` around it keeps its catch and a bare `FOO;` statement stays. A user constant
+        // with a literal value was folded away before this pass, so little else is left here.
+        ExprKind::ConstRef(name)
+            if crate::types::predefined_constants::target_restricted_type(name.as_str())
+                .is_some()
+                || !crate::types::predefined_constants::is_registered_constant(name.as_str()) =>
+        {
+            Effect::PURE.with_may_throw()
+        }
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
@@ -337,7 +373,15 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             .combine(callable_alias_effect(var)),
         ExprKind::ExprCall { callee, args } => expr_effect(callee)
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .combine(expr_call_effect(callee)),
+            .combine(match &callee.kind {
+                // `(strlen(...))("abc")`: the call's own arguments are known, and a builtin's
+                // effects depend on them (`strlen` of a string is pure, of an unknown type can
+                // coerce and throw), so resolve it like a direct call instead of with no arguments.
+                ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+                    function_call_effect(name.as_str(), args)
+                }
+                _ => expr_call_effect(callee),
+            }),
         ExprKind::NullsafeDynamicMethodCall {
             object,
             method,
@@ -391,6 +435,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 .iter()
                 .map(|(key, value)| expr_effect(key).combine(expr_effect(value))),
         ),
+        ExprKind::ArrayReference(value) => expr_effect(value).with_side_effects(),
         ExprKind::ArrayLiteralMixed(entries) => combine_effects(
             entries
                 .iter()
@@ -451,9 +496,15 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                     .with_writes_globals(),
             }),
         ExprKind::StaticPropertyAccess { .. } => Effect::PURE.with_may_throw(),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_effect(property).with_may_throw()
+        }
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            expr_effect(receiver).with_may_throw()
+        }
         ExprKind::ObjectClassName { object } => expr_effect(object),
         ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()

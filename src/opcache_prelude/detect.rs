@@ -605,6 +605,7 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
             expr_refs(value, target).or_else(|| instanceof_target_refs(iof, target))
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -696,9 +697,11 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
             expr_refs(object, target).or_else(|| expr_refs(property, target))
         }
         ExprKind::StaticPropertyAccess { .. } => None,
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_refs(property, target),
         ExprKind::BufferNew { len, .. } => expr_refs(len, target),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => None,
         ExprKind::ObjectClassName { object } => expr_refs(object, target),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_refs(receiver, target),
         ExprKind::NewScopedObject { args, .. } => {
             args.iter().find_map(|arg| expr_refs(arg, target))
         }
@@ -887,11 +890,25 @@ fn stmt_refs(stmt: &Stmt, target: Symbol<'_>) -> Option<Span> {
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_refs(object, target).or_else(|| expr_refs(value, target))
         }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            expr_refs(object, target).or_else(|| expr_refs(source, target))
+        }
         StmtKind::StaticPropertyAssign { value, .. }
         | StmtKind::StaticPropertyArrayPush { value, .. } => expr_refs(value, target),
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_refs(index, target).or_else(|| expr_refs(value, target))
         }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_refs(index, target).or_else(|| expr_refs(source, target))
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => expr_refs(property, target)
+            .or_else(|| index.as_ref().and_then(|index| expr_refs(index, target)))
+            .or_else(|| expr_refs(value, target)),
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs(object, target).or_else(|| expr_refs(value, target))
         }
@@ -903,6 +920,7 @@ fn stmt_refs(stmt: &Stmt, target: Symbol<'_>) -> Option<Span> {
         } => expr_refs(object, target)
             .or_else(|| expr_refs(index, target))
             .or_else(|| expr_refs(value, target)),
+        StmtKind::ClassLikeActivate { .. } => None,
     }
 }
 

@@ -2,7 +2,7 @@
 title: "mysqli_select_db()"
 description: "Selects the default database for the connection."
 sidebar:
-  order: 158
+  order: 169
 ---
 
 ## mysqli_select_db()

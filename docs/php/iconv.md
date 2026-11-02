@@ -16,6 +16,9 @@ automatically the first time a program calls one of these functions, and never
 linked otherwise; `--with-iconv` force-links it when detection cannot see the
 call. See
 [Linking & Conditional Compilation](../compiling/linking-and-conditional-compilation.md).
+The same crate also implements mbstring's `mb_strtoupper()` and `mb_strtolower()` (see
+[Strings](./strings.md#mb_strtoupper-and-mb_strtolower)), so calling either of those links
+it too.
 
 ## Converting between charsets
 

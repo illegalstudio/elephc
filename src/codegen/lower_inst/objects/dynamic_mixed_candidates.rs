@@ -21,6 +21,7 @@ pub(super) fn emit_generic_dynamic_new_class_string(
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             ctx.load_string_value_to_regs(class_name_value, ptr_reg, len_reg)?;
+            emit_strip_leading_namespace_separator(ctx);
             Ok(true)
         }
         PhpType::Mixed | PhpType::Union(_) => {
@@ -39,10 +40,20 @@ pub(super) fn emit_generic_dynamic_new_class_string(
                     ctx.emitter.instruction("mov rax, rdi");                    // move the unboxed string pointer into the string result register
                 }
             }
+            emit_strip_leading_namespace_separator(ctx);
             Ok(true)
         }
         _ => Ok(false),
     }
+}
+
+/// Drops one leading `\` from the dynamic-new class name (see the abi helper), then maps a
+/// run-time `class_alias()` name to its class: the candidate ladder compares class names, and an
+/// alias reaching the registry fallback would be allocated without its constructor.
+fn emit_strip_leading_namespace_separator(ctx: &mut FunctionContext<'_>) {
+    let bare = ctx.next_label("dynamic_new_class_name_bare");
+    abi::emit_strip_leading_namespace_separator(ctx.emitter, &bare);
+    abi::emit_call_label(ctx.emitter, "__rt_class_alias_resolve");
 }
 
 /// Returns AOT dynamic-new candidates in stable class-id order.
@@ -65,6 +76,15 @@ pub(super) fn dynamic_new_mixed_candidates(
         }
     }
     Ok(candidates)
+}
+
+/// Counts the AOT classes that would expand a generic dynamic-new dispatch.
+pub(super) fn dynamic_new_mixed_aot_candidate_count(ctx: &FunctionContext<'_>) -> usize {
+    ctx.module
+        .class_infos
+        .keys()
+        .filter(|class_name| is_dynamic_new_mixed_aot_candidate(class_name))
+        .count()
 }
 
 /// Returns AOT candidates that can be allocated without constructor dispatch.
@@ -205,6 +225,64 @@ pub(super) fn dynamic_new_mixed_refusals(
                 argument_count: false,
             });
         }
+    }
+    refusals
+}
+
+/// The descendants of `required_parent` a constrained `new static(...)` / factory site passes too
+/// few arguments to, with php's `ArgumentCountError` text, keyed by class id.
+///
+/// The checker no longer refuses such a site (`late_bound_target_cannot_bind`): Laravel's
+/// `Collection::newInstance()` is `new static($items)` while `SortedMiddleware extends
+/// Collection` takes two required parameters, and php raises only when a `SortedMiddleware`
+/// receiver actually gets there. The lowering leaves the class out of its candidates, so without
+/// these arms that receiver reached the uncatchable "Dynamic factory class must extend" fatal.
+pub(super) fn dynamic_new_constrained_refusals(
+    ctx: &FunctionContext<'_>,
+    required_parent: &str,
+    arg_count: usize,
+    line: u32,
+    matched_ids: &[u64],
+) -> Vec<(u64, DynamicNewRefusal)> {
+    let constructor_key = php_symbol_key("__construct");
+    let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    let mut refusals = Vec::new();
+    for (class_name, class_info) in sorted_classes {
+        if class_info.is_abstract
+            || matched_ids.contains(&class_info.class_id)
+            || !super::dynamic_factory::class_is_same_or_descends_from(ctx, class_name, required_parent)
+        {
+            continue;
+        }
+        let Some(constructor) = class_info.methods.get(&constructor_key) else {
+            continue;
+        };
+        let regular = crate::types::call_args::regular_param_count(constructor);
+        let required = constructor
+            .defaults
+            .iter()
+            .take(regular)
+            .filter(|default| default.is_none())
+            .count();
+        if arg_count >= required {
+            continue;
+        }
+        refusals.push((
+            class_info.class_id,
+            DynamicNewRefusal {
+                class_name: class_name.to_string(),
+                message: too_few_arguments_message(
+                    class_name,
+                    ctx.module.source_path.as_deref().unwrap_or(""),
+                    line,
+                    arg_count,
+                    required,
+                    required == regular && constructor.variadic.is_none(),
+                ),
+                argument_count: true,
+            },
+        ));
     }
     refusals
 }
@@ -374,6 +452,7 @@ pub(super) fn known_dynamic_new_builtin_class_names() -> &'static [&'static str]
         "RecursiveDirectoryIterator",
         "RecursiveFilterIterator",
         "RecursiveIteratorIterator",
+        "RecursiveTreeIterator",
         "RecursiveRegexIterator",
         "ReflectionAttribute",
         "ReflectionClass",
@@ -400,6 +479,7 @@ pub(super) fn known_dynamic_new_builtin_class_names() -> &'static [&'static str]
         "SplMaxHeap",
         "SplMinHeap",
         "SplObjectStorage",
+        "WeakMap",
         "SplPriorityQueue",
         "SplQueue",
         "SplStack",
@@ -450,8 +530,17 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
     constructor_arg_container: Option<ValueId>,
     dummy_receiver_operand: ValueId,
     result: ValueId,
+    creation_line: u32,
 ) -> Result<()> {
-    if candidate.class_name == "SplFixedArray" && constructor_arg_container.is_none() {
+    if candidate.class_name == "SplFixedArray" {
+        if let Some(arg_container) = constructor_arg_container {
+            return emit_dynamic_new_mixed_spl_fixed_array_from_container(
+                ctx,
+                candidate.class_id,
+                arg_container,
+                result,
+            );
+        }
         return emit_dynamic_new_mixed_spl_fixed_array_candidate(
             ctx,
             candidate.class_id,
@@ -464,13 +553,15 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
     {
         return emit_dynamic_new_mixed_spl_dll_candidate(ctx, candidate.class_id, result);
     }
-    emit_object_allocation(
+    let defaults = emit_class_instance_allocation(
         ctx,
+        &candidate.class_name,
         candidate.class_id,
         candidate.property_count,
         candidate.allow_dynamic_properties,
         &candidate.uninitialized_marker_offsets,
         &candidate.owned_reference_property_offsets,
+        candidate.property_initialization.inline_defaults(),
     )?;
     let object_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, object_reg);
@@ -481,14 +572,14 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
     } else {
         0
     };
-    emit_stacked_property_initialization(
-        ctx,
-        construction_guard_bytes,
-        &candidate.property_initialization,
-    )?;
+    let initialization = candidate.property_initialization.with_remaining_inline(defaults);
+    emit_stacked_property_initialization(ctx, construction_guard_bytes, &initialization)?;
     if super::super::is_throwable_like_class(ctx, &candidate.class_name) {
         abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, construction_guard_bytes);
         emit_regular_throwable_creation_line(ctx, result, object_reg, candidate.class_id);
+        // File, line and trace of the `new` site (the branch's location capture).
+        abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, construction_guard_bytes);
+        throwable_new::emit_throwable_creation_site(ctx, object_reg, creation_line);
     }
     if let Some(constructor) = &candidate.constructor_impl {
         if let Some(arg_container) = constructor_arg_container {
@@ -528,13 +619,26 @@ pub(super) fn emit_dynamic_new_without_constructor_mixed_candidate(
     candidate: &DynamicNewCandidate,
     result: ValueId,
 ) -> Result<()> {
-    emit_object_allocation(
+    // A stdClass is `[class_id][property hash]` (`runtime::objects::stdclass`), not a declared
+    // slot layout: the generic allocation left the hash null, and the first property write
+    // (`$o->y = 2` on `newInstanceWithoutConstructor()`'s result) faulted.
+    if candidate.class_name == "stdClass" {
+        abi::emit_call_label(ctx.emitter, "__rt_stdclass_new");
+        emit_box_current_owned_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Object(candidate.class_name.clone()),
+        );
+        return ctx.store_result_value(result);
+    }
+    let defaults = emit_class_instance_allocation(
         ctx,
+        &candidate.class_name,
         candidate.class_id,
         candidate.property_count,
         candidate.allow_dynamic_properties,
         &candidate.uninitialized_marker_offsets,
         &candidate.owned_reference_property_offsets,
+        candidate.property_initialization.inline_defaults(),
     )?;
     let object_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, object_reg);
@@ -543,7 +647,8 @@ pub(super) fn emit_dynamic_new_without_constructor_mixed_candidate(
     } else {
         0
     };
-    emit_stacked_property_initialization(ctx, guard_bytes, &candidate.property_initialization)?;
+    let initialization = candidate.property_initialization.with_remaining_inline(defaults);
+    emit_stacked_property_initialization(ctx, guard_bytes, &initialization)?;
     if guard_bytes > 0 {
         callable_guards::end_unconstructed_object(ctx.emitter, guard_bytes);
     }
@@ -570,7 +675,12 @@ pub(super) fn emit_dynamic_new_mixed_spl_fixed_array_candidate(
         )));
     }
     if let Some(size) = constructor_args.first().copied() {
-        ctx.load_value_to_result(size)?;
+        let size_ty = ctx.load_value_to_result(size)?.codegen_repr();
+        // Inside the shared `new $class(...)` helper the operand is a boxed `Mixed`: its pointer
+        // was taken for the size (`heap memory exhausted`, a 34 GB request) before this cast.
+        if matches!(size_ty, PhpType::Mixed | PhpType::Union(_)) {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        }
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         abi::emit_load_int_immediate(
             ctx.emitter,
@@ -591,6 +701,39 @@ pub(super) fn emit_dynamic_new_mixed_spl_fixed_array_candidate(
         ctx.emitter,
         &PhpType::Object("SplFixedArray".to_string()),
     );
+    ctx.store_result_value(result)
+}
+
+/// Allocates a dynamic `SplFixedArray` whose constructor arguments arrive as a runtime container
+/// (`$cls = "SplFixedArray"; new $cls(2)`): the size is the container's first element, `0` when
+/// there is none, as php's default.
+///
+/// This arm used to be skipped for the container form, so the class went through the generic
+/// object allocation: `SplFixedArray` has no declared slot layout there, and the program died on
+/// `heap memory exhausted` (a 34 GB request) before printing anything.
+pub(super) fn emit_dynamic_new_mixed_spl_fixed_array_from_container(
+    ctx: &mut FunctionContext<'_>,
+    class_id: u64,
+    arg_container: ValueId,
+    result: ValueId,
+) -> Result<()> {
+    let target = ctx.emitter.target;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(arg_container, abi::int_arg_reg_name(target, 0))?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 1), 0);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), -1);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 3), 0);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_get"); // the first argument, boxed (null when absent)
+    abi::emit_push_reg(ctx.emitter, result_reg); // [cell]
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int"); // the requested size
+    abi::emit_push_reg(ctx.emitter, result_reg); // [size][cell]
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed"); // release the boxed argument
+    abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(target, 1)); // [cell]
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 0), class_id as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_spl_fixed_new");
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Object("SplFixedArray".to_string()));
     ctx.store_result_value(result)
 }
 
@@ -675,14 +818,13 @@ pub(super) fn emit_dynamic_new_mixed_constructor_container_call(
     )
 }
 
-/// Invokes a dynamic constructor whose raw object may sit below an ownership guard.
-fn emit_dynamic_new_mixed_constructor_container_call_at_offset(
+/// Builds (or finds) the static descriptor of a candidate's constructor: the entry wrapper, the
+/// uniform invoker and the descriptor record the container call copies at run time.
+pub(super) fn constructor_container_descriptor(
     ctx: &mut FunctionContext<'_>,
     candidate: &DynamicNewCandidate,
     constructor: &ConstructorCallTarget,
-    arg_container: ValueId,
-    object_stack_offset: usize,
-) -> Result<()> {
+) -> Result<String> {
     let receiver_ty = PhpType::Object(candidate.class_name.clone());
     let captures = vec![("receiver".to_string(), receiver_ty.clone(), false)];
     let constructor_key = php_symbol_key("__construct");
@@ -717,6 +859,20 @@ fn emit_dynamic_new_mixed_constructor_container_call_at_offset(
         ),
         Some(&invoker_label),
     );
+
+    Ok(descriptor_label)
+}
+
+/// Invokes a dynamic constructor whose raw object may sit below an ownership guard.
+fn emit_dynamic_new_mixed_constructor_container_call_at_offset(
+    ctx: &mut FunctionContext<'_>,
+    candidate: &DynamicNewCandidate,
+    constructor: &ConstructorCallTarget,
+    arg_container: ValueId,
+    object_stack_offset: usize,
+) -> Result<()> {
+    let receiver_ty = PhpType::Object(candidate.class_name.clone());
+    let descriptor_label = constructor_container_descriptor(ctx, candidate, constructor)?;
 
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
     let descriptor_reg = abi::nested_call_reg(ctx.emitter).to_string();

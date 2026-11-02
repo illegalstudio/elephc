@@ -27,7 +27,7 @@ pub(super) fn emit_error_handler_invoke(emitter: &mut Emitter) {
     let arg1 = if arm { "x1" } else { "rsi" };
     emitter.blank();
     emitter.label_global("__rt_error_handler_invoke");
-    emit_frame_enter(emitter, 96);
+    emit_frame_enter(emitter, INVOKE_FRAME_BYTES);
     abi::emit_store_to_address(emitter, arg1, stack, 64);
     for (offset, symbol) in SAVED_FIELDS {
         abi::emit_load_symbol_to_reg(emitter, scratch, symbol, 0);
@@ -44,6 +44,13 @@ pub(super) fn emit_error_handler_invoke(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, scratch, 0);
     abi::emit_store_to_address(emitter, scratch, stack, 24);
     abi::emit_store_to_address(emitter, scratch, stack, 72);
+    // An instance-method handler (`[$errorHandler, 'handleError']`) is invoked through a BOUNDED
+    // invoker, which catches the method's throw and returns null with it left in `_exc_value`.
+    // Park whatever was pending and clear the slot, so a throw found there afterwards is the
+    // handler's: callers dereferenced that null result as the handler's boxed answer.
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_exc_value", 0);
+    abi::emit_store_to_address(emitter, scratch, stack, PARKED_EXCEPTION_OFFSET);
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_load_from_address(emitter, arg0, stack, 40);
     abi::emit_load_from_address(emitter, arg1, stack, 64);
     abi::emit_load_from_address(
@@ -56,13 +63,41 @@ pub(super) fn emit_error_handler_invoke(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_error_handler_restore");
     abi::emit_load_from_address(emitter, scratch, stack, 0);
     abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_exc_value", 0);
+    if arm {
+        emitter.instruction("cbnz x10, __rt_error_handler_invoke_pending");     // the handler threw through a bounded invoker
+    } else {
+        emitter.instruction("test r10, r10");                                   // did the handler leave a throw pending?
+        emitter.instruction("jnz __rt_error_handler_invoke_pending");           // rethrow it instead of returning its null result
+    }
+    abi::emit_load_from_address(emitter, scratch, stack, PARKED_EXCEPTION_OFFSET);
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_value", 0);
     abi::emit_load_from_address(emitter, result, stack, 72);
-    emit_frame_leave(emitter, 96);
+    emit_frame_leave(emitter, INVOKE_FRAME_BYTES);
+
+    emitter.label("__rt_error_handler_invoke_pending");
+    let (newest, older) = if arm { ("x0", "x1") } else { ("rax", "rdi") };
+    abi::emit_load_symbol_to_reg(emitter, newest, "_exc_value", 0);
+    abi::emit_load_from_address(emitter, older, stack, PARKED_EXCEPTION_OFFSET);
+    abi::emit_call_label(emitter, "__rt_exception_chain");
+    if arm {
+        emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", INVOKE_FRAME_BYTES - 16)); // restore caller frame linkage
+        emitter.instruction(&format!("add sp, sp, #{INVOKE_FRAME_BYTES}"));    // release the helper frame before unwinding
+    } else {
+        emitter.instruction("leave");                                           // restore the caller frame before unwinding
+    }
+    abi::emit_jump(emitter, "__rt_throw_current");
     emit_restore(emitter);
     // The saved PHP value and descriptor are independent owners. The optional
     // eval context uses its external release callback rather than a PHP heap slot.
     super::arrays::emit_native_frame_owners(emitter, "__rt_gc_error_handler_frame_owners", &[32, 40, 72]);
 }
+
+/// Frame of `__rt_error_handler_invoke`: ten 8-byte fields, the parked exception, and the
+/// 16-byte frame link at the top.
+const INVOKE_FRAME_BYTES: usize = 112;
+/// Where `__rt_error_handler_invoke` parks the exception pending before the handler runs.
+const PARKED_EXCEPTION_OFFSET: usize = 80;
 
 /// Restores suspended owners or releases them when PHP installed a replacement handler.
 fn emit_restore(emitter: &mut Emitter) {

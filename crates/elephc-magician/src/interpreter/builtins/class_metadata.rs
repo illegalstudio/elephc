@@ -204,17 +204,21 @@ pub(in crate::interpreter) fn eval_class_relation_name_exists(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    if context.has_class(name)
+    // The DECLARED-CLASS authority, not the raw generated table: `Closure` is a language-level
+    // class with no AOT metadata row, so `class_implements('Closure')` answered false and
+    // Symfony's `DebugClassLoader::getOwnInterfaces` ran `foreach (false)`.
+    let class_exists = crate::interpreter::builtins::symbols::eval_class_is_declared(
+        name, context, values,
+    )?;
+    let result = context.has_class(name)
         || context.has_interface(name)
         || context.has_trait(name)
         || context.has_enum(name)
-        || values.class_exists(name)?
+        || class_exists
         || eval_runtime_interface_exists(name, values)?
         || values.trait_exists(name)?
-    {
-        return Ok(true);
-    }
-    values.enum_exists(name)
+        || values.enum_exists(name)?;
+    Ok(result)
 }
 
 /// Reads and normalizes one class metadata string argument.

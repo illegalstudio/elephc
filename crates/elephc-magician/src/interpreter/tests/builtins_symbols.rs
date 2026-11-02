@@ -321,6 +321,7 @@ echo defined("PHP_OS_FAMILY") ? "family-defined" : "bad"; echo ":";
 echo defined("\\PHP_OS") ? "root" : "bad"; echo ":";
 echo defined("php_os") ? "bad" : "case"; echo ":";
 echo define("PHP_OS", "x") ? "bad" : "locked"; echo ":";
+echo T_START_HEREDOC; echo ":"; echo T_WHITESPACE; echo ":";
 return PHP_INT_MAX;"#,
     )
     .expect("parse eval fragment");
@@ -331,7 +332,7 @@ return PHP_INT_MAX;"#,
 
     assert_eq!(
         values.output,
-        "eol:os:family:/:int:defined:family-defined:root:case:locked:"
+        "eol:os:family:/:int:defined:family-defined:root:case:locked:398:397:"
     );
     assert_eq!(values.get(result), FakeValue::Int(i64::MAX));
     assert_eq!(

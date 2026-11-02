@@ -934,9 +934,9 @@ fn test_catch_discriminates_between_instantiations() {
     assert_eq!(out, "right:Err<string>");
 }
 
-/// `@template` on a CLASS reaches the same monomorphic instantiations native `class Box<T>`
-/// does — the file it is written in is still valid PHP, and `get_class` shows the two classes
-/// the one annotated declaration produced.
+/// `@template` on a CLASS is not adopted: php knows one class under its written name, so
+/// `get_class` prints `Box` for both objects (`php -n` prints the same). Monomorphizing the
+/// annotation used to rename it `Box<int>` and break `class_exists('Box')` / `new $class`.
 #[test]
 fn test_docblock_template_on_a_class() {
     let out = compile_and_run(concat!(
@@ -957,7 +957,7 @@ fn test_docblock_template_on_a_class() {
         "$b = new Box(\"hi\");\n",
         "echo $a->get(), $b->get(), \"|\", get_class($a), \"|\", get_class($b);\n",
     ));
-    assert_eq!(out, "42hi|Box<int>|Box<string>");
+    assert_eq!(out, "42hi|Box|Box");
 }
 
 /// A member annotation that mentions no type parameter is an ordinary PHPStan annotation and
@@ -982,28 +982,40 @@ fn test_docblock_member_without_a_type_parameter_is_not_a_declaration() {
 }
 
 /// A promoted constructor parameter is also a property. Retyping only the parameter would store
-/// an `int` into a `mixed` field and lose the instantiation.
+/// an `int` into a `mixed` field and lose the instantiation. The constructor's OWN `@template`
+/// drives it (a class-level one is not adopted); the output is what `php -n` prints.
 #[test]
 fn test_docblock_promoted_constructor_property() {
     let out = compile_and_run(concat!(
         "<?php\n",
-        "/** @template T */\n",
         "final class Pair {\n",
         "    /**\n",
+        "     * @template T\n",
         "     * @param T $first\n",
         "     * @param T $second\n",
         "     */\n",
         "    public function __construct(private $first, private $second) {}\n",
-        "    /** @return T */\n",
         "    public function first() { return $this->first; }\n",
-        "    /** @return T */\n",
         "    public function second() { return $this->second; }\n",
         "}\n",
         "$p = new Pair(3, 4);\n",
         "$q = new Pair(\"a\", \"b\");\n",
-        "echo $p->first() + $p->second(), $q->first() . $q->second(), \"|\", get_class($p);\n",
+        "echo $p->first() + $p->second(), $q->first() . $q->second();\n",
     ));
-    assert_eq!(out, "7ab|Pair<int>");
+    assert_eq!(out, "7ab");
+    // A class-level `@template` plus member annotations leaves the class as written.
+    let class_level = compile_and_run(concat!(
+        "<?php\n",
+        "/** @template T */\n",
+        "final class Pair {\n",
+        "    /** @param T $first */\n",
+        "    public function __construct(private $first) {}\n",
+        "    /** @return T */\n",
+        "    public function first() { return $this->first; }\n",
+        "}\n",
+        "echo (new Pair(3))->first(), (new Pair(\"a\"))->first(), \"|\", get_class(new Pair(1));\n",
+    ));
+    assert_eq!(class_level, "3a|Pair");
 }
 
 /// `@extends` and `@implements` are how an annotated file names the instantiation it inherits,
@@ -1111,8 +1123,8 @@ fn test_covariant_parameter_may_be_returned_inside_an_array() {
     assert_eq!(out, "1");
 }
 
-/// PHPStan spells variance in the tag; native syntax spells it on the parameter. Both reach the
-/// same declaration, so an annotated file widens exactly like a written one.
+/// A class-level `@template-covariant` is not adopted, so the class keeps its written name and
+/// a plain `Box` hint accepts it, exactly as under `php -n`.
 #[test]
 fn test_docblock_template_covariant() {
     let out = compile_and_run(concat!(
@@ -1127,10 +1139,186 @@ fn test_docblock_template_covariant() {
         "    public function get() { return $this->v; }\n",
         "    public function whoAmI(): string { return get_class($this); }\n",
         "}\n",
-        "function inspect(Box<Animal> $b): string { return $b->whoAmI(); }\n",
-        "echo inspect(new Box<Dog>(new Dog()));\n",
+        "function inspect(Box $b): string { return $b->whoAmI(); }\n",
+        "echo inspect(new Box(new Dog()));\n",
     ));
-    assert_eq!(out, "Box<Dog>");
+    assert_eq!(out, "Box");
+}
+
+/// A PHPDoc `@template-covariant` stored in a writable property compiles: php never reads a
+/// docblock, so an annotation cannot refuse valid code. This is Symfony's `NodeDefinition`
+/// (`@template-covariant TParent` held in `protected ... $parent`). The error-test harness skips
+/// `docblock::apply`, so only a full compile reaches the variance check this guards.
+#[test]
+fn test_docblock_covariant_parameter_in_a_writable_property_compiles() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/** @template-covariant T */\n",
+        "class Holder {\n",
+        "    /** @var T|null */\n",
+        "    protected $value = null;\n",
+        "    /** @param T $v */\n",
+        "    public function set($v): static { $this->value = $v; return $this; }\n",
+        "    /** @return T|null */\n",
+        "    public function get() { return $this->value; }\n",
+        "}\n",
+        "class Leaf extends Holder {}\n",
+        "$h = new Leaf();\n",
+        "echo $h->set(3)->get(), \"|\", get_class($h);\n",
+    ));
+    assert_eq!(out, "3|Leaf");
+}
+
+/// `@extends FilterIterator<int, string>` annotates a builtin that declares no type parameters
+/// (Symfony's Finder iterators). php sees plain `extends FilterIterator`, so the annotation is
+/// forgotten rather than refused as "written with type arguments but declares no type
+/// parameters" — which written `extends Base<int>` syntax still is.
+#[test]
+fn test_docblock_extends_a_builtin_without_type_parameters() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/** @extends FilterIterator<int, string> */\n",
+        "class LongOnly extends FilterIterator {\n",
+        "    public function accept(): bool { return strlen((string) $this->current()) > 2; }\n",
+        "}\n",
+        "foreach (new LongOnly(new ArrayIterator([\"a\", \"abc\", \"de\", \"fghi\"])) as $v) {\n",
+        "    echo $v, \",\";\n",
+        "}\n",
+    ));
+    assert_eq!(out, "abc,fghi,");
+}
+
+/// A member annotation `@param \Iterator<TKey, TValue>` names a builtin, which can never be a
+/// template: its arguments are forgotten and the parameter keeps reading as `Iterator`. This is
+/// the shape of Symfony's `MultiplePcreFilterIterator`. A declared non-generic class written with
+/// arguments (`Plain<int>`) is still refused by the error tests.
+#[test]
+fn test_docblock_member_type_arguments_on_a_builtin_are_forgotten() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey\n",
+        " * @template-covariant TValue\n",
+        " * @extends \\FilterIterator<TKey, TValue>\n",
+        " */\n",
+        "abstract class Matching extends \\FilterIterator {\n",
+        "    /** @param \\Iterator<TKey, TValue> $iterator */\n",
+        "    public function __construct(\\Iterator $iterator, protected string $needle) {\n",
+        "        parent::__construct($iterator);\n",
+        "    }\n",
+        "}\n",
+        "final class Contains extends Matching {\n",
+        "    public function accept(): bool { return str_contains((string) $this->current(), $this->needle); }\n",
+        "}\n",
+        "foreach (new Contains(new ArrayIterator([\"cat\", \"dog\", \"catalog\"]), \"cat\") as $k => $v) {\n",
+        "    echo $k, \"=\", $v, \",\";\n",
+        "}\n",
+    ));
+    assert_eq!(out, "0=cat,2=catalog,");
+}
+
+/// An implementation may declare MORE optional parameters than the interface method it
+/// satisfies (Symfony's `CacheWarmerAggregate::warmUp(..., ?SymfonyStyle $io = null)` behind
+/// `WarmableInterface::warmUp()`). A call through the interface fills the extra defaults, and
+/// `func_num_args()` still counts only what the caller passed, as php does.
+#[test]
+fn test_interface_call_reaches_an_implementation_with_extra_optional_params() {
+    let source = concat!(
+        "<?php\n",
+        "interface Warmable { public function warmUp(string $cacheDir, ?string $buildDir = null): array; }\n",
+        "final class Aggregate implements Warmable {\n",
+        "    public function warmUp(string $cacheDir, ?string $buildDir = null, ?object $io = null): array {\n",
+        "        return [func_num_args(), $cacheDir, $buildDir ?? '-', $io === null ? 'no-io' : 'io'];\n",
+        "    }\n",
+        "}\n",
+        "function warm(Warmable $w): string { return implode(',', $w->warmUp('cache')) . '|' . implode(',', $w->warmUp('c', 'b')); }\n",
+        "echo warm(new Aggregate());\n",
+    );
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "1,cache,-,no-io|2,c,b,no-io");
+}
+
+/// An interface method that is a PHPDoc template (`@template T` + `@return T`, Symfony's
+/// `CacheInterface::get()`) is implemented by a method returning the written `mixed`
+/// (`CacheTrait::get()`): php compares written types, so the implementation is accepted.
+#[test]
+fn test_implementing_a_docblock_template_interface_method_with_a_mixed_return() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "interface Cache {\n",
+        "    /**\n",
+        "     * @template T\n",
+        "     * @param callable():T $callback\n",
+        "     * @return T\n",
+        "     */\n",
+        "    public function get(string $key, callable $callback): mixed;\n",
+        "}\n",
+        "trait CacheTrait {\n",
+        "    public function get(string $key, callable $callback): mixed { return $callback(); }\n",
+        "}\n",
+        "final class ArrayCache implements Cache { use CacheTrait; }\n",
+        // Inherited through a child interface, as `TagAwareCacheInterface` inherits it.
+        "interface TagAware extends Cache {}\n",
+        "final class TagCache implements TagAware { use CacheTrait; }\n",
+        "$c = new ArrayCache();\n",
+        "echo $c->get('k', fn() => 42), '|', $c->get('s', fn() => 'v'), '|', (new TagCache())->get('t', fn() => 7);\n",
+    ));
+    assert_eq!(out, "42|v|7");
+}
+
+/// A file whose adopted PHPDoc generics refuse the program is compiled again with its WRITTEN
+/// types (`docblock::erasure`), so the program runs as php runs it. Symfony's Config builders
+/// construct `NodeBuilder` (`@template TParent of ...|null`) from `null`, which no binding
+/// can be inferred from. Through the CLI: the re-run is the compiler executing itself.
+#[test]
+fn test_refusing_docblock_generics_fall_back_to_written_types() {
+    let source = concat!(
+        "<?php\n",
+        "/** @template TParent of object|null */\n",
+        "class Builder {\n",
+        "    /** @param TParent $parent */\n",
+        "    public function __construct(protected $parent) {}\n",
+        "    public function has(): string { return $this->parent === null ? \"none\" : get_class($this->parent); }\n",
+        "}\n",
+        "$b = new Builder(null);\n",
+        "echo get_class($b), \"|\", $b->has(), \"|\", (new Builder($b))->has();\n",
+    );
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Builder|none|Builder");
+}
+
+/// A PHPDoc method `@template` no argument can bind — Twig's `Environment::getExtension()`, whose
+/// `@param class-string<TExtension>` this inference cannot read — takes its bare reading (the
+/// bound) instead of refusing the call. A template bound this reader cannot parse
+/// (`@template B of self::*_REFERENCE`, Symfony's container) is not adopted at all, so its
+/// `@param B` leaves the native `int` in place.
+#[test]
+fn test_docblock_method_template_no_argument_binds_reads_its_bound() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "interface Ext { public function name(): string; }\n",
+        "final class Core implements Ext { public function name(): string { return \"core\"; } }\n",
+        "final class Env {\n",
+        "    /** @var array<string, Ext> */\n",
+        "    private array $exts = [];\n",
+        "    public function add(Ext $e): void { $this->exts[get_class($e)] = $e; }\n",
+        "    /**\n",
+        "     * @template TExtension of Ext\n",
+        "     * @param class-string<TExtension> $class\n",
+        "     * @return TExtension\n",
+        "     */\n",
+        "    public function getExtension(string $class): Ext { return $this->exts[$class]; }\n",
+        "    /**\n",
+        "     * @template C of object\n",
+        "     * @template B of self::*_REFERENCE\n",
+        "     * @param string|class-string<C> $id\n",
+        "     * @param B $mode\n",
+        "     */\n",
+        "    public function mode(string $id, int $mode = 1): int { return $mode * 10; }\n",
+        "}\n",
+        "$env = new Env();\n",
+        "$env->add(new Core());\n",
+        "echo $env->getExtension(Core::class)->name(), \"|\", $env->mode(\"x\"), \"|\", $env->mode(\"x\", 3);\n",
+    ));
+    assert_eq!(out, "core|10|30");
 }
 
 /// A widened call site takes its vtable slot from the EXPECTED instantiation and indexes the
@@ -1958,33 +2146,28 @@ class Marker {}
 
 /**
  * @template T
+ * @param T $v
+ * @return T
  */
 #[Marker]
-class Attributed {
-    /** @param T $v */
-    public function __construct(private $v) {}
-    /** @return T */
-    public function get() { return $this->v; }
-}
+function attributed($v) { return $v; }
 
 /**
  * @template T
+ * @param T $v
+ * @return T
  */
-class Plain {
-    /** @param T $v */
-    public function __construct(private $v) {}
-    /** @return T */
-    public function get() { return $this->v; }
-}
-$a = new Attributed<int>(7);
-$p = new Plain<int>(7);
-echo $a->get() + 1, "|", $p->get() + 1;
+function plain($v) { return $v; }
+
+// Written arguments exist only if the function template was adopted.
+echo attributed<int>(7) + 1, "|", plain<int>(7) + 1;
 "#,
     );
     assert_eq!(out, "8|8");
 }
 
 /// Brackets in attribute strings and comments cannot end the group or consume its declaration.
+/// The docblock above the group is a FUNCTION template: `id<int>(7)` works only if it was read.
 #[test]
 fn test_docblock_generics_survive_brackets_inside_attributes() {
     for argument in [
@@ -1996,21 +2179,19 @@ fn test_docblock_generics_survive_brackets_inside_attributes() {
     ] {
         let source = format!(
             r#"<?php
-/** @template T */
+/**
+ * @template T
+ * @param T $value
+ * @return T
+ */
 #[Marker(
     {argument}
 )]
-class Box {{
-    /** @param T $value */
-    public function __construct(private $value) {{}}
-    /** @return T */
-    public function get() {{ return $this->value; }}
-}}
-$box = new Box<int>(7);
-echo $box->get() + 1, "|", get_class($box);
+function id($value) {{ return $value; }}
+echo id<int>(7) + 1;
 "#,
         );
-        assert_eq!(compile_and_run(&source), "8|Box<int>", "{argument}");
+        assert_eq!(compile_and_run(&source), "8", "{argument}");
     }
 }
 
@@ -2019,14 +2200,16 @@ echo $box->get() + 1, "|", get_class($box);
 fn test_docblock_generics_survive_same_line_attribute_groups() {
     let out = compile_and_run(
         r#"<?php
-/** @template T */
-#[First("]")] #[Second("[")] class Box {
-    public function __construct(int $value) {}
-}
-echo get_class(new Box<int>(7));
+/**
+ * @template T
+ * @param T $value
+ * @return T
+ */
+#[First("]")] #[Second("[")] function id($value) { return $value; }
+echo id<int>(7);
 "#,
     );
-    assert_eq!(out, "Box<int>");
+    assert_eq!(out, "7");
 }
 
 // --- Generic traits ---

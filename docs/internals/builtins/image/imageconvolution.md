@@ -2,7 +2,7 @@
 title: "imageconvolution() - internals"
 description: "Compiler internals for imageconvolution(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 489
+  order: 502
 ---
 
 ## `imageconvolution()` - internals

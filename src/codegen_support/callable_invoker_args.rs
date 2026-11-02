@@ -18,6 +18,18 @@ use crate::types::PhpType;
 /// Internal boxed-Mixed tag used only inside descriptor-invoker argument arrays.
 pub(crate) const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 
+/// Internal boxed-Mixed tag for an array element that owns a share of a global ref-cell.
+///
+/// Unlike tag 11, releasing this marker decrements the ref-cell itself. The cell keeps the
+/// referenced web superglobal alive after an array containing the alias escapes its function.
+pub(crate) const ARRAY_GLOBAL_REF_CELL_TAG: i64 = 12;
+
+/// Internal boxed-Mixed tag for an array element that owns a share of a local ref-cell.
+///
+/// The marker retains the promoted heap cell when it is created and releases that share when the
+/// containing array is destroyed, so the alias remains valid after its declaring frame returns.
+pub(crate) const ARRAY_LOCAL_REF_CELL_TAG: i64 = 13;
+
 /// Clones a boxed runtime Mixed argument container into a normalized boxed Mixed container.
 pub(crate) fn emit_clone_runtime_mixed_invoker_arg_as_mixed(
     dest_reg: &str,
@@ -66,6 +78,56 @@ pub(crate) fn emit_clone_runtime_mixed_invoker_arg_as_mixed(
     emit_clone_assoc_array_for_invoker(dest_reg, emitter);
     emit_box_invoker_arg_clone_as_mixed(dest_reg, &assoc_ty, emitter);
 
+    emitter.label(&done_label);
+}
+
+/// Clones and boxes a statically `Array(Mixed)` callback argument container by its heap kind.
+///
+/// A generic `array` local can be promoted to a hash at runtime (`$r[$mixedKey] = ...` with a
+/// string key goes through `__rt_array_set_mixed_key`), so its static type does not say which
+/// layout the pointer holds. Cloning a hash as a packed array read its entries as packed slots
+/// and the invoker then crashed. The heap kind picks the clone and the boxed Mixed tag; the
+/// named-argument normalizer then sees the hash exactly as it does for a literal.
+pub(crate) fn emit_clone_mixed_array_or_hash_for_invoker(
+    dest_reg: &str,
+    emitter: &mut Emitter,
+    next_label: &mut dyn FnMut(&str) -> String,
+) {
+    let hash_label = next_label("invoker_arg_kind_hash");
+    let done_label = next_label("invoker_arg_kind_done");
+    let indexed_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let result_reg = abi::int_result_reg(emitter);
+
+    abi::emit_push_reg(emitter, dest_reg);                                      // preserve the argument container while its heap kind is probed
+    if result_reg != dest_reg {
+        emitter.instruction(&format!("mov {}, {}", result_reg, dest_reg));      // pass the container to the heap-kind probe
+    }
+    abi::emit_call_label(emitter, "__rt_heap_kind");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #3");                                  // is the container a promoted associative hash?
+            emitter.instruction(&format!("b.eq {}", hash_label));               // hashes keep their named keys
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 3");                                  // is the container a promoted associative hash?
+            emitter.instruction(&format!("je {}", hash_label));                 // hashes keep their named keys
+        }
+    }
+    abi::emit_load_temporary_stack_slot(emitter, dest_reg, 0);
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the preserved pointer once it is reloaded for cloning
+    emit_clone_indexed_array_for_invoker(dest_reg, &PhpType::Mixed, emitter);
+    emit_box_invoker_arg_clone_as_mixed(dest_reg, &indexed_ty, emitter);
+    abi::emit_jump(emitter, &done_label);
+
+    emitter.label(&hash_label);
+    abi::emit_load_temporary_stack_slot(emitter, dest_reg, 0);
+    abi::emit_release_temporary_stack(emitter, 16);                             // discard the preserved pointer once it is reloaded for cloning
+    emit_clone_assoc_array_for_invoker_with_value_type(dest_reg, &PhpType::Mixed, emitter);
+    emit_box_invoker_arg_clone_as_mixed(dest_reg, &assoc_ty, emitter);
     emitter.label(&done_label);
 }
 

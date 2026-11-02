@@ -57,6 +57,28 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_get(
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property_value = expect_operand(inst, 1)?;
+    // A receiver typed with a class the closed world never declared -- a builtin elephc does not
+    // model, such as `SimpleXMLElement` -- can only hold a value no compiled code produced. The
+    // read fails at run time, when it actually executes, instead of refusing the whole body:
+    // that refusal deferred Symfony's validator `XmlFileLoader` and cost the demo a whole second
+    // compile.
+    if let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() {
+        let normalized = class_name.trim_start_matches('\\');
+        if !ctx.module.class_infos.contains_key(normalized)
+            && !crate::types::checker::builtin_stdclass::is_stdclass(normalized)
+        {
+            super::super::exceptions::emit_error(
+                ctx,
+                &format!("Class \"{normalized}\" is not supported by this compiled program"),
+            );
+            super::super::arrays::emit_array_get_null_fallback(
+                ctx,
+                &inst.result_php_type.codegen_repr(),
+                false,
+            );
+            return store_if_result(ctx, inst);
+        }
+    }
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
         return lower_object_dynamic_prop_get_with_null_guard(
             ctx,
@@ -187,14 +209,17 @@ pub(super) fn emit_property_warning_location(ctx: &mut FunctionContext<'_>, line
         ctx.emitter.instruction("mov rsi, rdx");                               // pass the formatted line-number length to the warning fragment buffer
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
-    // Publish the real caller location for a user error handler.
+    // Publish the real caller location for a user error handler: one `php_site` record
+    // `{file descriptor, line}`, whose zero descriptor names the entry file (see
+    // `prepare_call_site`); warning dispatch expands it into the `_php_diagnostic_*` words.
+    let record = ctx.data.add_words(vec![
+        crate::codegen_support::data_section::DataWord::U64(0),
+        crate::codegen_support::data_section::DataWord::U64(u64::from(line)),
+    ]);
     let scratch = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
-    abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(line));
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+    abi::emit_symbol_address(ctx.emitter, scratch, &record);
+    let site = abi::php_site_symbol(&ctx.emitter.target);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &site, 0);
 }
 
 /// Answers an `isset()`/`empty()` probe that found no property.
@@ -307,6 +332,100 @@ pub(super) fn lower_const_dynamic_prop_get(
     store_if_result(ctx, inst)
 }
 
+/// The class name of every class id, for recognising refusals that name the receiver's class.
+pub(super) fn class_names_by_id(ctx: &FunctionContext<'_>) -> crate::fast_hash::FastMap<u64, String> {
+    ctx.module
+        .class_infos
+        .iter()
+        .map(|(name, info)| (info.class_id, name.clone()))
+        .collect()
+}
+
+/// The visibility word of a read refusal that is plain php text naming the arm's own class.
+///
+/// Such an arm needs no per-class code: the text is composed from the receiver's class name at run
+/// time. A class that keeps eval-created properties separately takes the longer probe in
+/// `emit_refused_read_or_eval_child_property` instead, so it is left alone.
+pub(super) fn read_arm_dynamic_refusal(
+    ctx: &FunctionContext<'_>,
+    class_names: &crate::fast_hash::FastMap<u64, String>,
+    candidate: &MixedPropertyReadCandidate,
+) -> Option<&'static str> {
+    let MixedPropertyReadKind::Refuse(message) = &candidate.kind else {
+        return None;
+    };
+    let slot = &candidate.candidate.slot;
+    if ctx
+        .module
+        .class_infos
+        .get(slot.class_name.trim_start_matches('\\'))
+        .is_some_and(|info| info.eval_property_storage)
+    {
+        return None;
+    }
+    super::runtime_property_writes::refusal_message_visibility(
+        class_names,
+        candidate.candidate.class_id,
+        &slot.property,
+        message,
+    )
+}
+
+/// For each read arm, the index of the arm whose code it shares.
+///
+/// Slot reads that run the same code share the first one's label and body: a subclass that
+/// inherits a slot unchanged reads it exactly as its parent does, and php names the DECLARING
+/// class in the `must not be accessed before initialization` error. Plain visibility refusals
+/// share one body per visibility word.
+pub(super) fn shared_read_arm_owners(
+    ctx: &FunctionContext<'_>,
+    class_names: &crate::fast_hash::FastMap<u64, String>,
+    candidates: &[MixedPropertyReadCandidate],
+) -> Vec<usize> {
+    let grouping = std::env::var_os("ELEPHC_NO_ARM_GROUPS").is_none();
+    let mut first_for_key: crate::fast_hash::FastMap<String, usize> = Default::default();
+    let mut owners = Vec::with_capacity(candidates.len());
+    for (index, candidate) in candidates.iter().enumerate() {
+        let slot = &candidate.candidate.slot;
+        let key = if !grouping {
+            format!("unique|{index}")
+        } else if let Some(visibility) = read_arm_dynamic_refusal(ctx, class_names, candidate) {
+            format!("refuse-dynamic|{visibility}")
+        } else if matches!(candidate.kind, MixedPropertyReadKind::Slot) {
+            format!(
+                "slot|{}|{}|{:?}|{}|{}|{}|{}",
+                super::runtime_property_writes::message_class_for_slot(ctx, slot),
+                slot.property,
+                slot.php_type,
+                slot.offset,
+                slot.is_declared,
+                slot.is_packed,
+                slot.is_reference
+            )
+        } else {
+            format!("unique|{index}")
+        };
+        owners.push(*first_for_key.entry(key).or_insert(index));
+    }
+    owners
+}
+
+/// For each class-hash read arm, the index of the first arm with the same hash offset.
+pub(super) fn shared_hash_arm_owners(arms: &[MixedClassHashArm]) -> Vec<usize> {
+    let grouping = std::env::var_os("ELEPHC_NO_ARM_GROUPS").is_none();
+    let mut first_for_offset: crate::fast_hash::FastMap<usize, usize> = Default::default();
+    arms.iter()
+        .enumerate()
+        .map(|(index, arm)| {
+            if grouping {
+                *first_for_offset.entry(arm.hash_offset).or_insert(index)
+            } else {
+                index
+            }
+        })
+        .collect()
+}
+
 /// Lowers a runtime-name dynamic property read from a boxed `Mixed` receiver.
 pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     ctx: &mut FunctionContext<'_>,
@@ -314,13 +433,17 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     object: ValueId,
     property_value: ValueId,
 ) -> Result<()> {
+    if try_lower_outlined_mixed_prop_get(ctx, inst, object, property_value)? {
+        return Ok(());
+    }
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;
     let mode = property_fetch_mode(inst);
-    let candidates = declared_mixed_property_get_candidates(ctx, mode, inst)?;
+    let candidates = declared_mixed_property_get_candidates(ctx, mode, inst, None)?;
     let done_label = ctx.next_label("mixed_dyn_prop_get_done");
     let miss_label = ctx.next_label("mixed_dyn_prop_get_miss");
     let miss_no_stack_label = ctx.next_label("mixed_dyn_prop_get_miss_no_stack");
+    let eval_done_label = ctx.next_label("mixed_dyn_prop_get_eval_done");
     let stdclass_label = ctx.next_label("mixed_dyn_prop_get_stdclass");
     let match_labels = candidates
         .iter()
@@ -336,6 +459,9 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     // so an `#[\AllowDynamicProperties]` user class answered `null` for a key it really held.
     // The arms are per CLASS, because the name is only known at run time; the declared (class,
     // name) probes above run first, so a name the class declares keeps its declared answer.
+    let class_names = class_names_by_id(ctx);
+    let arm_owner = shared_read_arm_owners(ctx, &class_names, &candidates);
+    let match_labels = arm_owner.iter().map(|owner| match_labels[*owner].clone()).collect::<Vec<_>>();
     let hash_arms = mixed_class_hash_arms(ctx, "", &[])?;
     let hash_labels = hash_arms
         .iter()
@@ -347,6 +473,11 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
         })
         .collect::<Vec<_>>();
 
+    // The hash read depends on the class's hash offset alone, so classes with the same offset
+    // share one body.
+    let hash_owner = shared_hash_arm_owners(&hash_arms);
+    let hash_labels = hash_owner.iter().map(|owner| hash_labels[*owner].clone()).collect::<Vec<_>>();
+
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_mixed_unboxed_not_object(ctx, &miss_no_stack_label);
@@ -355,21 +486,21 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
-    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
-        emit_branch_if_mixed_dynamic_property_candidate_matches(
-            ctx,
-            candidate.candidate.class_id,
-            &candidate.candidate.slot.property,
-            label,
-        );
-    }
+    let dispatch_candidates = candidates
+        .iter()
+        .map(|candidate| candidate.candidate.clone())
+        .collect::<Vec<_>>();
+    emit_mixed_dynamic_property_candidate_dispatch(ctx, &dispatch_candidates, &match_labels);
     for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
         emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
     }
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
 
-    for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
+    for (index, (arm, label)) in hash_arms.iter().zip(hash_labels.iter()).enumerate() {
+        if hash_owner[index] != index {
+            continue;
+        }
         ctx.emitter.label(label);
         // The arm matched this runtime class, so the offset is its own. The helper takes the
         // runtime key from the stacked block and releases that block itself.
@@ -377,9 +508,21 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
-    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+    for (index, (candidate, label)) in candidates.iter().zip(match_labels.iter()).enumerate() {
+        if arm_owner[index] != index {
+            continue;
+        }
         ctx.emitter.label(label);
-        let slot = &candidate.candidate.slot;
+        if let Some(visibility) = read_arm_dynamic_refusal(ctx, &class_names, candidate) {
+            // Composes the text from the receiver's own class name, releasing the block.
+            super::closure_scope_gate::emit_scope_refusal(ctx, visibility);
+            continue;
+        }
+        let mut shared_slot = candidate.candidate.slot.clone();
+        if matches!(candidate.kind, MixedPropertyReadKind::Slot) {
+            shared_slot.class_name = super::runtime_property_writes::message_class_for_slot(ctx, &shared_slot);
+        }
+        let slot = &shared_slot;
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
         // Only `Slot` touches storage. Every temporary block is released BEFORE the arm's own
@@ -432,19 +575,65 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
+    // An object of an eval-declared class is carried by a stdClass runtime object (or matches no
+    // compiled class at all), so both arrival points ask the owning eval context before the native
+    // hash answers null: `$object->{$name}` on an eval model reaches its attributes and `__get()`.
+    let eval_fallback = super::mixed_property_reads::eval_owner_fallback_available(ctx);
+
     ctx.emitter.label(&stdclass_label);
+    if eval_fallback {
+        let native_stdclass_label = ctx.next_label("mixed_dyn_prop_get_stdclass_native");
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        builtins::lower_eval_owner_mixed_dynamic_property_get(
+            ctx,
+            object,
+            property_value,
+            &native_stdclass_label,
+            &eval_done_label,
+        )?;
+        ctx.emitter.label(&native_stdclass_label);
+        ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        push_mixed_unboxed_object_payload(ctx);
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+        abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    }
     emit_runtime_stdclass_get_for_stacked_name(ctx, inst, 16, 0)?;
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    if eval_fallback {
+        let native_miss_label = ctx.next_label("mixed_dyn_prop_get_miss_native");
+        builtins::lower_eval_owner_mixed_dynamic_property_get(
+            ctx,
+            object,
+            property_value,
+            &native_miss_label,
+            &eval_done_label,
+        )?;
+        ctx.emitter.label(&native_miss_label);
+    }
     emit_dynamic_property_miss_result(ctx, inst);
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_no_stack_label);
+    if eval_fallback {
+        let native_no_stack_label = ctx.next_label("mixed_dyn_prop_get_miss_no_stack_native");
+        builtins::lower_eval_owner_mixed_dynamic_property_get(
+            ctx,
+            object,
+            property_value,
+            &native_no_stack_label,
+            &eval_done_label,
+        )?;
+        ctx.emitter.label(&native_no_stack_label);
+    }
     emit_dynamic_property_miss_result(ctx, inst);
 
     ctx.emitter.label(&done_label);
+    ctx.emitter.label(&eval_done_label);
     store_if_result(ctx, inst)
 }

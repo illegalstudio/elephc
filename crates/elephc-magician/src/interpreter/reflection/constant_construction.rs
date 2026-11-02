@@ -19,7 +19,7 @@ pub(super) fn eval_reflection_class_constant_new(
         &[String::from("class_name"), String::from("constant_name")],
         evaluated_args,
     )?;
-    let class_name = eval_reflection_string_arg(args[0], values)?;
+    let class_name = eval_reflection_class_target_name(args[0], context, values)?;
     let constant_name = eval_reflection_string_arg(args[1], values)?;
     eval_reflection_class_constant_object_result_or_throw(
         &class_name,
@@ -113,12 +113,22 @@ pub(super) fn eval_reflection_enum_case_new(
         &[String::from("class_name"), String::from("constant_name")],
         evaluated_args,
     )?;
-    let enum_name = eval_reflection_string_arg(args[0], values)?;
+    let enum_name = eval_reflection_class_target_name(args[0], context, values)?;
     let case_name = eval_reflection_string_arg(args[1], values)?;
     let Some(enum_decl) = context.enum_decl(&enum_name) else {
-        if eval_reflection_class_constant_metadata(&enum_name, &case_name, context, values)?
-            .is_some()
+        if let Some(metadata) =
+            eval_reflection_class_constant_metadata(&enum_name, &case_name, context, values)?
         {
+            // A compiled enum's case: its metadata carries the enum-case flag. Compiled code builds
+            // every valid literal case reflector itself, so what reaches here asked a pure enum's
+            // case for a backed one.
+            if metadata.4 && owner_kind == EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE {
+                return eval_throw_reflection_exception(
+                    &format!("Enum case {}::{} is not a backed case", metadata.0, case_name),
+                    context,
+                    values,
+                );
+            }
             return eval_reflection_not_enum_case_exception(
                 &enum_name, &case_name, context, values,
             );

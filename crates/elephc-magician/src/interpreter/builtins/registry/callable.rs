@@ -81,33 +81,52 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
         values,
     )?;
     callback.with_values(context, values, |callback, context, values| {
-        if !values.is_array_like(arg_array)? {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        with_eval_array_call_arguments(arg_array, context, values, |evaluated_args, context, values| {
-            if let EvaluatedCallable::Named { name, .. } = &callback {
-                if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
-                    if forbidden != "get_defined_vars" || callback_is_object {
-                        return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
-                    }
-                }
-                if name.eq_ignore_ascii_case("get_defined_vars") {
-                    if let Some(lexical_scope) = lexical_scope {
-                        if evaluated_args.iter().any(|arg| arg.name.is_some()) {
-                            return Err(EvalStatus::RuntimeFatal);
-                        }
-                        let evaluated_values =
-                            evaluated_args.iter().map(|arg| arg.value).collect::<Vec<_>>();
-                        return eval_get_defined_vars_from_scope(
-                            &evaluated_values,
-                            lexical_scope,
-                            values,
-                        );
-                    }
+        eval_call_user_func_array_dispatch(
+            callback,
+            callback_is_object,
+            arg_array,
+            lexical_scope,
+            context,
+            values,
+        )
+    })
+}
+
+/// Dispatches a normalized `call_user_func_array` callback with the array's arguments.
+fn eval_call_user_func_array_dispatch(
+    callback: &EvaluatedCallable,
+    callback_is_object: bool,
+    arg_array: RuntimeCellHandle,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !values.is_array_like(arg_array)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    with_eval_array_call_arguments(arg_array, context, values, |evaluated_args, context, values| {
+        if let EvaluatedCallable::Named { name, .. } = callback {
+            if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
+                if forbidden != "get_defined_vars" || callback_is_object {
+                    return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
                 }
             }
-            eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
-        })
+            if name.eq_ignore_ascii_case("get_defined_vars") {
+                if let Some(lexical_scope) = lexical_scope {
+                    if evaluated_args.iter().any(|arg| arg.name.is_some()) {
+                        return Err(EvalStatus::RuntimeFatal);
+                    }
+                    let evaluated_values =
+                        evaluated_args.iter().map(|arg| arg.value).collect::<Vec<_>>();
+                    return eval_get_defined_vars_from_scope(
+                        &evaluated_values,
+                        lexical_scope,
+                        values,
+                    );
+                }
+            }
+        }
+        eval_evaluated_callable_with_call_array_args(callback, evaluated_args, context, values)
     })
 }
 
@@ -125,28 +144,50 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values_from_scope(
     let callback =
         eval_call_user_func_callback(*callback, "call_user_func", lexical_scope, context, values)?;
     callback.with_values(context, values, |callback, context, values| {
-        if let EvaluatedCallable::Named { name, .. } = &callback {
-            if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
-                if forbidden != "get_defined_vars" || callback_is_object {
-                    return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
-                }
-            }
-            if name.eq_ignore_ascii_case("get_defined_vars") {
-                if let Some(lexical_scope) = lexical_scope {
-                    return eval_get_defined_vars_from_scope(callback_args, lexical_scope, values);
-                }
-            }
-        }
-        eval_evaluated_callable_with_call_user_func_values(
-            &callback,
-            callback_args.to_vec(),
+        eval_call_user_func_values_dispatch(
+            callback,
+            callback_is_object,
+            callback_args,
+            lexical_scope,
             context,
             values,
         )
     })
 }
 
+/// Dispatches a normalized `call_user_func` callback with already evaluated positional values.
+fn eval_call_user_func_values_dispatch(
+    callback: &EvaluatedCallable,
+    callback_is_object: bool,
+    callback_args: &[RuntimeCellHandle],
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let EvaluatedCallable::Named { name, .. } = callback {
+        if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
+            if forbidden != "get_defined_vars" || callback_is_object {
+                return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
+            }
+        }
+        if name.eq_ignore_ascii_case("get_defined_vars") {
+            if let Some(lexical_scope) = lexical_scope {
+                return eval_get_defined_vars_from_scope(callback_args, lexical_scope, values);
+            }
+        }
+    }
+    eval_evaluated_callable_with_call_user_func_values(
+        callback,
+        callback_args.to_vec(),
+        context,
+        values,
+    )
+}
+
 /// Normalizes a `call_user_func*` callback and maps non-invokable objects to PHP's TypeError.
+///
+/// The resolved callable keeps the owned receiver a callable array's read produced; the caller
+/// finishes the dispatch through `ResolvedEvalCallable::with_values()`, which releases it.
 fn eval_call_user_func_callback(
     callback: RuntimeCellHandle,
     function_name: &str,
@@ -154,9 +195,27 @@ fn eval_call_user_func_callback(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<ResolvedEvalCallable, EvalStatus> {
+    // A Closure is invocable from anywhere: its access was settled where it was created
+    // (`$this->getService(...)` inside the class may target a protected method). Only the
+    // array/string spellings are checked against the CALLER's scope; checking a closure too made
+    // a compiled `($this->factory)(...)` on an interpreted container's closure throw
+    // "cannot access protected method".
+    let is_closure_value = values.type_tag(callback)? == EVAL_TAG_CALLABLE
+        || (values.type_tag(callback)? == EVAL_TAG_OBJECT
+            && values
+                .object_identity(callback)
+                .is_ok_and(|identity| context.closure_object_target(identity).is_some()));
     match eval_callable_with_optional_scope(callback, context, lexical_scope, values) {
         Ok(callback) => {
-            if let Err(status) = eval_validate_call_user_func_callback(&callback.callable, function_name, context, values) {
+            if is_closure_value {
+                return Ok(callback);
+            }
+            if let Err(status) = eval_validate_call_user_func_callback(
+                &callback.callable,
+                function_name,
+                context,
+                values,
+            ) {
                 let _ = callback.release(context, values);
                 return Err(status);
             }
@@ -191,6 +250,25 @@ pub(in crate::interpreter) fn eval_callable_from_scope(
     values: &mut impl RuntimeValueOps,
 ) -> Result<ResolvedEvalCallable, EvalStatus> {
     eval_callable_with_optional_scope(callback, context, Some(scope), values)
+}
+
+/// Releases the owned callable-array receiver of a finished transient dispatch.
+///
+/// The dispatch result wins: a release failure is reported only when the dispatch succeeded.
+pub(in crate::interpreter) fn eval_release_callable_receiver<T>(
+    result: Result<T, EvalStatus>,
+    receiver: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let Some(receiver) = receiver.filter(|cell| !cell.is_borrowed()) else {
+        return result;
+    };
+    let released = values.release(receiver);
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(_), Err(status)) => Err(status),
+        (Ok(value), Ok(())) => Ok(value),
+    }
 }
 
 /// Normalizes one callback for a non-invoking probe and reports any owned array receiver.
@@ -251,7 +329,29 @@ fn eval_callable_with_optional_scope_and_array_receiver(
             array_receiver,
         ));
     }
+    if values.type_tag(callback)? == EVAL_TAG_CALLABLE {
+        // A compiled closure reached interpreted code as its descriptor. Its string form names
+        // no function this context can find, so `array_map($compiledClosure, ...)` and every
+        // other callback builtin refused it; the descriptor is what `$f()` already calls.
+        let descriptor = values.raw_value_word(callback)? as usize;
+        if unsafe { decode_callable_descriptor(descriptor as *mut std::ffi::c_void) }.is_some() {
+            return Ok((EvaluatedCallable::NativeDescriptor { descriptor }, None));
+        }
+    }
     if values.type_tag(callback)? == EVAL_TAG_OBJECT {
+        if let Some(owner) = eval_foreign_closure_owner(callback, context, values)? {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_ref() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let callback = eval_object_callable(callback, owner_context, values)?;
+            return Ok((
+                EvaluatedCallable::ForeignContext {
+                    callback: Box::new(callback),
+                    owner,
+                },
+                None,
+            ));
+        }
         return eval_object_callable(callback, context, values).map(|callback| (callback, None));
     }
     if values.is_array_like(callback)? {
@@ -259,6 +359,69 @@ fn eval_callable_with_optional_scope_and_array_receiver(
     }
     eval_string_callable(callback, context, lexical_scope, values)
         .map(|callback| (callback, None))
+}
+
+/// Returns a lease on the eval context that owns a `Closure` object this context does not know.
+///
+/// A closure created while one compiled frame's context ran is registered there only. Symfony's
+/// FrameworkBundle `Router` stores `$parameters->get(...)` while the container builds it, and a
+/// cache warmer running under another context later calls `($this->paramFetcher)(...)`: the
+/// object then looked like its `stdClass` carrier and failed as "not callable".
+pub(in crate::interpreter) fn eval_foreign_closure_owner(
+    callback: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<crate::context::pcntl_runtime::EvalPcntlContextLease>, EvalStatus> {
+    let Ok(identity) = values.object_identity(callback) else {
+        return Ok(None);
+    };
+    if context.closure_object_target(identity).is_some() {
+        return Ok(None);
+    }
+    let Some(owner) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity) else {
+        return Ok(None);
+    };
+    if std::ptr::eq(owner as *const ElephcEvalContext, context as *const ElephcEvalContext) {
+        return Ok(None);
+    }
+    let Some(owner_context) = (unsafe { owner.as_ref() }) else {
+        return Ok(None);
+    };
+    if owner_context.closure_object_target(identity).is_none() {
+        return Ok(None);
+    }
+    Ok(crate::context::pcntl_runtime::begin_foreign_context_use(owner))
+}
+
+/// Runs `run` with BOTH the interpreter and the runtime hooks on a foreign closure's owner context.
+///
+/// Switching only `context` left `values` bound to the caller's context, and every hook that
+/// reads the class scope answered for the caller. Constructing an exception inside such a closure
+/// could not write the protected `Exception::$file`, the `new` failed, and the `throw` surfaced as
+/// "unsupported Throw statement". Laravel's `$request->validate()` is a macro closure registered by
+/// a service provider and invoked from a controller, so a failed validation killed the worker
+/// instead of answering 422.
+///
+/// A Throwable escaping the closure is parked on the OWNER's pending-throw slot, while the
+/// caller's `try` consults its own; it moves back here, or nothing would ever catch it.
+pub(in crate::interpreter) fn with_foreign_owner_context<V: RuntimeValueOps, R>(
+    owner: &crate::context::pcntl_runtime::EvalPcntlContextLease,
+    caller: &mut ElephcEvalContext,
+    values: &mut V,
+    run: impl FnOnce(&mut ElephcEvalContext, &mut V) -> Result<R, EvalStatus>,
+) -> Result<R, EvalStatus> {
+    let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let previous = values.rebind_context(owner_context as *const ElephcEvalContext);
+    let result = run(owner_context, values);
+    values.rebind_context(previous);
+    if matches!(result, Err(EvalStatus::UncaughtThrowable)) {
+        if let Some(thrown) = owner_context.take_pending_throw() {
+            caller.set_pending_throw(thrown);
+        }
+    }
+    result
 }
 
 /// Normalizes one invokable eval object for dynamic callable dispatch.
@@ -433,7 +596,15 @@ fn eval_array_callable_with_receiver_owner(
                     bridge_scope,
                 })
             }
-            _ => Err(EvalStatus::UnsupportedConstruct),
+            other => {
+                note_eval_runtime_failure(
+                    format!(
+                        "callable array receiver is neither an object nor a class name (runtime tag {other})"
+                    ),
+                    context,
+                );
+                Err(EvalStatus::UnsupportedConstruct)
+            }
         }
     })();
     // Only an object-method result transfers the array read's receiver owner.

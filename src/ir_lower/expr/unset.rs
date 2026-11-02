@@ -69,6 +69,12 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
                 || unset_array_access_property_array_type(ctx, array).is_some()
                 || unset_array_access_has_array_access_property_receiver(ctx, array)
                 || unset_array_access_static_php_array_receiver(ctx, array).is_some()
+                || unset_array_access_has_property_array_receiver(ctx, array)
+                || unset_array_access_has_generic_object_property_receiver(ctx, array)
+                || unset_array_access_has_static_property_receiver(ctx, array)
+                || crate::ir_lower::stmt::nested_local_hash_unset_supported(ctx, arg)
+                || crate::ir_lower::stmt::nested_property_hash_unset_supported(ctx, arg)
+                || crate::ir_lower::stmt::nested_static_property_hash_unset_supported(ctx, arg)
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -83,6 +89,75 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
         }
         _ => false,
     }
+}
+
+/// Returns true when an array-access unset receiver is a declared static property whose storage
+/// can be converted to a sparse hash and written back through the static-property slot.
+fn unset_array_access_has_static_property_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ExprKind::StaticPropertyAccess { receiver, property } = &array.kind else {
+        return false;
+    };
+    matches!(
+        static_property_result_type(ctx, receiver, property, array).codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+    )
+}
+
+/// Returns true when an array-access unset receiver is a declared instance property with concrete
+/// array storage that can be loaded, sparsified, mutated, and written back directly in EIR.
+fn unset_array_access_has_property_array_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ExprKind::PropertyAccess { object, property } = &array.kind else {
+        return false;
+    };
+    matches!(
+        property_access_expr_type_for_ir(ctx, object, property)
+            .map(|ty| ty.codegen_repr()),
+        Some(PhpType::Array(_) | PhpType::AssocArray { .. })
+    )
+}
+
+/// Returns true when the receiver is a property of a GENERIC object — one whose class the compiler
+/// cannot name, so there is no declared slot to walk, only a boxed cell to read and write back.
+///
+/// Symfony's generated container is written this way throughout: `getXService($container, …)`
+/// takes an UNTYPED parameter and mutates `$container->services[$id]`. The element WRITE already
+/// has this path (`lower_generic_object_mixed_property_array_write`); this is what lets the UNSET
+/// reach its counterpart instead of the fallback whose only job is to refuse.
+///
+/// Restricted to a plain variable receiver, which is the shape that occurs and the shape the
+/// lowering handles; anything else keeps its existing treatment.
+fn unset_array_access_has_generic_object_property_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ExprKind::PropertyAccess { object, property } = &array.kind else {
+        return false;
+    };
+    if matches!(
+        property_access_expr_type_for_ir(ctx, object, property)
+            .map(|ty| ty.codegen_repr()),
+        Some(PhpType::Mixed | PhpType::Union(_))
+    ) {
+        return true;
+    }
+    let ExprKind::Variable(name) = &object.kind else {
+        // A chained receiver whose own type is gradual (`unset($this->store->locks[$name])` over an
+        // untyped `$store`, illuminate/cache's `ArrayLock::forceRelease()`) is read and written
+        // back exactly like the plain-variable one.
+        return matches!(
+            unset_operand_type(ctx, object).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        );
+    };
+    let ty = ctx.local_type(name);
+    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || matches!(&ty, PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty())
 }
 
 /// Returns true when an array-access unset receiver is a plain array/hash local whose element the
@@ -115,7 +190,7 @@ pub(super) fn unset_array_access_has_local_array_receiver(
         return true;
     }
     match ctx.local_type(name).codegen_repr() {
-        PhpType::Mixed => ctx.is_ref_bound_local(name),
+        PhpType::Mixed | PhpType::Union(_) => true,
         PhpType::AssocArray { .. } => true,
         PhpType::Array(_) => !ctx.is_ref_bound_local(name),
         _ => false,
@@ -133,6 +208,13 @@ pub(super) fn unset_array_access_has_object_receiver(
             .get(name)
             .cloned()
             .unwrap_or_else(|| infer_expr_type_syntactic(array)),
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_result_type(ctx, receiver, property, array)
+        }
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
         _ => infer_expr_type_syntactic(array),
     };
     type_satisfies_array_access_for_ir(ctx, &ty)
@@ -178,6 +260,51 @@ pub(super) fn lower_unset_array_access(
         lower_unset_static_property_array_element(ctx, receiver, property, index, expr);
         return None;
     }
+    // An OBJECT offset is never an array key, so only an `ArrayAccess` receiver (`WeakMap`,
+    // `SplObjectStorage`, a user class) can honour the unset, and it does so through
+    // `offsetUnset()`. Laravel's exception handler forgets reported exceptions with
+    // `unset($this->reportedExceptionMap[$e])`; the hash paths below would materialize the
+    // object as a hash key and refuse the program.
+    if matches!(
+        crate::ir_lower::expr::array_access::index_expr_key_type(ctx, index),
+        PhpType::Object(_)
+    ) {
+        let synthetic = Expr::new(
+            ExprKind::MethodCall {
+                object: Box::new(array.clone()),
+                method: "offsetUnset".to_string(),
+                args: vec![index.clone()],
+            },
+            expr.span,
+        );
+        let result = lower_expr(ctx, &synthetic);
+        // The call's boxed `null` answer is a temporary of its own; nothing else consumes it.
+        if ctx.value_is_owning_temporary(result) {
+            crate::ir_lower::ownership::release_if_owned(ctx, result, Some(expr.span));
+        }
+        return None;
+    }
+    if crate::ir_lower::stmt::lower_nested_local_hash_unset(ctx, expr) {
+        return None;
+    }
+    if crate::ir_lower::stmt::lower_nested_property_hash_unset(ctx, expr) {
+        return None;
+    }
+    if crate::ir_lower::stmt::lower_nested_static_property_hash_unset(ctx, expr) {
+        return None;
+    }
+    // Shapes the declared-array paths above do not take: gradual (`mixed`) static properties,
+    // and instance properties of a receiver whose class the compiler cannot name.
+    if let ExprKind::StaticPropertyAccess { receiver, property } = &array.kind {
+        if lower_unset_gradual_static_property_element(ctx, receiver, property, index, expr) {
+            return None;
+        }
+    }
+    if let ExprKind::PropertyAccess { object, property } = &array.kind {
+        if lower_unset_gradual_property_array_element(ctx, object, property, index, expr) {
+            return None;
+        }
+    }
     if let ExprKind::Variable(name) = &array.kind {
         if ctx.local_type(name).is_php_array()
             || (ctx.is_ref_bound_local(name)
@@ -200,6 +327,10 @@ pub(super) fn lower_unset_array_access(
                 let removed = lower_unset_indexed_element(ctx, name, elem_ty, array.span, index, expr);
                 return can_gate.then_some(removed);
             }
+            PhpType::Mixed | PhpType::Union(_) => {
+                lower_unset_mixed_array_element(ctx, name, array.span, index, expr);
+                return None;
+            }
             _ => {}
         }
     }
@@ -213,6 +344,511 @@ pub(super) fn lower_unset_array_access(
     );
     lower_expr(ctx, &synthetic);
     None
+}
+
+/// Lowers `unset(Class::$property[$key])` by promoting the static array to sparse hash storage,
+/// deleting the key, and publishing the possibly relocated container back to the static slot.
+fn lower_unset_gradual_static_property_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    index: &Expr,
+    expr: &Expr,
+) -> bool {
+    let property_expr = Expr::new(
+        ExprKind::StaticPropertyAccess {
+            receiver: receiver.clone(),
+            property: property.to_string(),
+        },
+        expr.span,
+    );
+    let property_ty = static_property_result_type(ctx, receiver, property, &property_expr)
+        .codegen_repr();
+    if !matches!(
+        property_ty,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return false;
+    }
+    let property_value = lower_static_property_get(ctx, receiver, property, &property_expr);
+    // A gradual static that still holds null -- the default of an untyped `static $cache;` --
+    // makes this unset a silent no-op in PHP, where `MixedToHash` would raise the array TypeError.
+    // The dimension is evaluated either way, as PHP does.
+    let gradual = matches!(property_ty, PhpType::Mixed | PhpType::Union(_));
+    let null_guard = if gradual {
+        let key = lower_expr(ctx, index);
+        let is_null = ctx.emit_value(
+            Op::IsNull,
+            vec![property_value.value],
+            None,
+            PhpType::Bool,
+            Op::IsNull.default_effects(),
+            Some(expr.span),
+        );
+        let delete = ctx
+            .builder
+            .create_named_block("unset.static_element.delete", Vec::new());
+        let merge = ctx
+            .builder
+            .create_named_block("unset.static_element.merge", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: is_null.value,
+            then_target: merge,
+            then_args: Vec::new(),
+            else_target: delete,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(delete);
+        Some((key, merge))
+    } else {
+        None
+    };
+    let hash_ty = match &property_ty {
+        PhpType::Array(element) => PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(element.codegen_repr()),
+        },
+        PhpType::AssocArray { .. } => property_ty.clone(),
+        PhpType::Mixed | PhpType::Union(_) => PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+        _ => return false,
+    };
+    let hash = match property_ty {
+        PhpType::Array(_) => ctx.emit_value(
+            Op::ArrayToHash,
+            vec![property_value.value],
+            None,
+            hash_ty,
+            Op::ArrayToHash.default_effects(),
+            Some(expr.span),
+        ),
+        PhpType::Mixed | PhpType::Union(_) => ctx.emit_value(
+            Op::MixedToHash,
+            vec![property_value.value],
+            None,
+            hash_ty,
+            Op::MixedToHash.default_effects(),
+            Some(expr.span),
+        ),
+        PhpType::AssocArray { .. } => property_value,
+        _ => return false,
+    };
+    let key = match &null_guard {
+        Some((key, _)) => *key,
+        None => lower_expr(ctx, index),
+    };
+    ctx.emit_void(
+        Op::HashUnset,
+        vec![hash.value, key.value],
+        None,
+        Op::HashUnset.default_effects(),
+        Some(expr.span),
+    );
+    let stored = if gradual {
+        ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(expr.span))
+    } else {
+        hash
+    };
+    let data = crate::ir_lower::stmt::static_property_ref_data(ctx, receiver, property);
+    ctx.emit_void(
+        Op::StoreStaticProperty,
+        vec![stored.value],
+        Some(Immediate::Data(data)),
+        Op::StoreStaticProperty.default_effects(),
+        Some(expr.span),
+    );
+    if let Some((_, merge)) = null_guard {
+        branch_to(ctx, merge);
+        ctx.builder.position_at_end(merge);
+    }
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(expr.span));
+    } else {
+        crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, expr.span);
+    }
+    true
+}
+
+/// Lowers `unset($object->property[$key])` by separating the declared array property, promoting
+/// indexed storage to a sparse hash when needed, deleting the key, and publishing the possibly
+/// relocated container back through the ordinary retaining property store.
+fn lower_unset_gradual_property_array_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    index: &Expr,
+    expr: &Expr,
+) -> bool {
+    let object = lower_expr(ctx, object);
+    let handled = lower_unset_property_array_element_on(ctx, &object, property, index, expr);
+    // A chained receiver (`unset($ast->selectClause->selectExpressions[$k])`) is a property read
+    // the lowering acquired; neither path below gave it back, so the intermediate object outlived
+    // its owner. A fallback (`false`) lowers the receiver again, so this one is released too.
+    if ctx.value_is_owning_temporary(object) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
+    }
+    handled
+}
+
+/// Lowers `unset($object->property[$index])` on an already lowered receiver.
+fn lower_unset_property_array_element_on(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &LoweredValue,
+    property: &str,
+    index: &Expr,
+    expr: &Expr,
+) -> bool {
+    let object = *object;
+    let declared_array_property =
+        crate::ir_lower::stmt::object_property_type(ctx, object.value, property)
+            .map(|ty| ty.codegen_repr())
+            .filter(|ty| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }));
+    let Some(property_ty) = declared_array_property else {
+        // No declared ARRAY slot to walk, but the property may still be one boxed cell — either
+        // because the receiver's class is unknown (Symfony's generated container) or because the
+        // property is declared without a type (Twig's `Node::$attributes`). Both read, modify and
+        // write that cell back; anything else keeps falling through to `offsetUnset()`.
+        return lower_unset_gradual_property_element(ctx, &object, property, index, expr);
+    };
+    let data = ctx.intern_string(property);
+    // PHP evaluates the dimension even when the property is uninitialized and the unset itself
+    // becomes a no-op. Lower it before the initialization branch, then release it once at the
+    // merge shared by the present and absent paths.
+    let key = lower_expr(ctx, index);
+    // The CONTAINER of an `unset` is fetched QUIETLY, like the container of an `isset`/`empty`
+    // operand: measured with `php -n` 8.5.6, `unset($o->p['k'])` on an uninitialized typed
+    // property neither raises nor initializes it. Over an EVAL-OWNED receiver this fetch leaves
+    // compiled code through the bridge, which raises unless the mode is on.
+    //
+    // This is the ONE-level path. The two- and three-level chains are lowered by
+    // `lower_nested_property_hash_unset`, whose gate is `(2..=3).contains(&chain.len())`, so
+    // wrapping only that one left exactly this shape uncovered -- and it is the shape Symfony
+    // writes: `unset($this->checkedLazyNodes[$id])` in `CheckCircularReferencesPass`.
+    // An UNINITIALIZED typed property makes the whole `unset` a no-op, so the slot is probed
+    // BEFORE the fetch. Doing it after is not enough: the fetch itself is what raises on the
+    // native path, through the compiled typed-property read guard, which no interpreter-side
+    // mode can reach. Measured under `php -n` 8.5.6, `unset($o->p['k'])` on `public array $p;`
+    // left unassigned neither raises nor initializes it -- `isset($o->p)` is still `false`
+    // afterwards -- while the same unset on a written property really does delete the element
+    // and leaves the (now empty) array initialized.
+    //
+    // The probe reads the object's own initialization marker, which is the right store on both
+    // routes: an AOT class keeps its property values in native slots even when the INSTANCE is
+    // eval-owned. An eval-DECLARED class never reaches this lowering, because
+    // `object_property_type` above would not have resolved a declared array type for it.
+    let absent_block = ctx
+        .builder
+        .create_named_block("unset.property_element.absent", Vec::new());
+    let fetch_block = ctx
+        .builder
+        .create_named_block("unset.property_element.fetch", Vec::new());
+    let delete_block = ctx
+        .builder
+        .create_named_block("unset.property_element.delete", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("unset.property_element.merge", Vec::new());
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: fetch_block,
+        then_args: Vec::new(),
+        else_target: absent_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(absent_block);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(fetch_block);
+    crate::ir_lower::expr::emit_quiet_property_fetch(ctx, true, expr.span);
+    let property_value = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        property_ty.clone(),
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    crate::ir_lower::expr::emit_quiet_property_fetch(ctx, false, expr.span);
+    // A container that still comes back absent is skipped as well. `ArrayToHash` of a null
+    // container is what segfaulted the Symfony worker once the fetch stopped raising, so the
+    // second guard stays even though the probe above should already have branched away.
+    let is_absent = ctx.emit_value(
+        Op::IsNull,
+        vec![property_value.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_absent.value,
+        then_target: absent_block,
+        then_args: Vec::new(),
+        else_target: delete_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(delete_block);
+    let property_value =
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(expr.span));
+    let hash_ty = match &property_ty {
+        PhpType::Array(element) => PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(element.codegen_repr()),
+        },
+        PhpType::AssocArray { .. } => property_ty.clone(),
+        _ => unreachable!("array property type checked above"),
+    };
+    let hash = if matches!(property_ty, PhpType::Array(_)) {
+        ctx.emit_value(
+            Op::ArrayToHash,
+            vec![property_value.value],
+            None,
+            hash_ty.clone(),
+            Op::ArrayToHash.default_effects(),
+            Some(expr.span),
+        )
+    } else {
+        property_value
+    };
+    ctx.emit_void(
+        Op::HashUnset,
+        vec![hash.value, key.value],
+        None,
+        Op::HashUnset.default_effects(),
+        Some(expr.span),
+    );
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object.value, hash.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(expr.span),
+    );
+    crate::ir_lower::stmt::release_rewritten_property_value_after_retaining_store(
+        ctx,
+        &hash_ty,
+        hash,
+        expr.span,
+    );
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(expr.span));
+    } else {
+        crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, expr.span);
+    }
+    true
+}
+
+/// Lowers `unset($obj->prop[$key])` when the receiver is a GENERIC object, not a known class.
+///
+/// The element WRITE through the same shape already exists
+/// (`lower_generic_object_mixed_property_array_write`) and exists because Symfony's generated
+/// container passes itself as an UNTYPED parameter — `getXService($container, …)` mutating
+/// `$container->services[$id]` — so the declared-property ladder has no class to walk. The unset
+/// in the container's own `catch` block is the same shape and used to be refused outright.
+///
+/// Read, modify, write back: the property is one boxed cell, `MixedToHash` makes an independently
+/// owned sparse hash of it (so removing a key cannot mutate an alias of the original boxed array,
+/// and PHP's non-renumbering `unset()` holds for an indexed source too), the key goes, and the
+/// result is boxed back into the same property.
+///
+/// `PropInitialized` guards the absent property: `unset($o->missing['k'])` is a silent no-op in
+/// PHP, while `MixedToHash` of a null raises the gradual array `TypeError`.
+///
+/// The new box is NOT released after the store: `property_store_keeps_independent_ref(Mixed,
+/// Mixed)` is false, so the `PropSet` takes the reference. That is the one place this differs from
+/// the typed path above, which stores back the very pointer it retained and therefore releases it.
+fn lower_unset_gradual_property_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &LoweredValue,
+    property: &str,
+    index: &Expr,
+    expr: &Expr,
+) -> bool {
+    // KNOWN LIMIT. A gradual property could hold an ArrayAccess OBJECT instead of an array, and
+    // PHP decides that at run time. The shape this replaces did not decide it either — it emitted
+    // `offsetUnset()` unconditionally, which faults on the array case that actually occurs
+    // (Symfony's container, Twig's `Node::$attributes`). Getting both right needs a runtime tag
+    // branch here; until then this takes the array reading, which is the one these frameworks use.
+    let receiver_is_generic =
+        crate::ir_lower::stmt::property_array_writes::is_generic_object_receiver(
+            ctx,
+            object.value,
+            property,
+        );
+    let property_is_gradual = matches!(
+        crate::ir_lower::stmt::object_property_type(ctx, object.value, property)
+            .map(|ty| ty.codegen_repr()),
+        Some(PhpType::Mixed | PhpType::Union(_))
+    );
+    if !receiver_is_generic && !property_is_gradual {
+        return false;
+    }
+    let data = ctx.intern_string(property);
+    // PHP evaluates the dimension even when the unset turns out to be a no-op.
+    let key = lower_expr(ctx, index);
+    let absent_block = ctx
+        .builder
+        .create_named_block("unset.generic_property_element.absent", Vec::new());
+    let delete_block = ctx
+        .builder
+        .create_named_block("unset.generic_property_element.delete", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("unset.generic_property_element.merge", Vec::new());
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: delete_block,
+        then_args: Vec::new(),
+        else_target: absent_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(absent_block);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(delete_block);
+    let property_value = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::Mixed,
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let hash = ctx.emit_value(
+        Op::MixedToHash,
+        vec![property_value.value],
+        None,
+        assoc_ty,
+        Op::MixedToHash.default_effects(),
+        Some(expr.span),
+    );
+    // `MixedToHash` builds an independent hash and only BORROWS its source, so the retained
+    // property read is retired here. Leaving it made every `unset($o->arr[$k])` keep the whole
+    // property value (and each object in it) alive for the rest of the program.
+    if ctx.value_is_owning_temporary(property_value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property_value, Some(expr.span));
+    }
+    ctx.emit_void(
+        Op::HashUnset,
+        vec![hash.value, key.value],
+        None,
+        Op::HashUnset.default_effects(),
+        Some(expr.span),
+    );
+    let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(expr.span));
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object.value, boxed.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(expr.span),
+    );
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(expr.span));
+    } else {
+        crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, expr.span);
+    }
+    true
+}
+
+/// Lowers `unset($mixed[$key])` for a gradual local that holds an array at runtime.
+///
+/// `MixedToHash` enforces the runtime array boundary and returns an independently owned sparse
+/// hash, so deleting a key cannot mutate aliases of the original boxed array. The mutated hash is
+/// boxed back into the local's unchanged `Mixed` storage after the previous boxed owner is
+/// released. This is the gradual counterpart of `lower_unset_indexed_element` and preserves PHP's
+/// non-renumbering `unset()` semantics for both indexed and associative runtime arrays.
+fn lower_unset_mixed_array_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    array_span: Span,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let source = ctx.load_local(name, Some(array_span));
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let key = lower_expr(ctx, index);
+    // Unsetting an element of null is a silent no-op in PHP; `MixedToHash` would raise the
+    // array TypeError instead, so a null local skips the delete and keeps its value.
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![source.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(array_span),
+    );
+    let delete = ctx
+        .builder
+        .create_named_block("unset.mixed_element.delete", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("unset.mixed_element.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: merge,
+        then_args: Vec::new(),
+        else_target: delete,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(delete);
+    let hash = ctx.emit_value(
+        Op::MixedToHash,
+        vec![source.value],
+        None,
+        assoc_ty,
+        Op::MixedToHash.default_effects(),
+        Some(array_span),
+    );
+    ctx.emit_void(
+        Op::HashUnset,
+        vec![hash.value, key.value],
+        None,
+        Op::HashUnset.default_effects(),
+        Some(expr.span),
+    );
+    let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(expr.span));
+    let slot = ctx.declare_local(name, PhpType::Mixed);
+    ctx.release_stored_local_value(name, slot, Some(expr.span));
+    ctx.store_prepared_mutated_local(name, boxed, PhpType::Mixed, Some(expr.span));
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
+    crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, expr.span);
+    ctx.set_local_type(name, PhpType::Mixed);
 }
 
 /// Detaches the declared array cell before sparse removal and roots an owned key across callbacks.
@@ -289,7 +925,7 @@ pub(super) fn lower_unset_indexed_element(
 ) -> LoweredValue {
     let array_value = ctx.load_local(name, Some(array_span));
     let assoc_ty = PhpType::AssocArray {
-        key: Box::new(PhpType::Int),
+        key: Box::new(super::array_builtin_args::promoted_hash_key_type(&elem_ty)),
         value: Box::new(elem_ty),
     };
     let hash = ctx.emit_value(
@@ -319,7 +955,24 @@ pub(super) fn unset_property_access_has_direct_lowering(
                 | UnsetPropertyAction::ClearSlot
                 | UnsetPropertyAction::RemoveDynamic
         )
-    )
+    ) || unset_property_receiver_is_gradual(ctx, object, property, member)
+}
+
+/// Returns true when `unset($object->name)` has no statically known class to ask, but the receiver
+/// is a boxed value the runtime-name ladder dispatches on its class id (laravel's
+/// `DatabaseUuidFailedJobProvider::all()` unsets `$record->uuid` on a closure parameter).
+fn unset_property_receiver_is_gradual(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    member: &Expr,
+) -> bool {
+    property_unset_action(ctx, object, property, member).is_none()
+        && isset_object_expr_class(ctx, object).is_none()
+        && matches!(
+            unset_operand_type(ctx, object).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
 }
 
 /// Lowers `unset($object->property)` for magic and no-op property targets.
@@ -359,7 +1012,14 @@ pub(super) fn lower_unset_property_access(
                 );
             });
         }
-        Some(UnsetPropertyAction::Fallback) | None => {}
+        Some(UnsetPropertyAction::Fallback) => {}
+        // A boxed receiver: the name is a literal, and the runtime-name ladder resolves the
+        // receiver's class from the box.
+        None if unset_property_receiver_is_gradual(ctx, object, property, expr) => {
+            let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+            lower_unset_dynamic_property_access(ctx, object, &name, expr);
+        }
+        None => {}
     }
 }
 
@@ -377,7 +1037,12 @@ pub(super) fn unset_dynamic_property_access_has_direct_lowering(
     // has no `Variable` arm at all: it answers from the expression's own shape. Asking it alone
     // therefore rejected the ordinary form and kept only a literal or a concatenation, so the
     // whole runtime-name lowering was unreachable from the syntax php programs actually use.
-    if !matches!(unset_operand_type(ctx, property).codegen_repr(), PhpType::Str) {
+    // A non-string name is cast by `coerce_runtime_property_name`, as a read's is: the key of
+    // `foreach ($props as $name => $key) unset($instance->$name);` is a boxed Mixed.
+    if !matches!(
+        unset_operand_type(ctx, property).codegen_repr(),
+        PhpType::Str | PhpType::Int | PhpType::Mixed | PhpType::Union(_)
+    ) {
         return false;
     }
     if isset_object_expr_class(ctx, object).is_some() {
@@ -385,9 +1050,11 @@ pub(super) fn unset_dynamic_property_access_has_direct_lowering(
     }
     // A boxed receiver and a union both reach the Mixed ladder in the backend, which unboxes,
     // keeps non-objects out and then dispatches on the runtime class id, so both are lowerable.
+    // So does a receiver typed only `object`: its class is unknown, and the backend dispatches it
+    // on the runtime class id like a boxed one (`function f(object $o, string $n) { unset($o->$n); }`).
     matches!(
         unset_operand_type(ctx, object).codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
     )
 }
 
@@ -409,6 +1076,13 @@ fn unset_operand_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
                 || ctx.extern_functions.contains_key(name.as_str()) =>
         {
             call_return_type(ctx, name.as_str(), &[])
+        }
+        // A property read answers with its declared type: `unset($this->resource->{$key})` over an
+        // untyped `$resource` (illuminate/http `DelegatesToResource::__unset()`) is a boxed
+        // receiver, which the syntactic fallback cannot see.
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| infer_expr_type_syntactic(expr))
         }
         _ => infer_expr_type_syntactic(expr),
     }

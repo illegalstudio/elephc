@@ -22,6 +22,7 @@ mod catalog_constants_tokenizer;
 mod catalog_constants_curl;
 mod catalog_data;
 mod catalog_gmp;
+mod catalog_data_additional;
 mod catalog_mbstring;
 mod catalog_pcntl;
 mod catalog_xml;
@@ -32,6 +33,7 @@ mod core_functions;
 mod core_constants;
 mod core_attributes;
 mod eval_profile;
+mod extensions;
 mod id;
 mod module;
 mod object_operators;
@@ -39,6 +41,8 @@ mod php_version;
 mod registry;
 mod requirements;
 mod runtime_id;
+/// Named character references and the keep rule for `htmlspecialchars(…, double_encode: false)`.
+pub mod html_entities;
 mod spec;
 mod type_spec;
 pub mod mbstring_abi;
@@ -56,6 +60,7 @@ pub use aot_profile::{
 pub use eval_profile::{
     eval_signature, eval_signature_profile, EvalSignatureOverrideReason, EvalSignatureProfile,
 };
+pub use extensions::{complete_surface_modules, module_php_functions, php_registration_rank};
 pub use class_spec::{ClassContract, ClassKind, ClassRoute};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;
@@ -70,11 +75,13 @@ pub use object_operators::{
 pub use catalog_gmp::FUNCTIONS as GMP_FUNCTIONS;
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};
-pub use symbol_registry::{canonical_constant_name, classes, constants, lookup_class, lookup_constant};
+pub use symbol_registry::{
+    canonical_constant_name, classes, constants, is_operator_class_name, lookup_class, lookup_constant,
+};
 pub use runtime_id::{runtime_builtin_id, RuntimeBuiltinId, RuntimeBuiltinStatus};
 pub use spec::{
     Area, BuiltinContract, BuiltinDeprecation, BuiltinKind, BuiltinRequirement, BuiltinSignature, DefaultSpec,
-    ParamSpec, PassingMode, TypeSpec,
+    ParamSpec, PassingMode, TypeSpec, VariadicSpec,
 };
 pub use support::{
     aot_class_support, aot_constant_support, aot_support, backend_support, eval_class_support,

@@ -30,6 +30,32 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_deref_loop");                             // peel another nested wrapper
     emitter.label("__rt_mixed_deref_done");
     emitter.instruction("ret");                                                 // return the borrowed concrete box
+    // A WRITE through a Mixed receiver also follows an array element's reference marker
+    // (`$box = ['q' => &$_GET]; $box['q']['hit'] = 1`): the marker `{12|13, cell, source_tag}`
+    // is not a value, and a write that stopped at it was dropped. Only a cell holding a boxed
+    // Mixed is followed; a typed cell keeps its marker for the writers that handle it.
+    emitter.label_global("__rt_mixed_deref_for_write");
+    emitter.label("__rt_mixed_deref_for_write_loop");
+    emitter.instruction("cbz x0, __rt_mixed_deref_for_write_done");             // null has no write target
+    emitter.instruction("ldr x9, [x0]");                                        // inspect the boxed tag
+    emitter.instruction("cmp x9, #7");                                          // a nested Mixed or persistent reference wrapper
+    emitter.instruction("b.eq __rt_mixed_deref_for_write_nested");              // follow its child
+    emitter.instruction("cmp x9, #12");                                         // an array element's global reference marker
+    emitter.instruction("b.eq __rt_mixed_deref_for_write_marker");              // writes go to the referenced variable
+    emitter.instruction("cmp x9, #13");                                         // an array element's local reference marker
+    emitter.instruction("b.ne __rt_mixed_deref_for_write_done");                // a concrete value is the write target
+    emitter.label("__rt_mixed_deref_for_write_marker");
+    emitter.instruction("ldr x9, [x0, #16]");                                   // the referenced cell's payload tag
+    emitter.instruction("cmp x9, #7");                                          // does the referenced cell hold a boxed Mixed?
+    emitter.instruction("b.ne __rt_mixed_deref_for_write_done");                // a typed cell keeps the marker for its own write path
+    emitter.instruction("ldr x0, [x0, #8]");                                    // the referenced cell
+    emitter.instruction("ldr x0, [x0]");                                        // the box every alias of it shares
+    emitter.instruction("b __rt_mixed_deref_for_write_loop");                   // peel whatever that box wraps
+    emitter.label("__rt_mixed_deref_for_write_nested");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // follow the owned boxed child
+    emitter.instruction("b __rt_mixed_deref_for_write_loop");                   // peel the remaining wrappers
+    emitter.label("__rt_mixed_deref_for_write_done");
+    emitter.instruction("ret");                                                 // return the borrowed write target
     emitter.label_global("__rt_reference_is");
     emitter.instruction("cbz x0, __rt_reference_is_false");                     // null is not a persistent reference
     emitter.instruction("ldr x9, [x0]");                                        // inspect the raw wrapper tag
@@ -87,6 +113,28 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_deref_loop");                           // peel the remaining nested wrappers
     emitter.label("__rt_mixed_deref_done");
     emitter.instruction("ret");                                                 // return the borrowed concrete value
+    emitter.label_global("__rt_mixed_deref_for_write");
+    emitter.label("__rt_mixed_deref_for_write_loop");
+    emitter.instruction("test rax, rax");                                       // recognize a null boxed value
+    emitter.instruction("jz __rt_mixed_deref_for_write_done");                  // null contains no nested value
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // inspect the boxed tag
+    emitter.instruction("cmp r10, 7");                                          // a nested Mixed or persistent reference wrapper
+    emitter.instruction("je __rt_mixed_deref_for_write_nested");                // follow its child
+    emitter.instruction("cmp r10, 12");                                         // an array element's global reference marker
+    emitter.instruction("je __rt_mixed_deref_for_write_marker");                // writes go to the referenced variable
+    emitter.instruction("cmp r10, 13");                                         // an array element's local reference marker
+    emitter.instruction("jne __rt_mixed_deref_for_write_done");                 // a concrete value is the write target
+    emitter.label("__rt_mixed_deref_for_write_marker");
+    emitter.instruction("cmp QWORD PTR [rax + 16], 7");                         // does the referenced cell hold a boxed Mixed?
+    emitter.instruction("jne __rt_mixed_deref_for_write_done");                 // a typed cell keeps the marker for its own write path
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // the referenced cell
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // the box every alias of it shares
+    emitter.instruction("jmp __rt_mixed_deref_for_write_loop");                 // peel whatever that box wraps
+    emitter.label("__rt_mixed_deref_for_write_nested");
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // follow the owned boxed child
+    emitter.instruction("jmp __rt_mixed_deref_for_write_loop");                 // peel the remaining wrappers
+    emitter.label("__rt_mixed_deref_for_write_done");
+    emitter.instruction("ret");                                                 // return the borrowed write target
     emitter.label_global("__rt_reference_is");
     emitter.instruction("test rax, rax");                                       // recognize a null input
     emitter.instruction("jz __rt_reference_is_false");                          // null is not a reference

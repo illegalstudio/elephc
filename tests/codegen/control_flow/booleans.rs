@@ -399,3 +399,32 @@ var_dump((bool) @$arr[9]);
     );
     assert_eq!(out, "f|f|bool(false)\n");
 }
+
+/// Keeps the null default of a short ternary over a boolean condition.
+///
+/// `$cond ?: null` merged as `bool`, so its null branch reached a `string|bool|null` parameter
+/// as `boolean`, `??=` skipped it, and `sprintf($format)` printed the null sentinel
+/// `9223372036854775806` -- Symfony's `debug:config` env placeholders. Expected output is
+/// `php -n` 8.5's.
+#[test]
+fn test_short_ternary_with_a_null_default_stays_nullable() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function a(string|bool|null $format): string {
+    $format ??= 'x%sx';
+    return \sprintf($format, 'y');
+}
+function b(string|bool|null $format): string {
+    if (true === $format ??= 'x%sx') { return 'T'; }
+    return \sprintf($format, 'y');
+}
+function t(string|bool|null $format): string { return gettype($format); }
+function u(bool|null $format): string { return gettype($format); }
+$n = $argc > 5 ?: null;
+echo a($n), "|", b($n), "|", t($n), "|", u($n), "|", gettype($n), "|", t($argc > 5 ?: null), "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "xyx|xyx|NULL|NULL|NULL|NULL\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

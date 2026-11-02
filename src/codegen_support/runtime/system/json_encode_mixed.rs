@@ -12,6 +12,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::ref_markers;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emits the `__rt_json_encode_mixed` runtime helper, dispatching on the boxed `Mixed` value_tag.
@@ -33,9 +34,9 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 /// - `8` → explicit null payload → `__rt_json_encode_null`
 /// - `11` → invoker marker → borrowed current caller value
 /// - Unknown tags → falls through to `__rt_json_encode_null` for PHP compatibility
-pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
+pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter, eval_bridge: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_json_encode_mixed_linux_x86_64(emitter);
+        emit_json_encode_mixed_linux_x86_64(emitter, eval_bridge);
         return;
     }
 
@@ -65,7 +66,14 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_encode_mixed_object");                  // encode objects via the public-property descriptor walker
     emitter.instruction("cmp x9, #8");                                          // is the boxed value null?
     emitter.instruction("b.eq __rt_json_encode_mixed_null");                    // encode null via json_encode_null
-    emitter.instruction("b __rt_json_encode_mixed_null");                       // remaining tags (resource, ...) currently encode as null
+    ref_markers::emit_follow_boxed_ref_marker(
+        emitter,
+        "x0",
+        "x9",
+        "__rt_json_encode_mixed",
+        "__rt_json_encode_mixed_null",
+        "__rt_json_encode_mixed",
+    );                                                                          // a reference element encodes its value; resources encode as null
 
     emitter.label("__rt_json_encode_mixed_nested");
     emitter.instruction("ldr x0, [x0, #8]");                                    // borrow the wrapped Mixed cell
@@ -126,6 +134,17 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
     emit_branch_if_null_container(emitter, "x0", "x9", "__rt_json_encode_mixed_null");
     // stdClass instances do not have static property descriptors; encode them
     // through the assoc-array path using the dynamic-property hash at obj+8.
+    if eval_bridge {
+        // An object the interpreter declared wears the generic stdClass wrapper header, so the
+        // class-id test below would send it down the dynamic-property path and encode `{}`.
+        // The regular object encoder asks the bridge for `jsonSerialize()` / public properties.
+        emitter.instruction("stp x0, x30, [sp, #-16]!");                        // keep the object and return address across the owner probe
+        let probe = emitter.target.extern_symbol("__elephc_eval_object_has_dynamic_owner");
+        crate::codegen_support::abi::emit_call_label(emitter, &probe);
+        emitter.instruction("mov x9, x0");                                      // keep the probe answer while the object is restored
+        emitter.instruction("ldp x0, x30, [sp], #16");                          // restore the object and return address
+        emitter.instruction("cbnz x9, __rt_json_encode_mixed_object_regular");  // an interpreter-owned object goes to the bridge-aware encoder
+    }
     emitter.instruction("ldr x9, [x0]");                                        // load class_id from the object header
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
     emitter.instruction("ldr x10, [x10]");                                      // load the compile-time stdClass class_id sentinel
@@ -159,7 +178,7 @@ pub(crate) fn emit_json_encode_mixed(emitter: &mut Emitter) {
 /// - `8` → explicit null → `__rt_json_encode_null`
 /// - `11` → invoker marker → borrowed current caller value
 /// - Unknown tags → `__rt_json_encode_null`
-fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
+fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool) {
     emitter.blank();
     emitter.comment("--- runtime: json_encode_mixed ---");
     emitter.label_global("__rt_json_encode_mixed");
@@ -187,7 +206,14 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_encode_mixed_object");                    // encode objects via the public-property descriptor walker
     emitter.instruction("cmp r10, 8");                                          // is the boxed payload null?
     emitter.instruction("je __rt_json_encode_mixed_null");                      // encode explicit null payloads through the shared helper
-    emitter.instruction("jmp __rt_json_encode_mixed_null");                     // remaining tags (resource, ...) currently encode as null on x86_64 too
+    ref_markers::emit_follow_boxed_ref_marker(
+        emitter,
+        "rax",
+        "r10",
+        "__rt_json_encode_mixed",
+        "__rt_json_encode_mixed_null",
+        "__rt_json_encode_mixed",
+    );                                                                          // a reference element encodes its value; resources encode as null
 
     emitter.label("__rt_json_encode_mixed_nested");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // borrow the wrapped Mixed cell
@@ -246,6 +272,17 @@ fn emit_json_encode_mixed_linux_x86_64(emitter: &mut Emitter) {
     emit_branch_if_null_container(emitter, "rax", "r10", "__rt_json_encode_mixed_null");
     // stdClass instances do not have static property descriptors; encode them
     // through the assoc-array path using the dynamic-property hash at obj+8.
+    if eval_bridge {
+        // See the AArch64 emitter: interpreter-owned objects wear the stdClass wrapper header.
+        emitter.instruction("push rax");                                        // keep the object across the owner probe (re-aligns the stack)
+        emitter.instruction("mov rdi, rax");                                    // pass the object identity to the owner probe
+        let probe = emitter.target.extern_symbol("__elephc_eval_object_has_dynamic_owner");
+        abi::emit_call_label(emitter, &probe);
+        emitter.instruction("mov r10, rax");                                    // keep the probe answer while the object is restored
+        emitter.instruction("pop rax");                                         // restore the object pointer
+        emitter.instruction("test r10, r10");                                   // does the interpreter own this object?
+        emitter.instruction("jnz __rt_json_encode_mixed_object_regular");       // an interpreter-owned object goes to the bridge-aware encoder
+    }
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load class_id from the object header
     abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id sentinel
     emitter.instruction("cmp r10, r11");                                        // is the receiver a stdClass instance?

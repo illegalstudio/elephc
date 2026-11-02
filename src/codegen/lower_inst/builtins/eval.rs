@@ -35,13 +35,29 @@ use super::super::{
 };
 
 const EVAL_STATUS_PARSE_ERROR: i64 = 1;
+const EVAL_STATUS_RUNTIME_FATAL: i64 = 2;
 const EVAL_STATUS_UNCAUGHT_THROWABLE: i64 = 3;
 const EVAL_STATUS_UNSUPPORTED: i64 = 4;
 const EVAL_STATUS_ESCAPING_PCNTL_CALLABLE: i64 = 6;
+/// PHP's process exit status for a parse error, measured with `php -n` 8.5.6.
+const EVAL_PARSE_ERROR_EXIT_STATUS: u32 = 255;
+/// The status the bridge has always exited with for its two anonymous fatals.
+///
+/// Not PHP's 255: these are not PHP fatals but the interpreter reporting what it could not do,
+/// and the wording that goes with them is written by `__elephc_eval_report_runtime_fatal` when
+/// that reporter is linked at all.
+const EVAL_RUNTIME_FATAL_EXIT_STATUS: u32 = 1;
+/// The two anonymous fatals' wording, for programs that do not link the interpreter bridge.
+///
+/// A scope-only program runs its eval fragments natively and deliberately does NOT link
+/// `libelephc-magician` (`runtime_features::link_requirements_for_runtime_features` asks for the
+/// archive only when `eval_bridge` is set), so `__elephc_eval_report_runtime_fatal` does not
+/// exist in its link. These are the exact strings that reporter falls back to when the
+/// interpreter recorded no clause, which is always the case when there is no interpreter.
 const EVAL_STATUS_USER_FATAL: i64 = 7;
-const EVAL_PARSE_ERROR_MESSAGE: &str = "Parse error: eval() fragment is invalid\n";
 const EVAL_UNSUPPORTED_MESSAGE: &str =
     "Fatal error: eval() fragment uses an unsupported construct\n";
+/// The runtime-fatal wording, for programs that do not link the interpreter bridge.
 const EVAL_RUNTIME_FATAL_MESSAGE: &str = "Fatal error: eval() runtime failed\n";
 const EVAL_ESCAPING_PCNTL_CALLABLE_MESSAGE: &str =
     "Fatal error: PCNTL handler/closure cannot escape its eval context\n";
@@ -49,6 +65,8 @@ const EVAL_STACK_BYTES: usize = 96;
 const EVAL_RESULT_VALUE_CELL_OFFSET: usize = 8;
 const EVAL_RESULT_ERROR_OFFSET: usize = 16;
 const EVAL_CONTEXT_HANDLE_OFFSET: usize = 24;
+const EVAL_CONTEXT_HELPER_FRAME_SIZE: usize = 32;
+const EVAL_CONTEXT_HELPER_LOCAL_OFFSET: usize = 16;
 const EVAL_SCOPE_HANDLE_OFFSET: usize = 32;
 const EVAL_TEMP_CELL_OFFSET: usize = 40;
 const EVAL_CODE_PTR_OFFSET: usize = 48;
@@ -56,6 +74,14 @@ const EVAL_CODE_LEN_OFFSET: usize = 56;
 const EVAL_GLOBAL_SCOPE_HANDLE_OFFSET: usize = 64;
 const EVAL_CALLED_CLASS_PTR_OFFSET: usize = 72;
 const EVAL_CALLED_CLASS_LEN_OFFSET: usize = 80;
+/// Scratch slot that parks a bridge status across a second call that returns its own status.
+///
+/// It must be a slot no bridge operand can occupy. `EVAL_TEMP_CELL_OFFSET` is where a bridge
+/// boxes its typed receiver, and that box is still owed a release AFTER the class scope is
+/// popped, so parking the status there overwrites the only pointer to the boxed cell and turns
+/// the pending `__rt_decref_mixed` into a decref of the status integer. The receiver's object
+/// reference is then stranded and its destructor never runs.
+const EVAL_STATUS_SAVE_OFFSET: usize = 88;
 const EVAL_RELOAD_THROWABLE_OFFSET: usize = 88;
 const EVAL_RELOAD_THROW_OWNER_OFFSET: usize = 96;
 const EVAL_RELOAD_VALUE_OWNER_OFFSET: usize = 144;
@@ -100,6 +126,10 @@ const NATIVE_ATTRIBUTE_ARG_STRING: u8 = 3;
 const NATIVE_ATTRIBUTE_ARG_NAMED: u8 = 4;
 const NATIVE_ATTRIBUTE_ARG_FLOAT: u8 = 5;
 const NATIVE_ATTRIBUTE_ARG_ARRAY: u8 = 6;
+/// A global constant reference (`#[A(SOME_CONST)]`), folded by the interpreter when read.
+const NATIVE_ATTRIBUTE_ARG_CONST: u8 = 7;
+/// A class constant reference (`#[A(C::X)]`), folded by the interpreter when read.
+const NATIVE_ATTRIBUTE_ARG_CLASS_CONST: u8 = 8;
 const NATIVE_OBJECT_DEFAULT_ARG_SCALAR: u8 = 0;
 const NATIVE_OBJECT_DEFAULT_ARG_STRING: u8 = 1;
 const NATIVE_OBJECT_DEFAULT_ARG_OBJECT: u8 = 2;
@@ -143,6 +173,9 @@ struct EvalNativeFunctionRegistration {
     name: String,
     signature: FunctionSig,
     bridge_supported: bool,
+    /// For a conditionally declared function registered under its public name: the module
+    /// symbol of its "active variant" slot, which says whether php would see it declared yet.
+    active_slot_symbol: Option<String>,
     is_internal: bool,
 }
 
@@ -152,7 +185,38 @@ struct EvalNativeMethodRegistration {
     method_name: String,
     is_static: bool,
     signature: FunctionSig,
+    /// The return type exactly as written when it names PHP's late-bound `static`.
+    ///
+    /// `signature.return_type` holds `static` already resolved to one concrete class, which is a
+    /// fabricated contract: an eval class overriding `negated(): static` was refused against
+    /// `negated(): Int1` (brick/math's `BigNumber`).
+    late_static_return: Option<TypeExpr>,
     bridge_supported: bool,
+}
+
+/// Returns true when a user function has a Magician registration that can bridge calls.
+pub(crate) fn eval_native_function_bridge_supported(function: &Function) -> bool {
+    function_has_eval_metadata(function) && function_signature_can_bridge_with_eval(function)
+}
+
+/// Returns true when an instance method has a Magician registration that can bridge calls.
+pub(crate) fn eval_native_instance_method_bridge_supported(
+    class_info: &ClassInfo,
+    method_name: &str,
+    signature: &FunctionSig,
+) -> bool {
+    class_method_visibility_bridge_supported(class_info, method_name)
+        && method_signature_can_bridge_with_eval(signature)
+}
+
+/// Returns true when a static method has a Magician registration that can bridge calls.
+pub(crate) fn eval_native_static_method_bridge_supported(
+    class_info: &ClassInfo,
+    method_name: &str,
+    signature: &FunctionSig,
+) -> bool {
+    class_static_method_visibility_bridge_supported(class_info, method_name)
+        && method_signature_can_bridge_with_eval(signature)
 }
 
 /// A module-local constructor signature that can be registered with the eval context.
@@ -228,6 +292,19 @@ enum EvalNativePropertyDefault {
     DeferredError(String),
 }
 
+/// An array-valued class constant registered with the eval context.
+///
+/// The generated scalar constant helper (`eval_class_constant_helpers`) boxes scalars and enum
+/// cases only; an array constant is handed over as a native default description instead, under
+/// every class that can read it.
+struct EvalNativeClassConstantDefaultRegistration {
+    class_name: String,
+    constant_name: String,
+    declaring_class: String,
+    visibility: Visibility,
+    default: EvalNativeCallableDefault,
+}
+
 /// A module-local member attribute that can be registered with the eval context.
 struct EvalNativeMemberAttributeRegistration {
     owner_kind: u8,
@@ -251,15 +328,20 @@ use crate::codegen::const_default_values::{
 mod calls;
 mod scope_access;
 mod dynamic_calls;
+mod outlined_owner_call;
+mod native_object_construction;
+mod extract;
 mod introspection;
 mod inventories;
 mod symbol_queries;
 mod argument_results;
+mod associative_results;
 mod context_registration;
 mod context_initialization;
 mod registration_collection;
 mod member_collection;
 mod signature_metadata;
+pub(crate) use signature_metadata::eval_native_callable_param_type_specs;
 mod default_expressions;
 mod default_constants;
 mod default_errors;
@@ -275,7 +357,10 @@ mod scope_context;
 mod sync_inventory;
 mod scope_io;
 mod scope_reload;
+mod native_scope;
+use native_scope::*;
 mod status;
+mod interface_miss;
 
 #[allow(unused_imports)]
 use calls::*;
@@ -284,7 +369,8 @@ use scope_access::*;
 #[allow(unused_imports)]
 use dynamic_calls::*;
 #[allow(unused_imports)]
-use introspection::*;
+pub(in crate::codegen::lower_inst::builtins) use introspection::*;
+pub(in crate::codegen::lower_inst) use introspection::lower_eval_highlight;
 pub(super) use inventories::append_eval_inventory;
 #[allow(unused_imports)]
 use symbol_queries::*;
@@ -293,6 +379,9 @@ use argument_results::*;
 #[allow(unused_imports)]
 use context_registration::*;
 use context_initialization::*;
+pub(in crate::codegen) use context_registration::emit_shared_eval_registration_helper;
+pub(in crate::codegen) use status::emit_shared_eval_status_fail_cells_body;
+pub(in crate::codegen) use scope_context::{emit_effective_scope_name, has_runtime_closure_scope};
 
 /// Returns the hidden eval-context local of this function, when it has one.
 ///
@@ -344,17 +433,37 @@ pub(in crate::codegen::lower_inst::builtins) use status::emit_eval_status_helper
 /// `crate::codegen::frame` reaches it directly from the prologue.
 pub(crate) use context_registration::configure_eval_opcache;
 pub(in crate::codegen::lower_inst::builtins) use context_registration::register_eval_inventory;
-pub(super) use calls::lower_eval;
+pub(super) use calls::{lower_dynamic_include, lower_eval};
+pub(super) use extract::lower_extract;
 pub(super) use dynamic_calls::{
-    lower_eval_function_call, lower_eval_function_call_array, lower_eval_method_call,
+    lower_eval_function_call, lower_eval_function_call_array, lower_eval_function_call_named,
+    lower_eval_method_call, lower_eval_property_get,
     lower_eval_native_frame_static_method_call, lower_eval_native_frame_static_property_get,
     lower_eval_native_frame_static_property_set, lower_eval_object_new,
-    lower_eval_object_new_dynamic_fallback, lower_eval_static_method_call,
+    lower_eval_object_new_dynamic_fallback, lower_eval_object_new_without_constructor_fallback,
+    lower_eval_static_method_call,
+};
+pub(in crate::codegen::lower_inst) use outlined_owner_call::{
+    inside_owner_call_helper, lower_owner_call_helper_body,
+};
+pub(in crate::codegen::lower_inst) use dynamic_calls::{
+    lower_eval_owned_method_call, lower_eval_owned_method_call_with_result,
+    lower_eval_owned_property_get, lower_eval_owner_mixed_dynamic_property_get,
+    lower_eval_owner_mixed_property_get,
+};
+pub(in crate::codegen::lower_inst) use interface_miss::{
+    emit_branch_if_eval_saved_object_is_a, emit_eval_interface_method_on_miss,
+};
+pub(super) use native_object_construction::{
+    lower_eval_native_object_new, lower_eval_native_object_new_fallback,
 };
 pub(super) use introspection::{
-    emit_context_free_object_class_name, lower_eval_callable_call_array,
-    lower_eval_class_relation, lower_eval_is_callable, lower_eval_member_exists,
-    lower_eval_object_class_name, lower_eval_object_is_a, lower_eval_object_is_a_dynamic,
+    emit_context_free_object_class_name, emit_eval_dynamic_constant_null_context,
+    emit_eval_object_is_a_dynamic_name_fallback, emit_eval_object_is_a_named_fallback,
+    emit_eval_object_is_a_named_fallback_from_result, lower_eval_callable_call_array,
+    lower_eval_class_relation, lower_eval_global_class_relation_to_result, lower_eval_is_callable,
+    lower_eval_member_exists, lower_eval_object_class_name, lower_eval_object_is_a,
+    lower_eval_object_is_a_dynamic,
 };
 pub(super) use scope_access::{lower_eval_scope_get, lower_eval_scope_set};
 pub(super) use symbol_queries::{

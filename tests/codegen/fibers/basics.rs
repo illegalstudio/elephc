@@ -439,3 +439,69 @@ echo $value;
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ret");
 }
+
+/// Verifies `Fiber::getCurrent()` from interpreted code: null on the main thread, the running
+/// fiber inside one.
+///
+/// The compiled call is an intrinsic with no method body, so the interpreter's static-call
+/// bridge had nothing to call and fataled. Monolog's `Logger::addRecord()` asks it on every log
+/// call, which killed every request of the Symfony demo once its logger was interpreted.
+/// Expected output is php 8.5.10's.
+#[test]
+fn test_fiber_get_current_from_eval_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+eval('
+var_dump(\Fiber::getCurrent());
+if (null !== ($fiber = \Fiber::getCurrent())) { echo "in fiber\n"; } else { echo "main\n"; }
+');
+$f = new Fiber(function () {
+    eval('var_dump(\Fiber::getCurrent() instanceof \Fiber);');
+});
+$f->start();
+"#,
+    );
+    assert_eq!(out, "NULL\nmain\nbool(true)\n");
+}
+
+/// A Fiber held in an untyped property is a `mixed` receiver: `start`, `resume`, `throw`,
+/// `getReturn` and the state predicates still reach the Fiber runtime, while another class's
+/// `start()` keeps its own method. The boxed dispatch has no candidate for `Fiber`, so these
+/// calls died with "Call to a member function start() on null", and `isRunning()` stored a raw
+/// bool where its mixed result belonged.
+#[test]
+fn test_fiber_methods_on_a_mixed_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Session { public function start(): string { return "session"; } }
+class Holder {
+    public $fiber;
+    public $other;
+    public function init(): void {
+        $this->fiber = new Fiber(function (string $a): string {
+            $got = Fiber::suspend($a . "!");
+            try { Fiber::suspend("again " . $got); } catch (Exception $e) { return "caught " . $e->getMessage(); }
+            return "unreached";
+        });
+        $this->other = new Session();
+    }
+}
+$h = new Holder();
+$h->init();
+echo $h->other->start(), "\n";
+echo $h->fiber->start("go"), "\n";
+var_dump($h->fiber->isSuspended());
+echo $h->fiber->resume("v"), "\n";
+var_dump($h->fiber->throw(new Exception("boom")));
+var_dump($h->fiber->isTerminated());
+echo $h->fiber->getReturn(), "\n";
+$cur = null;
+$f = new Fiber(function () use (&$cur): void { $cur = Fiber::getCurrent(); var_dump($cur->isRunning()); });
+$f->start();
+"#,
+    );
+    assert_eq!(
+        out,
+        "session\ngo!\nbool(true)\nagain v\nNULL\nbool(true)\ncaught boom\nbool(true)\n"
+    );
+}

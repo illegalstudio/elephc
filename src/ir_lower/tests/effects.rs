@@ -277,9 +277,11 @@ final class HookBox {
         .find(|function| function.name == "HookBox::read")
         .expect("missing HookBox::read EIR");
 
+    // An untyped declared slot is boxed `Mixed` and can hold the removed-state marker an
+    // `unset()` leaves, so reading it may report `Undefined property` (`effect_refinement.rs`).
     assert_eq!(
         named_property_read(safe, &module, "safe").effects,
-        Effects::READS_HEAP
+        Effects::READS_HEAP | Effects::MAY_WARN
     );
     assert_eq!(
         named_property_read(risky, &module, "risky").effects,

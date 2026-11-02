@@ -12,7 +12,8 @@
 //!   timezone-aware with no embedded tzdata). `_get` returns the stored identifier, or `"UTC"`.
 //! - String result convention: pointer in `x1`/`rax`, length in `x2`/`rdx`. `_set` returns the PHP
 //!   boolean in `x0`/`rax`. The `_php_tz_env` buffer is static so the pointer handed to `putenv`
-//!   stays valid (putenv does not copy).
+//!   stays valid (putenv does not copy). An offset id (`+02:00`) is handed to libc from the
+//!   `_php_tz_posix` copy with its sign flipped, because POSIX TZ offsets count west of UTC.
 
 use crate::codegen_support::abi::emit_symbol_address;
 use crate::codegen_support::emit::Emitter;
@@ -78,8 +79,30 @@ fn emit_set_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_ddtz_set_copy_done");
     emitter.instruction("strb wzr, [x6, x19]");                                 // NUL-terminate the env string
 
-    // -- apply via libc and re-read the zone --
+    // -- an offset id ("+02:00") reaches libc sign-flipped: POSIX TZ offsets count west of UTC --
+    emitter.instruction("ldrb w7, [x6]");                                       // first identifier byte
+    emitter.instruction("cmp w7, #43");                                         // '+' offset id?
+    emitter.instruction("b.eq __rt_ddtz_set_offset");                           // yes → hand libc the flipped copy
+    emitter.instruction("cmp w7, #45");                                         // '-' offset id?
+    emitter.instruction("b.eq __rt_ddtz_set_offset");                           // yes → hand libc the flipped copy
     emit_symbol_address(emitter, "x0", "_php_tz_env");
+    emitter.instruction("b __rt_ddtz_set_apply");                               // a named zone goes to libc as written
+    emitter.label("__rt_ddtz_set_offset");
+    emit_symbol_address(emitter, "x0", "_php_tz_posix");
+    emitter.instruction("add x4, x19, #4");                                     // "TZ=" + identifier + NUL
+    emitter.instruction("mov x5, #0");                                          // copy index
+    emitter.label("__rt_ddtz_set_offset_copy");
+    emitter.instruction("ldrb w7, [x3, x5]");                                   // load env byte
+    emitter.instruction("strb w7, [x0, x5]");                                   // store it into the libc copy
+    emitter.instruction("add x5, x5, #1");                                      // advance the copy index
+    emitter.instruction("cmp x5, x4");                                          // whole env string copied?
+    emitter.instruction("b.lt __rt_ddtz_set_offset_copy");                      // no → continue
+    emitter.instruction("ldrb w7, [x0, #3]");                                   // the offset sign
+    emitter.instruction("eor w7, w7, #6");                                      // '+' <-> '-'
+    emitter.instruction("strb w7, [x0, #3]");                                   // store the POSIX sign
+
+    // -- apply via libc and re-read the zone --
+    emitter.label("__rt_ddtz_set_apply");
     emitter.bl_c("putenv");                                                     // putenv("TZ=<id>")
     emitter.bl_c("tzset");                                                      // re-read TZ so localtime uses it
 
@@ -151,8 +174,28 @@ fn emit_set_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_ddtz_set_x86_copy_done");
     emitter.instruction("mov BYTE PTR [rdi + rbx], 0");                         // NUL-terminate the env string
 
-    // -- apply via libc and re-read the zone --
+    // -- an offset id ("+02:00") reaches libc sign-flipped: POSIX TZ offsets count west of UTC --
+    emitter.instruction("movzx r8d, BYTE PTR [rsi + 3]");                       // first identifier byte
+    emitter.instruction("cmp r8d, 43");                                         // '+' offset id?
+    emitter.instruction("je __rt_ddtz_set_x86_offset");                         // yes → hand libc the flipped copy
+    emitter.instruction("cmp r8d, 45");                                         // '-' offset id?
+    emitter.instruction("je __rt_ddtz_set_x86_offset");                         // yes → hand libc the flipped copy
     emit_symbol_address(emitter, "rdi", "_php_tz_env");
+    emitter.instruction("jmp __rt_ddtz_set_x86_apply");                         // a named zone goes to libc as written
+    emitter.label("__rt_ddtz_set_x86_offset");
+    emit_symbol_address(emitter, "rdi", "_php_tz_posix");
+    emitter.instruction("lea rdx, [rbx + 4]");                                  // "TZ=" + identifier + NUL
+    emitter.instruction("xor rcx, rcx");                                        // copy index
+    emitter.label("__rt_ddtz_set_x86_offset_copy");
+    emitter.instruction("mov r8b, BYTE PTR [rsi + rcx]");                       // load env byte
+    emitter.instruction("mov BYTE PTR [rdi + rcx], r8b");                       // store it into the libc copy
+    emitter.instruction("inc rcx");                                             // advance the copy index
+    emitter.instruction("cmp rcx, rdx");                                        // whole env string copied?
+    emitter.instruction("jl __rt_ddtz_set_x86_offset_copy");                    // no → continue
+    emitter.instruction("xor BYTE PTR [rdi + 3], 6");                           // '+' <-> '-' (POSIX sign)
+
+    // -- apply via libc and re-read the zone --
+    emitter.label("__rt_ddtz_set_x86_apply");
     emitter.instruction("call putenv");                                         // putenv("TZ=<id>")
     emitter.instruction("call tzset");                                          // re-read TZ so localtime uses it
 

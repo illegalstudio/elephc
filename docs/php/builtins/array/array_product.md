@@ -2,7 +2,7 @@
 title: "array_product()"
 description: "Calculate an integer or float product of array values; an empty array returns integer 1."
 sidebar:
-  order: 31
+  order: 37
 ---
 
 ## array_product()

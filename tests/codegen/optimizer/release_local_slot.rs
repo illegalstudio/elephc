@@ -192,16 +192,23 @@ echo "ok";
 
     for ir_opt in [false, true] {
         let ir = emit_release_ir(source, ir_opt);
+        // The slot NUMBER depends on how many hidden locals the program prologue declares, so
+        // the `$string` slot is read off the invoker argument rather than hard-coded.
+        let invoker_slot = ir
+            .lines()
+            .find_map(|line| {
+                let (_, rest) = line.split_once("php=mixed own=owned = invoker_ref_arg ")?;
+                rest.split_whitespace().next().map(str::to_string)
+            });
+        let Some(invoker_slot) = invoker_slot else {
+            panic!("the live local must be widened to Mixed before the call with ir_opt={ir_opt}:\n{ir}");
+        };
         let cleanup = ir.lines().find(|line| {
-            line.contains("release_local_slot slot[2]") && line.contains("span: 5:5")
+            line.contains(&format!("release_local_slot {invoker_slot}")) && line.contains("span: 5:5")
         });
         assert!(
             cleanup.is_some(),
             "assignment cleanup must retire the local slot with ir_opt={ir_opt}:\n{ir}"
-        );
-        assert!(
-            ir.lines().any(|line| line.contains("php=mixed own=owned = invoker_ref_arg slot[2]")),
-            "the live local must be widened to Mixed before the call with ir_opt={ir_opt}:\n{ir}"
         );
 
         let (stdout, stderr) = run_release_fixture(source, ir_opt);

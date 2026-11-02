@@ -170,6 +170,33 @@ foreach (new Aggregate() as $v) { echo $v; }
     assert_eq!(out, "012");
 }
 
+/// Verifies a `Traversable`-typed source dynamically supports both Iterator protocol families.
+#[test]
+fn test_foreach_traversable_typed_source_dispatches_runtime_protocol() {
+    let out = compile_and_run(
+        r#"<?php
+class DirectValues implements Iterator {
+    private int $position = 0;
+    public function rewind(): void { $this->position = 0; }
+    public function valid(): bool { return $this->position < 2; }
+    public function current(): string { return "D".$this->position; }
+    public function key(): int { return $this->position; }
+    public function next(): void { ++$this->position; }
+}
+class AggregateValues implements IteratorAggregate {
+    public function getIterator(): Traversable { return new DirectValues(); }
+}
+function dump_traversable(Traversable $values): void {
+    foreach ($values as $value) { echo $value, ";"; }
+}
+dump_traversable(new DirectValues());
+echo "|";
+dump_traversable(new AggregateValues());
+"#,
+    );
+    assert_eq!(out, "D0;D1;|D0;D1;");
+}
+
 /// Tests foreach with a function parameter typed as Iterator (interface). Verifies
 /// dispatch correctly calls rewind/valid/current/key/next on the concrete Range
 /// object passed at runtime and that key() result is used for $k.

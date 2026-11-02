@@ -312,6 +312,41 @@ fn test_parse_arrow_function_implicit_capture() {
     }
 }
 
+/// Verifies arrow functions never capture superglobals: they are visible in every scope, and a
+/// by-value capture of `$_SERVER` made the closure re-store the global from its copy.
+#[test]
+fn test_parse_arrow_function_does_not_capture_superglobals() {
+    let stmts = parse_source("<?php $fn = fn() => isset($_SERVER) ? $_GET : $y;");
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        if let ExprKind::Closure { captures, .. } = &value.kind {
+            assert_eq!(captures, &["y".to_string()]);
+        } else {
+            panic!("expected Closure (arrow)");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
+/// Verifies arrow capture inference respects locals initialized earlier in expression order.
+#[test]
+fn test_parse_arrow_function_assignment_defines_local_before_read() {
+    let stmts = parse_source(
+        "<?php $fn = fn($name) => match ($name) { 'parent' => ($parent = 'base') ? $parent : 'none', default => 'other' };",
+    );
+    assert_eq!(stmts.len(), 1);
+    if let StmtKind::Assign { value, .. } = &stmts[0].kind {
+        if let ExprKind::Closure { captures, .. } = &value.kind {
+            assert!(captures.is_empty());
+        } else {
+            panic!("expected Closure (arrow)");
+        }
+    } else {
+        panic!("expected Assign");
+    }
+}
+
 #[test]
 // Verifies that `<?php $fn = fn(int $x): int => $x + 1;` parses an arrow function with
 // typed param `int $x`, return type `int`, and `is_arrow` true.
@@ -953,6 +988,53 @@ fn test_parse_first_class_callable_function() {
     }
 }
 
+/// Verifies that first-class callable syntax on a variable captures its invocation target.
+#[test]
+fn test_parse_first_class_callable_variable() {
+    let stmts = parse_source("<?php $copy = $callback(...);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::FirstClassCallable(CallableTarget::Method { object, method }) => {
+                assert_eq!(method, "__invoke");
+                assert!(matches!(object.kind, ExprKind::Variable(ref name) if name == "callback"));
+            }
+            other => panic!("Expected variable first-class callable, got {:?}", other),
+        },
+        other => panic!("Expected assignment, got {:?}", other),
+    }
+}
+
+/// Verifies first-class callable syntax on a grouped property value captures its invokable value.
+#[test]
+fn test_parse_first_class_callable_parenthesized_property() {
+    let stmts = parse_source("<?php $copy = ($holder->callback)(...);");
+    let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+        panic!("Expected assignment, got {:?}", stmts[0].kind);
+    };
+    let ExprKind::FirstClassCallable(CallableTarget::Method { object, method }) = &value.kind else {
+        panic!("Expected expression first-class callable, got {:?}", value.kind);
+    };
+    assert_eq!(method, "__invoke");
+    assert!(matches!(object.kind, ExprKind::PropertyAccess { .. }));
+}
+
+/// Verifies that `$this(...)` captures the current object as an invokable callable.
+#[test]
+fn test_parse_first_class_callable_this() {
+    let stmts = parse_source("<?php class C { public function f() { return $this(...); } }");
+    let StmtKind::ClassDecl { methods, .. } = &stmts[0].kind else {
+        panic!("Expected class declaration");
+    };
+    let StmtKind::Return(Some(value)) = &methods[0].body[0].kind else {
+        panic!("Expected returned callable");
+    };
+    assert!(matches!(
+        value.kind,
+        ExprKind::FirstClassCallable(CallableTarget::Method { ref object, ref method })
+            if method == "__invoke" && matches!(object.kind, ExprKind::This)
+    ));
+}
+
 #[test]
 // Verifies that `<?php echo __FUNCTION__;` parses an echo statement whose expression is
 // the magic constant `MagicConstant::Function`.
@@ -1036,6 +1118,48 @@ fn test_parse_intersection_type_param() {
         }
         other => panic!("Expected FunctionDecl, got {:?}", other),
     }
+}
+
+#[test]
+/// Verifies that parenthesized intersections remain nested union members for PHP DNF types on
+/// both parameters and return declarations.
+fn test_parse_dnf_type_param_and_return() {
+    let stmts = parse_source(
+        "<?php function f((A&B)|null $x): (A&B)|C { return $x; }",
+    );
+    match &stmts[0].kind {
+        StmtKind::FunctionDecl {
+            params,
+            return_type,
+            ..
+        } => {
+            let intersection = TypeExpr::Intersection(vec![
+                TypeExpr::Named(Name::unqualified("A")),
+                TypeExpr::Named(Name::unqualified("B")),
+            ]);
+            assert_eq!(
+                params[0].1,
+                Some(TypeExpr::Union(vec![
+                    intersection.clone(),
+                    TypeExpr::Void,
+                ]))
+            );
+            assert_eq!(
+                return_type.as_ref(),
+                Some(&TypeExpr::Union(vec![
+                    intersection,
+                    TypeExpr::Named(Name::unqualified("C")),
+                ]))
+            );
+        }
+        other => panic!("Expected FunctionDecl, got {:?}", other),
+    }
+}
+
+#[test]
+/// Verifies that an intersection mixed into a union without PHP's required parentheses fails.
+fn test_parse_unparenthesized_dnf_type_fails() {
+    assert!(parse_fails("<?php function f(A&B|null $x): void {}"));
 }
 
 #[test]

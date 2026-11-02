@@ -2,7 +2,7 @@
 title: "gmp_sqrtrem()"
 description: "Integer square root and remainder."
 sidebar:
-  order: 635
+  order: 648
 ---
 
 ## gmp_sqrtrem()

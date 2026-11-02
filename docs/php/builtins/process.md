@@ -10,9 +10,9 @@ sidebar:
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
 | [`die()`](./process/die.md) | `(int $status = 0): void` | `void` | ✓ | ✓ |
-| [`exec()`](./process/exec.md) | `(string $command): string` | `string` | ✓ | ✓ |
+| [`exec()`](./process/exec.md) | `(string $command, array $output = null, int $result_code = null): string` | `string` | ✓ | ✓ |
 | [`exit()`](./process/exit.md) | `(int $status = 0): void` | `void` | ✓ | ✓ |
-| [`passthru()`](./process/passthru.md) | `(string $command): void` | `void` | ✓ | ✓ |
+| [`passthru()`](./process/passthru.md) | `(string $command, int $result_code = null): void` | `void` | ✓ | ✓ |
 | [`pclose()`](./process/pclose.md) | `(resource $handle): int` | `int` | ✓ | ✓ |
 | [`popen()`](./process/popen.md) | `(string $command, string $mode): mixed` | `mixed` | ✓ | ✓ |
 | [`readline()`](./process/readline.md) | `(?string $prompt = null): mixed` | `mixed` | ✓ | ✓ |

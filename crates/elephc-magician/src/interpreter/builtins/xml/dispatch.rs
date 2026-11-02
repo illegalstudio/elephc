@@ -192,7 +192,7 @@ pub(in crate::interpreter) fn eval_xml_values_result(
         .copied()
         .map(|value| EvaluatedCallArg {
             name: None,
-            value,
+            value: value.borrowed(),
             ref_target: None,
         })
         .collect();

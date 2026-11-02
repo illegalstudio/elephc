@@ -2,7 +2,7 @@
 title: "iptcembed()"
 description: "Embeds an IPTC block into a JPEG file."
 sidebar:
-  order: 547
+  order: 560
 ---
 
 ## iptcembed()

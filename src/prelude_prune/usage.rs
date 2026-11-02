@@ -98,6 +98,23 @@ pub(crate) struct Usage {
     /// Walk state, not a finding: true while the parsed source of a literal `eval` is being
     /// scanned, where an `include` resolves at runtime and names nothing this walk can read.
     pub(crate) scanning_eval_fragment: bool,
+    /// An `include`/`require` whose path this walk cannot read as a string literal.
+    ///
+    /// Such an include RUNS PHP TEXT THAT DOES NOT EXIST YET, through the same interpreter
+    /// `eval()` uses, and that text can name any class — exactly the hazard `introspects`
+    /// records for `eval`. It is kept separate because the two answers differ: `eval` also
+    /// hands over the symbol table and so must disable prelude pruning outright, whereas a
+    /// runtime include reaches classes through the eval bridge's own construction surface.
+    ///
+    /// Every checker gate that widens a builtin class family for `eval` has the same reason to
+    /// widen it for a runtime include, and must read this flag beside `introspects`:
+    /// `types::checker::builtin_class_gate` (the throwable set) and
+    /// `types::checker::builtin_types::reflection::gate` (the fourteen Reflection classes) do.
+    pub(crate) includes_runtime_php: bool,
+    /// An `eval()` that is not a transparent literal fragment (see `transparent_literal_eval`):
+    /// text this walk cannot fully account for, which may load code, reach the program's own
+    /// classes and functions, or run in the interpreter.
+    pub(crate) opaque_eval: bool,
     /// Walk-only proof used by the environment gate to discard unreferenced callable facts.
     callable_declaration_roots: Option<super::environment_callables::DeclarationRoots>,
     /// Constructor roles are usable during full collection as well as declaration exclusion.
@@ -369,6 +386,56 @@ pub(crate) fn collect(program: &[Stmt]) -> Usage {
         scan_stmt(stmt, &mut usage);
     }
     usage
+}
+
+thread_local! {
+    /// The usage of the program being type-checked, tagged with its slice (address, length).
+    static PUBLISHED: std::cell::RefCell<Option<(usize, usize, std::rc::Rc<Usage>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Restores the enclosing publication on drop.
+pub(crate) struct PublishedUsage {
+    previous: Option<(usize, usize, std::rc::Rc<Usage>)>,
+    usage: std::rc::Rc<Usage>,
+}
+
+impl PublishedUsage {
+    /// The published usage.
+    pub(crate) fn usage(&self) -> &Usage {
+        &self.usage
+    }
+}
+
+impl Drop for PublishedUsage {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        PUBLISHED.with(|cell| *cell.borrow_mut() = previous);
+    }
+}
+
+/// Collects `program`'s usage once and publishes it to [`collect_shared`] until the guard drops.
+///
+/// The type checker asked the same whole-program question from nine places (its own setup and
+/// eight class-family gates), each a full walk of the program: 5% of a Symfony build's checker.
+pub(crate) fn publish(program: &[Stmt]) -> PublishedUsage {
+    let usage = std::rc::Rc::new(collect(program));
+    let entry = (program.as_ptr() as usize, program.len(), std::rc::Rc::clone(&usage));
+    let previous = PUBLISHED.with(|cell| cell.borrow_mut().replace(entry));
+    PublishedUsage { previous, usage }
+}
+
+/// The usage of `program`: the published one when `program` is the slice it was collected from,
+/// otherwise a fresh walk.
+pub(crate) fn collect_shared(program: &[Stmt]) -> std::rc::Rc<Usage> {
+    let identity = (program.as_ptr() as usize, program.len());
+    let published = PUBLISHED.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .filter(|(address, len, _)| (*address, *len) == identity)
+            .map(|(_, _, usage)| std::rc::Rc::clone(usage))
+    });
+    published.unwrap_or_else(|| std::rc::Rc::new(collect(program)))
 }
 
 /// Collects ordinary usage plus the dispatch metadata needed to exclude unreferenced callbacks.
@@ -659,14 +726,15 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         | StmtKind::ArrayPush { value: expr, .. }
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. } => scan_expr(expr, usage),
-        StmtKind::Include { path: expr, .. } => {
+        StmtKind::Include { path, .. } => {
             // The resolver has already inlined every include it could read, so one still here
             // resolves at runtime. Inside a literal eval fragment that is the normal case, and the
             // included file's contents are exactly what this walk cannot see.
             if usage.scanning_eval_fragment {
                 usage.introspects = true;
             }
-            scan_expr(expr, usage)
+            record_include_path(path, usage);
+            scan_expr(path, usage);
         }
         StmtKind::RefAssign { source, .. } => scan_expr(source, usage),
         StmtKind::PropertyAssign { object, value, .. }
@@ -687,6 +755,30 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             scan_expr(index, usage);
+            scan_expr(value, usage);
+        }
+        // The by-reference property/static-element binds and the computed static-property write
+        // are ordinary writes as far as this walk is concerned: every expression they carry can
+        // still NAME a prelude function or class, and a name only reachable here would otherwise
+        // be pruned and fail at run time.
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            scan_expr(object, usage);
+            scan_expr(source, usage);
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            scan_expr(index, usage);
+            scan_expr(source, usage);
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            scan_expr(property, usage);
+            if let Some(index) = index {
+                scan_expr(index, usage);
+            }
             scan_expr(value, usage);
         }
         StmtKind::NestedArrayAssign { target, value } => {
@@ -986,7 +1078,19 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         | StmtKind::Global { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => {}
+    }
+}
+
+/// Records an `include`/`require` whose path this walk cannot read as a literal.
+///
+/// A literal path names a file the compiler resolves and inlines, so its declarations are part
+/// of the program this walk already sees. Anything else is decided at run time and executed by
+/// the interpreter, which can name a class no static walk can read.
+fn record_include_path(path: &Expr, usage: &mut Usage) {
+    if !matches!(path.kind, ExprKind::StringLiteral(_)) {
+        usage.includes_runtime_php = true;
     }
 }
 
@@ -1024,7 +1128,8 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             if usage.scanning_eval_fragment {
                 usage.introspects = true;
             }
-            scan_expr(path, usage)
+            record_include_path(path, usage);
+            scan_expr(path, usage);
         }
         ExprKind::FunctionCall { name, args } => {
             let name = php_symbol_key(name.as_str().trim_start_matches('\\'));
@@ -1084,10 +1189,22 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                     usage.dynamic_function_call = true;
                 }
             } else if name == "eval" {
-                // Only a runtime-sourced (or unparsable) eval hands the whole symbol table over;
-                // a literal one is scanned as the inline code it is.
-                if !scan_literal_eval_fragment(args.first(), usage) {
-                    usage.introspects = true;
+                // A TRANSPARENT fragment (see `transparent_literal_eval`) is source like any
+                // other: its names are read here. Treating `eval('return 1;')` as introspection
+                // disabled every prelude's pruning and, through the session group's interpreter
+                // calls, linked the eval bridge into a program whose eval compiles ahead of time.
+                match transparent_literal_eval(args) {
+                    Some(fragment) => scan_program(&fragment, usage),
+                    None => {
+                        // Any other eval may load code, reach the program's own classes and
+                        // functions, or run in the interpreter.
+                        usage.opaque_eval = true;
+                        // Only a runtime-sourced (or unparsable) eval hands the whole symbol
+                        // table over; a literal one is scanned as the inline code it is.
+                        if !scan_literal_eval_fragment(args.first(), usage) {
+                            usage.introspects = true;
+                        }
+                    }
                 }
             } else if INTROSPECTION_BUILTINS.contains(&name.as_str()) {
                 usage.introspects = true;
@@ -1426,12 +1543,107 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             usage.storage_variables.insert(name.clone());
         }
         ExprKind::ObjectClassName { object } => scan_expr(object, usage),
+        // A by-reference array element, a computed static-property read and a computed scoped
+        // constant all carry expressions that can still NAME a prelude declaration.
+        ExprKind::ArrayReference(inner) => scan_expr(inner, usage),
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                record_class(usage, &name.as_canonical());
+            }
+            scan_expr(property, usage);
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => scan_expr(receiver, usage),
     }
+}
+
+/// The parsed statements of an `eval()` whose argument is a TRANSPARENT literal fragment: it
+/// parses, declares nothing, and calls functions by name only -- no class, method, static
+/// member, dynamic call, runtime include, further opaque `eval`, or a builtin that defines a
+/// symbol at run time. Such a fragment cannot load code, so every walk may read it as ordinary
+/// source, its named functions included. A fragment that touches classes keeps the opaque
+/// treatment: the interpreter may run it, and it needs their bridge metadata.
+pub(crate) fn transparent_literal_eval(args: &[Expr]) -> Option<Vec<Stmt>> {
+    let ExprKind::StringLiteral(fragment) = &args.first()?.kind else {
+        return None;
+    };
+    // Any include loads a file this walk never reads, whatever its path spells: the file may not
+    // even exist until run time.
+    let lowered = fragment.to_ascii_lowercase();
+    if lowered.contains("include") || lowered.contains("require") {
+        return None;
+    }
+    let program = crate::eval_aot::parse_literal_fragment(fragment, false)?;
+    if fragment_declares(&program) {
+        return None;
+    }
+    let usage = collect(&program);
+    let builtin_only = !usage.opaque_eval
+        && !usage.dynamic_function_call
+        && !usage.includes_runtime_php
+        && !usage.introspects
+        && !usage.constructs_dynamic_class
+        && usage.methods.is_empty()
+        && usage.classes.is_empty()
+        && !usage.functions.iter().any(|name| {
+            matches!(
+                name.as_str(),
+                "define" | "class_alias" | "spl_autoload_register" | "set_include_path"
+            )
+        });
+    builtin_only.then_some(program)
+}
+
+/// Whether a parsed fragment declares a function, class-like or constant at any depth.
+fn fragment_declares(program: &[Stmt]) -> bool {
+    fn declares(stmt: &Stmt) -> bool {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { .. }
+            | StmtKind::ClassDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
+            | StmtKind::TraitDecl { .. }
+            | StmtKind::EnumDecl { .. }
+            | StmtKind::ConstDecl { .. } => true,
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                then_body.iter().any(declares)
+                    || elseif_clauses.iter().any(|(_, body)| body.iter().any(declares))
+                    || else_body.as_ref().is_some_and(|body| body.iter().any(declares))
+            }
+            StmtKind::NamespaceBlock { body, .. } => body.iter().any(declares),
+            _ => false,
+        }
+    }
+    program.iter().any(declares)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn program(source: &str) -> Vec<Stmt> {
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        crate::parser::parse(&tokens).expect("parse")
+    }
+
+    /// The checker publishes one walk of its program and every gate asking about the SAME slice
+    /// gets that walk back; any other slice is walked afresh, and the guard ends the publication.
+    #[test]
+    fn published_usage_is_shared_only_for_its_own_slice() {
+        let checked = program("<?php strlen('a');");
+        let other = program("<?php trim('a');");
+        {
+            let published = publish(&checked);
+            assert!(published.usage().references("strlen"));
+            let first = collect_shared(&checked);
+            let second = collect_shared(&checked);
+            assert!(std::rc::Rc::ptr_eq(&first, &second), "the same slice reuses the walk");
+            let fresh = collect_shared(&other);
+            assert!(fresh.references("trim") && !fresh.references("strlen"));
+        }
+        let after = collect_shared(&checked);
+        assert!(after.references("strlen"));
+        assert!(!std::rc::Rc::ptr_eq(&after, &collect_shared(&checked)), "the guard ended the publication");
+    }
+
     use crate::parser::ast::Program;
 
     /// Parses one tagged fixture without resolution or optimization passes.

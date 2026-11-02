@@ -8,9 +8,11 @@
 //! Key details:
 //! - Inference may emit diagnostics and warnings, so callers must preserve source spans and environment context.
 
-mod expr;
+pub(in crate::types::checker) mod expr;
 /// Inference for operators: binary ops, instanceof, closures, pipe, and expr calls.
 mod objects;
+#[cfg(test)]
+pub(crate) use objects::INTERFACE_IMPLEMENTATION_SIG_COPIES;
 /// Inference for objects: property access, method calls, constructors, and class constants.
 mod ops;
 /// Syntactic inference: lightweight AST-to-PhpType rules for literal-based return type hints.
@@ -20,3 +22,4 @@ pub(super) mod syntactic;
 pub use syntactic::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use expr::closure_body_uses_this;
 pub(super) use expr::is_valid_string_offset_index;
+pub(crate) use objects::php_declared_type_spelling;

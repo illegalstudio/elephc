@@ -154,3 +154,77 @@ fn encode_eval_native_literal_default_string(bytes: &mut Vec<u8>, value: &str) {
     bytes.extend_from_slice(&len.to_le_bytes());
     bytes.extend_from_slice(&value);
 }
+
+/// Looks up a class constant expression, including inherited parent classes.
+pub(super) fn eval_native_class_constant_expr<'a>(
+    module: &'a Module,
+    class_name: &str,
+    constant_name: &str,
+) -> Option<(&'a str, &'a Expr)> {
+    let (resolved_name, class_info) = resolve_eval_native_default_class(module, class_name)?;
+    if let Some(value) = class_info.constants.get(constant_name) {
+        return Some((resolved_name, value));
+    }
+    for interface_name in &class_info.interfaces {
+        if let Some(value) =
+            eval_native_interface_constant_expr(module, interface_name, constant_name)
+        {
+            return Some(value);
+        }
+    }
+    if let Some(parent_name) = class_info.parent.as_deref() {
+        return eval_native_class_constant_expr(module, parent_name, constant_name);
+    }
+    None
+}
+
+/// Looks up an interface constant expression, including inherited interfaces.
+pub(super) fn eval_native_interface_constant_expr<'a>(
+    module: &'a Module,
+    interface_name: &str,
+    constant_name: &str,
+) -> Option<(&'a str, &'a Expr)> {
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = vec![interface_name.to_string()];
+    while let Some(name) = queue.pop() {
+        let Some((resolved_name, interface_info)) =
+            resolve_eval_native_default_interface(module, &name)
+        else {
+            continue;
+        };
+        if !visited.insert(php_symbol_key(resolved_name.trim_start_matches('\\'))) {
+            continue;
+        }
+        if let Some(value) = interface_info.constants.get(constant_name) {
+            return Some((resolved_name, value));
+        }
+        queue.extend(interface_info.parents.iter().cloned());
+    }
+    None
+}
+
+/// Looks up class metadata by PHP-style case-insensitive name.
+pub(super) fn resolve_eval_native_default_class<'a>(
+    module: &'a Module,
+    class_name: &str,
+) -> Option<(&'a str, &'a ClassInfo)> {
+    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    module
+        .class_infos
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
+        .map(|(name, info)| (name.as_str(), info))
+}
+
+/// Looks up interface metadata by PHP-style case-insensitive name.
+pub(super) fn resolve_eval_native_default_interface<'a>(
+    module: &'a Module,
+    interface_name: &str,
+) -> Option<(&'a str, &'a InterfaceInfo)> {
+    let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
+    module
+        .interface_infos
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == interface_key)
+        .map(|(name, info)| (name.as_str(), info))
+}

@@ -2,7 +2,7 @@
 title: "gmp_jacobi() - internals"
 description: "Compiler internals for gmp_jacobi(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 610
+  order: 623
 ---
 
 ## `gmp_jacobi()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_jacobi.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_jacobi.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -20,7 +20,7 @@ pub(in crate::interpreter) fn eval_array_mutation_lvalue_arg(
     if arg.is_spread() || !matches!(arg.name(), None | Some("array")) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let (array, target) = eval_call_arg_value(arg.value(), context, scope, values)?;
+    let (array, target) = eval_direct_ref_arg_value(arg.value(), context, scope, values)?;
     let target = target.ok_or(EvalStatus::RuntimeFatal)?;
     if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
         return Err(EvalStatus::RuntimeFatal);

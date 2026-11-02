@@ -2,7 +2,7 @@
 title: "gmp_init()"
 description: "Creates a GMP number from an integer or string."
 sidebar:
-  order: 607
+  order: 620
 ---
 
 ## gmp_init()

@@ -33,8 +33,9 @@ pcntl_signal(SIGUSR1, $callback);
 const WIDE_EDGE_STEMS: &[&str] = &[
     "array_map_null_callback",
     "array_filter_null_callback",
-    "mixed_callable_array",
-    "mixed_callable_object",
+    // The variable call's tag dispatch (the shared open Mixed callable helper).
+    "mixed_callable_value_array",
+    "mixed_callable_value_object",
     "pcntl_signal_mixed_scalar",
     "pcntl_signal_mixed_bool_error",
 ];
@@ -95,11 +96,20 @@ fn cross_section_conditional_branches(assembly: &str) -> Vec<String> {
         .collect()
 }
 
-/// Returns true when `label` is one minted label of `stem`, such as `.L_eir_main_<stem>_12`.
+/// Returns true when `label` is one minted label of `stem`, such as `.L_eir_main_<stem>_12` or,
+/// with the per-body hash local labels carry, `.L_eir_main_<stem>_a50d7b190aaa_12`.
 fn is_stem_label(label: &str, stem: &str) -> bool {
-    label
-        .rsplit_once('_')
-        .is_some_and(|(head, id)| id.bytes().all(|b| b.is_ascii_digit()) && head.ends_with(stem))
+    label.rsplit_once('_').is_some_and(|(head, id)| {
+        if !id.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        if head.ends_with(stem) {
+            return true;
+        }
+        head.rsplit_once('_').is_some_and(|(head, hash)| {
+            hash.len() == 12 && hash.bytes().all(|b| b.is_ascii_hexdigit()) && head.ends_with(stem)
+        })
+    })
 }
 
 /// Verifies inline callback wrappers leave the caller's conditional branches in its section.

@@ -167,9 +167,86 @@ impl<'a> AliasState<'a> {
 pub(crate) struct ReturnAliasSummaries {
     functions: HashMap<String, ReturnArgAlias>,
     methods: HashMap<(String, String), ReturnArgAlias>,
+    /// Dispatch folds already computed, keyed by the receiver the fold ranged over.
+    ///
+    /// `method_return_arg_alias` answers a non-final or `mixed` receiver by merging the
+    /// resolved summary of EVERY closed-world class that could be dispatched to — a scan of
+    /// the whole class table at each such call site. The answer is a pure function of the
+    /// method name, the receiver, the class table and these summaries; the class table and
+    /// the summaries are borrowed by `LoweringContext` as `&'m`, so none of them can change
+    /// while lowering runs, and the fold only needs to happen once per key.
+    ///
+    /// `merge` absorbs on `Unknown`, is neutral on `None` and unions elsewhere, so it is
+    /// commutative and associative: the memoized answer does not depend on the iteration
+    /// order the fold happened to see.
+    dispatch_folds: std::cell::RefCell<crate::fast_hash::FastMap<DispatchFoldKey, ReturnArgAlias>>,
+    /// The classes each dispatch fold over a base class ranges over (the base and its
+    /// descendants, in class-table order), keyed by the class table's address and size and the
+    /// base: every new (base, method) fold used to walk every class's parent chain.
+    class_families: std::cell::RefCell<crate::fast_hash::FastMap<(usize, usize, String), std::sync::Arc<Vec<String>>>>,
+}
+
+/// Identifies one dispatch fold: a case-folded method name, over one receiver or over all.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct DispatchFoldKey {
+    /// The base class the fold was restricted to, or `None` for the `mixed` fallback.
+    pub(crate) base_class: Option<String>,
+    /// The case-folded method name.
+    pub(crate) method_key: String,
 }
 
 impl ReturnAliasSummaries {
+    /// Returns a dispatch fold computed earlier, if this key has already been answered.
+    pub(crate) fn cached_dispatch_fold(&self, key: &DispatchFoldKey) -> Option<ReturnArgAlias> {
+        self.dispatch_folds.borrow().get(key).cloned()
+    }
+
+    /// The names of `classes` that are `base` or descend from it through `parent` links, in
+    /// `classes` iteration order, computed once per class table and base.
+    pub(crate) fn class_family(
+        &self,
+        classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
+        base: &str,
+    ) -> std::sync::Arc<Vec<String>> {
+        let key = (classes as *const _ as usize, classes.len(), base.to_string());
+        if let Some(found) = self.class_families.borrow().get(&key) {
+            return found.clone();
+        }
+        #[cfg(test)]
+        CLASS_FAMILY_BUILDS.with(|count| count.set(count.get() + 1));
+        let mut children: crate::fast_hash::FastMap<&str, Vec<&str>> = Default::default();
+        for (name, info) in classes {
+            if let Some(parent) = info.parent.as_deref() {
+                children.entry(parent).or_default().push(name.as_str());
+            }
+        }
+        let mut reached = crate::fast_hash::FastSet::default();
+        let mut stack = vec![base];
+        while let Some(name) = stack.pop() {
+            for &child in children.get(name).into_iter().flatten() {
+                if reached.insert(child) {
+                    stack.push(child);
+                }
+            }
+        }
+        let family: Vec<String> = classes
+            .keys()
+            .filter(|name| name.as_str() == base || reached.contains(name.as_str()))
+            .cloned()
+            .collect();
+        let family = std::sync::Arc::new(family);
+        self.class_families.borrow_mut().insert(key, family.clone());
+        family
+    }
+
+    /// Records the result of one dispatch fold so the scan is not repeated.
+    ///
+    /// Taken by value and borrowed only here, so the caller runs its scan with no borrow of
+    /// the cache outstanding and re-entrancy cannot panic.
+    pub(crate) fn store_dispatch_fold(&self, key: DispatchFoldKey, alias: ReturnArgAlias) {
+        self.dispatch_folds.borrow_mut().insert(key, alias);
+    }
+
     /// Looks up a source-declared function summary by its canonical name.
     pub(crate) fn function(&self, name: &str) -> Option<&ReturnArgAlias> {
         self.functions.get(name)
@@ -201,6 +278,8 @@ pub(crate) fn collect_return_alias_summaries(program: &Program) -> ReturnAliasSu
     let mut summaries = ReturnAliasSummaries {
         functions: conservative.functions.keys().map(|name| (name.clone(), ReturnArgAlias::None)).collect(),
         methods: conservative.methods.keys().map(|key| (key.clone(), ReturnArgAlias::None)).collect(),
+        dispatch_folds: Default::default(),
+        class_families: Default::default(),
     };
     for _ in 0..64 {
         let callees = Callees {
@@ -245,6 +324,7 @@ fn collect_declaration_summaries(
                 name,
                 params,
                 variadic,
+                variadic_by_ref,
                 by_ref_return,
                 return_type,
                 body,
@@ -255,10 +335,11 @@ fn collect_declaration_summaries(
                     summarize_with_callees(
                         params
                             .iter()
-                            .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
+                            .map(|(name, hint, _, by_ref)| (name.as_str(), hint.as_ref(), *by_ref)),
                         variadic.as_deref(),
                         *by_ref_return,
                         return_type.as_ref(),
+                        params.iter().any(|(_, _, _, by_ref)| *by_ref) || *variadic_by_ref,
                         body,
                         callees,
                     ),
@@ -291,10 +372,11 @@ fn collect_method_summaries(
                 method
                     .params
                     .iter()
-                    .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
+                    .map(|(name, hint, _, by_ref)| (name.as_str(), hint.as_ref(), *by_ref)),
                 method.variadic.as_deref(),
                 method.by_ref_return,
                 method.return_type.as_ref(),
+                method.params.iter().any(|(_, _, _, by_ref)| *by_ref) || method.variadic_by_ref,
                 &method.body,
                 callees,
             )
@@ -311,27 +393,38 @@ fn collect_method_summaries(
     }
 }
 
-/// Summarizes one function-like body from its parameter names and statements.
+/// Summarizes one function-like body from its parameters -- name, declared type and by-reference
+/// flag -- and statements.
+///
+/// A BY-REFERENCE parameter is never a pass-through alias. Its value lives in the caller's own
+/// variable, not in an argument the caller lent for the call, and a callee that mutates it
+/// (`sort($t); return $t;`) may hand back storage the caller never saw as an argument at all.
+/// `return $t` therefore retains the value (`ir_lower::stmt::control_exit`), and the caller
+/// releases the result like any fresh one. Summarizing it as an alias made the caller skip that
+/// release on some paths and, once a call invalidated it to `Unknown`, release storage the
+/// callee had not retained: `function f(array &$t) { sort($t); return $t; } f($a);` freed `$a`.
 pub(crate) fn summarize_callable_return_alias<'a>(
-    params: impl Iterator<Item = (&'a str, Option<&'a TypeExpr>)>,
+    params: impl Iterator<Item = (&'a str, Option<&'a TypeExpr>, bool)>,
     variadic: Option<&str>,
     by_ref_return: bool,
     return_type: Option<&TypeExpr>,
+    by_ref_params: bool,
     body: &[Stmt],
 ) -> ReturnArgAlias {
-    summarize_with_callees(params, variadic, by_ref_return, return_type, body, None)
+    summarize_with_callees(params, variadic, by_ref_return, return_type, by_ref_params, body, None)
 }
 
 /// `summarize_callable_return_alias`, consulting what is known of the callables the body calls.
 fn summarize_with_callees<'a>(
-    params: impl Iterator<Item = (&'a str, Option<&'a TypeExpr>)>,
+    params: impl Iterator<Item = (&'a str, Option<&'a TypeExpr>, bool)>,
     variadic: Option<&str>,
     by_ref_return: bool,
     return_type: Option<&TypeExpr>,
+    by_ref_params: bool,
     body: &[Stmt],
     callees: Option<&Callees>,
 ) -> ReturnArgAlias {
-    let params: Vec<(&str, Option<&TypeExpr>)> = params.collect();
+    let params: Vec<(&str, Option<&TypeExpr>, bool)> = params.collect();
     if by_ref_return {
         // A by-reference callable whose whole body is `return $parameter;` transfers that
         // parameter's storage. Anything more complex stays conservative: the legacy
@@ -344,7 +437,7 @@ fn summarize_with_callees<'a>(
             ..
         }] = body
         {
-            if let Some(index) = params.iter().position(|(param, _)| param == name) {
+            if let Some(index) = params.iter().position(|(param, _, _)| param == name) {
                 return ReturnArgAlias::parameter(index);
             }
         }
@@ -358,30 +451,33 @@ fn summarize_with_callees<'a>(
     // slot is never a bare `Str`.
     let string_parameters: BTreeSet<String> = params
         .iter()
-        .filter(|(_, hint)| matches!(hint, Some(TypeExpr::Str)))
-        .map(|(name, _)| (*name).to_string())
+        .filter(|(_, hint, _)| matches!(hint, Some(TypeExpr::Str)))
+        .map(|(name, _, _)| (*name).to_string())
         .collect();
     let string_parameter_indices: BTreeSet<usize> = params
         .iter()
         .enumerate()
-        .filter(|(_, (_, hint))| matches!(hint, Some(TypeExpr::Str)))
+        .filter(|(_, (_, hint, _))| matches!(hint, Some(TypeExpr::Str)))
         .map(|(index, _)| index)
         .collect();
     let mut state = AliasState::new(&string_parameters, &string_parameter_indices);
     state.string_valued_locals = params
         .iter()
-        .filter(|(_, hint)| hint.is_none_or(type_hint_may_hold_string))
-        .map(|(name, _)| (*name).to_string())
+        .filter(|(_, hint, _)| hint.is_none_or(type_hint_may_hold_string))
+        .map(|(name, _, _)| (*name).to_string())
         .collect();
     state.callees = CalleeRef(callees);
     state.boxes_returned_strings = matches!(
         return_type,
         Some(TypeExpr::Named(name)) if name.as_str().eq_ignore_ascii_case("mixed")
     );
-    for (index, (name, _)) in params.iter().enumerate() {
-        state
-            .locals
-            .insert((*name).to_string(), ReturnArgAlias::parameter(index));
+    for (index, (name, _, by_ref)) in params.iter().enumerate() {
+        let provenance = if *by_ref {
+            ReturnArgAlias::None
+        } else {
+            ReturnArgAlias::parameter(index)
+        };
+        state.locals.insert((*name).to_string(), provenance);
     }
     if let Some(name) = variadic {
         state
@@ -389,7 +485,16 @@ fn summarize_with_callees<'a>(
             .insert(name.to_string(), ReturnArgAlias::parameter(params.len()));
     }
     let mut returned = ReturnArgAlias::None;
+    // A callee can rebind this body's locals only through a reference this body handed out, or
+    // through a by-reference parameter (checked per argument). Without either, a call to a user
+    // function cannot reach the tracked locals, so it no longer erases every summary: a body that
+    // built its result in a loop around a helper call (`mb_str_split()`'s prelude) was summarized
+    // `Unknown`, and its caller kept every argument temporary alive.
+    let previous = OPAQUE_CALLS_REACH_LOCALS.with(|flag| {
+        flag.replace(by_ref_params || crate::ast_usage::body_exposes_locals(body))
+    });
     analyze_body(body, &mut state, &mut returned);
+    OPAQUE_CALLS_REACH_LOCALS.with(|flag| flag.set(previous));
     returned
 }
 
@@ -407,6 +512,12 @@ fn holds_string_parameter_value(name: &str, state: &AliasState<'_>) -> bool {
             if !parameters.is_empty()
                 && parameters.iter().all(|index| state.is_string_parameter_index(*index))
     )
+}
+
+thread_local! {
+    /// Whether an opaque (user) call can rebind the summarized body's locals; see
+    /// `summarize_callable`.
+    static OPAQUE_CALLS_REACH_LOCALS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 /// Applies statement provenance effects and accumulates every reachable return path.
@@ -643,6 +754,7 @@ fn analyze_stmt(
             apply_expr_effects(value, state);
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             apply_expr_effects(object, state);
             apply_expr_effects(value, state);
@@ -664,6 +776,10 @@ fn analyze_stmt(
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             apply_expr_effects(index, state);
             apply_expr_effects(value, state);
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            apply_expr_effects(index, state);
+            apply_expr_effects(source, state);
         }
         StmtKind::ListUnpack { vars, value } => {
             apply_expr_effects(value, state);
@@ -888,8 +1004,30 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
             }
             expr_alias(result_target.as_deref().unwrap_or(value), &after_prelude)
         }
+        // `.` copies both operands into a reservation of its own, and a comparison or logical
+        // operator answers a scalar, so neither can hand an argument's storage back. Leaving
+        // them `Unknown` made every caller keep the string it passed: `function f(string $s)
+        // { return $s . "!"; }` called with `(string) $mixed` leaked the cast copy per call.
+        ExprKind::BinaryOp {
+            op:
+                BinOp::Concat
+                | BinOp::Eq
+                | BinOp::NotEq
+                | BinOp::StrictEq
+                | BinOp::StrictNotEq
+                | BinOp::Lt
+                | BinOp::Gt
+                | BinOp::LtEq
+                | BinOp::GtEq
+                | BinOp::And
+                | BinOp::Or
+                | BinOp::Xor
+                | BinOp::Spaceship,
+            ..
+        } => ReturnArgAlias::None,
         ExprKind::ArrayLiteral(_)
         | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayReference(_)
         | ExprKind::ArrayLiteralMixed(_)
         | ExprKind::Closure { .. }
         | ExprKind::FirstClassCallable(_)
@@ -1110,6 +1248,9 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
             }
             apply_expr_effects(value, state);
         }
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            apply_expr_effects(property, state);
+        }
         ExprKind::Assignment {
             target,
             value,
@@ -1209,6 +1350,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
             }
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -1314,6 +1456,9 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
         | ExprKind::ClassConstant { .. }
         | ExprKind::MagicConstant(_)
         | ExprKind::IncludeValue { .. } => {}
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            apply_expr_effects(receiver, state)
+        }
     }
 }
 
@@ -1334,12 +1479,13 @@ fn named_call_can_rebind_unlisted_locals(name: &str) -> bool {
     if matches!(name.as_str(), "isset" | "empty" | "unset" | "exit" | "die") {
         return false;
     }
-    crate::builtins::registry::lookup(&name).is_none_or(|definition| {
-        definition
+    match crate::builtins::registry::lookup(&name) {
+        Some(definition) => definition
             .params
             .iter()
-            .any(|(parameter, _)| parameter == "callback")
-    })
+            .any(|(parameter, _)| parameter == "callback"),
+        None => OPAQUE_CALLS_REACH_LOCALS.with(std::cell::Cell::get),
+    }
 }
 
 /// Replaces every tracked provenance with the conservative top element.
@@ -1692,5 +1838,47 @@ mod tests {
             summaries.method("P", "f"),
             Some(&ReturnArgAlias::Parameters(BTreeSet::from([1])))
         );
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Class families `ReturnAliasSummaries::class_family` computed on this test thread.
+    pub(crate) static CLASS_FAMILY_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod class_family_tests {
+    use super::*;
+
+    /// `class_family` keeps exactly the classes whose parent chain reaches the base, in class
+    /// table order, and computes each base's family once per class table.
+    #[test]
+    fn class_family_matches_the_parent_chain_walk() {
+        let source = "<?php class A {} class B extends A {} class C extends B {} class D extends A {} class E {} class F extends E {}";
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let target = crate::codegen::platform::Target::parse("macos-aarch64").expect("target");
+        let checked = crate::types::checker::check_types(&program, target).expect("check");
+        let classes: crate::fast_hash::FastMap<String, crate::types::ClassInfo> = checked.classes.into_iter().collect();
+        let walks_to = |name: &str, base: &str| {
+            let mut cursor = Some(name);
+            while let Some(current) = cursor {
+                if current == base {
+                    return true;
+                }
+                cursor = classes.get(current).and_then(|info| info.parent.as_deref());
+            }
+            false
+        };
+        let summaries = ReturnAliasSummaries::default();
+        CLASS_FAMILY_BUILDS.with(|count| count.set(0));
+        for base in ["A", "B", "C", "D", "E", "F", "Missing"] {
+            let family = summaries.class_family(&classes, base);
+            let walked: Vec<String> = classes.keys().filter(|name| walks_to(name, base)).cloned().collect();
+            assert_eq!(*family, walked, "family of {base}");
+            assert!(std::sync::Arc::ptr_eq(&family, &summaries.class_family(&classes, base)), "{base} is cached");
+        }
+        assert_eq!(CLASS_FAMILY_BUILDS.with(|count| count.get()), 7, "one family per base");
     }
 }

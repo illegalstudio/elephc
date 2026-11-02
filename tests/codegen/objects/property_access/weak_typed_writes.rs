@@ -617,12 +617,22 @@ Cannot assign float to property Box::$n of type int\n\
 Cannot assign float to property Box::$n of type int\n\
 Cannot assign float to property Box::$n of type int\n6"
     );
-    assert_eq!(
-        out.stderr,
-        "Deprecated: Implicit conversion from float 3.7 to int loses precision\n\
-Deprecated: Implicit conversion from float -2.5 to int loses precision\n\
-Deprecated: Implicit conversion from float-string \"2.5\" to int loses precision\n"
-    );
+    // Each diagnostic carries php's location suffix, naming the harness's temporary file and the
+    // assignment's line.
+    let expected = [
+        "Deprecated: Implicit conversion from float 3.7 to int loses precision in ",
+        "Deprecated: Implicit conversion from float -2.5 to int loses precision in ",
+        "Deprecated: Implicit conversion from float-string \"2.5\" to int loses precision in ",
+    ];
+    let lines = out.stderr.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), expected.len(), "{}", out.stderr);
+    for (line, prefix) in lines.iter().zip(expected) {
+        assert!(
+            line.starts_with(prefix) && line.ends_with(" on line 17"),
+            "{}",
+            out.stderr
+        );
+    }
 }
 
 /// Verifies PHP 8's leading-numeric string rule for a numeric typed property.
@@ -935,5 +945,48 @@ Cannot assign string to property Box::$v of type int|float\n\
 Cannot assign string to property Box::$v of type int|float\n\
 int=7\nfloat=7.5\n\
 float=-9.2233720368548E+18"
+    );
+}
+
+/// A runtime `Closure` is an object: an `object|array|string`, `object` or `?Closure` property
+/// accepts it, and a union without an object member still refuses it.
+///
+/// The runtime carries a closure as a callable descriptor (tag 10), not as an object of a compiled
+/// class, and the guard only admitted tag 6 to object members: Symfony's
+/// `ControllerEvent::$controller` refused every closure controller with a TypeError.
+#[test]
+fn test_runtime_closure_is_accepted_by_object_typed_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Ctl { public function index(): string { return 'idx'; } }
+class Ev {
+    private string|array|object $controller;
+    public function setController(callable $controller): void { $this->controller = $controller; }
+    public function getController(): callable { return $this->controller; }
+}
+class Strict {
+    public string|int $v = 0;
+    public object $o;
+    public ?Closure $c = null;
+}
+$e = new Ev();
+$e->setController(fn () => 'closure');
+echo ($e->getController())(), "\n";
+$e->setController([new Ctl(), 'index']);
+echo ($e->getController())(), "\n";
+$e->setController((new Ctl())->index(...));
+echo ($e->getController())(), "\n";
+$s = new Strict();
+$f = $argc > 5 ? null : fn () => 'f';
+$m = $argc > 5 ? 1 : $f;
+$s->o = $m;
+$s->c = $m;
+echo ($s->c)(), "\n";
+try { $s->v = $m; echo "accepted\n"; } catch (TypeError $t) { echo $t->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "closure\nidx\nidx\nf\nCannot assign Closure to property Strict::$v of type string|int\n"
     );
 }

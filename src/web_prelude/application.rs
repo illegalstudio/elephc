@@ -44,10 +44,11 @@ pub fn inject(
     program: Program,
     version: PhpVersion,
     ini: &[(String, String)],
+    entry_path: &std::path::Path,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload: Option<&std::path::Path>,
 ) -> Program {
-    inject_with_autoload_usage(program, version, ini, inventory, preload, false)
+    inject_with_autoload_usage(program, version, ini, entry_path, inventory, preload, false)
 }
 
 /// Installs application callbacks while retaining environment observers discovered by autoload.
@@ -55,12 +56,13 @@ pub(crate) fn inject_with_autoload_usage(
     program: Program,
     version: PhpVersion,
     ini: &[(String, String)],
+    entry_path: &std::path::Path,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload: Option<&std::path::Path>,
     autoload_observes_environment: bool,
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| inject_on_compiler_stack(
-        program, version, ini, inventory, preload, autoload_observes_environment,
+        program, version, ini, entry_path, inventory, preload, autoload_observes_environment,
     ))
 }
 
@@ -69,6 +71,7 @@ fn inject_on_compiler_stack(
     program: Program,
     version: PhpVersion,
     ini: &[(String, String)],
+    entry_path: &std::path::Path,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload: Option<&std::path::Path>,
     autoload_observes_environment: bool,
@@ -81,7 +84,13 @@ fn inject_on_compiler_stack(
         || usage.dynamic_function_call;
     let mut declarations_only = Vec::new();
     let mut prepare = Vec::new();
-    for statement in super::build::web_declarations_with_environment(version, ini, populate_environment) {
+    // The request bootstrap spells `$_SERVER['SCRIPT_FILENAME']` and friends with `__FILE__` /
+    // `__DIR__`, introduced after the per-file magic-constant pass: resolve them against the entry.
+    let request_declarations = crate::magic_constants::substitute_file_constants(
+        super::build::web_declarations_with_environment(version, ini, populate_environment),
+        entry_path,
+    );
+    for statement in request_declarations {
         if !needs_callable_session_handler && super::is_callable_session_handler_decl(&statement.kind) {
             continue;
         }

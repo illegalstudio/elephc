@@ -17,12 +17,13 @@
 //!   caller kept a pointer into the buffer `__rt_array_grow` had already freed, and a receiver
 //!   with no writable slot at all is now refused instead of silently dropped.
 //! - Returns the new indexed-array length as PHP `int`.
-//! - Supports integer and boolean indexed payloads, matching the existing 8-byte helper.
+//! - Supports integer, boolean, and pointer-backed 8-byte indexed payloads; newly inserted
+//!   refcounted values are retained before the array takes ownership of its slot.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::context::FunctionContext;
-use crate::codegen::{CodegenIrError, Result};
+use crate::codegen::{emit_box_current_value_as_mixed, CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
@@ -44,6 +45,9 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
     if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
         require_array_unshift_result_type(&inst.result_php_type.codegen_repr())?;
         return super::boxed_unshift::lower_boxed_array_unshift(ctx, inst, array);
+    }
+    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::Union(_)) {
+        return super::unshift_dynamic::lower_array_unshift_dynamic(ctx, inst, array);
     }
     // A concrete associative source: `array_unshift` renumbers the surviving integer keys from
     // zero, so it merges into a fresh hash rather than shifting indexed slots. The merge boxes
@@ -87,8 +91,8 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
             let value = expect_operand(inst, index)?;
             ensure_array_unshift_capacity(ctx, array)?;
             match ctx.emitter.target.arch {
-                Arch::AArch64 => lower_array_unshift_aarch64(ctx, array, value)?,
-                Arch::X86_64 => lower_array_unshift_x86_64(ctx, array, value)?,
+                Arch::AArch64 => lower_array_unshift_aarch64(ctx, array, value, &elem_ty)?,
+                Arch::X86_64 => lower_array_unshift_x86_64(ctx, array, value, &elem_ty)?,
             }
         }
         // The unique source and every growth already own the transition (see
@@ -129,7 +133,9 @@ fn array_unshift_element_type(ty: PhpType) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
-            if matches!(elem, PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never) {
+            if matches!(elem, PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never)
+                || (elem.is_refcounted() && elem != PhpType::Str)
+            {
                 return Ok(elem);
             }
             Err(CodegenIrError::unsupported(format!(
@@ -146,9 +152,13 @@ fn array_unshift_element_type(ty: PhpType) -> Result<PhpType> {
 
 /// Verifies the prepended value matches the runtime helper's scalar slot layout.
 fn require_array_unshift_value_type(elem_ty: &PhpType, value_ty: &PhpType) -> Result<()> {
-    if matches!(value_ty, PhpType::Int | PhpType::Bool)
-        && (elem_ty == value_ty || matches!(elem_ty, PhpType::Void | PhpType::Never))
-    {
+    if elem_ty == &PhpType::Mixed {
+        return Ok(());
+    }
+    let compatible_scalar = matches!(value_ty, PhpType::Int | PhpType::Bool)
+        && (elem_ty == value_ty || matches!(elem_ty, PhpType::Void | PhpType::Never));
+    let compatible_pointer = elem_ty == value_ty && value_ty.is_refcounted() && value_ty != &PhpType::Str;
+    if compatible_scalar || compatible_pointer {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
@@ -159,7 +169,7 @@ fn require_array_unshift_value_type(elem_ty: &PhpType, value_ty: &PhpType) -> Re
 }
 
 /// Verifies the lowered `array_unshift()` result carries PHP's integer count metadata.
-fn require_array_unshift_result_type(result_ty: &PhpType) -> Result<()> {
+pub(super) fn require_array_unshift_result_type(result_ty: &PhpType) -> Result<()> {
     if result_ty == &PhpType::Int {
         return Ok(());
     }
@@ -225,8 +235,10 @@ fn lower_array_unshift_aarch64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     value: ValueId,
+    elem_ty: &PhpType,
 ) -> Result<()> {
-    ctx.load_value_to_reg(value, "x1")?;
+    load_array_unshift_value(ctx, value, elem_ty)?;
+    ctx.emitter.instruction("mov x1, x0");                                      // transfer the retained 8-byte payload into the prepend argument
     ctx.load_value_to_reg(array, "x0")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_unshift");
     Ok(())
@@ -237,9 +249,30 @@ fn lower_array_unshift_x86_64(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     value: ValueId,
+    elem_ty: &PhpType,
 ) -> Result<()> {
-    ctx.load_value_to_reg(value, "rsi")?;
+    load_array_unshift_value(ctx, value, elem_ty)?;
+    ctx.emitter.instruction("mov rsi, rax");                                    // transfer the retained 8-byte payload into the prepend argument
     ctx.load_value_to_reg(array, "rdi")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_unshift");
+    Ok(())
+}
+
+/// Loads one prepended value in the indexed array's physical slot representation.
+///
+/// Concrete slots retain refcounted payloads directly. A generic `array<mixed>` slot instead
+/// owns a boxed cell, so concrete scalar and heap values are boxed while an existing Mixed cell
+/// is retained before the runtime helper takes ownership of the pointer.
+pub(super) fn load_array_unshift_value(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    elem_ty: &PhpType,
+) -> Result<()> {
+    let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    if elem_ty == &PhpType::Mixed && value_ty != PhpType::Mixed {
+        emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
+    } else {
+        abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+    }
     Ok(())
 }

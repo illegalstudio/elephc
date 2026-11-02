@@ -491,7 +491,9 @@ fn lower_nested_array_assign_inner(
             operand
         };
         let value_first = (deferred || key_already_diagnosed).then(|| {
-            let value = lower_expr(ctx, value);
+            // A parser-owned `ArrayReference` marker carries a promoted local reference cell into
+            // the leaf slot; the marker-aware lowering preserves alias identity.
+            let value = lower_array_reference_or_value(ctx, value);
             root_operand(ctx, value)
         });
         let parent = if key_already_diagnosed {
@@ -519,7 +521,7 @@ fn lower_nested_array_assign_inner(
         let value = match value_first {
             Some(value) => value,
             None => {
-                let value = lower_expr(ctx, value);
+                let value = lower_array_reference_or_value(ctx, value);
                 root_operand(ctx, value)
             }
         };
@@ -623,6 +625,25 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
             return parent;
         }
     }
+    // Generic array properties may promote or relocate while fetching a child for write.
+    // Publish that container back into the property before descending to the leaf.
+    if let ExprKind::PropertyAccess { object, property } = &array.kind {
+        if let Some(parent) =
+            lower_property_parent_fetch_for_write(ctx, object, property, index, expr)
+        {
+            return parent;
+        }
+    }
+    // Static array properties need the same fetch-for-write/store-back cycle as instance
+    // properties. A plain expression read returns a detached Mixed child, so mutating that
+    // child would never reach the symbol-backed static slot.
+    if let ExprKind::StaticPropertyAccess { receiver, property } = &array.kind {
+        if let Some(parent) =
+            lower_static_property_parent_fetch_for_write(ctx, receiver, property, index, expr)
+        {
+            return parent;
+        }
+    }
     // Boxed Mixed receivers: chains recurse with for-write semantics; other
     // receiver shapes evaluate once as plain reads of the receiver cell.
     let receiver = lower_nested_assign_parent_with_diagnosed_key_inner(
@@ -673,6 +694,259 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
     lower_array_access_from_lowered_receiver(ctx, receiver, index, expr)
 }
 
+/// Ensures `$object->property[$index]` exists as the parent of a nested write.
+///
+/// Generic PHP `array` properties use Mixed element storage but may hold either indexed or hash
+/// runtime storage. The fetch-for-write helper separates and autovivifies the requested child,
+/// then `PropSet` publishes the possibly relocated container back into the property.
+pub(super) fn lower_property_parent_fetch_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    index: &Expr,
+    parent_expr: &Expr,
+) -> Option<LoweredValue> {
+    let span = parent_expr.span;
+    let object = lower_expr(ctx, object);
+    // A NESTED write auto-initializes its property exactly as a single-level one does:
+    // `$o->p['k']['j'] = 1` makes `$o->p` an array where PHP does, and this path used to read
+    // it with a bare `PropGet` and raise `Typed property C::$p must not be accessed before
+    // initialization`. The one-level writers already call this; only the nested parent chain
+    // did not, so the two shapes disagreed about the same uninitialized property.
+    let initialize_uninitialized = is_concrete_object_receiver(ctx, object.value);
+    if let Some(declared_ty) = generic_object_array_property_type(ctx, object.value, property) {
+        initialize_uninitialized_array_property_for_write(
+            ctx,
+            object.value,
+            property,
+            &declared_ty,
+            initialize_uninitialized,
+            span,
+        );
+    }
+    let property_ty = object_property_type(ctx, object.value, property)?.codegen_repr();
+    // Decide BEFORE emitting anything. A declared `array` property is a boxed union since the
+    // origin/main merge, so this path declines it -- and it used to decline after the `PropGet`
+    // and its acquire below were already emitted. The caller's fallback then did the write while
+    // that extra reference stayed live: every `$o->p[$k][$j] = v` copied the whole property on
+    // write and leaked the old copy. Symfony's `HtmlSanitizerConfig::allowSafeElements()`
+    // exhausted a 256 MB heap that way on every page rendering a post.
+    let handled = match &property_ty {
+        PhpType::Array(_) => true,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        _ => false,
+    };
+    if !handled {
+        return None;
+    }
+    let data = ctx.intern_string(property);
+    let property_value = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        property_ty.clone(),
+        Op::PropGet.default_effects(),
+        Some(span),
+    );
+    let property_value =
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
+    let key = lower_expr(ctx, index);
+    let key_ty = lowered_index_expr_key_type(ctx, index, key.value).codegen_repr();
+    let (ensured_ty, read_op) = match &property_ty {
+        // A PHP property declared simply as `array` may keep the empty/default element marker
+        // even though its EIR storage is the generic Mixed-slot representation. Nested writes are
+        // valid for every such declared array; the runtime key decides whether it stays indexed or
+        // promotes to a hash.
+        PhpType::Array(_) => match key_ty {
+            PhpType::Int => (property_ty.clone(), Op::ArrayGetForWrite),
+            PhpType::Str => (
+                promoted_assoc_array_type(property_ty.clone(), PhpType::Mixed),
+                Op::HashGetForWrite,
+            ),
+            PhpType::Mixed | PhpType::Union(_) => {
+                (property_ty.clone(), Op::ArrayGetMixedKeyForWrite)
+            }
+            _ => return None,
+        },
+        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => {
+            (property_ty.clone(), Op::HashGetForWrite)
+        }
+        _ => return None,
+    };
+    let ensured = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![property_value.value, key.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        ensured_ty.clone(),
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object.value, ensured.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(span),
+    );
+    let parent = ctx.emit_value(
+        read_op,
+        vec![ensured.value, key.value],
+        None,
+        PhpType::Mixed,
+        read_op.default_effects(),
+        Some(span),
+    );
+    release_rewritten_property_value_after_retaining_store(ctx, &ensured_ty, ensured, span);
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+    } else {
+        release_persisted_string_operand(ctx, key, span);
+    }
+    Some(parent)
+}
+
+/// Ensures `Class::$property[$index]` exists as the parent of a nested write.
+///
+/// The loaded static container is explicitly acquired before the consuming ensure helper. The
+/// returned unique container is then read for write and moved back into the static slot, allowing
+/// both autovivification and any hash relocation to remain observable through the property.
+fn lower_static_property_parent_fetch_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    index: &Expr,
+    parent_expr: &Expr,
+) -> Option<LoweredValue> {
+    let span = parent_expr.span;
+    let property_ty = static_property_type(ctx, receiver, property)?.codegen_repr();
+    let key_ty = index_expr_key_type(ctx, index).codegen_repr();
+    let (ensured_ty, read_op) = match &property_ty {
+        PhpType::Array(_) => match key_ty {
+            PhpType::Int => (property_ty.clone(), Op::ArrayGetForWrite),
+            PhpType::Str => (
+                promoted_assoc_array_type(property_ty.clone(), PhpType::Mixed),
+                Op::HashGetForWrite,
+            ),
+            PhpType::Mixed | PhpType::Union(_) => {
+                (property_ty.clone(), Op::ArrayGetMixedKeyForWrite)
+            }
+            _ => return None,
+        },
+        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed => {
+            (property_ty.clone(), Op::HashGetForWrite)
+        }
+        _ => return None,
+    };
+    let key = lower_expr(ctx, index);
+    let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
+    let property_value =
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
+    let ensured = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![property_value.value, key.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        ensured_ty,
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+    let parent = ctx.emit_value(
+        read_op,
+        vec![ensured.value, key.value],
+        None,
+        PhpType::Mixed,
+        read_op.default_effects(),
+        Some(span),
+    );
+    store_static_property(ctx, receiver, property, ensured.value, span);
+    crate::ir_lower::ownership::release_if_owned(ctx, ensured, Some(span));
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+    } else {
+        release_persisted_string_operand(ctx, key, span);
+    }
+    Some(parent)
+}
+
+/// Normalizes an indexed local whose ELEMENTS are concretely-typed containers to boxed `Mixed`
+/// slots, so a nested write can use the parent cell the leaf writer needs.
+///
+/// `lower_nested_array_assign` finishes EVERY nested target through the shared boxed-Mixed
+/// writer (`lower_mixed_array_runtime_set`), which accepts only a `Mixed`/union parent — that is
+/// what lets one writer mutate an aliased container whatever its slot representation is. A local
+/// typed `array<array<int>>` hands that writer a raw `array<int>` parent instead, and the build
+/// stops in the BACKEND with `runtime_call array set with receiver PHP type Array(Int)`. Two
+/// lines of ordinary PHP inside any function reproduce it:
+///
+/// ```php
+/// $dp = [[0, 0], [0, 0]];
+/// $dp[1][0] = 5;
+/// ```
+///
+/// It compiles at TOP LEVEL, where the same local is already boxed, which is why the hole went
+/// unnoticed; `Symfony\Polyfill\Php85\Php85::grapheme_levenshtein`'s Levenshtein matrix
+/// (`array_fill(0, $l1 + 1, array_fill(0, $l2 + 1, 0))`, then `$dp[$i][0] = …`) is what found it.
+///
+/// Normalizing is the same device `prepare_indexed_array_local_set` and `lower_array_unshift_args`
+/// already use when a write would make a typed payload heterogeneous: `Op::ArrayToMixed` rewrites
+/// the container's slots and the local is re-typed to `array<mixed>`, which is a representation
+/// the Mixed fetch-for-write and set helpers both understand. The runtime helper is a no-op on an
+/// already-normalized array, and the re-typed local no longer matches the guard, so a second
+/// nested write to the same name converts nothing.
+fn normalize_concrete_nested_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    span: Span,
+) {
+    // The hash twin: `$services = ['definitions' => [], 'aliases' => []];` types every value as
+    // the empty `array<never>`, and `$services['aliases'][$id] = $alias` handed the leaf writer
+    // that raw parent ("runtime_call array set with receiver PHP type Array(Never)") -- Symfony's
+    // `MarkdownDescriptor::describeContainerServices()`. Boxing the values is `Op::HashToMixed`.
+    if let PhpType::AssocArray { key, value } = ctx.local_type(name).codegen_repr() {
+        if !matches!(
+            value.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ) {
+            return;
+        }
+        let target = PhpType::AssocArray {
+            key,
+            value: Box::new(PhpType::Mixed),
+        };
+        let local = ctx.load_local(name, Some(span));
+        ctx.prepare_mutated_local_owner(name, local, target.clone(), Some(span));
+        let converted = ctx.emit_value(
+            Op::HashToMixed,
+            vec![local.value],
+            None,
+            target.clone(),
+            Op::HashToMixed.default_effects(),
+            Some(span),
+        );
+        ctx.store_prepared_mutated_local(name, converted, target, Some(span));
+        return;
+    }
+    let PhpType::Array(elem_ty) = ctx.local_type(name).codegen_repr() else {
+        return;
+    };
+    if !matches!(
+        elem_ty.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. }
+    ) {
+        return;
+    }
+    let target = PhpType::Array(Box::new(PhpType::Mixed));
+    let local = ctx.load_local(name, Some(span));
+    let converted = ctx.emit_value(
+        Op::ArrayToMixed,
+        vec![local.value],
+        None,
+        target.clone(),
+        Op::ArrayToMixed.default_effects(),
+        Some(span),
+    );
+    ctx.store_call_normalized_local(name, converted, target, Some(span));
+}
+
 /// Lowers `$local[key]` as the parent of a nested assignment when the local
 /// holds an indexed array or an assoc array:
 /// `__rt_array_ensure_elem_for_write` autovivifies the element in write
@@ -697,6 +971,7 @@ fn lower_local_parent_fetch_for_write_inner(
     key_already_diagnosed: bool,
 ) -> Option<LoweredValue> {
     let span = parent_expr.span;
+    normalize_concrete_nested_container(ctx, name, span);
     let local_ty = ctx.local_type(name);
     match local_ty.codegen_repr() {
         PhpType::Array(elem_ty) => {
@@ -722,10 +997,8 @@ fn lower_local_parent_fetch_for_write_inner(
                         }
                         let assoc_ty = promoted_assoc_array_type(local_ty, PhpType::Mixed);
                         ctx.prepare_mutated_local_owner_for_backend_retire(name, array, assoc_ty.clone(), Some(span));
-                        let hash = ctx.emit_value(
-                            Op::ArrayToHash, vec![array.value], None, assoc_ty.clone(),
-                            Op::ArrayToHash.default_effects(), Some(span),
-                        );
+                        // The slot's reference moves into the conversion; codegen consumes only a marked move.
+                        let hash = ctx.emit_local_array_to_hash_move(name, array, assoc_ty.clone(), span);
                         return Some(lower_hash_parent_fetch_for_write_with_key(
                             ctx,
                             name,
@@ -788,14 +1061,8 @@ fn lower_local_parent_fetch_for_write_inner(
                     let array_value = ctx.load_local(name, Some(span));
                     let assoc_ty = promoted_assoc_array_type(local_ty, PhpType::Mixed);
                     ctx.prepare_mutated_local_owner_for_backend_retire(name, array_value, assoc_ty.clone(), Some(span));
-                    let hash = ctx.emit_value(
-                        Op::ArrayToHash,
-                        vec![array_value.value],
-                        None,
-                        assoc_ty.clone(),
-                        Op::ArrayToHash.default_effects(),
-                        Some(span),
-                    );
+                    // The slot's reference moves into the conversion; codegen consumes only a marked move.
+                    let hash = ctx.emit_local_array_to_hash_move(name, array_value, assoc_ty.clone(), span);
                     Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span, key_already_diagnosed))
                 }
                 _ => None,

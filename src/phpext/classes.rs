@@ -47,7 +47,7 @@ pub struct ExportedMethod {
 }
 
 /// Collects explicitly exported classes and rejects declarations with no proven host ABI.
-pub fn collect(program: &Program, classes: &HashMap<String, ClassInfo>, target: Target) -> Result<Vec<ExportedClass>, CompileError> {
+pub fn collect(program: &Program, classes: &crate::fast_hash::FastMap<String, ClassInfo>, target: Target) -> Result<Vec<ExportedClass>, CompileError> {
     let names = program.iter().filter(|stmt| crate::exports::has_export_attribute(stmt))
         .filter_map(|stmt| match &stmt.kind { StmtKind::ClassDecl { name, .. } => Some(name.clone()), _ => None })
         .collect::<HashSet<_>>();

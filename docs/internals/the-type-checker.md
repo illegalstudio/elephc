@@ -942,8 +942,12 @@ pub struct ClassInfo {
     pub owned_reference_properties: HashSet<String>, // ref cells the object allocates/frees itself
     pub promoted_properties: HashSet<String>,
     pub property_reference_slots: Vec<bool>, // per-layout-slot by-reference flags
+    pub property_slot_declaring_classes: Vec<String>, // per-layout-slot declaring class
+    pub property_owned_reference_slots: Vec<bool>, // per-layout-slot object-owned ref cells
     pub abstract_properties: HashSet<String>,
     pub abstract_property_hooks: HashMap<String, PropertyHookContract>,
+    pub reflection_properties: Vec<String>, // getProperties() order
+    pub reflection_methods: Vec<String>, // getMethods() order, declared case
     pub static_properties: Vec<(String, PhpType)>,
     pub static_defaults: Vec<Option<Expr>>,
     pub static_property_declaring_classes: HashMap<String, String>,
@@ -976,7 +980,9 @@ pub struct ClassInfo {
 }
 ```
 
-`vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding. `allow_dynamic_properties` records the PHP 8.2 `#[\AllowDynamicProperties]` attribute so codegen can route undeclared property storage through a per-object side table. The `*_attribute_names` / `*_attribute_args` fields carry PHP 8 attribute metadata for the class, its methods, its properties, and its constants so the Reflection codegen path can materialize `ReflectionAttribute` objects. `abstract_property_hooks` records PHP 8.4 property hook contracts that concrete subclasses must satisfy, and `property_set_visibilities` records PHP 8.4 asymmetric write visibility (e.g. `public private(set)`) for properties whose write visibility differs from their read visibility. The per-slot vectors (`property_declared_slots`, `property_reference_slots`) follow the physical `properties` layout by index so hidden private parent slots keep their metadata when a child declares a same-named property.
+`vtable_methods` / `vtable_slots` drive ordinary inherited instance dispatch, while `static_vtable_methods` / `static_vtable_slots` carry the parallel metadata used by `static::method()` late static binding. `allow_dynamic_properties` records the PHP 8.2 `#[\AllowDynamicProperties]` attribute so codegen can route undeclared property storage through a per-object side table. The `*_attribute_names` / `*_attribute_args` fields carry PHP 8 attribute metadata for the class, its methods, its properties, and its constants so the Reflection codegen path can materialize `ReflectionAttribute` objects. `abstract_property_hooks` records PHP 8.4 property hook contracts that concrete subclasses must satisfy, and `property_set_visibilities` records PHP 8.4 asymmetric write visibility (e.g. `public private(set)`) for properties whose write visibility differs from their read visibility. The per-slot vectors (`property_declared_slots`, `property_reference_slots`, `property_slot_declaring_classes`, `property_owned_reference_slots`) follow the physical `properties` layout by index so hidden private parent slots keep their metadata when a child declares a same-named property. The object keeps both slots and every by-name lookup reaches the child's, so anything that walks the layout reads the slot's own owner through `ClassInfo::property_slot_owner`: the var_dump / print_r / var_export / serialize descriptor rows, the `(array)` cast, a scoped `get_object_vars()` or `foreach ($this)`, and reference-cell allocation. A by-name allocation (`__rt_new_by_name`) runs the class's `_class_propinit_<id>` thunk, which assigns in the class's own scope and so cannot name a hidden slot; for a class flagged in `_class_hidden_private_slot_flags` it also runs each ancestor's `_class_propinit_private_<id>` thunk, which assigns that ancestor's own private defaults in its scope.
+
+`properties` and `static_properties` are storage layouts and `methods` / `static_methods` are hashed signature maps, so none of them carries PHP's reflection order. `reflection_properties` and `reflection_methods` do: the class's own declarations as written (static and instance interleaved, promoted properties at the constructor, trait members after the class's own), then each member the parent lists that is not private to the parent and not redeclared. `getProperties()`, `hasProperty()`, `getProperty()`, `new ReflectionProperty()` and `getMethods()` read them, so an ancestor's private property is not reflectable through a descendant. Trait flattening for a class or enum (`merge_class_properties`, `merge_class_methods`) keeps the same order: own members first, then imported ones.
 
 ### Declaring and implementing classes
 

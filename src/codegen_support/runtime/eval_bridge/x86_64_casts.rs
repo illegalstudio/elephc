@@ -11,6 +11,35 @@ use super::*;
 
 /// Emits x86_64 value predicates, raw handles, and cast wrappers.
 pub(super) fn emit_x86_64_casts(emitter: &mut Emitter) {
+    // See the AArch64 twin: interpreted `$compiledClosure->bindTo($obj)`.
+    label_c_global(emitter, "__elephc_eval_value_closure_bind");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve operand slots, keeping 16-byte alignment
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // keep the boxed new-$this operand
+    emitter.instruction("mov rax, rdi");                                        // boxed closure into mixed_unbox input
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the closure descriptor payload
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // keep the source descriptor pointer
+    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // default: no receiver to bind
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the boxed new-$this operand
+    emitter.instruction("test rax, rax");                                       // a missing operand binds no receiver
+    emitter.instruction("jz __elephc_eval_value_closure_bind_go");              // keep the default receiver
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the receiver's tag and payload
+    emitter.instruction("cmp rax, 6");                                          // only an object can become $this
+    emitter.instruction("jne __elephc_eval_value_closure_bind_go");             // null or a scalar keeps the captures as they are
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // record the receiver object pointer
+    emitter.label("__elephc_eval_value_closure_bind_go");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // source descriptor for the bind helper
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // receiver object pointer or null
+    emitter.instruction("call __rt_closure_bind");                              // copy the descriptor with the new $this
+    emitter.instruction("mov rdi, rax");                                        // the fresh descriptor is the callable payload
+    emitter.instruction("mov rax, 10");                                         // runtime tag 10 = callable descriptor
+    emitter.instruction("xor edx, edx");                                        // callables carry no high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the bound callable for the interpreter
+    emitter.instruction("mov rsp, rbp");                                        // release the operand slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed bound closure to Rust
+
     label_c_global(emitter, "__elephc_eval_value_is_array_like");
     emitter.instruction("push rbp");                                            // preserve linkage and align the borrowed dereference call
     emitter.instruction("mov rax, rdi");                                        // adapt the C value argument to the native Mixed convention

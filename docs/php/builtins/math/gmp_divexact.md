@@ -2,7 +2,7 @@
 title: "gmp_divexact()"
 description: "Performs an exact GMP division."
 sidebar:
-  order: 600
+  order: 613
 ---
 
 ## gmp_divexact()

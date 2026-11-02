@@ -2,7 +2,7 @@
 title: "cairo_set_source_rgba()"
 description: "Uses a color with alpha as the source for subsequent drawing."
 sidebar:
-  order: 450
+  order: 463
 ---
 
 ## cairo_set_source_rgba()

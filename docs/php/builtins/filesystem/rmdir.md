@@ -2,19 +2,20 @@
 title: "rmdir()"
 description: "Removes a directory."
 sidebar:
-  order: 302
+  order: 313
 ---
 
 ## rmdir()
 
 ```php
-function rmdir(string $directory): bool
+function rmdir(string $directory, mixed $context = null): bool
 ```
 
 Removes a directory.
 
 **Parameters**:
 - `$directory` (`string`)
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
 

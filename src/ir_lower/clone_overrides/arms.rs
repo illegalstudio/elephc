@@ -20,7 +20,6 @@
 //!   answers `Cannot modify protected(set) readonly property R::$ro from global scope` from
 //!   outside and still allows the reinitialization from the declaring class or a descendant.
 
-use std::collections::HashMap;
 
 use crate::parser::ast::Visibility;
 use crate::types::ClassInfo;
@@ -53,7 +52,7 @@ pub(super) enum OverrideArm {
 
 /// Resolves one override key against the clone's class and the invocation scope.
 pub(super) fn resolve(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     class_name: &str,
     class_info: &ClassInfo,
     scope: Option<&str>,
@@ -124,7 +123,7 @@ pub(super) fn resolve(
 /// `clone()` reuses that path unchanged: `clone($m, ["privateProp" => 5])` on a class with
 /// `__set()` calls `__set('privateProp', 5)` from global scope instead of throwing.
 fn denied_access_arm(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     class_info: &ClassInfo,
     scope: Option<&str>,
     message: String,
@@ -134,7 +133,7 @@ fn denied_access_arm(
 
 /// Returns the scope-selected private slot arm when the scope owns a same-named private property.
 fn resolve_scope_private_shadow(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     class_name: &str,
     scope: Option<&str>,
     property: &str,
@@ -176,7 +175,7 @@ pub(super) fn declares_private(
 
 /// Applies PHP 8.4 asymmetric write visibility and readonly reinitialization scope rules.
 fn apply_set_visibility(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     owner: &ClassInfo,
     declaring: &str,
     scope: Option<&str>,
@@ -220,7 +219,7 @@ fn apply_set_visibility(
 
 /// Returns the arm PHP takes when the key names no property visible on the clone's class.
 pub(super) fn undefined_arm(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     class_name: &str,
     class_info: &ClassInfo,
     scope: Option<&str>,
@@ -243,7 +242,7 @@ pub(super) fn undefined_arm(
 
 /// Returns the `__set()` arm when the class declares a magic setter this scope may call.
 fn magic_set_arm(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     class_info: &ClassInfo,
     scope: Option<&str>,
 ) -> Option<OverrideArm> {
@@ -279,7 +278,7 @@ pub(super) fn scope_phrase(scope: Option<&str>) -> String {
 
 /// Returns whether `child` inherits from `ancestor` through the declared parent chain.
 pub(super) fn is_subclass_of(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     child: &str,
     ancestor: &str,
 ) -> bool {
@@ -288,7 +287,7 @@ pub(super) fn is_subclass_of(
 
 /// Returns php-src's `zend_check_protected` verdict: the scope is an ancestor OR a descendant.
 pub(super) fn shares_hierarchy(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     scope: Option<&str>,
     declaring: &str,
 ) -> bool {

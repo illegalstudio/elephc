@@ -2,7 +2,7 @@
 title: "mysqli_stmt_affected_rows()"
 description: "Returns how many rows a prepared write affected."
 sidebar:
-  order: 163
+  order: 174
 ---
 
 ## mysqli_stmt_affected_rows()

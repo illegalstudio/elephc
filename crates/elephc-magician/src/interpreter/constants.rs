@@ -28,7 +28,14 @@ pub(super) const EVAL_PHP_URL_QUERY: i64 = 6;
 /// `parse_url()` component selector for the fragment.
 pub(super) const EVAL_PHP_URL_FRAGMENT: i64 = 7;
 
-/// Hash algorithm names supported by eval `hash_algos()`, matching native runtime order.
+/// Hash algorithm names supported by eval `hash_algos()`, in `php -n` 8.5.6's own order.
+///
+/// This is elephc's supported SUBSET of php's 60, kept in php's relative order: php reports
+/// `sha512/224, sha512/256, sha512` and `adler32, crc32, crc32b, crc32c`, both of which used to
+/// be transposed here. The same order is repeated in
+/// `src/codegen_support/runtime/strings/hash_algos.rs` and mirrored by the match arms of
+/// `crates/elephc-crypto/src/algos.rs`, and the three only ever move together -- changing one
+/// alone trades a php divergence for an eval/AOT one.
 pub(super) const EVAL_HASH_ALGOS: &[&str] = &[
     "md2",
     "md4",
@@ -37,9 +44,9 @@ pub(super) const EVAL_HASH_ALGOS: &[&str] = &[
     "sha224",
     "sha256",
     "sha384",
-    "sha512",
     "sha512/224",
     "sha512/256",
+    "sha512",
     "sha3-224",
     "sha3-256",
     "sha3-384",
@@ -49,15 +56,16 @@ pub(super) const EVAL_HASH_ALGOS: &[&str] = &[
     "ripemd256",
     "ripemd320",
     "whirlpool",
+    "adler32",
     "crc32",
     "crc32b",
     "crc32c",
-    "adler32",
     "fnv132",
     "fnv1a32",
     "fnv164",
     "fnv1a64",
     "joaat",
+    "xxh128",
 ];
 
 /// Built-in stream wrappers reported by eval `stream_get_wrappers()`.
@@ -166,17 +174,6 @@ pub(super) const EVAL_PHP_RELEASE_VERSION: i64 = 0;
 /// [`EVAL_PHP_RELEASE_VERSION`] is.
 pub(super) const EVAL_PHP_EXTRA_VERSION: &str = "";
 
-/// `PHP_SAPI` reported from inside `eval()`.
-///
-/// KEEP IN SYNC with `crate::web_prelude::sapi_name()` in the compiler. Unlike the version
-/// surface — which the compiler forwards through
-/// [`crate::eval_php_profile::set_eval_php_version_id`] — nothing forwards `--web`, so this
-/// stays the CLI default, the same choice `opcache_reset` makes with `is_web_sapi = false`.
-/// DOCUMENTED DIVERGENCE: inside a `--web` binary, native `PHP_SAPI` is `cli-server` while
-/// `eval('echo PHP_SAPI;')` reports `cli`. Closing it would take the same one-call bridge the
-/// version surface uses.
-pub(super) const EVAL_PHP_SAPI: &str = "cli";
-
 pub(super) const DEFINE_ALREADY_DEFINED_WARNING: &str =
     "Warning: define(): Constant already defined\n";
 pub(super) const HEX2BIN_ODD_LENGTH_WARNING: &str =
@@ -241,3 +238,27 @@ pub(super) const EVAL_JSON_THROW_ON_ERROR: i64 = 4_194_304;
 pub(super) const EVAL_JSON_INF_OR_NAN_MESSAGE: &str = "Inf and NaN cannot be JSON encoded";
 pub(super) const EVAL_JSON_UTF8_MESSAGE: &str =
     "Malformed UTF-8 characters, possibly incorrectly encoded";
+
+// The full `LC_*` `setlocale()` category family. Unlike `SEEK_*`, this numbering is NOT POSIX
+// standard -- macOS/BSD libc and glibc assign different integers to the same category names, and
+// `php -n` reports whichever the host C library defines. Matches
+// `src/codegen_support/platform/target.rs`'s existing `Platform::lc_ctype()`/`lc_numeric()` for
+// the two categories the compiled backend already seeds (`LC_CTYPE` 2/0, `LC_NUMERIC` 4/1 for
+// macOS/Linux respectively); the rest are new to elephc on both backends.
+/// `setlocale()`'s "every category at once" pseudo-category.
+pub(super) const EVAL_LC_ALL: i64 = if cfg!(target_os = "macos") { 0 } else { 6 };
+pub(super) const EVAL_LC_COLLATE: i64 = if cfg!(target_os = "macos") { 1 } else { 3 };
+pub(super) const EVAL_LC_CTYPE: i64 = if cfg!(target_os = "macos") { 2 } else { 0 };
+pub(super) const EVAL_LC_MONETARY: i64 = if cfg!(target_os = "macos") { 3 } else { 4 };
+pub(super) const EVAL_LC_NUMERIC: i64 = if cfg!(target_os = "macos") { 4 } else { 1 };
+pub(super) const EVAL_LC_TIME: i64 = if cfg!(target_os = "macos") { 5 } else { 2 };
+pub(super) const EVAL_LC_MESSAGES: i64 = if cfg!(target_os = "macos") { 6 } else { 5 };
+
+/// `GLOB_*` bit values, masked by `builtins::filesystem::glob`. The PHP-visible constants of the
+/// same names live in the shared catalog; these are the implementation's own copy of the bits.
+pub(super) const EVAL_GLOB_MARK: i64 = 8;
+pub(super) const EVAL_GLOB_NOSORT: i64 = 32;
+pub(super) const EVAL_GLOB_NOCHECK: i64 = 16;
+pub(super) const EVAL_GLOB_NOESCAPE: i64 = 4096;
+pub(super) const EVAL_GLOB_BRACE: i64 = 128;
+pub(super) const EVAL_GLOB_ONLYDIR: i64 = 1 << 30;

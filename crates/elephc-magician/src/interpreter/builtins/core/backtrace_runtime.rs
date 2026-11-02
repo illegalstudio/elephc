@@ -75,7 +75,7 @@ pub(super) fn eval_debug_print_backtrace(
 }
 
 /// Formats one materialized native frame using the same scalar spellings as eval frames.
-fn render_native_frame(
+pub(in crate::interpreter) fn render_native_frame(
     index: usize,
     frame: RuntimeCellHandle,
     options: i64,
@@ -246,7 +246,7 @@ fn append_rendered_arguments(
 }
 
 /// Formats one argument using the compact scalar and container spellings used by backtraces.
-fn render_backtrace_argument(
+pub(super) fn render_backtrace_argument(
     value: RuntimeCellHandle,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

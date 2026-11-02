@@ -73,7 +73,7 @@ fn native_catalog_shares_metadata_without_sharing_activation_state() {
     seed(&mut first, 101);
     assert!(first.publish_native_catalog());
     first.call_file = "first.php".into();
-    first.included_files.insert("first.php".into());
+    first.included_file_order.push("first.php".into());
     first.may_have_foreign_pcntl_callables = true;
     for _ in 0..100 {
         let mut next = ElephcEvalContext::new();
@@ -95,7 +95,7 @@ fn native_catalog_shares_metadata_without_sharing_activation_state() {
         assert!(next.native_function("probe").is_some());
         assert_eq!(next.native_class_parent("Probe"), Some("ParentProbe"));
         assert!(next.call_file.is_empty());
-        assert!(next.included_files.is_empty());
+        assert!(next.included_file_order.is_empty());
         assert!(!next.may_have_foreign_pcntl_callables);
         assert!(next.global_scope.is_none());
         assert!(next.pending_throw.is_none());
@@ -215,7 +215,7 @@ fn native_catalog_rejects_dynamic_declarations_at_publication() {
     reset_cache();
     let mut context = ElephcEvalContext::new();
     seed(&mut context, 401);
-    assert!(context.define_class(EvalClass::new("DynamicProbe", Vec::new(), Vec::new())));
+    assert!(context.define_class(Arc::new(EvalClass::new("DynamicProbe", Vec::new(), Vec::new()))));
     assert!(!context.publish_native_catalog());
     let mut next = ElephcEvalContext::new();
     next.use_native_catalog(401);

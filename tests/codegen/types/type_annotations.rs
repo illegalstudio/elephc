@@ -9,6 +9,28 @@
 
 use super::*;
 
+/// Verifies a wider boxed union is checked by active tag at a nullable-string parameter.
+#[test]
+fn test_gradual_union_parameter_accepts_active_string_and_rejects_active_array() {
+    let out = compile_and_run(
+        r#"<?php
+function nullable_text(?string $value): string {
+    return $value ?? "null";
+}
+function text_or_array(bool $array): string|array {
+    return $array ? ["wrong"] : "right";
+}
+echo nullable_text(text_or_array(false)), ":";
+try {
+    nullable_text(text_or_array(true));
+} catch (TypeError $error) {
+    echo "caught";
+}
+"#,
+    );
+    assert_eq!(out, "right:caught");
+}
+
 /// Compiles and runs the checked-in `examples/union-types/main.php` fixture, covering typed
 /// locals, an `int|false` return, and a `string|null` return. Asserts the full stdout.
 #[test]
@@ -157,6 +179,57 @@ fn test_typed_constructor_parameter() {
         ",
     );
     assert_eq!(out, "42");
+}
+
+/// Verifies an `int|null` value is checked when it crosses a declared `int` call boundary,
+/// preserving the integer payload and raising a catchable `TypeError` for null.
+#[test]
+fn test_nullable_int_runtime_parameter_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+function consumeRequiredInt(int $value): string {
+    return (string) $value;
+}
+
+function forwardNullableInt(?int $value): string {
+    return consumeRequiredInt($value);
+}
+
+echo forwardNullableInt(7);
+try {
+    forwardNullableInt(null);
+} catch (TypeError) {
+    echo '|caught';
+}
+"#,
+    );
+    assert_eq!(out, "7|caught");
+}
+
+/// Verifies `is_array()` narrows a gradual local inside a ternary before a by-reference array
+/// builtin mutates it, while the non-array branch remains throwable.
+#[test]
+fn test_is_array_ternary_narrows_gradual_by_ref_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function shuffleGuardedValue(mixed $value): mixed {
+    is_array($value) ? shuffle($value) : throw new RuntimeException('not array');
+
+    return $value;
+}
+
+$result = shuffleGuardedValue([7]);
+echo is_array($result) ? $result[0] : 'bad';
+$assocResult = shuffleGuardedValue(['named' => 9]);
+echo is_array($assocResult) ? '|' . $assocResult[0] : '|bad';
+try {
+    shuffleGuardedValue('no');
+} catch (RuntimeException) {
+    echo '|caught';
+}
+"#,
+    );
+    assert_eq!(out, "7|9|caught");
 }
 
 /// Verifies a typed parameter with a default value uses that default when the argument is omitted.
@@ -405,6 +478,41 @@ fn test_union_typed_parameter_accepts_multiple_types() {
         ",
     );
     assert_eq!(out, "integer:1|string:ok");
+}
+
+/// Verifies weak calls and returns select a union's sole string scalar arm.
+#[test]
+fn test_weak_scalar_coercion_into_string_unions() {
+    let out = compile_and_run(
+        r#"<?php
+function stringify(string|array|null $value): string {
+    return gettype($value) . ":" . $value;
+}
+function nullable_string(): ?string {
+    return false;
+}
+function scalar_union(bool $asString): string|false {
+    return $asString ? "kept" : false;
+}
+function nullable_from_union(bool $asString): ?string {
+    return scalar_union($asString);
+}
+function nullable_int(bool $present): ?int {
+    return $present ? 7 : null;
+}
+function nullable_from_int(bool $present): ?string {
+    return nullable_int($present);
+}
+echo stringify(42) . "|" . stringify(false) . "|[" . nullable_string() . "]";
+echo "|[" . nullable_from_union(false) . "]|[" . nullable_from_union(true) . "]";
+echo "|" . stringify(nullable_int(false)) . "|" . stringify(nullable_int(true));
+echo "|" . gettype(nullable_from_int(false)) . "|" . gettype(nullable_from_int(true));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string:42|string:|[]|[]|[kept]|NULL:|string:7|NULL|string"
+    );
 }
 
 /// Regression: an untyped parameter called from distinct sites with incompatible types
@@ -813,4 +921,27 @@ echo $box->self_or_null(true)->v;
 "#,
     );
     assert_eq!(out, "42|int|null|9");
+}
+
+/// Verifies a declared `mixed` function may compile with a fallthrough path and
+/// raises PHP's catchable `TypeError` only when that path executes.
+#[test]
+fn test_mixed_return_fallthrough_throws_runtime_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+function conditionalMixed(bool $returns): mixed {
+    if ($returns) {
+        return 7;
+    }
+}
+
+echo conditionalMixed(true);
+try {
+    conditionalMixed(false);
+} catch (TypeError $error) {
+    echo ":type";
+}
+"#,
+    );
+    assert_eq!(out, "7:type");
 }

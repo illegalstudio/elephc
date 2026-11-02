@@ -31,6 +31,7 @@
 //! - `touch` owns the relocated `check_touch` helper (was in io/files.rs).
 //! - Add `pub mod <name>;` here for every new io builtin home.
 
+pub mod __elephc_fd_to_stream;
 pub mod __elephc_phar_bzip2_archive;
 pub mod __elephc_phar_decompress_archive;
 pub mod __elephc_phar_get_file_metadata;
@@ -47,6 +48,7 @@ pub mod __elephc_phar_set_stub;
 pub mod __elephc_phar_set_zip_password;
 pub mod __elephc_phar_sign_hash;
 pub mod __elephc_phar_sign_openssl;
+pub mod __elephc_stream_fd;
 pub mod basename;
 pub mod chdir;
 pub mod chgrp;
@@ -62,6 +64,7 @@ pub mod fclose;
 pub mod fdatasync;
 pub mod feof;
 pub mod fflush;
+pub mod flush;
 pub mod fgetc;
 pub mod fgetcsv;
 pub mod fgets;

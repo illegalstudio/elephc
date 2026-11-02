@@ -1,6 +1,6 @@
 //! Purpose:
 //! Declarative eval registry entry for PHP's `iconv()` plus the glue every iconv eval
-//! builtin shares.
+//! builtin shares, including the mbstring case pair the same engine crate implements.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::string` and the sibling `iconv_*` home files.
@@ -118,12 +118,7 @@ fn eval_iconv_offset_error(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(&elephc_iconv::offset_value_error_message(function))?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("ValueError", &elephc_iconv::offset_value_error_message(function), 0, context, values)
 }
 
 /// Evaluates any iconv builtin from its unevaluated arguments, in PHP source order.

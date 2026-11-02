@@ -54,15 +54,47 @@ fn emit_branch_if_nonzero(ctx: &mut FunctionContext<'_>, label: &str) {
 }
 
 /// Returns a stable copy of constant metadata so emission can mutate the data section.
+///
+/// A constant whose value is still an expression (`define('X', (float) PCRE_VERSION >= 10 ? ..)`)
+/// is evaluated at run time and has no folded value to stage here, so it is left out rather than
+/// failing the whole build over one inventory entry.
 fn sorted_constant_entries(ctx: &FunctionContext<'_>) -> Vec<(String, ExprKind, PhpType)> {
     let mut entries = ctx
         .module
         .global_constants
         .iter()
+        .filter(|(_, (value, _))| constant_value_is_folded(value))
         .map(|(name, (value, ty))| (name.clone(), value.clone(), ty.clone()))
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     entries
+}
+
+/// Returns whether `value` is one of the folded shapes [`emit_boxed_constant_value`] stages.
+fn constant_value_is_folded(value: &ExprKind) -> bool {
+    let key_is_folded = |key: &ExprKind| match key {
+        ExprKind::IntLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::Null => true,
+        ExprKind::Negate(inner) => matches!(inner.kind, ExprKind::IntLiteral(_)),
+        _ => false,
+    };
+    match value {
+        ExprKind::IntLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::Null => true,
+        ExprKind::Negate(inner) => {
+            matches!(inner.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_))
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().all(|item| constant_value_is_folded(&item.kind)),
+        ExprKind::ArrayLiteralAssoc(items) => items
+            .iter()
+            .all(|(key, value)| key_is_folded(&key.kind) && constant_value_is_folded(&value.kind)),
+        _ => false,
+    }
 }
 
 /// Builds the categorized outer hash with independent Core and user maps.

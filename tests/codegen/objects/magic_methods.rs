@@ -41,6 +41,62 @@ echo $p;
     assert!(err.contains("could not be converted to string"), "{err}");
 }
 
+/// Verifies a value of the DECLARED type `object` reaches `__toString` in every string context,
+/// and that a subclass's `__toString` binds through a parent-typed value.
+///
+/// `object` is spelled `PhpType::Object("")` in codegen, so the class-name lookup that binds
+/// `__toString` found nothing and every one of these contexts wrote
+/// `Object of class  could not be converted to string` — with an empty class name — and exited.
+/// The parent-typed case failed the same lookup for the opposite reason: `Base` really has no
+/// `__toString`, but the value is a `Child` that does, and PHP calls it.
+///
+/// Values are `php -n` 8.5.6 verbatim: `xL!|yL!|L!|L!|L!|L!|Z|pL!|xC!|C!|C!`.
+#[test]
+fn test_declared_object_type_and_subclass_reach_tostring_in_string_contexts() {
+    let out = compile_and_run(
+        r#"<?php
+class Label { public function __toString(): string { return "L!"; } }
+class Base { public $v = 1; }
+class Child extends Base { public function __toString(): string { return "C!"; } }
+
+function asObject(): object { return new Label(); }
+function takeObject(object $o): string { return "p" . $o; }
+function asBase(): Base { return new Child(); }
+
+$o = asObject();
+echo "x" . $o, "|", "y$o", "|", (string) $o, "|", strval($o), "|", sprintf('%s', $o), "|";
+echo $o;
+echo "|", str_replace("L!", "Z", $o), "|", takeObject(new Label()), "|";
+$b = asBase();
+echo "x" . $b, "|", (string) $b, "|";
+echo $b;
+"#,
+    );
+    assert_eq!(out, "xL!|yL!|L!|L!|L!|L!|Z|pL!|xC!|C!|C!");
+}
+
+/// Verifies the conversion failure NAMES the runtime class even when the static type is `object`,
+/// and that output written before it survives.
+///
+/// The `object`-typed arm used to print an EMPTY class name, and the boxed-Mixed arm printed no
+/// class at all (`Fatal error: Object could not be converted to string`), which is what a Symfony
+/// `--web` request died with. Both now resolve the name from the object itself.
+#[test]
+fn test_declared_object_conversion_error_names_the_runtime_class() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class Plain { public $v = 1; }
+function asObject(): object { return new Plain(); }
+echo "before\n";
+echo "x" . asObject();
+"#,
+    );
+    assert!(
+        err.contains("Object of class Plain could not be converted to string"),
+        "{err}"
+    );
+}
+
 /// Verifies `__get` is invoked for undefined property reads, returning the intercepted name.
 #[test]
 fn test_magic_get_handles_missing_property_reads() {
@@ -491,6 +547,60 @@ fn test_example_magic_methods_compiles_and_runs() {
 // Non-class regression edge cases
 // =============================================================================
 
+/// Verifies `static::method()` resolves against the late-static class when only DESCENDANTS of the
+/// calling class declare the method: a protected child-only static method is reachable from the
+/// parent's scope, the lexical class that lacks it keeps `__callStatic`, `method_exists()` stays
+/// false for it, and an instance without any fallback raises PHP's own undefined-method `Error`.
+#[test]
+fn test_static_call_reaches_protected_method_only_a_child_declares() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Base {
+    public static function run() { return static::hook() . "|" . static::name(); }
+    public static function check() { return method_exists(static::class, 'hook') ? 'yes' : 'no'; }
+    public static function withArgs($a, $b) { return static::combine($a, $b); }
+    public static function __callStatic($m, $a) { return "callStatic:" . $m . count($a); }
+    public static function name() { return "base"; }
+}
+class Child extends Base {
+    protected static function hook() { return "child-hook"; }
+    protected static function combine($a, $b) { return $a . "+" . $b . "@" . static::name(); }
+    public static function name() { return "child"; }
+}
+class GrandChild extends Child {
+    public static function name() { return "grand"; }
+}
+class Other extends Base {
+}
+echo Child::run(), "\n";
+echo GrandChild::run(), "\n";
+echo Other::run(), "\n";
+echo Child::check(), " ", Other::check(), "\n";
+echo Child::withArgs("x", "y"), "\n";
+echo GrandChild::withArgs(1, 2), "\n";
+echo Other::withArgs("p", "q"), "\n";
+
+abstract class Plain {
+    public static function go() { return static::missing(); }
+}
+class Impl extends Plain {
+    protected static function missing() { return "impl"; }
+}
+class Empty_ extends Plain {}
+echo Impl::go(), "\n";
+try {
+    echo Empty_::go(), "\n";
+} catch (Error $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "child-hook|child\nchild-hook|grand\ncallStatic:hook0|base\nyes no\nx+y@child\n1+2@grand\ncallStatic:combine2\nimpl\nError: Call to undefined method Empty_::missing()\n"
+    );
+}
+
 /// `empty($o->p)` through `__isset`/`__get` releases the value `__get` returned once it has
 /// been tested. A `mixed` return is boxed, and that box used to leak on every call.
 #[test]
@@ -644,4 +754,107 @@ var_dump(g(new D), g(new E), h(new E), g(new C));
          bool(true)\nbool(true)\nbool(false)\nbool(false)\n"
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A method call on an UNKNOWN receiver (untyped parameter, array element, closure parameter)
+/// reaches `__call()` when the object's class has it but not the method.
+///
+/// The class-id dispatch ladder behind such a call listed only the classes that declare the
+/// method, so `fn ($carry, $e) => $e->getLength()` over Termwind elements died with "Call to
+/// undefined method" instead of Element::__call() forwarding to its styles. Argument side effects
+/// happen once and in order; an object without `__call()` still gets php's own error.
+/// Expected output is real php 8.5 output.
+#[test]
+fn test_unknown_receiver_method_call_falls_back_to_magic_call() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public function __call($n, $a) { return "magic:$n(" . implode(",", $a) . ")"; } }
+class B { public function foo($x = 0) { return "foo$x"; } }
+class C extends A { public function bar() { return "bar"; } }
+class D { }
+function f($o, $x) { return $o->foo($x); }
+function g($o) { return $o->bar(); }
+echo f(new B, 5), "|", f(new A, 6), "|", f(new C, 7), "|", g(new C), "|", g(new A), "\n";
+$items = [new A, new B, new C];
+echo implode(",", array_map(fn ($e) => $e->foo(1), $items)), "\n";
+echo array_reduce($items, fn ($carry, $e) => $carry . $e->foo(2), ''), "\n";
+$n = 0;
+function h($o, &$n) { return $o->foo(++$n, ++$n); }
+echo h(new A, $n), " n=$n\n";
+try { f(new D, 1); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { f(null, 1); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "foo5|magic:foo(6)|magic:foo(7)|bar|magic:bar()\n\
+magic:foo(1),foo1,magic:foo(1)\n\
+magic:foo(2)foo2magic:foo(2)\n\
+magic:foo(1,2) n=2\n\
+Error: Call to undefined method D::foo()\n\
+Error: Call to a member function foo() on null\n"
+    );
+}
+
+/// A property read through an UNKNOWN receiver reaches `__get()` and keeps php's access rules.
+///
+/// The class-id ladder behind `$untyped->name` listed only classes that declare the property, so a
+/// class with `__get()` and no such slot fell into the miss arm and warned `Undefined property`.
+/// `??` consults `__isset()` first when the class declares one and `__get()` otherwise, `isset()`
+/// never calls `__get()`, and a protected slot read from outside the class still raises php's
+/// catchable `Error`. The loop is scaled so a per-read leak cannot hide behind live-at-exit values.
+/// Expected output is real php 8.5 output.
+#[test]
+fn test_unknown_receiver_property_read_reaches_magic_get() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Plain { public $name = 'plain'; protected $secret = 's1'; }
+class Plain2 { public $name = 'plain2'; }
+class Magic { public function __get($n) { return "magic:$n"; } }
+class SubMagic extends Magic {}
+class Gated {
+    public function __isset($n) { return $n === 'yes'; }
+    public function __get($n) { return "gated:$n"; }
+}
+class Hidden {
+    private $name = 'hidden';
+    public function __get($n) { return "hidden-magic:$n"; }
+    public function own($o) { return $o->name; }
+}
+function nameOf($o) { return $o->name; }
+function nameOrDefault($o) { return $o->name ?? 'none'; }
+function hasName($o) { return isset($o->name) ? 'y' : 'n'; }
+function yesOrDefault($o) { return $o->yes ?? 'none'; }
+function secretOf($o) {
+    try { return $o->secret; } catch (Error $e) { return get_class($e) . ':' . $e->getMessage(); }
+}
+$objects = [new Plain, new Plain2, new Magic, new SubMagic, new Gated, new Hidden];
+for ($i = 0; $i < 25; $i++) {
+    $out = [];
+    foreach ($objects as $o) {
+        $out[] = nameOf($o) . '/' . nameOrDefault($o) . '/' . hasName($o) . '/' . yesOrDefault($o);
+    }
+    $out[] = secretOf(new Plain);
+    $out[] = (new Hidden)->own(new Hidden);
+}
+echo implode("\n", $out), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "plain/plain/y/none\n\
+plain2/plain2/y/none\n\
+magic:name/magic:name/n/magic:yes\n\
+magic:name/magic:name/n/magic:yes\n\
+gated:name/none/n/gated:yes\n\
+hidden-magic:name/hidden-magic:name/n/hidden-magic:yes\n\
+Error:Cannot access protected property Plain::$secret\n\
+hidden\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
 }

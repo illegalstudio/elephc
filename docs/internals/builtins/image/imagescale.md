@@ -2,7 +2,7 @@
 title: "imagescale() - internals"
 description: "Compiler internals for imagescale(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 536
+  order: 549
 ---
 
 ## `imagescale()` - internals

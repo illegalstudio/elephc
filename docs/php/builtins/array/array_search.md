@@ -2,7 +2,7 @@
 title: "array_search()"
 description: "Searches the array for a given value and returns the first corresponding key if successful."
 sidebar:
-  order: 38
+  order: 44
 ---
 
 ## array_search()

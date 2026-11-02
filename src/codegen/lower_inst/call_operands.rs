@@ -84,6 +84,22 @@ pub(in crate::codegen) fn resolve_int_operand_to_result(
             load_value_to_first_int_arg(ctx, value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
         }
+        // A numeric string reaches an integer parameter through php's weak-mode coercion:
+        // `mktime(0, 0, 0, 12, 28, $year)` over an `explode()`d year, or `range(date('Y') - 120,
+        // date('Y'))`. The runtime parser reads the leading integer, as `(int)` does.
+        PhpType::Str => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+        }
+        // php's weak mode converts a float passed to an int parameter: an integral value as it
+        // stands, a fractional one with the "loses precision" deprecation, and NaN, the
+        // infinities or an out-of-range value with a `TypeError`. Laravel's `Collection::split()`
+        // passes `floor()`'s float to `array_slice()`; refusing it left `Collection` -- and every
+        // class built on it -- to the runtime autoloader.
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+            super::builtins::strings::emit_weak_float_result_to_int(ctx, context);
+        }
         ty => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for PHP type {:?}",

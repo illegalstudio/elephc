@@ -63,6 +63,7 @@ fn resolve_type_params(
     type_params
         .iter()
         .map(|param| TypeParam {
+            doc_annotated: param.doc_annotated,
             name: param.name.clone(),
             bound: param
                 .bound
@@ -101,6 +102,7 @@ fn resolve_generic_decl(
                     .collect()
             })
             .collect(),
+        doc_annotated: generics.doc_annotated,
     }))
 }
 
@@ -146,7 +148,9 @@ pub(super) fn resolve_decl_stmt(
                         .collect(),
                     variadic: variadic.clone(),
                     variadic_by_ref: *variadic_by_ref,
-                    variadic_type: variadic_type.clone(),
+                    variadic_type: variadic_type
+                        .as_ref()
+                        .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
                     return_type: return_type
                         .as_ref()
                         .map(|ty| resolve_type_expr(ty, namespace, imports, symbols)),
@@ -166,6 +170,7 @@ pub(super) fn resolve_decl_stmt(
         StmtKind::ClassDecl {
             generics,
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -188,6 +193,7 @@ pub(super) fn resolve_decl_stmt(
                 StmtKind::ClassDecl {
                     generics: resolve_generic_decl(generics, namespace, imports, symbols),
                     name: canonical_name_for_decl(namespace, name),
+                    doc_comment: doc_comment.clone(),
                     extends: extends.as_ref().map(|name| {
                         resolved_name(resolved_class_name(name, namespace, imports, symbols))
                     }),
@@ -413,6 +419,11 @@ pub(super) fn resolve_decl_stmt(
                 name: name.clone(),
                 c_type: resolve_ctype(c_type, namespace, imports, symbols),
             },
+            stmt.span,
+            stmt_attributes,
+        ))),
+        StmtKind::ClassLikeActivate { name, kind, source_path } => Ok(Some(Stmt::with_attributes(
+            StmtKind::ClassLikeActivate { name: canonical_name_for_decl(namespace, name), kind: *kind, source_path: source_path.clone() },
             stmt.span,
             stmt_attributes,
         ))),

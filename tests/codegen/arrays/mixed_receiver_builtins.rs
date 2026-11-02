@@ -296,3 +296,44 @@ for ($i = 0; $i < 3; $i++) {
     );
     assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
 }
+
+/// A local first seeded with a scope value (Mixed) and then assigned a concrete list is sliced as
+/// that list. The result slot is Mixed, which the backend refused ("array_slice result PHP type
+/// Mixed"); Symfony's `trace.html.php` compiled as a scoped template is this shape.
+#[test]
+fn test_array_slice_of_a_concrete_list_into_a_mixed_local() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function parts(array $vars): string {
+    $parts = $vars['parts'] ?? null;
+    $path = $vars['path'] ?? '/a/b/c.php';
+    $parts = explode('/', $path);
+    return implode('|', array_slice($parts, 0, -1)) . '+' . count($parts);
+}
+echo parts($argc > 5 ? ['parts' => 1] : []), "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "|a|b+4\n");
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
+
+/// `end()`/`reset()`/`next()`/`current()`/`key()` on a local seeded with a Mixed value and then
+/// assigned a list release the copy they read it through: the list leaked once per call (Symfony's
+/// compiled `trace.html.php` does `end($filePathParts)` for every stack frame it renders).
+#[test]
+fn test_internal_pointer_reads_of_a_list_in_a_mixed_local_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function seeded(array $v): string { $p = $v["p"] ?? null; $p = explode("/", "a/b/c"); $last = end($p); $first = reset($p); $k = key($p); $n = next($p); return $last . $first . $k . $n . current($p); }
+function plain(): string { $p = explode("/", "x/y"); $last = end($p); reset($p); return $last . current($p) . key($p); }
+function param(array $p): string { end($p); return (string) key($p) . current($p); }
+$s = '';
+for ($i = 0; $i < 3; $i++) { $s .= seeded([]) . '|' . plain() . '|' . param(['q' => 1, 'r' => 2]) . "\n"; }
+echo $s;
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "ca0bb|yx0|r2\nca0bb|yx0|r2\nca0bb|yx0|r2\n");
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}

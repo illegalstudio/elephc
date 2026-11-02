@@ -70,6 +70,7 @@ fn stmt_has_dynamic_instanceof(stmt: &Stmt) -> bool {
         | StmtKind::Return(Some(expr))
         | StmtKind::ArrayPush { value: expr, .. }
         | StmtKind::PropertyAssign { value: expr, .. }
+        | StmtKind::PropertyRefAssign { source: expr, .. }
         | StmtKind::PropertyArrayPush { value: expr, .. }
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. } => {
@@ -126,6 +127,19 @@ fn stmt_has_dynamic_instanceof(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_has_dynamic_instanceof(index) || expr_has_dynamic_instanceof(value)
         }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_has_dynamic_instanceof(index) || expr_has_dynamic_instanceof(source)
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_has_dynamic_instanceof(property)
+                || index.as_ref().is_some_and(expr_has_dynamic_instanceof)
+                || expr_has_dynamic_instanceof(value)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_dynamic_instanceof(target) || expr_has_dynamic_instanceof(value)
         }
@@ -154,6 +168,7 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
             expr_has_dynamic_instanceof(left) || expr_has_dynamic_instanceof(right)
         }
         ExprKind::Negate(expr)
+        | ExprKind::ArrayReference(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
@@ -279,6 +294,12 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         | ExprKind::This
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => false,
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_has_dynamic_instanceof(property)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            expr_has_dynamic_instanceof(receiver)
+        }
         ExprKind::Yield { key, value } => {
             key.as_ref().is_some_and(|k| expr_has_dynamic_instanceof(k))
                 || value

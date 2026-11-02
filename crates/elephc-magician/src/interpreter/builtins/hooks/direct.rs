@@ -42,18 +42,48 @@ pub(in crate::interpreter) enum EvalDirectHook {
     ArrayValues,
     /// Dispatches `base_convert(...)`.
     BaseConvert,
+    /// Dispatches the six fixed-base conversions (`dechex`, `hexdec`, ...).
+    BaseDigits,
+    /// Dispatches `setlocale(...)`.
+    Setlocale,
     /// Dispatches the PHP BCMath procedural surface.
     Bcmath,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
+    /// Dispatches `highlight_string(...)` and `highlight_file(...)`.
+    Highlight,
     /// Dispatches `base64_encode(...)`.
     Base64Encode,
     /// Dispatches `bin2hex(...)`.
     Bin2Hex,
+    /// Dispatches `unpack(...)`.
+    Unpack,
     /// Dispatches `chr(...)`.
     Chr,
     /// Dispatches `chunk_split(...)`.
     ChunkSplit,
+    /// Dispatches `substr_compare(...)`.
+    SubstrCompare,
+    /// Dispatches `substr_count(...)`.
+    SubstrCount,
+    /// Dispatches `get_debug_type(...)`.
+    GetDebugType,
+    /// Dispatches `parse_str(...)`.
+    ParseStr,
+    /// Dispatches `levenshtein(...)`.
+    Levenshtein,
+    /// Dispatches `addcslashes(...)`.
+    AddCSlashes,
+    /// Dispatches `version_compare(...)`.
+    VersionCompare,
+    /// Dispatches `strtok(...)`.
+    Strtok,
+    /// Dispatches `hash_pbkdf2(...)`.
+    HashPbkdf2,
+    /// Dispatches the `password_*` API.
+    PasswordApi,
+    /// Dispatches `array_change_key_case(...)`.
+    ArrayChangeKeyCase,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)` and `sizeof(...)`.
@@ -66,8 +96,12 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Crc32,
     /// Dispatches `ctype_*` predicates.
     Ctype,
+    /// Dispatches `extract(...)`.
+    Extract,
     /// Dispatches filesystem and path builtins.
     Filesystem,
+    /// Dispatches `filter_var(...)`.
+    FilterVar,
     /// Dispatches the whole `ext/curl` easy-interface family (behind the `curl` Cargo
     /// feature; see `crate::interpreter::builtins::curl`'s module doc). One shared
     /// variant with internal name dispatch, mirroring `HashContext`/`Openssl` above.
@@ -155,6 +189,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     HashOneShot,
     /// Dispatches `hex2bin(...)`.
     Hex2Bin,
+    /// Dispatches the `sodium_crypto_box_*` sealed-box family.
+    SodiumBox,
     /// Dispatches HTML entity encode/decode builtins.
     HtmlEntity,
     /// Dispatches `intdiv(...)`.
@@ -201,6 +237,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Pi,
     /// Dispatches `mt_rand(...)`.
     MtRand,
+    /// Dispatches `preg_quote(...)`.
+    PregQuote,
     /// Dispatches `quotemeta(...)`.
     QuoteMeta,
     /// Dispatches `quoted_printable_encode(...)`.
@@ -215,6 +253,14 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Round,
     /// Dispatches `range(...)`.
     Range,
+    /// Dispatches `preg_filter(...)`.
+    PregFilter,
+    /// Dispatches `preg_grep(...)`.
+    PregGrep,
+    /// Dispatches `preg_last_error(...)`.
+    PregLastError,
+    /// Dispatches `preg_last_error_msg(...)`.
+    PregLastErrorMsg,
     /// Dispatches `preg_match(...)`.
     PregMatch,
     /// Dispatches `preg_match_all(...)`.
@@ -223,6 +269,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     PregReplace,
     /// Dispatches `preg_replace_callback(...)`.
     PregReplaceCallback,
+    /// Dispatches `preg_replace_callback_array(...)`.
+    PregReplaceCallbackArray,
     /// Dispatches `preg_split(...)`.
     PregSplit,
     /// Dispatches `buffer_free(...)`.
@@ -285,6 +333,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     StringCompare,
     /// Dispatches string position builtins.
     StringPosition,
+    /// Dispatches `strcspn(...)` and `strspn(...)`.
+    StringSpan,
     /// Dispatches string search predicate builtins.
     StringSearch,
     /// Dispatches `explode(...)` and `implode(...)`.
@@ -301,7 +351,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     StrSplit,
     /// Dispatches `str_word_count(...)`.
     StrWordCount,
-    /// Dispatches the whole `iconv*` extension family.
+    /// Dispatches the whole `iconv*` extension family and the `elephc-iconv`-backed
+    /// `mb_strtoupper(...)` / `mb_strtolower(...)` pair.
     Iconv,
     /// Dispatches `strlen(...)` and `mb_strlen(...)`.
     Strlen,
@@ -311,6 +362,10 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Strval,
     /// Dispatches `strtr(...)`.
     Strtr,
+    /// Dispatches `strrchr(...)`.
+    Strrchr,
+    /// Dispatches `strpbrk(...)`.
+    Strpbrk,
     /// Dispatches `strstr(...)`.
     Strstr,
     /// Dispatches `substr(...)`.
@@ -368,12 +423,33 @@ impl EvalDirectHook {
             Self::Atan => eval_builtin_atan(args, context, scope, values),
             Self::Atan2 => eval_builtin_atan2(args, context, scope, values),
             Self::BaseConvert => eval_builtin_base_convert(args, context, scope, values),
+            Self::BaseDigits => eval_builtin_base_digits(name, args, context, scope, values),
+            Self::Setlocale => eval_builtin_setlocale(args, context, scope, values),
             Self::Bcmath => eval_builtin_bcmath_call(name, args, context, scope, values),
             Self::Base64Decode => eval_builtin_base64_decode(args, context, scope, values),
+            Self::Highlight => match name {
+                "highlight_file" => eval_builtin_highlight_file(args, context, scope, values),
+                "highlight_string" => eval_builtin_highlight_string(args, context, scope, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Base64Encode => eval_builtin_base64_encode(args, context, scope, values),
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),
+            Self::Unpack => eval_builtin_unpack(args, context, scope, values),
             Self::Chr => eval_builtin_chr(args, context, scope, values),
             Self::ChunkSplit => eval_builtin_chunk_split(args, context, scope, values),
+            Self::SubstrCompare => eval_builtin_substr_compare(args, context, scope, values),
+            Self::SubstrCount => eval_builtin_substr_count(args, context, scope, values),
+            Self::GetDebugType => eval_builtin_get_debug_type(args, context, scope, values),
+            Self::ParseStr => eval_builtin_parse_str_direct(args, context, scope, values),
+            Self::Levenshtein => eval_builtin_levenshtein(args, context, scope, values),
+            Self::AddCSlashes => eval_builtin_addcslashes(args, context, scope, values),
+            Self::VersionCompare => eval_builtin_version_compare(args, context, scope, values),
+            Self::Strtok => eval_builtin_strtok(args, context, scope, values),
+            Self::HashPbkdf2 => eval_builtin_hash_pbkdf2(args, context, scope, values),
+            Self::PasswordApi => eval_builtin_password_api(name, args, context, scope, values),
+            Self::ArrayChangeKeyCase => {
+                eval_builtin_array_change_key_case(args, context, scope, values)
+            }
             Self::Clamp => eval_builtin_clamp(args, context, scope, values),
             Self::Core => eval_builtin_core_call(name, args, context, scope, values),
             Self::Cos => eval_builtin_cos(args, context, scope, values),
@@ -390,7 +466,9 @@ impl EvalDirectHook {
             Self::Deg2rad => eval_builtin_deg2rad(args, context, scope, values),
             Self::Exp => eval_builtin_exp(args, context, scope, values),
             Self::Gmp => eval_builtin_gmp_expr_call(name, args, context, scope, values),
+            Self::Extract => eval_builtin_extract(args, context, scope, values),
             Self::Filesystem => eval_builtin_filesystem_call(name, args, context, scope, values),
+            Self::FilterVar => eval_builtin_filter_var(args, context, scope, values),
             #[cfg(feature = "curl")]
             Self::Curl => eval_builtin_curl_declared_call(name, args, context, scope, values),
             Self::Gettype => eval_builtin_gettype(args, context, scope, values),
@@ -439,6 +517,7 @@ impl EvalDirectHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::Hex2Bin => eval_builtin_hex2bin(args, context, scope, values),
+            Self::SodiumBox => eval_builtin_sodium_box(name, args, context, scope, values),
             Self::HtmlEntity => match name {
                 "html_entity_decode" => {
                     eval_builtin_html_entity_decode(args, context, scope, values)
@@ -472,6 +551,7 @@ impl EvalDirectHook {
             Self::ParseUrl => eval_builtin_parse_url(args, context, scope, values),
             Self::Pi => eval_builtin_pi(args, values),
             Self::Printf => eval_builtin_printf(args, context, scope, values),
+            Self::PregQuote => eval_builtin_preg_quote(args, context, scope, values),
             Self::QuoteMeta => eval_builtin_quotemeta(args, context, scope, values),
             Self::QuotedPrintableEncode => {
                 eval_builtin_quoted_printable_encode(args, context, scope, values)
@@ -480,6 +560,13 @@ impl EvalDirectHook {
             Self::Rand => eval_builtin_rand(args, context, scope, values),
             Self::RandomInt => eval_builtin_random_int(args, context, scope, values),
             Self::Round => eval_builtin_round(args, context, scope, values),
+            Self::PregFilter => eval_builtin_preg_filter(args, context, scope, values),
+            Self::PregGrep => eval_builtin_preg_grep(args, context, scope, values),
+            Self::PregReplaceCallbackArray => {
+                eval_builtin_preg_replace_callback_array(args, context, scope, values)
+            }
+            Self::PregLastError => eval_builtin_preg_last_error(args, values),
+            Self::PregLastErrorMsg => eval_builtin_preg_last_error_msg(args, values),
             Self::PregMatch => eval_builtin_preg_match(args, context, scope, values),
             Self::PregMatchAll => eval_builtin_preg_match_all(args, context, scope, values),
             Self::PregReplace => eval_builtin_preg_replace(args, context, scope, values),
@@ -541,6 +628,9 @@ impl EvalDirectHook {
                 "strrpos" => eval_builtin_strrpos(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::StringSpan => {
+                eval_builtin_string_span_named(name, args, context, scope, values)
+            }
             Self::StringSearch => match name {
                 "str_contains" => eval_builtin_str_contains(args, context, scope, values),
                 "str_ends_with" => eval_builtin_str_ends_with(args, context, scope, values),
@@ -549,7 +639,7 @@ impl EvalDirectHook {
             },
             Self::StringSplitJoin => match name {
                 "explode" => eval_builtin_explode(args, context, scope, values),
-                "implode" => eval_builtin_implode(args, context, scope, values),
+                "implode" | "join" => eval_builtin_implode(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StreamBoolPredicate => match name {
@@ -583,6 +673,8 @@ impl EvalDirectHook {
             Self::StrRepeat => eval_builtin_str_repeat(args, context, scope, values),
             Self::Strval => eval_builtin_strval(args, context, scope, values),
             Self::Strtr => eval_builtin_strtr(args, context, scope, values),
+            Self::Strrchr => eval_builtin_strrchr(args, context, scope, values),
+            Self::Strpbrk => eval_builtin_strpbrk(args, context, scope, values),
             Self::Strstr => eval_builtin_strstr(args, context, scope, values),
             Self::Substr => eval_builtin_substr(args, context, scope, values),
             Self::SubstrReplace => eval_builtin_substr_replace(args, context, scope, values),

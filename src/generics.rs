@@ -71,6 +71,15 @@ pub struct GenericContext {
 /// compiling on regardless would emit a program missing instantiations its call sites need.
 pub const MAX_INSTANTIATION_ROUNDS: usize = 16;
 
+/// The suffix of a PHPDoc function template's hidden twin declaration.
+///
+/// A PHPDoc `@template` must never remove or rename a php symbol, so the function keeps its
+/// written name and types as an ordinary declaration, and the annotated reading is declared once
+/// more under `<name><suffix>`. The checker consults the twin only at a direct call by name; it
+/// is a template, so it never reaches lowering. The name is an ordinary identifier so every pass
+/// that decodes names sees nothing unusual.
+pub const DOC_TWIN_SUFFIX: &str = "__elephc_doc_template";
+
 /// Type-checks `program` to a fixpoint, instantiating every generic call site along the way,
 /// and returns the program with templates replaced by their instantiations.
 ///
@@ -84,7 +93,7 @@ pub const MAX_INSTANTIATION_ROUNDS: usize = 16;
 /// that does not exist.
 pub fn monomorphize<F>(
     program: crate::parser::ast::Program,
-    mut check: F,
+    check: F,
 ) -> Result<(crate::parser::ast::Program, crate::types::CheckResult), crate::errors::CompileError>
 where
     F: FnMut(
@@ -92,6 +101,46 @@ where
         &GenericContext,
     ) -> Result<crate::types::CheckResult, crate::errors::CompileError>,
 {
+    monomorphize_recovering(program, check).map_err(|(_, error)| error)
+}
+
+/// [`monomorphize`], but a type-check refusal hands the program back with the error.
+///
+/// The CLI pipeline hands a refused autoloaded class file back to the runtime autoloader and
+/// checks the rest of the program again, so it needs the program the checker refused. The
+/// program comes back only when the FIRST round's check refuses it (every Symfony-style refusal
+/// is raised there); an error from a later round, or from the generic-class expansion, carries
+/// `None` and is final.
+pub fn monomorphize_recovering<F>(
+    program: crate::parser::ast::Program,
+    mut check: F,
+) -> Result<
+    (crate::parser::ast::Program, crate::types::CheckResult),
+    (Option<crate::parser::ast::Program>, crate::errors::CompileError),
+>
+where
+    F: FnMut(
+        &crate::parser::ast::Program,
+        &GenericContext,
+    ) -> Result<crate::types::CheckResult, crate::errors::CompileError>,
+{
+    monomorphize_body(program, &mut check)
+}
+
+fn monomorphize_body<F>(
+    program: crate::parser::ast::Program,
+    check: &mut F,
+) -> Result<
+    (crate::parser::ast::Program, crate::types::CheckResult),
+    (Option<crate::parser::ast::Program>, crate::errors::CompileError),
+>
+where
+    F: FnMut(
+        &crate::parser::ast::Program,
+        &GenericContext,
+    ) -> Result<crate::types::CheckResult, crate::errors::CompileError>,
+{
+    let lost = |error: crate::errors::CompileError| (None, error);
     // Generic CLASSES are resolved first and entirely without the checker: their type arguments
     // are written, not inferred, so instantiating them is pure syntax. Doing it here rather than
     // in the pipeline is what keeps the two in step — an instantiated FUNCTION body can name
@@ -101,12 +150,13 @@ where
     // A variance marker is a promise about the DECLARATION, so it is checked once, here, before
     // anything is spliced. Checking it per instantiation would name a class the programmer never
     // wrote, and checking it after splicing would be too late to name the member at fault.
-    variance::verify(&class_templates)?;
+    variance::verify(&class_templates).map_err(lost)?;
     let first = constructors::instantiate(
         program,
         &mut class_templates,
         &classes::InferredConstructions::default(),
-    )?;
+    )
+    .map_err(lost)?;
     let program = first.program;
     let obligations = first.obligations;
     // Warnings the INSTANTIATING pass produced — a bare template name read as an instantiation —
@@ -132,7 +182,11 @@ where
     // produce.
     let mut collected_warnings: Vec<crate::errors::CompileWarning> = Vec::new();
     let mut check_result = loop {
-        let result = check(&program, &context)?;
+        let result = match check(&program, &context) {
+            Ok(result) => result,
+            Err(error) if rounds == 0 => return Err((Some(program), error)),
+            Err(error) => return Err((None, error)),
+        };
         for warning in &result.warnings {
             if !collected_warnings
                 .iter()
@@ -163,7 +217,7 @@ where
         let (spliced, added) = splice_instantiations(program, &result.requested_instantiations);
         program = spliced;
         let (with_methods, method_added) =
-            methods::instantiate(program, &context.method_templates, &method_work)?;
+            methods::instantiate(program, &context.method_templates, &method_work).map_err(lost)?;
         program = with_methods;
         if added == 0 && method_added == 0 && !class_work {
             break result;
@@ -172,7 +226,7 @@ where
         // `Box<T>` among them has become a `Box<int>` that needs its own class. This is also
         // where the checker's `new Box(5)` inferences are adopted: the class it asked for is
         // spliced and the construction is renamed to it.
-        let round = constructors::instantiate(program, &mut class_templates, &inferred)?;
+        let round = constructors::instantiate(program, &mut class_templates, &inferred).map_err(lost)?;
         program = round.program;
         context.class_type_argument_bounds.extend(round.obligations);
         for warning in round.warnings {
@@ -189,7 +243,7 @@ where
         context.class_templates = class_templates.signatures();
         rounds += 1;
         if rounds >= MAX_INSTANTIATION_ROUNDS {
-            return Err(crate::errors::CompileError::new(
+            return Err(lost(crate::errors::CompileError::new(
                 Span::dummy(),
                 &format!(
                     "Generic instantiation did not settle after {} rounds. Every round added a \
@@ -197,7 +251,7 @@ where
                      ever-changing type",
                     MAX_INSTANTIATION_ROUNDS
                 ),
-            ));
+            )));
         }
     };
     for warning in instantiation_warnings {
@@ -346,10 +400,34 @@ pub fn infer_bindings_with_args(
         }
         unify(&names, declared, actual, &mut bound)?;
     }
+    // A PHPDoc `@template` no argument binds (Twig's `@param class-string<TExtension>`, a type
+    // this inference cannot read) takes its bare reading — bound, else `mixed` — instead of
+    // refusing the call: php never reads the annotation, so it cannot make a valid call fail.
+    for param in type_params {
+        if param.doc_annotated
+            && param.default.is_none()
+            && !bound.iter().any(|(name, _)| name == &param.name)
+        {
+            let reading = param
+                .bound
+                .clone()
+                .unwrap_or_else(|| TypeExpr::Named(crate::names::Name::unqualified("mixed")));
+            bound.push((param.name.clone(), reading));
+        }
+    }
     let inferred = bound.iter().map(|(name, ty)| (name.clone(), shared::to_shared(ty))).collect();
     elephc_generics::finish(&shared::parameters(type_params), &inferred)
         .map(|bindings| bindings.into_iter().map(|(name, ty)| (name, shared::from_shared(ty))).collect())
         .map_err(shared::infer_error)
+}
+
+/// Rebinds a PHPDoc template parameter to `mixed`, the reading its erased declaration has.
+pub fn erase_doc_binding(bindings: &mut Bindings, name: &str) {
+    let mixed = crate::parser::ast::TypeExpr::Named(crate::names::Name::unqualified("mixed"));
+    match bindings.iter_mut().find(|(bound, _)| bound == name) {
+        Some((_, ty)) => *ty = mixed,
+        None => bindings.push((name.to_string(), mixed)),
+    }
 }
 
 /// Places a call's arguments at the declaration positions they bind to.
@@ -828,6 +906,7 @@ mod tests {
             bound: None,
             default: None,
             variance: Variance::Invariant,
+            doc_annotated: false,
         }
     }
 
@@ -948,6 +1027,7 @@ mod tests {
             bound: None,
             default: Some(TypeExpr::Str),
             variance: Variance::Invariant,
+            doc_annotated: false,
         };
         let bindings = infer_bindings(&[declared], &[param(TypeExpr::Int)], &[PhpType::Int])
             .expect("the default determines K");
@@ -962,6 +1042,7 @@ mod tests {
             bound: None,
             default: Some(TypeExpr::Str),
             variance: Variance::Invariant,
+            doc_annotated: false,
         };
         let bindings = infer_bindings(&[declared], &[param(t("T"))], &[PhpType::Int])
             .expect("T is constrained by the argument");

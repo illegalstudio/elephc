@@ -10,6 +10,29 @@
 use super::super::*;
 use super::support::*;
 
+/// Eval exposes the same scalar validation filters that the static compiler
+/// supports, including the constants and callable lookup used by dynamic code.
+#[test]
+fn execute_program_dispatches_filter_var_scalar_validation_filters() {
+    let program = parse_fragment(
+        br#"echo filter_var('yes', FILTER_VALIDATE_BOOL) ? 'Y' : '?';
+echo filter_var('off', FILTER_VALIDATE_BOOL) === false ? 'F' : '?';
+echo filter_var('invalid', FILTER_VALIDATE_BOOL) === false ? 'B' : '?';
+echo filter_var('42', FILTER_VALIDATE_INT) === 42 ? 'I' : '?';
+echo filter_var('1.5e2', FILTER_VALIDATE_FLOAT) === 150.0 ? 'L' : '?';
+return function_exists('filter_var');"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute eval filter validation");
+
+    assert_eq!(values.output, "YFBIL");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval zero-argument system builtins return native-compatible values.
 #[test]
 fn execute_program_dispatches_zero_arg_system_builtins() {
@@ -466,7 +489,7 @@ return function_exists("stream_supports_lock");"#,
 fn execute_program_dispatches_spl_classes_builtin() {
     let program = parse_fragment(
         br#"$names = spl_classes();
-echo count($names) . ":" . $names[0] . ":" . $names[53] . ":";
+echo count($names) . ":" . $names[0] . ":" . $names[54] . ":";
 echo (in_array("LogicException", $names) ? "exception" : "bad") . ":";
 echo (in_array("SplDoublyLinkedList", $names) ? "list" : "bad") . ":";
 $call = call_user_func("spl_classes");
@@ -484,7 +507,7 @@ return is_callable("spl_classes");"#,
 
     assert_eq!(
         values.output,
-        "54:AppendIterator:UnexpectedValueException:exception:list:call:spread:1"
+        "55:AppendIterator:UnexpectedValueException:exception:list:call:spread:1"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
@@ -527,6 +550,8 @@ echo getenv(name: "ELEPHC_EVAL_ENV_TEST") . ":";
 echo call_user_func("getenv", "ELEPHC_EVAL_ENV_TEST") . ":";
 echo call_user_func_array("putenv", ["assignment" => "ELEPHC_EVAL_ENV_TEST=spread"]) ? "set" : "bad";
 echo ":" . getenv("ELEPHC_EVAL_ENV_TEST") . ":";
+echo getenv()["ELEPHC_EVAL_ENV_TEST"] . ":";
+echo getenv(null, true)["ELEPHC_EVAL_ENV_TEST"] . ":";
 putenv("ELEPHC_EVAL_ENV_TEST");
 echo getenv("ELEPHC_EVAL_ENV_TEST") === false ? "missing" : "bad";
 echo ":"; echo function_exists("getenv");
@@ -538,7 +563,18 @@ return function_exists("putenv");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "direct:named:named:set:spread:missing:1");
+    // THREE `spread`s, not one. A second, contradictory `assert_eq!` on this same value sat
+    // here asserting `...:set:spread:missing:1` and failed every run — the residue of a
+    // half-finished edit made when whole-environment `getenv()` landed (the next test in this
+    // file). The fragment reads the variable back three times after the spread `putenv`:
+    // `getenv("…")`, `getenv()["…"]` and `getenv(null, true)["…"]`. php 8.5.10 on the same
+    // source agrees, which is what settled it rather than a guess:
+    //
+    // ```text
+    // $ php getenv_probe.php
+    // direct:named:named:set:spread:spread:spread:missing:1
+    // ```
+    assert_eq!(values.output, "direct:named:named:set:spread:spread:spread:missing:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
@@ -665,6 +701,22 @@ return is_array(call_user_func("getenv"));"#,
 
     assert_eq!(values.output, "anntlopresent");
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+/// Verifies `getenv()` distinguishes an unset name (`false`) from a set-but-empty one (`""`),
+/// matching php: `var_dump(getenv("..."))` on a name the process never set answers `bool(false)`.
+#[test]
+fn execute_program_getenv_reports_false_for_a_name_the_process_never_set() {
+    let program = parse_fragment(
+        br#"$u = getenv("ELEPHC_EVAL_ENV_DEFINITELY_UNSET_TEST");
+return $u === false ? "false" : "not-false";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::String("false".to_string()));
 }
 /// Verifies eval shell process builtins capture or echo stdout across all call paths.
 #[test]
@@ -936,7 +988,7 @@ return function_exists("get_loaded_extensions");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    let count = if curl_present { 12 } else { 11 };
+    let count = if curl_present { 13 } else { 12 };
     let curl_label = if curl_present { "curl-present" } else { "curl-absent" };
     assert_eq!(
         values.output,

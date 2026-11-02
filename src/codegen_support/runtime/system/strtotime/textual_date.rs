@@ -1,7 +1,7 @@
 //! Purpose:
 //! Emits the textual-date parser sub-routine for the `__rt_strtotime` dispatcher.
 //! Accepts `D Month Y`, `Month D[,] Y` (full or abbreviated month names), with an optional
-//! `HH:MM[:SS]` time suffix.
+//! `HH:MM[:SS]` time suffix, and `D Month` / `Month D` without a year (the clock's own year).
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::system::strtotime::mod::emit_strtotime()`: the dispatcher routes
@@ -71,7 +71,7 @@ fn emit_textual_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_strtotime_fail");                            // no day → fail
     emitter.instruction("str w5, [sp, #12]");                                   // tm_mday (mktime normalizes overflow)
     emitter.instruction("cmp x3, x4");                                          // need a year after the day
-    emitter.instruction("b.ge __rt_strtotime_fail");                            // missing year → fail
+    emitter.instruction("b.ge __rt_strtotime_textual_noyear");                  // no year: the clock's own year ("1 april", "april 1")
     emitter.instruction("ldrb w9, [x3]");                                       // peek separator after the day
     emitter.instruction("cmp w9, #44");                                         // optional ',' ?
     emitter.instruction("b.ne __rt_strtotime_textual_mf_sp");                   // no comma → skip whitespace
@@ -111,6 +111,8 @@ fn emit_textual_date_arm64(emitter: &mut Emitter) {
 
     // -- common tail: year (with 2-digit windowing) + optional time + mktime --
     emitter.label("__rt_strtotime_textual_year");
+    emitter.instruction("cmp x3, x4");                                            // anything left for a year ?
+    emitter.instruction("b.ge __rt_strtotime_textual_noyear");                    // no year: the clock's own year ("1 april", "april 1")
     emitter.instruction("mov x12, x3");                                         // remember cursor to detect "no digits"
     emitter.instruction("bl __rt_strtotime_parse_dec");                         // x5 = year
     emitter.instruction("cmp x3, x12");                                         // any year digits?
@@ -172,6 +174,20 @@ fn emit_textual_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, sp");                                          // x0 = &tm
     emitter.instruction("bl __rt_mktime_shifted");                              // mktime(&tm) → x0 = timestamp
     emitter.instruction("b __rt_strtotime_ret");                                // return through shared epilogue
+    emitter.label("__rt_strtotime_textual_noyear");
+    emitter.instruction("ldr w9, [sp, #12]");                                     // the parsed day
+    emitter.instruction("str w9, [sp, #88]");                                     // park it across now_tm
+    emitter.instruction("ldr w9, [sp, #16]");                                     // the parsed month
+    emitter.instruction("str w9, [sp, #92]");                                     // park it across now_tm
+    emitter.instruction("bl __rt_strtotime_now_tm");                              // tm of the effective clock: its year is the date's year
+    emitter.instruction("ldr w9, [sp, #88]");                                     // the parsed day
+    emitter.instruction("str w9, [sp, #12]");                                     // tm_mday (mktime normalizes overflow)
+    emitter.instruction("ldr w9, [sp, #92]");                                     // the parsed month
+    emitter.instruction("str w9, [sp, #16]");                                     // tm_mon
+    emitter.instruction("str wzr, [sp, #0]");                                     // tm_sec = 0
+    emitter.instruction("str wzr, [sp, #4]");                                     // tm_min = 0
+    emitter.instruction("str wzr, [sp, #8]");                                     // tm_hour = 0
+    emitter.instruction("b __rt_strtotime_textual_mktime");                       // finish like every other textual date
 }
 
 /// Emits x86_64 (Linux) assembly for the textual-date parser. Cursor in `rdi`, end pointer in
@@ -218,7 +234,7 @@ fn emit_textual_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_strtotime_fail_linux_x86_64");                 // no day → fail
     emitter.instruction("mov DWORD PTR [rsp + 12], eax");                       // tm_mday (mktime normalizes overflow)
     emitter.instruction("cmp rdi, r10");                                        // need a year after the day
-    emitter.instruction("jae __rt_strtotime_fail_linux_x86_64");                // missing year → fail
+    emitter.instruction("jae __rt_strtotime_textual_noyear_linux_x86_64");      // no year: the clock's own year ("1 april", "april 1")
     emitter.instruction("movzx eax, BYTE PTR [rdi]");                           // peek separator after the day
     emitter.instruction("cmp al, 44");                                          // optional ',' ?
     emitter.instruction("jne __rt_strtotime_textual_mf_sp_linux_x86_64");       // no comma → skip whitespace
@@ -262,6 +278,8 @@ fn emit_textual_date_linux_x86_64(emitter: &mut Emitter) {
 
     // -- common tail: year (with 2-digit windowing) + optional time + mktime --
     emitter.label("__rt_strtotime_textual_year_linux_x86_64");
+    emitter.instruction("cmp rdi, r10");                                          // anything left for a year ?
+    emitter.instruction("jae __rt_strtotime_textual_noyear_linux_x86_64");        // no year: the clock's own year ("1 april", "april 1")
     emitter.instruction("mov rdx, rdi");                                        // remember cursor to detect "no digits"
     emitter.instruction("call __rt_strtotime_parse_dec_linux_x86_64");          // rax = year
     emitter.instruction("cmp rdi, rdx");                                        // any year digits?
@@ -322,4 +340,18 @@ fn emit_textual_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rsp");                                        // rdi = &tm
     emitter.instruction("call __rt_mktime_shifted");                            // mktime(&tm) → rax = timestamp
     emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return through shared epilogue
+    emitter.label("__rt_strtotime_textual_noyear_linux_x86_64");
+    emitter.instruction("mov eax, DWORD PTR [rsp + 12]");                         // the parsed day
+    emitter.instruction("mov DWORD PTR [rsp + 88], eax");                         // park it across now_tm
+    emitter.instruction("mov eax, DWORD PTR [rsp + 16]");                         // the parsed month
+    emitter.instruction("mov DWORD PTR [rsp + 92], eax");                         // park it across now_tm
+    emitter.instruction("call __rt_strtotime_now_tm_linux_x86_64");               // tm of the effective clock: its year is the date's year
+    emitter.instruction("mov eax, DWORD PTR [rsp + 88]");                         // the parsed day
+    emitter.instruction("mov DWORD PTR [rsp + 12], eax");                         // tm_mday (mktime normalizes overflow)
+    emitter.instruction("mov eax, DWORD PTR [rsp + 92]");                         // the parsed month
+    emitter.instruction("mov DWORD PTR [rsp + 16], eax");                         // tm_mon
+    emitter.instruction("mov DWORD PTR [rsp + 0], 0");                            // tm_sec = 0
+    emitter.instruction("mov DWORD PTR [rsp + 4], 0");                            // tm_min = 0
+    emitter.instruction("mov DWORD PTR [rsp + 8], 0");                            // tm_hour = 0
+    emitter.instruction("jmp __rt_strtotime_textual_mktime_linux_x86_64");        // finish like every other textual date
 }

@@ -139,6 +139,32 @@ pub(super) unsafe fn register_native_function_bridge_support_inner(
     ))
 }
 
+/// Runs native function active-slot registration after installing a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_register_native_function_active_slot`; invalid handles, names, or a
+/// null slot fail closed as `false`.
+pub(super) unsafe fn register_native_function_active_slot_inner(
+    ctx: *mut ElephcEvalContext,
+    function_name_ptr: *const u8,
+    function_name_len: u64,
+    slot: *const u64,
+) -> i32 {
+    let Some(context) = ctx.as_mut() else {
+        return 0;
+    };
+    if context.abi_version() != ABI_VERSION || slot.is_null() {
+        return 0;
+    }
+    let Ok(function_name) = abi_name_to_string(function_name_ptr, function_name_len) else {
+        return 0;
+    };
+    i32::from(context.define_native_function_active_slot(
+        &function_name.to_ascii_lowercase(),
+        slot as usize,
+    ))
+}
+
 /// Runs native function parameter-flags registration after installing a panic boundary.
 ///
 /// # Safety

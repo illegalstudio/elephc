@@ -15,6 +15,7 @@ use crate::types::PhpType;
 #[cfg(test)]
 use super::registers::{float_result_reg, int_result_reg, string_result_regs};
 use super::registers::{frame_pointer_reg, is_float_register};
+use super::values::emit_load_int_immediate;
 
 /// Sets up the stack frame for a function body.
 /// On AArch64: allocates `frame_size` bytes, saves x29/x30 in the footer, and establishes x29 as the frame pointer.
@@ -25,6 +26,9 @@ pub fn emit_frame_prologue(emitter: &mut Emitter, frame_size: usize) {
         "frame_size must reserve the 16-byte frame footer (x29/x30), got {frame_size}"
     );
     emitter.comment("prologue");
+    // A new frame has no frame-base register until its owner establishes one, even when it is
+    // emitted in the middle of another function whose body keeps x28 as its base.
+    emitter.frame_slot_base = None;
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_adjust_sp(emitter, frame_size, true);
@@ -113,8 +117,20 @@ pub fn emit_return(emitter: &mut Emitter) {
 }
 
 /// Emits code that computes the address of a local frame slot and stores it in `dest`.
-/// Uses the frame pointer (x29/rbp) as the base. Large offsets on AArch64 are walked down in
-/// 4095-byte chunks to stay within immediate-add instructions.
+/// Uses the frame pointer (x29/rbp) as the base. A far offset on AArch64 is materialized into
+/// `dest` and applied with one register-form `sub`, matching the single `lea` x86_64 uses.
+///
+/// That far path used to walk the frame pointer down in 4095-byte steps, one `sub` per step. The
+/// offset is a compile-time constant, so the walk bought nothing and cost `offset / 4095`
+/// instructions in a single dependent chain: in the Symfony `--web` build `sub x9, x9, #4095`
+/// alone was 4,706,946 of 40,575,184 emitted lines, 11.6% of the artifact, at ~8.6 steps per
+/// address. `movz`/`movk` reaches any 64-bit constant in at most four instructions and typically
+/// one, so the whole sequence is now 2-3 instructions whatever the frame size.
+///
+/// The offset is staged in `dest` itself, which needs no scratch register because `dest` is a pure
+/// output here -- every caller treats it as clobbered. The one register that cannot stage it is
+/// the frame pointer itself, since `sub x29, x29, x29` would read the staged value as the base;
+/// `dest == "x29"` therefore keeps the original walk.
 pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -122,12 +138,15 @@ pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize)
                 emitter.instruction(&format!("mov {}, x29", dest));             // copy the frame pointer when the requested slot is the frame base itself
             } else if offset <= 4095 {
                 emitter.instruction(&format!("sub {}, x29, #{}", dest, offset)); // compute the local-slot address directly from the frame pointer
+            } else if dest != "x29" {
+                emit_load_int_immediate(emitter, dest, offset as i64);          // materialize the whole distance to the far local slot as one immediate
+                emitter.instruction(&format!("sub {}, x29, {}", dest, dest));   // step the frame pointer down to the distant local slot in a single subtraction
             } else {
                 emitter.instruction(&format!("mov {}, x29", dest));             // seed the destination register from the frame pointer for a far local-slot address
                 let mut remaining = offset;
                 while remaining > 0 {
                     let chunk = remaining.min(4095);
-                    emitter.instruction(&format!("sub {}, {}, #{}", dest, dest, chunk)); // walk the destination register down toward the distant local-slot address
+                    emitter.instruction(&format!("sub {}, {}, #{}", dest, dest, chunk)); // walk the frame pointer itself down toward the distant local-slot address
                     remaining -= chunk;
                 }
             }
@@ -147,6 +166,16 @@ pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize)
     }
 }
 
+/// The `x28`-relative offset of the slot `offset` bytes below `x29`, when the current function
+/// keeps a frame-base register (`Emitter::frame_slot_base`) and one scaled `ldr`/`str` reaches the
+/// slot: 64-bit registers only (`x`/`d`), 8-aligned, within the 32 760-byte immediate.
+fn based_slot_offset(emitter: &Emitter, reg: &str, offset: usize) -> Option<usize> {
+    let base = emitter.frame_slot_base?;
+    let wide = reg.starts_with('x') || reg.starts_with('d');
+    let distance = base.checked_sub(offset)?;
+    (wide && distance % 8 == 0 && distance <= 32_760).then_some(distance)
+}
+
 /// Stores `reg` into the local frame slot at `offset` from the frame pointer, using x9 as scratch.
 /// On AArch64: uses `stur` for offsets ≤ 255, otherwise computes the address first.
 /// On x86_64: stores via `[rbp - offset]` with a mov instruction; float registers use movsd.
@@ -161,6 +190,8 @@ pub fn store_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, 
         Arch::AArch64 => {
             if offset <= 255 {
                 emitter.instruction(&format!("stur {}, [x29, #-{}]", reg, offset)); // store via unscaled immediate offset
+            } else if let Some(base_offset) = based_slot_offset(emitter, reg, offset) {
+                emitter.instruction(&format!("str {}, [x28, #{}]", reg, base_offset)); // store through the frame-base register in one instruction
             } else {
                 emit_frame_slot_address(emitter, scratch, offset);
                 emitter.instruction(&format!("str {}, [{}]", reg, scratch));    // store via computed address
@@ -181,11 +212,25 @@ pub fn store_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, 
     }
 }
 
-/// Loads the local frame slot at `offset` from the frame pointer into `reg`, using x9 as scratch.
+/// Loads the local frame slot at `offset` from the frame pointer into `reg`.
 /// On AArch64: uses `ldur` for offsets ≤ 255, otherwise computes the address first.
 /// On x86_64: loads via `[rbp - offset]` with a mov instruction; float registers use movsd.
+///
+/// The address is computed INTO THE DESTINATION, which the load is about to overwrite anyway, so
+/// a deep frame cannot disturb a register the caller is still holding. It used to borrow x9
+/// unconditionally, and that made correct-looking code fail once a frame grew past the 255-byte
+/// `ldur` immediate -- a caller holding a value in x9 across this call lost it, with no diagnostic
+/// and no change to its own source.
+///
+/// MEASURED: `foreach ($a as &$v) { $p($v); }` printed the values, and adding the unused KEY
+/// (`as $k => &$v`) pushed the slot past the immediate range and printed nothing, because
+/// `lower_invoker_ref_arg` keeps the marker's SOURCE TAG in x9 across the address materialization.
+/// php 8.5.10 prints `p(1);p(2);` for both spellings.
+///
+/// A float destination cannot hold an address, so it keeps a general-purpose scratch.
 pub fn load_at_offset(emitter: &mut Emitter, reg: &str, offset: usize) {
-    load_at_offset_scratch(emitter, reg, offset, "x9");
+    let scratch = if is_float_register(reg) { "x9" } else { reg };
+    load_at_offset_scratch(emitter, reg, offset, scratch);
 }
 
 /// Loads the local frame slot at `offset` from the frame pointer into `reg`, using `scratch` as scratch.
@@ -195,6 +240,8 @@ pub fn load_at_offset_scratch(emitter: &mut Emitter, reg: &str, offset: usize, s
         Arch::AArch64 => {
             if offset <= 255 {
                 emitter.instruction(&format!("ldur {}, [x29, #-{}]", reg, offset)); // load via unscaled immediate offset
+            } else if let Some(base_offset) = based_slot_offset(emitter, reg, offset) {
+                emitter.instruction(&format!("ldr {}, [x28, #{}]", reg, base_offset)); // load through the frame-base register in one instruction
             } else {
                 emit_frame_slot_address(emitter, scratch, offset);
                 emitter.instruction(&format!("ldr {}, [{}]", reg, scratch));    // load via computed address
@@ -328,21 +375,17 @@ pub fn emit_store_zero_to_address(emitter: &mut Emitter, addr_reg: &str, byte_of
 }
 
 /// Loads a spilled incoming call argument from the caller stack into `reg`.
-/// On AArch64 uses the frame pointer (x29) as base with positive offset; large offsets are walked
-/// through a scratch register in 4080-byte chunks. On x86_64 uses rbp with positive offset.
+/// On AArch64 uses the frame pointer (x29) as base with positive offset; a far offset is
+/// materialized into the x9 scratch and applied in one `add`. On x86_64 uses rbp with positive
+/// offset. See [`emit_frame_slot_address`] for why the constant needs no extra register.
 pub fn load_from_caller_stack(emitter: &mut Emitter, reg: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
             if offset <= 4095 {
                 emitter.instruction(&format!("ldr {}, [x29, #{}]", reg, offset)); // load a spilled incoming argument from the caller stack
             } else {
-                emitter.instruction("mov x9, x29");                             // seed a scratch pointer from the current frame base
-                let mut remaining = offset;
-                while remaining > 0 {
-                    let chunk = remaining.min(4080);
-                    emitter.instruction(&format!("add x9, x9, #{}", chunk));    // advance the scratch pointer toward the distant caller-stack slot
-                    remaining -= chunk;
-                }
+                emit_load_int_immediate(emitter, "x9", offset as i64);          // materialize the whole distance to the far caller-stack slot as one immediate
+                emitter.instruction("add x9, x29, x9");                         // advance the frame base to the distant caller-stack slot in a single addition
                 emitter.instruction(&format!("ldr {}, [x9]", reg));             // load the spilled incoming argument through the computed caller-stack pointer
             }
         }
@@ -381,6 +424,96 @@ pub fn emit_store_zero_to_local_slot(emitter: &mut Emitter, offset: usize) {
                     offset
                 ));                                                             // zero-initialize the requested local slot relative to rbp
             }
+        }
+    }
+}
+
+/// Zero-initializes the 8-byte local frame words at the given offsets from the frame pointer.
+///
+/// On AArch64 adjacent words are cleared two at a time with `stp xzr, xzr`, and a run beyond the
+/// pair-store range reaches its words from one computed base instead of forming an address per
+/// word: a function with a dozen cleanup slots used to spend two instructions on each. x86_64
+/// keeps one `mov` per word. Offsets may arrive in any order and duplicates are cleared once.
+pub fn emit_zero_local_slot_words(emitter: &mut Emitter, offsets: &[usize]) {
+    let mut words: Vec<usize> = offsets.to_vec();
+    words.sort_unstable_by(|a, b| b.cmp(a));
+    words.dedup();
+    if !matches!(emitter.target.arch, Arch::AArch64) {
+        for offset in words {
+            emit_store_zero_to_local_slot(emitter, offset);
+        }
+        return;
+    }
+    // `words` is in ascending ADDRESS order (a larger offset sits lower in the frame).
+    let mut index = 0;
+    while index < words.len() {
+        let mut run_end = index + 1;
+        while run_end < words.len() && words[run_end - 1] == words[run_end] + 8 {
+            run_end += 1;
+        }
+        let run = &words[index..run_end];
+        index = run_end;
+        if run.len() == 1 {
+            emit_store_zero_to_local_slot(emitter, run[0]);
+            continue;
+        }
+        let lowest = run[0];
+        // `stp` takes a signed, 8-scaled immediate in -512..=504 from its base.
+        let (base, base_offset) = if lowest <= 512 {
+            ("x29", lowest as i64)
+        } else {
+            emit_frame_slot_address(emitter, "x9", lowest);
+            ("x9", 0)
+        };
+        let mut word = 0usize;
+        while word < run.len() {
+            let imm = if base == "x29" {
+                -base_offset + (word as i64) * 8
+            } else {
+                (word as i64) * 8
+            };
+            if imm > 504 {
+                // Past the pair-store range: re-base at this word.
+                emit_frame_slot_address(emitter, "x9", run[word]);
+                let rebased = &run[word..];
+                emit_zero_run_from_x9(emitter, rebased.len());
+                break;
+            }
+            if word + 1 < run.len() {
+                emitter.instruction(&format!("stp xzr, xzr, [{}, #{}]", base, imm)); // zero two adjacent frame words with one pair store
+                word += 2;
+            } else if base == "x29" {
+                // `str` takes only a positive scaled immediate from x29; `stur` reaches -256..255.
+                if imm >= -256 {
+                    emitter.instruction(&format!("stur xzr, [x29, #{}]", imm)); // zero the last frame word of the run
+                } else {
+                    emit_store_zero_to_local_slot(emitter, run[word]);
+                }
+                word += 1;
+            } else {
+                emitter.instruction(&format!("str xzr, [x9, #{}]", imm));       // zero the last frame word of the run
+                word += 1;
+            }
+        }
+    }
+}
+
+/// Clears `count` consecutive words upward from the address already in x9.
+fn emit_zero_run_from_x9(emitter: &mut Emitter, count: usize) {
+    let mut word = 0usize;
+    let mut imm = 0usize;
+    while word < count {
+        if imm > 504 {
+            emitter.instruction(&format!("add x9, x9, #{}", imm));              // advance the run base past the pair-store range
+            imm = 0;
+        }
+        if word + 1 < count {
+            emitter.instruction(&format!("stp xzr, xzr, [x9, #{}]", imm));      // zero two adjacent frame words with one pair store
+            word += 2;
+            imm += 16;
+        } else {
+            emitter.instruction(&format!("str xzr, [x9, #{}]", imm));           // zero the last frame word of the run
+            word += 1;
         }
     }
 }
@@ -462,16 +595,18 @@ pub(crate) fn emit_adjust_sp(emitter: &mut Emitter, amount: usize, subtract: boo
 
 /// Computes the address of a temporary stack slot relative to the current stack pointer and
 /// stores it in `scratch`. Used for stack positions that are not part of the fixed frame layout.
-/// On AArch64 walks up from sp in 4080-byte chunks; on x86_64 uses lea with rsp base.
+/// On AArch64 a far offset is materialized and applied in one `add`; on x86_64 uses lea with rsp
+/// base. See [`emit_frame_slot_address`] for why the constant is staged in the output register.
 pub(crate) fn emit_sp_address(emitter: &mut Emitter, scratch: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov {}, sp", scratch));               // seed a scratch pointer from the current stack pointer
-            let mut remaining = offset;
-            while remaining > 0 {
-                let chunk = remaining.min(4080);
-                emitter.instruction(&format!("add {}, {}, #{}", scratch, scratch, chunk)); // advance the scratch pointer toward the desired stack slot
-                remaining -= chunk;
+            if offset == 0 {
+                emitter.instruction(&format!("mov {}, sp", scratch));           // copy the current stack pointer when the requested slot is at sp
+            } else if offset <= 4095 {
+                emitter.instruction(&format!("add {}, sp, #{}", scratch, offset)); // compute a nearby temporary stack-slot address directly from the stack pointer
+            } else {
+                emit_load_int_immediate(emitter, scratch, offset as i64);       // materialize the whole distance to the far stack slot as one immediate
+                emitter.instruction(&format!("add {}, sp, {}", scratch, scratch)); // advance the stack pointer to the distant stack slot in a single addition
             }
         }
         Arch::X86_64 => {

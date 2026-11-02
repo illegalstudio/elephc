@@ -46,6 +46,37 @@ pub(crate) fn lower_html_escape(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `preg_quote()` — escapes PCRE metacharacters in the subject (operand 0), plus the
+/// optional delimiter's first byte (operand 1).
+///
+/// The delimiter reaches `__rt_preg_quote` as a plain string pair with a zero length standing
+/// for "absent". PHP's `null` default and an explicit empty string already behave identically
+/// (measured: both leave `a.b` as `a\.b`), so the runtime needs no separate presence flag.
+///
+/// Argument order matters here: the subject is materialized FIRST and parked on the stack,
+/// because materializing the delimiter can itself emit a call that clobbers the subject's
+/// registers.
+pub(crate) fn lower_preg_quote(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    crate::codegen::lower_inst::builtins::ensure_arg_count_between(inst, "preg_quote", 1, 2)?;
+    let ptr_reg = string_ptr_reg(ctx);
+    let len_reg = string_len_reg(ctx);
+    let (delim_ptr_reg, delim_len_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    load_string_arg_to_regs(ctx, inst, 0, "preg_quote", ptr_reg, len_reg)?;
+    if inst.operands.len() > 1 {
+        abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        load_string_arg_to_regs(ctx, inst, 1, "preg_quote", delim_ptr_reg, delim_len_reg)?;
+        abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, delim_ptr_reg, 0);
+        abi::emit_load_int_immediate(ctx.emitter, delim_len_reg, 0);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_preg_quote");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `grapheme_strrev()` and boxes its `string|false` result as `Mixed`.
 pub(crate) fn lower_grapheme_strrev(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "grapheme_strrev")?;

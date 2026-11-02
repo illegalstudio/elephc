@@ -291,7 +291,7 @@ fn store_openssl_tag_writeback(
         }
     }
     let storage_ty = ctx.local_php_type(slot)?.codegen_repr();
-    ctx.release_local_before_string_writeback(slot)?;
+    ctx.release_local_before_refcounted_writeback(slot)?;
     restore_openssl_string_result(ctx, 96);
     if storage_ty == PhpType::Mixed {
         crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);

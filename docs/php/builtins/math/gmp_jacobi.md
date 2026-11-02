@@ -2,7 +2,7 @@
 title: "gmp_jacobi()"
 description: "Jacobi symbol."
 sidebar:
-  order: 610
+  order: 623
 ---
 
 ## gmp_jacobi()

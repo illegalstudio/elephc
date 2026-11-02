@@ -52,44 +52,250 @@ enum EvalClassConstantValue {
         enum_name: String,
         case_name: String,
     },
+    /// A constant array of supported values, in declaration order.
+    ///
+    /// Without it an eval fragment could not read ANY array-valued constant of a compiled class:
+    /// `W3CReference::CONTEXTS_MAP[$element] ?? W3CReference::CONTEXT_BODY` in an interpreted
+    /// `HtmlSanitizer` threw "Undefined constant", and every Symfony demo post page with it.
+    Array(Vec<(EvalClassConstantKey, EvalClassConstantValue)>),
+}
+
+/// One key of a constant array, already normalized the way PHP normalizes array keys.
+#[derive(Clone)]
+enum EvalClassConstantKey {
+    Int(i64),
+    Str(String),
+}
+
+impl EvalClassConstantKey {
+    /// Normalizes a constant key: a canonical decimal-integer string is an integer key in PHP.
+    fn from_value(value: EvalClassConstantValue) -> Option<Self> {
+        match value {
+            EvalClassConstantValue::Int(value) => Some(Self::Int(value)),
+            EvalClassConstantValue::Bool(value) => Some(Self::Int(i64::from(value))),
+            EvalClassConstantValue::Str(value) => {
+                if crate::types::is_php_integer_array_key(&value) {
+                    if let Ok(int_key) = value.parse::<i64>() {
+                        return Some(Self::Int(int_key));
+                    }
+                }
+                Some(Self::Str(value))
+            }
+            EvalClassConstantValue::Null => Some(Self::Str(String::new())),
+            _ => None,
+        }
+    }
+}
+
+/// Resolves a supported class-like constant expression into the literal form consumed by direct
+/// property initializers. Enum cases remain runtime objects and therefore are not literalized.
+pub(super) fn resolve_class_like_constant_literal(
+    module: &Module,
+    current_class: &str,
+    expr: &ExprKind,
+) -> Option<ExprKind> {
+    let current_info = module.class_infos.get(current_class);
+    let expr = Expr::new(expr.clone(), crate::span::Span::dummy());
+    match eval_class_constant_value(module, current_class, current_info, &expr, 0)? {
+        EvalClassConstantValue::Int(value) => Some(ExprKind::IntLiteral(value)),
+        EvalClassConstantValue::Bool(value) => Some(ExprKind::BoolLiteral(value)),
+        EvalClassConstantValue::Float(value) => Some(ExprKind::FloatLiteral(value)),
+        EvalClassConstantValue::Str(value) => Some(ExprKind::StringLiteral(value)),
+        EvalClassConstantValue::Null => Some(ExprKind::Null),
+        EvalClassConstantValue::EnumCase { .. } | EvalClassConstantValue::Array(_) => None,
+    }
+}
+
+/// Returns `(enum, case)` when a default expression names an enum case (`Status::On`,
+/// `self::On` inside the enum, or a class constant whose value is one).
+pub(crate) fn resolve_class_like_enum_case(
+    module: &Module,
+    current_class: &str,
+    expr: &ExprKind,
+) -> Option<(String, String)> {
+    let current_info = module.class_infos.get(current_class);
+    let expr = Expr::new(expr.clone(), crate::span::Span::dummy());
+    match eval_class_constant_value(module, current_class, current_info, &expr, 0)? {
+        EvalClassConstantValue::EnumCase {
+            enum_name,
+            case_name,
+        } => Some((enum_name, case_name)),
+        _ => None,
+    }
+}
+
+/// Recursively resolves supported class-like constants used as keys or values inside a literal
+/// array default while leaving expressions that require runtime evaluation unchanged.
+pub(super) fn resolve_class_like_constants_in_literal(
+    module: &Module,
+    current_class: &str,
+    expr: &ExprKind,
+) -> ExprKind {
+    if let Some(resolved) = resolve_class_like_constant_literal(module, current_class, expr) {
+        return resolved;
+    }
+    // An array-valued class constant (`public $l = self::L;`) is its array literal, resolved in
+    // the scope of the class that declares it.
+    if let ExprKind::ScopedConstantAccess { receiver, name } = expr {
+        if let Some((owner, value)) = class_constant_array_value(module, current_class, receiver, name)
+        {
+            return resolve_class_like_constants_in_literal(module, &owner, &value.kind);
+        }
+    }
+    match expr {
+        ExprKind::ArrayLiteral(items) => ExprKind::ArrayLiteral(
+            items
+                .iter()
+                .map(|item| {
+                    Expr::new(
+                        resolve_class_like_constants_in_literal(
+                            module,
+                            current_class,
+                            &item.kind,
+                        ),
+                        item.span,
+                    )
+                })
+                .collect(),
+        ),
+        ExprKind::ArrayLiteralAssoc(items) => ExprKind::ArrayLiteralAssoc(
+            items
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        Expr::new(
+                            resolve_class_like_constants_in_literal(
+                                module,
+                                current_class,
+                                &key.kind,
+                            ),
+                            key.span,
+                        ),
+                        Expr::new(
+                            resolve_class_like_constants_in_literal(
+                                module,
+                                current_class,
+                                &value.kind,
+                            ),
+                            value.span,
+                        ),
+                    )
+                })
+                .collect(),
+        ),
+        // An operator over constants (`self::CHECK_A | self::CHECK_B`) is resolved operand by
+        // operand; `literal_defaults` folds the arithmetic once every operand is a literal.
+        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
+            left: Box::new(Expr::new(
+                resolve_class_like_constants_in_literal(module, current_class, &left.kind),
+                left.span,
+            )),
+            op: op.clone(),
+            right: Box::new(Expr::new(
+                resolve_class_like_constants_in_literal(module, current_class, &right.kind),
+                right.span,
+            )),
+        },
+        ExprKind::Negate(inner) => ExprKind::Negate(Box::new(Expr::new(
+            resolve_class_like_constants_in_literal(module, current_class, &inner.kind),
+            inner.span,
+        ))),
+        ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(Expr::new(
+            resolve_class_like_constants_in_literal(module, current_class, &inner.kind),
+            inner.span,
+        ))),
+        _ => expr.clone(),
+    }
+}
+
+/// Returns the class that declares an array-valued class constant and its array literal, or
+/// `None` when the reference names no such constant (a scalar one, an enum case, an unknown class).
+fn class_constant_array_value(
+    module: &Module,
+    current_class: &str,
+    receiver: &StaticReceiver,
+    name: &str,
+) -> Option<(String, Expr)> {
+    let mut owner = match receiver {
+        StaticReceiver::Self_ | StaticReceiver::Static => current_class.to_string(),
+        StaticReceiver::Parent => module.class_infos.get(current_class)?.parent.clone()?,
+        StaticReceiver::Named(class_name) => {
+            class_name.as_str().trim_start_matches('\\').to_string()
+        }
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
+    };
+    // `+` over arrays is still an array value: Symfony's `CurlHttpClient::OPTIONS_DEFAULTS` is
+    // `HttpClientInterface::OPTIONS_DEFAULTS + [...]`, which `literal_defaults` folds once its
+    // operands are resolved.
+    let is_array = |value: &Expr| {
+        matches!(
+            value.kind,
+            ExprKind::ArrayLiteral(_)
+                | ExprKind::ArrayLiteralAssoc(_)
+                | ExprKind::BinaryOp {
+                    op: crate::parser::ast::BinOp::Add,
+                    ..
+                }
+        )
+    };
+    // An interface reached by name holds its own constants and its parents'.
+    if module.class_infos.get(&owner).is_none() {
+        let (resolved, info) = resolve_interface(module, &owner)?;
+        let value = info.constants.get(name)?;
+        let declaring = interface_constant_declaring_interface(info, resolved, name);
+        return is_array(value).then(|| (declaring.to_string(), value.clone()));
+    }
+    // The nearest class that has the constant: an override shadows its parent's value. A
+    // constant no class in the chain declares comes from an implemented interface, as Symfony's
+    // `CurlHttpClient` reads `self::OPTIONS_DEFAULTS` from `HttpClientInterface`.
+    let mut chain = Vec::new();
+    loop {
+        let info = module.class_infos.get(&owner)?;
+        if let Some(value) = info.constants.get(name) {
+            return is_array(value).then(|| (owner, value.clone()));
+        }
+        chain.push(info);
+        match info.parent.clone() {
+            Some(parent) => owner = parent,
+            None => break,
+        }
+    }
+    chain
+        .iter()
+        .flat_map(|info| info.interfaces.iter())
+        .find_map(|interface| {
+            let (resolved, info) = resolve_interface(module, interface)?;
+            let value = info.constants.get(name)?;
+            let declaring = interface_constant_declaring_interface(info, resolved, name);
+            Some((declaring.to_string(), value.clone()))
+        })
+        .filter(|(_, value)| is_array(value))
 }
 
 /// Emits eval class-constant helpers when any lowered function owns an eval context.
+///
+/// The direct getter is also emitted without the bridge when the runtime carries
+/// `__rt_constant`, which reads `constant('Class::NAME')` through it.
 pub(super) fn emit_eval_class_constant_helpers(
     module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
 ) {
-    if !module_uses_eval(module) {
+    let features = &module.required_runtime_features;
+    if !features.eval_bridge && !features.const_introspection {
         return;
     }
     let slots = collect_eval_class_constant_slots(module);
     emit_class_constant_get_helper(module, emitter, data, &slots);
+    if !features.eval_bridge {
+        return;
+    }
     emit_reflection_constant_value_helper(module, emitter, data, &slots);
     emit_reflection_constant_names_helper(module, emitter, data, &slots);
     emit_reflection_constant_flags_helper(module, emitter, data, &slots);
     emit_reflection_constant_declaring_class_helper(module, emitter, data, &slots);
-}
-
-/// Returns whether this binary links the eval bridge, and therefore needs these helpers.
-///
-/// THE INVARIANT IS "LINKED", NOT "USES EVAL". `libelephc_magician.a` references the
-/// `__elephc_eval_*` callbacks unconditionally, so any binary that links it must define
-/// them or fail to link — `__elephc_eval_reflection_attribute_new` undefined and a dozen
-/// like it. This used to scan for functions carrying an eval local instead, which is a
-/// different question that happened to give the same answer while the ONLY reason to link
-/// the archive was an `eval()` in the program.
-///
-/// That stopped being the only reason. `opcache_compile_file()` populates the runtime script
-/// cache, which lives in the archive, so a program calling it needs the archive whether or
-/// not it ever evaluates a string. Keeping the narrower scan here made that combination
-/// unlinkable, which is what kept the fold in place and left the function answering `false`
-/// where reference answers `true`.
-///
-/// The call sites are all inside a block already gated on the same flag, so for a program
-/// that does use `eval()` nothing changes.
-fn module_uses_eval(module: &Module) -> bool {
-    module.required_runtime_features.eval_bridge
 }
 
 /// Collects class-like constants visible to direct eval reads and Reflection APIs.
@@ -493,6 +699,46 @@ fn eval_class_constant_value(
             let class_name = static_receiver_name(current_class, current_info, receiver)?;
             eval_scoped_class_constant_value(module, &class_name, name, depth + 1)
         }
+        // A global constant inside a class constant: `monolog`'s
+        // `const DEFAULT_JSON_FLAGS = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | …`.
+        // The program's own constants come first; a predefined one has a fixed catalogue value.
+        ExprKind::ConstRef(name) => {
+            let key = name.as_str().trim_start_matches('\\');
+            if let Some((value, _)) = module
+                .global_constants
+                .get(name.as_str())
+                .or_else(|| module.global_constants.get(key))
+            {
+                let value = Expr::new(value.clone(), expr.span);
+                return eval_class_constant_value(module, current_class, current_info, &value, depth + 1);
+            }
+            crate::types::predefined_constants::int_constant_value(key).map(EvalClassConstantValue::Int)
+        }
+        ExprKind::ArrayLiteral(items) => {
+            let mut entries = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                let value =
+                    eval_class_constant_value(module, current_class, current_info, item, depth + 1)?;
+                entries.push((EvalClassConstantKey::Int(index as i64), value));
+            }
+            Some(EvalClassConstantValue::Array(entries))
+        }
+        ExprKind::ArrayLiteralAssoc(items) => {
+            let mut entries = Vec::with_capacity(items.len());
+            for (key, value) in items {
+                let key = EvalClassConstantKey::from_value(eval_class_constant_value(
+                    module,
+                    current_class,
+                    current_info,
+                    key,
+                    depth + 1,
+                )?)?;
+                let value =
+                    eval_class_constant_value(module, current_class, current_info, value, depth + 1)?;
+                entries.push((key, value));
+            }
+            Some(EvalClassConstantValue::Array(entries))
+        }
         _ => None,
     }
 }
@@ -521,6 +767,27 @@ fn eval_binary_class_constant_value(
         }
         (EvalClassConstantValue::Int(left), BinOp::Mod, EvalClassConstantValue::Int(right)) => {
             (*left).checked_rem(*right).map(EvalClassConstantValue::Int)
+        }
+        // Bit flags are the commonest integer constant expression there is
+        // (`const FLAGS = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE;`).
+        (EvalClassConstantValue::Int(left), BinOp::BitOr, EvalClassConstantValue::Int(right)) => {
+            Some(EvalClassConstantValue::Int(left | right))
+        }
+        (EvalClassConstantValue::Int(left), BinOp::BitAnd, EvalClassConstantValue::Int(right)) => {
+            Some(EvalClassConstantValue::Int(left & right))
+        }
+        (EvalClassConstantValue::Int(left), BinOp::BitXor, EvalClassConstantValue::Int(right)) => {
+            Some(EvalClassConstantValue::Int(left ^ right))
+        }
+        (EvalClassConstantValue::Int(left), BinOp::ShiftLeft, EvalClassConstantValue::Int(right))
+            if (0..64).contains(right) =>
+        {
+            Some(EvalClassConstantValue::Int(left << right))
+        }
+        (EvalClassConstantValue::Int(left), BinOp::ShiftRight, EvalClassConstantValue::Int(right))
+            if (0..64).contains(right) =>
+        {
+            Some(EvalClassConstantValue::Int(left >> right))
         }
         (EvalClassConstantValue::Int(left), BinOp::Pow, EvalClassConstantValue::Int(right))
             if *right >= 0 =>
@@ -643,12 +910,7 @@ fn static_receiver_name(
 
 /// Looks up class metadata by PHP-style case-insensitive name.
 fn resolve_class<'a>(module: &'a Module, class_name: &str) -> Option<(&'a str, &'a ClassInfo)> {
-    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
-    module
-        .class_infos
-        .iter()
-        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
-        .map(|(name, info)| (name.as_str(), info))
+    module.class_info_by_key(&php_symbol_key(class_name.trim_start_matches('\\')))
 }
 
 /// Looks up interface metadata by PHP-style case-insensitive name.
@@ -656,12 +918,7 @@ fn resolve_interface<'a>(
     module: &'a Module,
     interface_name: &str,
 ) -> Option<(&'a str, &'a InterfaceInfo)> {
-    let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
-    module
-        .interface_infos
-        .iter()
-        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == interface_key)
-        .map(|(name, info)| (name.as_str(), info))
+    module.interface_info_by_key(&php_symbol_key(interface_name.trim_start_matches('\\')))
 }
 
 /// Emits `__elephc_eval_value_class_constant_get(class, constant, scope) -> Mixed*`.
@@ -1030,9 +1287,114 @@ fn emit_aarch64_constant_value(
             crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
                 emitter, module, enum_name, case_name,
             );
+            // The materializer lends the slot's singleton. Boxing retains its child, so an
+            // additional retain here would leak one object reference per dynamic lookup.
             emit_box_current_value_as_mixed(emitter, &PhpType::Object(enum_name.clone()));
         }
+        EvalClassConstantValue::Array(entries) => {
+            emit_aarch64_constant_array(module, emitter, data, entries);
+        }
     }
+}
+
+/// Builds one constant array as a fresh hash of boxed Mixed values and boxes it (ARM64).
+///
+/// Every read materializes its own copy, exactly as the scalar arms box a fresh cell: the eval
+/// caller owns the result. Entries go in with the Mixed tag, each holding the box its value arm
+/// produced, so nested arrays and enum cases need no further case analysis.
+fn emit_aarch64_constant_array(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    entries: &[(EvalClassConstantKey, EvalClassConstantValue)],
+) {
+    let capacity = (entries.len() * 2).max(4) as i64;
+    abi::emit_load_int_immediate(emitter, "x0", capacity);
+    abi::emit_load_int_immediate(emitter, "x1", 7);
+    emitter.instruction("bl __rt_hash_new");                                    // allocate the constant array as a Mixed-valued hash
+    emitter.instruction("sub sp, sp, #16");                                     // hold the hash (and later its box) across entry construction
+    emitter.instruction("str x0, [sp]");                                        // save the hash under construction
+    for (key, value) in entries {
+        emit_aarch64_constant_value(module, emitter, data, value);
+        emitter.instruction("mov x3, x0");                                      // the entry value is the boxed Mixed cell just built
+        emitter.instruction("mov x4, xzr");                                     // a boxed cell has one payload word
+        emitter.instruction("mov x5, #7");                                      // entry tag 7 = boxed Mixed
+        match key {
+            EvalClassConstantKey::Int(key) => {
+                abi::emit_load_int_immediate(emitter, "x1", *key);
+                abi::emit_load_int_immediate(emitter, "x2", -1);
+            }
+            EvalClassConstantKey::Str(key) => {
+                let (label, len) = data.add_string(key.as_bytes());
+                abi::emit_symbol_address(emitter, "x1", &label);
+                abi::emit_load_int_immediate(emitter, "x2", len as i64);
+            }
+        }
+        emitter.instruction("ldr x0, [sp]");                                    // reload the hash under construction
+        emitter.instruction("bl __rt_hash_set");                                // insert the entry, taking ownership of its boxed value
+        emitter.instruction("str x0, [sp]");                                    // keep the possibly-grown hash
+    }
+    emitter.instruction("ldr x0, [sp]");                                        // box the finished hash
+    emit_box_current_value_as_mixed(
+        emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
+    emitter.instruction("str x0, [sp, #8]");                                    // hold the box while the construction reference is dropped
+    emitter.instruction("ldr x0, [sp]");                                        // boxing retained the hash; the box is its only owner now
+    emitter.instruction("bl __rt_decref_any");                                  // drop the construction reference
+    emitter.instruction("ldr x0, [sp, #8]");                                    // return the boxed constant array
+    emitter.instruction("add sp, sp, #16");                                     // release the construction slots
+}
+
+/// Builds one constant array as a fresh hash of boxed Mixed values and boxes it (x86_64).
+fn emit_x86_64_constant_array(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    entries: &[(EvalClassConstantKey, EvalClassConstantValue)],
+) {
+    let capacity = (entries.len() * 2).max(4) as i64;
+    abi::emit_load_int_immediate(emitter, "rdi", capacity);
+    abi::emit_load_int_immediate(emitter, "rsi", 7);
+    emitter.instruction("call __rt_hash_new");                                  // allocate the constant array as a Mixed-valued hash
+    emitter.instruction("sub rsp, 16");                                         // hold the hash (and later its box) across entry construction
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the hash under construction
+    for (key, value) in entries {
+        emit_x86_64_constant_value(module, emitter, data, value);
+        emitter.instruction("mov rcx, rax");                                    // the entry value is the boxed Mixed cell just built
+        emitter.instruction("xor r8d, r8d");                                    // a boxed cell has one payload word
+        emitter.instruction("mov r9, 7");                                       // entry tag 7 = boxed Mixed
+        match key {
+            EvalClassConstantKey::Int(key) => {
+                abi::emit_load_int_immediate(emitter, "rsi", *key);
+                abi::emit_load_int_immediate(emitter, "rdx", -1);
+            }
+            EvalClassConstantKey::Str(key) => {
+                let (label, len) = data.add_string(key.as_bytes());
+                abi::emit_symbol_address(emitter, "rsi", &label);
+                abi::emit_load_int_immediate(emitter, "rdx", len as i64);
+            }
+        }
+        emitter.instruction("mov rdi, QWORD PTR [rsp]");                        // reload the hash under construction
+        emitter.instruction("call __rt_hash_set");                              // insert the entry, taking ownership of its boxed value
+        emitter.instruction("mov QWORD PTR [rsp], rax");                        // keep the possibly-grown hash
+    }
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // box the finished hash
+    emit_box_current_value_as_mixed(
+        emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
+    emitter.instruction("mov QWORD PTR [rsp + 8], rax");                        // hold the box while the construction reference is dropped
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // boxing retained the hash; the box is its only owner now
+    emitter.instruction("call __rt_decref_any");                                // drop the construction reference
+    emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                        // return the boxed constant array
+    emitter.instruction("add rsp, 16");                                         // release the construction slots
 }
 
 /// Emits one x86_64 boxed Mixed value for a supported class constant.
@@ -1077,7 +1439,12 @@ fn emit_x86_64_constant_value(
             crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
                 emitter, module, enum_name, case_name,
             );
+            // The materializer lends the slot's singleton. Boxing retains its child, so an
+            // additional retain here would leak one object reference per dynamic lookup.
             emit_box_current_value_as_mixed(emitter, &PhpType::Object(enum_name.clone()));
+        }
+        EvalClassConstantValue::Array(entries) => {
+            emit_x86_64_constant_array(module, emitter, data, entries);
         }
     }
 }

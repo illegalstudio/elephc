@@ -56,7 +56,9 @@ pub(in crate::interpreter) fn eval_preg_split_result(
     flags: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let regex = eval_preg_regex(pattern, values)?;
+    let Some(regex) = eval_preg_regex(pattern, "preg_split", values)? else {
+        return values.bool_value(false);
+    };
     let subject = values.string_bytes(subject)?;
     let limit = eval_preg_split_limit(limit, values)?;
     let flags = eval_preg_split_flags(flags, values)?;
@@ -64,27 +66,30 @@ pub(in crate::interpreter) fn eval_preg_split_result(
     let capture_delimiters = flags & EVAL_PREG_SPLIT_DELIM_CAPTURE != 0;
     let offset_capture = flags & EVAL_PREG_SPLIT_OFFSET_CAPTURE != 0;
     let mut pieces = Vec::<EvalPregSplitPiece>::new();
+    let mut segments = 0usize;
     let mut cursor = 0;
 
     for captures in regex.captures_iter(&subject) {
         let Some(matched) = captures.get(0) else {
             continue;
         };
-        if eval_preg_split_reached_limit(&pieces, limit) {
+        if eval_preg_split_reached_limit(segments, limit) {
             break;
         }
-        eval_preg_split_push_piece(
+        if eval_preg_split_push_piece(
             &mut pieces,
             &subject[cursor..matched.start()],
             cursor,
             no_empty,
-        );
+        ) {
+            segments += 1;
+        }
         if capture_delimiters {
             eval_preg_split_push_captures(&mut pieces, &subject, &captures, no_empty);
         }
         cursor = matched.end();
     }
-    eval_preg_split_push_piece(&mut pieces, &subject[cursor..], cursor, no_empty);
+    let _ = eval_preg_split_push_piece(&mut pieces, &subject[cursor..], cursor, no_empty);
 
     let mut result = values.array_new(pieces.len())?;
     for (index, piece) in pieces.iter().enumerate() {

@@ -2,7 +2,7 @@
 title: "array_fill()"
 description: "Fill an array with values."
 sidebar:
-  order: 10
+  order: 13
 ---
 
 ## array_fill()

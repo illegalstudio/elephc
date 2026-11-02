@@ -30,7 +30,7 @@ pub(in crate::interpreter) fn generic_local_contracts(scope: &ElephcEvalScope, n
 /// Obtains contracts for a whole variable reference before binding an untyped parameter or capture.
 pub(in crate::interpreter) fn generic_reference_contracts(target: &EvalReferenceTarget, context: &ElephcEvalContext) -> Vec<EvalParameterType> {
     match target {
-        EvalReferenceTarget::Variable { scope, name } => unsafe { scope.as_ref() }.map(|scope| generic_local_contracts(scope, name, context)).unwrap_or_default(),
+        EvalReferenceTarget::Variable { scope, name } => unsafe { scope.live_mut() }.map(|scope| generic_local_contracts(scope, name, context)).unwrap_or_default(),
         EvalReferenceTarget::Cell { cell } => context.local_reference_types(*cell),
         _ => Vec::new(),
     }

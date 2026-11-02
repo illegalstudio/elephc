@@ -2,7 +2,7 @@
 title: "gmp_scan1()"
 description: "Finds the first set bit."
 sidebar:
-  order: 631
+  order: 644
 ---
 
 ## gmp_scan1()

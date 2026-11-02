@@ -9,8 +9,8 @@
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
 //! - Null or sentinel payloads presented with a container-shaped tag (4–6) are
 //!   normalized to the canonical Mixed null tag before ownership or allocation.
-//! - Tag 13 (`POINTER_ARRAY_VALUE_TYPE`, a raw `?ptr<T>` word from a pointer array or hash)
-//!   boxes as PHP null for address 0 and as an integer otherwise, so no cell carries tag 13.
+//! - Tag 14 (`POINTER_ARRAY_VALUE_TYPE`, a raw `?ptr<T>` word from a pointer array or hash)
+//!   boxes as PHP null for address 0 and as an integer otherwise, so no cell carries tag 14.
 //! - Tag 9 (resource) takes no ownership, but it is this function that guarantees
 //!   every boxed resource carries a PHP resource id: the tag-9 arm calls
 //!   `__rt_resource_id_of`, which binds the next id when the native payload has
@@ -91,6 +91,20 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
 
     emitter.instruction("cmp x0, #4");                                          // do only container-shaped tags need null-payload normalization?
     emitter.instruction("b.lt __rt_mixed_from_value_dispatch");                 // scalar tags preserve every payload bit pattern
+    // A `callable` slot holding php null carries the null sentinel too (`?callable $cb = null`
+    // specialized to `callable`). Boxed under tag 10 it was a truthy "callable" whose descriptor
+    // pointer was the sentinel, and the first `is_array()`/call dereferenced it: Laravel's
+    // `Collection::sortBy(null)` behind `Arr::sort()` killed the worker.
+    emitter.instruction("cmp x0, #10");                                         // is this a callable descriptor?
+    emitter.instruction("b.ne __rt_mixed_from_value_not_callable");             // other tags keep the container rule below
+    emit_branch_if_null_container(
+        emitter,
+        "x1",
+        "x9",
+        "__rt_mixed_from_value_null_container",
+    );
+    emitter.instruction("b __rt_mixed_from_value_dispatch");                    // a real descriptor keeps its tag
+    emitter.label("__rt_mixed_from_value_not_callable");
     emitter.instruction("cmp x0, #6");                                          // indexed arrays, hashes, and objects are the container-shaped tags
     emitter.instruction("b.gt __rt_mixed_from_value_dispatch");                 // nested Mixed/callable tags use ordinary pointer ownership
     emit_branch_if_null_container(
@@ -99,6 +113,27 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
         "x9",
         "__rt_mixed_from_value_null_container",
     );
+    // -- an array's tag follows its HEAP KIND, not the caller's static claim --
+    // `Op::ArraySetMixedKey` promotes an `Array(Mixed)` local to a hash in place, and the static
+    // type keeps saying "list". Once such a value sits in a container whose element tag is 4, every
+    // reader boxed the hash as a list and walked indices that do not exist: a `PREG_SET_ORDER`
+    // row with a named group came back as `[0, 5, 1]`, and Symfony's `HeaderUtils::split()`
+    // glued a whole Cache-Control header into one directive.
+    emitter.instruction("cmp x0, #6");                                          // objects keep their tag
+    emitter.instruction("b.eq __rt_mixed_from_value_dispatch");                 // only the two array tags can disagree with the heap
+    emitter.instruction("mov x0, x1");                                          // probe the container's own heap kind
+    emitter.instruction("bl __rt_heap_kind");                                   // x0 = 2 for an indexed array, 3 for a hash
+    emitter.instruction("cmp x0, #3");                                          // is the container really a hash?
+    emitter.instruction("mov x9, #5");                                          // tag 5 = associative array
+    emitter.instruction("b.eq __rt_mixed_from_value_kind_tag");                 // box a hash under the hash tag
+    emitter.instruction("cmp x0, #2");                                          // is the container really an indexed array?
+    emitter.instruction("mov x9, #4");                                          // tag 4 = indexed array
+    emitter.instruction("b.eq __rt_mixed_from_value_kind_tag");                 // box a list under the list tag
+    emitter.instruction("ldr x9, [sp, #0]");                                    // anything else keeps the caller's tag
+    emitter.label("__rt_mixed_from_value_kind_tag");
+    emitter.instruction("str x9, [sp, #0]");                                    // the normalized tag is the one boxed
+    emitter.instruction("mov x0, x9");                                          // restore the tag register for dispatch
+    emitter.instruction("ldp x1, x2, [sp, #8]");                                // restore the payload words the probe clobbered
     emitter.label("__rt_mixed_from_value_dispatch");
     emitter.instruction("cmp x0, #1");                                          // does this mixed payload hold a string?
     emitter.instruction("b.eq __rt_mixed_from_value_string");                   // strings must be persisted for the boxed owner
@@ -112,6 +147,8 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_from_value_retain");                   // nested mixed cells must also be retained
     emitter.instruction("cmp x0, #10");                                         // does this mixed payload hold a callable descriptor?
     emitter.instruction("b.eq __rt_mixed_from_value_retain");                   // callable descriptors are retained for the boxed owner
+    emitter.instruction("cmp x0, #11");                                         // does this mixed payload hold a managed reference cell?
+    emitter.instruction("b.eq __rt_mixed_from_value_retain");                   // boxed references retain their cell ownership share
     emitter.instruction("cmp x0, #9");                                          // does this mixed payload hold a PHP resource?
     emitter.instruction("b.eq __rt_mixed_from_value_resource");                 // resources need a display id bound before they can be shown
     emitter.instruction("b __rt_mixed_from_value_alloc");                       // scalars can be boxed without additional retention
@@ -200,6 +237,17 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // only genuine tracked resources bind a canonical cell
     emitter.instruction("cmp rax, 4");                                          // do only container-shaped tags need null-payload normalization?
     emitter.instruction("jl __rt_mixed_from_value_dispatch");                   // scalar tags preserve every payload bit pattern
+    // See the AArch64 twin: a null `callable` slot boxes as php null.
+    emitter.instruction("cmp rax, 10");                                         // is this a callable descriptor?
+    emitter.instruction("jne __rt_mixed_from_value_not_callable");              // other tags keep the container rule below
+    emit_branch_if_null_container(
+        emitter,
+        "rdi",
+        "r10",
+        "__rt_mixed_from_value_null_container",
+    );
+    emitter.instruction("jmp __rt_mixed_from_value_dispatch");                  // a real descriptor keeps its tag
+    emitter.label("__rt_mixed_from_value_not_callable");
     emitter.instruction("cmp rax, 6");                                          // indexed arrays, hashes, and objects are the container-shaped tags
     emitter.instruction("jg __rt_mixed_from_value_dispatch");                   // nested Mixed/callable tags use ordinary pointer ownership
     emit_branch_if_null_container(
@@ -208,6 +256,23 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
         "r10",
         "__rt_mixed_from_value_null_container",
     );
+    // An array's tag follows its heap kind, not the caller's static claim: see the ARM64 twin.
+    emitter.instruction("cmp rax, 6");                                          // objects keep their tag
+    emitter.instruction("je __rt_mixed_from_value_dispatch");                   // only the two array tags can disagree with the heap
+    emitter.instruction("mov rax, rdi");                                        // probe the container's own heap kind
+    emitter.instruction("call __rt_heap_kind");                                 // eax = 2 for an indexed array, 3 for a hash
+    emitter.instruction("mov r10, 5");                                          // tag 5 = associative array
+    emitter.instruction("cmp rax, 3");                                          // is the container really a hash?
+    emitter.instruction("je __rt_mixed_from_value_kind_tag");                   // box a hash under the hash tag
+    emitter.instruction("mov r10, 4");                                          // tag 4 = indexed array
+    emitter.instruction("cmp rax, 2");                                          // is the container really an indexed array?
+    emitter.instruction("je __rt_mixed_from_value_kind_tag");                   // box a list under the list tag
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // anything else keeps the caller's tag
+    emitter.label("__rt_mixed_from_value_kind_tag");
+    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // the normalized tag is the one boxed
+    emitter.instruction("mov rax, r10");                                        // restore the tag register for dispatch
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // restore the low payload word the probe clobbered
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // restore the high payload word the probe clobbered
     emitter.label("__rt_mixed_from_value_dispatch");
     emitter.instruction("cmp rax, 1");                                          // detect string payloads that need their own owned copy inside the mixed box
     emitter.instruction("je __rt_mixed_from_value_string");                     // strings must be persisted so the mixed cell owns a stable payload
@@ -221,6 +286,8 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_from_value_retain");                     // retain nested mixed cells before storing them inside the parent mixed cell
     emitter.instruction("cmp rax, 10");                                         // detect callable descriptors that participate in callable ownership
     emitter.instruction("je __rt_mixed_from_value_retain");                     // retain callable descriptors before storing them inside the mixed cell
+    emitter.instruction("cmp rax, 11");                                         // detect managed reference-cell payloads
+    emitter.instruction("je __rt_mixed_from_value_retain");                     // boxed references retain their cell ownership share
     emitter.instruction("cmp rax, 9");                                          // detect PHP resources, which carry a displayed id rather than ownership
     emitter.instruction("je __rt_mixed_from_value_resource");                   // resources need a display id bound before they can be shown
     emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // scalars can be boxed directly without additional ownership work

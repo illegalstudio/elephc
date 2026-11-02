@@ -52,6 +52,40 @@ echo $f->x;
     assert_eq!(out, "42");
 }
 
+/// An explicit object-to-array cast must retain its shared property-walk body after dead stripping.
+#[test]
+fn test_object_to_array_cast_survives_dead_strip() {
+    let out = compile_cli_file_and_run(
+        r#"<?php
+class DeadStripObjectArrayCast {
+    public int $public = 7;
+    private string $private = "secret";
+}
+$properties = (array) new DeadStripObjectArrayCast();
+echo $properties["public"] . ":" . $properties["\0DeadStripObjectArrayCast\0private"];
+"#,
+        &[],
+    );
+    assert_eq!(out, "7:secret");
+}
+
+/// Ensures a boxed string cast keeps the separately atomized inline-value helper alive.
+#[test]
+fn test_mixed_string_cast_helper_survives_dead_strip() {
+    let out = compile_cli_file_and_run(
+        r#"<?php
+class Holder {
+    private array $values;
+    public function __construct() { $this->values = ["kept"]; }
+    public function first(): string { return (string) $this->values[0]; }
+}
+echo (new Holder())->first();
+"#,
+        &[],
+    );
+    assert_eq!(out, "kept");
+}
+
 /// A managed-native callback may retain code through descriptor data, not a direct call edge.
 #[test]
 fn test_managed_regex_instance_callable_survives_dead_strip() {

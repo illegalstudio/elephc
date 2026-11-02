@@ -120,6 +120,9 @@ struct ConcatInertAnalysis<'a> {
     alloc_value_deps: Vec<Vec<ValueId>>,
     block_param_disqualified: Vec<bool>,
     block_param_incoming: Vec<Vec<ValueId>>,
+    /// One numeric-domain proof for the whole function: a fresh one per question rescanned every
+    /// instruction and rebuilt the slot accesses, quadratic on Symfony's largest bodies.
+    numeric: super::numeric_domain::NumericInputs<'a>,
 }
 
 /// Collects a dense boolean mask of block identifiers targeted by `Op::TryPushHandler` tokens.
@@ -679,6 +682,7 @@ impl<'a> ConcatInertAnalysis<'a> {
             alloc_value_deps,
             block_param_disqualified,
             block_param_incoming,
+            numeric: super::numeric_domain::NumericInputs::new(function),
         }
     }
 
@@ -704,10 +708,10 @@ impl<'a> ConcatInertAnalysis<'a> {
             }
             Op::Cast => return self.cast_is_concat_inert(inst),
             Op::StrIncDec if super::numeric_domain::increment(inst) => {
-                return super::numeric_domain::inputs(self.function, &inst.operands);
+                return self.numeric.prove(&inst.operands);
             }
             Op::PhpRelCmp if super::numeric_domain::comparison(inst) => {
-                return super::numeric_domain::inputs(self.function, &inst.operands);
+                return self.numeric.prove(&inst.operands);
             }
             Op::IterStart
             | Op::IterNext
@@ -999,7 +1003,7 @@ impl<'a> ConcatInertAnalysis<'a> {
             }
         }
 
-        if super::numeric_domain::inputs(self.function, &[value]) {
+        if self.numeric.prove(&[value]) {
             self.value_state[idx] = VisitState::Done(true);
             return true;
         }

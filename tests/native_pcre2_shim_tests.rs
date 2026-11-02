@@ -37,6 +37,13 @@ int32_t elephc_pcre2_v1_exec(
     uint32_t eflags
 );
 void elephc_pcre2_v1_free(void *opaque_handle);
+uint64_t elephc_pcre2_v1_name_count(void *opaque_handle);
+int32_t elephc_pcre2_v1_group_name(
+    void *opaque_handle,
+    uint64_t group,
+    const char **name_out,
+    uint64_t *name_len_out
+);
 int32_t elephc_pcre2_v1_mime_compile(void **handle, const uint8_t *pattern, uint64_t length, uint64_t *offset);
 int32_t elephc_pcre2_v1_mime_match(void *handle, const uint8_t *subject, uint64_t length);
 void elephc_pcre2_v1_mime_free(void *handle);
@@ -131,6 +138,26 @@ static int check_startend_offsets(void) {
     return 0;
 }
 
+static int check_anchored_at_offset(void) {
+    void *handle = NULL;
+    uint64_t slots = 0;
+    int64_t pairs[2] = {0, 5};
+    int32_t result;
+
+    result = elephc_pcre2_v1_compile(&handle, "foo", 0x2000, &slots);
+    CHECK(result == 0 && handle != NULL && slots == 1, "anchored fixture must compile");
+    result = elephc_pcre2_v1_exec(handle, "xxfoo", 1, pairs, 0x0080);
+    CHECK(result != 0, "anchored execution must reject a later match");
+
+    pairs[0] = 2;
+    pairs[1] = 5;
+    result = elephc_pcre2_v1_exec(handle, "xxfoo", 1, pairs, 0x0080);
+    CHECK(result == 0, "anchored execution must accept a match at the supplied offset");
+    CHECK(pairs[0] == 2 && pairs[1] == 5, "anchored execution must preserve absolute offsets");
+    elephc_pcre2_v1_free(handle);
+    return 0;
+}
+
 static int check_guard_contracts(void) {
     void *handle = (void *)(uintptr_t)1;
     uint64_t slots = UINT64_MAX;
@@ -201,6 +228,56 @@ static int check_iteration_context(void) {
     return 0;
 }
 
+static int check_named_group_table(void) {
+    void *handle = NULL;
+    uint64_t slots = 0;
+    const char *name = NULL;
+    uint64_t name_len = 0;
+    int32_t result;
+
+    /* PHP accepts three spellings for the same declaration; PCRE2 numbers them identically. */
+    result = elephc_pcre2_v1_compile(&handle, "(?<q>a)(?'r'b)(?P<s>c)", 0, &slots);
+    CHECK(result == 0, "named-group pattern must compile");
+    CHECK(slots == 4, "three named captures plus the full match must publish four slots");
+    CHECK(elephc_pcre2_v1_name_count(handle) == 3, "every declared name must be counted");
+
+    CHECK(elephc_pcre2_v1_group_name(handle, 0, &name, &name_len) != 0,
+          "the full match is never a named group");
+    CHECK(name == NULL && name_len == 0, "a failed lookup must clear both outputs");
+    CHECK(elephc_pcre2_v1_group_name(handle, 1, &name, &name_len) == 0, "group 1 is named");
+    CHECK(name_len == 1 && name[0] == 'q', "group 1 must resolve to q");
+    CHECK(elephc_pcre2_v1_group_name(handle, 2, &name, &name_len) == 0, "group 2 is named");
+    CHECK(name_len == 1 && name[0] == 'r', "group 2 must resolve to r");
+    CHECK(elephc_pcre2_v1_group_name(handle, 3, &name, &name_len) == 0, "group 3 is named");
+    CHECK(name_len == 1 && name[0] == 's', "group 3 must resolve to s");
+    elephc_pcre2_v1_free(handle);
+
+    /* An interleaved unnamed group must not shift the names onto the wrong indices. */
+    result = elephc_pcre2_v1_compile(&handle, "(\\w)(?P<mid>\\w)(\\w)", 0, &slots);
+    CHECK(result == 0, "interleaved pattern must compile");
+    CHECK(elephc_pcre2_v1_name_count(handle) == 1, "only one group is named");
+    CHECK(elephc_pcre2_v1_group_name(handle, 1, &name, &name_len) != 0, "group 1 is unnamed");
+    CHECK(elephc_pcre2_v1_group_name(handle, 2, &name, &name_len) == 0, "group 2 is named");
+    CHECK(name_len == 3 && name[0] == 'm' && name[1] == 'i' && name[2] == 'd',
+          "group 2 must resolve to mid");
+    CHECK(elephc_pcre2_v1_group_name(handle, 3, &name, &name_len) != 0, "group 3 is unnamed");
+    elephc_pcre2_v1_free(handle);
+
+    result = elephc_pcre2_v1_compile(&handle, "^a: (\\d+)$", 0, &slots);
+    CHECK(result == 0, "unnamed pattern must compile");
+    CHECK(elephc_pcre2_v1_name_count(handle) == 0, "a pattern without names must count zero");
+    CHECK(elephc_pcre2_v1_group_name(handle, 1, &name, &name_len) != 0,
+          "an unnamed pattern resolves no group name");
+    elephc_pcre2_v1_free(handle);
+
+    CHECK(elephc_pcre2_v1_name_count(NULL) == 0, "a null handle must count zero names");
+    CHECK(elephc_pcre2_v1_group_name(NULL, 1, &name, &name_len) != 0,
+          "a null handle must fail the name lookup");
+    CHECK(elephc_pcre2_v1_group_name(handle, 1, NULL, &name_len) != 0,
+          "a null name output must fail the lookup");
+    return 0;
+}
+
 /* Exercises PCRE2 syntax, caseless matching, explicit byte lengths, and diagnostic ownership. */
 static int check_mime_native_contract(void) {
     void *handle = (void *)(uintptr_t)1;
@@ -262,11 +339,19 @@ int main(void) {
     if (result != 0) {
         return result;
     }
+    result = check_anchored_at_offset();
+    if (result != 0) {
+        return result;
+    }
     result = check_guard_contracts();
     if (result != 0) {
         return result;
     }
     result = check_iteration_context();
+    if (result != 0) {
+        return result;
+    }
+    result = check_named_group_table();
     if (result != 0) {
         return result;
     }

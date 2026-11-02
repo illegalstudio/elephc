@@ -284,7 +284,7 @@ fn lower_json_encode_flags(
 ) -> Result<()> {
     if inst.operands.len() >= 2 {
         let flags = expect_operand(inst, 1)?;
-        require_integer_like(ctx.load_value_to_result(flags)?, "json_encode flags")?;
+        load_json_flags_as_int(ctx, flags, "json_encode flags")?;
         abi::emit_store_reg_to_symbol(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
@@ -328,11 +328,14 @@ fn emit_json_encode_loaded_value(ctx: &mut FunctionContext<'_>, value_ty: &PhpTy
         PhpType::Void | PhpType::Never => {
             abi::emit_call_label(ctx.emitter, "__rt_json_encode_null");
         }
-        PhpType::Array(elem_ty) => match elem_ty.as_ref().codegen_repr() {
-            PhpType::Int => abi::emit_call_label(ctx.emitter, "__rt_json_encode_array_int"),
-            PhpType::Str => abi::emit_call_label(ctx.emitter, "__rt_json_encode_array_str"),
-            _ => abi::emit_call_label(ctx.emitter, "__rt_json_encode_array_dynamic"),
-        },
+        PhpType::Array(elem_ty) => {
+            let indexed_encoder = match elem_ty.as_ref().codegen_repr() {
+                PhpType::Int => "__rt_json_encode_array_int",
+                PhpType::Str => "__rt_json_encode_array_str",
+                _ => "__rt_json_encode_array_dynamic",
+            };
+            emit_json_encode_array_by_heap_kind(ctx, indexed_encoder);
+        }
         PhpType::AssocArray { .. } => {
             abi::emit_call_label(ctx.emitter, "__rt_json_encode_assoc");
         }
@@ -350,6 +353,42 @@ fn emit_json_encode_loaded_value(ctx: &mut FunctionContext<'_>, value_ty: &PhpTy
             abi::emit_call_label(ctx.emitter, "__rt_json_encode_null");
         }
     }
+}
+
+/// Encodes a statically indexed array, falling back to the associative encoder when the value it
+/// actually holds is a hash.
+///
+/// PHP's `array` type covers a list AND a hash, while elephc's `PhpType::Array` claims a list, so
+/// any boundary that only carries PHP's own annotation loses the distinction. `function f(): array`
+/// returning a by-reference out-parameter is the plain case: the value is a hash and the type says
+/// list, and the list encoder then walked indices that do not exist —
+/// `json_encode(parse_str_result())` printed `[0,1]` where php prints the object. The tag cannot be
+/// trusted here, so the heap kind decides, exactly as `__rt_serialize_value` already does.
+fn emit_json_encode_array_by_heap_kind(ctx: &mut FunctionContext<'_>, indexed_encoder: &str) {
+    let assoc_case = ctx.next_label("json_encode_array_assoc");
+    let done = ctx.next_label("json_encode_array_done");
+
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 is a hash table, whatever the declared element type said
+            ctx.emitter.instruction(&format!("b.eq {}", assoc_case));           // encode hash-backed arrays with the associative encoder
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 is a hash table, whatever the declared element type said
+            ctx.emitter.instruction(&format!("je {}", assoc_case));             // encode hash-backed arrays with the associative encoder
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, indexed_encoder);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&assoc_case);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_json_encode_assoc");
+
+    ctx.emitter.label(&done);
 }
 
 /// Emits the tag test a tagged nullable int needs, choosing between the null and int encoders.
@@ -690,6 +729,39 @@ fn subtract_one_from_int_result(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Verifies a value can be passed as a JSON integer option.
+/// Loads a `json_encode()` flags operand into the integer result register.
+///
+/// A `?int` local (tagged-scalar storage) is the usual shape once code defaults it --
+/// `if (null === $flags) { $flags = self::DEFAULT; }` in Monolog's `Utils::jsonEncode()`, which
+/// every log line goes through -- and a gradual value converts the way php's int parameter
+/// converts it. A null reads as 0, as php's coercion of null to an int parameter does.
+fn load_json_flags_as_int(ctx: &mut FunctionContext<'_>, flags: ValueId, context: &str) -> Result<()> {
+    let ty = ctx.value_php_type(flags)?.codegen_repr();
+    match ty {
+        PhpType::Int | PhpType::Bool => {
+            ctx.load_value_to_result(flags)?;
+            Ok(())
+        }
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(flags)?;
+            let null_label = ctx.next_label("json_flags_null");
+            let done_label = ctx.next_label("json_flags_done");
+            crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &null_label);
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&null_label);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            ctx.emitter.label(&done_label);
+            Ok(())
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, flags)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            Ok(())
+        }
+        other => require_integer_like(other, context),
+    }
+}
+
 fn require_integer_like(ty: PhpType, context: &str) -> Result<()> {
     if matches!(ty, PhpType::Int | PhpType::Bool) {
         return Ok(());

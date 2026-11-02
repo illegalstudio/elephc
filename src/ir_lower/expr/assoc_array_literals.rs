@@ -42,13 +42,16 @@ pub(super) fn lower_assoc_array_literal_as(
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
+    // The literal is the only owner of the entries already inserted, so a key or value
+    // expression that throws (`['a' => 1, 'b' => bad()]`) would strand it: publish it in an
+    // unwind-visible slot for the whole construction.
     let owner = publish_constructed_container(ctx, hash, expr.span);
     if guarded { guard_descriptor_container(ctx, hash, expr.span); }
     for (key, value) in pairs {
         let mut roots = Vec::new();
         let key_value = lower_expr(ctx, key);
         let key = root_array_literal_item(ctx, key_value, key.span, &mut roots);
-        let value_operand = lower_expr(ctx, value);
+        let value_operand = lower_array_reference_or_value(ctx, value);
         // A packed record address or `null` stored as a pointer value is the pointer word.
         let value_operand = match &hash_ty {
             PhpType::AssocArray { value: value_ty, .. } => {
@@ -65,6 +68,129 @@ pub(super) fn lower_assoc_array_literal_as(
         }
     }
     take_published_container(ctx, owner, hash_ty, expr.span)
+}
+
+/// Releases an owned string a `HashSet` has just stored.
+///
+/// The hash writer persists a string value -- it takes its own reference -- whatever the
+/// container's value type, while every other owned payload is absorbed. So a call's string
+/// result inserted by a literal (`['date' => $d->format('Y'), 'n' => 1]`, every
+/// `DateTimeImmutable::__serialize()`) leaked one block per evaluation.
+pub(super) fn release_string_after_hash_insert(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: crate::span::Span,
+) {
+    if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Str
+        && ctx.value_is_owning_temporary(value)
+    {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+}
+
+/// Releases a computed key a `HashSet` has just used.
+///
+/// The hash copies the key it stores, so an owned key -- a boxed `$alias ?? 'name'`, a call's
+/// string -- is still the literal's to release, exactly as `unset($a[$key])` releases its own.
+/// Doctrine's DQL parser builds `[$fieldAlias ?? $field => $arg]`; each evaluation leaked the box
+/// and its string.
+pub(super) fn release_key_after_hash_insert(
+    ctx: &mut LoweringContext<'_, '_>,
+    key: LoweredValue,
+    span: crate::span::Span,
+) {
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+    } else {
+        crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, span);
+    }
+}
+
+/// Lowers an ordinary array value or an owning marker for a referenced variable.
+pub(in crate::ir_lower) fn lower_array_reference_or_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: &Expr,
+) -> LoweredValue {
+    let ExprKind::ArrayReference(inner) = &value.kind else {
+        return lower_expr(ctx, value);
+    };
+    if matches!(inner.kind, ExprKind::ArrayAccess { .. } | ExprKind::PropertyAccess { .. }) {
+        return lower_element_reference_marker(ctx, inner, value.span);
+    }
+    let ExprKind::Variable(name) = &inner.kind else {
+        unreachable!("array reference markers require a variable or element source");
+    };
+    // A by-reference `foreach` value variable that was NOT promoted to a shared cell aliases the
+    // element's raw storage: there is no cell to hand out, and wrapping that address as one
+    // corrupted the heap. Store the value instead -- the reference is lost, the memory is not.
+    if ctx.is_interior_ref_local(name) {
+        return lower_expr(ctx, inner);
+    }
+    if crate::superglobals::is_superglobal(name) {
+        let data = ctx.intern_global_storage_name(name);
+        return ctx.emit_value(
+            Op::InvokerRefArg,
+            Vec::new(),
+            Some(Immediate::GlobalName(data)),
+            PhpType::Mixed,
+            Op::InvokerRefArg.default_effects(),
+            Some(value.span),
+        );
+    }
+    // A PHP reference stored in an array can subsequently receive any PHP value, irrespective
+    // of the source variable's current value. Promote through Mixed before emitting the marker:
+    // the marker records its referenced storage tag once, so preserving an initial null tag would
+    // make a later closure/callable assignment read back as null.
+    ctx.promote_local_mixed_ref_cell(name, Some(value.span));
+    local_ref_cell_marker(ctx, name, value.span)
+}
+
+/// Emits the owning array marker over the reference cell local `name` is bound to.
+fn local_ref_cell_marker(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) -> LoweredValue {
+    let local_type = ctx.local_type(name);
+    let slot = ctx.declare_local(name, local_type);
+    ctx.emit_value(
+        Op::ArrayLocalRefCell,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        PhpType::Mixed,
+        Op::ArrayLocalRefCell.default_effects(),
+        Some(span),
+    )
+}
+
+/// Lowers `&$a[$k]` or `&$o->p` inside an array literal: the place becomes a reference, and the
+/// literal stores a marker over that same reference.
+///
+/// A hidden local is bound to the place exactly as `$t = &$a[$k]` (or `$t = &$o->p`) would bind
+/// it -- which makes the place a shared reference and gives the local one share -- the marker
+/// takes its own share from the local, and the hidden binding ends, leaving the place and the
+/// literal's slot as the reference's holders. A property's storage was widened to a boxed cell by
+/// the checker (`widen_property_for_element_reference`).
+fn lower_element_reference_marker(
+    ctx: &mut LoweringContext<'_, '_>,
+    element: &Expr,
+    span: Span,
+) -> LoweredValue {
+    let temp = ctx.declare_synthetic_php_local(PhpType::Mixed);
+    if matches!(element.kind, ExprKind::PropertyAccess { .. }) {
+        crate::ir_lower::expr::lower_ref_assign_property(ctx, &temp, element, span);
+    } else {
+        crate::ir_lower::expr::lower_ref_assign_array_elem(ctx, &temp, element, span);
+    }
+    let marker = lower_array_reference_or_value(
+        ctx,
+        &Expr::new(
+            ExprKind::ArrayReference(Box::new(Expr::new(
+                ExprKind::Variable(temp.clone()),
+                span,
+            ))),
+            span,
+        ),
+    );
+    let null = lower_null(ctx, element);
+    ctx.unset_local(&temp, null, Some(span));
+    marker
 }
 
 /// Returns the associative-array type for a literal that contains at least one associative
@@ -211,6 +337,7 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             target: CastType::Array,
             expr: inner,
         } => array_cast_literal_element_type(ctx, inner),
+        ExprKind::ArrayReference(_) => PhpType::Mixed,
         ExprKind::Ternary { .. }
         | ExprKind::ShortTernary { .. }
         | ExprKind::Match { .. }
@@ -229,6 +356,7 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
         ExprKind::ScopedConstantAccess { receiver, name } => {
             scoped_constant_value_type_for_ir(ctx, receiver, name, value)
         }
+        ExprKind::DynamicScopedConstantAccess { .. } => PhpType::Mixed,
         // A nested literal must be typed by the same context-aware function that will lower
         // it, not by the syntactic fallback: `infer_expr_type_syntactic` cannot see a local's
         // type, so it types every `$v` element `Int`. The outer hash then stamped its value
@@ -249,6 +377,11 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
                 .cloned()
                 .unwrap_or_else(|| infer_expr_type_syntactic(value)),
         ),
+        ExprKind::This => ctx
+            .current_class
+            .as_ref()
+            .map(|class_name| PhpType::Object(class_name.clone()))
+            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
         ExprKind::FunctionCall { name, .. } => {
             let canonical = name.as_str();
             if let Some(sig) = ctx.functions.get(canonical) {
@@ -350,6 +483,21 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         }
         ExprKind::ArrayLiteral(items) => Some(array_literal_type_for_ir(ctx, items, array)),
         ExprKind::ArrayLiteralAssoc(pairs) => Some(assoc_array_literal_type_for_ir(ctx, pairs, array)),
+        // A nested read (`$tags[0]['reset']`) takes the element type of the inner read. Without
+        // it the literal fell back to the syntactic guess, whose unknown is `int`, and
+        // `['method' => $tags[0]['reset']]` was stamped `array<string, int>` over a string --
+        // Symfony's CachePoolPass tag attribute then read back as `0`.
+        ExprKind::ArrayAccess { array: inner, .. } => {
+            array_access_expr_value_type_for_ir(ctx, inner)
+        }
+        // A static property's DECLARED type, as for an instance property above. Without it a
+        // nested read through one (`static::$formats[$format][0]`) fell back to the syntactic
+        // guess, whose unknown is `int`: a ternary merging that read with `null` then stored the
+        // inner string's POINTER in a `null|int` slot, and Symfony's `Request::getMimeType()`
+        // answered `"4396328192"` -- every cached response went out with that as its Content-Type.
+        ExprKind::StaticPropertyAccess { receiver, property } => Some(
+            super::property_access::static_property_result_type(ctx, receiver, property, array),
+        ),
         // Any other receiver that loads a buffer (`make()[0]`, `($b ?? $c)[0]`) is typed from
         // what its own lowering loads; other receivers keep the previous syntactic answer.
         _ => buffer_receiver_type_for_ir(ctx, array),
@@ -460,11 +608,19 @@ pub(in crate::ir_lower) fn property_access_expr_type_for_ir(
         return Some(normalize_value_php_type(property_ty));
     }
     let class_info = ctx.classes.get(normalized)?;
+    if super::property_access::undeclared_read_may_hit_dynamic_storage(class_info, property) {
+        return Some(PhpType::Mixed);
+    }
+    if !property_is_accessible_for_ir(ctx, normalized, class_info, property) {
+        return magic_get_result_type(ctx, normalized).map(normalize_value_php_type);
+    }
     class_info
         .properties
         .iter()
         .find(|(name, _)| name == property)
-        .map(|(_, ty)| normalize_value_php_type(ty.codegen_repr()))
+        // Keep nullable nominal types available to receiver/isset analysis; storage
+        // erasure belongs to the consumer that actually chooses an EIR layout.
+        .map(|(_, ty)| normalize_value_php_type(ty.clone()))
 }
 
 /// Returns the declared property result type plus `null` when a nullsafe receiver may be null.

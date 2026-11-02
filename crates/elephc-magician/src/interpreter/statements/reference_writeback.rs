@@ -86,6 +86,109 @@ pub(in crate::interpreter) fn bind_method_scope_args(
     alias_duplicate_method_ref_args(method_scope, params, bound_args, context, values)
 }
 
+/// Re-binds a GENERATOR's by-value parameters as cells the generator's own scope OWNS.
+///
+/// A generator body does not run during the call that creates it: PHP evaluates the arguments,
+/// binds them, and hands back a `Generator` whose scope OUTLIVES this frame. But
+/// [`bind_method_scope_args`] binds every by-value parameter `Borrowed`, and the caller releases
+/// its own reference (`release_owned_bound_args`) as soon as the generator object exists. For an
+/// argument the CALLER OWNS -- a literal, a concatenation, any temporary -- that release is the
+/// last one, and the generator later reads a freed cell:
+///
+/// ```php
+/// function gen($a, $b) { yield $a . '|' . $b; }
+/// gen('L1', 'L2');        // yielded '|' -- both literals were gone
+/// $x = 'V1'; gen($x, $b); // fine: the caller's VARIABLE kept it alive
+/// ```
+///
+/// That asymmetry is why this only ever reproduced with literal arguments. Twig hits it on every
+/// render (`$this->unwrap()->yieldBlock('title', $context, $blocks)` in every compiled template),
+/// where the lost `$name` surfaced as `Block "" on template "base.html.twig" does not exist`.
+///
+/// Retaining here and marking the cell `Owned` is the same rule the `$this` binding at each
+/// generator site already follows, for the same reason: net zero against the caller's release,
+/// and the generator's own teardown frees it.
+///
+/// BY-REFERENCE parameters are skipped: they alias caller storage that the caller keeps alive,
+/// exactly as `bind_method_scope_args` binds them.
+///
+/// `owned` is NOT consulted. It records who must release the incoming cell when this call ends,
+/// which is a different question from whether the cell survives until the generator runs. A
+/// COMPILED caller marks every argument it packs `owned: false` -- the interpreter must not
+/// release them -- and then releases the boxed cells itself the instant the bridge returns
+/// (`emit_release_eval_boxed_operands`). Skipping those left a compiled `$this->doDisplay($ctx)`
+/// handing an eval generator a cell that was freed before the first `foreach` resumed it, which
+/// read back as an empty array.
+pub(in crate::interpreter) fn retain_generator_scope_args(
+    generator_scope: &mut ElephcEvalScope,
+    params: &[String],
+    parameter_is_by_ref: &[bool],
+    bound_args: &[BoundMethodArg],
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for (position, (name, bound_arg)) in params.iter().zip(bound_args.iter()).enumerate() {
+        if parameter_is_by_ref.get(position).copied().unwrap_or(false) {
+            continue;
+        }
+        // An array argument already got its own cell from `separate_array_scope_args`.
+        if generator_scope
+            .entry(name)
+            .is_some_and(|entry| entry.flags().ownership == ScopeCellOwnership::Owned)
+        {
+            continue;
+        }
+        let retained = values.retain(bound_arg.value)?;
+        generator_scope.set(name.clone(), retained, ScopeCellOwnership::Owned);
+    }
+    Ok(())
+}
+
+/// Gives every by-value ARRAY parameter its own cell, so writes in the body stay local.
+///
+/// [`bind_method_scope_args`] binds a by-value parameter as a `Borrowed` view of the caller's
+/// cell, adding no reference. An array write then saw a payload nobody else seemed to share and
+/// mutated it IN PLACE, so the caller's array changed under it -- PHP passes arrays by value:
+///
+/// ```php
+/// function f(array $p, int $d) { $p[] = $d; if ($d < 2) f($p, $d + 1); return $p; }
+/// f([], 0);   // php [0]   interpreter [0, 1, 2]
+/// ```
+///
+/// Symfony's `PhpDumper::collectCircularReferences()` recurses with its `$path` exactly like
+/// that, so every loop it found carried nodes from sibling branches: the dumped container lost
+/// its circular-reference guards and inlined services cache:clear then asks for by id.
+///
+/// `copy_value` makes a detached cell that retains the payload, which is what an assignment
+/// `$b = $a;` does: the first write finds the payload shared and copies it, and a body that only
+/// reads pays one cell. BY-REFERENCE parameters are skipped: they alias the caller on purpose.
+pub(in crate::interpreter) fn separate_array_scope_args(
+    scope: &mut ElephcEvalScope,
+    params: &[String],
+    parameter_is_by_ref: &[bool],
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for (position, name) in params.iter().enumerate() {
+        if parameter_is_by_ref.get(position).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some(entry) = scope.entry(name) else {
+            continue;
+        };
+        if entry.flags().by_ref || !entry.flags().is_visible() {
+            continue;
+        }
+        let cell = entry.cell();
+        if !matches!(values.type_tag(cell)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            continue;
+        }
+        let copied = values.copy_value(cell)?;
+        if let Some(replaced) = scope.set(name.clone(), copied, ScopeCellOwnership::Owned) {
+            values.release(replaced)?;
+        }
+    }
+    Ok(())
+}
+
 /// Creates local aliases when two by-reference method parameters point at the same caller variable.
 pub(super) fn alias_duplicate_method_ref_args(
     method_scope: &mut ElephcEvalScope,
@@ -147,7 +250,7 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
                 array_name: right_name,
                 index: right_index,
             },
-        ) => left_scope == right_scope && left_name == right_name && same_reference_index(*left_index, *right_index, values)?,
+        ) => left_scope == right_scope && left_name == right_name && same_reference_index(left_index, right_index),
         (
             EvalReferenceTarget::NestedArrayElement {
                 array_target: left_target,
@@ -157,7 +260,7 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
                 array_target: right_target,
                 index: right_index,
             },
-        ) => same_reference_index(*left_index, *right_index, values)? && same_method_ref_target(left_target, right_target, values)?,
+        ) => same_reference_index(left_index, right_index) && same_method_ref_target(left_target, right_target, values)?,
         (
             EvalReferenceTarget::ObjectProperty {
                 object: left_object,
@@ -209,12 +312,9 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
 }
 
 /// Compares normalized PHP array keys instead of the identity of their temporary boxes.
-fn same_reference_index(left: RuntimeCellHandle, right: RuntimeCellHandle, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
-    if left == right { return Ok(true); }
-    Ok(match (eval_array_reference_key(left, values)?, eval_array_reference_key(right, values)?) {
-        (Some(left), Some(right)) => left == right,
-        _ => false,
-    })
+fn same_reference_index(left: &EvalArrayReferenceKey, right: &EvalArrayReferenceKey) -> bool {
+    // Keys are normalized at capture time, so equal PHP keys already compare equal here.
+    left == right
 }
 
 /// Writes completed by-reference method parameter values back to their caller-side variables.
@@ -229,13 +329,18 @@ pub(in crate::interpreter) fn write_back_method_ref_args(
         let Some(param) = params.get(position) else {
             continue;
         };
-        if let Some(target) = bound_arg.ref_target.as_ref() {
+        if let Some(original_target) = bound_arg.ref_target.as_ref() {
             let Some(entry) = method_scope
                 .entry(param)
                 .filter(|entry| entry.flags().is_visible() && entry.flags().by_ref)
             else {
                 continue;
             };
+            // A parameter rebound with `$param = &$other[...]` no longer aliases the caller's
+            // variable: what it holds now belongs to whatever it was rebound to, and the
+            // scope's CURRENT reference target names that storage. Writing it over the original
+            // turned `Arr::set($config, 'a.b', 1)` into `$config = ['b' => 1]`.
+            let target = method_scope.reference_target(param).unwrap_or(original_target);
             write_back_method_ref_target(target, entry.cell(), context, values)?;
         }
         write_back_method_variadic_ref_args(param, bound_arg, method_scope, context, values)?;
@@ -289,6 +394,30 @@ pub(super) fn write_back_owned_variable_ref_target(
 }
 
 /// Stores one by-reference result in the original caller-side target.
+/// Whether a variable whose writes travel through `target` must OWN the reference it stores.
+///
+/// After `write_back_method_ref_target`, the local entry still holds the value the statement
+/// evaluated. When the target retained its own reference (an array element through `array_set`,
+/// a live variable or a static local through an explicit retain), the entry's reference is
+/// separate and must be released with the entry: a borrowed entry leaked one cell per write
+/// (`$r = 9` after `$r = &$x[0]`). A `Cell` that is not a PHP reference (`$x = &f()` with a
+/// by-value `f()`) keeps nothing, so the entry is the only owner. The other targets keep the
+/// borrowed entry they always had: their write paths do not show a separate reference to keep.
+pub(in crate::interpreter) fn written_value_is_owned_by_entry(
+    target: &EvalReferenceTarget,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(match target {
+        EvalReferenceTarget::ArrayElement { scope, .. }
+        | EvalReferenceTarget::Variable { scope, .. } => unsafe { scope.live_mut() }.is_some(),
+        EvalReferenceTarget::NestedArrayElement { .. }
+        | EvalReferenceTarget::StaticLocal { .. }
+        | EvalReferenceTarget::ObjectProperty { .. } => true,
+        EvalReferenceTarget::Cell { cell } => !values.is_reference(*cell)?,
+        EvalReferenceTarget::StaticProperty { .. } | EvalReferenceTarget::InvokerSlot { .. } => false,
+    })
+}
+
 pub(in crate::interpreter) fn write_back_method_ref_target(
     target: &EvalReferenceTarget,
     value: RuntimeCellHandle,
@@ -297,19 +426,46 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
 ) -> Result<(), EvalStatus> {
     match target {
         EvalReferenceTarget::Variable { scope, name } => {
-            let Some(scope) = (unsafe { scope.as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
+            // The defining activation has returned -- a closure's `use (&$x)` outliving the
+            // function that declared `$x`. No variable is left to update; the closure's own
+            // binding is the only holder of the value now.
+            let Some(scope) = (unsafe { scope.live_mut() }) else {
+                return Ok(());
             };
-            if visible_scope_cell(context, scope, name) == Some(value) { return Ok(()); }
-            let value = values.retain(value)?;
-            for replaced in set_scope_cell(
+            if visible_scope_cell(context, scope, name) == Some(value) {
+                // Native writeback can mutate the existing cell in place. Do
+                // not demote its scope owner to a borrow and release that owner.
+                return Ok(());
+            }
+            // The named variable can itself BE a reference -- the outer loop variable of a
+            // by-reference `foreach` aliasing an array element, a captured `use (&$x)` closure
+            // parameter, or a property reference alias -- in which case this scope cell is not
+            // what the write is really for. A write that stops here is invisible to whatever the
+            // variable actually names, so it must keep following the chain first, exactly as a
+            // plain `$name = value;` statement already does for its own target (`StoreVar` in
+            // `crate::interpreter::statements::dispatch`). This is what a nested by-reference
+            // `foreach` needed: the inner loop's subject resolves to a `Variable` target naming
+            // the outer loop variable, and without this the inner write reached only that
+            // variable's own local cell, never the array element it aliases.
+            if let Some(nested_target) = scope.reference_target(name).cloned() {
+                write_back_method_ref_target(&nested_target, value, context, values)?;
+            }
+            let stored = values.retain(value)?;
+            let replaced = match set_scope_cell(
                 context,
                 scope,
                 name.clone(),
-                value,
+                stored,
                 ScopeCellOwnership::Owned,
                 values,
-            )? {
+            ) {
+                Ok(replaced) => replaced,
+                Err(status) => {
+                    let _ = values.release(stored);
+                    return Err(status);
+                }
+            };
+            for replaced in replaced {
                 values.release(replaced)?;
             }
             Ok(())
@@ -319,11 +475,11 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             array_name,
             index,
         } => {
-            let Some(scope) = (unsafe { scope.as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
+            let Some(scope) = (unsafe { scope.live_mut() }) else {
+                return Ok(());
             };
             write_back_method_array_element_ref_target(
-                scope, array_name, *index, value, context, values,
+                scope, array_name, index, value, context, values,
             )
         }
         EvalReferenceTarget::NestedArrayElement {
@@ -331,7 +487,7 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             index,
         } => write_back_method_nested_array_element_ref_target(
             array_target,
-            *index,
+            index,
             value,
             context,
             values,
@@ -360,6 +516,17 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             context,
             values,
         ),
+        EvalReferenceTarget::StaticLocal { function, name } => {
+            // The store keeps this until the NEXT call, so it takes a reference of its own and
+            // gives back the one it displaces -- the same rule `persist_static_locals` applies.
+            let stored = values.retain(value)?;
+            if let Some(replaced) =
+                context.set_static_local(function.clone(), name.clone(), stored)
+            {
+                values.release(replaced)?;
+            }
+            Ok(())
+        }
         EvalReferenceTarget::Cell { cell } => {
             for declared in context.local_reference_types(*cell) { validate_generic_local(&declared, "reference", value, context, values)?; }
             if *cell != value && values.is_reference(*cell)? {
@@ -392,7 +559,7 @@ pub(in crate::interpreter) fn eval_invoker_slot_ref_target_value(
         }
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
             let word = unsafe { *(slot as *const u64) };
-            values.raw_word_value(source_tag, word)
+            raw_slot_word_value(source_tag, word, values)
         }
         EVAL_TAG_MIXED => {
             let value = RuntimeCellHandle::from_raw(unsafe {
@@ -465,7 +632,10 @@ pub(super) fn write_back_invoker_heap_slot(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if values.type_tag(value)? != source_tag {
+    let value_tag = values.type_tag(value)?;
+    let array_shape_changed = matches!(source_tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
+        && matches!(value_tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
+    if value_tag != source_tag && !array_shape_changed {
         return Err(EvalStatus::RuntimeFatal);
     }
     let word = values.raw_value_word(value)?;
@@ -484,22 +654,40 @@ pub(super) fn write_back_invoker_heap_slot(
 pub(super) fn write_back_method_array_element_ref_target(
     scope: &mut ElephcEvalScope,
     array_name: &str,
+    index: &EvalArrayReferenceKey,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let index = eval_array_reference_key_value(index, values)?;
+    let result = write_back_method_array_element_ref_target_value(
+        scope, array_name, index, value, context, values,
+    );
+    values.release(index)?;
+    result
+}
+
+/// Stores one by-reference result using an already materialized array-key cell.
+fn write_back_method_array_element_ref_target_value(
+    scope: &mut ElephcEvalScope,
+    array_name: &str,
     index: RuntimeCellHandle,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut ownership = ScopeCellOwnership::Owned;
     if let Some(current) = visible_scope_cell(context, scope, array_name) {
         for declared in generic_local_contracts(scope, array_name, context) {
             validate_generic_local_element(Some(&declared), current, index, value, context, values)?;
         }
     }
+    // The rebuilt array is a fresh owner whatever the slot held before, a borrowed by-reference
+    // parameter included: recording it `Borrowed` left nothing to release it.
+    let ownership = ScopeCellOwnership::Owned;
     let array = if let Some(existing) =
         scope_entry(context, scope, array_name).filter(|entry| entry.flags().is_visible())
     {
         if values.is_array_like(existing.cell())? {
-            ownership = existing.flags().ownership;
             let array = values.array_clone_shallow(existing.cell())?;
             context.copy_array_metadata(existing.cell(), array);
             array
@@ -520,21 +708,68 @@ pub(super) fn write_back_method_array_element_ref_target(
 /// Copies the live receiver's metadata before replacing a nested persistent reference.
 pub(super) fn write_back_method_nested_array_element_ref_target(
     array_target: &EvalReferenceTarget,
+    index: &EvalArrayReferenceKey,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let index = eval_array_reference_key_value(index, values)?;
+    let result = write_back_method_nested_array_element_ref_target_value(
+        array_target, index, value, context, values,
+    );
+    values.release(index)?;
+    result
+}
+
+/// Whether a reference target is rooted in an activation scope that no longer exists.
+fn reference_target_root_scope_is_dead(target: &EvalReferenceTarget) -> bool {
+    match target {
+        EvalReferenceTarget::Variable { scope, .. }
+        | EvalReferenceTarget::ArrayElement { scope, .. } => {
+            unsafe { scope.live_mut() }.is_none()
+        }
+        EvalReferenceTarget::NestedArrayElement { array_target, .. } => {
+            reference_target_root_scope_is_dead(array_target)
+        }
+        _ => false,
+    }
+}
+
+/// Stores one by-reference result using an already materialized nested array key.
+fn write_back_method_nested_array_element_ref_target_value(
+    array_target: &EvalReferenceTarget,
     index: RuntimeCellHandle,
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    // The activation the chain is rooted in has returned (a closure's `use (&$x)` outliving the
+    // method whose `foreach (... as &$x)` bound it): there is no variable left to update, exactly
+    // as for the plain `Variable` and `ArrayElement` targets, and the reading below would turn
+    // that into a fatal.
+    if reference_target_root_scope_is_dead(array_target) {
+        return Ok(());
+    }
     let current = eval_reference_target_value(array_target, context, values)?;
     let array = if values.is_array_like(current)? {
-        let array = values.array_clone_shallow(current)?;
-        context.copy_array_metadata(current, array);
-        array
+        values.array_clone_shallow(current).map(|array| {
+            context.copy_array_metadata(current, array);
+            array
+        })
     } else {
-        eval_new_array_for_index(index, values)?
+        eval_new_array_for_index(index, values)
     };
-    let array = values.array_set(array, index, value)?;
-    write_back_method_ref_target(array_target, array, context, values)
+    // A property or element read hands back an owner of its own; a variable read only borrows.
+    if !current.is_borrowed() {
+        values.release(current)?;
+    }
+    let array = values.array_set(array?, index, value)?;
+    let written = write_back_method_ref_target(array_target, array, context, values);
+    // Every target but a static property keeps a reference of its own to the rebuilt array.
+    if !matches!(array_target, EvalReferenceTarget::StaticProperty { .. }) {
+        values.release(array)?;
+    }
+    written
 }
 
 /// Stores one by-reference method result in a caller-side object property.

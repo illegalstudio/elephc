@@ -26,7 +26,10 @@ pub(crate) struct CallArgPlan {
     pub(crate) spread_bounds_checks: Vec<SpreadBoundsCheck>,
     pub(crate) first_named_pos: Option<usize>,
     pub(crate) prefix_has_dynamic_named_spread: bool,
-    pub(super) passthrough_args: Option<Vec<Expr>>,
+    /// True when the call is purely positional and `normalized_args` is `source_args` as is.
+    /// A flag rather than a second copy of the arguments: every positional call of the program
+    /// used to clone its whole argument trees once more into it.
+    pub(super) passthrough: bool,
     pub(super) regular_param_count: usize,
 }
 
@@ -124,7 +127,7 @@ impl CallArgPlan {
             self.source_origins.get(source_index).is_some_and(|origin|
                 *origin != super::static_spread::ExpandedArgOrigin::Source)
         };
-        if self.passthrough_args.is_some() {
+        if self.passthrough {
             return self.source_args.iter().enumerate().take(parameter_index + 1)
                 .any(|(index, arg)| matches!(arg.kind, ExprKind::Spread(_))
                     || (index == parameter_index && from_unpack(index)));
@@ -140,7 +143,7 @@ impl CallArgPlan {
     pub(crate) fn statically_missing_positionals(
         &self, sig: &crate::types::FunctionSig,
     ) -> Option<(usize, usize)> {
-        let args = self.passthrough_args.as_ref()?;
+        let args = self.passthrough.then_some(&self.source_args)?;
         let provided = if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
             super::static_spread::expand_planned_positional_spreads(args)?.len()
         } else { args.len() };
@@ -150,7 +153,8 @@ impl CallArgPlan {
 
     /// Marks defaults that may be evaluated, retaining uncertainty from dynamic unpack lengths.
     pub(crate) fn possible_default_argument_mask(&self, sig: &crate::types::FunctionSig) -> Vec<bool> {
-        if let Some(args) = &self.passthrough_args {
+        if self.passthrough {
+            let args = &self.source_args;
             let supplied = super::static_spread::expand_planned_positional_spreads(args)
                 .map(|values| values.len())
                 .unwrap_or_else(|| args.iter()
@@ -179,8 +183,9 @@ impl CallArgPlan {
     /// that lowering will actually extract from a spread container. A direct `Mixed` argument
     /// must not gain the same exception merely because its normalized expression has that type.
     pub(crate) fn descriptor_projection_mask(&self) -> Vec<bool> {
-        if let Some(args) = &self.passthrough_args {
-            let first_spread = args
+        if self.passthrough {
+            let first_spread = self
+                .source_args
                 .iter()
                 .position(|arg| matches!(arg.kind, ExprKind::Spread(_)));
             return (0..self.regular_param_count)
@@ -206,7 +211,7 @@ impl CallArgPlan {
     ///
     /// Passthrough arguments keep their source order, so none of them is tied to a parameter.
     pub(crate) fn normalized_regular_arg_count(&self) -> usize {
-        if self.passthrough_args.is_some() {
+        if self.passthrough {
             0
         } else {
             self.regular_args.len()
@@ -218,8 +223,8 @@ impl CallArgPlan {
     /// were resolved in place; applies default guards for optional slots when the
     /// spread may not have provided those elements.
     pub(crate) fn normalized_args(&self) -> Vec<Expr> {
-        if let Some(args) = &self.passthrough_args {
-            return args.clone();
+        if self.passthrough {
+            return self.source_args.clone();
         }
 
         let mut args = Vec::new();
@@ -347,19 +352,58 @@ fn spread_element_expr(
     prefer_named_key: bool,
     span: Span,
 ) -> Expr {
-    let index = if prefer_named_key {
-        if let Some(param_name) = param_name {
-            Expr::new(ExprKind::StringLiteral(param_name.to_string()), span)
-        } else {
-            Expr::new(ExprKind::IntLiteral(element_idx as i64), span)
-        }
-    } else {
-        Expr::new(ExprKind::IntLiteral(element_idx as i64), span)
-    };
-    Expr::new(
+    let positional = Expr::new(
         ExprKind::ArrayAccess {
             array: Box::new(spread_expr.clone()),
-            index: Box::new(index),
+            index: Box::new(Expr::new(ExprKind::IntLiteral(element_idx as i64), span)),
+        },
+        span,
+    );
+    let Some(param_name) = param_name.filter(|_| prefer_named_key) else {
+        return positional;
+    };
+    let key = Expr::new(ExprKind::StringLiteral(param_name.to_string()), span);
+    if !spread_source_is_rereadable(spread_expr) {
+        // The source is read exactly once: evaluating a call or a property chain four times
+        // would repeat its side effects. Only a local is safe to probe by name AND position.
+        return Expr::new(
+            ExprKind::ArrayAccess {
+                array: Box::new(spread_expr.clone()),
+                index: Box::new(key),
+            },
+            span,
+        );
+    }
+    // PHP binds an unpacked array per KEY: a string key names a parameter, an integer key fills
+    // the next position. The name is asked first, then the position (`f(...[2], factor: 4)`
+    // binds `$value` from key 0; asking only for `'value'` bound the default).
+    Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(array_key_exists_expr(key.clone(), spread_expr, span)),
+            then_expr: Box::new(Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(spread_expr.clone()),
+                    index: Box::new(key),
+                },
+                span,
+            )),
+            else_expr: Box::new(positional),
+        },
+        span,
+    )
+}
+
+/// Whether the spread source can be read several times without repeating side effects.
+fn spread_source_is_rereadable(spread_expr: &Expr) -> bool {
+    matches!(spread_expr.kind, ExprKind::Variable(_))
+}
+
+/// Emits `array_key_exists($key, $spread_expr)`.
+fn array_key_exists_expr(key: Expr, spread_expr: &Expr, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("array_key_exists"),
+            args: vec![key, spread_expr.clone()],
         },
         span,
     )
@@ -378,35 +422,63 @@ fn spread_element_or_default_expr(
     default_expr: Expr,
     span: Span,
 ) -> Expr {
-    let condition = if prefer_named_key {
-        if let Some(param_name) = param_name {
-            Expr::new(
-                ExprKind::FunctionCall {
-                    name: Name::unqualified("array_key_exists"),
-                    args: vec![
-                        Expr::new(ExprKind::StringLiteral(param_name.to_string()), span),
-                        spread_expr.clone(),
-                    ],
-                },
-                span,
-            )
-        } else {
-            spread_len_gt_expr(spread_expr, element_idx, span)
-        }
-    } else {
-        spread_len_gt_expr(spread_expr, element_idx, span)
+    let Some(param_name) = param_name.filter(|_| prefer_named_key) else {
+        return Expr::new(
+            ExprKind::Ternary {
+                condition: Box::new(spread_len_gt_expr(spread_expr, element_idx, span)),
+                then_expr: Box::new(spread_element_expr(
+                    spread_expr,
+                    element_idx,
+                    None,
+                    false,
+                    span,
+                )),
+                else_expr: Box::new(default_expr),
+            },
+            span,
+        );
     };
+    if !spread_source_is_rereadable(spread_expr) {
+        // Name-only probe, so a source with side effects is evaluated as few times as before.
+        let key = Expr::new(ExprKind::StringLiteral(param_name.to_string()), span);
+        return Expr::new(
+            ExprKind::Ternary {
+                condition: Box::new(array_key_exists_expr(key, spread_expr, span)),
+                then_expr: Box::new(spread_element_expr(
+                    spread_expr,
+                    element_idx,
+                    Some(param_name),
+                    true,
+                    span,
+                )),
+                else_expr: Box::new(default_expr),
+            },
+            span,
+        );
+    }
+    // The name first, then the position, then the default (see `spread_element_expr`). A source
+    // that may carry names may also be sparse, so the position is asked by key, not by length.
+    let index = Expr::new(ExprKind::IntLiteral(element_idx as i64), span);
+    let positional = Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(array_key_exists_expr(index, spread_expr, span)),
+            then_expr: Box::new(spread_element_expr(spread_expr, element_idx, None, false, span)),
+            else_expr: Box::new(default_expr),
+        },
+        span,
+    );
+    let key = Expr::new(ExprKind::StringLiteral(param_name.to_string()), span);
     Expr::new(
         ExprKind::Ternary {
-            condition: Box::new(condition),
-            then_expr: Box::new(spread_element_expr(
-                spread_expr,
-                element_idx,
-                param_name,
-                prefer_named_key,
+            condition: Box::new(array_key_exists_expr(key.clone(), spread_expr, span)),
+            then_expr: Box::new(Expr::new(
+                ExprKind::ArrayAccess {
+                    array: Box::new(spread_expr.clone()),
+                    index: Box::new(key),
+                },
                 span,
             )),
-            else_expr: Box::new(default_expr),
+            else_expr: Box::new(positional),
         },
         span,
     )
@@ -576,7 +648,15 @@ mod tests {
 
         assert_eq!(plan.spread_bounds_checks[0].min_len, 2);
         let normalized = plan.normalized_args();
-        assert!(matches!(&normalized[0].kind, ExprKind::ArrayAccess { .. }));
+        // The slot is read by name, else by position, and never falls back to the default.
+        match &normalized[0].kind {
+            ExprKind::ArrayAccess { .. } => {}
+            ExprKind::Ternary { then_expr, else_expr, .. } => {
+                assert!(matches!(then_expr.kind, ExprKind::ArrayAccess { .. }));
+                assert!(matches!(else_expr.kind, ExprKind::ArrayAccess { .. }));
+            }
+            other => panic!("unexpected guaranteed spread slot shape: {other:?}"),
+        }
     }
 
     /// Implements the `normalized_args_keep_default_guard_when_spread_may_skip_optional_slot`

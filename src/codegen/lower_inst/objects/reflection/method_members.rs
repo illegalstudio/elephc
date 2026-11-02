@@ -105,14 +105,6 @@ pub(super) fn reflection_class_method_member(
     };
     let declaring_class_name =
         reflection_method_declaring_class_name(info, class_name, &method_key);
-    let declared_name = reflection_declared_method_name(
-        ctx,
-        &[
-            declaring_class_name.as_deref().unwrap_or(class_name),
-            class_name,
-        ],
-        &method_key,
-    );
     let attr_names = info
         .method_attribute_names
         .get(&method_key)
@@ -141,9 +133,25 @@ pub(super) fn reflection_class_method_member(
         declaring_class_name.as_deref().unwrap_or(class_name),
         &method_key,
     );
-    let prototype_member = reflection_class_method_prototype_member(
-        ctx, class_name, info, &method_key, flags,
-    )?;
+    let prototype_member =
+        reflection_class_method_prototype_member(ctx, class_name, info, &method_key, flags)?;
+    // A method with no declaration (an enum's `tryFrom`) still has php's spelling in the
+    // class's reflection list.
+    let declared_name = reflection_declared_method_name(
+        ctx,
+        &[declaring_class_name.as_deref().unwrap_or(class_name), class_name],
+        &method_key,
+    );
+    // The lookup answers the bare key when no declaration carries a spelling.
+    let declared_name = if declared_name == method_key {
+        info.reflection_methods
+            .iter()
+            .find(|name| php_symbol_key(name) == method_key)
+            .cloned()
+            .unwrap_or(declared_name)
+    } else {
+        declared_name
+    };
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: declared_name.clone(),
         declaring_class_name: declaring_class_name.clone(),
@@ -396,8 +404,5 @@ pub(super) fn reflection_method_is_generator(
         declaring_class_name.trim_start_matches('\\'),
         method_name
     ));
-    ctx.module.class_methods.iter().any(|function| {
-        php_symbol_key(function.name.trim_start_matches('\\')) == expected_key
-            && function.flags.is_generator
-    })
+    ctx.shared.reflection.method_is_generator(&expected_key)
 }

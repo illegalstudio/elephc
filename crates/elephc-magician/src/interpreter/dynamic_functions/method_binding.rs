@@ -189,7 +189,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
             values.array_new(evaluated_args.len())?
         };
         bound_args[index] = Some(BoundMethodArg {
-            value: array,
+            value: array.borrowed(),
             ref_target: None,
             variadic_ref_targets: Vec::new(),
         });
@@ -206,6 +206,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                 &name,
                 arg.value,
                 arg.ref_target,
+                !arg.value.is_borrowed(),
                 by_ref_mode,
                 &mut variadic_named_args,
                 context,
@@ -222,6 +223,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                 &mut next_variadic_index,
                 arg.value,
                 arg.ref_target,
+                !arg.value.is_borrowed(),
                 by_ref_mode,
                 context,
                 values,
@@ -255,7 +257,14 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
         }
         if let Some(param_type) = parameter_types.get(position).and_then(Option::as_ref) {
             let bound = value.as_mut().ok_or(EvalStatus::RuntimeFatal)?;
-            bound.value = eval_method_parameter_value(param_type, bound.value, context, values)?;
+            bound.value = eval_method_parameter_bound_value(
+                param_type,
+                bound.value,
+                position,
+                params.get(position).map(String::as_str).unwrap_or_default(),
+                context,
+                values,
+            )?;
         }
     }
 
@@ -328,6 +337,7 @@ fn bind_dynamic_positional_method_arg(
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    owned: bool,
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -345,13 +355,14 @@ fn bind_dynamic_positional_method_arg(
         *next_variadic_index = next_variadic_index
             .checked_add(1)
             .ok_or(EvalStatus::RuntimeFatal)?;
-        let value = eval_variadic_method_parameter_value(
+        let coerced = eval_variadic_method_parameter_value(
             parameter_types,
             variadic_index,
             value,
             context,
             values,
         )?;
+        let owned = settle_coerced_variadic_value(value, coerced, owned, values)?;
         let ref_target = method_parameter_ref_target(
             params,
             parameter_is_by_ref,
@@ -365,19 +376,30 @@ fn bind_dynamic_positional_method_arg(
             bound_args,
             variadic_index,
             key,
-            value,
+            coerced,
             ref_target,
+            owned,
             values,
         );
     }
     let param_index = *next_positional;
     if param_index >= bound_args.len() {
-        *next_positional = next_positional
+        // A SURPLUS positional argument. php accepts it for a user function, method or closure --
+        // it binds to no parameter and is reachable only through `func_get_args()`, which is the
+        // entire reason that function exists. Refusing it here made every variadic-by-convention
+        // call a fatal, and made the argument-introspection trio unreachable even once it was
+        // implemented. A builtin is different: php raises ArgumentCountError there, and that path
+        // does not come through here.
+        *next_positional = param_index
             .checked_add(1)
             .ok_or(EvalStatus::RuntimeFatal)?;
+        if owned {
+            values.release(value)?;
+        }
         return Ok(());
     }
     if bound_args[param_index].is_some() {
+        // Still a fatal: the same parameter filled twice, positionally and by name.
         return Err(EvalStatus::RuntimeFatal);
     }
     let ref_target = method_parameter_ref_target(
@@ -390,7 +412,7 @@ fn bind_dynamic_positional_method_arg(
         values,
     )?;
     bound_args[param_index] = Some(BoundMethodArg {
-        value,
+        value: if owned { value } else { value.borrowed() },
         ref_target,
         variadic_ref_targets: Vec::new(),
     });
@@ -408,6 +430,7 @@ fn bind_dynamic_named_method_arg(
     name: &str,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    owned: bool,
     by_ref_mode: EvalByRefBindingMode<'_>,
     variadic_named_args: &mut std::collections::HashSet<String>,
     context: &mut ElephcEvalContext,
@@ -427,7 +450,7 @@ fn bind_dynamic_named_method_arg(
             values,
         )?;
         bound_args[param_index] = Some(BoundMethodArg {
-            value,
+            value: if owned { value } else { value.borrowed() },
             ref_target,
             variadic_ref_targets: Vec::new(),
         });
@@ -437,13 +460,15 @@ fn bind_dynamic_named_method_arg(
         return Err(EvalStatus::RuntimeFatal);
     }
     let key = values.string(name)?;
-    let value = eval_variadic_method_parameter_value(
+    let coerced = eval_variadic_method_parameter_value(
         parameter_types,
         variadic_index,
         value,
         context,
         values,
     )?;
+    let owned = settle_coerced_variadic_value(value, coerced, owned, values)?;
+    let value = coerced;
     let argument_number = variadic_index
         .and_then(|index| index.checked_add(1))
         .ok_or(EvalStatus::RuntimeFatal)?;
@@ -456,7 +481,27 @@ fn bind_dynamic_named_method_arg(
         by_ref_mode,
         values,
     )?;
-    bind_dynamic_variadic_arg(bound_args, variadic_index, key, value, ref_target, values)
+    bind_dynamic_variadic_arg(bound_args, variadic_index, key, value, ref_target, owned, values)
+}
+
+/// Settles the release owed on a variadic value that parameter coercion has replaced.
+///
+/// Returns the debt that survives onto the coerced cell: a coercion that answers the same handle
+/// keeps it, a coercion that builds a different cell pays the old debt here and adopts none, since
+/// only the coercion knows whether the replacement is fresh or borrowed.
+pub(in crate::interpreter) fn settle_coerced_variadic_value(
+    value: RuntimeCellHandle,
+    coerced: RuntimeCellHandle,
+    owned: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if coerced == value {
+        return Ok(owned);
+    }
+    if owned {
+        values.release(value)?;
+    }
+    Ok(false)
 }
 
 /// Returns the caller writeback target required by a by-reference method parameter.
@@ -554,6 +599,7 @@ fn bind_dynamic_variadic_arg(
     key: RuntimeCellHandle,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    owned: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
@@ -561,6 +607,11 @@ fn bind_dynamic_variadic_arg(
     bound.value = values.array_set(bound.value, key, value)?;
     if let Some(ref_target) = ref_target {
         bound.variadic_ref_targets.push((key, ref_target));
+    }
+    // `__elephc_eval_value_array_set` increfs the value before the setter consumes it, so the
+    // variadic array now holds its own reference and any release the caller owed is settled here.
+    if owned {
+        values.release(value)?;
     }
     Ok(())
 }
@@ -582,6 +633,9 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
         return Err(EvalStatus::RuntimeFatal);
     }
     for variant in param_type.variants() {
+        if !eval_scalar_coercion_is_allowed(variant, value, context, values)? {
+            continue;
+        }
         if let Some(coerced) =
             eval_method_parameter_scalar_coercion(variant, value, context, values)?
         {
@@ -593,6 +647,45 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
         return eval_throw_type_error(&format!("Value does not satisfy {}", crate::eval_ir::generic_type(param_type)), context, values);
     }
     Err(EvalStatus::RuntimeFatal)
+}
+
+/// Applies a declared parameter type to one bound argument, naming it the way PHP does on failure.
+///
+/// `php -n` 8.5.6 says
+/// `takesInt(): Argument #1 ($n) must be of type int, string given`, and appends
+/// `, called in FILE on line N` when there is a call site to name. It is a catchable `TypeError`
+/// rather than a fatal, which is what lets `try { … } catch (\TypeError)` around a strict call
+/// work at all.
+fn eval_method_parameter_bound_value(
+    param_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    position: usize,
+    param_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match eval_method_parameter_value(param_type, value, context, values) {
+        Ok(value) => Ok(value),
+        Err(EvalStatus::RuntimeFatal) => {
+            let (file, _, line, _) = context.call_site();
+            let call_site = if file.is_empty() {
+                String::new()
+            } else {
+                format!(", called in {file} on line {line}")
+            };
+            let message = format!(
+                "{}(): Argument #{} (${}) must be of type {}, {} given{}",
+                context.current_function().unwrap_or_default(),
+                position + 1,
+                param_name,
+                eval_declared_type_spelling(param_type),
+                eval_given_type_spelling(value, values)?,
+                call_site,
+            );
+            eval_throw_type_error(&message, context, values)
+        }
+        Err(status) => Err(status),
+    }
 }
 
 /// Returns whether a value satisfies one eval parameter type without scalar coercion.
@@ -634,6 +727,12 @@ fn eval_method_parameter_variant_accepts_exact(
         EvalParameterTypeVariant::Generic(ty) => generic_value_accepts(ty, value, context, values),
         EvalParameterTypeVariant::Array => Ok(matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)),
         EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
+        // `EVAL_TAG_CALLABLE` belongs here for the same reason the `Class("Closure")` arm below
+        // already accepts it: a closure built by COMPILED code crosses as a descriptor cell, and
+        // it is a callable in every sense PHP cares about. Leaving it out refused
+        // `HtmlErrorRenderer::__construct(bool|callable $debug, ...)` the closure Symfony's own
+        // container hands it, which is how a compiled prod container failed to build its error
+        // renderer.
         EvalParameterTypeVariant::Callable => Ok(matches!(
             tag,
             EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE
@@ -641,6 +740,9 @@ fn eval_method_parameter_variant_accepts_exact(
         EvalParameterTypeVariant::Class(class_name) => {
             eval_method_parameter_class_accepts(value, tag, class_name, context, values)
         }
+        // PHP 8.2 value types accept ONE boolean each, not either.
+        EvalParameterTypeVariant::False => Ok(tag == EVAL_TAG_BOOL && !values.truthy(value)?),
+        EvalParameterTypeVariant::True => Ok(tag == EVAL_TAG_BOOL && values.truthy(value)?),
         EvalParameterTypeVariant::Float => Ok(tag == EVAL_TAG_FLOAT),
         EvalParameterTypeVariant::Int => Ok(tag == EVAL_TAG_INT),
         EvalParameterTypeVariant::Iterable => {
@@ -735,6 +837,14 @@ pub(in crate::interpreter) fn eval_method_parameter_scalar_coercion(
             values.cast_string(value).map(Some)
         }
         EvalParameterTypeVariant::String if tag == EVAL_TAG_OBJECT => {
+            // A typed `string` parameter REJECTS an object without `__toString()` (the caller
+            // then raises php's `TypeError`, `must be of type string, stdClass given`); only a
+            // string CONTEXT throws `could not be converted to string`. Converting first made
+            // `curl_escape($ch, new stdClass())` in eval, which reaches the compiled curl
+            // function through this binder, die with the wrong, uncatchable-as-TypeError Error.
+            if !eval_object_has_to_string(value, context, values)? {
+                return Ok(None);
+            }
             let coerced = eval_dynamic_object_string_context_value(value, context, values)?;
             if values.type_tag(coerced)? == EVAL_TAG_STRING {
                 Ok(Some(coerced))
@@ -766,7 +876,9 @@ pub(in crate::interpreter) fn eval_method_parameter_scalar_coercion(
 /// deciding whether to reject them is asking a different question (`null`, `int`, `float` and
 /// `bool` all coerce to `string` under PHP's coercive typing).
 ///
-/// Shared by ordinary builtin string-union binding and optional curl argument validation.
+/// Shared by ordinary builtin string-union binding and optional curl argument validation, used
+/// by `eval_method_parameter_scalar_coercion` for every typed `string` parameter, and by
+/// `builtins::curl::handle::eval_curl_string_argument`.
 pub(in crate::interpreter) fn eval_object_has_to_string(
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
@@ -1046,7 +1158,8 @@ fn eval_method_default_call_arg_is_supported(arg: &EvalCallArg) -> bool {
 fn eval_method_default_array_element_is_supported(element: &EvalArrayElement) -> bool {
     match element {
         EvalArrayElement::Value(value) => eval_method_default_expr_is_supported(value),
-        EvalArrayElement::Reference(_) => false,
+        // A spread has to READ its operand, so it is never a compile-time constant default.
+        EvalArrayElement::Reference(_) | EvalArrayElement::Spread(_) => false,
         EvalArrayElement::KeyValue { key, value } => {
             eval_method_default_expr_is_supported(key)
                 && eval_method_default_expr_is_supported(value)

@@ -117,7 +117,11 @@ echo implode(",", $r), "\n";
 }
 
 /// Verifies asort maintains key-value associations and sorts by values in ascending order.
-/// Fixture: [3, 1, 2] → sorted [1, 2, 3] → first element $a[0] should be 1.
+///
+/// Fixture: `[3, 1, 2]` sorts to values `1, 2, 3` under keys `1, 2, 0` — the key travels with the
+/// value, which is the whole difference from `sort()`. `$a[0]` therefore still reads `3`, the
+/// element index 0 held all along. This assertion used to read `1`, the value the renumbering left
+/// there, against a doc comment that already described the correct rule.
 #[test]
 fn test_asort() {
     let out = compile_and_run(
@@ -127,11 +131,13 @@ asort($a);
 echo $a[0];
 "#,
     );
-    assert_eq!(out, "1");
+    assert_eq!(out, "3");
 }
 
 /// Verifies arsort maintains key-value associations and sorts by values in descending order.
-/// Fixture: [1, 3, 2] → sorted descending [3, 2, 1] → first element $a[0] should be 3.
+///
+/// Fixture: `[1, 3, 2]` sorts to values `3, 2, 1` under keys `1, 2, 0`, so `$a[0]` still reads the
+/// `1` that index 0 held. See `test_asort` for why the previous expectation was the bug.
 #[test]
 fn test_arsort() {
     let out = compile_and_run(
@@ -141,7 +147,7 @@ arsort($a);
 echo $a[0];
 "#,
     );
-    assert_eq!(out, "3");
+    assert_eq!(out, "1");
 }
 
 /// Verifies ksort sorts by keys in ascending order, preserving values.
@@ -653,4 +659,58 @@ echo $a[0] . "," . $a[1] . "," . $a[2] . "," . $a[3];
 "#,
     );
     assert_eq!(out, "date,cherry,banana,apple");
+}
+
+/// Verifies gradual callback sorts preserve or reset keys according to the PHP builtin used.
+#[test]
+fn test_gradual_sort_compatibility_helpers() {
+    let output = compile_and_run(
+        r#"<?php
+function compare_values(mixed $left, mixed $right): int { return $left <=> $right; }
+function compare_keys(mixed $left, mixed $right): int { return $right <=> $left; }
+function sort_all(mixed $input): array {
+    $preserved = $input;
+    uasort($preserved, 'compare_values');
+    $reindexed = $input;
+    usort($reindexed, 'compare_values');
+    $keys = $input;
+    uksort($keys, 'compare_keys');
+    return [$preserved, $reindexed, $keys];
+}
+$result = sort_all(["b" => 2, "a" => 1]);
+echo implode(',', array_keys($result[0])).'|';
+echo implode(',', array_keys($result[1])).'|';
+echo implode(',', array_keys($result[2]));
+"#,
+    );
+    assert_eq!(output, "a,b|0,1|b,a");
+}
+
+/// Verifies key sorting a boxed gradual array reaches typed hash codegen without a backend refusal.
+#[test]
+fn test_ksort_gradual_local_reaches_typed_codegen_with_flags() {
+    let source = r#"<?php
+function sorted(mixed $values): mixed {
+    ksort($values, SORT_STRING);
+    return $values;
+}
+$source = ["b" => 2, "a" => 1];
+$result = sorted($source);
+foreach ($result as $key => $value) { echo $key . $value; }
+echo ":";
+foreach ($source as $key => $value) { echo $key . $value; }
+"#;
+    let dir = make_cli_test_dir("elephc_ksort_gradual_local");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    // The boxed receiver is unboxed to its hash and sorted by the hash key-sort helper
+    // (`__rt_hash_ksort`); an indexed receiver would use `__rt_ksort`. Either is the typed
+    // key-sort call this test is about, as opposed to a refusal or a prelude fallback.
+    assert!(
+        user_asm.contains("__rt_ksort") || user_asm.contains("__rt_hash_ksort"),
+        "gradual ksort must reach the typed key-sort runtime call"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+    // php 8.5: the sorted copy is returned and the caller's array is untouched.
+    assert_eq!(compile_and_run(source), "a1b2:b2a1");
 }

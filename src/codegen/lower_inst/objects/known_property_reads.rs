@@ -25,7 +25,7 @@ const REFERENCE_RETURN_PAYLOAD_MISMATCH_MESSAGE: &str =
 /// dereferences it, and an arm that merely omitted an unreachable class fell here too, so the
 /// unsafe answer was reachable from more than the non-object case. Raising leaves the caller with
 /// no cell at all, which is the only answer that cannot be dereferenced.
-const REFERENCE_WITHOUT_CELL_MESSAGE: &str =
+pub(super) const REFERENCE_WITHOUT_CELL_MESSAGE: &str =
     "Cannot take a reference to a property the receiver's runtime class does not store in a \
      shared reference cell";
 
@@ -125,10 +125,124 @@ pub(super) fn lower_prop_get_nonnull(
         }
     }
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
-        return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, property);
+        // A nullable INTERFACE has no slot layout of its own; the implementers' class-id ladder
+        // (the generic path below) reads it.
+        if ctx.module.class_infos.contains_key(class_name.trim_start_matches('\\')) {
+            return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, property);
+        }
     }
+    // A private declared slot belongs to its declaring class even when `$this` is an
+    // eval-owned subclass. PHP cannot override that storage from the child, and PropSet already
+    // writes this native slot directly, so routing only reads through the eval overlay loses the
+    // value (notably a lazily initialized Closure) and splits one PHP property in two.
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(class_name) if !class_name.trim_start_matches('\\').is_empty())
+        && property_interface_receiver(ctx, object)?.is_none()
+        && private_declared_property_slot(ctx, object, property, inst)?
+    {
+        return lower_native_prop_get_nonnull(ctx, inst, object, property);
+    }
+    if builtins::has_eval_context(ctx)
+        && matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_))
+    {
+        if !eval_bridge_can_defer_to_native_declared_slot(ctx, inst, object, property)? {
+            return builtins::lower_eval_property_get(ctx, inst, object, property);
+        }
+        let native_label = ctx.next_label("prop_get_native_dispatch");
+        let done_label = ctx.next_label("prop_get_dynamic_dispatch_done");
+        builtins::lower_eval_owned_property_get(
+            ctx,
+            inst,
+            object,
+            property,
+            &native_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&native_label);
+        lower_native_prop_get_nonnull(ctx, inst, object, property)?;
+        ctx.emitter.label(&done_label);
+        return Ok(());
+    }
+    lower_native_prop_get_nonnull(ctx, inst, object, property)
+}
+
+/// Returns true when `property` resolves to a private declared slot of the static receiver.
+fn private_declared_property_slot(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    inst: &Instruction,
+) -> Result<bool> {
+    // Abstract receiver metadata may be implemented by a concrete descendant. It has no
+    // physical slot on the abstract class itself, so let the ordinary polymorphic path select
+    // the runtime class before attempting static slot resolution.
+    if property_abstract_receiver(ctx, object, property)?.is_some() {
+        return Ok(false);
+    }
+    // A receiver with no slot for this property is not an answer of "no" to this question — it
+    // has no answer at all, and the routes below (stdClass, allow-dynamic, magic `__get`) are
+    // where it belongs. Propagating the resolver's error here refused the whole read before they
+    // were reached: `(object) ['vars' => []]` then `$state->vars` died with "prop_get for dynamic
+    // or missing property stdClass::$vars" even though `lower_native_prop_get_nonnull` has a
+    // stdClass arm three lines further on. A property that is genuinely missing still reports
+    // that, from the resolve call at the end of that function.
+    let Ok(slot) = resolve_property_slot(ctx, object, property, inst) else {
+        return Ok(false);
+    };
+    // `is_declared` means "has a declared TYPE". A private slot belongs to its declaring class
+    // whether or not it is typed, and only a declared property has a visibility entry below,
+    // so a dynamic property still falls through. Requiring the type sent every untyped
+    // `private $x` read in a method through the eval bridge -- which creates an eval context on
+    // each call: Twig's `Environment::addExtension` did that for `$this->extensionSet`.
+    Ok(ctx
+        .module
+        .class_infos
+        .get(&slot.class_name)
+        .and_then(|class_info| class_info.property_visibilities.get(property))
+        .is_some_and(|visibility| matches!(visibility, crate::parser::ast::Visibility::Private)))
+}
+
+/// Returns whether an eval-context property read has a concrete AOT slot to fall back to.
+///
+/// An eval context alone is not enough to choose the overlay: native declared slots remain the
+/// source of truth for native objects. Conversely, `stdClass`, allow-dynamic and magic
+/// properties live in the bridge's dynamic representation even when their receiver has no
+/// dynamic-class owner, so they must keep the bridge path.
+fn eval_bridge_can_defer_to_native_declared_slot(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<bool> {
+    // A nominal interface has no own object-slot layout. Let the bridge retain the
+    // existing dynamic/polymorphic route instead of asking the class-only dynamic-property
+    // resolver for a layout it cannot have.
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(name) if name.trim_start_matches('\\').is_empty())
+        || property_interface_receiver(ctx, object)?.is_some()
+        || object_is_builtin_stdclass(ctx, object)?
+        || dynamic_property_hash_offset_for_object(ctx, object, property)?.is_some()
+        || magic_get_receiver_class(ctx, object, property)?.is_some()
+    {
+        return Ok(false);
+    }
+    Ok(resolve_property_slot(ctx, object, property, inst)
+        .map(|slot| slot.is_declared)
+        .unwrap_or(false))
+}
+
+/// Lowers a property read once native dispatch has been selected.
+fn lower_native_prop_get_nonnull(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<()> {
     if let Some(class_name) = union_object_member_class(ctx, object)? {
-        return lower_union_object_prop_get(ctx, inst, object, &class_name, property);
+        // A nullable INTERFACE (`?CacheEntry`) has no slot layout to resolve the property
+        // against; its implementers do, and the boxed class-id ladder below reads whichever one
+        // the run-time object is. Doctrine's second-level cache reads `$entry->class` that way.
+        if ctx.module.class_infos.contains_key(class_name.trim_start_matches('\\')) {
+            return lower_union_object_prop_get(ctx, inst, object, &class_name, property);
+        }
     }
     if matches!(
         ctx.value_php_type(object)?.codegen_repr(),
@@ -138,6 +252,12 @@ pub(super) fn lower_prop_get_nonnull(
     }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_get(ctx, inst, object, property);
+    }
+    if let Some(interface_name) = property_interface_receiver(ctx, object)? {
+        return lower_polymorphic_object_prop_get(ctx, inst, object, &interface_name, property);
+    }
+    if let Some(class_name) = property_abstract_receiver(ctx, object, property)? {
+        return lower_polymorphic_object_prop_get(ctx, inst, object, &class_name, property);
     }
     if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
         return lower_magic_get_prop(ctx, inst, object, &class_name, property);
@@ -192,6 +312,7 @@ pub(super) fn lower_prop_get_nonnull(
         PropertyReadMissingResult::Instruction(inst),
     )?;
     emit_property_load(ctx, &slot, base_reg)?;
+    emit_aot_loaded_object_property_trace(ctx, object, property, &slot.php_type)?;
     materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
     if let Some(read_done) = read_done {
         ctx.emitter.label(&read_done);
@@ -239,6 +360,48 @@ fn narrowed_receiver_property_candidates(
         return Ok(None);
     }
     Ok(Some(candidates))
+}
+
+/// Emits an opt-in trace for a loaded AOT object property while preserving the
+/// raw result register for normal materialization.
+///
+/// The trace is limited to object-shaped slots so its diagnostic helper may
+/// safely inspect the loaded word as an AOT object header. It is compiled only
+/// into eval-bridge programs when explicitly requested by the build environment.
+fn emit_aot_loaded_object_property_trace(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    property_ty: &PhpType,
+) -> Result<()> {
+    if std::env::var_os("ELEPHC_CODEGEN_AOT_PROPERTY_TRACE").is_none()
+        || !ctx.module.required_runtime_features.eval_bridge
+        || !matches!(property_ty.codegen_repr(), PhpType::Object(_))
+    {
+        return Ok(());
+    }
+    let site = format!("{}|{}|typed-after", ctx.function.name, property);
+    let (site_label, site_len) = ctx.data.add_string(site.as_bytes());
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_reg_move(ctx.emitter, value_arg, result_reg);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, result_reg, scratch_reg);
+    let site_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_symbol_address(ctx.emitter, site_ptr_arg, &site_label);
+    let site_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, site_len_arg, site_len as i64);
+    let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    ctx.load_value_to_reg(object, receiver_arg)?;
+    let value_is_object_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    abi::emit_load_int_immediate(ctx.emitter, value_is_object_arg, 1);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_trace_aot_raw_property_receiver");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_pop_reg_pair(ctx.emitter, result_reg, scratch_reg);
+    Ok(())
 }
 
 /// Resolves the reference-cell slot a statically typed receiver exposes, or emits php's refusal.
@@ -295,6 +458,9 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell(
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return lower_mixed_load_prop_ref_cell(ctx, inst, object, &property);
     }
+    if lower_typed_stdclass_ref_cell(ctx, inst, object, &property)? {
+        return Ok(());
+    }
     let Some(slot) = typed_receiver_reference_slot(ctx, object, &property, inst)? else {
         return Ok(());
     };
@@ -337,6 +503,11 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell_checked(
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return lower_mixed_load_prop_ref_cell_checked(ctx, inst, object, &property, &expected);
     }
+    if matches!(expected.codegen_repr(), PhpType::Mixed)
+        && lower_typed_stdclass_ref_cell(ctx, inst, object, &property)?
+    {
+        return Ok(());
+    }
     let Some(slot) = typed_receiver_reference_slot(ctx, object, &property, inst)? else {
         return Ok(());
     };
@@ -378,7 +549,9 @@ fn lower_mixed_load_prop_ref_cell_checked(
     expected: &PhpType,
 ) -> Result<()> {
     let candidates = declared_mixed_reference_property_candidates(ctx, property, inst)?;
-    if candidates.is_empty() {
+    let stdclass_id = stdclass_class_id(ctx)
+        .filter(|_| matches!(expected.codegen_repr(), PhpType::Mixed));
+    if candidates.is_empty() && stdclass_id.is_none() {
         return Err(CodegenIrError::unsupported(format!(
             "load_prop_ref_cell_checked on Mixed receiver for property ${} with no \
              reference-property class",
@@ -401,15 +574,25 @@ fn lower_mixed_load_prop_ref_cell_checked(
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_mixed_object_payload_or_null(ctx, &null_label);
-    // stdClass and classes without this reference property have no matching cell.
-    let dispatch = mixed_reference_dispatch_candidates(&candidates);
+    // Classes without this reference property have no matching cell.
+    let mut dispatch = mixed_reference_dispatch_candidates(&candidates);
+    let mut dispatch_labels = match_labels.clone();
+    let stdclass_label = stdclass_id.map(|class_id| {
+        let label = ctx.next_label("mixed_propref_stdclass");
+        dispatch.push(class_id);
+        dispatch_labels.push(label.clone());
+        label
+    });
     emit_mixed_property_class_dispatch(
         ctx,
         &dispatch,
-        &match_labels,
+        &dispatch_labels,
         &null_label,
         &null_label,
     );
+    if let Some(label) = &stdclass_label {
+        emit_stdclass_ref_cell_arm(ctx, label, property, &done_label);
+    }
 
     let int_reg = abi::int_result_reg(ctx.emitter);
     let mut any_mismatch = false;
@@ -447,6 +630,62 @@ fn lower_mixed_load_prop_ref_cell_checked(
     store_ref_cell_pointer_result(ctx, inst)
 }
 
+/// Loads the cell of a `stdClass` receiver's property, an entry of its hash, and answers whether
+/// the receiver was one.
+fn lower_typed_stdclass_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<bool> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(false);
+    };
+    if !crate::types::checker::builtin_stdclass::is_stdclass(&class_name) {
+        return Ok(false);
+    }
+    let arm = ctx.next_label("stdclass_propref");
+    let done = ctx.next_label("stdclass_propref_done");
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    emit_stdclass_ref_cell_arm(ctx, &arm, property, &done);
+    ctx.emitter.label(&done);
+    store_ref_cell_pointer_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// The class id of `stdClass`, when the program has it.
+fn stdclass_class_id(ctx: &FunctionContext<'_>) -> Option<u64> {
+    ctx.module
+        .class_infos
+        .iter()
+        .find(|(name, _)| crate::types::checker::builtin_stdclass::is_stdclass(name))
+        .map(|(_, info)| info.class_id)
+}
+
+/// The `stdClass` arm of a Mixed-receiver reference read (the dispatch left the object in the
+/// integer result register): the property is an entry of the instance's hash, made a reference
+/// in place (`__rt_stdclass_prop_ref_cell`).
+fn emit_stdclass_ref_cell_arm(
+    ctx: &mut FunctionContext<'_>,
+    label: &str,
+    property: &str,
+    done_label: &str,
+) {
+    ctx.emitter.label(label);
+    let (name_label, name_len) = ctx.data.add_string(property.as_bytes());
+    let (ptr_reg, len_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // the stdClass object
+            ("rsi", "rdx")
+        }
+    };
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &name_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, name_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_prop_ref_cell");
+    abi::emit_jump(ctx.emitter, done_label);
+}
+
 /// Projects the reference arms onto the class-id dispatch shape the shared ladder expects.
 fn mixed_reference_dispatch_candidates(candidates: &[MixedReferenceCandidate]) -> Vec<u64> {
     candidates
@@ -480,7 +719,8 @@ pub(super) fn lower_mixed_load_prop_ref_cell(
     property: &str,
 ) -> Result<()> {
     let candidates = declared_mixed_reference_property_candidates(ctx, property, inst)?;
-    if candidates.is_empty() {
+    let stdclass_id = stdclass_class_id(ctx);
+    if candidates.is_empty() && stdclass_id.is_none() {
         return Err(CodegenIrError::unsupported(format!(
             "load_prop_ref_cell on Mixed receiver for property ${} with no reference-property class",
             property
@@ -501,15 +741,25 @@ pub(super) fn lower_mixed_load_prop_ref_cell(
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_mixed_object_payload_or_null(ctx, &null_label);
-    // stdClass and classes without this reference property have no matching cell.
-    let dispatch = mixed_reference_dispatch_candidates(&candidates);
+    // Classes without this reference property have no matching cell.
+    let mut dispatch = mixed_reference_dispatch_candidates(&candidates);
+    let mut dispatch_labels = match_labels.clone();
+    let stdclass_label = stdclass_id.map(|class_id| {
+        let label = ctx.next_label("mixed_propref_stdclass");
+        dispatch.push(class_id);
+        dispatch_labels.push(label.clone());
+        label
+    });
     emit_mixed_property_class_dispatch(
         ctx,
         &dispatch,
-        &match_labels,
+        &dispatch_labels,
         &null_label,
         &null_label,
     );
+    if let Some(label) = &stdclass_label {
+        emit_stdclass_ref_cell_arm(ctx, label, property, &done_label);
+    }
 
     let int_reg = abi::int_result_reg(ctx.emitter);
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
@@ -552,11 +802,20 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
     if let Some(class_name) = union_object_member_class(ctx, object)? {
         return lower_boxed_prop_initialized(ctx, inst, object, &class_name, &property);
     }
+    // A receiver with no single object layout — an untyped parameter, a `mixed` local, a union of
+    // two classes — has no slot to read here; its class is settled by runtime dispatch instead.
+    if !matches!(
+        ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Object(_)
+    ) {
+        return lower_mixed_prop_initialized(ctx, inst, object, &property);
+    }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     if !slot.is_declared && !slot_supports_untyped_unset_marker(&slot) {
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
         return store_if_result(ctx, inst);
     }
+    let slot = resolve_property_slot(ctx, object, &property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     emit_typed_property_initialized_bool(ctx, &slot, base_reg);
@@ -627,6 +886,20 @@ pub(super) fn magic_get_receiver_class(
         .any(|(name, _)| name == property)
         && !property_name_is_scope_dynamic(ctx, normalized, property)
     {
+        let visibility = class_info.property_visibilities.get(property)
+            .unwrap_or(&crate::parser::ast::Visibility::Public);
+        let declaring_class = class_info.property_declaring_classes.get(property)
+            .map(String::as_str).unwrap_or(normalized);
+        if super::super::callable_descriptors::codegen_can_access_member(
+            ctx, declaring_class, visibility,
+        ) {
+            return Ok(None);
+        }
+    }
+    // A class that allows dynamic properties may hold the name in its own hash, which php reads
+    // before it ever calls `__get` (guzzle's `FnStream` stores its `_fn_*` callables there). The
+    // runtime plan below reads the hash and answers a miss from `__get`.
+    if class_info.allow_dynamic_properties {
         return Ok(None);
     }
     if class_info.methods.contains_key(&php_symbol_key("__get")) {
@@ -928,6 +1201,9 @@ pub(super) fn emit_dynamic_plan_read(
         PropertyRuntimeAction::MagicGet => {
             lower_magic_get_prop(ctx, inst, object, &arm.class_name, property)
         }
+        PropertyRuntimeAction::DynamicHashThenMagicGet { hash_offset } => {
+            emit_dynamic_hash_read_or_magic_get(ctx, inst, object, &arm.class_name, property, *hash_offset)
+        }
         // A silent probe would consult `__isset`, which has no codegen call site in this phase. It
         // answers php null rather than a slot so that the deferral can only lose a value, never
         // expose storage.
@@ -939,6 +1215,46 @@ pub(super) fn emit_dynamic_plan_read(
             "property dispatch handed a refusal arm to its action emitter",
         )),
     }
+}
+
+/// Reads `property` from the receiver's own dynamic-property hash, and calls `__get` only when the
+/// hash holds no such entry, which is php's order for an undeclared name on a class that allows
+/// dynamic properties and declares `__get`.
+fn emit_dynamic_hash_read_or_magic_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    class_name: &str,
+    property: &str,
+    hash_offset: usize,
+) -> Result<()> {
+    let target = ctx.emitter.target;
+    let (label, key_len) = ctx.data.add_string(property.as_bytes());
+    let miss_label = ctx.next_label("dyn_hash_or_magic_miss");
+    let done_label = ctx.next_label("dyn_hash_or_magic_done");
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    abi::emit_load_from_address(ctx.emitter, abi::int_arg_reg_name(target, 0), base_reg, hash_offset);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &miss_label);
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
+        }
+    }
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&miss_label);
+    lower_magic_get_prop(ctx, inst, object, class_name, property)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Reads a RUNTIME-name undeclared property from the receiver's dynamic-property hash.

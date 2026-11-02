@@ -298,8 +298,31 @@ fn is_array_assignment_base(expr: &Expr) -> bool {
         | ExprKind::DynamicPropertyAccess { .. }
         | ExprKind::StaticPropertyAccess { .. } => true,
         ExprKind::ArrayAccess { array, .. } => is_array_assignment_base(array),
-        _ => false,
+        _ => is_temporary_write_base(expr),
     }
+}
+
+/// Returns true for an array-write base php evaluates to a TEMPORARY: `$this`, or the result of
+/// a call.
+///
+/// php compiles `f()[] = $v`, `$obj->get()['k'] = $v` and `$this['k'] = $v` alike: the base is
+/// evaluated once and the dimension write goes to that value. An `ArrayAccess` object receives
+/// `offsetSet()`; an array result is a temporary, so the write is simply discarded. Laravel writes
+/// both — `app(DeferredCallbackCollection::class)[] = $deferred` and
+/// `return $this['env'] = …;` in `Application` — and each refused its whole file. The lowering
+/// binds such a base to a hidden local first (`AssignmentExpressionLowerer::bind_temp`), which is
+/// that same "evaluate once, write to the value" rule. Nullsafe calls are excluded: php refuses
+/// them in write context.
+pub(super) fn is_temporary_write_base(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::This
+            | ExprKind::FunctionCall { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::ClosureCall { .. }
+            | ExprKind::ExprCall { .. }
+    )
 }
 
 /// Stateful lowerer that classifies assignment-expression targets and generates prelude
@@ -417,6 +440,8 @@ impl AssignmentExpressionLowerer {
                         kind: ExprKind::ArrayAccess { .. },
                         ..
                     } => self.stabilize_receiver(other, rhs),
+                    // `f()[k] = v` / `$this[k] = v`: the write goes to the evaluated value.
+                    other if is_temporary_write_base(&other) => self.bind_temp(other),
                     other => other,
                 };
                 Expr::new(
@@ -444,7 +469,15 @@ impl AssignmentExpressionLowerer {
             ExprKind::StaticPropertyAccess { receiver, property } => {
                 Expr::new(ExprKind::StaticPropertyAccess { receiver, property }, span)
             }
-            other => Expr::new(other, span),
+            // The append form hands the base itself here (`f()[] = v`, `$this[] = v`).
+            other => {
+                let expr = Expr::new(other, span);
+                if is_temporary_write_base(&expr) {
+                    self.bind_temp(expr)
+                } else {
+                    expr
+                }
+            }
         }
     }
 
@@ -622,6 +655,7 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
             collect_instanceof_target_dependencies(target, dependencies);
         }
         ExprKind::Negate(value)
+        | ExprKind::ArrayReference(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
@@ -720,6 +754,12 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
         | ExprKind::Yield { .. }
         | ExprKind::YieldFrom(_)
         | ExprKind::MagicConstant(_) => {}
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            collect_assignment_target_dependencies(property, dependencies);
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            collect_assignment_target_dependencies(receiver, dependencies);
+        }
     }
 }
 
@@ -766,6 +806,7 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
                 || instanceof_target_may_write_dependency(target, dependencies)
         }
         ExprKind::Negate(value)
+        | ExprKind::ArrayReference(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
@@ -898,6 +939,12 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
         | ExprKind::Yield { .. }
         | ExprKind::YieldFrom(_)
         | ExprKind::MagicConstant(_) => false,
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_may_write_dependency(property, dependencies)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            expr_may_write_dependency(receiver, dependencies)
+        }
     }
 }
 
@@ -987,6 +1034,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
                 || instanceof_target_contains_equivalent(target, needle)
         }
         ExprKind::Negate(value)
+        | ExprKind::ArrayReference(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
@@ -1125,6 +1173,12 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => false,
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_contains_equivalent(property, needle)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            expr_contains_equivalent(receiver, needle)
+        }
     }
 }
 

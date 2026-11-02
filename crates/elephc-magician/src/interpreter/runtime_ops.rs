@@ -18,6 +18,52 @@ use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
 use crate::value::RuntimeCellHandle;
 
+/// Which generated AOT name table `aot_member_names` should scan.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AotMemberNameKind {
+    /// `__elephc_eval_reflection_method_names`.
+    Method,
+}
+
+impl AotMemberNameKind {
+    /// A short, stable tag so one memo table can hold every kind without colliding.
+    ///
+    /// It occupies the `member_name` half of the memo key, which no real member name can equal:
+    /// the tags are chosen to be spellings PHP rejects as identifiers.
+    pub(crate) fn memo_tag(self) -> &'static str {
+        match self {
+            Self::Method => "#method",
+        }
+    }
+}
+
+/// Copies one generated AOT name array into owned strings and releases the array.
+///
+/// Kept as a free function so the trait default and the memoizing adapter override run the very
+/// same code on a miss; a second transcription of it would be free to drift.
+pub fn aot_member_names_uncached<V: RuntimeValueOps>(
+    values: &mut V,
+    kind: AotMemberNameKind,
+    class_name: &str,
+) -> Result<Vec<String>, EvalStatus> {
+    let array = match kind {
+        AotMemberNameKind::Method => values.reflection_method_names(class_name)?,
+    };
+    let len = values.array_len(array)?;
+    let mut names = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.int(position as i64)?;
+        let value = values.array_get(array, key)?;
+        let bytes = values.string_bytes(value);
+        // Both cells are caller-owned reads; the array's release only retires its own elements.
+        values.release(value)?;
+        values.release(key)?;
+        names.push(String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?);
+    }
+    values.release(array)?;
+    Ok(names)
+}
+
 mod builtins;
 mod object_operators;
 pub(crate) use builtins::default_builtin_call;
@@ -151,6 +197,12 @@ pub trait RuntimeValueOps {
         let truthy = self.truthy(value)?;
         self.bool_value(truthy)
     }
+    /// Reports that a filesystem path may have been created, removed or renamed.
+    ///
+    /// The generated runtime caches realpath() answers the way php does, and forgets them when
+    /// its own path-changing helpers run; interpreted `unlink`/`rename`/`mkdir`/... change paths
+    /// without them, so they report here. Nothing to forget without a generated runtime.
+    fn filesystem_paths_changed(&mut self) {}
 
     /// Publishes a successful eval-owned resource close to a shared native inventory.
     fn resource_closed(&mut self, _resource: RuntimeCellHandle) -> Result<(), EvalStatus> { Ok(()) }
@@ -158,6 +210,19 @@ pub trait RuntimeValueOps {
     /// Writes a diagnostic already dispatched and filtered by its precise PHP error level.
     fn warning_unhandled(&mut self, message: &str) -> Result<(), EvalStatus> {
         self.warning(message)
+    }
+
+    /// Records a diagnostic no user handler took as `error_get_last()`'s answer.
+    ///
+    /// Only the generated runtime holds that record; pure interpreter implementations have none.
+    fn record_last_error(
+        &mut self,
+        _level: i64,
+        _message: &str,
+        _file: &str,
+        _line: i64,
+    ) -> Result<(), EvalStatus> {
+        Ok(())
     }
 
     /// Materializes one suspended native PHP frame, or returns None at the end of the stack.
@@ -272,6 +337,46 @@ pub trait RuntimeValueOps {
         array: RuntimeCellHandle,
         value: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Appends one byte string, which need not be UTF-8, to a runtime string-array cell.
+    fn string_array_push_bytes(
+        &mut self,
+        array: RuntimeCellHandle,
+        value: &[u8],
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.string_array_push(array, &String::from_utf8_lossy(value))
+    }
+
+    /// Reports whether the element at `position` of an indexed array is a native by-reference
+    /// MARKER cell -- what a compiled caller stores for a variable it passes to a callable -- as
+    /// `(slot address, source tag)`. `array_get` dereferences markers, so only the raw slot tells.
+    /// Hosts whose arrays do not use the generated runtime's layout have none.
+    fn array_invoker_marker_at(
+        &mut self,
+        _array: RuntimeCellHandle,
+        _position: usize,
+    ) -> Result<Option<(usize, u64)>, EvalStatus> {
+        Ok(None)
+    }
+
+    /// Creates a runtime indexed-array cell specialized for raw object-pointer slots, the layout a
+    /// compiled `Class ...$items` variadic reads. Hosts without that layout build a Mixed array.
+    fn object_array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.array_new(capacity)
+    }
+
+    /// Appends one object to an array made by `object_array_new`. The array retains the object;
+    /// the caller keeps its own reference.
+    fn object_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let index = self.array_len(array)?;
+        let key = self.int(index as i64)?;
+        let value = self.retain(object)?;
+        self.array_set(array, key, value)
+    }
 
     /// Creates a runtime associative-array cell with room for at least `capacity` elements.
     fn assoc_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
@@ -395,6 +500,20 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus>;
 
+    /// Stores one serialized property on a class-like's DECLARED slot, ignoring visibility.
+    ///
+    /// `unserialize()` hydrates a payload without the calling scope's property rules: a mangled
+    /// private/protected key must reach its declared slot (and clear its typed-uninitialized
+    /// marker), not become a dynamic property beside it.
+    fn hydrate_declared_property(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+        value: RuntimeCellHandle,
+    ) -> Result<(), EvalStatus> {
+        self.property_set(object, property, value)
+    }
+
     /// Mirrors an eval `__set` pair into the generated runtime's Fiber-local guard chain.
     fn native_magic_set_guard_push(
         &mut self,
@@ -474,6 +593,15 @@ pub trait RuntimeValueOps {
     /// Returns the number of public JSON-visible properties on a runtime object.
     fn object_property_len(&mut self, object: RuntimeCellHandle) -> Result<usize, EvalStatus>;
 
+    /// Returns the compiled program's `(array)` cast of an object it laid out (declared
+    /// properties with php's visibility-mangled keys), or `None` when no such cast applies.
+    fn compiled_object_to_array(
+        &mut self,
+        _object: RuntimeCellHandle,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
+    }
+
     /// Returns the public property key at a zero-based JSON object iteration position.
     fn object_property_iter_key(
         &mut self,
@@ -511,6 +639,21 @@ pub trait RuntimeValueOps {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Calls a named method and writes its result through caller-owned storage.
+    ///
+    /// Runtime-backed implementations may override this to keep a native pointer out of the
+    /// Rust `Result` return ABI while crossing an assembly bridge.
+    fn method_call_out(
+        &mut self,
+        object: RuntimeCellHandle,
+        method: &str,
+        args: Vec<RuntimeCellHandle>,
+        result: &mut RuntimeCellHandle,
+    ) -> Result<(), EvalStatus> {
+        *result = self.method_call(object, method, args)?;
+        Ok(())
+    }
+
     /// Calls a named static method through the generated AOT bridge.
     fn static_method_call(
         &mut self,
@@ -532,12 +675,17 @@ pub trait RuntimeValueOps {
     }
 
     /// Materializes a synthetic `ReflectionAttribute` object through generated private-layout code.
+    ///
+    /// `rendered` is PHP's `ReflectionAttribute::__toString()` text. It is produced HERE rather
+    /// than in the emitted helper because it spells out every literal argument, and only the
+    /// interpreter holds those for a runtime-declared class.
     fn reflection_attribute_new(
         &mut self,
         name: &str,
         args: RuntimeCellHandle,
         target: u64,
         repeated: bool,
+        rendered: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Materializes a synthetic ReflectionClass/Method/Property object through generated private-layout code.
@@ -581,13 +729,58 @@ pub trait RuntimeValueOps {
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Returns generated AOT member names for one class as owned strings.
+    ///
+    /// Every caller of the handle-returning scanners above copies the array out and releases it
+    /// on the spot -- the handle is always a throwaway. Asking for the owned list instead lets
+    /// the generated-runtime adapter answer from a memo, because the tables being scanned are
+    /// read-only generated data and the answer is a constant of the program.
+    ///
+    /// The default is exactly what those callers wrote by hand, so an implementation whose
+    /// tables are NOT compile-time constant -- the test adapter, which registers class-likes as
+    /// a fixture runs -- keeps re-reading them.
+    fn aot_member_names(
+        &mut self,
+        kind: AotMemberNameKind,
+        class_name: &str,
+    ) -> Result<Vec<String>, EvalStatus>
+    where
+        Self: Sized,
+    {
+        aot_member_names_uncached(self, kind, class_name)
+    }
+
     /// Returns the generated program source file used for AOT reflection metadata.
     fn reflection_source_file(&mut self) -> Result<Option<String>, EvalStatus> {
         Ok(None)
     }
 
+    /// Returns the generated source file that declared one AOT class-like.
+    fn reflection_class_source_file(
+        &mut self,
+        _class_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        Ok(None)
+    }
+
     /// Returns generated AOT ReflectionClass modifier flags for one class.
     fn reflection_class_flags(&mut self, class_name: &str) -> Result<Option<u64>, EvalStatus>;
+
+    /// Returns the generated AOT class doc comment when the class declares one.
+    fn reflection_class_doc_comment(
+        &mut self,
+        _class_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        Ok(None)
+    }
+
+    /// Returns the canonical generated AOT class-like name for a case-insensitive lookup.
+    fn reflection_canonical_class_name(
+        &mut self,
+        _class_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        Ok(None)
+    }
 
     /// Returns generated AOT ReflectionProperty flags for a class/property pair.
     fn reflection_property_flags(
@@ -670,6 +863,20 @@ pub trait RuntimeValueOps {
         args: Vec<RuntimeCellHandle>,
     ) -> Result<(), EvalStatus>;
 
+    /// Calls a runtime constructor using the resolved AOT declaring class as dispatch target.
+    ///
+    /// The default preserves existing test/embedding behavior. Generated-runtime adapters
+    /// override it when an eval-declared child inherits a constructor from an AOT ancestor,
+    /// whose runtime class id differs from the ancestor's constructor slot.
+    fn construct_object_for_class(
+        &mut self,
+        _class_name: &str,
+        object: RuntimeCellHandle,
+        args: Vec<RuntimeCellHandle>,
+    ) -> Result<(), EvalStatus> {
+        self.construct_object(object, args)
+    }
+
     /// Returns whether a runtime class table contains the requested class name.
     fn class_exists(&mut self, name: &str) -> Result<bool, EvalStatus>;
 
@@ -681,6 +888,15 @@ pub trait RuntimeValueOps {
 
     /// Returns whether a runtime enum table contains the requested enum name.
     fn enum_exists(&mut self, name: &str) -> Result<bool, EvalStatus>;
+
+    /// Records the interpreter frames live right now as the trace of a Throwable eval allocated.
+    ///
+    /// A compiled `new` does this itself at allocation; an interpreted `new Exception(...)`
+    /// allocates through the generated name-keyed factory instead and would keep the declared
+    /// empty trace. The default does nothing, for adapters with no compiled object layout.
+    fn capture_throwable_trace(&mut self, _object: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        Ok(())
+    }
 
     /// Tests whether a boxed object cell satisfies a class/interface relation.
     fn object_is_a(
@@ -719,6 +935,19 @@ pub trait RuntimeValueOps {
 
     /// Returns the concrete boxed Mixed runtime tag after unwrapping nested Mixed cells.
     fn type_tag(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus>;
+
+    /// Returns the first three words of a runtime cell, for `ELEPHC_EVAL_TRACE` only.
+    ///
+    /// The default answers `None`, which is the ONLY safe answer for an implementation whose
+    /// handles are not real cell pointers — the test harness mints them from indices, so its
+    /// `as_ptr()` yields values like `0x1`: not null, not aligned, and not readable. The trace
+    /// used to read three words straight through the handle, which aborted the process on the
+    /// alignment precondition and, once that was bypassed, segfaulted. Only an implementation
+    /// that OWNS the cell representation may answer, so the peek belongs behind this method
+    /// rather than at the call site.
+    fn trace_result_words(&mut self, _value: RuntimeCellHandle) -> Option<[u64; 3]> {
+        None
+    }
 
     /// Creates an invoker-only by-reference marker for a staged Mixed slot.
     fn invoker_ref_cell(
@@ -782,6 +1011,15 @@ pub trait RuntimeValueOps {
     /// Releases one owned runtime cell that is no longer held by the eval scope.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
+    /// Copies one PHP value for by-value assignment.
+    ///
+    /// Runtime adapters override this to create a detached Mixed cell while
+    /// retaining refcounted payloads. The default keeps lightweight test
+    /// adapters compatible when their values have no independent storage.
+    fn copy_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.retain(value)
+    }
+
     /// Collects native cycles after an explicit root removal.
     fn collect_cycles(&mut self) -> Result<(), EvalStatus> {
         self.gc_collect_cycles().map(|_| ())
@@ -830,8 +1068,26 @@ pub trait RuntimeValueOps {
         Err(EvalStatus::UnsupportedConstruct)
     }
 
-    /// Copies a PHP value independently from a persistent reference wrapper.
-    fn copy_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> { self.retain(value) }
+    /// Points caller-sensitive runtime hooks at another eval context and returns the previous one.
+    ///
+    /// Hooks that read the class scope (protected/private property access, magic methods) consult
+    /// the context the adapter is bound to. Adapters with no such binding keep the default no-op.
+    /// Rebinds a COMPILED closure descriptor to a new `$this`; adapters without compiled
+    /// closures refuse.
+    fn bind_native_closure(
+        &mut self,
+        _closure: RuntimeCellHandle,
+        _new_this: Option<RuntimeCellHandle>,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::RuntimeFatal)
+    }
+
+    fn rebind_context(
+        &mut self,
+        context: *const crate::abi::ElephcEvalContext,
+    ) -> *const crate::abi::ElephcEvalContext {
+        context
+    }
 
     /// Retains hidden object-owned edges for native GC; arena-backed adapters need no extra owners.
     fn retain_object_children(
@@ -865,8 +1121,28 @@ pub trait RuntimeValueOps {
         Ok(None)
     }
 
+    /// Reads the target runtime's heap accounting for `memory_get_usage()` and its peak twin.
+    ///
+    /// `peak` selects the high-water counter; `real_usage` selects the bytes the allocator has
+    /// taken from its arena instead of the bytes it currently has handed out — the same two
+    /// quantities php's Zend memory manager reports.
+    ///
+    /// The DEFAULT ANSWERS ZERO, and that is a measurement rather than a placeholder: a test
+    /// adapter has no generated runtime, so no elephc heap block exists to account for. Only the
+    /// runtime adapter has counters, and it overrides this. Reporting an invented plausible
+    /// number here would be worse than reporting the zero bytes that are actually tracked.
+    fn memory_usage_bytes(&mut self, _peak: bool, _real_usage: bool) -> Result<i64, EvalStatus> {
+        Ok(0)
+    }
+
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Returns `Fiber::getCurrent()`: the running compiled `Fiber` object, or null on the main
+    /// thread. A host with no fibers is always on the main thread.
+    fn fiber_current(&mut self) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.null()
+    }
 
     /// Creates a runtime bool cell.
     fn bool_value(&mut self, value: bool) -> Result<RuntimeCellHandle, EvalStatus>;
@@ -1059,6 +1335,23 @@ pub trait RuntimeValueOps {
     /// Emits one runtime cell to stdout using PHP echo semantics.
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
+    /// Writes raw bytes to `error_log()`'s DEFAULT channel (message_type 0/4: no destination
+    /// configured, or a SAPI-handler type this embedding has no SAPI for).
+    ///
+    /// fd 2 is a raw OS file descriptor shared by the whole process regardless of which half of
+    /// a hybrid binary writes to it -- the compiled backend's own `__rt_error_log` runtime helper
+    /// (`src/codegen_support/runtime/system/error_log.rs`) reaches the SAME destination with a
+    /// raw `write(2, ...)` syscall, with no output-buffering (`ob_start()`) coordination needed
+    /// either way, since `error_log()` never writes through the stdout buffer stack. The default
+    /// body is therefore correct for every embedding unless one specifically wants to capture or
+    /// redirect it (the test fixture overrides it to capture bytes for assertions).
+    fn error_log_write_stderr(&mut self, bytes: &[u8]) -> Result<(), EvalStatus> {
+        use std::io::Write;
+        std::io::stderr()
+            .write_all(bytes)
+            .map_err(|_| EvalStatus::RuntimeFatal)
+    }
+
     /// Casts one runtime cell to a PHP string and copies its bytes for parsing.
     fn string_bytes(&mut self, value: RuntimeCellHandle) -> Result<Vec<u8>, EvalStatus>;
 
@@ -1126,6 +1419,30 @@ pub(crate) const EVAL_TAG_NULL: u64 = 8;
 pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
 pub(super) const EVAL_TAG_CALLABLE: u64 = 10;
 pub(super) const EVAL_TAG_INVOKER_REF_CELL: u64 = 11;
+
+/// Boxes one raw native slot word, recovering an array's LIVE shape instead of trusting its tag.
+///
+/// A compiled `array` parameter is spelled with the packed runtime tag whatever it ends up
+/// holding, because the static type is the only thing the caller's frame layout records. A
+/// string-keyed hash forwarded through one would therefore be read back here as a packed array,
+/// and every key would be lost. The heap-kind byte on the payload is the only honest source for
+/// the shape, and `raw_heap_word_value` reads it.
+///
+/// The declared tag stays the answer for everything that carries no heap kind — a callable
+/// descriptor, an empty slot — so this narrows to the two array tags and keeps the old path as
+/// the fallback.
+pub(super) fn raw_slot_word_value(
+    source_tag: u64,
+    word: u64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if word != 0 && matches!(source_tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        if let Ok(value) = values.raw_heap_word_value(word) {
+            return Ok(value);
+        }
+    }
+    values.raw_word_value(source_tag, word)
+}
 
 pub(super) const EVAL_REFLECTION_OWNER_CLASS: u64 = 0;
 pub(super) const EVAL_REFLECTION_OWNER_METHOD: u64 = 1;

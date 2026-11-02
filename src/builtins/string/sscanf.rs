@@ -5,9 +5,9 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - Accepts required `string` and `format` params plus a variadic `vars` list.
-//! - `check` returns `PhpType::Array(Box::new(PhpType::Str))` because the macro
-//!   `returns:` field cannot express a parameterized array type inline.
+//! - Accepts required `string` and `format` params plus a by-reference variadic `vars` list.
+//! - Calls without output variables return `array<mixed>`; calls with outputs return the
+//!   assignment count after writing parsed values into caller storage.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -21,10 +21,14 @@ builtin! {
     ),
 }
 
-/// Returns `PhpType::Array(Box::new(PhpType::Str))` for a `sscanf` call.
+/// Returns the output-variable assignment count or a parsed Mixed array.
 ///
 /// A check hook is required because the `builtin!` macro cannot express a
-/// parameterized array return type inline.
-fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(PhpType::Array(Box::new(PhpType::Str)))
+/// parameterized array return type or the call-shape-dependent integer result inline.
+fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    if cx.args.len() > 2 {
+        Ok(PhpType::Int)
+    } else {
+        Ok(PhpType::Array(Box::new(PhpType::Mixed)))
+    }
 }

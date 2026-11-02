@@ -9,6 +9,7 @@
 //! - Type parameters keep their lexical spelling instead of namespace qualification.
 
 use super::state::Parser;
+use std::sync::Arc;
 use crate::errors::EvalParseError;
 use crate::eval_ir::{generic_type, EvalGenericTemplate, EvalStmt};
 use crate::lexer::{Token, TokenKind};
@@ -136,11 +137,11 @@ impl Parser {
 /// Re-parses one specialization with concrete type syntax at the retained lexical scope.
 pub(crate) fn instantiate(template: &EvalGenericTemplate, bindings: &Bindings, name: &str) -> Result<EvalStmt, EvalParseError> {
     let mut parser = specialization_parser(template, bindings, name)?;
-    let program = parser.parse_program()?;
+    let program = parser.parse_program().map_err(|diagnostic| diagnostic.error())?;
     let mut declaration = program.statements().first().cloned().ok_or(EvalParseError::UnexpectedEof)?;
     match (&mut declaration, template.prototype.as_ref()) {
         (EvalStmt::FunctionDecl { attributes, .. }, EvalStmt::FunctionDecl { attributes: original, .. }) => *attributes = original.clone(),
-        (EvalStmt::ClassDecl(class), EvalStmt::ClassDecl(original)) => *class = class.clone().with_attributes(original.attributes().to_vec()),
+        (EvalStmt::ClassDecl(class), EvalStmt::ClassDecl(original)) => *class = Arc::new((**class).clone().with_attributes(original.attributes().to_vec())),
         (EvalStmt::InterfaceDecl(interface), EvalStmt::InterfaceDecl(original)) => *interface = interface.clone().with_attributes(original.attributes().to_vec()),
         (EvalStmt::TraitDecl(trait_decl), EvalStmt::TraitDecl(original)) => *trait_decl = trait_decl.clone().with_attributes(original.attributes().to_vec()),
         _ => {}

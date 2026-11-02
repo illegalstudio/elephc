@@ -2,7 +2,7 @@
 title: "serialize() - internals"
 description: "Compiler internals for serialize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 757
+  order: 788
 ---
 
 ## `serialize()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/serialize.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/serialize.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,8 +49,9 @@ function serialize(mixed $value): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/serialize.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/serialize.rs) (`eval_builtin!`)
-- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(94)`).
-- **Dispatch hooks**: _none_ (shared runtime dispatch)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `dynamic-object-coercion`.
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

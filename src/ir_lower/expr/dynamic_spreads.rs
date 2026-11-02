@@ -14,6 +14,7 @@ use super::*;
 
 /// Tracks runtime parameter occupancy separately from the next positional argument index.
 struct SpreadBindings {
+    names: Vec<String>,
     slots: Vec<String>,
     filled: Vec<String>,
     next: String,
@@ -31,6 +32,12 @@ enum StagedSpreadArgument {
 }
 
 /// Lowers unpack sources for by-value fixed signatures and compiler-owned surplus collectors.
+///
+/// The hidden `func_get_args()` collector is no source variadic: once `debug_backtrace()` arms
+/// it on every body, refusing it left `new self(...$args)` with one opaque operand for a
+/// seven-parameter constructor, and Monolog's `LogRecord::with()` stopped compiling. The unpack
+/// binds the source-visible parameters and the collector is appended -- empty, or holding the
+/// passed-argument count a body with optional parameters reads first.
 pub(super) fn lower_boxed_spread_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -40,13 +47,15 @@ pub(super) fn lower_boxed_spread_args(
 ) -> Option<Vec<ValueId>> {
     let hidden = crate::func_args::sig_collects_surplus_args(sig);
     if sig.variadic.is_some() && !hidden || sig.ref_params.iter().any(|by_ref| *by_ref)
-        || !hidden && !preserve_values && sig.defaults.iter().any(Option::is_some)
+        || !hidden && !preserve_values
+            && sig.defaults.iter().flatten().any(|default| !is_literal_default(default))
         || crate::func_args::sig_has_hidden_argc_param(sig)
         || !args.iter().any(|arg| match &arg.kind {
             ExprKind::Spread(source) => {
                 hidden || preserve_values
                     || spread_source_storage_type_for_ir(ctx, source).codegen_repr() == PhpType::Mixed
                     || nested_spread_assoc_literal(source)
+                    || (args.len() > 1 && spread_source_has_runtime_string_keys(ctx, source))
             }
             _ => false,
         })
@@ -68,6 +77,7 @@ pub(super) fn lower_boxed_spread_args(
         });
     }
     let mut state = SpreadBindings {
+        names: sig.params.iter().map(|(name, _)| name.clone()).collect(),
         slots: Vec::new(), filled: Vec::new(),
         next: initialize_slot(ctx, PhpType::Int, &Expr::new(ExprKind::IntLiteral(0), span)),
         named: initialize_slot(ctx, PhpType::Bool, &Expr::new(ExprKind::BoolLiteral(false), span)),
@@ -118,10 +128,22 @@ pub(super) fn lower_boxed_spread_args(
         if preserve_values && sig.defaults.get(index).is_some_and(Option::is_some) {
             continue;
         }
+        if let Some(default) = sig.defaults.get(index).and_then(Option::as_ref) {
+            // An omitted parameter takes its literal default, exactly as the callee would bind it.
+            let supplied = ctx.load_local(filled, Some(span));
+            let fill = ctx.builder.create_named_block("spread.default.fill", Vec::new());
+            let next = ctx.builder.create_named_block("spread.default.next", Vec::new());
+            conditional(ctx, supplied.value, next, fill);
+            ctx.builder.position_at_end(fill);
+            store_expr_into_temp(ctx, &state.slots[index], PhpType::Mixed, default, span);
+            branch(ctx, next);
+            ctx.builder.position_at_end(next);
+            continue;
+        }
         let ready = ctx.load_local(filled, Some(span));
         require(ctx, ready, "ArgumentCountError", "Too few arguments for unpacked call", span);
     }
-    let mut operands = Vec::with_capacity(state.slots.len());
+    let mut operands = Vec::with_capacity(state.slots.len() + usize::from(hidden));
     for slot in &state.slots {
         let value = ctx.load_local(&slot, Some(span));
         let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
@@ -155,6 +177,32 @@ pub(super) fn lower_boxed_spread_args(
         retire_slot(ctx, &source, span);
     }
     Some(if preserve_values { operands } else { coerce_operands_to_params(ctx, sig, operands) })
+}
+
+/// Returns true for a default value the caller can store without a scope of its own.
+fn is_literal_default(default: &Expr) -> bool {
+    match &default.kind {
+        ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null => true,
+        ExprKind::ArrayLiteral(items) => items.iter().all(is_literal_default),
+        _ => false,
+    }
+}
+
+/// Returns true for a non-literal unpack source whose keys are strings known only at run time.
+///
+/// `f(1, ...$named)` and `f(...$a, ...$b)` with typed string-keyed hashes have no static
+/// expansion: the keys, hence the parameters they bind and the overwrite errors php raises, are
+/// only visible while the hash is walked, so the runtime walk is the lowering that binds them.
+fn spread_source_has_runtime_string_keys(ctx: &LoweringContext<'_, '_>, source: &Expr) -> bool {
+    matches!(source.kind, ExprKind::Variable(_) | ExprKind::PropertyAccess { .. })
+        && matches!(
+            spread_source_storage_type_for_ir(ctx, source).codegen_repr(),
+            PhpType::AssocArray { .. }
+        )
 }
 
 /// Returns true for an unpack source that is a keyed literal carrying a nested `...$source`.
@@ -199,6 +247,21 @@ fn retire_slot(ctx: &mut LoweringContext<'_, '_>, slot: &str, span: Span) {
 /// Iterates a boxed source with the normal runtime iterator, preserving sparse and named keys.
 fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &SpreadBindings, source_slot: &str) {
     let source = ctx.load_local(source_slot, Some(state.span));
+    // A `[$object, 'method']` array that crossed a `callable` slot is a descriptor (tag 10), which
+    // the iterator does not walk: `method_exists(...$this->controller)` in Symfony's
+    // `ControllerEvent` warned "foreach() argument must be of type array|object" and then raised
+    // "Too few arguments for unpacked call". Rebuild its two elements first, exactly as the
+    // positional spread narrowing does; every other cell passes through untouched.
+    let source = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![source.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::MixedSpreadArray,
+        ))),
+        PhpType::Mixed,
+        crate::ir::RuntimeFnId::MixedSpreadArray.effects(),
+        Some(state.span),
+    );
     let (iterator, iterator_owner, _) = ctx.emit_iter_start(source, false, state.span);
     let key_slot = initialize_owned_slot(
         ctx,
@@ -273,13 +336,11 @@ fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &Sp
 }
 
 /// Binds a string-keyed value after checking that the parameter has not already been populated.
-fn bind_named(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &SpreadBindings, index: usize, value: &str) {
+fn bind_named(ctx: &mut LoweringContext<'_, '_>, _sig: &FunctionSig, state: &SpreadBindings, index: usize, value: &str) {
     let occupied = ctx.load_local(&state.filled[index], Some(state.span));
     let zero = emit_i64_at_span(ctx, 0, state.span);
     let free = compare_ints(ctx, occupied.value, zero.value, CmpPredicate::Eq, state.span);
-    let message = if state.collector.is_some() {
-        format!("Named parameter ${} overwrites previous argument", sig.params[index].0)
-    } else { "Named parameter overwrites previous argument".to_string() };
+    let message = format!("Named parameter ${} overwrites previous argument", state.names[index]);
     require(ctx, free, "Error", &message, state.span);
     bind_slot(ctx, state, index, value);
     let extent = emit_i64_at_span(ctx, index as i64 + 1, state.span);

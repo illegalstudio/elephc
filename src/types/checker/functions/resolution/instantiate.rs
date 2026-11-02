@@ -115,7 +115,7 @@ impl Checker {
         &mut self,
         name: &str,
         decl: &crate::types::checker::FnDecl,
-        bindings: generics::Bindings,
+        mut bindings: generics::Bindings,
         span: crate::span::Span,
         record_site: bool,
     ) -> Result<String, CompileError> {
@@ -142,6 +142,13 @@ impl Checker {
             let bound_ty = self.resolve_type_expr(&generics::substitute_value_type(bound, &bindings), span)?;
             let argument_ty = self.resolve_generic_bound_argument(argument, span)?;
             if !self.type_accepts(&bound_ty, &argument_ty) {
+            // A PHPDoc template's bound is advice php never enforces: an argument outside it
+            // (`id("seven")` under `@template T of int`) reads the parameter as `mixed`, the
+            // erased signature php itself calls, instead of refusing a call php runs.
+                if param.doc_annotated {
+                    generics::erase_doc_binding(&mut bindings, &param.name);
+                    continue;
+                }
                 return Err(CompileError::new(
                     span,
                     &format!(

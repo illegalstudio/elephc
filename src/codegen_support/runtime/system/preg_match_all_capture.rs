@@ -58,7 +58,10 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     let pair_ptr_off = piece_offset_off + 8;
     let mixed_ptr_off = pair_ptr_off + 8;
     let row_off = mixed_ptr_off + 8;
-    let stack_size = (row_off + 48 + 15) & !15;
+    let start_off = row_off + 8;
+    // PATTERN_ORDER `(*MARK)` names, keyed by match number, or 0 while no match set one.
+    let marks_off = start_off + 8;
+    let stack_size = (start_off + 48 + 15) & !15;
     let save_off = stack_size - 16;
 
     emitter.blank();
@@ -73,9 +76,11 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x3, [sp, #{}]", subject_ptr_off));        // preserve the elephc subject pointer
     emitter.instruction(&format!("str x4, [sp, #{}]", subject_len_off));        // preserve the elephc subject length
     emitter.instruction(&format!("str x5, [sp, #{}]", preg_flags_off));         // preserve PHP preg_match_all flags
+    emitter.instruction(&format!("str x6, [sp, #{}]", start_off));              // preserve PHP's requested starting byte offset
     emitter.instruction(&format!("str xzr, [sp, #{}]", group_rows_off));        // no group-row table until PATTERN_ORDER setup
     emitter.instruction(&format!("str xzr, [sp, #{}]", regmatches_ptr_off));    // no offset-pair buffer until compile succeeds
     emitter.instruction(&format!("str xzr, [sp, #{}]", match_count_off));       // match count starts at zero
+    emitter.instruction(&format!("str xzr, [sp, #{}]", marks_off));             // no PATTERN_ORDER mark table yet
 
     emit_preg_match_all_capture_validate_flags_arm64(emitter, preg_flags_off);
 
@@ -113,6 +118,22 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.bl_c("strlen");                                                     // retain the established C-string subject boundary
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_len_off));        // save the complete subject length for offset matching
 
+    // -- normalize PHP's start offset: negative counts from the end (clamped at 0), past the end fails --
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", start_off));              // load the requested starting offset
+    emitter.instruction("cmp x9, #0");                                          // a negative offset is relative to the subject end
+    emitter.instruction("b.ge __rt_pma_cap_offset_nonnegative");                // keep non-negative offsets unchanged
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_len_off));       // load the subject length for negative normalization
+    emitter.instruction("add x9, x10, x9");                                     // convert to an absolute byte offset
+    emitter.instruction("cmp x9, #0");                                          // PHP clamps an offset before the subject start
+    emitter.instruction("csel x9, xzr, x9, lt");                                // clamp to the subject start
+    emitter.label("__rt_pma_cap_offset_nonnegative");
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_len_off));       // load the subject length for the upper bound
+    emitter.instruction("cmp x9, x10");                                         // the offset may equal the length but not exceed it
+    emitter.instruction("b.gt __rt_pma_cap_malloc_fail");                       // free the handle and pair vector, then return false and []
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_cstr_off));      // reload the subject C string
+    emitter.instruction("add x10, x10, x9");                                    // first search position = subject + offset
+    emitter.instruction(&format!("str x10, [sp, #{}]", current_cstr_off));      // seed the search cursor
+
     emit_preg_match_all_capture_init_matrix_arm64(
         emitter,
         preg_flags_off,
@@ -140,9 +161,22 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [sp, #{}]", match_count_off));        // reload the running match count
     emitter.instruction("add x9, x9, #1");                                      // count this non-overlapping match
     emitter.instruction(&format!("str x9, [sp, #{}]", match_count_off));        // save the updated match count
+    // PATTERN_ORDER collects each match's `(*MARK)` under its match number; SET_ORDER rows take
+    // theirs directly, when the row is keyed.
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", preg_flags_off));         // reload PHP flags
+    emitter.instruction(&format!("tst x9, #{}", PREG_SET_ORDER));               // SET_ORDER rows carry their own mark
+    emitter.instruction("b.ne __rt_pma_cap_mark_noted");                        // skip the PATTERN_ORDER mark table
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass the handle holding the last match
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", marks_off));              // pass the mark table, or 0
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", match_count_off));        // reload the running match count
+    emitter.instruction("sub x2, x2, #1");                                      // this match's zero-based number
+    emitter.instruction("bl __rt_preg_mark_note");                              // record the match's mark, if it set one
+    emitter.instruction(&format!("str x0, [sp, #{}]", marks_off));              // keep the possibly-created mark table
+    emitter.label("__rt_pma_cap_mark_noted");
 
     emit_preg_match_all_capture_append_match_arm64(
         emitter,
+        handle_off,
         preg_flags_off,
         nmatch_off,
         regmatches_ptr_off,
@@ -164,12 +198,14 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.label("__rt_pma_cap_done");
     emit_preg_match_all_capture_finish_pattern_order_arm64(
         emitter,
+        handle_off,
         preg_flags_off,
         nmatch_off,
         group_rows_off,
         outer_off,
         group_idx_off,
         mixed_ptr_off,
+        marks_off,
     );
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
@@ -283,6 +319,7 @@ fn emit_preg_match_all_capture_init_matrix_arm64(
 #[allow(clippy::too_many_arguments)]
 fn emit_preg_match_all_capture_append_match_arm64(
     emitter: &mut Emitter,
+    handle_off: usize,
     preg_flags_off: usize,
     nmatch_off: usize,
     regmatches_ptr_off: usize,
@@ -347,6 +384,23 @@ fn emit_preg_match_all_capture_append_match_arm64(
     emitter.instruction(&format!("ldr x13, [sp, #{}]", nmatch_off));            // reload compiled slot count
     emitter.instruction("cmp x12, x13");                                        // have all groups for this match been stored?
     emitter.instruction("b.ge __rt_pma_cap_append_set_row");                    // box the completed SET_ORDER row
+    // php ends a SET_ORDER row at the last group that participated: trailing unmatched groups are
+    // dropped, unless PREG_UNMATCHED_AS_NULL asks for their nulls.
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", preg_flags_off));         // reload PHP flags for the trailing-group rule
+    emitter.instruction(&format!("tst x9, #{}", PREG_UNMATCHED_AS_NULL));       // UNMATCHED_AS_NULL keeps every group
+    emitter.instruction("b.ne __rt_pma_cap_append_set_keep");                   // store this group as usual
+    emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load the offset-pair buffer for the scan
+    emitter.instruction("mov x15, x12");                                        // scan from the current group onwards
+    emitter.label("__rt_pma_cap_append_set_scan");
+    emitter.instruction("cmp x15, x13");                                        // did the scan pass the last compiled group?
+    emitter.instruction("b.ge __rt_pma_cap_append_set_row");                    // no later group matched: the row is complete
+    emitter.instruction("lsl x16, x15, #4");                                    // scale the scanned group by the 16-byte pair stride
+    emitter.instruction("ldr x16, [x14, x16]");                                 // load the scanned group's capture start
+    emitter.instruction("cmp x16, #0");                                         // a non-negative start means the group matched
+    emitter.instruction("b.ge __rt_pma_cap_append_set_keep");                   // a later group matched: keep this one
+    emitter.instruction("add x15, x15, #1");                                    // advance the scan
+    emitter.instruction("b __rt_pma_cap_append_set_scan");                      // continue the trailing-group scan
+    emitter.label("__rt_pma_cap_append_set_keep");
     emit_preg_match_all_capture_box_cell_arm64(
         emitter,
         "set",
@@ -371,13 +425,20 @@ fn emit_preg_match_all_capture_append_match_arm64(
     emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save the next group index
     emitter.instruction("b __rt_pma_cap_append_set_loop");                      // continue filling the SET_ORDER row
     emitter.label("__rt_pma_cap_append_set_row");
-    emitter.instruction("mov x0, #4");                                          // runtime value tag 4 = indexed array
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass the handle holding the last match
+    emitter.instruction("bl __rt_preg_mark_cell");                              // box the match's `(*MARK)` name, or 0
+    emitter.instruction("mov x2, x0");                                          // the row's `MARK` value
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass the compiled handle holding the group names
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", row_off));                // pass the owned numbered row
+    emitter.instruction("bl __rt_preg_rekey_named");                            // give named groups their name keys
+    emitter.instruction(&format!("str x0, [sp, #{}]", row_off));                // the row is now a list or a keyed hash
+    emit_storage_value_tag_arm64(emitter);
     emitter.instruction(&format!("ldr x1, [sp, #{}]", row_off));                // load the SET_ORDER row for boxing
-    emitter.instruction("mov x2, xzr");                                         // indexed-array payload has no high word
+    emitter.instruction("mov x2, xzr");                                         // array payloads have no high word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the SET_ORDER row as Mixed
     emitter.instruction(&format!("str x0, [sp, #{}]", mixed_ptr_off));          // save the boxed row Mixed pointer
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", row_off));                // reload the helper-owned row array
-    emitter.instruction("bl __rt_decref_array");                                // drop helper ownership after Mixed retain
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", row_off));                // reload the helper-owned row storage
+    emitter.instruction("bl __rt_decref_any");                                  // drop helper ownership after Mixed retain
     emitter.instruction(&format!("ldr x0, [sp, #{}]", outer_off));              // reload the SET_ORDER outer array
     emitter.instruction(&format!("ldr x1, [sp, #{}]", mixed_ptr_off));          // load the boxed row
     emitter.instruction("bl __rt_array_push_refcounted");                       // append and retain the boxed row
@@ -480,12 +541,14 @@ fn emit_preg_match_all_capture_box_cell_arm64(
 /// Boxes PATTERN_ORDER group rows into the ARM64 outer array after the search.
 fn emit_preg_match_all_capture_finish_pattern_order_arm64(
     emitter: &mut Emitter,
+    handle_off: usize,
     preg_flags_off: usize,
     nmatch_off: usize,
     group_rows_off: usize,
     outer_off: usize,
     group_idx_off: usize,
     mixed_ptr_off: usize,
+    marks_off: usize,
 ) {
     emitter.instruction(&format!("ldr x9, [sp, #{}]", preg_flags_off));         // reload PHP flags
     emitter.instruction(&format!("tst x9, #{}", PREG_SET_ORDER));               // SET_ORDER already built the outer array
@@ -526,10 +589,39 @@ fn emit_preg_match_all_capture_finish_pattern_order_arm64(
     emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save the next group index
     emitter.instruction("b __rt_pma_cap_finish_loop");                          // continue boxing group rows
     emitter.label("__rt_pma_cap_finish_free");
+    // php adds `MARK` after the groups, a table of the marked matches' names by match number.
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", marks_off));              // did any match set a mark?
+    emitter.instruction("cbz x1, __rt_pma_cap_finish_no_marks");                // no `MARK` entry
+    emitter.instruction("mov x0, #5");                                          // runtime value tag 5 = hash-backed array
+    emitter.instruction("mov x2, xzr");                                         // array payloads have no high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the mark table as Mixed
+    emitter.instruction(&format!("str x0, [sp, #{}]", mixed_ptr_off));          // keep the boxed mark table
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", marks_off));              // reload the helper-owned mark table
+    emitter.instruction("bl __rt_decref_any");                                  // drop helper ownership after Mixed retain
+    emitter.instruction(&format!("str xzr, [sp, #{}]", marks_off));             // forget the released table
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", mixed_ptr_off));          // the table's `MARK` value
+    emitter.instruction("b __rt_pma_cap_finish_rekey");                         // key the group table
+    emitter.label("__rt_pma_cap_finish_no_marks");
+    emitter.instruction("mov x2, xzr");                                         // no `MARK` value
+    emitter.label("__rt_pma_cap_finish_rekey");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass the compiled handle holding the group names
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", outer_off));              // pass the owned PATTERN_ORDER group table
+    emitter.instruction("bl __rt_preg_rekey_named");                            // give named groups their name keys
+    emitter.instruction(&format!("str x0, [sp, #{}]", outer_off));              // the table is now a list or a keyed hash
     emitter.instruction(&format!("ldr x0, [sp, #{}]", group_rows_off));         // reload the group-row table
     emitter.bl_c("free");                                                       // release the PATTERN_ORDER pointer table
     emitter.instruction(&format!("str xzr, [sp, #{}]", group_rows_off));        // forget the freed table pointer
     emitter.label("__rt_pma_cap_finish_skip");
+}
+
+/// ARM64: x0 = row storage; leaves x0 = its runtime value tag (4 = indexed list, 5 = hash).
+fn emit_storage_value_tag_arm64(emitter: &mut Emitter) {
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the storage's packed kind word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the heap kind
+    emitter.instruction("cmp x9, #2");                                          // heap kind 2 is an indexed list
+    emitter.instruction("mov x10, #4");                                         // runtime value tag 4 = indexed array
+    emitter.instruction("mov x11, #5");                                         // runtime value tag 5 = hash-backed array
+    emitter.instruction("csel x0, x10, x11, eq");                               // pick the tag the storage actually has
 }
 
 /// Emits ARM64 code that stamps an indexed array as boxed-Mixed slots.
@@ -541,6 +633,16 @@ fn emit_stamp_indexed_array_mixed_arm64(emitter: &mut Emitter, array_reg: &str) 
     emitter.instruction("lsl x11, x11, #8");                                    // move Mixed tag into packed kind word
     emitter.instruction("orr x10, x10, x11");                                   // combine stable metadata with Mixed tag
     emitter.instruction(&format!("str x10, [{array_reg}, #-8]"));               // store boxed-Mixed indexed-array metadata
+}
+
+/// x86_64: rax = row storage; leaves rax = its runtime value tag (4 = indexed list, 5 = hash).
+fn emit_storage_value_tag_linux_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the storage's packed kind word
+    emitter.instruction("and r10, 0xff");                                       // isolate the heap kind
+    emitter.instruction("cmp r10, 2");                                          // heap kind 2 is an indexed list
+    emitter.instruction("mov eax, 5");                                          // runtime value tag 5 = hash-backed array
+    emitter.instruction("mov r11d, 4");                                         // runtime value tag 4 = indexed array
+    emitter.instruction("cmove eax, r11d");                                     // pick the tag the storage actually has
 }
 
 /// Emits x86_64 `__rt_preg_match_all_capture`.
@@ -565,7 +667,10 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     let pair_ptr_off = piece_offset_off + 8;
     let mixed_ptr_off = pair_ptr_off + 8;
     let row_off = mixed_ptr_off + 8;
-    let stack_size = (row_off + 32 + 15) & !15;
+    let start_off = row_off + 8;
+    // PATTERN_ORDER `(*MARK)` names, keyed by match number, or 0 while no match set one.
+    let marks_off = start_off + 8;
+    let stack_size = (start_off + 32 + 15) & !15;
 
     emitter.blank();
     emitter.comment("--- runtime: preg_match_all_capture ---");
@@ -577,9 +682,11 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", preg_flags_off)); // preserve PHP preg_match_all flags
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", start_off));   // preserve PHP's requested starting byte offset
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_rows_off)); // no group-row table until PATTERN_ORDER setup
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", regmatches_ptr_off)); // no offset-pair buffer until compile succeeds
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", match_count_off)); // match count starts at zero
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", marks_off));    // no PATTERN_ORDER mark table yet
     emitter.instruction("mov rax, rdi");                                        // move the pattern pointer into preg-strip input
     emitter.instruction("mov rdx, rsi");                                        // move the pattern length into preg-strip input
 
@@ -629,6 +736,19 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
         &format!("mov QWORD PTR [rsp + {}], rax", subject_len_off)
     );
 
+    // -- normalize PHP's start offset: negative counts from the end (clamped at 0), past the end fails --
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", start_off));   // load the requested starting offset
+    emitter.instruction("test r9, r9");                                         // a negative offset is relative to the subject end
+    emitter.instruction("jns __rt_pma_cap_offset_nonnegative_linux_x86_64");    // keep non-negative offsets unchanged
+    emitter.instruction(&format!("add r9, QWORD PTR [rsp + {}]", subject_len_off)); // convert to an absolute byte offset
+    emitter.instruction("jns __rt_pma_cap_offset_nonnegative_linux_x86_64");    // still before the subject start?
+    emitter.instruction("xor r9d, r9d");                                        // PHP clamps an offset before the subject start
+    emitter.label("__rt_pma_cap_offset_nonnegative_linux_x86_64");
+    emitter.instruction(&format!("cmp r9, QWORD PTR [rsp + {}]", subject_len_off)); // the offset may equal the length but not exceed it
+    emitter.instruction("jg __rt_pma_cap_malloc_fail_linux_x86_64");            // free the handle and pair vector, then return false and []
+    emitter.instruction(&format!("add r9, QWORD PTR [rsp + {}]", subject_cstr_off)); // first search position = subject + offset
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", current_cstr_off)); // seed the search cursor
+
     emit_preg_match_all_capture_init_matrix_linux_x86_64(
         emitter,
         preg_flags_off,
@@ -661,9 +781,22 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", match_count_off)); // reload the running match count
     emitter.instruction("add r9, 1");                                           // count this non-overlapping match
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", match_count_off)); // save the updated match count
+    // PATTERN_ORDER collects each match's `(*MARK)` under its match number; SET_ORDER rows take
+    // theirs directly, when the row is keyed.
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload PHP flags
+    emitter.instruction(&format!("test r9, {}", PREG_SET_ORDER));               // SET_ORDER rows carry their own mark
+    emitter.instruction("jnz __rt_pma_cap_mark_noted_linux_x86_64");            // skip the PATTERN_ORDER mark table
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass the handle holding the last match
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", marks_off));  // pass the mark table, or 0
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", match_count_off)); // reload the running match count
+    emitter.instruction("sub rdx, 1");                                          // this match's zero-based number
+    emitter.instruction("call __rt_preg_mark_note");                            // record the match's mark, if it set one
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", marks_off));  // keep the possibly-created mark table
+    emitter.label("__rt_pma_cap_mark_noted_linux_x86_64");
 
     emit_preg_match_all_capture_append_match_linux_x86_64(
         emitter,
+        handle_off,
         preg_flags_off,
         nmatch_off,
         regmatches_ptr_off,
@@ -685,12 +818,14 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pma_cap_done_linux_x86_64");
     emit_preg_match_all_capture_finish_pattern_order_linux_x86_64(
         emitter,
+        handle_off,
         preg_flags_off,
         nmatch_off,
         group_rows_off,
         outer_off,
         group_idx_off,
         mixed_ptr_off,
+        marks_off,
     );
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
@@ -786,6 +921,7 @@ fn emit_preg_match_all_capture_init_matrix_linux_x86_64(
 #[allow(clippy::too_many_arguments)]
 fn emit_preg_match_all_capture_append_match_linux_x86_64(
     emitter: &mut Emitter,
+    handle_off: usize,
     preg_flags_off: usize,
     nmatch_off: usize,
     regmatches_ptr_off: usize,
@@ -846,6 +982,22 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload the current group index
     emitter.instruction(&format!("cmp r9, QWORD PTR [rsp + {}]", nmatch_off));  // have all groups for this match been stored?
     emitter.instruction("jge __rt_pma_cap_append_set_row_linux_x86_64");        // box the completed SET_ORDER row
+    // php ends a SET_ORDER row at the last group that participated: trailing unmatched groups are
+    // dropped, unless PREG_UNMATCHED_AS_NULL asks for their nulls.
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", preg_flags_off)); // reload PHP flags for the trailing-group rule
+    emitter.instruction(&format!("test r10, {}", PREG_UNMATCHED_AS_NULL));      // UNMATCHED_AS_NULL keeps every group
+    emitter.instruction("jnz __rt_pma_cap_append_set_keep_linux_x86_64");       // store this group as usual
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load the offset-pair buffer for the scan
+    emitter.label("__rt_pma_cap_append_set_scan_linux_x86_64");
+    emitter.instruction(&format!("cmp r9, QWORD PTR [rsp + {}]", nmatch_off));  // did the scan pass the last compiled group?
+    emitter.instruction("jge __rt_pma_cap_append_set_row_linux_x86_64");        // no later group matched: the row is complete
+    emitter.instruction("mov r11, r9");                                         // copy the scanned group index
+    emitter.instruction("shl r11, 4");                                          // scale it by the 16-byte pair stride
+    emitter.instruction("cmp QWORD PTR [r10 + r11], 0");                        // a non-negative start means the group matched
+    emitter.instruction("jge __rt_pma_cap_append_set_keep_linux_x86_64");       // a later group matched: keep this one
+    emitter.instruction("add r9, 1");                                           // advance the scan
+    emitter.instruction("jmp __rt_pma_cap_append_set_scan_linux_x86_64");       // continue the trailing-group scan
+    emitter.label("__rt_pma_cap_append_set_keep_linux_x86_64");
     emit_preg_match_all_capture_box_cell_linux_x86_64(
         emitter,
         "set",
@@ -870,13 +1022,20 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save the next group index
     emitter.instruction("jmp __rt_pma_cap_append_set_loop_linux_x86_64");       // continue filling the SET_ORDER row
     emitter.label("__rt_pma_cap_append_set_row_linux_x86_64");
-    emitter.instruction("mov rax, 4");                                          // runtime value tag 4 = indexed array
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass the handle holding the last match
+    emitter.instruction("call __rt_preg_mark_cell");                            // box the match's `(*MARK)` name, or 0
+    emitter.instruction("mov rdx, rax");                                        // the row's `MARK` value
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass the compiled handle holding the group names
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", row_off));    // pass the owned numbered row
+    emitter.instruction("call __rt_preg_rekey_named");                          // give named groups their name keys
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", row_off));    // the row is now a list or a keyed hash
+    emit_storage_value_tag_linux_x86_64(emitter);
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", row_off));    // load the SET_ORDER row for boxing
-    emitter.instruction("xor esi, esi");                                        // indexed-array payload has no high word
+    emitter.instruction("xor esi, esi");                                        // array payloads have no high word
     emitter.instruction("call __rt_mixed_from_value");                          // box the SET_ORDER row as Mixed
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); // save the boxed row Mixed pointer
-    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", row_off));    // reload the helper-owned row array into the x86 decref input
-    emitter.instruction("call __rt_decref_array");                              // drop helper ownership after Mixed retain
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", row_off));    // reload the helper-owned row storage into the x86 decref input
+    emitter.instruction("call __rt_decref_any");                                // drop helper ownership after Mixed retain
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", outer_off));  // reload the SET_ORDER outer array
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", mixed_ptr_off)); // load the boxed row
     emitter.instruction("call __rt_array_push_refcounted");                     // append and retain the boxed row
@@ -978,12 +1137,14 @@ fn emit_preg_match_all_capture_box_cell_linux_x86_64(
 /// Boxes PATTERN_ORDER group rows into the x86_64 outer array after the search.
 fn emit_preg_match_all_capture_finish_pattern_order_linux_x86_64(
     emitter: &mut Emitter,
+    handle_off: usize,
     preg_flags_off: usize,
     nmatch_off: usize,
     group_rows_off: usize,
     outer_off: usize,
     group_idx_off: usize,
     mixed_ptr_off: usize,
+    marks_off: usize,
 ) {
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload PHP flags
     emitter.instruction(&format!("test r9, {}", PREG_SET_ORDER));               // SET_ORDER already built the outer array
@@ -1022,6 +1183,24 @@ fn emit_preg_match_all_capture_finish_pattern_order_linux_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save the next group index
     emitter.instruction("jmp __rt_pma_cap_finish_loop_linux_x86_64");           // continue boxing group rows
     emitter.label("__rt_pma_cap_finish_free_linux_x86_64");
+    // php adds `MARK` after the groups, a table of the marked matches' names by match number.
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", marks_off));  // did any match set a mark?
+    emitter.instruction("xor edx, edx");                                        // no `MARK` value unless one was recorded
+    emitter.instruction("test rdi, rdi");                                       // is there a mark table?
+    emitter.instruction("jz __rt_pma_cap_finish_rekey_linux_x86_64");           // no `MARK` entry
+    emitter.instruction("mov rax, 5");                                          // runtime value tag 5 = hash-backed array
+    emitter.instruction("xor esi, esi");                                        // array payloads have no high word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the mark table as Mixed
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); // keep the boxed mark table
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", marks_off));  // reload the helper-owned mark table
+    emitter.instruction("call __rt_decref_any");                                // drop helper ownership after Mixed retain
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", marks_off));    // forget the released table
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", mixed_ptr_off)); // the table's `MARK` value
+    emitter.label("__rt_pma_cap_finish_rekey_linux_x86_64");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass the compiled handle holding the group names
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", outer_off));  // pass the owned PATTERN_ORDER group table
+    emitter.instruction("call __rt_preg_rekey_named");                          // give named groups their name keys
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", outer_off));  // the table is now a list or a keyed hash
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", group_rows_off)); // reload the group-row table
     emitter.bl_c("free");                                                       // release the PATTERN_ORDER pointer table
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_rows_off)); // forget the freed table pointer

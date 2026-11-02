@@ -168,6 +168,7 @@ fn exclude_address_escaping_slots(function: &Function, eligible: &mut HashSet<Lo
     }
 }
 
+
 /// Returns the local slots named by an instruction immediate, covering both the
 /// single-slot and slot-pair (ref-cell) immediate shapes.
 fn immediate_slots(immediate: Option<&Immediate>) -> Vec<LocalSlotId> {

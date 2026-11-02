@@ -18,7 +18,10 @@ pub(super) fn lower_property_assign(
     span: Span,
 ) {
     // Readonly errors depend on runtime initialization, after receiver and RHS effects.
-    let readonly_write = ctx.throw_access_sites.get(&span).and_then(|info| {
+    let readonly_write = ctx
+        .throw_access_sites
+        .get(&(ctx.loop_storage_scope.clone(), span))
+        .and_then(|info| {
         if let ThrowAccessKind::ReadonlyProperty { class_name, property, initialization_error } = &info.kind {
             Some((class_name.clone(), format!("Cannot modify readonly property {}::${}", class_name, property),
                 initialization_error.clone()))
@@ -26,7 +29,10 @@ pub(super) fn lower_property_assign(
             None
         }
     });
-    let reflection_write = ctx.throw_access_sites.get(&span).and_then(|info| {
+    let reflection_write = ctx
+        .throw_access_sites
+        .get(&(ctx.loop_storage_scope.clone(), span))
+        .and_then(|info| {
         if let ThrowAccessKind::ReflectionReadOnlyProperty { property: blocked } = &info.kind {
             (blocked == property).then(|| blocked.clone())
         } else {
@@ -47,6 +53,27 @@ pub(super) fn lower_property_assign(
             }
         }
     }
+    if readonly_write.is_none() && reflection_write.is_none() {
+        if let Some(default) =
+            property_null_coalesce_assignment_default(value, object, property, span)
+        {
+            lower_statement_property_null_coalesce_assignment(ctx, object, property, default, span);
+            return;
+        }
+        // The static class lacks the property and only a DESCENDANT declares it (the checker
+        // admits the write for that reason): the run-time class resolves it, through the by-name
+        // store.
+        if property_declared_only_below(ctx, object, property) {
+            crate::ir_lower::expr::lower_descendant_property_assign(
+                ctx,
+                object,
+                &Expr::new(ExprKind::StringLiteral(property.to_string()), span),
+                value,
+                span,
+            );
+            return;
+        }
+    }
     let value_expr = value;
     let (mut receiver, lowered_value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
         let rhs = lower_expr(ctx, value_expr);
@@ -63,6 +90,9 @@ pub(super) fn lower_property_assign(
         };
         (receiver, rhs)
     };
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     let lowered_value = ctx.borrow_write_operand_if_needed(lowered_value, span);
     // Preserve the original PHP tag until the initialization probe has chosen its branch.
     // Only an authorized first write reaches the backend's weak typed-property guard.
@@ -127,6 +157,10 @@ pub(super) fn lower_property_assign(
     // asks it. Receiver and value are already lowered, once each and in source order, so the
     // guard adds no evaluation and both branches see exactly the same two values.
     let magic_classes = magic_accessor_subclasses(ctx, object.value, property, "__set");
+    // A receiver read from a boxed slot through an `instanceof`-narrowed object type is an OWNED
+    // unbox (it retains the payload). `PropertyWriteReceiver` records it as an owner, so
+    // `receiver.finish` below retires the retain once the store, on whichever arm ran, is done;
+    // `if ($n instanceof X) { $n->p = $v; }` over an untyped parameter leaked the object.
     if !magic_classes.is_empty() {
         lower_property_assign_guarding_magic_subclasses(
             ctx,
@@ -311,7 +345,10 @@ pub(super) fn lower_synthetic_readonly_coalesce(
         return false;
     };
     if object_name != name || read_object != object || read_property != property
-        || !ctx.throw_access_sites.get(&write.span).is_some_and(|info| {
+        || !ctx
+            .throw_access_sites
+            .get(&(ctx.loop_storage_scope.clone(), write.span))
+            .is_some_and(|info| {
             matches!(info.kind, ThrowAccessKind::ReadonlyProperty { .. })
         })
     {
@@ -348,6 +385,34 @@ fn lower_readonly_coalesce_update(
     }, span);
     crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, &target, default, span);
     crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+}
+
+/// Whether `object`'s static class has no `property` while a class extending it declares one.
+fn property_declared_only_below(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    let Some((class_name, _)) =
+        crate::ir_lower::expr::instance_callable_object_class_and_nullability(ctx, object)
+    else {
+        return false;
+    };
+    let class_name = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.classes.get(class_name) else {
+        return false;
+    };
+    if class_info.visible_property(property).is_some()
+        || class_info.methods.contains_key("__set")
+        || class_info.allow_dynamic_properties
+    {
+        return false;
+    }
+    ctx.classes.iter().any(|(name, info)| {
+        name.as_str() != class_name
+            && info.properties.iter().any(|(declared, _)| declared == property)
+            && crate::ir_lower::expr::class_extends_class(ctx, name, class_name)
+    })
 }
 
 /// Emits the `instanceof` chain that hands a runtime subclass's `__set` its own call.
@@ -444,6 +509,11 @@ fn lower_property_assign_value(
                 && boxed_value_for_class_typed_property(ctx, &ty, value) =>
         {
             value
+        }
+        Some(ty) if declared_property_type(ctx, object.value, property) => {
+            let value =
+                ctx.retype_packed_address_for_pointer_sink(value, &ty, Some(span));
+            super::typed_foreach::coerce_property_assign_value(ctx, value, &ty, span)
         }
         Some(ty) => {
             let value =
@@ -592,6 +662,220 @@ pub(crate) fn box_value_for_runtime_shaped_receiver(
         return value;
     }
     ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
+}
+
+/// Returns the lazy default when this statement originated from `property ??= default`.
+///
+/// Statement parsing lowers compound assignments into ordinary expressions, so the shared source
+/// span is the stable marker that distinguishes `??=` from a user-written
+/// `property = property ?? default`. The latter must keep its ordinary assignment semantics.
+fn property_null_coalesce_assignment_default<'a>(
+    value: &'a Expr,
+    object: &Expr,
+    property: &str,
+    span: Span,
+) -> Option<&'a Expr> {
+    if value.span != span {
+        return None;
+    }
+    let ExprKind::NullCoalesce {
+        value: current,
+        default,
+    } = &value.kind
+    else {
+        return None;
+    };
+    let ExprKind::PropertyAccess {
+        object: current_object,
+        property: current_property,
+    } = &current.kind
+    else {
+        return None;
+    };
+    (current_property == property && current_object.as_ref() == object).then_some(default)
+}
+
+/// Lowers a statement-level property `??=` while evaluating its receiver exactly once.
+///
+/// The statement AST historically represents `??=` as a `PropertyAssign` containing a regular
+/// `NullCoalesce` expression. Reusing the expression-level conditional lowering keeps the RHS
+/// lazy and gives the merge the property's concrete storage type; the synthetic local prevents
+/// the read branch and default write from re-evaluating an effectful receiver.
+fn lower_statement_property_null_coalesce_assignment(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    default: &Expr,
+    span: Span,
+) {
+    let object_value = lower_expr(ctx, object);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let object_type = ctx.builder.value_php_type(object_value.value).clone();
+    let object_temp = ctx.declare_synthetic_php_local(object_type.clone());
+    ctx.store_local(&object_temp, object_value, object_type, Some(span));
+    let object_expr = Expr::new(ExprKind::Variable(object_temp), span);
+    let target = Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(object_expr),
+            property: property.to_string(),
+        },
+        span,
+    );
+    let value = Expr::new(
+        ExprKind::NullCoalesce {
+            value: Box::new(target.clone()),
+            default: Box::new(default.clone()),
+        },
+        span,
+    );
+    let _ = crate::ir_lower::expr::lower_conditional_non_local_null_coalesce_assignment(
+        ctx,
+        None,
+        &target,
+        &value,
+        None,
+        &value,
+    );
+}
+
+/// Lowers a direct backing-slot write without invoking magic methods or property set hooks.
+pub(in crate::ir_lower) fn lower_raw_property_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+    span: Span,
+) {
+    let object = lower_expr(ctx, object);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let receiver_is_owned_unbox = ctx.value_is_owning_temporary(object);
+    let lowered_value = lower_expr(ctx, value);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let lowered_value = contextualize_property_array_assignment(
+        ctx,
+        object.value,
+        property,
+        lowered_value,
+        value,
+        span,
+    );
+    let property_ty = object_property_type(ctx, object.value, property);
+    let lowered_value = match property_ty {
+        Some(ref ty) if declared_property_type(ctx, object.value, property) => {
+            if boxed_value_for_class_typed_property(ctx, ty, lowered_value) {
+                lowered_value
+            } else {
+                super::typed_foreach::coerce_property_assign_value(ctx, lowered_value, ty, span)
+            }
+        }
+        Some(ref ty) => coerce_typed_assign_value(ctx, lowered_value, ty, span),
+        None => lowered_value,
+    };
+    let data = ctx.intern_string(property);
+    // Same ownership contract as the ordinary store: a store that keeps an independent
+    // reference pins the in-flight temporary for the unwind chain and retires its own
+    // reference afterwards. An undeclared or untyped property stores a boxed Mixed value,
+    // so the release is owed under `Mixed` too -- it used to be skipped for those, leaking
+    // the boxed value (and the object inside it) once per `setRawValue()`.
+    let stored_property_ty = property_ty.unwrap_or(PhpType::Mixed);
+    let pins = if property_store_keeps_independent_ref(
+        &stored_property_ty,
+        &ctx.builder.value_php_type(lowered_value.value),
+    ) {
+        crate::ir_lower::expr::pin_in_flight_owners(ctx, &[lowered_value.value], span)
+    } else {
+        Vec::new()
+    };
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object.value, lowered_value.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(span),
+    );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    release_property_assignment_source_after_retaining_store(
+        ctx,
+        &stored_property_ty,
+        lowered_value,
+        span,
+    );
+    // The store only borrows its receiver; retire the retain an owning receiver temporary
+    // carries, exactly as `lower_property_assign` does.
+    if receiver_is_owned_unbox {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    }
+}
+
+/// Lowers a declared-property reference bind while preserving the source cell identity.
+pub(super) fn lower_property_ref_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let object = lower_expr(ctx, object);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    // `$this->cache = &self::$htmlCache`: the slot holds the static's process-lifetime storage.
+    if let ExprKind::StaticPropertyAccess { receiver, property: static_property } = &source.kind {
+        let data = super::static_property_ref_data(ctx, receiver, static_property);
+        let cell_ptr = ctx.emit_value(
+            Op::LoadStaticPropertyRefCell,
+            Vec::new(),
+            Some(Immediate::Data(data)),
+            PhpType::Pointer(None),
+            Op::LoadStaticPropertyRefCell.default_effects(),
+            Some(span),
+        );
+        let target_data = ctx.intern_string(property);
+        ctx.emit_void(
+            Op::BindPropRefCell,
+            vec![object.value, cell_ptr.value],
+            Some(Immediate::Data(target_data)),
+            Op::BindPropRefCell.default_effects(),
+            Some(span),
+        );
+        return;
+    }
+    let ExprKind::PropertyAccess {
+        object: source_object,
+        property: source_property,
+    } = &source.kind
+    else {
+        return;
+    };
+    let value_type = property_access_expr_type_for_ir(ctx, source_object, source_property)
+        .unwrap_or(PhpType::Mixed);
+    let source_object = lower_expr(ctx, source_object);
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    let source_data = ctx.intern_string(source_property);
+    let cell_ptr = ctx.emit_value(
+        Op::LoadPropRefCell,
+        vec![source_object.value],
+        Some(Immediate::Data(source_data)),
+        value_type.clone(),
+        Op::LoadPropRefCell.default_effects(),
+        Some(span),
+    );
+    let target_data = ctx.intern_string(property);
+    ctx.emit_void(
+        Op::BindPropRefCell,
+        vec![object.value, cell_ptr.value],
+        Some(Immediate::Data(target_data)),
+        Op::BindPropRefCell.default_effects(),
+        Some(span),
+    );
 }
 
 /// Narrows a boxed Mixed value assigned to a fixed-layout scalar field into the field's raw
@@ -943,14 +1227,11 @@ pub(super) fn contextualize_property_array_assignment(
 pub(in crate::ir_lower) fn contextualize_property_array_value(
     ctx: &mut LoweringContext<'_, '_>,
     lowered: LoweredValue,
-    value_expr: &Expr,
+    _value_expr: &Expr,
     contextual_ty: &PhpType,
     span: Span,
 ) -> LoweredValue {
     let php_type = ctx.builder.value_php_type(lowered.value);
-    if !matches!(value_expr.kind, ExprKind::ArrayLiteral(_)) {
-        return lowered;
-    }
     if !matches!(php_type.codegen_repr(), PhpType::Array(_)) {
         return lowered;
     }
@@ -974,7 +1255,10 @@ fn boxed_value_for_class_typed_property(
     property_ty: &PhpType,
     value: LoweredValue,
 ) -> bool {
-    matches!(property_ty.codegen_repr(), PhpType::Object(_))
+    // `iterable` too: the generic unbox raised "Value must be of type iterable, int given", where
+    // php names the property ("Cannot assign int to property Box::$it of type Traversable|array"),
+    // and the property guard already renders and checks that type.
+    matches!(property_ty.codegen_repr(), PhpType::Object(_) | PhpType::Iterable)
         && ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed
 }
 

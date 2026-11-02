@@ -144,6 +144,10 @@ echo "after";
 }
 
 /// Releases an owning regular method argument before a variadic child whose destructor throws.
+///
+/// The body throws an exception built BEFORE the call: php records every frame's arguments in the
+/// trace of an exception it builds inside the callee (`zend.exception_ignore_args=Off`), which would
+/// keep both arguments alive until the exception dies and defer the destructors this test pins.
 #[test]
 fn test_method_argument_guards_preserve_variadic_cleanup_order_after_throw() {
     let source = r#"<?php
@@ -156,10 +160,12 @@ class OrderedMethodArgument {
 }
 class ThrowingVariadicMethod {
     public function invoke(OrderedMethodArgument $regular, OrderedMethodArgument ...$tail): void {
+        global $bodyError;
         echo "body|";
-        throw new RuntimeException("body");
+        throw $bodyError;
     }
 }
+$bodyError = new RuntimeException("body");
 $target = new ThrowingVariadicMethod();
 try {
     $target->invoke(

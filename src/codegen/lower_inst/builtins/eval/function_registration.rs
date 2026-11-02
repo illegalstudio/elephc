@@ -115,6 +115,15 @@ pub(super) fn register_eval_native_function(
         &eval_native_signature_shape(&registration.signature),
         registration.is_internal,
     );
+    if let Some(active_slot_symbol) = &registration.active_slot_symbol {
+        register_eval_native_function_active_slot(
+            ctx,
+            context_source,
+            &name_label,
+            name_len,
+            active_slot_symbol,
+        );
+    }
     let param_type_specs = eval_native_callable_param_type_specs(&registration.signature);
     let source_constant_names = ctx.module.functions.iter()
         .find(|function| function.name == registration.name)
@@ -261,8 +270,9 @@ pub(super) fn emit_eval_native_function_invoker_inline(
     sig: &FunctionSig,
     name: &str,
 ) -> String {
-    ctx.shared.callable_argument_normalizer |=
-        crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
+    if crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig) {
+        ctx.shared.require_callable_argument_normalizer();
+    }
     let label = ctx.next_global_label("eval_callable_invoker");
     let captures: [(String, PhpType, bool); 0] = [];
     // A registered native FREE function has no class scope, so its defaults resolve globally.

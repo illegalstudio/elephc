@@ -26,7 +26,7 @@ fn parse_fragment_accepts_trait_adaptations() {
 
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(
+        &[EvalStmt::class_decl(
             EvalClass::with_modifiers_traits_adaptations_and_constants(
                 "EvalAdaptBox",
                 false,

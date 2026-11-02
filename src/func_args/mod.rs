@@ -27,6 +27,7 @@
 //!   remain distinguishable from arguments the caller supplied.
 
 mod build;
+mod method_families;
 mod walk;
 
 use crate::errors::CompileError;
@@ -123,6 +124,8 @@ impl IntrospectionCall {
 /// the same stack budget.
 pub fn desugar(program: Program) -> Result<Program, CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
+        // Same moment, same reason: autoloaded files are spliced in and the checker has not run.
+        let program = crate::literal_format_split::split_ternary_literal_formats(program);
         desugar_on_compiler_stack(program)
     })
 }
@@ -132,13 +135,19 @@ fn desugar_on_compiler_stack(program: Program) -> Result<Program, CompileError> 
     let mut program = program;
     // The gate walks the program in place: its detector mode performs no rewrite, so there is
     // no reason to hand it a full copy of the AST.
-    let capture_all_frames = walk::program_uses_backtrace(&mut program);
+    // TEMP-AB-SWITCH ELEPHC_NO_CAPTURE_ALL
+    let capture_all_frames = walk::program_uses_backtrace(&mut program)
+        && std::env::var_os("ELEPHC_NO_CAPTURE_ALL").is_none();
     let rewrite_introspection = !program_declares_introspection_name(&program);
     if !rewrite_introspection && !capture_all_frames {
         return Ok(program);
     }
     let mut rewriter = walk::Rewriter::new(capture_all_frames, rewrite_introspection);
+    if capture_all_frames {
+        rewriter.set_capture_opt_outs(method_families::capture_all_opt_outs(&program));
+    }
     rewriter.walk_stmts(&mut program);
+    method_families::propagate(&mut program);
     match rewriter.into_errors() {
         errors if errors.is_empty() => Ok(program),
         errors => Err(CompileError::from_many(errors)),
@@ -154,6 +163,33 @@ fn desugar_on_compiler_stack(program: Program) -> Result<Program, CompileError> 
 /// is exactly what a scope carrying only the hidden parameter still is.
 pub(crate) fn sig_collects_surplus_args(sig: &FunctionSig) -> bool {
     sig.variadic.as_deref() == Some(HIDDEN_ARGS_PARAM)
+}
+
+/// Returns `sig` as PHP declares it: without the hidden variadic this pass appends.
+///
+/// The hidden parameter is an ABI detail. A PHP-visible contract must not carry it: handed to
+/// the interpreter as an interface requirement, it demanded a variadic parameter from every class
+/// implementing the interface there.
+pub(crate) fn php_visible_signature(sig: &FunctionSig) -> FunctionSig {
+    if !sig_collects_surplus_args(sig) {
+        return sig.clone();
+    }
+    let mut visible = sig.clone();
+    if visible
+        .params
+        .last()
+        .is_some_and(|(name, _)| name == HIDDEN_ARGS_PARAM)
+    {
+        let keep = visible.params.len() - 1;
+        visible.params.truncate(keep);
+        visible.param_type_exprs.truncate(keep);
+        visible.param_attributes.truncate(keep);
+        visible.defaults.truncate(keep);
+        visible.ref_params.truncate(keep);
+        visible.declared_params.truncate(keep);
+    }
+    visible.variadic = None;
+    visible
 }
 
 /// Returns whether the hidden collector must begin with the actual PHP argument count.

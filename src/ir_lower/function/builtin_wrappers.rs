@@ -64,7 +64,7 @@ pub(crate) fn lower_boxed_usort_callable(
     )
 }
 
-/// Expands the callable argument pack into the two operands supported by the merge backend.
+/// Forwards the callable argument pack to `array_merge(...$args)`, which accepts any number of arrays.
 pub(crate) fn lower_array_merge_callable(
     module: &mut Module,
     label: &str,
@@ -75,33 +75,13 @@ pub(crate) fn lower_array_merge_callable(
     let arguments = Expr::new(ExprKind::Variable(
         signature.variadic.clone().expect("array_merge callable has a variadic pack"),
     ), span);
-    let count = Expr::new(ExprKind::FunctionCall {
-        name: Name::unqualified("count"), args: vec![arguments.clone()],
-    }, span);
-    let guard = Stmt::new(StmtKind::If {
-        condition: Expr::new(ExprKind::BinaryOp {
-            left: Box::new(count), op: BinOp::NotEq,
-            right: Box::new(Expr::new(ExprKind::IntLiteral(2), span)),
-        }, span),
-        then_body: vec![Stmt::new(StmtKind::Throw(Expr::new(ExprKind::NewObject {
-            class_name: Name::unqualified("ArgumentCountError"),
-            args: vec![Expr::new(ExprKind::StringLiteral(
-                "array_merge() takes exactly 2 arguments".to_string(),
-            ), span)],
-        }, span)), span)],
-        elseif_clauses: Vec::new(),
-        else_body: None,
-    }, span);
     let merge = Expr::new(ExprKind::FunctionCall {
         name: Name::unqualified("array_merge"),
-        args: (0..2).map(|index| Expr::new(ExprKind::ArrayAccess {
-            array: Box::new(arguments.clone()),
-            index: Box::new(Expr::new(ExprKind::IntLiteral(index), span)),
-        }, span)).collect(),
+        args: vec![Expr::new(ExprKind::Spread(Box::new(arguments)), span)],
     }, span);
     lower_builtin_callable_body(
         module, label, signature, strict_php,
-        vec![guard, Stmt::new(StmtKind::Return(Some(merge)), span)],
+        vec![Stmt::new(StmtKind::Return(Some(merge)), span)],
     )
 }
 
@@ -127,7 +107,10 @@ pub(super) fn lower_builtin_callable_body(
     );
     function.params = function_params(signature);
     function.signature = Some(signature.clone());
-    // Prefer the emitted signatures so a call into an injected prelude helper also sees the
+    // The body calls user-level compatibility helpers (`__elephc_array_merge_gradual`, ...) by
+    // name, so it needs the module's declared function signatures to resolve them; with an empty
+    // table the call fell through to a runtime "undefined function" error. Prefer the emitted
+    // signatures so a call into an injected prelude helper also sees the
     // hidden `func_args` ABI slots `capture_all_frames` appended to it. Without this map the
     // builtin lowering at the bottom of this wrapper cannot tell the helper needs a collector.
     let function_signatures = module
@@ -141,12 +124,14 @@ pub(super) fn lower_builtin_callable_body(
         })
         .collect::<std::collections::HashMap<_, _>>();
     let closures = lower_body_into_function(
+        module.shared_source_catalog(),
+        module.runtime_bound_functions.clone(),
         &mut function,
         None,
         &mut module.data,
         &statements,
         env_from_signature(signature, false),
-        TypeEnv::new(),
+        TypeEnv::default(),
         &function_signatures,
         &Default::default(),
         &module.extern_globals,
@@ -175,6 +160,9 @@ pub(super) fn lower_builtin_callable_body(
         &Default::default(),
         // One more empty site map: the merge with core-align left this wrapper lowering with two
         // independent site tables to forward, and a builtin wrapper has neither.
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
         &Default::default(),
         &Default::default(),
         label.to_string(),

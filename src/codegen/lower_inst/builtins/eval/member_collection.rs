@@ -71,6 +71,42 @@ pub(super) fn collect_eval_native_method_attributes(
     }
 }
 
+/// Adds parameter attribute metadata for one class's methods to eval registration.
+///
+/// A parameter's attributes travel as METHOD attributes under the synthetic member name
+/// `method#index` (`#` cannot occur in a PHP method name), which Magician reads back when it
+/// builds the reflected parameters of a compiled method. Without them an interpreted
+/// `ReflectionParameter::getAttributes()` on a compiled method returned nothing: Symfony's
+/// argument resolver never saw `#[CurrentUser]` on a compiled controller, so every admin page of
+/// the demo failed to resolve `$user` instead of redirecting an anonymous visitor to the login.
+pub(super) fn collect_eval_native_parameter_attributes(
+    class_name: &str,
+    class_info: &ClassInfo,
+    registrations: &mut Vec<EvalNativeMemberAttributeRegistration>,
+) {
+    let mut methods = class_info
+        .methods
+        .iter()
+        .chain(class_info.static_methods.iter())
+        .collect::<Vec<_>>();
+    methods.sort_by_key(|(method_name, _)| method_name.as_str());
+    for (method_name, signature) in methods {
+        for (index, groups) in signature.param_attributes.iter().enumerate() {
+            if groups.is_empty() {
+                continue;
+            }
+            collect_eval_native_member_attributes(
+                NATIVE_MEMBER_ATTRIBUTE_METHOD,
+                eval_native_method_declaring_class(class_name, class_info, method_name),
+                &format!("{}#{}", method_name, index),
+                &crate::types::collect_attribute_names(groups),
+                &crate::types::collect_attribute_args(groups),
+                registrations,
+            );
+        }
+    }
+}
+
 /// Adds property attribute metadata for one class to eval registration.
 pub(super) fn collect_eval_native_property_attributes(
     class_name: &str,
@@ -217,6 +253,23 @@ pub(super) fn collect_eval_native_static_property_defaults(
     }
 }
 
+/// Formats a declared property type for eval registration.
+///
+/// The checker lowers a `Closure` hint to `callable`, and php forbids `callable` as a property
+/// type, so on a property it can only have been `Closure`. Publishing `callable` made every
+/// interpreted subclass that redeclares the property (Laravel Prompts' `TextareaPrompt` promotes
+/// `public ?Closure $transform` over `Prompt`'s) fail php's invariant-type check, and the class
+/// could not be declared.
+fn eval_native_property_type_spec(php_type: &PhpType) -> Option<String> {
+    let spec = eval_native_php_type_spec(php_type, false)?;
+    Some(
+        spec.split('|')
+            .map(|member| if member == "callable" { "Closure" } else { member })
+            .collect::<Vec<_>>()
+            .join("|"),
+    )
+}
+
 /// Adds declared instance-property type metadata for one class to eval registration.
 pub(super) fn collect_eval_native_instance_property_types(
     class_name: &str,
@@ -227,7 +280,7 @@ pub(super) fn collect_eval_native_instance_property_types(
         if !class_info.property_slot_is_declared(slot, property_name) {
             continue;
         }
-        let Some(type_spec) = eval_native_php_type_spec(php_type, false) else {
+        let Some(type_spec) = eval_native_property_type_spec(php_type) else {
             continue;
         };
         registrations.push(EvalNativePropertyTypeRegistration {
@@ -256,7 +309,7 @@ pub(super) fn collect_eval_native_static_property_types(
         {
             continue;
         }
-        let Some(type_spec) = eval_native_php_type_spec(php_type, false) else {
+        let Some(type_spec) = eval_native_property_type_spec(php_type) else {
             continue;
         };
         registrations.push(EvalNativePropertyTypeRegistration {
@@ -345,13 +398,14 @@ pub(super) fn collect_eval_native_instance_methods(
         if method_name == "__construct" {
             continue;
         }
-        let bridge_supported = class_method_visibility_bridge_supported(class_info, method_name)
-            && method_signature_can_bridge_with_eval(signature);
+        let bridge_supported =
+            super::eval_native_instance_method_bridge_supported(class_info, method_name, signature);
         registrations.push(EvalNativeMethodRegistration {
             class_name: class_name.to_string(),
             method_name: method_name.clone(),
             is_static: false,
             signature: signature.clone(),
+            late_static_return: class_info.late_static_method_returns.get(method_name).cloned(),
             bridge_supported,
         });
     }
@@ -366,14 +420,20 @@ pub(super) fn collect_eval_native_static_methods(
     let mut methods = class_info.static_methods.iter().collect::<Vec<_>>();
     methods.sort_by_key(|(method, _)| method.as_str());
     for (method_name, signature) in methods {
-        let bridge_supported =
-            class_static_method_visibility_bridge_supported(class_info, method_name)
-                && method_signature_can_bridge_with_eval(signature);
+        let bridge_supported = super::eval_native_static_method_bridge_supported(
+            class_info,
+            method_name,
+            signature,
+        );
         registrations.push(EvalNativeMethodRegistration {
             class_name: class_name.to_string(),
             method_name: method_name.clone(),
             is_static: true,
             signature: signature.clone(),
+            late_static_return: class_info
+                .late_static_static_method_returns
+                .get(method_name)
+                .cloned(),
             bridge_supported,
         });
     }
@@ -397,7 +457,9 @@ pub(super) fn collect_eval_native_interface_instance_methods(
             .to_string(),
             method_name: method_name.clone(),
             is_static: false,
-            signature: signature.clone(),
+            // The contract as PHP declares it: the hidden `func_get_args()` variadic is ABI only.
+            signature: crate::func_args::php_visible_signature(signature),
+            late_static_return: interface_info.late_static_method_returns.get(method_name).cloned(),
             bridge_supported: false,
         });
     }
@@ -421,7 +483,12 @@ pub(super) fn collect_eval_native_interface_static_methods(
             .to_string(),
             method_name: method_name.clone(),
             is_static: true,
-            signature: signature.clone(),
+            // The contract as PHP declares it: the hidden `func_get_args()` variadic is ABI only.
+            signature: crate::func_args::php_visible_signature(signature),
+            late_static_return: interface_info
+                .late_static_static_method_returns
+                .get(method_name)
+                .cloned(),
             bridge_supported: false,
         });
     }

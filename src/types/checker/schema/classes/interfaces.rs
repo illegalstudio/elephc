@@ -18,6 +18,7 @@ use crate::types::traits::FlattenedClass;
 use crate::types::{PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
+use super::super::super::builtin_interfaces::interface_return_type_is_tentative;
 use super::super::validation::{
     declaration_is_source, declared_return_type_compatible,
     is_pdo_exception_get_code_contract, late_static_return_compatible,
@@ -28,7 +29,8 @@ use super::state::ClassBuildState;
 /// Collects all interfaces (including transitive parents) that `class` implements.
 ///
 /// Validates that each interface exists, that `Throwable` is only implementable by
-/// `Error`/`Exception`, and that non-interfaces are not being implemented as interfaces.
+/// `Error`/`Exception`, that enum contracts stay enum-only, and that classes do not implement
+/// non-interface declarations.
 /// Pushes collected interface names onto `state.interfaces` in breadth-first order.
 pub(super) fn collect_interfaces(
     state: &mut ClassBuildState,
@@ -36,16 +38,34 @@ pub(super) fn collect_interfaces(
     class_map: &HashMap<String, FlattenedClass>,
     checker: &Checker,
 ) -> Result<(), CompileError> {
+    // php-src links a class that names no interface of its own through
+    // `zend_do_inherit_interfaces`, which walks the parent's list from the END: `class D extends
+    // P {}` reports P's interfaces reversed, and a grandchild reverses them back. A `__toString`
+    // declaration counts as naming `Stringable` (the compiler adds it to the class's own list),
+    // and a class that names any interface copies the parent's list in order, then appends its
+    // own. `class_implements()` and `ReflectionClass::getInterfaceNames()` expose this order,
+    // and frameworks key listener order on it (`[$c => $c] + class_parents($c) +
+    // class_implements($c)`).
+    let declares_own_interface = !class.implements.is_empty()
+        || class
+            .methods
+            .iter()
+            .any(|method| php_symbol_key(&method.name) == php_symbol_key("__toString"));
+    if !declares_own_interface && class.extends.is_some() {
+        state.interfaces.reverse();
+    }
     let mut seen_interfaces: HashSet<String> = state.interfaces.iter().cloned().collect();
     let mut queue = Vec::new();
     for interface_name in class.implements.iter().rev() {
         if !checker.enums.contains_key(&class.name)
-            && (php_symbol_key(interface_name) == "unitenum"
-                || checker.interface_extends_interface(interface_name, "UnitEnum"))
+            && interface_is_enum_contract(checker, interface_name)
         {
             return Err(CompileError::new(
                 class.span,
-                &format!("Non-enum class {} cannot implement interface UnitEnum", class.name),
+                &format!(
+                    "Non-enum class {} cannot implement interface UnitEnum",
+                    class.name
+                ),
             ));
         }
         if interface_is_throwable_contract(checker, interface_name)
@@ -92,6 +112,39 @@ pub(super) fn collect_interfaces(
         state.interfaces.push(interface_name);
     }
     Ok(())
+}
+
+/// Appends the `Stringable` php-src adds to a class that declares a public `__toString`.
+///
+/// It is appended while the class is BUILT, after the interfaces the class names, so a subclass
+/// copies it in the parent's list like any other interface: `class C extends S implements Z`
+/// with `S::__toString()` reports `Stringable, Z`, where appending it after every class was
+/// built (`apply_implicit_stringable_interfaces`, still the fallback) reported `Z, Stringable`.
+pub(super) fn append_implicit_stringable(state: &mut ClassBuildState, class: &FlattenedClass) {
+    let tostring_key = php_symbol_key("__toString");
+    let declares_tostring = class.methods.iter().any(|method| {
+        php_symbol_key(&method.name) == tostring_key && method.visibility == Visibility::Public
+    });
+    if !declares_tostring
+        || !state
+            .method_sigs
+            .get(&tostring_key)
+            .is_some_and(|sig| sig.return_type == PhpType::Str)
+        || state
+            .interfaces
+            .iter()
+            .any(|iface| php_symbol_key(iface) == php_symbol_key("Stringable"))
+    {
+        return;
+    }
+    state.interfaces.push("Stringable".to_string());
+}
+
+/// Returns `true` when an interface is or extends PHP's enum-only contracts.
+fn interface_is_enum_contract(checker: &Checker, interface_name: &str) -> bool {
+    let key = php_symbol_key(interface_name);
+    key == php_symbol_key("UnitEnum")
+        || checker.interface_extends_interface(interface_name, "UnitEnum")
 }
 
 /// Returns `true` if `interface_name` is or extends `Throwable` (case-insensitive).
@@ -260,9 +313,7 @@ fn validate_static_interface_method(
                 .static_method_declaring_classes
                 .insert(method_name.to_string(), class.name.clone());
             state.static_method_impl_classes.remove(method_name);
-            state
-                .abstract_static_methods
-                .insert(method_name.to_string());
+            state.abstract_static_methods.insert(method_name.to_string());
             if !state.static_vtable_slots.contains_key(method_name) {
                 let slot = state.static_vtable_methods.len();
                 state
@@ -307,7 +358,17 @@ fn validate_static_interface_method(
                 ),
         checker.enums.contains_key(&class.name),
     )?;
-    if required_sig.declared_return && !actual_sig.declared_return {
+    let actual_method = class
+        .methods
+        .iter()
+        .find(|m| m.is_static && php_symbol_key(&m.name) == method_name);
+    if required_sig.declared_return
+        && !actual_sig.declared_return
+        && !interface_return_type_is_tentative(
+            declaring_interface(&interface_info, interface_name, method_name),
+            method_name,
+        )
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -322,6 +383,7 @@ fn validate_static_interface_method(
         if actual_name != &class.name
             && class_map.contains_key(actual_name)
             && !checker.classes.contains_key(actual_name)
+            && !building.contains(actual_name.as_str())
         {
             super::build_class_info_recursive(
                 actual_name,
@@ -451,6 +513,71 @@ pub(super) fn ensure_concrete_class_implements_abstracts(
     Ok(())
 }
 
+/// Names the interface that actually DECLARED `method_name`, not the one the class named.
+///
+/// A class may reach `Countable::count` through `interface Nodes extends Countable`; the tentative
+/// return-type rule is a property of the declaring interface, so resolving through
+/// `method_declaring_interfaces` is what keeps it from depending on how the contract was reached.
+/// The fallback is the interface the class named, which is the declaring one for a direct clause.
+fn declaring_interface<'a>(
+    interface_info: &'a crate::types::InterfaceInfo,
+    interface_name: &'a str,
+    method_name: &str,
+) -> &'a str {
+    interface_info
+        .method_declaring_interfaces
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(interface_name)
+}
+
+/// Reports whether the implementing method carries `#[\\ReturnTypeWillChange]`.
+///
+/// The attribute silences PHP's tentative-return deprecation and nothing else — it does not make an
+/// undeclared return legal against a USERLAND parent, which is why acceptance is decided by the
+/// declaring interface and only the NOTICE is decided here. A leading `\\` and the case of the name
+/// are both insignificant in PHP, so neither is compared.
+fn method_suppresses_tentative_return_notice(
+    method: Option<&crate::parser::ast::ClassMethod>,
+) -> bool {
+    method.is_some_and(|method| {
+        method.attributes.iter().any(|group| {
+            group.attributes.iter().any(|attribute| {
+                attribute
+                    .name
+                    .trim_start_matches('\\')
+                    .eq_ignore_ascii_case("ReturnTypeWillChange")
+            })
+        })
+    })
+}
+
+/// Reports an inherited source-method/interface contract already checked at its parent.
+///
+/// php-src's `zend_do_implement_interfaces` does not repeat signature checks for inherited
+/// interfaces. A deferred abstract slot is not a source declaration and still needs checking.
+fn source_parent_checked_interface_method(
+    class: &FlattenedClass,
+    interface_name: &str,
+    method_name: &str,
+    class_map: &HashMap<String, FlattenedClass>,
+    checker: &Checker,
+) -> bool {
+    let Some(parent) = class.extends.as_ref().and_then(|name| checker.classes.get(name)) else {
+        return false;
+    };
+    if !parent.interfaces.iter().any(|name| name == interface_name) {
+        return false;
+    }
+    let Some(owner) = parent.method_declaring_classes.get(method_name) else {
+        return false;
+    };
+    declaration_is_source(checker, owner)
+        && class_map.get(owner).is_some_and(|declaration| {
+            declaration.methods.iter().any(|method| php_symbol_key(&method.name) == method_name)
+        })
+}
+
 /// Validates that `class` implements the interface method `method_name` from `interface_name`.
 ///
 /// Checks signature compatibility, return type declarations, visibility (must be public), and
@@ -549,21 +676,62 @@ fn validate_interface_method(
                 ),
         checker.enums.contains_key(&class.name),
     )?;
-    if required_sig.declared_return && !actual_sig.declared_return && !tentative_return {
-        return Err(CompileError::new(
-            actual_method
-                .map(|m| m.span)
-                .unwrap_or_else(crate::span::Span::dummy),
-            &format!(
-                "Cannot implement interface method {}::{} without declaring a compatible return type (interface returns {})",
-                class.name, method_name, required_sig.return_type
-            ),
-        ));
+    if required_sig.declared_return && !actual_sig.declared_return {
+        let declaring = declaring_interface(&interface_info, interface_name, method_name);
+        if !tentative_return && !interface_return_type_is_tentative(declaring, method_name) {
+            return Err(CompileError::new(
+                actual_method
+                    .map(|m| m.span)
+                    .unwrap_or_else(crate::span::Span::dummy),
+                &format!(
+                    "Cannot implement interface method {}::{} without declaring a compatible return type (interface returns {})",
+                    class.name, method_name, required_sig.return_type
+                ),
+            ));
+        }
+        // Accepted, but not silently: PHP reports the missing declaration as a deprecation and the
+        // attribute is what suppresses it.
+        // Resolve the declaration only for this notice; ordinary validation keeps its original
+        // class-local error location and declaration-ownership behavior.
+        let notice_method = actual_method.or_else(|| {
+            state
+                .method_declaring_classes
+                .get(method_name)
+                .and_then(|owner| class_map.get(owner))
+                .and_then(|declaration| {
+                    declaration.methods.iter().find(|m| php_symbol_key(&m.name) == method_name)
+                })
+        });
+        if !method_suppresses_tentative_return_notice(notice_method)
+            && !source_parent_checked_interface_method(
+                class,
+                interface_name,
+                method_name,
+                class_map,
+                checker,
+            )
+        {
+            let owner = state
+                .method_declaring_classes
+                .get(method_name)
+                .map(String::as_str)
+                .unwrap_or(class.name.as_str());
+            checker.warnings.push(crate::errors::CompileWarning::new(
+                notice_method
+                    .map(|m| m.span)
+                    .unwrap_or_else(crate::span::Span::dummy),
+                &format!(
+                    "Return type of {}::{}() should either be compatible with {}::{}(): {}, or the #[\\ReturnTypeWillChange] attribute should be used to temporarily suppress the notice",
+                    owner, method_name, declaring, method_name, required_sig.return_type
+                ),
+            ));
+        }
     }
     if let PhpType::Object(actual_name) = &actual_sig.return_type {
         if actual_name != &class.name
             && class_map.contains_key(actual_name)
             && !checker.classes.contains_key(actual_name)
+            && !building.contains(actual_name.as_str())
         {
             super::build_class_info_recursive(
                 actual_name,
@@ -616,7 +784,37 @@ fn validate_interface_method(
                 &actual_sig.return_type,
             )
         });
-    if required_sig.declared_return && !return_compatible && !tentative_return {
+    // An implementation that declares NO return type has nothing to compare: the missing
+    // declaration was settled above (refused, or accepted as php's tentative-type deprecation),
+    // and `actual_sig.return_type` is only this checker's inference of the body. Comparing that
+    // inference refused `offsetUnset(mixed $offset) { $this->remove($offset); }` against
+    // `ArrayAccess::offsetUnset(): void` -- Doctrine's `ArrayCollection`, which every entity
+    // relation holds, and 20 classes built on it went to the interpreter.
+    // A PHPDoc method template's return (`@template T` + `@return T` on Symfony's
+    // `CacheInterface::get()`) replaced the WRITTEN return php compares (`mixed`), so it is no
+    // contract an implementation can break: each call instantiates it at its own `T`.
+    // The method may be inherited from a parent interface (`TagAwareCacheInterface` extends
+    // `CacheInterface`), whose declaration is the one carrying the template.
+    let declaring_decls = interface_info
+        .method_declaring_interfaces
+        .get(method_name)
+        .and_then(|owner| checker.interfaces.get(owner))
+        .map(|owner| owner.method_decls.as_slice())
+        .unwrap_or(&[]);
+    let doc_template_return = interface_info
+        .method_decls
+        .iter()
+        .chain(declaring_decls)
+        .find(|method| php_symbol_key(&method.name) == method_name)
+        .is_some_and(|method| {
+            !method.type_params.is_empty()
+                && method.type_params.iter().all(|param| param.doc_annotated)
+        });
+    if required_sig.declared_return && actual_sig.declared_return
+        && !return_compatible
+        && !tentative_return
+        && !doc_template_return
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -780,9 +978,14 @@ fn ensure_object_type_known(
     building: &mut HashSet<String>,
 ) -> Result<(), CompileError> {
     match ty {
+        // A class already being built further up this chain is known enough for a type
+        // mention: `Carbon` implements an interface whose methods name `CarbonImmutable`, whose
+        // own interface names `Carbon` again. Building it a second time reported circular
+        // inheritance, and both classes went to the interpreter.
         PhpType::Object(name) if name != current_class
             && class_map.contains_key(name)
-            && !checker.classes.contains_key(name) =>
+            && !checker.classes.contains_key(name)
+            && !building.contains(name.as_str()) =>
         {
             super::build_class_info_recursive(name, class_map, checker, next_class_id, building)?;
         }

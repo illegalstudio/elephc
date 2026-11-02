@@ -103,7 +103,7 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
         op,
         // Integer/float arithmetic and bitwise operators.
         IAdd | ISub | IMul | ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt
-            | ICheckedSubToInt | ICheckedMulToInt | ICheckedNumericChainToInt | ICheckedPow
+            | ICheckedSubToInt | ICheckedMulToInt | ICheckedNumericChainToInt | ICheckedPow | ICheckedDiv
             | IDiv | ISDiv | ISMod
             | IPow | INeg | IBitAnd | IBitOr | IBitXor
             | IBitNot | IShl | IShrA | FAdd | FSub | FMul | FDiv | FPow | FNeg | MixedNumericBinop

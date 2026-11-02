@@ -230,10 +230,12 @@ pub(super) fn reflection_object_constructor_object_arg(
 
 /// Resolves a PHP class name case-insensitively against known class metadata.
 pub(super) fn resolve_known_class_name(ctx: &LoweringContext<'_, '_>, class_name: &str) -> Option<String> {
-    let key = php_symbol_key(class_name.trim_start_matches('\\'));
+    // An equality between two `php_symbol_key` results is `eq_ignore_ascii_case`, which is
+    // the same predicate without a lowercased `String` allocated for every class in the module.
+    let wanted = class_name.trim_start_matches('\\');
     ctx.classes
         .keys()
-        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .find(|candidate| candidate.trim_start_matches('\\').eq_ignore_ascii_case(wanted))
         .cloned()
 }
 
@@ -242,10 +244,10 @@ pub(super) fn resolve_known_function_name(
     ctx: &LoweringContext<'_, '_>,
     function_name: &str,
 ) -> Option<String> {
-    let key = php_symbol_key(function_name.trim_start_matches('\\'));
+    let wanted = function_name.trim_start_matches('\\');
     ctx.functions
         .keys()
-        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .find(|candidate| candidate.trim_start_matches('\\').eq_ignore_ascii_case(wanted))
         .cloned()
 }
 
@@ -256,12 +258,11 @@ pub(super) fn resolve_known_class_method_name(
     method: &str,
 ) -> Option<String> {
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
-    let key = php_symbol_key(method);
     class_info
         .methods
         .keys()
         .chain(class_info.static_methods.keys())
-        .find(|candidate| php_symbol_key(candidate) == key)
+        .find(|candidate| candidate.eq_ignore_ascii_case(method))
         .cloned()
 }
 
@@ -361,7 +362,11 @@ pub(super) fn is_reflection_class_construction_receiver(
     object: ValueId,
 ) -> bool {
     let object_ty = ctx.builder.value_php_type(object);
-    let Some((class_name, false)) = singular_object_class(&object_ty) else {
+    // Nullable ordinary method calls reach this predicate only after their null-fatal branch has
+    // split off. Keep the ReflectionClass specialization on that non-null edge: otherwise the
+    // generic variadic lowering materializes its empty tail as one actual array argument, which
+    // `ReflectionClass::newInstance()` forwards as a constructor argument.
+    let Some((class_name, _)) = singular_object_class(&object_ty) else {
         return false;
     };
     matches!(
@@ -369,4 +374,3 @@ pub(super) fn is_reflection_class_construction_receiver(
         "reflectionclass" | "reflectionobject"
     )
 }
-

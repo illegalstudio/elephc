@@ -74,6 +74,7 @@ pub struct Function {
     pub lexical_class: Option<String>,
     /// Normalized expression evaluated by this native callable-default helper, if any.
     pub callable_default: Option<crate::parser::ast::Expr>,
+    pub generator_source: Option<GeneratorSource>,
     pub flags: FunctionFlags,
     /// PHP-visible label of a closure (`{closure:<context>:<line>}`), when it differs from `name`.
     ///
@@ -101,6 +102,26 @@ pub struct Function {
     /// (passes neutralize or relocate instructions rather than renumbering them), and passes
     /// that copy a body into another function carry the entries along.
     pub inlined_scopes: std::collections::HashMap<InstId, String>,
+    /// By-value parameter slots whose address this body hands to a by-reference parameter.
+    ///
+    /// The callee can overwrite the slot through that reference and releases what it replaces,
+    /// but a by-value parameter holds a +0 borrow of the caller's argument. The frame must
+    /// therefore own its parameter (retain it in the prologue) exactly as it would for a slot an
+    /// ordinary `StoreLocal` overwrites; no EIR store names the slot, so the lowering records it.
+    pub by_ref_argument_param_slots: std::collections::HashSet<LocalSlotId>,
+    /// Where a closure literal sits, for php's `{closure:SCOPE:LINE}` name and its reflected
+    /// line range. `None` for every non-closure body and for synthesized closures.
+    pub closure_origin: Option<ClosureOrigin>,
+}
+
+/// Source position of a closure literal: the body that declared it and its line range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosureOrigin {
+    /// EIR name of the enclosing body (`"main"`, a function, `"Class::method"`, or another
+    /// closure's `__eir_closure_*` name).
+    pub owner: String,
+    /// The literal's span: its start and end lines, and the source file identity.
+    pub span: crate::span::Span,
 }
 
 impl Function {
@@ -115,8 +136,13 @@ impl Function {
     }
 
     /// Counts instruction and terminator value uses without counting definitions.
-    pub(crate) fn value_use_counts(&self) -> std::collections::HashMap<ValueId, usize> {
-        let mut counts = std::collections::HashMap::new();
+    ///
+    /// Keyed with `FxHasher`: passes and codegen recount every body several times, and SipHash
+    /// on these dense integer keys showed in every window of the Symfony build profile.
+    pub(crate) fn value_use_counts(&self) -> ValueUseCounts {
+        #[cfg(test)]
+        VALUE_USE_COUNTINGS.with(|count| count.set(count.get() + 1));
+        let mut counts = ValueUseCounts::default();
         for inst in &self.instructions {
             for &operand in &inst.operands {
                 *counts.entry(operand).or_insert(0) += 1;
@@ -153,10 +179,13 @@ impl Function {
             lexical_class: None,
             callable_default: None,
             source_defaults: Vec::new(),
+            generator_source: None,
             flags: FunctionFlags::default(),
             display_name: None,
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
             inlined_scopes: std::collections::HashMap::new(),
+            by_ref_argument_param_slots: std::collections::HashSet::new(),
+            closure_origin: None,
         }
     }
 
@@ -317,4 +346,20 @@ pub struct FunctionFlags {
     /// property-default init thunks and builtin class methods (Reflection, SPL,
     /// DateTime) lowered into the module. Consumed by source-map emission.
     pub is_synthetic: bool,
+}
+
+/// Source metadata retained for generator functions during the Phase 04 EIR backend bridge.
+#[derive(Debug, Clone)]
+pub struct GeneratorSource {
+    pub body: Vec<crate::parser::ast::Stmt>,
+    pub visible_param_count: usize,
+}
+
+/// Use count per value, as `Function::value_use_counts` returns it.
+pub(crate) type ValueUseCounts = crate::fast_hash::FastMap<ValueId, usize>;
+
+#[cfg(test)]
+std::thread_local! {
+    /// Whole-body use countings (`Function::value_use_counts`) on this test thread.
+    pub(crate) static VALUE_USE_COUNTINGS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

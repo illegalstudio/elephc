@@ -6,15 +6,11 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The third param `matches` is by-reference (`ref matches: Mixed = DefaultSpec::EmptyArray`).
-//! - Optional `$flags` accepts `PREG_PATTERN_ORDER`, `PREG_SET_ORDER`,
-//!   `PREG_OFFSET_CAPTURE`, and `PREG_UNMATCHED_AS_NULL`.
-//! - `lazy_check: true` suppresses the registry's default pre-inference loop so the hook
-//!   can infer pattern, subject, and flags while skipping write-only `$matches`.
+//! - The optional by-reference capture array, flags, and offset follow PHP's public signature.
+//! - The checker leaves the capture destination write-only while inferring all value inputs.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
-use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
@@ -27,22 +23,29 @@ builtin! {
     ),
 }
 
-/// Validates optional `$matches` / `$flags` and returns the match-count type.
-///
-/// Infers the pattern, subject, and flags arguments. `$matches` is write-only and
-/// is not inferred here. Shared by-reference validation rejects non-lvalues;
-/// unsupported non-local destinations receive an explicit diagnostic instead of count-only execution.
+/// Infers every input while leaving the by-reference capture destination write-only.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if let Some(matches) = cx.args.get(2) {
-        if !cx.argument_was_omitted(2) && !matches!(matches.kind, ExprKind::Variable(_)) {
-            return Err(CompileError::new(matches.span,
-                "preg_match_all(): non-local $matches destinations are not supported"));
-        }
+    if cx.args.len() >= 3
+        && !cx.argument_was_omitted(2)
+        && !cx
+            .checker
+            .is_by_ref_argument_lvalue(&cx.args[2], cx.env)?
+    {
+        return Err(CompileError::new(
+            cx.args[2].span,
+            "preg_match_all() parameter $matches must be passed a variable",
+        ));
     }
     if cx.args.len() >= 4 {
         cx.checker.infer_type(&cx.args[3], cx.env)?;
     }
-    Ok(PhpType::Mixed)
+    if cx.args.len() >= 5 {
+        cx.checker.infer_type(&cx.args[4], cx.env)?;
+    }
+    if crate::builtins::system::preg_match::preg_pattern_can_fail(&cx.args[0]) {
+        return Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]));
+    }
+    Ok(PhpType::Int)
 }

@@ -246,7 +246,11 @@ pub(super) fn reflection_constant_value(
     expr: &Expr,
     depth: usize,
 ) -> Result<ReflectionConstantValue> {
-    if depth > 16 {
+    // `depth` counts hops from one constant to another (`self::A`, `Foo::B`, a global
+    // constant), which is where a self-referencing cycle loops; operators and array elements
+    // pass it unchanged, since a flag set `self::F0 | ... | self::F23` or a long concatenation
+    // nests one binary node per term and is finite by construction.
+    if depth > 64 {
         return Err(CodegenIrError::unsupported(
             "deep recursive ReflectionClass constant metadata",
         ));
@@ -258,11 +262,17 @@ pub(super) fn reflection_constant_value(
         ExprKind::StringLiteral(value) => Ok(ReflectionConstantValue::Str(value.clone())),
         ExprKind::Null => Ok(ReflectionConstantValue::Null),
         ExprKind::Negate(inner) => {
-            match reflection_constant_value(ctx, current_class, current_info, inner, depth + 1)? {
+            match reflection_constant_value(ctx, current_class, current_info, inner, depth)? {
                 ReflectionConstantValue::Int(value) => Ok(value.checked_neg()
                     .map(ReflectionConstantValue::Int)
                     .unwrap_or_else(|| ReflectionConstantValue::Float(-(value as f64)))),
                 ReflectionConstantValue::Float(value) => Ok(ReflectionConstantValue::Float(-value)),
+                other => Err(unsupported_reflection_constant_value(other)),
+            }
+        }
+        ExprKind::BitNot(inner) => {
+            match reflection_constant_value(ctx, current_class, current_info, inner, depth)? {
+                ReflectionConstantValue::Int(value) => Ok(ReflectionConstantValue::Int(!value)),
                 other => Err(unsupported_reflection_constant_value(other)),
             }
         }
@@ -273,7 +283,7 @@ pub(super) fn reflection_constant_value(
             left,
             op,
             right,
-            depth + 1,
+            depth,
         ),
         ExprKind::ClassConstant { receiver } => {
             let class_name =
@@ -362,6 +372,32 @@ pub(super) fn reflection_binary_constant_value(
             ReflectionConstantValue::Str(right),
         ) => Ok(ReflectionConstantValue::Str(format!("{}{}", left, right))),
         (
+            ReflectionConstantValue::Str(_) | ReflectionConstantValue::Int(_),
+            BinOp::Concat,
+            ReflectionConstantValue::Str(_) | ReflectionConstantValue::Int(_),
+        ) => {
+            let text = |value: &ReflectionConstantValue| match value {
+                ReflectionConstantValue::Int(value) => value.to_string(),
+                ReflectionConstantValue::Str(value) => value.clone(),
+                _ => unreachable!(),
+            };
+            Ok(ReflectionConstantValue::Str(format!("{}{}", text(&left), text(&right))))
+        }
+        // Flag constants (`const ALL = self::A | self::B`, `1 << 3`).
+        (
+            ReflectionConstantValue::Int(left),
+            BinOp::BitOr | BinOp::BitAnd | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight,
+            ReflectionConstantValue::Int(right),
+        ) if !matches!(op, BinOp::ShiftLeft | BinOp::ShiftRight) || (0..64).contains(right) => {
+            Ok(ReflectionConstantValue::Int(match op {
+                BinOp::BitOr => *left | *right,
+                BinOp::BitAnd => *left & *right,
+                BinOp::BitXor => *left ^ *right,
+                BinOp::ShiftLeft => left.wrapping_shl(*right as u32),
+                _ => *left >> *right,
+            }))
+        }
+        (
             left,
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow,
             right,
@@ -402,6 +438,30 @@ pub(super) fn reflection_scoped_constant_value(
             {
                 return reflection_constant_value(ctx, interface_name, None, &value_expr, depth);
             }
+        }
+        // An inherited default (`protected string $sep = self::SEP` declared on an ancestor) is
+        // evaluated in the descendant's scope: look the constant up through the ancestors.
+        let mut ancestor = info.parent.clone();
+        let mut hops = 0;
+        while let Some(parent_name) = ancestor {
+            hops += 1;
+            if hops > 64 {
+                break;
+            }
+            let Some((resolved_parent, parent_info)) = resolve_reflection_class(ctx, &parent_name)
+            else {
+                break;
+            };
+            if let Some(value_expr) = parent_info.constants.get(constant_name) {
+                return reflection_constant_value(
+                    ctx,
+                    resolved_parent,
+                    Some(parent_info),
+                    value_expr,
+                    depth,
+                );
+            }
+            ancestor = parent_info.parent.clone();
         }
     }
     if let Some(interface_name) = resolve_reflection_interface(ctx, &class_name) {

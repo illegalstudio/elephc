@@ -121,6 +121,12 @@ fn load_precision_as_int(ctx: &mut FunctionContext<'_>, value: ValueId) -> Resul
             abi::emit_float_result_to_int_result(ctx.emitter);
             Ok(())
         }
+        // A nullable integer (`?int` from a helper that answers `null` for "not set") coerces
+        // like `null` does: `0`.
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+            Ok(())
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             load_value_to_first_int_arg(ctx, value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");

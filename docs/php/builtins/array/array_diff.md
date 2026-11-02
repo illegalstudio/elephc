@@ -2,7 +2,7 @@
 title: "array_diff()"
 description: "Computes the difference of arrays."
 sidebar:
-  order: 7
+  order: 8
 ---
 
 ## array_diff()

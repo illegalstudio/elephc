@@ -813,6 +813,7 @@ crates/
 ├── elephc-pcntl/        # Unix process control, wait, exec, and signal bridge
 ├── elephc-pdo/          # Multi-driver PDO bridge
 ├── elephc-phar/         # PHAR/tar/zip bridge
+├── elephc-proc/         # proc_open() process spawning and wait-status bridge
 ├── elephc-probe/        # Sampled profiling and authenticated service endpoint
 ├── elephc-random/       # PHP ext/random engines, CSPRNG, and global Mt19937 state bridge
 ├── elephc-tls/          # TLS stream bridge

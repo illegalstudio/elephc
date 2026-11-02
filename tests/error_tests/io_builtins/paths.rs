@@ -62,10 +62,11 @@ fn test_error_fseek_wrong_args() {
 /// passes a stream context elephc does not model.
 #[test]
 fn test_error_file_wrong_args() {
-    expect_error("<?php file();", "file() takes 1 or 2 arguments");
+    // php's own signature: `file(string $filename, int $flags = 0, ?resource $context = null)`.
+    expect_error("<?php file();", "file() takes 1 to 3 arguments");
     expect_error(
-        r#"<?php file("a.txt", 0, null);"#,
-        "file() takes 1 or 2 arguments",
+        r#"<?php file("a.txt", 0, null, 1);"#,
+        "file() takes 1 to 3 arguments",
     );
 }
 

@@ -26,6 +26,7 @@ use super::super::Checker;
 /// that contains an unresolvable deferred symbolic reference, setting it to
 /// `None`. Runs after all class/interface/enum schemas are built.
 pub(crate) fn drop_unresolvable_attribute_arg_refs(checker: &mut Checker) {
+    resolve_relative_class_refs(checker);
     // Phase 1 (immutable): record which (class, level, key, index) arg-lists hold
     // an unresolvable reference. Resolvability reads the class/interface/enum
     // tables, so this must finish before any mutation borrows them mutably.
@@ -83,6 +84,49 @@ pub(crate) fn drop_unresolvable_attribute_arg_refs(checker: &mut Checker) {
     }
 }
 
+/// Substitutes the declaring class for `self::`/`static::` and its parent for `parent::` inside
+/// every captured attribute argument list of every class.
+fn resolve_relative_class_refs(checker: &mut Checker) {
+    for (class_name, class_info) in checker.classes.iter_mut() {
+        let parent = class_info.parent.clone();
+    let rewrite = |lists: &mut Vec<Option<Vec<AttrArgEntry>>>| {
+            for entries in lists.iter_mut().flatten() {
+                for entry in entries.iter_mut() {
+                    rewrite_relative_class_ref(&mut entry.value, class_name, parent.as_deref());
+                }
+            }
+        };
+        rewrite(&mut class_info.attribute_args);
+        for lists in class_info.method_attribute_args.values_mut() {
+            rewrite(lists);
+        }
+        for lists in class_info.property_attribute_args.values_mut() {
+            rewrite(lists);
+        }
+    }
+}
+
+/// Rewrites one value (and any array entries inside it) in place.
+fn rewrite_relative_class_ref(value: &mut AttrArgValue, class_name: &str, parent: Option<&str>) {
+    match value {
+        AttrArgValue::ScopedConst(type_name, _) => match type_name.as_str() {
+            "self" | "static" => *type_name = class_name.to_string(),
+            "parent" => {
+                if let Some(parent) = parent {
+                    *type_name = parent.to_string();
+                }
+            }
+            _ => {}
+        },
+        AttrArgValue::Array(entries) => {
+            for entry in entries.iter_mut() {
+                rewrite_relative_class_ref(&mut entry.value, class_name, parent);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Returns true when a captured arg-list resolves to `Some(..)` and any entry
 /// (at any array depth) carries a `ScopedConst` reference that cannot be
 /// resolved. `None` arg-lists are already unsupported and need no change.
@@ -121,8 +165,14 @@ fn value_has_unresolvable_ref(checker: &Checker, value: &AttrArgValue) -> bool {
 /// an interface.
 fn scoped_const_materializable(checker: &Checker, type_name: &str, member: &str) -> bool {
     let normalized = type_name.trim_start_matches('\\');
-    if let Some(enum_info) = checker.enums.get(normalized) {
-        return enum_info.cases.iter().any(|case| case.name == member);
+    // An enum may also declare plain constants (Symfony's `Requirement::POSITIVE_INT`); those
+    // live in its class record like any class constant, so only a case match short-circuits.
+    if checker
+        .enums
+        .get(normalized)
+        .is_some_and(|enum_info| enum_info.cases.iter().any(|case| case.name == member))
+    {
+        return true;
     }
     class_constant_reachable(checker, normalized, member)
         || interface_constant_reachable(checker, normalized, member, &mut HashSet::new())

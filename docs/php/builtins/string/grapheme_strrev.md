@@ -2,7 +2,7 @@
 title: "grapheme_strrev()"
 description: "Reverses a string by grapheme cluster, returning false on failure."
 sidebar:
-  order: 869
+  order: 904
 ---
 
 ## grapheme_strrev()

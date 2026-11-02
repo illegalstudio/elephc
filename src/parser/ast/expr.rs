@@ -141,6 +141,11 @@ pub enum ExprKind {
     },
     ArrayLiteral(Vec<Expr>),
     ArrayLiteralAssoc(Vec<(Expr, Expr)>),
+    /// A by-reference array element (`[&$value]` or `['key' => &$value]`).
+    ///
+    /// This node is only valid as an array-literal value. Lowering currently accepts
+    /// web superglobals, whose shared storage can outlive the returned array.
+    ArrayReference(Box<Expr>),
     /// An array literal that MIXES a spread with explicit keys, which neither of the two
     /// nodes above can hold: `ArrayLiteral` has no place for a key and `ArrayLiteralAssoc`
     /// has no place for a keyless spread. Produced only for that shape.
@@ -265,6 +270,11 @@ pub enum ExprKind {
         receiver: StaticReceiver,
         property: String,
     },
+    /// A static property whose name is computed at runtime, such as `self::${$name}`.
+    DynamicStaticPropertyAccess {
+        receiver: StaticReceiver,
+        property: Box<Expr>,
+    },
     MethodCall {
         object: Box<Expr>,
         method: String,
@@ -312,6 +322,11 @@ pub enum ExprKind {
     /// time by looking up the constant in the receiver's class info.
     ScopedConstantAccess {
         receiver: StaticReceiver,
+        name: String,
+    },
+    /// A class constant read through an object or class-string expression (`$object::CONSTANT`).
+    DynamicScopedConstantAccess {
+        receiver: Box<Expr>,
         name: String,
     },
     /// `new self()`, `new static()`, `new parent()`. Distinct from `NewObject`

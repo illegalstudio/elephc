@@ -2,7 +2,7 @@
 title: "xmlwriter_text() - internals"
 description: "Compiler internals for xmlwriter_text(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1134
+  order: 1194
 ---
 
 ## `xmlwriter_text()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1240](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1240) (`xmlwriter_text`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:1250](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1250) (`xmlwriter_text`)
 - **Function symbol**: `xmlwriter_text()`
 
 

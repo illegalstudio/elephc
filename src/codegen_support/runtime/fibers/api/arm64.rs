@@ -108,6 +108,9 @@ pub(super) fn emit_construct(emitter: &mut Emitter) {
     for i in 0..FIBER_START_ARGS_MAX {
         emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARGS_OFFSET + i * 8)); // start_args[i] cleared
     }
+    for i in 0..super::super::GENERATOR_EXTRA_ARGS_MAX {
+        emitter.instruction(&format!("str xzr, [x21, #{}]", super::super::GENERATOR_EXTRA_ARGS_OFFSET + i * 8)); // trailing generator start_args[i] cleared
+    }
     emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARG_COUNT_OFFSET)); // start_arg_count cleared until Fiber::start() copies values
     for i in 0..FIBER_FLOAT_ARGS_MAX {
         emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_FLOAT_ARGS_OFFSET + i * 8)); // clear reserved legacy float slot storage

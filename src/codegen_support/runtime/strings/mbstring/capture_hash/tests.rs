@@ -27,7 +27,7 @@ fn native_mbstring_capture_hash_store_preserves_aliases_and_pending_cleanup() {
     super::super::capture_reference::emit_reference_child_slot(&mut emitter);
     for emit in [arrays::emit_hash_new, arrays::emit_hash_grow, arrays::emit_hash_insert_owned,
         arrays::emit_hash_iter, arrays::emit_hash_get, arrays::emit_hash_key_hash,
-        arrays::emit_hash_key_eq, arrays::emit_hash_fnv1a, arrays::emit_hash_pin,
+        arrays::emit_hash_key_eq, arrays::emit_hash_bytes, arrays::emit_hash_pin,
         arrays::emit_hash_write_guards, arrays::emit_hash_set, arrays::emit_hash_unset,
         arrays::emit_hash_to_mixed, arrays::emit_array_to_hash, arrays::emit_mixed_from_value,
         arrays::emit_mixed_clone, arrays::emit_mixed_unbox, arrays::emit_mixed_reference,
@@ -57,11 +57,19 @@ pub(in crate::codegen_support::runtime::strings::mbstring) fn adapters(emitter: 
     emitter.instruction("ret");                                                 // return the independently stamped heap kind
     for (symbol, destination) in [("__rt_heap_alloc", "fixture_allocate"), ("__rt_heap_free", "fixture_free"),
         ("__rt_decref_hash", "fixture_release"), ("__rt_decref_any", "fixture_release"),
-        ("__rt_callable_descriptor_release", "fixture_release"), ("__rt_incref", "fixture_retain")] {
+        ("__rt_callable_descriptor_release", "fixture_release")] {
         emitter.label_global(symbol);
         if !arm { emitter.instruction("mov rdi, rax"); }                        // adapt the private runtime unary input to C
         emitter.instruction(&format!("{} {destination}", if arm { "b" } else { "jmp" })); // delegate ownership accounting to the C fixture
     }
+    // The production retain ignores a null gap, which `__rt_ref_copy_slot` hands it for a hole.
+    emitter.label_global("__rt_incref");
+    emitter.instruction(if arm { "cbz x0, fixture_incref_null" } else { "test rax, rax" }); // a null gap retains nothing
+    if !arm { emitter.instruction("jz fixture_incref_null"); }                   // a null gap retains nothing
+    if !arm { emitter.instruction("mov rdi, rax"); }                            // adapt the private unary input to C
+    emitter.instruction(&format!("{} fixture_retain", if arm { "b" } else { "jmp" })); // delegate ownership accounting to the C fixture
+    emitter.label("fixture_incref_null");
+    emitter.instruction("ret");                                                 // nothing to retain
     emitter.label_global("fixture_invoke");
     if arm {
         emitter.instruction("mov x9, x0");                                      // retain the protected operation pointer
@@ -80,6 +88,8 @@ pub(in crate::codegen_support::runtime::strings::mbstring) fn adapters(emitter: 
     emitter.instruction(if arm { "ldp x29, x30, [sp], #16" } else { "add rsp, 8" }); // restore caller linkage and stack
     emitter.instruction("ret");                                                 // return the borrowed entry or a miss
     persist_adapter(emitter);
+    crate::codegen_support::runtime::arrays::hash_layout::tests::runtime_state_stubs(emitter);
+    arrays::emit_ref_copy_slot(emitter);
 }
 
 /// Preserves the private string pointer/length return convention across C byte allocation.

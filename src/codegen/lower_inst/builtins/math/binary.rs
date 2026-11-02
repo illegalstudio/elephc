@@ -206,8 +206,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
         .add_string(b"Division of PHP_INT_MIN by -1 is not an integer");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #56");                             // request Throwable payload storage (message/code/previous) for the ArithmeticError
-            ctx.emitter.instruction("bl __rt_heap_alloc");                      // allocate the ArithmeticError object payload
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks an object instance allocation
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation header as a runtime object
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
@@ -221,7 +220,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // store the default zero exception code
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active ArithmeticError object
             ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
@@ -230,8 +229,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("push rbp");                                // preserve caller frame pointer for exception allocation
             ctx.emitter.instruction("mov rbp, rsp");                            // establish an aligned helper frame for heap allocation
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
-            ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous) for the ArithmeticError
-            ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the ArithmeticError object payload
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction(
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
             );                                                                  // materialize the x86_64 object heap-kind header
@@ -248,7 +246,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             );                                                                  // store the exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // store the default zero exception code
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             ctx.emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");   // publish the active ArithmeticError object
             ctx.emitter.instruction("mov rsp, rbp");                            // release the helper frame before throwing
             ctx.emitter.instruction("pop rbp");                                 // restore caller frame pointer before throwing

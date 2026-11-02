@@ -27,6 +27,7 @@ impl fmt::Display for TypeSpec {
             Self::Void => "void",
             Self::Ptr => "pointer",
             Self::Callable => "callable",
+            Self::NullableInt => "?int",
             Self::Nullable(inner) => return write!(formatter, "?{inner}"),
             Self::Union(members) => {
                 for (index, member) in members.iter().enumerate() {

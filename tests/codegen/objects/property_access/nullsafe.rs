@@ -160,6 +160,51 @@ echo receiver()?->label(side());
     assert_eq!(out, "receiver|arg|method|value");
 }
 
+/// Verifies a gradual interface property preserves its object member through a nullsafe method
+/// call followed by a regular method call on the non-null result.
+#[test]
+fn test_nullsafe_method_call_on_nullable_interface_property() {
+    let out = compile_and_run(
+        r#"<?php
+interface ClockContract {
+    public function now(): Moment;
+}
+class Moment {
+    public function zone(): string { return "UTC"; }
+}
+class FixedClock implements ClockContract {
+    public function now(): Moment { return new Moment(); }
+}
+class Resolver {
+    public function __construct(private ClockContract|false|null $clock = null) {}
+    public function zone(): string {
+        return $this->clock?->now()->zone() ?? "none";
+    }
+}
+echo (new Resolver(new FixedClock()))->zone(), ":", (new Resolver())->zone();
+"#,
+    );
+    assert_eq!(out, "UTC:none");
+}
+
+/// Verifies a nullsafe chain on an unresolved nominal property remains gradual and can
+/// short-circuit on null without inventing an integer method result.
+#[test]
+fn test_nullsafe_method_chain_on_unresolved_nominal_property() {
+    let out = compile_and_run(
+        r#"<?php
+class ResolverWithOptionalDependency {
+    public function __construct(private ?OptionalClockContract $clock = null) {}
+    public function zone(): string {
+        return $this->clock?->now()->zone() ?? "none";
+    }
+}
+echo (new ResolverWithOptionalDependency())->zone();
+"#,
+    );
+    assert_eq!(out, "none");
+}
+
 /// Verifies regular (non-nullsafe) method call also evaluates receiver before
 /// arguments, matching PHP's left-to-right evaluation order. Same fixture as
 /// nullsafe variant but with -> instead of ?-> to confirm consistency.

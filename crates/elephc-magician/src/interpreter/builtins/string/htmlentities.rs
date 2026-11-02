@@ -26,13 +26,11 @@ pub(in crate::interpreter) fn eval_builtin_htmlentities(
     super::htmlspecialchars::eval_builtin_html_entity_named("htmlentities", args, context, scope, values)
 }
 
-/// Applies PHP `htmlentities(...)` to one evaluated string value under `$flags`.
-///
-/// Shares the `htmlspecialchars()` encoder, as the compiled lowering does.
-pub(in crate::interpreter) fn eval_htmlentities_result(
+/// Applies PHP `htmlentities(...)` with an explicit `$flags` bit set.
+pub(in crate::interpreter) fn eval_htmlentities_result_with_flags(
     value: RuntimeCellHandle,
     flags: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::htmlspecialchars::eval_htmlspecialchars_result(value, flags, values)
+    super::htmlspecialchars::eval_htmlspecialchars_with_flags(value, flags, values)
 }

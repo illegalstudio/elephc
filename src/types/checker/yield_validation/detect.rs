@@ -127,6 +127,9 @@ fn stmt_contains_yield(stmt: &Stmt) -> bool {
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_contains_yield(object) || expr_contains_yield(value)
         }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            expr_contains_yield(object) || expr_contains_yield(source)
+        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_contains_yield(object) || expr_contains_yield(value)
         }
@@ -137,6 +140,9 @@ fn stmt_contains_yield(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyArrayPush { value, .. } => expr_contains_yield(value),
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_contains_yield(index) || expr_contains_yield(value)
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_contains_yield(index) || expr_contains_yield(source)
         }
         _ => false,
     }

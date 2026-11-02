@@ -8,15 +8,18 @@
 //! - Leaf files register metadata through `eval_builtin!` and own the concrete
 //!   direct or evaluated-argument adapter used by registry hooks.
 
+mod array_change_key_case;
 mod array_chunk;
 mod array_column;
 mod array_combine;
 mod array_count_values;
 mod array_diff;
 mod array_diff_key;
+mod extract;
 mod array_fill;
 mod array_fill_keys;
 mod array_filter;
+mod array_find;
 mod array_flip;
 mod array_intersect;
 mod array_intersect_key;
@@ -30,17 +33,25 @@ mod array_pop;
 mod array_product;
 mod array_push;
 mod array_rand;
+mod array_recursive;
 mod array_reduce;
+mod array_replace;
 mod array_reverse;
 mod array_search;
 mod array_shift;
 mod array_slice;
 mod array_splice;
 mod array_sum;
+mod array_is_list;
+mod array_first;
+mod array_ucompare;
+mod array_key_first;
+mod array_key_last;
 mod array_unique;
 mod array_unshift;
-mod array_values;
+pub(in crate::interpreter) mod array_values;
 mod array_walk;
+mod array_walk_recursive;
 mod arsort;
 mod asort;
 mod count;
@@ -50,7 +61,7 @@ mod end;
 mod in_array;
 mod iterator_apply;
 mod iterator_count;
-mod iterator_to_array;
+pub(in crate::interpreter) mod iterator_to_array;
 mod key;
 mod key_sort_flags;
 mod krsort;
@@ -72,6 +83,7 @@ mod uksort;
 mod usort;
 mod values_dispatch;
 
+pub(in crate::interpreter) use array_change_key_case::*;
 pub(in crate::interpreter) use array_pointer::eval_array_pointer_move;
 pub(in crate::interpreter) use array_pop::eval_array_pop_shift_replacement;
 pub(in crate::interpreter) use array_push::{
@@ -80,6 +92,7 @@ pub(in crate::interpreter) use array_push::{
 pub(in crate::interpreter) use array_splice::eval_array_splice_removed_and_replacement;
 pub(in crate::interpreter) use array_walk::eval_array_walk_ref_result;
 pub(in crate::interpreter) use direct_dispatch::eval_builtin_array_declared_call;
+pub(in crate::interpreter) use extract::*;
 pub(in crate::interpreter) use mutating_dispatch::eval_builtin_array_mutating_declared_call;
 pub(in crate::interpreter) use sort::eval_array_sort_replacement;
 pub(in crate::interpreter) use usort::eval_user_sort_replacement;

@@ -29,6 +29,7 @@ const CALLBACK_PARAMETERS: &[CallbackParameters] = &[
     callback_parameters("array_any", CALLBACK),
     callback_parameters("array_filter", CALLBACK),
     callback_parameters("array_find", CALLBACK),
+    callback_parameters("array_find_key", CALLBACK),
     callback_parameters("array_map", CALLBACK),
     callback_parameters("array_reduce", CALLBACK),
     callback_parameters("array_udiff", CALLBACK),

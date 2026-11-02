@@ -106,9 +106,7 @@ fn contextual_closure_sig(
                         callback.span,
                         &format!("Closure parameter ${}", name),
                     )?;
-                    let specialized_ty =
-                        Checker::specialize_generic_array_param_hint(&declared_ty, actual_ty);
-                    (specialized_ty.clone(), specialized_ty, true)
+                    (declared_ty.clone(), declared_ty, true)
                 } else {
                     (declared_ty.clone(), declared_ty, true)
                 }
@@ -154,48 +152,67 @@ fn contextual_closure_sig(
     }))
 }
 
-/// Returns the checker type of `preg_replace_callback()`.
+/// Type-checks a call to PHP `preg_replace_callback(pattern, callback, subject, limit, count)`.
 ///
-/// The runtime value is a string, or PHP null when the pattern is invalid. The
-/// static type stays `mixed`, the same contract `preg_replace()` and `var_export()`
-/// use, so `function f(): string { return preg_replace_callback(...); }` still
-/// type-checks. A `string|null` return would reject those programs.
-fn result_type() -> PhpType {
-    PhpType::Mixed
-}
-
-/// Type-checks a call to PHP `preg_replace_callback(pattern, callback, subject)`.
-///
-/// Validates exactly 3 arguments, infers types for the pattern and subject
-/// expressions, synthesizes an `array<string>` type for the `$matches` callback
-/// parameter, and delegates to `check_known_callable_call` to verify the closure
-/// signature. Returns `mixed` so a declared string return can still accept the call.
+/// Validates the public arity, leaves the optional counter destination write-only,
+/// synthesizes an `array<string>` type for the callback parameter, and verifies the
+/// callable signature. Returns `PhpType::Str` on success.
 pub(crate) fn check(
     checker: &mut Checker,
     args: &[Expr],
     span: crate::span::Span,
     env: &TypeEnv,
 ) -> BuiltinResult {
-    if args.len() != 3 {
+    if !(3..=6).contains(&args.len()) {
         return Err(CompileError::new(
             span,
-            "preg_replace_callback() takes exactly 3 arguments",
+            "preg_replace_callback() takes 3 to 6 arguments",
         ));
     }
 
-    checker.infer_type(&args[0], env)?;
-    checker.infer_type(&args[2], env)?;
+    let pattern_ty = checker.infer_type(&args[0], env)?;
+    let subject_ty = checker.infer_type(&args[2], env)?;
+    if args.len() >= 4 {
+        checker.infer_type(&args[3], env)?;
+    }
+    // A `$count` skipped by a named `flags:` is the contract's injected default, which carries the
+    // dummy span: no caller expression, so nothing to demand a variable of.
+    if args.len() >= 5
+        && args[4].span != crate::span::Span::dummy()
+        && !checker.is_by_ref_argument_lvalue(&args[4], env)?
+    {
+        return Err(CompileError::new(
+            args[4].span,
+            "preg_replace_callback() parameter $count must be passed a variable",
+        ));
+    }
+    // `$flags` and an operand that may be an array both go to `crate::preg_array_prelude`, which
+    // answers `mixed`; the lowering redirects on exactly that type. With `$flags` a match can be
+    // an `[text, offset]` pair or null, so the callback's `$matches` is `array<mixed>`.
+    let flagged = args.len() == 6;
+    if flagged {
+        checker.infer_type(&args[5], env)?;
+    }
+    let redirected = flagged
+        || super::preg_operand_may_be_array(&pattern_ty)
+        || super::preg_operand_may_be_array(&subject_ty);
+    let result = if redirected { PhpType::Mixed } else { PhpType::Str };
+    let matches = if flagged {
+        PhpType::Array(Box::new(PhpType::Mixed))
+    } else {
+        matches_type()
+    };
 
     let callback_args = vec![matches_arg(span)];
-    if let Some(sig) = contextual_closure_sig(checker, &args[1], &[matches_type()], env)? {
-        checker.check_known_callable_call(
+    if let Some(sig) = contextual_closure_sig(checker, &args[1], &[matches], env)? {
+        checker.check_known_userland_callable_call(
             &sig,
             &callback_args,
             span,
             env,
             "preg_replace_callback() callback",
         )?;
-        return Ok(Some(result_type()));
+        return Ok(Some(result));
     }
 
     check_callback_builtin_call(
@@ -206,5 +223,5 @@ pub(crate) fn check(
         env,
         "preg_replace_callback() callback",
     )?;
-    Ok(Some(result_type()))
+    Ok(Some(result))
 }

@@ -1,7 +1,7 @@
 //! Purpose:
-//! Defines the per-file source profile: the language mode selected from a physical input path
-//! plus the `declare(strict_types=1)` state that file opted into.
-//! Centralizes `.lfc` classification so every file loader agrees on tag and strict-mode semantics.
+//! Defines physical-source loading and the per-file source profile: the language mode selected
+//! from a path plus the `declare(strict_types=1)` state that file opted into. Centralizes byte
+//! decoding and `.lfc` classification so every loader agrees on source semantics.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` for the entry source.
@@ -94,11 +94,11 @@ impl SourceMode {
     }
 }
 
-/// Returns whether Composer discovery should inspect a path as PHP/LFC source.
+/// Returns whether static source discovery should inspect a path as PHP/LFC source.
 ///
-/// Physical includes remain PHP-compatible regardless of suffix, but Composer's
-/// directory walkers intentionally discover only files named `.php` or `.lfc`.
-pub fn is_composer_source_path(path: &Path) -> bool {
+/// Physical includes remain PHP-compatible regardless of suffix, while directory-based
+/// discovery intentionally indexes only files named `.php` or `.lfc`.
+pub fn is_discoverable_source_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
@@ -106,13 +106,106 @@ pub fn is_composer_source_path(path: &Path) -> bool {
         })
 }
 
-/// Removes the recognized source suffix from one Composer-relative path component.
-pub fn composer_source_stem(component: &str) -> String {
+/// Removes the recognized source suffix from one discovered path component.
+pub fn discoverable_source_stem(component: &str) -> String {
     Path::new(component)
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or(component)
         .to_string()
+}
+
+/// Reads PHP source without requiring its byte stream to be valid UTF-8.
+///
+/// PHP identifiers and string literals are BYTE strings: bytes in `0x80..=0xff` are legal in both,
+/// and third-party packages use that. `symfony/cache` declares `class \xA9` -- one non-ASCII byte,
+/// no namespace -- and Composer's generated classmap carries the same byte as a key.
+///
+/// A malformed byte goes through `crate::string_bytes`, the SAME private-use marker range a
+/// `\xNN` escape already uses, so a raw source byte and its escaped spelling produce identical
+/// runtime bytes. Latin-1 was used here before and is not reversible: byte `0xA9` became
+/// `U+00A9`, which re-encodes to TWO bytes, and every byte operation on it was then wrong --
+/// measured against php 8.5.10, `strlen("\xA9")` answered 2 against 1, `ord()` 194 against 169,
+/// `bin2hex()` `c2a9` against `a9`. Internal coherence was preserved, which is why it went
+/// unnoticed: both sides of a comparison were transformed alike, and only the bytes LEAVING the
+/// program differed.
+pub(crate) fn read_physical_source(path: impl AsRef<Path>) -> std::io::Result<String> {
+    std::fs::read(path).map(decode_physical_source)
+}
+
+/// Converts one physical PHP byte stream into the UTF-8 storage used by the parser.
+fn decode_physical_source(bytes: Vec<u8>) -> String {
+    match String::from_utf8(bytes) {
+        // A valid UTF-8 source still needs normalising IF it spells a private-use char in the
+        // marker range itself, or that char would be indistinguishable from the marker a malformed
+        // byte decodes to. The guard keeps the rebuild off the hot path: essentially no real
+        // source contains one, and the check is a scan rather than an allocation.
+        Ok(source) if !holds_byte_marker(&source) => source,
+        Ok(source) => {
+            let mut normalised = String::with_capacity(source.len());
+            push_source_text(&source, &mut normalised);
+            normalised
+        }
+        Err(error) => decode_mixed_utf8_and_latin1(error.into_bytes()),
+    }
+}
+
+/// Whether `source` spells a char in the byte-marker range, which only this decode may produce.
+///
+/// A BYTE scan, not a char walk: every marker in `U+E000..=U+E0FF` encodes as three UTF-8 bytes
+/// beginning `0xEE`, so a source without that byte cannot hold one and pays a memchr-shaped pass
+/// instead of a full decode. This runs on every source file the compiler reads, and the char walk
+/// it replaces was heavy enough to push a cross-process lease test past its timeout.
+fn holds_byte_marker(source: &str) -> bool {
+    source
+        .as_bytes()
+        .contains(&0xee)
+        .then(|| {
+            source
+                .chars()
+                .any(|ch| ('\u{e000}'..='\u{e0ff}').contains(&ch))
+        })
+        .unwrap_or(false)
+}
+
+/// Appends a VALID UTF-8 span, routing it through the byte-marker encoder.
+///
+/// Not optional: a source that genuinely spells a private-use char in `U+E000..=U+E0FF` would
+/// otherwise be indistinguishable from a marker this decode produced, and
+/// `string_bytes::push_literal_char` is exactly the escape hatch for that collision.
+fn push_source_text(text: &str, out: &mut String) {
+    for ch in text.chars() {
+        crate::string_bytes::push_literal_char(ch, out);
+    }
+}
+
+/// Preserves valid UTF-8 spans while mapping each malformed byte to its byte marker.
+fn decode_mixed_utf8_and_latin1(bytes: Vec<u8>) -> String {
+    let mut source = String::with_capacity(bytes.len());
+    let mut offset = 0;
+    while offset < bytes.len() {
+        match std::str::from_utf8(&bytes[offset..]) {
+            Ok(valid) => {
+                push_source_text(valid, &mut source);
+                break;
+            }
+            Err(error) => {
+                let valid_end = offset + error.valid_up_to();
+                if valid_end > offset {
+                    let valid = std::str::from_utf8(&bytes[offset..valid_end])
+                        .expect("UTF-8 validator reported a valid prefix");
+                    push_source_text(valid, &mut source);
+                }
+                offset = valid_end;
+                let invalid_len = error.error_len().unwrap_or(bytes.len() - offset);
+                for byte in &bytes[offset..offset + invalid_len] {
+                    crate::string_bytes::push_escaped_byte(*byte, &mut source);
+                }
+                offset += invalid_len;
+            }
+        }
+    }
+    source
 }
 
 /// RAII guard restoring the parser's previous source profile on drop.
@@ -185,7 +278,7 @@ pub fn finalize_physical_program(
     // Per physical file, because the lexer discards comments and they are recovered from the
     // source text by line: that only means anything while the file is still its own, before
     // include resolution splices every file into one program without rebasing line numbers.
-    let program = crate::docblock::apply(program, source);
+    let program = crate::docblock::erasure::apply_for_file(program, source, path);
     Ok(crate::conditional::apply(program, defines))
 }
 
@@ -203,13 +296,46 @@ mod tests {
         assert_eq!(SourceMode::from_path(Path::new("script")), SourceMode::Php);
     }
 
-    /// Verifies Composer discovery accepts only the two physical source suffixes.
+    /// Verifies directory-based discovery accepts only the two physical source suffixes.
     #[test]
-    fn classifies_composer_source_paths() {
-        assert!(is_composer_source_path(Path::new("src/App.php")));
-        assert!(is_composer_source_path(Path::new("src/App.LFC")));
-        assert!(!is_composer_source_path(Path::new("src/App.inc")));
-        assert_eq!(composer_source_stem("App.lfc"), "App");
+    fn classifies_discoverable_source_paths() {
+        assert!(is_discoverable_source_path(Path::new("src/App.php")));
+        assert!(is_discoverable_source_path(Path::new("src/App.LFC")));
+        assert!(!is_discoverable_source_path(Path::new("src/App.inc")));
+        assert_eq!(discoverable_source_stem("App.lfc"), "App");
+    }
+
+    /// Verifies physical source keeps valid Unicode while accepting isolated PHP identifier bytes.
+    ///
+    /// The isolated byte becomes a `string_bytes` MARKER, not the Latin-1 char it used to become.
+    /// That is the whole point: a marker decodes back to ONE byte, while `U+00A9` re-encodes to
+    /// two and made `strlen`, `ord` and `bin2hex` disagree with php on any source holding a raw
+    /// high byte. The valid `é` is untouched, so nothing that was already UTF-8 moves.
+    #[test]
+    fn decodes_mixed_utf8_and_php_identifier_bytes() {
+        let source = decode_physical_source(vec![b'e', 0xc3, 0xa9, b' ', 0xa9, b'!']);
+        let mut expected = String::from("eé ");
+        crate::string_bytes::push_escaped_byte(0xa9, &mut expected);
+        expected.push('!');
+        assert_eq!(source, expected);
+        assert_eq!(
+            crate::string_bytes::literal_bytes(&source),
+            vec![b'e', 0xc3, 0xa9, b' ', 0xa9, b'!'],
+            "the decode must round-trip to the original bytes"
+        );
+    }
+
+    /// Verifies a source that spells a marker-range char itself cannot be mistaken for a decoded
+    /// raw byte: it is re-encoded, so `literal_bytes` still returns its original UTF-8.
+    #[test]
+    fn a_private_use_source_char_round_trips_instead_of_colliding_with_a_byte_marker() {
+        let original = "x\u{e0a9}y";
+        let source = decode_physical_source(original.as_bytes().to_vec());
+        assert_ne!(source, original, "the marker-range char must be re-encoded");
+        assert_eq!(
+            crate::string_bytes::literal_bytes(&source),
+            original.as_bytes().to_vec()
+        );
     }
 
     /// Verifies a nested file parse starts coercive and cannot leak its `strict_types` state

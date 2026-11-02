@@ -23,7 +23,7 @@ use crate::span::Span;
 use super::super::params::{
     looks_like_typed_param, parse_name_list, parse_type_expr, parse_type_param_list,
 };
-use super::super::{expect_semicolon, expect_token, parse_block, parse_unqualified_name};
+use super::super::{expect_semicolon, expect_token, parse_unqualified_name};
 use super::method_params::parse_method_params;
 use super::traits::parse_trait_use;
 
@@ -152,6 +152,10 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
     let mut cases = Vec::new();
 
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        if matches!(tokens[*pos].0, Token::DocComment(_)) {
+            *pos += 1;
+            continue;
+        }
         // Capture any `#[...]` attribute groups attached to the next member —
         // they're attached to the resulting property or method below.
         let member_attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
@@ -480,14 +484,20 @@ fn parse_optional_property_type(
     // Property parsing preserves null's declaration and rejects unimplemented true-only slots.
     // Excluding these tokens here made `public false $v;` parse
     // as an untyped property whose NAME is a keyword — an immediate statement-level error.
+    // A type may also open with a keyword member: `null|string`, `false|int` (phpunit's
+    // `WithEnvironmentVariable`), or a class-relative `self`/`parent`; a parenthesized
+    // `(A&B)|null` DNF type opens with `(`.
     if !matches!(
         tokens.get(*pos).map(|(t, _)| t),
         Some(Token::Identifier(_))
             | Some(Token::Question)
             | Some(Token::Backslash)
+            | Some(Token::LParen)
             | Some(Token::False)
             | Some(Token::True)
             | Some(Token::Null)
+            | Some(Token::Self_)
+            | Some(Token::Parent)
     ) && !crate::parser::relative_name_starts_at(tokens, *pos)
     {
         return Ok(None);
@@ -692,6 +702,13 @@ fn parse_class_like_method(
     let return_type = if *pos < tokens.len() && tokens[*pos].0 == Token::Colon {
         *pos += 1;
         Some(parse_type_expr(tokens, pos, span)?)
+    } else if method_name.eq_ignore_ascii_case("__toString") {
+        // php 8 declares `: string` on every `__toString()` that omits it — Reflection reports
+        // the return type, and a returned `5` is coerced to "5". Without it, an undeclared
+        // `__toString()` was refused as incompatible with `Stringable::__toString(): string` or
+        // with a parent's declared one, which is how Laravel writes `HtmlString`, `MessageBag`,
+        // `ViewErrorBag` and `Stringable`.
+        Some(TypeExpr::Str)
     } else {
         None
     };
@@ -699,8 +716,12 @@ fn parse_class_like_method(
         *pos += 1;
         (false, Vec::new())
     } else {
-        (true, parse_block(tokens, pos)?)
+        (true, super::super::blocks::parse_executable_block(tokens, pos)?)
     };
+    // The method's extent ends at the `}` (or `;`) just consumed. `ReflectionMethod::getEndLine()`
+    // reads it, and it answered the START line for every compiled method, so code that slices a
+    // method's source out of its file (Symfony demo's "show controller code") got one line.
+    let span = super::declarations::close_brace_span(tokens, *pos, span);
     if !promoted_properties.is_empty() {
         if is_abstract || !has_body {
             return Err(CompileError::new(
@@ -756,6 +777,10 @@ fn parse_interface_body(
     let mut constants = Vec::new();
 
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        if matches!(tokens[*pos].0, Token::DocComment(_)) {
+            *pos += 1;
+            continue;
+        }
         // Attributes may decorate interface methods (e.g. `#[Deprecated]`).
         let member_attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
         if *pos >= tokens.len() || matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
@@ -1072,6 +1097,7 @@ fn parse_property_hooks(
         }
 
         // Hook body: `;` (abstract), `=> expr;` (short), or `{ ... }` (block).
+        let body_start = *pos;
         let body: Option<Vec<Stmt>> = match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Semicolon) => {
                 *pos += 1;
@@ -1094,7 +1120,9 @@ fn parse_property_hooks(
                     )])
                 }
             }
-            Some(Token::LBrace) => Some(parse_block(tokens, pos)?),
+            Some(Token::LBrace) => {
+                Some(super::super::blocks::parse_executable_block(tokens, pos)?)
+            }
             _ => {
                 return Err(CompileError::new(
                     hook_span,
@@ -1102,6 +1130,14 @@ fn parse_property_hooks(
                 ))
             }
         };
+        // PHP calls a hooked property BACKED when a hook touches `$this-><prop>`, and VIRTUAL when
+        // none does. Only a virtual one is unwritable — a backed one keeps its slot and the class
+        // writes it normally. The distinction is read off the hook's own tokens because it is a
+        // syntactic fact about the body, and the schema only ever sees the method signature.
+        // A `set` hook's short form always writes the store, so it is backed by construction.
+        if hooks_touch_backing_store(tokens, body_start, *pos, prop_name) {
+            hooks.backed = true;
+        }
 
         if is_get {
             if hooks.requires_get() {
@@ -1181,4 +1217,34 @@ fn parse_property_hooks(
         super::property_hook_storage::body_uses_backing_slot(&method.body, prop_name)
     });
     Ok((hooks, accessors))
+}
+
+/// Returns whether the hook body between `start` and `end` reads or writes `$this-><prop>`.
+///
+/// PHP decides a hooked property's storage from exactly this: a hook that touches the property by
+/// name keeps the backing slot (the property is BACKED), and one that never does has no slot at
+/// all (VIRTUAL). Only a virtual property refuses a write. Symfony's `ViewEvent` declares
+/// `public private(set) ?ControllerArgumentsEvent $controllerArgumentsEvent { get { … } }` whose
+/// getter does `$this->controllerArgumentsEvent ??= …`, so the constructor may assign it.
+///
+/// Read off the TOKENS rather than the parsed body: it is a syntactic property of the hook, and
+/// the class schema keeps only method signatures by the time the question is asked. A `$this->p`
+/// inside a nested closure counts here and does not in PHP; that only makes elephc accept a write
+/// PHP answers with a runtime `Error` instead of a compile error, which is the safer direction.
+fn hooks_touch_backing_store(
+    tokens: &[SpannedToken],
+    start: usize,
+    end: usize,
+    prop_name: &str,
+) -> bool {
+    let end = end.min(tokens.len());
+    if start >= end {
+        return false;
+    }
+    tokens[start..end].windows(3).any(|window| {
+        matches!(window[0].0, Token::This)
+            && matches!(window[1].0, Token::Arrow)
+            && crate::parser::keyword_name::bareword_name_from_token(&window[2].0, &window[2].1)
+                .is_some_and(|name| name == prop_name)
+    })
 }

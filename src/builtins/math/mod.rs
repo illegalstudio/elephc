@@ -108,6 +108,9 @@ pub(crate) fn min_max_array_element_type(
         // A bare `array` reaches the runtime as the `array<mixed>` list of its values
         // (`BuiltinArgumentLowering::BareArrayValues`), so its element type is `mixed`.
         other if other.is_php_array() => Ok(PhpType::Mixed),
+        // A gradual operand is checked at run time by `crate::min_max_prelude`, which the lowering
+        // routes it to (php's TypeError for a non-array, ValueError for an empty one).
+        PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
         other => Err(CompileError::new(
             cx.span,
             &format!(

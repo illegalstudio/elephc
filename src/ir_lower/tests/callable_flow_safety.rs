@@ -95,8 +95,8 @@ echo invokeJoinedCallable($argc);
             function
                 .instructions
                 .iter()
-                .any(|instruction| instruction.op == Op::FirstClassCallableNew),
-            "{target}: the static callable-array target must materialize a descriptor",
+                .any(|instruction| instruction.op == Op::NormalizeCallable),
+            "{target}: the static callable-array target must materialize an array-kind descriptor",
         );
     }
 }
@@ -203,7 +203,9 @@ echo invokeSpreadDescriptor([SpreadDescriptorTarget::hit(...)]);
         );
         assert!(
             function.instructions.iter().any(|instruction| {
-                instruction.op == Op::MixedUnbox
+                // `NormalizeCallable` is the validating extraction: it resolves every callable
+                // spelling and refuses a non-callable box (a bare unbox did not).
+                instruction.op == Op::NormalizeCallable
                     && instruction.result_php_type.codegen_repr() == PhpType::Callable
             }),
             "{target}: a boxed spread projection must be validated as a descriptor",
@@ -262,8 +264,8 @@ echo invokeResolvedArray(), invokeResolvedLiteral();
                 function
                     .instructions
                     .iter()
-                    .any(|instruction| instruction.op == Op::FirstClassCallableNew),
-                "{target}/{name}: the instance target must become a descriptor",
+                    .any(|instruction| instruction.op == Op::NormalizeCallable),
+                "{target}/{name}: the instance target must become an array-kind descriptor",
             );
         }
     }

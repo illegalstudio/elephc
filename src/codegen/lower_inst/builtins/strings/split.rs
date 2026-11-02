@@ -251,7 +251,7 @@ fn emit_explode_separator_guard(
     ctx.emitter.label(&ok_label);
 }
 
-/// Lowers `sscanf(string, format)` into the shared scanner helper.
+/// Lowers `sscanf(string, format, &...outputs)` into the shared typed scanner helper.
 pub(crate) fn lower_sscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() < 2 {
         return Err(CodegenIrError::invalid_module(format!(
@@ -259,9 +259,150 @@ pub(crate) fn lower_sscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             inst.operands.len()
         )));
     }
+    let output_slots = inst
+        .operands
+        .iter()
+        .skip(2)
+        .map(|value| sscanf_output_local_slot(ctx, *value))
+        .collect::<Result<Vec<_>>>()?;
     load_input_and_pattern_args(ctx, inst, "sscanf")?;
     abi::emit_call_label(ctx.emitter, "__rt_sscanf");
+    if !output_slots.is_empty() {
+        emit_sscanf_output_writebacks(ctx, &output_slots)?;
+    }
     store_if_result(ctx, inst)
+}
+
+/// Resolves one scanner output operand to the writable Mixed local it loaded.
+fn sscanf_output_local_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<LocalSlotId> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Err(CodegenIrError::unsupported(
+            "sscanf output argument that is not a local load",
+        ));
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+        return Err(CodegenIrError::unsupported(
+            "sscanf output argument that is not a local variable",
+        ));
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+        return Err(CodegenIrError::invalid_module(
+            "sscanf output load missing local slot",
+        ));
+    };
+    if ctx.local_php_type(slot)?.codegen_repr() != PhpType::Mixed {
+        return Err(CodegenIrError::unsupported(format!(
+            "sscanf output local uses PHP type {:?} instead of Mixed storage",
+            ctx.local_php_type(slot)?.codegen_repr()
+        )));
+    }
+    Ok(slot)
+}
+
+/// Transfers scanned Mixed cells into caller locals and returns the assignment count.
+fn emit_sscanf_output_writebacks(
+    ctx: &mut FunctionContext<'_>,
+    output_slots: &[LocalSlotId],
+) -> Result<()> {
+    const SCRATCH_BYTES: usize = 32;
+    const ARRAY_OFFSET: usize = 0;
+    const COUNT_OFFSET: usize = 8;
+    const CELL_OFFSET: usize = 16;
+
+    abi::emit_reserve_temporary_stack(ctx.emitter, SCRATCH_BYTES);
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_store_to_sp(ctx.emitter, &result_reg, ARRAY_OFFSET);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                           // load the number of successfully scanned values
+            ctx.emitter
+                .instruction(&format!("mov x10, #{}", output_slots.len()));     // materialize the number of writable output arguments
+            ctx.emitter.instruction("cmp x9, x10");                            // cap the assignment count at the number of caller outputs
+            ctx.emitter.instruction("csel x9, x9, x10, lo");                   // select min(scanned values, output arguments)
+            abi::emit_store_to_sp(ctx.emitter, "x9", COUNT_OFFSET);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax]");               // load the number of successfully scanned values
+            ctx.emitter
+                .instruction(&format!("mov r11, {}", output_slots.len()));      // materialize the number of writable output arguments
+            ctx.emitter.instruction("cmp r10, r11");                           // cap the assignment count at the number of caller outputs
+            ctx.emitter.instruction("cmova r10, r11");                         // select min(scanned values, output arguments)
+            abi::emit_store_to_sp(ctx.emitter, "r10", COUNT_OFFSET);
+        }
+    }
+
+    for (index, slot) in output_slots.iter().copied().enumerate() {
+        emit_sscanf_single_output_writeback(ctx, slot, index, ARRAY_OFFSET, CELL_OFFSET)?;
+    }
+
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, ARRAY_OFFSET);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, COUNT_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, SCRATCH_BYTES);
+    Ok(())
+}
+
+/// Writes one scanned Mixed cell, or PHP null when no conversion value exists, into a local.
+fn emit_sscanf_single_output_writeback(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    index: usize,
+    array_offset: usize,
+    cell_offset: usize,
+) -> Result<()> {
+    let missing = ctx.next_label("sscanf_output_missing");
+    let ready = ctx.next_label("sscanf_output_ready");
+    let element_offset = 24 + index * 8;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", array_offset);
+            ctx.emitter.instruction("ldr x10, [x9]");                          // load the number of scanned cells before indexing
+            ctx.emitter.instruction(&format!("cmp x10, #{}", index));          // does this output position exist in the result array?
+            ctx.emitter.instruction(&format!("b.ls {}", missing));             // absent conversions write PHP null
+            abi::emit_load_from_address(ctx.emitter, "x0", "x9", element_offset);
+            abi::emit_store_to_sp(ctx.emitter, "x0", cell_offset);
+            abi::emit_call_label(ctx.emitter, "__rt_incref");                  // transfer an ownership share from the result array to the local
+            ctx.emitter.instruction(&format!("b {}", ready));
+            ctx.emitter.label(&missing);
+            ctx.emitter.instruction("mov x0, #8");                             // runtime tag 8 = PHP null
+            ctx.emitter.instruction("mov x1, xzr");                            // null has no low payload word
+            ctx.emitter.instruction("mov x2, xzr");                            // null has no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_store_to_sp(ctx.emitter, "x0", cell_offset);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", array_offset);
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");               // load the number of scanned cells before indexing
+            ctx.emitter.instruction(&format!("cmp r11, {}", index));           // does this output position exist in the result array?
+            ctx.emitter.instruction(&format!("jbe {}", missing));              // absent conversions write PHP null
+            abi::emit_load_from_address(ctx.emitter, "rax", "r10", element_offset);
+            abi::emit_store_to_sp(ctx.emitter, "rax", cell_offset);
+            abi::emit_call_label(ctx.emitter, "__rt_incref");                  // transfer an ownership share from the result array to the local
+            ctx.emitter.instruction(&format!("jmp {}", ready));
+            ctx.emitter.label(&missing);
+            ctx.emitter.instruction("mov rax, 8");                             // runtime tag 8 = PHP null
+            ctx.emitter.instruction("xor edi, edi");                           // null has no low payload word
+            ctx.emitter.instruction("xor esi, esi");                           // null has no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_store_to_sp(ctx.emitter, "rax", cell_offset);
+        }
+    }
+    ctx.emitter.label(&ready);
+    ctx.release_local_before_refcounted_writeback(slot)?;
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, cell_offset);
+    ctx.store_current_result_to_local(slot)
 }
 
 /// Lowers `str_split(string, length?)` into the fixed-width string-array splitter.
@@ -322,6 +463,41 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     super::implode_owners::emit_owned_implode(ctx, runtime_label, normalized_copy);
     store_if_result(ctx, inst)
 }
+
+/// Materializes the AArch64 glue pair for either accepted `implode()` call form.
+fn load_implode_glue_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array_index: usize,
+) -> Result<()> {
+    if array_index == 0 {
+        let (label, _) = ctx.data.add_string(b"");
+        abi::emit_symbol_address(ctx.emitter, "x1", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "x2", 0);
+    } else {
+        let glue = expect_operand(inst, 0)?;
+        load_value_as_string_to_regs(ctx, glue, "implode", "x1", "x2")?;
+    }
+    Ok(())
+}
+
+/// Materializes the x86_64 glue pair for either accepted `implode()` call form.
+fn load_implode_glue_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array_index: usize,
+) -> Result<()> {
+    if array_index == 0 {
+        let (label, _) = ctx.data.add_string(b"");
+        abi::emit_symbol_address(ctx.emitter, "rax", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "rdx", 0);
+    } else {
+        let glue = expect_operand(inst, 0)?;
+        load_value_as_string_to_regs(ctx, glue, "implode", "rax", "rdx")?;
+    }
+    Ok(())
+}
+
 /// Materializes delimiter/payload string pairs plus the optional `$limit` for `explode()`.
 pub(super) fn load_split_pair_args(
     ctx: &mut FunctionContext<'_>,
@@ -625,14 +801,7 @@ pub(super) fn lower_implode_aarch64(
     array_index: usize,
 ) -> Result<()> {
     let array = expect_operand(inst, array_index)?;
-    if array_index == 0 {
-        let (label, _) = ctx.data.add_string(b"");
-        abi::emit_symbol_address(ctx.emitter, "x1", &label);
-        abi::emit_load_int_immediate(ctx.emitter, "x2", 0);
-    } else {
-        let glue = expect_operand(inst, 0)?;
-        load_value_as_string_to_regs(ctx, glue, "implode", "x1", "x2")?;
-    }
+    load_implode_glue_aarch64(ctx, inst, array_index)?;
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the glue string while materializing the array argument
     load_implode_array(ctx, array)?;
     ctx.emitter.instruction("mov x3, x0");                                      // pass the indexed array pointer as the third implode argument
@@ -650,14 +819,7 @@ pub(super) fn lower_implode_x86_64(
     array_index: usize,
 ) -> Result<()> {
     let array = expect_operand(inst, array_index)?;
-    if array_index == 0 {
-        let (label, _) = ctx.data.add_string(b"");
-        abi::emit_symbol_address(ctx.emitter, "rax", &label);
-        abi::emit_load_int_immediate(ctx.emitter, "rdx", 0);
-    } else {
-        let glue = expect_operand(inst, 0)?;
-        load_value_as_string_to_regs(ctx, glue, "implode", "rax", "rdx")?;
-    }
+    load_implode_glue_x86_64(ctx, inst, array_index)?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
     load_implode_array(ctx, array)?;
     ctx.emitter.instruction("mov rdx, rax");                                    // pass the indexed array pointer as the third implode argument

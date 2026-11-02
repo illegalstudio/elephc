@@ -19,14 +19,14 @@ use crate::span::Span;
 
 use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo};
 use super::merge::{
-    merge_constants, merge_imported_constant_set, merge_imported_method_set, merge_methods,
-    merge_properties, merge_property_into,
+    merge_constants, merge_imported_constant_set, merge_imported_method_set,
+    merge_methods, merge_properties, merge_property_into,
 };
 use super::validation::validate_direct_members;
 
 /// Recursively expands a single trait, applying its trait_uses, then merging
 /// all inherited and direct members. Uses `cache` to memoize results and `stack`
-/// to detect circular composition. Returns the fully expanded property/method set
+/// to detect circular composition. Returns the fully expanded property/method/constant set
 /// or a `CompileError` on circular reference, unknown trait, or validation failure.
 fn expand_trait(
     trait_name: &str,
@@ -88,6 +88,7 @@ fn expand_trait(
         &trait_info.constants,
         trait_info.span,
         &format!("trait {}", trait_name),
+        true,
     )?;
     let expanded = ExpandedTrait {
         properties,
@@ -101,11 +102,11 @@ fn expand_trait(
 /// For each `TraitUse` in `trait_uses`, expands the referenced traits, applies
 /// insteadof/alias adaptations, resolves visibility overrides, selects the
 /// dominant method from each `HashMap` of candidates, and accumulates all
-/// imported properties, methods, and constants.
+/// imported properties, methods, and constants into their aggregate collections.
 ///
 /// `owner_label` is a human-readable context string (e.g., `"class Foo"` or
 /// `"trait Bar"`) used only in error messages. `owner_span` is the source span
-/// used for error location. Returns imported properties, methods, and constants.
+/// used for error location. Returns the properties, methods, and constants on success.
 pub(super) fn resolve_trait_uses(
     trait_uses: &[TraitUse],
     trait_map: &HashMap<String, TraitDeclInfo>,
@@ -117,6 +118,24 @@ pub(super) fn resolve_trait_uses(
     let mut all_properties = Vec::new();
     let mut all_methods = Vec::new();
     let mut all_constants = Vec::new();
+
+    // php resolves every `use` of one class-like together: `use A { A::m insteadof B; } use B;`
+    // is `use A, B { A::m insteadof B; }` (Symfony's `CachingHttpClient` writes exactly that with
+    // `AsyncDecoratorTrait` and `HttpClientTrait`). Taken one statement at a time, the `insteadof`
+    // named a trait its own statement did not list, and the conflict across statements went
+    // unresolved.
+    let merged;
+    let trait_uses = if trait_uses.len() > 1 {
+        merged = [TraitUse {
+            type_args: Vec::new(),
+            trait_names: trait_uses.iter().flat_map(|u| u.trait_names.iter().cloned()).collect(),
+            adaptations: trait_uses.iter().flat_map(|u| u.adaptations.iter().cloned()).collect(),
+            span: trait_uses[0].span,
+        }];
+        &merged[..]
+    } else {
+        trait_uses
+    };
 
     for trait_use in trait_uses {
         let mut imported_properties = Vec::new();
@@ -321,6 +340,20 @@ fn select_methods(
                     .is_some_and(|set| set.contains(&candidate.source_trait))
             })
             .collect();
+        // An abstract trait method only states a requirement, so it never conflicts: php keeps the
+        // one concrete candidate, or one of the abstract declarations when every candidate is
+        // abstract (ramsey/uuid's `Fields` uses five traits that each declare
+        // `abstract getBytes()` and implements it itself).
+        let concrete = remaining.iter().filter(|candidate| !candidate.decl.is_abstract).count();
+        let remaining: Vec<ImportedMethod> = if remaining.len() > 1 && concrete <= 1 {
+            let keep = remaining
+                .iter()
+                .position(|candidate| !candidate.decl.is_abstract)
+                .unwrap_or(0);
+            remaining.into_iter().nth(keep).into_iter().collect()
+        } else {
+            remaining
+        };
         if remaining.len() > 1 {
             let trait_list = remaining
                 .iter()

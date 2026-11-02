@@ -261,3 +261,218 @@ var_dump(is_null($m->foo));
         "int(9223372036854775806)\nint(9223372036854775806)\nbool(true)\nbool(false)\n"
     );
 }
+
+/// Verifies every whole-object reader renders a `?int` property out of its own two-word slot.
+///
+/// The per-class descriptor tables carry one static runtime value tag per property, and a
+/// `TaggedScalar` slot has no such tag — its tag lives in the slot's second word. Claiming
+/// tag 7 ("the slot holds a boxed Mixed cell pointer") made every reader below take the raw
+/// payload for a cell address and dereference `NULL_SENTINEL` (`0x7ffffffffffffffe`), which
+/// is why one fixture covers all of them: they share the descriptor, not the code.
+/// Expected output is `LC_ALL=C php -n` 8.4 output, byte for byte.
+#[test]
+fn test_nullable_int_property_renders_through_every_object_reader() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+class A { public ?int $n = null; public ?int $v = 5; }
+$a = new A();
+var_dump($a);
+print_r($a);
+var_export($a);
+echo "\n";
+echo json_encode($a), "\n";
+echo serialize($a), "\n";
+var_dump(get_object_vars($a));
+var_dump((array) $a);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(A)#1 (2) {\n  [\"n\"]=>\n  NULL\n  [\"v\"]=>\n  int(5)\n}\n",
+            "A Object\n(\n    [n] => \n    [v] => 5\n)\n",
+            "\\A::__set_state(array(\n   'n' => NULL,\n   'v' => 5,\n))\n",
+            "{\"n\":null,\"v\":5}\n",
+            "O:1:\"A\":2:{s:1:\"n\";N;s:1:\"v\";i:5;}\n",
+            "array(2) {\n  [\"n\"]=>\n  NULL\n  [\"v\"]=>\n  int(5)\n}\n",
+            "array(2) {\n  [\"n\"]=>\n  NULL\n  [\"v\"]=>\n  int(5)\n}\n",
+        )
+    );
+}
+
+/// Verifies the `int|null` union spelling reaches the same readers as `?int`, and that the
+/// sibling nullable scalar types — which stay on the boxed Mixed representation, so they were
+/// never affected — keep rendering the same way beside it.
+#[test]
+fn test_explicit_int_null_union_and_sibling_nullable_types_render_together() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+class A {
+    public int|null $u = null;
+    public int|null $w = 7;
+    public ?float $f = null;
+    public ?string $s = null;
+    public ?bool $b = null;
+    public ?array $a = null;
+}
+$o = new A();
+echo json_encode($o), "\n";
+echo serialize($o), "\n";
+foreach ((array) $o as $k => $v) { echo $k, "="; var_dump($v); }
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "{\"u\":null,\"w\":7,\"f\":null,\"s\":null,\"b\":null,\"a\":null}\n",
+            "O:1:\"A\":6:{s:1:\"u\";N;s:1:\"w\";i:7;s:1:\"f\";N;s:1:\"s\";N;s:1:\"b\";N;s:1:\"a\";N;}\n",
+            "u=NULL\nw=int(7)\nf=NULL\ns=NULL\nb=NULL\na=NULL\n",
+        )
+    );
+}
+
+/// Verifies the exact `__serialize()` shape Symfony's `DependencyInjection\Definition` uses,
+/// which is what turned this descriptor bug into a SIGSEGV on every `GET /`: the `(array)`
+/// cast boxes each property slot and `!$v` then casts that box to bool. A null `?int` takes
+/// the `continue` arm and a non-null one is kept, so both tagged payloads reach the cast.
+#[test]
+fn test_nullable_int_property_survives_the_cast_then_bool_serialize_shape() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+class Definition
+{
+    private ?int $factory = null;
+    private ?int $priority = 3;
+    private bool $shared = false;
+    private ?string $class = null;
+    private array $arguments = [];
+
+    public function __serialize(): array
+    {
+        $serialized = [];
+        foreach ((array) $this as $k => $v) {
+            if (!$v xor 'shared' === $k) {
+                continue;
+            }
+            $k = str_replace("\0Definition\0", '', $k);
+            $serialized[$k] = $v;
+        }
+        return $serialized;
+    }
+}
+$d = new Definition();
+print_r($d->__serialize());
+var_dump(serialize($d));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Array\n(\n    [priority] => 3\n)\n",
+            "string(41) \"O:10:\"Definition\":1:{s:8:\"priority\";i:3;}\"\n",
+        )
+    );
+}
+
+/// Verifies PHP's `uninitialized(...)` line for a typed, default-less `?int` property, and that
+/// the readers that omit an uninitialized property still omit it now that a tagged scalar's own
+/// tag word is the same word the uninitialized marker lives in.
+#[test]
+fn test_uninitialized_nullable_int_property_is_named_and_omitted() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+class U { public ?int $n; public ?string $s; public int $seen = 1; }
+$u = new U();
+var_dump($u);
+var_dump((array) $u);
+var_dump(get_object_vars($u));
+$u->n = 4;
+var_dump($u);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(U)#1 (1) {\n  [\"n\"]=>\n  uninitialized(?int)\n",
+            "  [\"s\"]=>\n  uninitialized(?string)\n  [\"seen\"]=>\n  int(1)\n}\n",
+            "array(1) {\n  [\"seen\"]=>\n  int(1)\n}\n",
+            "array(1) {\n  [\"seen\"]=>\n  int(1)\n}\n",
+            "object(U)#1 (2) {\n  [\"n\"]=>\n  int(4)\n",
+            "  [\"s\"]=>\n  uninitialized(?string)\n  [\"seen\"]=>\n  int(1)\n}\n",
+        )
+    );
+}
+
+/// Verifies `==` between two instances compares `?int` properties by value. `__rt_obj_loose_eq`
+/// walks the same descriptor through `__rt_obj_prop_value`, so it used to segfault on the first
+/// property instead of reporting a comparison.
+#[test]
+fn test_nullable_int_properties_compare_loosely_by_value() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+class A { public ?int $n = null; public ?int $v = 5; }
+$a = new A();
+$b = new A();
+var_dump($a == $b);
+$b->n = 3;
+var_dump($a == $b);
+$b->n = null;
+var_dump($a == $b);
+$b->v = null;
+var_dump($a == $b);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(true)\nbool(false)\n");
+}
+
+/// Verifies the readers a `?int` STATIC property reaches. A static slot is addressed by its
+/// compile-time type rather than through the per-class descriptor tables, so this pins that the
+/// two storage paths agree on what a `?int` holding null and one holding a value print.
+#[test]
+fn test_nullable_int_static_property_renders_through_the_readers() {
+    let out = compile_and_run_tagged(
+        r#"<?php
+class S { public static ?int $n = null; public static ?int $v = 9; }
+var_dump(S::$n);
+var_dump(S::$v);
+print_r(S::$n);
+echo "|";
+print_r(S::$v);
+echo "|\n";
+var_export(S::$n);
+echo "\n";
+var_export(S::$v);
+echo "\n";
+S::$n = 12;
+S::$v = null;
+var_dump(S::$n === 12, S::$v === null);
+"#,
+    );
+    assert_eq!(out, "NULL\nint(9)\n|9|\nNULL\n9\nbool(true)\nbool(true)\n");
+}
+
+/// Verifies a `?int` property slot owns nothing on the heap.
+///
+/// The gc descriptor used to call a `?int` slot a boxed Mixed cell too, which handed the raw
+/// payload — a PHP int, or the null sentinel — to `__rt_decref_any` as a heap pointer on every
+/// object release.
+#[test]
+fn test_nullable_int_property_readers_leave_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public ?int $n = null; public ?int $v = 5; }
+$a = new A();
+var_dump($a);
+print_r($a);
+var_export($a);
+echo json_encode($a), serialize($a), "\n";
+var_dump(get_object_vars($a));
+var_dump((array) $a);
+"#,
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

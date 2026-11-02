@@ -9,6 +9,20 @@
 
 use super::*;
 
+/// Verifies a declaration-leading docblock is retained for class reflection metadata.
+#[test]
+fn test_declaration_doc_comment_token() {
+    let t = tokens("<?php /** Documented class. */ class DocumentedClass {}");
+    assert!(t.contains(&Token::DocComment("/** Documented class. */".into())));
+}
+
+/// Verifies a docblock in a parameter list is PHP trivia rather than parser input.
+#[test]
+fn test_parameter_doc_comment_is_trivia() {
+    let t = tokens("<?php function documented(/** @var string */ string $value) {}");
+    assert!(!t.iter().any(|token| matches!(token, Token::DocComment(_))));
+}
+
 /// Verifies that heredoc syntax with a basic label (`<<<EOT`) tokenizes
 /// the body as a single `StringLiteral` token without interpolation.
 #[test]

@@ -305,6 +305,33 @@ echo count($names);
     assert_eq!(out, "3");
 }
 
+/// Verifies array_column() accepts an associative outer collection of associative rows.
+#[test]
+fn test_array_column_associative_outer_collection() {
+    let out = compile_and_run(
+        r#"<?php
+$users = ['primary' => ['name' => 'Alice'], 'secondary' => ['name' => 'Bob']];
+echo implode(',', array_column($users, 'name'));
+"#,
+    );
+    assert_eq!(out, "Alice,Bob");
+}
+
+/// Verifies strict in_array() compares a gradual needle against nested indexed-array elements.
+#[test]
+fn test_in_array_strict_mixed_needle_nested_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+function contains(mixed $needle): bool {
+    return in_array($needle, [['cache.adapter.redis_tag_aware'], ['cache.adapter.valkey_tag_aware']], true);
+}
+echo contains(['cache.adapter.valkey_tag_aware']) ? 'Y' : 'N';
+echo contains(['cache.adapter.redis']) ? 'Y' : 'N';
+"#,
+    );
+    assert_eq!(out, "YN");
+}
+
 /// Exercises `array_column()` on rows containing mixed (string and int) values, then iterates both result arrays to confirm ordering and values are preserved.
 #[test]
 fn test_array_column_mixed_row_values() {
@@ -327,6 +354,26 @@ foreach ($scores as $score) {
 "#,
     );
     assert_eq!(out, "Ada Linus Grace |10 12 8 ");
+}
+
+/// Verifies `array_column()` accepts an indexed array whose rows were widened to boxed `Mixed`.
+#[test]
+fn test_array_column_boxed_mixed_rows() {
+    let output = compile_and_run(
+        r#"<?php
+function rows(bool $include): array {
+    $values = [];
+    $values[] = ["name" => "Alice"];
+    if ($include) {
+        $values[] = 42;
+        $values[] = ["name" => "Bob"];
+    }
+    return $values;
+}
+echo implode(",", array_column(rows(true), "name"));
+"#,
+    );
+    assert_eq!(output, "Alice,Bob");
 }
 
 /// Regression test for GC balance: after `array_column()` on mixed-type rows with all three arrays subsequently `unset`, allocations must equal frees.
@@ -481,4 +528,160 @@ echo $first[1] . "|" . $second[0];
 "#,
     );
     assert_eq!(out, "5|6");
+}
+
+/// A nested element write inside a FUNCTION, where the container's element type is a concrete
+/// array rather than `mixed`.
+///
+/// `lower_nested_array_assign` finishes every nested target through the shared boxed-Mixed writer,
+/// which accepts only a `Mixed`/union parent. A local typed `array<array<int>>` handed it a raw
+/// `array<int>` parent and the build stopped in the BACKEND with
+/// `unsupported EIR backend feature: runtime_call array set with receiver PHP type Array(Int)`.
+/// The identical two lines COMPILE AT TOP LEVEL, where the same local is already boxed, which is
+/// why the hole survived: every existing nested-write fixture in this file is either top-level or
+/// `mixed`-elemented. `Symfony\Polyfill\Php85\Php85::grapheme_levenshtein`'s Levenshtein matrix is
+/// what found it.
+///
+/// `php 8.5.10` prints `5 7 0` for this program.
+#[test]
+fn test_nested_write_through_concrete_element_type_in_a_function() {
+    let out = compile_and_run(
+        r#"<?php
+function grid(): string {
+    $dp = [[0, 0], [0, 0]];
+    $dp[1][0] = 5;
+    $dp[0][1] = 7;
+    return $dp[1][0] . " " . $dp[0][1] . " " . $dp[0][0];
+}
+echo grid();
+"#,
+    );
+    assert_eq!(out, "5 7 0");
+}
+
+/// The same write with a RUNTIME row index, so the parent fetch cannot be folded to a literal.
+///
+/// `php 8.5.10` prints `9 0`.
+#[test]
+fn test_nested_write_through_concrete_element_type_with_a_dynamic_index() {
+    let out = compile_and_run(
+        r#"<?php
+function put(int $row): string {
+    $dp = [[1, 2], [3, 4]];
+    $dp[$row][0] = 9;
+    return $dp[$row][0] . " " . $dp[0][0];
+}
+echo put(1);
+"#,
+    );
+    assert_eq!(out, "9 1");
+}
+
+/// A keyed write into an empty-array VALUE of a hash local, inside a function, compiles and keeps
+/// every bucket.
+///
+/// `['definitions' => [], 'aliases' => [], 'services' => []]` types each value as the empty
+/// `array<never>`, and `$services['aliases'][$id] = $alias` handed that raw parent to the leaf
+/// writer: `runtime_call array set with receiver PHP type Array(Never)`, which kept Symfony's
+/// `MarkdownDescriptor::describeContainerServices()` out of the build. The hash is boxed once, ahead
+/// of the loop, even though every arm of the `if` writes it. Expected output is `php -n` 8.5's.
+#[test]
+fn test_nested_keyed_write_into_empty_array_values_of_a_hash_local() {
+    let out = compile_and_run(
+        r#"<?php
+class A {} class D {}
+function f(array $ids) {
+    $services = ["definitions" => [], "aliases" => [], "services" => []];
+    foreach ($ids as $id) {
+        $s = $id === "a" ? new A : ($id === "d" ? new D : "x");
+        if ($s instanceof A) { $services["aliases"][$id] = $s; }
+        elseif ($s instanceof D) { $services["definitions"][$id] = $s; }
+        else { $services["services"][$id] = $s; }
+    }
+    foreach ($services as $k => $v) { echo $k, "=", count($v), ":", implode(",", array_keys($v)), " "; }
+    echo "\n";
+}
+f(["z", "a", "d", "a2"]);
+"#,
+    );
+    assert_eq!(out, "definitions=1:d aliases=1:a services=2:z,a2 \n");
+}
+
+/// Keeps a scratch-built key alive while the value's calls reuse the concat buffer.
+///
+/// The key `"svc$i"` was a view into the concat buffer, and the constructor call inside the value
+/// reset it, so `"name$i"` overwrote the key's bytes: every entry was keyed "name" and
+/// Symfony's `CheckTypeDeclarationsPass` walked 30 of 300 services. Covers a local hash, a boxed
+/// local, a property, a static property and a nested leaf. Expected output is `php -n` 8.5's.
+#[test]
+fn test_interpolated_key_survives_a_value_that_reuses_the_concat_buffer() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class Ref { function __construct(public string $id) {} }
+class Def {
+    public array $p = [];
+    public static array $s = [];
+    function m(array $a) { return $this; }
+}
+function run(int $i, mixed $boxed): void {
+    $c = [];
+    $c["svc$i"] = (new Def())->m([new Ref("a$i")])->m(["name$i"]);
+    $boxed["svc$i"] = (new Def())->m([new Ref("a$i")])->m(["name$i"]);
+    $o = new Def();
+    $o->p["svc$i"] = (new Def())->m([new Ref("a$i")])->m(["name$i"]);
+    Def::$s["svc$i"] = (new Def())->m([new Ref("a$i")])->m(["name$i"]);
+    $n = ['x' => []];
+    $n['x']["svc$i"] = (new Def())->m([new Ref("a$i")])->m(["name$i"]);
+    echo implode(',', array_keys($c)), " ", implode(',', array_keys($boxed)), " ",
+        implode(',', array_keys($o->p)), " ", implode(',', array_keys(Def::$s)), " ",
+        implode(',', array_keys($n['x'])), "\n";
+}
+for ($k = 0; $k < 3; $k++) {
+    run($argc + $k, $argc > 5 ? 1 : []);
+}
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(
+        output.stdout,
+        "svc1 svc1 svc1 svc1 svc1\nsvc2 svc2 svc2 svc1,svc2 svc2\nsvc3 svc3 svc3 svc1,svc2,svc3 svc3\n"
+    );
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Releases a fresh object or array written into a nested leaf once the leaf's box holds it.
+///
+/// The Mixed writer boxes the value with its own reference, so `$n['x']['k'] = new Def()` kept
+/// the creation reference and leaked the object on every write. A borrowed local stays shared,
+/// and an `ArrayAccess` leaf still receives the value. Expected output is `php -n` 8.5's.
+#[test]
+fn test_nested_leaf_write_of_a_fresh_object_or_array_does_not_leak() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class Def { public int $v = 0; }
+class Box implements ArrayAccess {
+    public array $d = [];
+    function offsetExists(mixed $o): bool { return isset($this->d[$o]); }
+    function offsetGet(mixed $o): mixed { return $this->d[$o]; }
+    function offsetSet(mixed $o, mixed $v): void { $this->d[$o] = $v; }
+    function offsetUnset(mixed $o): void { unset($this->d[$o]); }
+}
+function run(int $i): void {
+    $n = ['x' => new Box()];
+    $n['x']['k'] = new Def();
+    $n['x']['l'] = [new Def(), $i];
+    $m = ['x' => ['y' => []]];
+    $m['x']['y']["k$i"] = new Def();
+    $m['x']['y']['l'] = [1, 2];
+    $keep = new Def();
+    $m['x']['y']['z'] = $keep;
+    $keep->v = 5;
+    echo count($n['x']->d), count($m['x']['y']), $m['x']['y']['z']->v, "\n";
+}
+for ($k = 0; $k < 3; $k++) { run($argc + $k); }
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "235\n235\n235\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }

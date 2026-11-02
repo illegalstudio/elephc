@@ -19,8 +19,6 @@
 //! - `eval()` keeps the dynamic bridge feature separate from scope-only helpers
 //!   so AOT fragments can shed bridge-only runtime/link dependencies incrementally.
 
-use std::collections::HashMap;
-
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, InstanceOfTarget, Program, StaticReceiver, Stmt, StmtKind,
@@ -65,6 +63,14 @@ pub struct RuntimeFeatures {
     /// tail-call `elephc_web_write` (a symbol only linked into `--web` binaries).
     /// Non-web runtimes must leave this false so they never reference that symbol.
     pub web: bool,
+    /// True when non-literal constant or enum queries need closed-world tables.
+    pub const_introspection: bool,
+    /// True when non-literal class/interface/trait queries need closed-world tables.
+    pub class_introspection: bool,
+    /// True when dynamic class relation queries need per-class payload tables.
+    pub class_relation_introspection: bool,
+    /// True when dynamic class-member queries need method/property payload tables.
+    pub class_methods_introspection: bool,
     /// True when the program lowers a `__elephc_pdo_adapter_addr` call (the PDO
     /// Tier-D prelude decomposing a callback into descriptor + adapter pointers),
     /// which takes the address of a `__rt_pdo_*` adapter. Emitting the adapter under
@@ -102,6 +108,15 @@ pub struct RuntimeFeatures {
     /// `globfree` and `close`. Those three plus `pclose` were every libc import a trivial program
     /// had apart from the `getrlimit` stack probe.
     pub directory_resource: bool,
+    /// True when the program compiles the PHP function `__elephc_diag_render`, the entry
+    /// `__rt_diag_warning` uses to offer an engine-raised diagnostic to a `set_error_handler`
+    /// callback before displaying it.
+    ///
+    /// Gated because the call is a HARD REFERENCE from the runtime object to a symbol only the
+    /// program object defines: a binary compiled without the dispatch prelude (every non-`--web`
+    /// build today) would fail to link. When false, `__rt_diag_warning` keeps its original
+    /// shape — suppression depth, then `write(2)` — and no diagnostic buffer is emitted.
+    pub diag_user_handler: bool,
     /// True when native code can push, pop, inspect, or restore a PHP error or exception
     /// handler registration. The linked-stack helpers are otherwise omitted from the runtime.
     pub handler_state: bool,
@@ -109,6 +124,16 @@ pub struct RuntimeFeatures {
     /// required by the full eval bridge, which exposes the same operation to Magician.
     pub object_clone: bool,
 }
+
+/// Every `RuntimeFeatures` field is a `bool`, so the struct is exactly one byte per feature and
+/// `size_of` counts its fields. Tying that count to `RuntimeFeatures::CACHE_KEY_BIT_COUNT` is what
+/// makes "every feature reaches the runtime cache key" true BY CONSTRUCTION rather than by a
+/// hand-kept list: a feature added to the struct fails this assertion until it is given a bit in
+/// `cache_key_bits` and a variant in `single_feature_variants`.
+const _: () = assert!(
+    std::mem::size_of::<RuntimeFeatures>() == RuntimeFeatures::CACHE_KEY_BIT_COUNT as usize,
+    "every RuntimeFeatures field must own a cache-key bit",
+);
 
 impl RuntimeFeatures {
     /// Packs the feature set into the bits that identify one runtime object.
@@ -139,10 +164,68 @@ impl RuntimeFeatures {
             | ((self.generator as u64) << 9)
             | ((self.popen_resource as u64) << 10)
             | ((self.directory_resource as u64) << 11)
-            | ((self.handler_state as u64) << 12)
-            | ((self.object_clone as u64) << 13)
-            | ((self.mbregex as u64) << 14)
-            | ((self.mbstring_mime as u64) << 15)
+            // The four introspection switches gate emission in
+            // `codegen_support::runtime::emitters` exactly the way `regex` does, but were absent
+            // from this key: a program that needs `__rt_class_exists` and one that does not named
+            // the SAME cache entry, so whichever compiled first published its runtime object and
+            // the other one linked it. Missing symbol or dead weight depending on which way round
+            // the cache was filled.
+            | ((self.const_introspection as u64) << 12)
+            | ((self.class_introspection as u64) << 13)
+            | ((self.class_relation_introspection as u64) << 14)
+            | ((self.class_methods_introspection as u64) << 15)
+            | ((self.diag_user_handler as u64) << 16)
+            // Main's switches, numbered after ours so no existing bit moves.
+            | ((self.handler_state as u64) << 17)
+            | ((self.object_clone as u64) << 18)
+            | ((self.mbregex as u64) << 19)
+            | ((self.mbstring_mime as u64) << 20)
+    }
+
+    /// Number of feature bits `cache_key_bits` packs, which is also the number of fields.
+    ///
+    /// `runtime_cache::identity` puts the relocation and library-boundary modes in bits 62/63,
+    /// so appending features here stays free until bit 62.
+    pub const CACHE_KEY_BIT_COUNT: u32 = 21;
+
+    /// Returns one variant per field, each with exactly that field set and every other clear.
+    ///
+    /// The list cannot silently fall behind the struct: its length is `CACHE_KEY_BIT_COUNT`,
+    /// which the assertion below pins to `size_of::<RuntimeFeatures>()`. Every field is a
+    /// `bool`, so the struct is one byte per feature and its size IS its field count — adding a
+    /// feature fails the build until it is given a bit in `cache_key_bits` and a variant here.
+    #[cfg(test)]
+    pub(crate) fn single_feature_variants(
+    ) -> [(&'static str, Self); Self::CACHE_KEY_BIT_COUNT as usize] {
+        [
+            ("regex", Self { regex: true, ..Self::none() }),
+            ("mbstring", Self { mbstring: true, ..Self::none() }),
+            ("phar_archive", Self { phar_archive: true, ..Self::none() }),
+            ("descriptor_invoker", Self { descriptor_invoker: true, ..Self::none() }),
+            ("eval_bridge", Self { eval_bridge: true, ..Self::none() }),
+            ("eval_scope", Self { eval_scope: true, ..Self::none() }),
+            ("web", Self { web: true, ..Self::none() }),
+            ("pdo_udf", Self { pdo_udf: true, ..Self::none() }),
+            ("fiber", Self { fiber: true, ..Self::none() }),
+            ("generator", Self { generator: true, ..Self::none() }),
+            ("popen_resource", Self { popen_resource: true, ..Self::none() }),
+            ("directory_resource", Self { directory_resource: true, ..Self::none() }),
+            ("const_introspection", Self { const_introspection: true, ..Self::none() }),
+            ("class_introspection", Self { class_introspection: true, ..Self::none() }),
+            (
+                "class_relation_introspection",
+                Self { class_relation_introspection: true, ..Self::none() },
+            ),
+            (
+                "class_methods_introspection",
+                Self { class_methods_introspection: true, ..Self::none() },
+            ),
+            ("diag_user_handler", Self { diag_user_handler: true, ..Self::none() }),
+            ("mbregex", Self { mbregex: true, ..Self::none() }),
+            ("mbstring_mime", Self { mbstring_mime: true, ..Self::none() }),
+            ("handler_state", Self { handler_state: true, ..Self::none() }),
+            ("object_clone", Self { object_clone: true, ..Self::none() }),
+        ]
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -157,11 +240,16 @@ impl RuntimeFeatures {
             eval_bridge: false,
             eval_scope: false,
             web: false,
+            const_introspection: false,
+            class_introspection: false,
+            class_relation_introspection: false,
+            class_methods_introspection: false,
             pdo_udf: false,
             fiber: false,
             generator: false,
             popen_resource: false,
             directory_resource: false,
+            diag_user_handler: false,
             handler_state: false,
             object_clone: false,
         }
@@ -180,11 +268,16 @@ impl RuntimeFeatures {
             eval_bridge: true,
             eval_scope: true,
             web: true,
+            const_introspection: true,
+            class_introspection: true,
+            class_relation_introspection: true,
+            class_methods_introspection: true,
             pdo_udf: true,
             fiber: true,
             generator: true,
             popen_resource: true,
             directory_resource: true,
+            diag_user_handler: true,
             handler_state: true,
             object_clone: true,
         }
@@ -200,7 +293,7 @@ fn runtime_features_for_program(program: &Program) -> RuntimeFeatures {
 /// Returns optional runtime features referenced by the program and emitted class metadata.
 pub fn runtime_features_for_program_and_classes(
     program: &Program,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> RuntimeFeatures {
     runtime_features_for_program_and_classes_opt(program, Some(classes))
 }
@@ -213,7 +306,11 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
     }
     if features.mbregex { requirements.push(LinkRequirement::NativePackage("oniguruma")); }
     if features.phar_archive {
-        requirements.push(LinkRequirement::Bridge("elephc_phar"));
+        if !features.eval_bridge {
+            // Magician already embeds the PHAR implementation. Adding the standalone
+            // archive beside it duplicates the exported C ABI symbols on macOS.
+            requirements.push(LinkRequirement::Bridge("elephc_phar"));
+        }
         requirements.push(LinkRequirement::SystemLibrary("z".to_string()));
         requirements.push(LinkRequirement::SystemLibrary("bz2".to_string()));
     }
@@ -223,6 +320,23 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         // Magician staticlib already carries its crypto dependency, and adding the
         // standalone archive beside it produces duplicate C exports on macOS.
         requirements.push(LinkRequirement::Bridge("elephc_crypto"));
+    }
+    if features.descriptor_invoker && !features.phar_archive {
+        // The same dispatcher also wraps the stream builtins, and `fopen`/`file_put_contents`
+        // publish the PHAR bridge entry points so a `phar://` URL resolves at run time. Their
+        // libraries were only requested when the program NAMED one of those builtins, so a
+        // program that merely reaches them through a descriptor — `$container->getService(...)`
+        // stored in a `\Closure` property and invoked, which is how Symfony's generated container
+        // works — emitted the references and then failed to link with undefined
+        // `_elephc_phar_*`, `_inflate*` and `_BZ2_*`. `phar_archive` covers the named case and
+        // pushes the identical set, so this arm only fills the gap it leaves.
+        if !features.eval_bridge {
+            // Magician already embeds the PHAR implementation; a standalone archive beside it
+            // duplicates the exported C ABI symbols on macOS.
+            requirements.push(LinkRequirement::Bridge("elephc_phar"));
+        }
+        requirements.push(LinkRequirement::SystemLibrary("z".to_string()));
+        requirements.push(LinkRequirement::SystemLibrary("bz2".to_string()));
     }
     if features.eval_bridge {
         // The interpreter remains an ordinary table-driven Elephc bridge. Its BCMath
@@ -242,7 +356,7 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
 /// Builds the optional runtime feature set, using class metadata when codegen has it.
 fn runtime_features_for_program_and_classes_opt(
     program: &Program,
-    classes: Option<&HashMap<String, ClassInfo>>,
+    classes: Option<&crate::fast_hash::FastMap<String, ClassInfo>>,
 ) -> RuntimeFeatures {
     let mut features = RuntimeFeatures::none();
     features.regex = program_requires_regex(program, classes);
@@ -252,14 +366,14 @@ fn runtime_features_for_program_and_classes_opt(
 }
 
 /// Returns true when user code or emitted builtin class methods can call regex helpers.
-fn program_requires_regex(program: &Program, classes: Option<&HashMap<String, ClassInfo>>) -> bool {
+fn program_requires_regex(program: &Program, classes: Option<&crate::fast_hash::FastMap<String, ClassInfo>>) -> bool {
     body_has_regex_call(program) || class_emission_can_reference_regex(program, classes)
 }
 
 /// Returns true when class method emission can reference RegexIterator methods.
 fn class_emission_can_reference_regex(
     program: &Program,
-    classes: Option<&HashMap<String, ClassInfo>>,
+    classes: Option<&crate::fast_hash::FastMap<String, ClassInfo>>,
 ) -> bool {
     match classes {
         Some(classes) => emitted_classes_include_regex_iterators(program, classes),
@@ -270,7 +384,7 @@ fn class_emission_can_reference_regex(
 /// Returns true when the actual emitted class set includes regex iterator classes.
 fn emitted_classes_include_regex_iterators(
     program: &Program,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> bool {
     if program_has_dynamic_instanceof(program) {
         return classes.keys().any(|name| is_regex_iterator_name(name));
@@ -298,7 +412,7 @@ fn is_regex_iterator_name(name: &str) -> bool {
 /// Returns true when class method emission can reference PHAR bridge helpers.
 fn class_emission_can_reference_phar_archive(
     program: &Program,
-    classes: Option<&HashMap<String, ClassInfo>>,
+    classes: Option<&crate::fast_hash::FastMap<String, ClassInfo>>,
 ) -> bool {
     match classes {
         Some(classes) => emitted_classes_include_phar_archive_helpers(program, classes),
@@ -309,7 +423,7 @@ fn class_emission_can_reference_phar_archive(
 /// Returns true when the actual emitted class set includes stream/archive helpers.
 fn emitted_classes_include_phar_archive_helpers(
     program: &Program,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> bool {
     if program_has_dynamic_instanceof(program) {
         return classes
@@ -355,6 +469,7 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::Return(Some(expr))
         | StmtKind::ArrayPush { value: expr, .. }
         | StmtKind::PropertyAssign { value: expr, .. }
+        | StmtKind::PropertyRefAssign { source: expr, .. }
         | StmtKind::PropertyArrayPush { value: expr, .. }
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. }
@@ -363,6 +478,19 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_has_regex_call(index) || expr_has_regex_call(value)
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_has_regex_call(index) || expr_has_regex_call(source)
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_has_regex_call(property)
+                || index.as_ref().is_some_and(expr_has_regex_call)
+                || expr_has_regex_call(value)
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_regex_call(target) || expr_has_regex_call(value)
@@ -447,7 +575,8 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
-        | StmtKind::ExternGlobalDecl { .. } => false,
+        | StmtKind::ExternGlobalDecl { .. }
+        | StmtKind::ClassLikeActivate { .. } => false,
     }
 }
 
@@ -478,6 +607,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
                 }
         }
         ExprKind::Negate(expr)
+        | ExprKind::ArrayReference(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
@@ -585,12 +715,14 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         }
         ExprKind::FirstClassCallable(CallableTarget::StaticMethod { .. }) => false,
         ExprKind::ObjectClassName { object } => expr_has_regex_call(object),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_has_regex_call(property),
         ExprKind::StaticPropertyAccess { receiver, .. }
         | ExprKind::ClassConstant { receiver }
         | ExprKind::ScopedConstantAccess { receiver, .. } => {
             static_receiver_has_regex_call(receiver)
         }
         ExprKind::BufferNew { len, .. } => expr_has_regex_call(len),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_has_regex_call(receiver),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_has_regex_call)
                 || value.as_deref().is_some_and(expr_has_regex_call)
@@ -658,6 +790,7 @@ fn is_regex_builtin_name(name: &str) -> bool {
     matches!(
         php_symbol_key(name.trim_start_matches('\\')).as_str(),
         "preg_match" | "preg_match_all" | "preg_replace" | "preg_replace_callback" | "preg_split"
+        | "preg_grep" | "mb_ereg_match"
     )
 }
 
@@ -692,6 +825,7 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         | StmtKind::Return(Some(expr))
         | StmtKind::ArrayPush { value: expr, .. }
         | StmtKind::PropertyAssign { value: expr, .. }
+        | StmtKind::PropertyRefAssign { source: expr, .. }
         | StmtKind::PropertyArrayPush { value: expr, .. }
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. }
@@ -700,6 +834,19 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_needs_descriptor_invoker(index) || expr_needs_descriptor_invoker(value)
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_needs_descriptor_invoker(index) || expr_needs_descriptor_invoker(source)
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_needs_descriptor_invoker(property)
+                || index.as_ref().is_some_and(expr_needs_descriptor_invoker)
+                || expr_needs_descriptor_invoker(value)
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_needs_descriptor_invoker(target) || expr_needs_descriptor_invoker(value)
@@ -798,7 +945,8 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
-        | StmtKind::ExternGlobalDecl { .. } => false,
+        | StmtKind::ExternGlobalDecl { .. }
+        | StmtKind::ClassLikeActivate { .. } => false,
     }
 }
 
@@ -824,6 +972,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         }
         ExprKind::InstanceOf { value, .. } => expr_needs_descriptor_invoker(value),
         ExprKind::Negate(expr)
+        | ExprKind::ArrayReference(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
@@ -925,10 +1074,16 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         }
         ExprKind::FirstClassCallable(_) => false,
         ExprKind::ObjectClassName { object } => expr_needs_descriptor_invoker(object),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_needs_descriptor_invoker(property)
+        }
         ExprKind::StaticPropertyAccess { .. }
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => false,
         ExprKind::BufferNew { len, .. } => expr_needs_descriptor_invoker(len),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            expr_needs_descriptor_invoker(receiver)
+        }
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_needs_descriptor_invoker)
                 || value.as_deref().is_some_and(expr_needs_descriptor_invoker)
@@ -1348,6 +1503,24 @@ mod tests {
                 LinkRequirement::Bridge("elephc_magician"),
                 LinkRequirement::Bridge("elephc_bcmath"),
                 LinkRequirement::Bridge("elephc_mbstring")
+            ]
+        );
+    }
+
+    /// Verifies Magician supplies PHAR symbols while retaining their system libraries.
+    #[test]
+    fn test_eval_phar_runtime_features_omit_standalone_phar_bridge() {
+        assert_eq!(
+            link_requirements_for_runtime_features(RuntimeFeatures {
+                phar_archive: true,
+                eval_bridge: true,
+                ..RuntimeFeatures::none()
+            }),
+            vec![
+                LinkRequirement::SystemLibrary("z".to_string()),
+                LinkRequirement::SystemLibrary("bz2".to_string()),
+                LinkRequirement::Bridge("elephc_magician"),
+                LinkRequirement::Bridge("elephc_bcmath")
             ]
         );
     }

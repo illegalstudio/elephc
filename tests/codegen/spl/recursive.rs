@@ -70,6 +70,21 @@ var_dump(new ParentIterator(new RecursiveArrayIterator([])) instanceof Recursive
     );
 }
 
+/// Verifies RecursiveTreeIterator metadata, inheritance, constants, and prefix configuration.
+#[test]
+fn test_recursive_tree_iterator_builtin_surface() {
+    let out = compile_and_run(
+        r#"<?php
+$tree = new RecursiveTreeIterator(new RecursiveArrayIterator([]));
+$tree->setPrefixPart(RecursiveTreeIterator::PREFIX_LEFT, "> ");
+var_dump(class_exists("RecursiveTreeIterator"));
+var_dump($tree instanceof RecursiveIteratorIterator);
+echo RecursiveTreeIterator::BYPASS_KEY, ":", RecursiveTreeIterator::PREFIX_RIGHT;
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\n8:5");
+}
+
 /// Verifies that recursive array iterator children from mixed values.
 #[test]
 fn test_recursive_array_iterator_children_from_mixed_values() {

@@ -2,7 +2,7 @@
 title: "imagecreate() - internals"
 description: "Compiler internals for imagecreate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 495
+  order: 508
 ---
 
 ## `imagecreate()` - internals

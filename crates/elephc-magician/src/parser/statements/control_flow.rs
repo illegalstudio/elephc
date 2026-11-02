@@ -215,6 +215,7 @@ impl Parser {
                     index: *index,
                 },
                 EvalExpr::LoadVar(name) => EvalStmt::UnsetVar { name },
+                EvalExpr::DynamicVar(name) => EvalStmt::UnsetDynamicVar { name: *name },
                 EvalExpr::PropertyGet { object, property } => EvalStmt::UnsetProperty {
                     object: *object,
                     property,
@@ -250,6 +251,10 @@ impl Parser {
             };
             statements.push(stmt);
             if !self.consume(TokenKind::Comma) {
+                break;
+            }
+            // php 7.3 allows a trailing comma: `unset($a, $b,);` (Carbon's `CarbonPeriod`).
+            if matches!(self.current(), TokenKind::RParen) {
                 break;
             }
         }

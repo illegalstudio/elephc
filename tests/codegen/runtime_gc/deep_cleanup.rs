@@ -142,13 +142,17 @@ echo "after\n";
 }
 
 /// Chains compact and boxed subclass exceptions without interpreting a nullable cell as an object.
+///
+/// The subclass forwards `$previous` through `parent::__construct()`: `Exception::$previous` is
+/// private, so writing `$this->previous` from a subclass makes a dynamic property and
+/// `getPrevious()` stays null in php 8.5 (which also reports the deprecation).
 #[test]
 fn test_mbstring_deep_cleanup_previous_subclass_storage() {
     let source = r#"<?php
 class CleanupCustomException extends RuntimeException {
     public string $detail = "custom";
     public function __construct(string $message, int $code = 0, ?Throwable $previous = null) {
-        $this->message = $message; $this->code = $code; $this->previous = $previous;
+        parent::__construct($message, $code, $previous);
     }
 }
 class CleanupSubclassFailure {

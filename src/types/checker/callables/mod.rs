@@ -9,5 +9,6 @@
 //! - Callable targets must preserve parameter order, capture ownership expectations, and builtin alias resolution.
 
 mod closures;
+pub(crate) use closures::closure_captures_for_check;
 mod extern_calls;
 mod first_class;

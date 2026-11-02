@@ -1,5 +1,5 @@
 //! Purpose:
-//! Owns compile-time autoload state for Composer mappings and supported SPL rules.
+//! Owns compile-time autoload state for static mappings and supported SPL rules.
 //! Builds the registry and returns the program with consumed autoload setup stripped.
 //!
 //! Called from:
@@ -37,8 +37,8 @@ impl Registry {
             extensions: DEFAULT_AUTOLOAD_EXTENSIONS.to_string(), warnings: Vec::new() }
     }
 
-    /// Build the registry by reading composer.json from `project_root` and
-    /// scanning `program` for `spl_autoload_register` callsites. Returns
+    /// Builds the registry from supported manifests below `project_root` and scans
+    /// `program` for `spl_autoload_register` callsites. Returns
     /// the registry plus the program with consumed register sites stripped
     /// so the runtime stub doesn't see closure bodies containing
     /// non-foldable `require_once` statements.
@@ -54,7 +54,12 @@ impl Registry {
         excluded: &std::collections::HashSet<String>,
     ) -> (Self, Program) {
         let psr4 = AutoloadIndex::from_project_root_excluding(project_root, excluded);
-        let (program, rules, warnings) = collect_register_calls(program);
+        // The index's own diagnostics come first: a classmap file it could not read hides every
+        // class in it, and that has to be visible before anything downstream reports the class
+        // as merely undefined.
+        let mut warnings = psr4.warnings().to_vec();
+        let (program, rules, rule_warnings) = collect_register_calls(program);
+        warnings.extend(rule_warnings);
         // Synthesise alias subclasses after closure collection so the
         // alias decls don't get confused with autoloader sources.
         let program = super::alias::collect_aliases(program);
@@ -67,16 +72,13 @@ impl Registry {
         (registry, program)
     }
 
-    /// Returns the PSR-4 namespace-to-directory index built from all
-    /// composer.json files in the project.
+    /// Returns the namespace-to-directory index built from all supported project manifests.
     pub fn psr4(&self) -> &AutoloadIndex {
         &self.psr4
     }
 
-    /// Files listed under `autoload.files` (or `autoload-dev.files`) in
-    /// any composer.json the index visited. They must always be inlined
-    /// at compile time, regardless of which classes the program
-    /// references.
+    /// Returns the root manifest's eager source entries in declaration order.
+    /// They are inlined regardless of which classes the program references.
     pub fn always_included_files(&self) -> &[PathBuf] {
         self.psr4.files()
     }

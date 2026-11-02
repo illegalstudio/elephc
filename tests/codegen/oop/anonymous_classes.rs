@@ -142,6 +142,57 @@ fn test_reflection_class_reports_anonymous_class() {
     assert_eq!(out, "ADn");
 }
 
+/// Verifies an anonymous class written in a braced `namespace { }` block keeps that block's
+/// namespace and `use` imports.
+///
+/// The parser hoists an anonymous class out of expression position and used to append it to the
+/// END OF THE PROGRAM, outside every block, so `use Greets;` looked for a global `Greets`
+/// ("unknown or invalid trait") and `__NAMESPACE__` inside it was no longer `App`.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_anonymous_class_in_braced_namespace_keeps_its_imports() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Lib {
+    trait Greets { public function greet(): string { return 'hi ' . $this->name(); } }
+    interface Named { public function name(): string; }
+}
+namespace App {
+    use Lib\Greets;
+    use Lib\Named;
+    $o = new class implements Named {
+        use Greets;
+        public function name(): string { return __NAMESPACE__; }
+    };
+    echo $o->greet(), '|', $o instanceof Named ? 'named' : 'unnamed', "\n";
+}
+"#,
+    );
+    assert_eq!(out, "hi App|named\n");
+}
+
+/// Verifies an anonymous class before a later `namespace X;` statement resolves in its own
+/// namespace, not the last one in the file: appended at the end, `implements Shape` bound to
+/// `Second\Shape` (a class) and the build failed "cannot implement non-interface".
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_anonymous_class_resolves_in_the_namespace_that_wrote_it() {
+    let out = compile_and_run(
+        r#"<?php
+namespace First;
+interface Shape { public function area(): int; }
+$sq = new class implements Shape { public function area(): int { return 4; } };
+echo __NAMESPACE__, ':', $sq->area(), ':', $sq instanceof Shape ? 'shape' : 'plain', "\n";
+namespace Second;
+class Shape {}
+echo __NAMESPACE__, ':', $sq instanceof \First\Shape ? 'first' : 'other', "\n";
+"#,
+    );
+    assert_eq!(out, "First:4:shape\nSecond:first\n");
+}
+
 /// Compiles and runs the checked-in `examples/anonymous-classes/main.php` fixture, covering
 /// interface-implementing anonymous classes (with and without constructor args) and one that
 /// extends an abstract base.

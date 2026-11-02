@@ -2,7 +2,7 @@
 title: "date_time_set()"
 description: "Sets a DateTime's hour, minute, second, and microsecond."
 sidebar:
-  order: 215
+  order: 226
 ---
 
 ## date_time_set()

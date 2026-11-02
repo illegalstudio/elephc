@@ -2,7 +2,7 @@
 title: "min()"
 description: "Find lowest value."
 sidebar:
-  order: 651
+  order: 664
 ---
 
 ## min()

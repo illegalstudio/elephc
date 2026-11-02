@@ -8,6 +8,7 @@
 //! - Uses boxed Mixed tags and interface metadata consistently across supported targets.
 
 use super::*;
+use crate::codegen_support::callable_descriptor;
 
 /// Lowers the reusable EIR PHP type predicate through target-aware value inspection.
 pub(crate) fn lower_type_predicate(
@@ -166,7 +167,29 @@ pub(in crate::codegen::lower_inst) fn emit_mixed_is_iterable(ctx: &mut FunctionC
         }
     }
     ctx.emitter.label(&object_case);
-    emit_runtime_object_iterable_check(ctx, &true_case, &done);
+    if ctx.module.required_runtime_features.eval_bridge {
+        // An object an eval context built wraps the generic native header, so the compiled
+        // Traversable matcher only ever sees `stdClass`; `instanceof` asks the bridge's identity
+        // table for exactly this reason. Twig's compiled `ensureTraversable()` answered `[]` for
+        // every interpreted Doctrine collection, and each `{% for tag in post.tags %}` was empty.
+        let native_miss = ctx.next_label("is_iterable_mixed_native_miss");
+        let not_iterable = ctx.next_label("is_iterable_mixed_not_iterable");
+        emit_runtime_object_iterable_check(ctx, &true_case, &native_miss);
+        ctx.emitter.label(&native_miss);
+        super::emit_eval_object_is_a_named_fallback(
+            ctx,
+            value,
+            "Traversable",
+            &true_case,
+            &not_iterable,
+            &not_iterable,
+        )?;
+        ctx.emitter.label(&not_iterable);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        abi::emit_jump(ctx.emitter, &done);
+    } else {
+        emit_runtime_object_iterable_check(ctx, &true_case, &done);
+    }
     ctx.emitter.label(&true_case);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     ctx.emitter.label(&done);
@@ -316,6 +339,7 @@ pub(crate) fn lower_is_countable(ctx: &mut FunctionContext<'_>, inst: &Instructi
         PhpType::Object(_) => {
             ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
             emit_object_countable_check(ctx);
+            emit_eval_countable_fallback(ctx, value)?;
         }
         PhpType::Mixed | PhpType::Union(_) => emit_mixed_is_countable(ctx, value)?,
         PhpType::Iterable => emit_iterable_is_countable(ctx, value)?,
@@ -385,8 +409,41 @@ fn emit_mixed_is_countable(ctx: &mut FunctionContext<'_>, value: ValueId) -> Res
         }
     }
     emit_object_countable_check(ctx);
+    emit_eval_countable_fallback(ctx, value)?;
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&array_case);
+    emit_static_bool(ctx, true);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Asks the eval bridge about an object the native `Countable` matcher refused.
+///
+/// An object an eval context built wraps the generic native header, so the native matcher only
+/// sees `stdClass` and answers false for a `Countable` the interpreter declared (a Doctrine
+/// `PersistentCollection` behind Twig's `|length`). The native answer is in the integer result
+/// register on entry; a miss is re-asked of the bridge's identity table, as `instanceof` does.
+/// The integer result register holds PHP's boolean answer on exit.
+fn emit_eval_countable_fallback(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return Ok(());
+    }
+    let matched = ctx.next_label("is_countable_eval_matched");
+    let not_countable = ctx.next_label("is_countable_eval_not_countable");
+    let done = ctx.next_label("is_countable_eval_done");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &matched);
+    super::emit_eval_object_is_a_named_fallback(
+        ctx,
+        value,
+        "Countable",
+        &matched,
+        &not_countable,
+        &not_countable,
+    )?;
+    ctx.emitter.label(&not_countable);
+    emit_static_bool(ctx, false);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&matched);
     emit_static_bool(ctx, true);
     ctx.emitter.label(&done);
     Ok(())
@@ -433,21 +490,174 @@ fn emit_iterable_is_countable(ctx: &mut FunctionContext<'_>, value: ValueId) -> 
 }
 
 /// Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value
-/// whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value is
-/// not treated as a definite array here (it may hold a Traversable); use `is_iterable` for that.
+/// whose runtime tag is an indexed (4) or associative (5) array. An `iterable`-typed value holds
+/// either shape or a Traversable object, so it is decided at RUN TIME from its heap kind.
 pub(crate) fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_array", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
         PhpType::Array(_) | PhpType::AssocArray { .. } => emit_static_bool(ctx, true),
+        PhpType::Callable => emit_callable_array_predicate(ctx, value)?,
         PhpType::Mixed | PhpType::Union(_) => {
-            predicates::emit_mixed_tag_membership(ctx, value, &[4, 5])?;
+            emit_mixed_array_predicate(ctx, value)?;
         }
+        PhpType::Iterable => emit_iterable_heap_kind_predicate(ctx, value, IterableKind::Array)?,
         _ => emit_static_bool(ctx, false),
     }
     store_if_result(ctx, inst)
 }
 
+/// Which side of `iterable`'s `array|Traversable` an `is_*` predicate is asking about.
+#[derive(Clone, Copy)]
+enum IterableKind {
+    /// PHP `array`: heap kind 2 (indexed) or 3 (hash).
+    Array,
+    /// A `Traversable` instance: heap kind 4.
+    Object,
+}
+
+/// Answers an `is_array`/`is_object` predicate for a value whose static type is `iterable`.
+///
+/// `iterable` is `array|Traversable`, and unlike `Mixed` it is NOT a boxed cell carrying a tag:
+/// `PhpType::Iterable` is a raw heap pointer whose concrete shape is read from the uniform heap
+/// header (`crate::types::model` — "type-erased pointer (array|Traversable)"). The predicate
+/// therefore has to ask the heap, which is what `__rt_heap_kind` is for; it is the same probe
+/// `codegen_support::value_boxing::emit_box_iterable_as_mixed` uses to give an iterable a Mixed
+/// tag, and it maps kinds the same way — 2 indexed array, 3 hash, 4 object.
+///
+/// Answering statically instead was measured wrong on the commonest shape there is: a promoted
+/// constructor property `private iterable $items = []` holding a plain array reported
+/// `is_array=false` while `get_debug_type` on the same value said `array`, so a `!is_array($x)`
+/// guard took the branch PHP never takes. `count()` on the same value has always dispatched on
+/// the heap kind (`builtins::count_empty::lower_iterable_count`), which is why the two disagreed.
+fn emit_iterable_heap_kind_predicate(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    kind: IterableKind,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match (ctx.emitter.target.arch, kind) {
+        // Kinds 2 and 3 are the two array shapes, so one unsigned range test covers both.
+        (Arch::AArch64, IterableKind::Array) => {
+            ctx.emitter.instruction("sub x0, x0, #2");                          // rebase the indexed/hash heap kinds onto 0 and 1
+            ctx.emitter.instruction("cmp x0, #1");                              // is the rebased heap kind still inside the array pair?
+            ctx.emitter.instruction("cset x0, ls");                             // materialize true for an indexed array or a hash
+        }
+        (Arch::AArch64, IterableKind::Object) => {
+            ctx.emitter.instruction("cmp x0, #4");                              // heap kind 4 is an object instance
+            ctx.emitter.instruction("cset x0, eq");                             // materialize true only for a Traversable instance
+        }
+        (Arch::X86_64, IterableKind::Array) => {
+            ctx.emitter.instruction("sub rax, 2");                              // rebase the indexed/hash heap kinds onto 0 and 1
+            ctx.emitter.instruction("cmp rax, 1");                              // is the rebased heap kind still inside the array pair?
+            ctx.emitter.instruction("setbe al");                                // materialize true for an indexed array or a hash
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
+        }
+        (Arch::X86_64, IterableKind::Object) => {
+            ctx.emitter.instruction("cmp rax, 4");                              // heap kind 4 is an object instance
+            ctx.emitter.instruction("sete al");                                 // materialize true only for a Traversable instance
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
+        }
+    }
+    Ok(())
+}
+
+/// Checks boxed gradual values for indexed/hash arrays or a callable descriptor explicitly marked
+/// as originating from PHP callable-array syntax.
+fn emit_mixed_array_predicate(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let true_label = ctx.next_label("is_array_mixed_true");
+    let callable_label = ctx.next_label("is_array_mixed_callable");
+    let done_label = ctx.next_label("is_array_mixed_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // indexed array runtime tag
+            ctx.emitter.instruction(&format!("b.eq {}", true_label));
+            ctx.emitter.instruction("cmp x0, #5");                              // associative array runtime tag
+            ctx.emitter.instruction(&format!("b.eq {}", true_label));
+            ctx.emitter.instruction("cmp x0, #10");                             // callable descriptor runtime tag
+            ctx.emitter.instruction(&format!("b.eq {}", callable_label));
+            ctx.emitter.instruction("mov x0, #0");                              // all other gradual values are not arrays
+            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.label(&callable_label);
+            ctx.emitter.instruction("ldr x9, [x1]");                            // load the callable descriptor source-shape kind
+            ctx.emitter.instruction(&format!(
+                "cmp x9, #{}",
+                callable_descriptor::CALLABLE_DESC_KIND_ARRAY
+            ));
+            ctx.emitter.instruction("cset x0, eq");
+            ctx.emitter.instruction(&format!("b {}", done_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // indexed array runtime tag
+            ctx.emitter.instruction(&format!("je {}", true_label));
+            ctx.emitter.instruction("cmp rax, 5");                              // associative array runtime tag
+            ctx.emitter.instruction(&format!("je {}", true_label));
+            ctx.emitter.instruction("cmp rax, 10");                             // callable descriptor runtime tag
+            ctx.emitter.instruction(&format!("je {}", callable_label));
+            ctx.emitter.instruction("xor eax, eax");                            // all other gradual values are not arrays
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.label(&callable_label);
+            ctx.emitter.instruction("cmp QWORD PTR [rdi], 5");                  // compare the descriptor source-shape kind
+            ctx.emitter.instruction("sete al");
+            ctx.emitter.instruction("movzx rax, al");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+        }
+    }
+    ctx.emitter.label(&true_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Checks whether a compact callable descriptor originated from PHP's two-element callable-array
+/// syntax rather than a closure, function string, or first-class callable.
+fn emit_callable_array_predicate(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    let descriptor_reg = abi::int_result_reg(ctx.emitter);
+    let kind_reg = abi::secondary_scratch_reg(ctx.emitter);
+    // A `callable` slot can hold php null (an untyped parameter specialized to `callable` that
+    // one call site passes null); its payload is the null sentinel, never a descriptor.
+    let null_label = ctx.next_label("is_array_callable_null");
+    let done_label = ctx.next_label("is_array_callable_done");
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        descriptor_reg,
+        kind_reg,
+        &null_label,
+    );
+    abi::emit_load_from_address(ctx.emitter, kind_reg, descriptor_reg, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!(
+                "cmp {}, #{}",
+                kind_reg,
+                callable_descriptor::CALLABLE_DESC_KIND_ARRAY
+            ));
+            ctx.emitter.instruction("cset x0, eq");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!(
+                "cmp {}, {}",
+                kind_reg,
+                callable_descriptor::CALLABLE_DESC_KIND_ARRAY
+            ));
+            ctx.emitter.instruction("sete al");
+            ctx.emitter.instruction("movzx rax, al");
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&null_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Lowers `is_object()`: true for statically-known objects and closures, or boxed values whose
+/// runtime tag is an object (6) or callable descriptor (10). An `iterable` is the other half of
+/// the same run-time question `is_array` asks — see [`emit_iterable_heap_kind_predicate`].
 /// Lowers `is_object()`: true for objects and Closures, including boxed runtime tags 6 and 10.
 pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_object", 1)?;
@@ -457,6 +667,7 @@ pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         PhpType::Mixed | PhpType::Union(_) => {
             predicates::emit_mixed_tag_membership(ctx, value, &[6, 10])?;
         }
+        PhpType::Iterable => emit_iterable_heap_kind_predicate(ctx, value, IterableKind::Object)?,
         _ => emit_static_bool(ctx, false),
     }
     store_if_result(ctx, inst)

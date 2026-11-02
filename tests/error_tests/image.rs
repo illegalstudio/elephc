@@ -71,15 +71,12 @@ imagecolorallocate($im);
 }
 
 /// A GD function called with a wrong-typed argument (int where a `GdImage` is
-/// expected) is rejected at compile time.
+/// expected) compiles: php throws `TypeError` when the call runs.
 #[test]
 fn test_image_error_gd_type() {
-    expect_image_error(
-        r#"<?php
-imagepng(123);
-"#,
-        "imagepng",
-    );
+    // php binds `imagepng(GdImage $image)` when the call runs and throws `TypeError` there.
+    let result = check_image("<?php\nimagepng(123);\n");
+    assert!(result.is_ok(), "php defers this to a run-time TypeError; got: {result:?}");
 }
 
 /// An Imagick method called with too few arguments is rejected at compile time.

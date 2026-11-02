@@ -28,22 +28,48 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
         EvalStmt::ArrayAppendVar { value, .. } => {
             eval_expr_uses_this_property(value, property_name)
         }
+        EvalStmt::ArrayAppend { target, value } => {
+            eval_expr_uses_this_property(target, property_name)
+                || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::ArrayAppendReferenceBind { source, .. } => {
+            eval_expr_uses_this_property(source, property_name)
+        }
         EvalStmt::ArraySetVar { index, value, .. } => {
             eval_expr_uses_this_property(index, property_name)
                 || eval_expr_uses_this_property(value, property_name)
         }
-        EvalStmt::Break
-        | EvalStmt::Continue
+        EvalStmt::ArrayDestructure { value, .. } => {
+            eval_expr_uses_this_property(value, property_name)
+        }
+        EvalStmt::ArrayReferenceBind { target, source } => {
+            eval_expr_uses_this_property(target, property_name)
+                || eval_expr_uses_this_property(source, property_name)
+        }
+        EvalStmt::VarReferenceBind { source, .. } => {
+            eval_expr_uses_this_property(source, property_name)
+        }
+        EvalStmt::Break(_)
+        | EvalStmt::Continue(_)
         | EvalStmt::ClassDecl(_)
         | EvalStmt::EnumDecl(_)
         | EvalStmt::GenericDecl(_)
         | EvalStmt::FunctionDecl { .. }
         | EvalStmt::Global { .. }
+        | EvalStmt::Goto(_)
         | EvalStmt::GcCollect
         | EvalStmt::InterfaceDecl(_)
+        | EvalStmt::Label(_)
+        | EvalStmt::DeclareStrictTypes(_)
+        | EvalStmt::SourceLine(_)
         | EvalStmt::ReferenceAssign { .. }
         | EvalStmt::TraitDecl(_)
         | EvalStmt::UnsetVar { .. } => false,
+        // A `declare(…) { … }` body is ordinary statements in the same scope, so a hook writing
+        // its backing slot inside one still writes it.
+        EvalStmt::DeclareTicks { body, .. } | EvalStmt::DeclareDirective { body, .. } => body
+            .as_ref()
+            .is_some_and(|body| eval_stmt_list_uses_this_property(body, property_name)),
         EvalStmt::UnsetArrayElement { array, index } => {
             eval_expr_uses_this_property(array, property_name)
                 || eval_expr_uses_this_property(index, property_name)
@@ -104,6 +130,7 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
                 || eval_expr_uses_this_property(object, property_name)
                 || eval_expr_uses_this_property(property, property_name)
         }
+        EvalStmt::UnsetDynamicVar { name } => eval_expr_uses_this_property(name, property_name),
         EvalStmt::UnsetDynamicStaticProperty { class_name, .. } => {
             eval_expr_uses_this_property(class_name, property_name)
         }
@@ -309,7 +336,7 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
         EvalExpr::DeferredDefaultError(_) => false,
         EvalExpr::Array(elements) => elements.iter().any(|element| match element {
             EvalArrayElement::Value(value) => eval_expr_uses_this_property(value, property_name),
-            EvalArrayElement::Reference(value) => {
+            EvalArrayElement::Reference(value) | EvalArrayElement::Spread(value) => {
                 eval_expr_uses_this_property(value, property_name)
             }
             EvalArrayElement::KeyValue { key, value } => {
@@ -321,6 +348,13 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
                     || eval_expr_uses_this_property(value, property_name)
             }
         }),
+        EvalExpr::ArrayDestructureAssign { value, .. }
+        | EvalExpr::ArrayAppendSlot { target: value } => {
+            eval_expr_uses_this_property(value, property_name)
+        }
+        EvalExpr::ReferenceBindAssign { source, .. } => {
+            eval_expr_uses_this_property(source, property_name)
+        }
         EvalExpr::ArrayGet { array, index } => {
             eval_expr_uses_this_property(array, property_name)
                 || eval_expr_uses_this_property(index, property_name)
@@ -417,7 +451,9 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
         EvalExpr::Include { path, .. }
         | EvalExpr::Cast { expr: path, .. }
         | EvalExpr::Clone(path)
+        | EvalExpr::DynamicVar(path)
         | EvalExpr::Print(path)
+        | EvalExpr::Throw(path)
         | EvalExpr::Unary { expr: path, .. } => eval_expr_uses_this_property(path, property_name),
         EvalExpr::InstanceOf { value, target } => {
             eval_expr_uses_this_property(value, property_name)
@@ -458,9 +494,33 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
         EvalExpr::NewAnonymousClass { args, .. } => args
             .iter()
             .any(|arg| eval_expr_uses_this_property(arg.value(), property_name)),
-        EvalExpr::NullCoalesce { value, default } => {
+        EvalExpr::NullCoalesce { value, default }
+        | EvalExpr::NullCoalesceAssign {
+            target: value,
+            default,
+        }
+        | EvalExpr::CompoundAssign {
+            target: value,
+            value: default,
+            ..
+        }
+        | EvalExpr::ArrayAppendAssign {
+            target: value,
+            value: default,
+        }
+        | EvalExpr::ReferenceBind {
+            target: value,
+            source: default,
+        }
+        | EvalExpr::Assign {
+            target: value,
+            value: default,
+        } => {
             eval_expr_uses_this_property(value, property_name)
                 || eval_expr_uses_this_property(default, property_name)
+        }
+        EvalExpr::PostfixIncDec { target, .. } => {
+            eval_expr_uses_this_property(target, property_name)
         }
         EvalExpr::PropertyGet { object, property } => {
             eval_is_this_property(object, property, property_name)

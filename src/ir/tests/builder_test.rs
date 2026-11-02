@@ -216,6 +216,50 @@ fn deferred_local_load_release_is_pruned_for_concrete_storage() {
     assert!(function.instructions[1].operands.is_empty());
 }
 
+/// Keeps the concrete frame representation after `unset()` so earlier instructions retain
+/// the storage shape they were lowered against.
+#[test]
+fn local_storage_widening_ignores_later_void_state() {
+    let mut function = Function::new("unset_storage".to_string(), IrType::Void, PhpType::Void);
+    let mut builder = Builder::new(&mut function);
+    let slot = builder.add_local(
+        Some("value".to_string()),
+        IrType::I64,
+        PhpType::Int,
+        LocalKind::PhpLocal,
+    );
+
+    builder.widen_local_storage_type(slot, PhpType::Void);
+
+    assert_eq!(builder.local_php_type(slot), PhpType::Int);
+}
+
+/// Keeps nullable scalar frame storage tagged when a control-flow path stores a plain scalar.
+#[test]
+fn local_storage_widening_preserves_tagged_scalar_for_plain_scalar_stores() {
+    let mut function =
+        Function::new("tagged_scalar_store".to_string(), IrType::Void, PhpType::Void);
+    let mut builder = Builder::new(&mut function);
+    let tagged_slot = builder.add_local(
+        Some("nullable".to_string()),
+        IrType::TaggedScalar,
+        PhpType::TaggedScalar,
+        LocalKind::PhpLocal,
+    );
+    let int_slot = builder.add_local(
+        Some("plain".to_string()),
+        IrType::I64,
+        PhpType::Int,
+        LocalKind::PhpLocal,
+    );
+
+    builder.widen_local_storage_type(tagged_slot, PhpType::Int);
+    builder.widen_local_storage_type(int_slot, PhpType::TaggedScalar);
+
+    assert_eq!(builder.local_php_type(tagged_slot), PhpType::TaggedScalar);
+    assert_eq!(builder.local_php_type(int_slot), PhpType::TaggedScalar);
+}
+
 /// String loads release detached Mixed payloads but never ordinary borrowed local buffers.
 #[test]
 fn deferred_string_load_release_tracks_final_storage_representation() {

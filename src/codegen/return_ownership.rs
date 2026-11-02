@@ -135,6 +135,31 @@ pub(super) fn classify_return_value(
                     })?;
                     classify_return_value(ctx, source, None)
                 }
+                // A nominal-object boundary guard hands back its OWN reference for an object
+                // operand, and the operand's very box for a gradual one, so the box keeps the
+                // ownership its source had.
+                Op::RuntimeCall
+                    if matches!(
+                        instruction.immediate,
+                        Some(crate::ir::Immediate::NominalObject { .. })
+                    ) =>
+                {
+                    let source = instruction.operands.first().copied().ok_or_else(|| {
+                        CodegenIrError::invalid_module(format!(
+                            "nominal guard value {} has no source operand",
+                            value.as_raw()
+                        ))
+                    })?;
+                    if matches!(ctx.value_php_type(source)?.codegen_repr(), PhpType::Object(_)) {
+                        Ok(ReturnOwnershipStatus::Static(true))
+                    } else {
+                        classify_return_value(ctx, source, None)
+                    }
+                }
+                // `lower_elephc_normalize_callable` always hands back an owned descriptor: it
+                // increfs a `Callable` source and builds a fresh one otherwise. Symfony's
+                // `ControllerEvent::getController(): callable` returns one.
+                Op::NormalizeCallable => Ok(ReturnOwnershipStatus::Static(true)),
                 _ if is_string => Ok(ReturnOwnershipStatus::Static(false)),
                 _ => Err(CodegenIrError::invalid_module(format!(
                     "ambiguous ownership for returned {} value {} produced by {:?}",

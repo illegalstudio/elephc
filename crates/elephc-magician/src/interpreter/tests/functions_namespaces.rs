@@ -464,13 +464,15 @@ fn execute_program_superglobal_unset_holds_in_a_fresh_context() {
     assert!(fresh_scope.visible_cell("_SERVER").is_none());
 }
 
-/// Verifies a context outside an executing eval call keeps superglobals local.
+/// Verifies a context outside an executing eval call still reads superglobals globally.
 ///
-/// A callback can run in a context retained past the native frame that installed its global
-/// scope, so the redirect is limited to executing eval calls: here the global scope's
-/// `$_SERVER` is left alone and the fragment gets its own CLI `$_SERVER`.
+/// PHP has one `$_SERVER` per request, and a function from a runtime-loaded file that
+/// compiled code calls back is not inside an `eval()` call. The redirect used to be limited
+/// to executing eval calls, so such a callback read an empty local `$_SERVER`. A context
+/// retained past its native frame owns that frame's global scope rather than dangling, so
+/// here the global scope's `$_SERVER` is read and nothing is materialized locally.
 #[test]
-fn execute_program_superglobals_stay_local_outside_an_eval_call() {
+fn execute_program_superglobals_resolve_globally_outside_an_eval_call() {
     let program = parse_fragment(br#"return $_SERVER["k"] ?? "absent";"#)
         .expect("parse eval fragment");
     let mut context = ElephcEvalContext::new();
@@ -487,8 +489,8 @@ fn execute_program_superglobals_stay_local_outside_an_eval_call() {
     let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("execute eval ir");
 
-    assert_eq!(values.get(result), FakeValue::String("absent".to_string()));
-    assert!(scope.visible_cell("_SERVER").is_some());
+    assert_eq!(values.get(result), FakeValue::String("v".to_string()));
+    assert!(scope.visible_cell("_SERVER").is_none());
 }
 /// Verifies named calls reject positional arguments that follow named arguments.
 #[test]

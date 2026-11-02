@@ -266,6 +266,15 @@ pub fn emit_str_persist(emitter: &mut Emitter, mbstring: bool) {
     emitter.instruction("mov x3, x0");                                          // x3 = destination (heap pointer)
     emitter.instruction("mov x4, x2");                                          // x4 = byte count for loop
 
+    // Sixteen bytes per iteration, then the tail a byte at a time: the byte loop alone was half
+    // of this helper's samples on a Symfony request. Only x3-x6 are touched, as before.
+    emitter.label("__rt_str_persist_copy16");
+    emitter.instruction("cmp x4, #16");                                         // are at least sixteen bytes left?
+    emitter.instruction("b.lo __rt_str_persist_copy");                          // no — finish with the byte tail
+    emitter.instruction("ldp x5, x6, [x1], #16");                               // load sixteen source bytes, advance
+    emitter.instruction("stp x5, x6, [x3], #16");                               // store them to the heap copy, advance
+    emitter.instruction("sub x4, x4, #16");                                     // sixteen fewer bytes remain
+    emitter.instruction("b __rt_str_persist_copy16");                           // continue with the next chunk
     emitter.raw(".p2align 6");
     emitter.label("__rt_str_persist_copy");
     emitter.instruction("cbz x4, __rt_str_persist_ret");                        // all bytes copied
@@ -344,6 +353,16 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter, mbstring: bool) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the source pointer after the allocator helper returns
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the source byte length after the allocator helper returns
 
+    // -- copy the source bytes into the owned heap allocation: eight at a time, then the tail --
+    emitter.label("__rt_str_persist_copy8");
+    emitter.instruction("cmp rcx, 8");                                          // are at least eight bytes left?
+    emitter.instruction("jb __rt_str_persist_copy");                            // no — finish with the byte tail
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load eight source bytes
+    emitter.instruction("mov QWORD PTR [r8], r10");                             // store them into the owned destination payload
+    emitter.instruction("add r9, 8");                                           // advance the source cursor past the copied chunk
+    emitter.instruction("add r8, 8");                                           // advance the destination cursor past the copied chunk
+    emitter.instruction("sub rcx, 8");                                          // eight fewer bytes remain
+    emitter.instruction("jmp __rt_str_persist_copy8");                          // continue with the next chunk
     // -- copy the source bytes into the owned heap allocation --
     emitter.raw(".p2align 6");
     emitter.label("__rt_str_persist_copy");

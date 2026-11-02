@@ -9,9 +9,61 @@
 
 use super::*;
 
+/// A method found on an eval-declared class, borrowed from the shared class rather than copied.
+///
+/// WHY. `class_method()` used to hand back the `EvalClassMethod` BY VALUE, and every interpreted
+/// method dispatch paid for a copy of its parameter vectors, attribute lists and name strings --
+/// and for dropping them again -- before a single statement ran; it was a fifth of a Laravel
+/// request. Classes are already `Arc`-shared between contexts, so a handle that keeps the class
+/// alive and derefs to the method costs one refcount bump. Callers that genuinely need an owned
+/// method copy it explicitly from the deref.
+#[derive(Clone)]
+pub struct EvalClassMethodRef {
+    class: Arc<EvalClass>,
+    index: usize,
+    /// A synthesized method (a generic instantiation's renamed copy) that is not stored in the
+    /// class; it wins over `index` when present.
+    owned: Option<Arc<EvalClassMethod>>,
+}
+
+impl EvalClassMethodRef {
+    /// Returns the class the method is declared on.
+    pub fn class(&self) -> &Arc<EvalClass> {
+        &self.class
+    }
+}
+
+impl std::ops::Deref for EvalClassMethodRef {
+    type Target = EvalClassMethod;
+
+    fn deref(&self) -> &EvalClassMethod {
+        match &self.owned {
+            Some(method) => method,
+            None => &self.class.methods()[self.index],
+        }
+    }
+}
+
+impl std::fmt::Debug for EvalClassMethodRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (**self).fmt(f)
+    }
+}
+
+/// Position of a method in `class.methods()` by PHP case-insensitive name.
+///
+/// Lives here rather than on `EvalClass`: the script cache fingerprints the `eval_ir` sources,
+/// and a lookup helper is not a change of the stored shape.
+fn class_method_index(class: &EvalClass, method_name: &str) -> Option<usize> {
+    class
+        .methods()
+        .iter()
+        .position(|method| method.name().eq_ignore_ascii_case(method_name))
+}
+
 impl ElephcEvalContext {
     /// Returns eval-declared class metadata from parent to child for construction.
-    pub fn class_chain(&self, name: &str) -> Vec<EvalClass> {
+    pub fn class_chain(&self, name: &str) -> Vec<Arc<EvalClass>> {
         let mut chain = Vec::new();
         let mut seen = HashSet::new();
         self.collect_class_chain(name, &mut chain, &mut seen);
@@ -22,7 +74,7 @@ impl ElephcEvalContext {
     pub(super) fn collect_class_chain(
         &self,
         name: &str,
-        chain: &mut Vec<EvalClass>,
+        chain: &mut Vec<Arc<EvalClass>>,
         seen: &mut HashSet<String>,
     ) {
         let key = normalize_class_name(name);
@@ -35,7 +87,7 @@ impl ElephcEvalContext {
         if let Some(parent) = class.parent() {
             self.collect_class_chain(parent, chain, seen);
         }
-        chain.push(class.clone());
+        chain.push(Arc::clone(class));
     }
 
     /// Finds a method in an eval-declared class or its eval-declared parents.
@@ -43,7 +95,7 @@ impl ElephcEvalContext {
         &self,
         class_name: &str,
         method_name: &str,
-    ) -> Option<(String, EvalClassMethod)> {
+    ) -> Option<(String, EvalClassMethodRef)> {
         let mut current_name = self.resolve_class_name(class_name)?;
         let mut seen = HashSet::new();
         loop {
@@ -52,12 +104,22 @@ impl ElephcEvalContext {
                 return None;
             }
             let class = self.classes.get(&key)?;
-            if let Some(method) = class.method(method_name) {
-                return Some((class.name().to_string(), method.clone()));
+            if let Some(index) = class_method_index(class, method_name) {
+                return Some((
+                    class.name().to_string(),
+                    EvalClassMethodRef { class: Arc::clone(class), index, owned: None },
+                ));
             }
             if let Some((base, _)) = method_name.split_once('<') {
                 if let Some(method) = class.method(base).filter(|method| method.generic_template().is_some()) {
-                    return Some((class.name().to_string(), method.renamed(method_name)));
+                    return Some((
+                        class.name().to_string(),
+                        EvalClassMethodRef {
+                            class: Arc::clone(class),
+                            index: 0,
+                            owned: Some(Arc::new(method.renamed(method_name))),
+                        },
+                    ));
                 }
             }
             current_name = class.parent()?.to_string();
@@ -69,11 +131,13 @@ impl ElephcEvalContext {
         &self,
         class_name: &str,
         method_name: &str,
-    ) -> Option<(String, EvalClassMethod)> {
-        let class = self.class(class_name)?;
-        class
-            .method(method_name)
-            .map(|method| (class.name().to_string(), method.clone()))
+    ) -> Option<(String, EvalClassMethodRef)> {
+        let class = self.class_shared(class_name)?;
+        let index = class_method_index(class, method_name)?;
+        Some((
+            class.name().to_string(),
+            EvalClassMethodRef { class: Arc::clone(class), index, owned: None },
+        ))
     }
 
     /// Finds a class-like constant on an eval class, interface, trait, or inherited relation.
@@ -109,7 +173,13 @@ impl ElephcEvalContext {
             if !seen.insert(key.clone()) {
                 return None;
             }
-            let class = self.classes.get(&key)?;
+            // A native parent (`class Carbon extends DateTime`) ends the eval chain, NOT the
+            // lookup: the interfaces below still declare constants. Returning here hid every
+            // interface constant of a class with a native parent (Carbon's
+            // `static::YEARS_PER_MILLENNIUM`, declared by `UnitValue` through `CarbonInterface`).
+            let Some(class) = self.classes.get(&key) else {
+                break;
+            };
             if let Some(constant) = class.constant(constant_name) {
                 return Some((class.name().to_string(), constant.clone()));
             }
@@ -270,6 +340,11 @@ impl ElephcEvalContext {
                     &mut seen,
                 );
             }
+            // php-src adds `Stringable` to the interface list of every class that declares
+            // `__toString`, after the ones it names; a subclass inherits it like any other.
+            if !is_enum && class.method("__toString").is_some() {
+                push_unique_class_name("Stringable", &mut interfaces, &mut seen);
+            }
         }
         if let Some(enum_decl) = self.enum_decl(class_name) {
             push_unique_class_name("UnitEnum", &mut interfaces, &mut seen);
@@ -289,6 +364,17 @@ impl ElephcEvalContext {
         seen: &mut HashSet<String>,
     ) {
         let Some(interface) = self.interface(interface_name) else {
+            // A PHP BUILTIN interface has no eval declaration, so the walk used to stop here and
+            // a class implementing `Iterator` was never seen as a `Traversable`. That is not a
+            // cosmetic gap: `foreach` over an `IteratorAggregate` whose
+            // `getIterator(): Traversable` returns an eval Iterator failed the return-type check
+            // and the whole loop became a fatal.
+            for parent in builtin_class_like_parent_names(interface_name) {
+                if skip_enum_markers && is_php_enum_marker_interface(parent) {
+                    continue;
+                }
+                push_unique_class_name(parent, names, seen);
+            }
             return;
         };
         for parent in interface.parents() {
@@ -448,6 +534,30 @@ impl ElephcEvalContext {
         names
     }
 
+    /// Returns the method names `ReflectionClass::getMethods()` lists, in PHP's order.
+    ///
+    /// PHP builds a class's method table from its own declarations first and appends what it
+    /// inherits, so the reflected class leads and each ancestor follows with the methods nobody
+    /// below it redeclared. A private method is not inherited at all: it is listed only when the
+    /// reflected class itself declares it. (`class_method_names` walks root-first and keeps
+    /// ancestor privates, which is the right set for name lookups but not for this list.)
+    pub fn class_reflection_method_names(&self, class_name: &str) -> Vec<String> {
+        if self.enum_decl(class_name).is_some() {
+            return self.class_method_names(class_name);
+        }
+        let mut names = Vec::new();
+        let mut seen = HashSet::new();
+        for (depth, class) in self.class_chain(class_name).into_iter().rev().enumerate() {
+            for method in class.methods() {
+                if depth > 0 && method.visibility() == EvalVisibility::Private {
+                    continue;
+                }
+                push_unique_method_name(method.name(), &mut names, &mut seen);
+            }
+        }
+        names
+    }
+
     /// Returns PHP case-sensitive property names visible to `ReflectionClass::hasProperty()`.
     pub fn class_property_names(&self, class_name: &str) -> Vec<String> {
         let reflected_name = self
@@ -599,6 +709,13 @@ impl ElephcEvalContext {
         seen: &mut HashSet<String>,
     ) {
         let Some(interface) = self.interface(interface_name) else {
+            // A PHP BUILTIN interface has no eval declaration, so this used to report that
+            // `Iterator` extends nothing -- and a return type narrowed from `Traversable` to
+            // `Iterator`, which php allows and Symfony writes, was refused at class declaration.
+            // The class-side walk already consults the same table.
+            for parent in builtin_class_like_parent_names(interface_name) {
+                push_unique_class_name(parent, names, seen);
+            }
             return;
         };
         for parent in interface.parents() {
@@ -632,7 +749,7 @@ impl ElephcEvalContext {
         methods
     }
 
-    /// Collects eval interface methods without duplicating inherited method names.
+    /// Collects eval interface methods with child declarations overriding inherited names.
     pub(super) fn collect_interface_method_requirements(
         &self,
         interface_name: &str,
@@ -647,6 +764,12 @@ impl ElephcEvalContext {
         let Some(interface) = self.interface(interface_name) else {
             return;
         };
+        for method in interface.methods() {
+            let key = method.name().to_ascii_lowercase();
+            if seen_methods.insert(key) {
+                methods.push((interface.name().to_string(), method.clone()));
+            }
+        }
         for parent in interface.parents() {
             self.collect_interface_method_requirements(
                 parent,
@@ -654,12 +777,6 @@ impl ElephcEvalContext {
                 seen_interfaces,
                 seen_methods,
             );
-        }
-        for method in interface.methods() {
-            let key = method.name().to_ascii_lowercase();
-            if seen_methods.insert(key) {
-                methods.push((interface.name().to_string(), method.clone()));
-            }
         }
     }
 

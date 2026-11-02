@@ -44,34 +44,13 @@ pub(super) fn emit_eval_static_property_helpers(
     emitter: &mut Emitter,
     data: &mut DataSection,
 ) {
-    if !module_uses_eval(module) {
+    if !module.required_runtime_features.eval_bridge {
         return;
     }
     let slots = collect_eval_static_property_slots(module);
     emit_static_property_get_helper(module, emitter, data, &slots);
     emit_static_property_is_initialized_helper(module, emitter, data, &slots);
     emit_static_property_set_helper(module, emitter, data, &slots);
-}
-
-/// Returns whether this binary links the eval bridge, and therefore needs these helpers.
-///
-/// THE INVARIANT IS "LINKED", NOT "USES EVAL". `libelephc_magician.a` references the
-/// `__elephc_eval_*` callbacks unconditionally, so any binary that links it must define
-/// them or fail to link — `__elephc_eval_reflection_attribute_new` undefined and a dozen
-/// like it. This used to scan for functions carrying an eval local instead, which is a
-/// different question that happened to give the same answer while the ONLY reason to link
-/// the archive was an `eval()` in the program.
-///
-/// That stopped being the only reason. `opcache_compile_file()` populates the runtime script
-/// cache, which lives in the archive, so a program calling it needs the archive whether or
-/// not it ever evaluates a string. Keeping the narrower scan here made that combination
-/// unlinkable, which is what kept the fold in place and left the function answering `false`
-/// where reference answers `true`.
-///
-/// The call sites are all inside a block already gated on the same flag, so for a program
-/// that does use `eval()` nothing changes.
-fn module_uses_eval(module: &Module) -> bool {
-    module.required_runtime_features.eval_bridge
 }
 
 /// Collects static properties with storage layouts and visibility rules the bridge can access.

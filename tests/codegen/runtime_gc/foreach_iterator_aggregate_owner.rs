@@ -10,6 +10,9 @@
 //! - Fixtures run under `--heap-debug` and require `leak summary: clean`.
 //! - Destructor letters record whether the iterator dies before the aggregate
 //!   on unwind from rewind, current, key, and next.
+//! - A temporary aggregate is destroyed once its iterator exists and is rewound, before the
+//!   first iteration, as php's `FE_RESET` frees its operand; only a `rewind()` that throws
+//!   destroys the iterator first.
 
 use crate::support::compile_and_run_with_heap_debug;
 
@@ -51,6 +54,10 @@ class ExistingAgg implements IteratorAggregate {
 "#;
 
 /// A temporary aggregate that returns a fresh Iterator must not leak.
+///
+/// A temporary aggregate dies as soon as the loop has its iterator (A first): php's `FE_RESET`
+/// frees its operand once `getIterator()` returned and the iterator was rewound, so the aggregate
+/// never outlives the first iteration. Measured with `php -n` 8.5.
 #[test]
 fn test_foreach_temporary_aggregate_fresh_iterator_heap_clean() {
     let out = compile_and_run_with_heap_debug(&format!(
@@ -59,7 +66,7 @@ foreach (new FreshAgg() as $v) {{ echo $v; }}
 echo "\n";
 "#
     ));
-    assert_clean(out, "01IA\n");
+    assert_clean(out, "A01I\n");
 }
 
 /// A local aggregate that returns an existing Iterator must not leak.
@@ -77,6 +84,10 @@ echo "\n";
 }
 
 /// Normal completion, innermost break, break 2, and return all leave a clean heap.
+///
+/// A temporary aggregate dies as soon as the loop has its iterator (A first): php's `FE_RESET`
+/// frees its operand once `getIterator()` returned and the iterator was rewound, so the aggregate
+/// never outlives the first iteration. Measured with `php -n` 8.5.
 #[test]
 fn test_foreach_aggregate_break_return_heap_clean() {
     let out = compile_and_run_with_heap_debug(&format!(
@@ -93,10 +104,14 @@ echo first();
 echo "\n";
 "#
     ));
-    assert_clean(out, "0IA0IAIA0\n");
+    assert_clean(out, "A0IA0IAI0\n");
 }
 
 /// Same-frame throws from rewind/current/key/next run iterator destructors and stay clean.
+///
+/// A `rewind()` throw happens while the loop is still taking its iterator, so php destroys the
+/// iterator and then the aggregate (`IAr`); every later throw finds the aggregate already gone
+/// (`AIc`, `AIk`, `A0In`). Measured with `php -n` 8.5.
 #[test]
 fn test_foreach_aggregate_method_throws_destructor_timing_heap_clean() {
     let out = compile_and_run_with_heap_debug(&format!(
@@ -136,7 +151,7 @@ try {{ foreach (new AggNext() as $v) {{ echo $v; }} }} catch (RuntimeException $
 echo "\n";
 "#
     ));
-    assert_clean(out, "IArIAcIAk0IAn\n");
+    assert_clean(out, "IArAIcAIkA0In\n");
 }
 
 /// A tracked callable array unpacking a temporary aggregate destroys it before the callee runs.
@@ -181,6 +196,10 @@ echo "\n";
 }
 
 /// An explicit throw caught inside foreach must not retire the live iterator or source.
+///
+/// A temporary aggregate dies as soon as the loop has its iterator (A first): php's `FE_RESET`
+/// frees its operand once `getIterator()` returned and the iterator was rewound, so the aggregate
+/// never outlives the first iteration. Measured with `php -n` 8.5.
 #[test]
 fn test_foreach_inner_catch_preserves_aggregate_owner_heap_clean() {
     let out = compile_and_run_with_heap_debug(&format!(
@@ -196,7 +215,7 @@ foreach (new FreshAgg() as $value) {{
 echo "\n";
 "#
     ));
-    assert_clean(out, "01IA\n");
+    assert_clean(out, "A01I\n");
 }
 
 /// A getIterator throw must unwind the temporary aggregate even before the loop body exists.
@@ -248,8 +267,10 @@ echo implode(",", $mixed), "\n";
 /// Both branches have to run in one program: `return` is the branch that consumes a finally
 /// frame, and `continue` is the sibling that must still find one. `walk(false)` catches twice,
 /// so the finally runs after each catch body and the loop completes normally, retiring the
-/// iterator before the aggregate. `walk(true)` returns out of the first iteration, so the
-/// finally runs once and the same two destructors follow it on the return path.
+/// iterator. `walk(true)` returns out of the first iteration, so the finally runs once and the
+/// iterator's destructor follows it on the return path. In both walks the temporary aggregate is
+/// destroyed before the first iteration, as php's `FE_RESET` frees it once the iterator exists
+/// (measured with `php -n` 8.5).
 #[test]
 fn test_foreach_try_branch_exit_preserves_sibling_handler_state_heap_clean() {
     let out = compile_and_run_with_heap_debug(&format!(
@@ -272,5 +293,5 @@ walk(true);
 echo "\n";
 "#
     ));
-    assert_clean(out, "0f1fIAfIA\n");
+    assert_clean(out, "A0f1fIAfI\n");
 }

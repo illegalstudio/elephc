@@ -2,7 +2,7 @@
 title: "bindec()"
 description: "Converts a binary string to its decimal number."
 sidebar:
-  order: 575
+  order: 588
 ---
 
 ## bindec()
@@ -21,7 +21,7 @@ Converts a binary string to its decimal number.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/bindec.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/bindec.rs)).
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

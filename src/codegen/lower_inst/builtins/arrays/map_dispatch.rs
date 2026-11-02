@@ -24,6 +24,15 @@ pub(super) enum ArrayMapTarget {
     Boxed,
 }
 
+/// Runtime location of the single source container consumed by `array_map()`.
+#[derive(Clone, Copy)]
+pub(super) enum ArrayMapSource {
+    /// A statically represented source can be reloaded from its EIR value slot.
+    Static(ValueId),
+    /// A gradual source has been normalized to an owned Mixed-valued hash at the stack base.
+    OwnedMixedHash,
+}
+
 /// Lowers `array_map()` through the callback runtime helper matching the callback result type.
 ///
 /// Associative sources take the `__rt_hash_map` path, which walks the source hash and reuses
@@ -38,8 +47,26 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         return boxed_map_callback::lower_array_map_identity(ctx, inst, array);
     }
     let source_ty = ctx.value_php_type(array)?.codegen_repr();
-    let (elem_ty, target) = if source_ty == PhpType::Mixed {
+    let boxed_source = source_ty == PhpType::Mixed;
+    let gradual_source = matches!(source_ty, PhpType::Union(_));
+    // `array<mixed>` can be promoted to hash storage by a runtime string key even when the
+    // checker cannot prove that key. `array_map()` with one source preserves keys, so normalize
+    // that ambiguous storage to an owned Mixed-valued hash before invoking the callback.
+    let runtime_promotable_mixed_array = matches!(
+        source_ty,
+        PhpType::Array(ref value) if value.codegen_repr() == PhpType::Mixed
+    );
+    // A hash whose values `__rt_hash_map` cannot hand to the callback directly (arrays, objects,
+    // floats: `array_map('array_keys', $mappedClasses)` in Symfony's `AttributeMetadataPass`)
+    // is normalized to the same owned Mixed-valued hash a gradual source gets.
+    let boxed_value_hash = matches!(&source_ty, PhpType::AssocArray { .. })
+        && hash_map_source_value_type(&source_ty).is_err();
+    let normalize_source_to_hash =
+        gradual_source || runtime_promotable_mixed_array || boxed_value_hash;
+    let (elem_ty, target) = if boxed_source {
         (PhpType::Mixed, ArrayMapTarget::Boxed)
+    } else if gradual_source || runtime_promotable_mixed_array || boxed_value_hash {
+        (PhpType::Mixed, ArrayMapTarget::Hash)
     } else if matches!(source_ty, PhpType::AssocArray { .. }) {
         (
             hash_map_source_value_type(&source_ty)?,
@@ -51,6 +78,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             ArrayMapTarget::Indexed,
         )
     };
+    let source = prepare_array_map_source(ctx, array, normalize_source_to_hash)?;
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Mixed => {
             return boxed_map_callback::lower_array_map_mixed_callback(
@@ -64,7 +92,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 ctx,
                 inst,
                 callback,
-                array,
+                source,
                 &elem_ty,
                 &callback_elem_ty,
                 &result_elem_ty,
@@ -72,11 +100,16 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             );
         }
         PhpType::Str => {
-            // The same narrowed element type every other arm uses. A callback named by string
-            // binds through a descriptor whose result arrives boxed, but the wrapper casts that
-            // box to the declared return type before the runtime helper sees it — so there is no
-            // reason for this arm alone to force `Mixed`, and forcing it cost `array_map('label',
-            // …)` the `array<string>` that `function label(int $n): string` plainly promises.
+            // The same narrowed element type every other arm uses. A runtime string still has
+            // precise callback-result metadata when the checker could resolve its literal or
+            // finite candidate set (for example `array_map('strtoupper', build())`), and a
+            // callback named by string binds through a descriptor whose result arrives boxed but
+            // is cast by the wrapper to the declared return type before the runtime helper sees
+            // it. There is no reason for this arm alone to force `Mixed`: that cost
+            // `array_map('label', …)` the `array<string>` that `function label(int $n): string`
+            // plainly promises, and it creates boxed slots while the EIR result remains
+            // `array<string>`, which the backend must reject rather than misread as raw string
+            // pairs.
             //
             // The narrowing set is `Int`/`Bool`/`Str` and nothing else, so anything the wrapper
             // cannot cast still arrives here as `Mixed` and lowers exactly as it did.
@@ -95,13 +128,20 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
                     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
-                    ctx.load_value_to_reg(array, array_arg_reg)?;
+                    load_array_map_source(ctx, source, array_arg_reg, env_bytes + 16)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    emit_array_map_runtime_call(ctx, &callback_elem_ty, env_bytes, target)?;
+                    emit_array_map_runtime_call(
+                        ctx,
+                        &elem_ty,
+                        &callback_elem_ty,
+                        env_bytes,
+                        target,
+                    )?;
                     Ok(())
                 },
             )?;
             finish_array_map_result(ctx, inst, target, &callback_elem_ty, &result_elem_ty)?;
+            release_array_map_source_preserving_result(ctx, source);
             store_if_result(ctx, inst)?;
             return Ok(());
         }
@@ -112,7 +152,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 ctx,
                 inst,
                 callback,
-                array,
+                source,
                 &elem_ty,
                 &callback_elem_ty,
                 &result_elem_ty,
@@ -128,7 +168,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             ctx,
             inst,
             callback,
-            array,
+            source,
             &elem_ty,
             &callback_elem_ty,
             &result_elem_ty,
@@ -136,7 +176,12 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         );
     }
     let callback_binding =
-        static_sort_callback_binding(ctx, callback, "array_map callback", Some(&[elem_ty]))?;
+        static_sort_callback_binding(
+            ctx,
+            callback,
+            "array_map callback",
+            Some(&[elem_ty.clone()]),
+        )?;
     let callback_elem_ty = array_map_callback_result_element_type(&callback_binding.return_ty)?;
     let result_elem_ty = array_map_result_element_type(inst, &callback_elem_ty)?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
@@ -144,14 +189,66 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_binding.label);
-    ctx.load_value_to_reg(array, array_arg_reg)?;
+    load_array_map_source(ctx, source, array_arg_reg, env_bytes)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    emit_array_map_runtime_call(ctx, &callback_elem_ty, env_bytes, target)?;
+    emit_array_map_runtime_call(ctx, &elem_ty, &callback_elem_ty, env_bytes, target)?;
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
     finish_array_map_result(ctx, inst, target, &callback_elem_ty, &result_elem_ty)?;
+    release_array_map_source_preserving_result(ctx, source);
     store_if_result(ctx, inst)
+}
+
+/// Normalizes a gradual or runtime-promotable source to an owned Mixed-valued hash on the stack.
+fn prepare_array_map_source(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    normalize_to_hash: bool,
+) -> Result<ArrayMapSource> {
+    if !normalize_to_hash {
+        return Ok(ArrayMapSource::Static(array));
+    }
+    super::misc_dispatch::materialize_owned_mixed_hash_operand(ctx, array, "array_map")?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    Ok(ArrayMapSource::OwnedMixedHash)
+}
+
+/// Loads the selected source container while accounting for callback temporaries above it.
+fn load_array_map_source(
+    ctx: &mut FunctionContext<'_>,
+    source: ArrayMapSource,
+    reg: &str,
+    temporary_bytes: usize,
+) -> Result<()> {
+    match source {
+        ArrayMapSource::Static(value) => {
+            ctx.load_value_to_reg(value, reg)?;
+            Ok(())
+        }
+        ArrayMapSource::OwnedMixedHash => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, reg, temporary_bytes);
+            Ok(())
+        }
+    }
+}
+
+/// Releases an owned gradual source without clobbering the mapped result register.
+fn release_array_map_source_preserving_result(
+    ctx: &mut FunctionContext<'_>,
+    source: ArrayMapSource,
+) {
+    if matches!(source, ArrayMapSource::Static(_)) {
+        return;
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let source_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, source_arg_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
 }
 
 /// Lowers `array_map()` through a descriptor-backed callback wrapper.
@@ -159,7 +256,7 @@ pub(super) fn lower_array_map_descriptor_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     callback: ValueId,
-    array: ValueId,
+    source: ArrayMapSource,
     elem_ty: &PhpType,
     callback_elem_ty: &PhpType,
     result_elem_ty: &PhpType,
@@ -172,11 +269,12 @@ pub(super) fn lower_array_map_descriptor_callback(
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
-    ctx.load_value_to_reg(array, array_arg_reg)?;
+    load_array_map_source(ctx, source, array_arg_reg, env_bytes)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    emit_array_map_runtime_call(ctx, callback_elem_ty, env_bytes, target)?;
+    emit_array_map_runtime_call(ctx, elem_ty, callback_elem_ty, env_bytes, target)?;
     abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     finish_array_map_result(ctx, inst, target, callback_elem_ty, result_elem_ty)?;
+    release_array_map_source_preserving_result(ctx, source);
     store_if_result(ctx, inst)
 }
 
@@ -185,7 +283,7 @@ pub(super) fn lower_array_map_callable_array_descriptor_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     callback: ValueId,
-    array: ValueId,
+    source: ArrayMapSource,
     elem_ty: &PhpType,
     callback_elem_ty: &PhpType,
     result_elem_ty: &PhpType,
@@ -193,10 +291,11 @@ pub(super) fn lower_array_map_callable_array_descriptor_callback(
 ) -> Result<()> {
     let wrapper_label =
         emit_descriptor_callback_wrapper(ctx, vec![elem_ty.clone()], callback_elem_ty.clone());
-    super::super::super::callables::emit_runtime_callable_array_descriptor_value(
+    super::super::super::callables::emit_runtime_callable_array_descriptor_value_with_callback_error(
         ctx,
         callback,
         "array_map callable array",
+        Some("array_map(): Argument #1 ($callback) must be a valid callback or null"),
     )?;
     let descriptor_reg = abi::int_result_reg(ctx.emitter);
     let env_bytes = reserve_descriptor_callback_env_from_reg(ctx, descriptor_reg);
@@ -204,12 +303,13 @@ pub(super) fn lower_array_map_callable_array_descriptor_callback(
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
-    ctx.load_value_to_reg(array, array_arg_reg)?;
+    load_array_map_source(ctx, source, array_arg_reg, env_bytes)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    emit_array_map_runtime_call(ctx, callback_elem_ty, env_bytes, target)?;
+    emit_array_map_runtime_call(ctx, elem_ty, callback_elem_ty, env_bytes, target)?;
     release_descriptor_callback_env_preserving_result(ctx);
     abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     finish_array_map_result(ctx, inst, target, callback_elem_ty, result_elem_ty)?;
+    release_array_map_source_preserving_result(ctx, source);
     store_if_result(ctx, inst)
 }
 
@@ -233,6 +333,12 @@ pub(super) fn emit_descriptor_callback_wrapper(
     visible_arg_types: Vec<PhpType>,
     return_ty: PhpType,
 ) -> String {
+    // NOT shared by ABI shape. 30 135 of these wrappers are emitted on the Symfony `--web`
+    // module, 1 717 989 lines, and collapsing them by `(visible_arg_types, return type, …)`
+    // looks sound because `emit_callback_wrapper` reads nothing else. It is not: it broke
+    // `preg_grep` (the callback's filtering was ignored) and SIGSEGV'd every
+    // `codegen::callables::*_preserves_by_ref_argument` test. Whatever else distinguishes two
+    // wrappers is not in the struct, so find it before trying this again.
     let wrapper_label = ctx.next_global_label("array_map_descriptor_callback_wrapper");
     let wrapper = DeferredCallbackWrapper {
         label: wrapper_label.clone(),
@@ -333,6 +439,11 @@ where
         len_offset: 8,
         call_reg,
     };
+    // Every case differs only in the descriptor it selects into `call_reg`; the wrapper reads
+    // the descriptor from its env, so one wrapper and one call serve the whole ladder. Emitting
+    // them per case made a single `array_map('name', ...)` site scale with the program's
+    // callable count (a million instructions per site in the Symfony console).
+    let call_label = ctx.next_label(&format!("{}_runtime_string_callback_call", owner));
     for case in &cases {
         let next_case = ctx.next_label(&format!("{}_runtime_string_callback_next", owner));
         let matched_label = ctx.next_label("callable_string_match");
@@ -344,16 +455,18 @@ where
             &matched_label,
             ctx.data,
         );
-        let wrapper_label =
-            emit_descriptor_callback_wrapper(ctx, visible_arg_types.clone(), return_ty.clone());
-        let env_bytes = reserve_descriptor_callback_env_from_reg(ctx, call_reg);
-        emit_call(ctx, &wrapper_label, env_bytes)?;
-        abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
-        abi::emit_jump(ctx.emitter, &done_label);
+        abi::emit_jump(ctx.emitter, &call_label);
         ctx.emitter.label(&next_case);
     }
 
-    emit_dynamic_string_callback_abort(ctx, owner);
+    emit_dynamic_string_callback_abort(ctx, owner, candidate_names.as_deref());
+    if !cases.is_empty() {
+        ctx.emitter.label(&call_label);
+        let wrapper_label = emit_descriptor_callback_wrapper(ctx, visible_arg_types, return_ty);
+        let env_bytes = reserve_descriptor_callback_env_from_reg(ctx, call_reg);
+        emit_call(ctx, &wrapper_label, env_bytes)?;
+        abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+    }
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
@@ -380,10 +493,22 @@ pub(super) fn reserve_descriptor_callback_env_from_reg(
 }
 
 /// Emits a fatal diagnostic for runtime callback names that do not resolve to descriptors.
-pub(super) fn emit_dynamic_string_callback_abort(ctx: &mut FunctionContext<'_>, owner: &str) {
+///
+/// The compiled CANDIDATES are named in the message. Without them the diagnostic says only which
+/// builtin died, which in a whole-program build is every `array_map` in the program at once; with
+/// them the failing call site is the one whose callback names those.
+pub(super) fn emit_dynamic_string_callback_abort(
+    ctx: &mut FunctionContext<'_>,
+    owner: &str,
+    candidate_names: Option<&[String]>,
+) {
+    let candidates = match candidate_names {
+        Some(names) if !names.is_empty() => names.join(", "),
+        _ => "none".to_string(),
+    };
     let message = format!(
-        "Fatal error: {} callback string does not name a supported callable\n",
-        owner
+        "Fatal error: {} callback string does not name a supported callable (compiled candidates: {})\n",
+        owner, candidates
     );
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {

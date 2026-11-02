@@ -155,7 +155,15 @@ macro_rules! impl_fake_collection_call_ops {
         method: &str,
         args: Vec<RuntimeCellHandle>,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        self.runtime_method_call(object, method, args)
+        let result = self.runtime_method_call(object, method, args)?;
+        // A method RESULT is owned by its caller: the real bridge boxes it through
+        // `__rt_mixed_from_value`, which retains. Many fake reflection getters answer with one of
+        // the receiver's stored property handles, so without this the caller's correct release of
+        // a temporary receiver's result gave back a reference the fixture had never taken.
+        if self.object_holds_property_value(object, result) {
+            return self.runtime_retain(result);
+        }
+        Ok(result)
     }
     /// Calls one fake static runtime method by class and method name.
     fn static_method_call(

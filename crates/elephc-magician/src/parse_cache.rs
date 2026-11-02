@@ -12,7 +12,7 @@
 //!   declarations, scope entries, or context-derived magic-constant values.
 //! - Large fragments bypass the cache to avoid pinning one-off source strings.
 
-use crate::errors::EvalParseError;
+use crate::errors::EvalParseDiagnostic;
 use crate::eval_ir::EvalProgram;
 use crate::parser;
 use std::collections::{HashMap, VecDeque};
@@ -21,21 +21,86 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 const EVAL_PARSE_CACHE_CAPACITY: usize = 256;
 const MAX_CACHEABLE_FRAGMENT_BYTES: usize = 64 * 1024;
 
-type CachedParseResult = Result<Arc<EvalProgram>, EvalParseError>;
+type CachedParseResult = Result<Arc<EvalProgram>, EvalParseDiagnostic>;
 
 static EVAL_PARSE_CACHE: OnceLock<Mutex<EvalParseCache>> = OnceLock::new();
 
-/// Parses an eval fragment, reusing a cached immutable EvalIR program when available.
+/// Parses an eval fragment for execution (with source-line markers), reusing a cached
+/// immutable EvalIR program when available.
 pub(crate) fn parse_fragment_cached(code: &[u8]) -> CachedParseResult {
     if !is_cacheable_fragment(code) {
-        return parser::parse_fragment(code).map(Arc::new);
+        return parser::parse_eval_fragment(code).map(Arc::new);
     }
     if let Some(result) = lock_eval_parse_cache().lookup(code) {
         return result;
     }
-    let result = parser::parse_fragment(code).map(Arc::new);
+    let result = parser::parse_eval_fragment(code).map(Arc::new);
     lock_eval_parse_cache().insert(code.to_vec(), result.clone());
     result
+}
+
+/// Parses a whole PHP source file, reusing a cached immutable EvalIR program when available.
+///
+/// A source file and an eval fragment are different grammars — a file carries inline HTML and its
+/// own `<?php` tags — so the two share the cache only through distinct keys: a file is keyed by its
+/// bytes with a marker no fragment can produce, since the same bytes could legally be both.
+pub(crate) fn parse_source_file_cached(code: &[u8]) -> CachedParseResult {
+    let key = source_file_cache_key(code);
+    if let Some(result) = lock_eval_parse_cache().lookup(&key) {
+        return result;
+    }
+    let result = parser::parse_source_file(code).map(Arc::new);
+    lock_eval_parse_cache().insert(key, result.clone());
+    result
+}
+
+/// Parses a PHP source FILE identified by its path, reusing a cached program without reading it.
+///
+/// Keyed by path plus the file's modification time and length, so a repeat include costs one
+/// `stat` instead of a full read, a key copy of the whole file, and — for anything past
+/// `MAX_CACHEABLE_FRAGMENT_BYTES` — a complete re-parse. A long-lived web worker includes the same
+/// vendor tree on every request: Symfony re-read and re-hashed 76 files per request, and the
+/// generated DI container is far past the fragment cap, so it was re-parsed every single time.
+///
+/// Identity is (path, mtime, len). That is what php's own opcache validates by default, and it
+/// catches every edit an ordinary deploy makes. A file rewritten in place within the same
+/// mtime granularity AND to the identical length would be missed, which is why the caller keeps
+/// the read-and-parse path for anything it cannot stat.
+pub(crate) fn parse_source_file_at_path(path: &std::path::Path) -> Option<CachedParseResult> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let key = source_path_cache_key(path, &metadata)?;
+    if let Some(result) = lock_eval_parse_cache().lookup(&key) {
+        return Some(result);
+    }
+    let code = std::fs::read(path).ok()?;
+    let result = parser::parse_source_file(&code).map(Arc::new);
+    lock_eval_parse_cache().insert(key, result.clone());
+    Some(result)
+}
+
+/// Builds the identity key for one source file on disk.
+///
+/// The marker byte keeps these keys disjoint from both fragment keys (raw bytes) and whole-file
+/// content keys (leading `0`), so three different lookups can share one cache.
+fn source_path_cache_key(path: &std::path::Path, metadata: &std::fs::Metadata) -> Option<Vec<u8>> {
+    use std::time::UNIX_EPOCH;
+
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    let mut key = Vec::with_capacity(path.as_os_str().len() + 32);
+    key.push(1);
+    key.extend_from_slice(&metadata.len().to_le_bytes());
+    key.extend_from_slice(&modified.as_secs().to_le_bytes());
+    key.extend_from_slice(&modified.subsec_nanos().to_le_bytes());
+    key.extend_from_slice(path.to_string_lossy().as_bytes());
+    Some(key)
+}
+
+/// Builds the cache key that separates a whole source file from an eval fragment.
+fn source_file_cache_key(code: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(code.len() + 1);
+    key.push(0);
+    key.extend_from_slice(code);
+    key
 }
 
 /// Returns true when a fragment is small enough to retain in the parse cache.
@@ -72,7 +137,13 @@ const SCRIPT_PARSE_CACHE_CAPACITY: usize = 64;
 /// `docs/php/opcache.md` measures for an include without the script cache still hold: a larger
 /// file is parsed again on every include, which is what the runtime script cache is for.
 pub(crate) fn parse_script_cached(bytes: &[u8]) -> CachedParseResult {
-    let parse = || crate::script_cache::segments::parse_script(bytes).map(Arc::new);
+    // The script cache keeps the bare error (it is part of the persisted segment format);
+    // this memo shares the fragment cache's located-diagnostic type, with no location.
+    let parse = || {
+        crate::script_cache::segments::parse_script(bytes)
+            .map(Arc::new)
+            .map_err(|error| crate::errors::EvalParseDiagnostic::new(error, 0, ""))
+    };
     if !is_cacheable_fragment(bytes) {
         return parse();
     }
@@ -131,6 +202,12 @@ impl EvalParseCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::EvalParseError;
+
+    /// Builds one positioned parse diagnostic for a cache test.
+    fn diagnostic(error: EvalParseError) -> EvalParseDiagnostic {
+        EvalParseDiagnostic::new(error, 1, "end of file")
+    }
 
     /// Verifies repeated successful parses reuse the stored EvalIR allocation.
     #[test]
@@ -154,11 +231,11 @@ mod tests {
         let mut cache = EvalParseCache::new(4);
         let source = b"<?php echo 1;";
 
-        cache.insert(source.to_vec(), Err(EvalParseError::PhpOpenTag));
+        cache.insert(source.to_vec(), Err(diagnostic(EvalParseError::PhpOpenTag)));
 
         assert_eq!(
             cache.lookup(source),
-            Some(Err(EvalParseError::PhpOpenTag))
+            Some(Err(diagnostic(EvalParseError::PhpOpenTag)))
         );
     }
 
@@ -167,9 +244,9 @@ mod tests {
     fn cache_evicts_oldest_fragment() {
         let mut cache = EvalParseCache::new(2);
 
-        cache.insert(b"return 1;".to_vec(), Err(EvalParseError::UnexpectedToken));
-        cache.insert(b"return 2;".to_vec(), Err(EvalParseError::UnexpectedEof));
-        cache.insert(b"return 3;".to_vec(), Err(EvalParseError::InvalidNumber));
+        cache.insert(b"return 1;".to_vec(), Err(diagnostic(EvalParseError::UnexpectedToken)));
+        cache.insert(b"return 2;".to_vec(), Err(diagnostic(EvalParseError::UnexpectedEof)));
+        cache.insert(b"return 3;".to_vec(), Err(diagnostic(EvalParseError::InvalidNumber)));
 
         assert!(cache.lookup(b"return 1;").is_none());
         assert!(cache.lookup(b"return 2;").is_some());
@@ -181,7 +258,7 @@ mod tests {
     fn zero_capacity_cache_stores_nothing() {
         let mut cache = EvalParseCache::new(0);
 
-        cache.insert(b"return 1;".to_vec(), Err(EvalParseError::UnexpectedToken));
+        cache.insert(b"return 1;".to_vec(), Err(diagnostic(EvalParseError::UnexpectedToken)));
 
         assert!(cache.lookup(b"return 1;").is_none());
     }

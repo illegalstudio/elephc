@@ -79,7 +79,7 @@ pub(crate) fn plan_call_args_with_regular_param_count(
     if first_named_pos.is_none() {
         validate_positional_spread_order(&source_args)?;
         return Ok(CallArgPlan {
-            passthrough_args: Some(source_args.clone()),
+            passthrough: true,
             source_args,
             source_origins,
             regular_args: Vec::new(),
@@ -138,7 +138,7 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
     if first_named_pos.is_none() {
         validate_positional_spread_order(&source_args)?;
         return Ok(CallArgPlan {
-            passthrough_args: Some(source_args.clone()),
+            passthrough: true,
             source_args,
             source_origins,
             regular_args: Vec::new(),
@@ -516,7 +516,7 @@ fn plan_named_call_args(
         spread_bounds_checks,
         first_named_pos,
         prefix_has_dynamic_named_spread,
-        passthrough_args: None,
+        passthrough: false,
         regular_param_count,
     })
 }

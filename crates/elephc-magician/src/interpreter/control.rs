@@ -6,8 +6,12 @@
 //! - `crate::interpreter` execution, builtin, and call-dispatch helpers.
 //!
 //! Key details:
-//! - Runtime cells are opaque handles; only foreign PCNTL callables own a
-//!   temporary lease that keeps their eval context alive through dispatch.
+//! - Runtime cells are opaque handles; an argument's ownership travels on the handle itself
+//!   (`RuntimeCellHandle::is_borrowed`). A value the call machinery still owes a release on is
+//!   an owned handle; `with_eval_call_arguments` hands consumers borrowed views and settles the
+//!   owners after dispatch.
+//! - Only foreign PCNTL callables own a temporary lease that keeps their eval context alive
+//!   through dispatch.
 
 use crate::context::{pcntl_runtime::EvalPcntlContextLease, EvalReferenceTarget};
 use crate::value::RuntimeCellHandle;
@@ -18,8 +22,9 @@ pub(super) enum EvalControl {
     ReturnVoid,
     Return(RuntimeCellHandle),
     Throw(RuntimeCellHandle),
-    Break,
-    Continue,
+    Break(u32),
+    Continue(u32),
+    Goto(String),
 }
 
 /// Final result of executing a parsed eval program.
@@ -124,6 +129,12 @@ pub(super) enum EvaluatedCallable {
         native_class: Option<String>,
         bridge_scope: Option<String>,
     },
+    /// A compiled callable's descriptor (a compiled closure or first-class callable) handed to
+    /// interpreted code as a `callable` value. The descriptor carries its own invoker, so it is
+    /// called directly rather than looked up by name, the way a `$f()` call already does.
+    NativeDescriptor {
+        descriptor: usize,
+    },
 }
 
 /// Bound argument tuple for direct `array_splice()` calls.
@@ -142,6 +153,8 @@ pub(super) struct EvalSprintfSpec {
     pub(super) force_sign: bool,
     pub(super) space_sign: bool,
     pub(super) zero_pad: bool,
+    /// A custom padding byte from PHP's `'c` flag (`%'*10s`), which pads on the aligned side.
+    pub(super) padding: Option<u8>,
     pub(super) alternate: bool,
     pub(super) width: Option<usize>,
     pub(super) precision: Option<usize>,

@@ -2,7 +2,7 @@
 title: "get_declared_interfaces() - internals"
 description: "Compiler internals for get_declared_interfaces(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 92
+  order: 103
 ---
 
 ## `get_declared_interfaces()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/get_declared_interfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/get_declared_interfaces.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

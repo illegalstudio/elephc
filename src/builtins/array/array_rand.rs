@@ -26,7 +26,7 @@ builtin! {
 /// multi-key form; this builtin remains the first-class-callable/eval entry point.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+    if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) {
         return Err(CompileError::new(
             cx.span,
             "array_rand() argument must be array",

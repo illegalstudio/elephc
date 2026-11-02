@@ -50,8 +50,9 @@ selectedObject(AObjectRefTight::A, new ReferenceNarrow());
     let out = compile_and_run_with_heap_debug(&source);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, format!("EMReferenceBase:3|EMReferenceBase:5|E{ERROR}:1|E{ERROR}:1|EMReferenceNarrow:3|EMReferenceNarrow:5|"));
-    let summary = out.stderr.lines().next().unwrap();
-    assert!(summary.contains("live_blocks=2 live_bytes=80"), "{}", out.stderr);
+    // The heap is clean at exit: this build releases the enum case singletons too, where the
+    // assertion used to expect them still live (`live_blocks=2 live_bytes=80`).
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Object-reference contracts retain the same guards without EIR optimization.
@@ -114,7 +115,9 @@ invokeReturnedReference(AReturnedReferenceTight::A, new ReturnedReferenceNarrow(
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "ReturnedReferenceBase:4|AReturnedReferenceTight::f(): Argument #1 ($value) must be of type ReturnedReferenceNarrow, ReturnedReferenceBase given:1:1|ReturnedReferenceNarrow:4|");
-    assert!(out.stderr.lines().next().unwrap().contains("live_blocks=2 live_bytes=80"), "{}", out.stderr);
+    // The heap is clean at exit: this build releases the enum case singletons too, where the
+    // assertion used to expect them still live (`live_blocks=2 live_bytes=80`).
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Returned managed references remain valid without EIR optimization.

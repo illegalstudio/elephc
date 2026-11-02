@@ -11,38 +11,42 @@
 
 use crate::support::*;
 
-/// Constructor and ordinary methods on the class line retain their class-scoped types.
+/// A `@template` above a class is not adopted, so the class and its same-line constructor and
+/// methods are ordinary php: `get_class` prints `Box`, as `php -n` does.
 #[test]
 fn test_docblock_shared_class_and_method_line() {
     let source = r#"<?php
 /** @template T */
-class Box { public function __construct(public T $value) {} public function id(T $v): T { return $v; } }
+class Box { public function __construct(public $value) {} public function id($v) { return $v; } }
 $box = new Box(7);
 echo get_class($box), ":", $box->value, "|", $box->id(8);
 "#;
     for flags in [&[][..], &["--strict-php"][..]] {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "Box<int>:7|8");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "Box:7|8");
     }
 }
 
-/// A same-line class annotation determines the concrete class in both PHP modes.
+/// A same-line class annotation does not make the class generic in either PHP mode: the class
+/// keeps its name, and a written `new Box<int>` is refused because `Box` declares no parameter.
 #[test]
 fn test_docblock_same_line_class_declaration() {
     let source = r#"<?php
 /** @template T */ class Box {
-    public function __construct(public T $value) {}
+    public function __construct(public $value) {}
 }
-$box = new Box<int>(7);
+$box = new Box(7);
 echo get_class($box), ":", $box->value;
 "#;
-    assert_eq!(compile_and_run(source), "Box<int>:7");
-    let portable = source.replace("Box<int>(7)", "Box(7)");
     for flags in [&[][..], &["--strict-php"][..]] {
-        assert_eq!(compile_cli_file_and_run_with_flags(&portable, flags), "Box<int>:7");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "Box:7", "{flags:?}");
     }
+    let written = source.replace("new Box(7)", "new Box<int>(7)");
+    let error = compile_cli_file_with_flags_expect_failure(&written, &[]);
+    assert!(error.contains("declares no type parameters"), "{error}");
 }
 
-/// An ordinary class method specializes its returned container at each call's concrete type.
+/// An ordinary class method specializes its returned container at each call's concrete type; the
+/// container's own class-level `@template` is not adopted, so both objects are plain `Box`.
 #[test]
 fn test_docblock_method_templates_specialize_with_and_without_strict_php() {
     let source = r#"<?php
@@ -71,13 +75,14 @@ echo get_class($number), ":", $number->get() + 1, "|",
     for flags in [&[][..], &["--strict-php"][..]] {
         assert_eq!(
             compile_cli_file_and_run_with_flags(source, flags),
-            "Box<int>:8|Box<string>:SEVEN",
+            "Box:8|Box:SEVEN",
             "{flags:?}"
         );
     }
 }
 
-/// A class's type parameter and a method's type parameter bind independently.
+/// A class-level `@template` is ignored while a method's own template still binds per call. The
+/// output is what `php -n` prints, with one `Box` class.
 #[test]
 fn test_docblock_method_templates_inside_generic_classes() {
     let out = compile_and_run(
@@ -103,7 +108,7 @@ echo $left->get(), "|", $right->get(), "|", get_class($mapped), ":", $mapped->ge
     "|", get_class($back), ":", $back->get();
 "#,
     );
-    assert_eq!(out, "7|seven|Box<string>:eight|Box<int>:9");
+    assert_eq!(out, "7|seven|Box:eight|Box:9");
 }
 
 /// Static, named, variadic and defaulted calls use the existing method-template argument rules.
@@ -192,11 +197,12 @@ echo (new A())->id(7), "|", (new A())->id("seven"), "|",
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Written method type arguments also work when the template was declared only in PHPDoc.
+/// A method's doc template is not adopted, so a written method type argument is refused as the
+/// elephc extension it is; the same template on a FUNCTION accepts written type arguments, and
+/// the method itself runs as php runs it.
 #[test]
 fn test_docblock_method_templates_accept_explicit_type_arguments() {
-    let out = compile_and_run(
-        r#"<?php
+    let method = r#"<?php
 class Identity {
     /**
      * @template T
@@ -205,10 +211,22 @@ class Identity {
      */
     public function id($value) { return $value; }
 }
-echo (new Identity())->id<string>("seven");
-"#,
-    );
-    assert_eq!(out, "seven");
+echo (new Identity())->id("seven");
+"#;
+    assert_eq!(compile_and_run(method), "seven");
+    let written = method.replace("->id(", "->id<string>(");
+    let error = compile_cli_file_with_flags_expect_failure(&written, &[]);
+    assert!(error.contains("id<string>"), "{error}");
+    let function = r#"<?php
+/**
+ * @template T
+ * @param T $value
+ * @return T
+ */
+function id($value) { return $value; }
+echo id<string>("seven");
+"#;
+    assert_eq!(compile_and_run(function), "seven");
 }
 
 /// Native method templates retain both class and method parameter scope inside a namespace.
@@ -229,30 +247,42 @@ echo $holder->get(), "|", strtoupper($holder->id("seven"));
     assert_eq!(out, "7|SEVEN");
 }
 
-/// An unrelated object is rejected against a method-local PHPDoc bound in both strict modes.
+/// An unrelated object no longer fails a function-local PHPDoc bound (php never reads it): the
+/// template is rebound to `mixed` and the call runs. A written argument shows the bound was read.
 #[test]
-fn test_docblock_method_templates_enforce_bounds() {
+fn test_docblock_method_templates_tolerate_bound_violations() {
     let source = r#"<?php
 class Entity {}
 class Other {}
-class Repo {
-    /**
-     * @template E of Entity
-     * @param E $entity
-     */
-    public function accept($entity): int { return 1; }
-}
-echo (new Repo())->accept(new Other());
+/**
+ * @template E of Entity
+ * @param E $entity
+ */
+function accept($entity): int { return 1; }
+echo accept(new Other());
 "#;
+    let written = source.replace("accept(new Other())", "accept<Entity>(ARG)");
     for flags in [&[][..], &["--strict-php"][..]] {
-        let error = compile_cli_file_with_flags_expect_failure(source, flags);
-        assert!(error.contains("does not satisfy its bound"), "{error}");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "1", "{flags:?}");
+        assert_eq!(
+            compile_cli_file_and_run_with_flags(&written.replace("ARG", "new Entity()"), flags),
+            "1",
+            "{flags:?}"
+        );
+        // The written `E = Entity` makes the parameter a real `Entity`, enforced at runtime.
+        let caught = written
+            .replace("echo accept<Entity>(ARG);", "try { accept<Entity>(ARG); } catch (TypeError $e) { echo 'TypeError'; }")
+            .replace("ARG", "new Other()");
+        assert_eq!(compile_cli_file_and_run_with_flags(&caught, flags), "TypeError", "{flags:?}");
     }
 }
 
 /// A method's specialized array return contract cannot silently return another element type.
 #[test]
 fn test_docblock_method_templates_enforce_return_storage() {
+    // A return annotation naming `T` only inside a container is not adopted: the body fills that
+    // storage, and php runs the written `array` (Symfony's `getAttributesOfType()` builds its
+    // `@return array<T>` from untyped data). The program runs as php runs it.
     let source = r#"<?php
 class Repo {
     /**
@@ -262,11 +292,67 @@ class Repo {
      */
     public function values($value): array { return ["wrong"]; }
 }
-(new Repo())->values(7);
+echo implode(",", (new Repo())->values(7));
 "#;
     for flags in [&[][..], &["--strict-php"][..]] {
-        let error = compile_cli_file_with_flags_expect_failure(source, flags);
-        assert!(error.contains("array<int>") && error.contains("array<string>"), "{error}");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "wrong");
+    }
+}
+
+/// The four declaration forms of one `id` (function, static method, trait method, enum method)
+/// carrying `doc` above it, with `body` as its body, called with `arg`.
+fn id_forms(doc: &str, body: &str, arg: &str) -> [String; 4] {
+    [
+        format!("<?php\n{doc}function id($v) {{ {body} }}\necho id({arg});\n"),
+        format!(
+            "<?php\nclass R {{\n{doc}public static function id($v) {{ {body} }}\n}}\n\
+             echo R::id({arg});\n"
+        ),
+        format!(
+            "<?php\ntrait Tr {{\n{doc}public function id($v) {{ {body} }}\n}}\n\
+             class K {{ use Tr; }}\necho (new K)->id({arg});\n"
+        ),
+        format!(
+            "<?php\nenum Id {{\n    case A;\n{doc}public function id($v) {{ {body} }}\n}}\n\
+             echo Id::A->id({arg});\n"
+        ),
+    ]
+}
+
+/// The note the compiler prints when a file's ADOPTED docblock generics refused the program and
+/// the file was compiled again with its written types (`docblock::erasure`).
+const ERASED_NOTE: &str = "is compiled with its written types";
+
+/// A bounded `@template T of int` docblock above a FUNCTION is tolerant, not enforced: every
+/// program runs as php runs it. That `doc` was READ shows in a call where the adopted reading
+/// refuses the body (`T` binds to `int` from `5`, and `return "x"` breaks the instantiated
+/// `@return T`): the compiler notes it fell back to the written types, then the program prints
+/// `x` like php. The same doc above a METHOD (static, trait or enum) is never adopted: it runs
+/// as written with no note, because a method is overridable and reachable by name.
+fn assert_bound_docblock_read(doc: &str) {
+    let [function, methods @ ..] = id_forms(doc, "return $v;", "\"seven\"");
+    assert_eq!(compile_cli_file_and_run_with_flags(&function, &[]), "seven", "{function}");
+    for source in methods {
+        assert_eq!(compile_cli_file_and_run_with_flags(&source, &[]), "seven", "{source}");
+    }
+    let [function, methods @ ..] = id_forms(doc, "return \"x\";", "5");
+    let notes = compile_cli_file_with_flags_capturing_stderr(&function, &[]);
+    assert!(notes.contains(ERASED_NOTE), "{function}: {notes}");
+    assert_eq!(compile_cli_file_and_run_with_flags(&function, &[]), "x", "{function}");
+    for source in methods {
+        let notes = compile_cli_file_with_flags_capturing_stderr(&source, &[]);
+        assert!(!notes.contains(ERASED_NOTE), "{source}: {notes}");
+        assert_eq!(compile_cli_file_and_run_with_flags(&source, &[]), "x", "{source}");
+    }
+}
+
+/// The program of `assert_bound_docblock_read` when `doc` was NOT read: `5` binds nothing, so
+/// nothing is refused or erased and the mismatched body prints `x`.
+fn assert_bound_docblock_unread(doc: &str) {
+    for source in id_forms(doc, "return \"x\";", "5") {
+        let notes = compile_cli_file_with_flags_capturing_stderr(&source, &[]);
+        assert!(!notes.contains(ERASED_NOTE), "{source}: {notes}");
+        assert_eq!(compile_cli_file_and_run_with_flags(&source, &[]), "x", "{source}");
     }
 }
 
@@ -274,35 +360,27 @@ class Repo {
 #[test]
 fn test_docblock_method_templates_example_runs_in_both_modes() {
     let source = include_str!("../../examples/generics-docblock/main.php");
-    let expected = "42|hi|ok\n7|ab\n42|21\n10|x\n7|seven\n8|EIGHT\nBox<int>|Box<string>|Pair<int>\n";
+    // php -n prints the same: the class keeps its written name.
+    let expected = "10|x\n3|2\n7|seven|ok\n3|a\n8|eight\nIdentity|true\n";
     for flags in [&[][..], &["--strict-php"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), expected, "{flags:?}");
     }
 }
 
-/// A doc comment closed on the declaration's own line still binds to it, and a member sharing
-/// the class's line does not adopt the class's `@template`.
+/// A doc comment closed on the declaration's own line still binds to it. Checked on a function,
+/// a static method, a trait method and an enum method, whose bound `T of int` is observable
+/// through the erasure note (`assert_bound_docblock_read`).
 ///
-/// `collect` keyed every block to the line AFTER `*/`, so `/** @template T */ class Box` lost
-/// its template and `new Box<int>(7)` was refused. With the class and its constructor on one
-/// line, the class block was also copied onto the constructor, which then expected no argument.
+/// `collect` keyed every block to the line AFTER `*/`, so `/** @template T */ function id` lost
+/// its template when the declaration shared the closing line.
 #[test]
 fn test_docblock_on_the_declaration_line_binds_to_it() {
-    let sources = [
-        "<?php\n/** @template T */ class Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
-        "<?php\n/** @template T */\nclass Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
-    ];
-    // Without `--strict-php` only: the written `new Box<int>` is an elephc extension it refuses.
-    for source in sources {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
-    }
+    assert_bound_docblock_read("/**\n * @template T of int\n * @param T $v\n * @return T\n */ ");
+    assert_bound_docblock_read("/**\n * @template T of int\n * @param T $v\n * @return T\n */\n");
 }
 
-/// An enum method's PHPDoc template specializes per call and enforces its bound, like a class's.
-///
-/// Enum methods were skipped, so `@template T of int` was never checked on `Id::A->id("seven")`.
+/// An enum method's PHPDoc template is not adopted: it keeps its written signature, accepts any
+/// argument as php does, and the written `id<int>` extension is refused on it.
 #[test]
 fn test_docblock_method_templates_on_enum_methods() {
     let template = r#"<?php
@@ -323,13 +401,19 @@ echo Id::A->id(ARG);
             "7",
             "{flags:?}"
         );
-        let error =
-            compile_cli_file_with_flags_expect_failure(&template.replace("ARG", "\"seven\""), flags);
-        assert!(error.contains("does not satisfy its bound int"), "{error}");
+        assert_eq!(
+            compile_cli_file_and_run_with_flags(&template.replace("ARG", "\"seven\""), flags),
+            "seven",
+            "{flags:?}"
+        );
     }
+    let written = template.replace("id(ARG)", "id<int>(7)");
+    let error = compile_cli_file_with_flags_expect_failure(&written, &[]);
+    assert!(error.contains("id<int>"), "{error}");
 }
 
-/// Constructor PHPDoc templates affect class specialization in both PHP modes.
+/// A constructor's PHPDoc `@template` does NOT make the class a template: `get_class` prints
+/// `Box` for both objects, exactly as `php -n` does.
 #[test]
 fn test_docblock_template_on_a_constructor_specializes_the_class() {
     let source = r#"<?php
@@ -348,7 +432,7 @@ echo get_class($number), ":", $number->value, "|", get_class($text), ":", $text-
     for flags in [&[][..], &["--strict-php"][..]] {
         assert_eq!(
             compile_cli_file_and_run_with_flags(source, flags),
-            "Box<int>:5|Box<string>:x",
+            "Box:5|Box:x",
             "{flags:?}"
         );
     }
@@ -358,20 +442,12 @@ echo get_class($number), ":", $number->value, "|", get_class($text), ":", $text-
 /// trailing attribute group leads to the declaration that follows it.
 ///
 /// Any text after `*/` used to key the block to the closing line, so `/** @template T */ #[Marker]`
-/// and `/** @template T */ // note` above `class …` left the class non-generic.
+/// and `/** @template T */ // note` above a declaration left it non-generic.
 #[test]
 fn test_docblock_closing_line_trailing_comment_or_attribute() {
-    let sources = [
-        "<?php\n#[Attribute]\nclass Marker {}\n/** @template T */ #[Marker]\n\
-         class Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
-        "<?php\n/** @template T */ // kept\n\
-         class Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
-    ];
-    for source in sources {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
-    }
+    let bound = "/**\n * @template T of int\n * @param T $v\n * @return T\n */";
+    assert_bound_docblock_read(&format!("{bound} #[Marker]\n"));
+    assert_bound_docblock_read(&format!("{bound} // kept\n"));
 }
 
 /// An ordinary `/* … */` between a docblock and its declaration does not discard the docblock,
@@ -381,63 +457,25 @@ fn test_docblock_closing_line_trailing_comment_or_attribute() {
 /// declaration was compiled as non-generic or its `@template` bound was never checked.
 #[test]
 fn test_block_comment_between_docblock_and_declaration_keeps_the_template() {
-    let class_sources = [
-        "<?php\n/** @template T */ /* kept */ class Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
-        "<?php\n/** @template T */\n/*\n * kept\n */\nclass Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
-        "<?php\n#[Attribute]\nclass Marker {}\n/** @template T */\n/* kept */\n#[Marker]\n\
-         class Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
-    ];
-    for source in class_sources {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
-    }
-    let bounded = r#"<?php
-/**
- * @template T of int
- * @param T $v
- * @return T
- */
-/* kept */
-function id($v) { return $v; }
-echo id("seven");
-"#;
-    let error = compile_cli_file_with_flags_expect_failure(bounded, &[]);
-    assert!(error.contains("does not satisfy its bound int"), "{error}");
+    let bound = "/**\n * @template T of int\n * @param T $v\n * @return T\n */";
+    assert_bound_docblock_read(&format!("{bound} /* kept */ "));
+    assert_bound_docblock_read(&format!("{bound}\n/*\n * kept\n */\n"));
+    assert_bound_docblock_read(&format!("{bound}\n/* kept */\n#[Marker]\n"));
+    assert_bound_docblock_read(&format!("{bound}\n/* kept */\n"));
 }
 
 /// A `/***` banner is an ordinary comment, as php's lexer reads it, so it does not replace the
 /// docblock above it; a real docblock below still does.
 ///
 /// Any comment starting `/**` counted as a docblock, so a `/*** kept */` line or a `/***` banner
-/// dropped the `@template`: the class compiled as non-generic, and a function, static method or
-/// enum method lost its `of int` bound.
+/// dropped the `@template`: a function, static method or enum method lost its `of int` bound.
 #[test]
 fn test_star_banner_comment_keeps_the_docblock_above_it() {
-    let banner = "<?php\n/** @template T */\n/***\n * banner\n */\n\
-                  class Box { public function __construct(public T $v) {} }\n\
-                  $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n";
-    assert_eq!(compile_cli_file_and_run_with_flags(banner, &[]), "Box<int>:7");
-    let bound = "/**\n * @template T of int\n * @param T $v\n * @return T\n */\n/*** kept */\n";
-    for source in [
-        format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n"),
-        format!(
-            "<?php\nclass R {{\n{bound}public static function id($v) {{ return $v; }}\n}}\n\
-             echo R::id(\"seven\");\n"
-        ),
-        format!(
-            "<?php\nenum Id {{\n    case A;\n{bound}public function id($v) {{ return $v; }}\n}}\n\
-             echo Id::A->id(\"seven\");\n"
-        ),
-    ] {
-        let error = compile_cli_file_with_flags_expect_failure(&source, &[]);
-        assert!(error.contains("does not satisfy its bound int"), "{source}: {error}");
-    }
-    let second = "<?php\n/** @template T */\n/** plain */\n\
-                  class Box { public function __construct(public $v) {} }\n\
-                  $b = new Box(7);\necho get_class($b), \":\", $b->v;\n";
-    assert_eq!(compile_cli_file_and_run_with_flags(second, &[]), "Box:7");
+    let bound = "/**\n * @template T of int\n * @param T $v\n * @return T\n */\n";
+    assert_bound_docblock_read(&format!("{bound}/***\n * banner\n */\n"));
+    assert_bound_docblock_read(&format!("{bound}/*** kept */\n"));
+    // A real docblock below replaces the bounded one: nothing is read any more.
+    assert_bound_docblock_unread(&format!("{bound}/** plain */\n"));
 }
 
 /// A comment is scanned and classified the way php's lexer does: the opener is consumed before
@@ -450,63 +488,135 @@ fn test_star_banner_comment_keeps_the_docblock_above_it() {
 fn test_comment_scan_follows_the_php_lexer() {
     let bound = "/**\n * @template T of int\n * @param T $v\n * @return T\n */\n";
     for comment in ["/*/ kept */", "/*/** kept */"] {
-        let source =
-            format!("<?php\n{bound}{comment}\nfunction id($v) {{ return $v; }}\necho id(\"seven\");\n");
-        let error = compile_cli_file_with_flags_expect_failure(&source, &[]);
-        assert!(error.contains("does not satisfy its bound int"), "{comment}: {error}");
+        assert_bound_docblock_read(&format!("{bound}{comment}\n"));
     }
     for comment in ["/*/*/", "/**\u{0c}*/", "/**\u{0b}*/", "/**\u{a0}*/"] {
-        let source = format!(
-            "<?php\n/** @template T */\n{comment}\n\
-             class Box {{ public function __construct(public T $v) {{}} }}\n\
-             $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n"
-        );
-        assert_eq!(
-            compile_cli_file_and_run_with_flags(&source, &[]),
-            "Box<int>:7",
-            "{comment:?}"
-        );
+        assert_bound_docblock_read(&format!("{bound}{comment}\n"));
     }
 }
 
-/// A one-line block parses its OPENING tag only — the tags after it are that tag's description
+/// A one-line block parses its OPENING tag only: the tags after it are that tag's description
 /// (phpDocumentor semantics, review finding: a tag MENTIONED in a description must not bind).
-/// The violating argument is still refused, by a different route: with `@param` unread, `T`
-/// stays undetermined and the call errors. The multi-line form binds every tag and reports the
-/// bound violation.
+///
+/// Every form still runs a violating argument as php does. The opening `@template` is read for a
+/// function (`id<int>(1)` exists), while `@param` and `@return` are not: a written `id<int>("s")`
+/// is accepted and a `5` argument binds nothing, so a body returning "x" runs. A method with no
+/// read annotation naming `T` adopts no template, so `id<int>` is "not generic" there. The
+/// multi-line form binds every tag.
 #[test]
 fn test_one_line_block_reads_its_opening_tag() {
     let bound = "/** @template T of int @param T $v @return T */\n";
-    let cases = [
-        format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n"),
-        format!(
-            "<?php\nclass R {{\n{bound}public static function id($v) {{ return $v; }}\n}}\n\
-             echo R::id(\"seven\");\n"
-        ),
-        format!(
-            "<?php\ntrait Tr {{\n{bound}public function id($v) {{ return $v; }}\n}}\n\
-             class K {{ use Tr; }}\necho (new K)->id(\"seven\");\n"
-        ),
-        format!(
-            "<?php\nenum Id {{\n    case A;\n{bound}public function id($v) {{ return $v; }}\n}}\n\
-             echo Id::A->id(\"seven\");\n"
-        ),
-    ];
-    for source in &cases {
-        let error = compile_cli_file_with_flags_expect_failure(source, &[]);
-        assert!(
-            error.contains("does not determine type parameter <T>"),
-            "{source}: {error}"
-        );
+    for source in id_forms(bound, "return $v;", "\"seven\"") {
+        assert_eq!(compile_cli_file_and_run_with_flags(&source, &[]), "seven", "{source}");
     }
-    let multiline = "<?php\n/** @template T of int\n * @param T $v\n * @return T\n */\n\
-                     function id($v) { return $v; }\necho id(\"seven\");\n";
-    let error = compile_cli_file_with_flags_expect_failure(multiline, &[]);
-    assert!(
-        error.contains("does not satisfy its bound int"),
-        "{multiline}: {error}"
+    // `@param T` / `@return T` mentioned in the description are not read: nothing binds `T`.
+    assert_bound_docblock_unread(bound);
+    // A function or method whose only mention of `T` is in a description adopts no template:
+    // nothing it reads binds `T`.
+    let method = format!(
+        "<?php\nclass R {{\n{bound}public function id($v) {{ return $v; }}\n}}\necho (new R)->id<int>(1);\n"
     );
+    let error = compile_cli_file_with_flags_expect_failure(&method, &[]);
+    assert!(error.contains("R::id<int>"), "{error}");
+    let multiline = "/** @template T of int\n * @param T $v\n * @return T\n */\n";
+    assert_bound_docblock_read(multiline);
     let ok = "<?php\n/** @template T of int\n * @param T $v\n * @return T\n */\n\
               function id($v) { return $v; }\necho id(7);\n";
     assert_eq!(compile_cli_file_and_run_with_flags(ok, &[]), "7");
+}
+
+/// The Twig shape (`CoreExtension::enum`): a static method carrying a doc `@template` must stay
+/// a plain php method. Reflection, `method_exists` and callables by name see it exactly as under
+/// `php -n`, because a PHPDoc template must never remove or rename a php symbol.
+#[test]
+fn test_docblock_template_method_stays_a_plain_php_method() {
+    let source = r#"<?php
+class Ext {
+    /**
+     * @template T of \UnitEnum
+     * @param class-string<T> $enum
+     * @return T
+     */
+    public static function enum(string $enum): \UnitEnum { return Suit::Hearts; }
+
+    /**
+     * @template T
+     * @param T $value
+     * @return T
+     */
+    public function keep($value) { return $value; }
+}
+enum Suit { case Hearts; case Spades; }
+
+$m = new ReflectionMethod(Ext::class, 'enum');
+echo $m->getName(), '|', $m->getNumberOfParameters(), '|', $m->getParameters()[0]->getName(), '|', $m->getParameters()[0]->getType(), "\n";
+$p = (new ReflectionClass(Ext::class))->getMethod('enum')->getParameters();
+echo count($p), '|', $p[0]->getName(), "\n";
+echo var_export(method_exists(Ext::class, 'enum'), true), '|', var_export(method_exists(Ext::class, 'keep'), true), "\n";
+echo call_user_func([Ext::class, 'enum'], Suit::class)->name, '|', call_user_func([new Ext(), 'keep'], 3), "\n";
+echo (new Ext())->keep(5), '|', get_class(new Ext()), "\n";
+"#;
+    // Identical to `php -n`.
+    let expected = "enum|1|enum|string\n1|enum\ntrue|true\nHearts|3\n5|Ext\n";
+    for flags in [&[][..], &["--strict-php"][..]] {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), expected, "{flags:?}");
+    }
+}
+
+/// A free function with a doc `@template` is still a php function: `function_exists`, a string
+/// callable, `array_map('id', …)` and `ReflectionFunction` all find it with its written
+/// signature, while a direct call may still use the annotated instantiation.
+#[test]
+fn test_docblock_template_function_stays_a_plain_php_function() {
+    let source = r#"<?php
+/**
+ * @template T
+ * @param T $value
+ * @return T
+ */
+function id($value) { return $value; }
+
+$name = 'id';
+echo $name(7), '|', call_user_func('id', 9), '|', id(8), '|', id('y'), "\n";
+echo var_export(function_exists('id'), true), '|', (new ReflectionFunction('id'))->getNumberOfParameters(), "\n";
+echo implode(',', array_map('id', [1, 2])), "\n";
+"#;
+    let expected = "7|9|8|y\ntrue|1\n1,2\n";
+    for flags in [&[][..], &["--strict-php"][..]] {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), expected, "{flags:?}");
+    }
+    // The direct call still reads the annotation: a written argument exists only if it was.
+    let written = source.replace("id(8)", "id<int>(8)");
+    assert_eq!(compile_cli_file_and_run_with_flags(&written, &[]), expected);
+}
+
+/// An interface method implemented by a method carrying a doc `@template`: the implementation
+/// keeps its written signature, so the interface contract, dispatch through the interface and an
+/// overriding subclass all behave as under `php -n`.
+#[test]
+fn test_docblock_template_method_implements_an_interface() {
+    let source = r#"<?php
+interface Source {
+    public function fetch(string $key);
+}
+class Impl implements Source {
+    /**
+     * @template T
+     * @param T $key
+     * @return T
+     */
+    public function fetch(string $key) { return $key; }
+}
+class Child extends Impl {
+    public function fetch(string $key) { return strtoupper($key); }
+}
+function use_it(Source $s, string $k) { return $s->fetch($k); }
+echo use_it(new Impl(), 'a'), '|', use_it(new Child(), 'b'), '|', (new Impl())->fetch('c'), "\n";
+echo var_export((new Impl()) instanceof Source, true), '|', implode(',', class_implements(new Impl())), "\n";
+echo (new ReflectionMethod(Impl::class, 'fetch'))->getNumberOfParameters(), "\n";
+"#;
+    let expected = "a|B|c\ntrue|Source\n1\n";
+    for flags in [&[][..], &["--strict-php"][..]] {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), expected, "{flags:?}");
+    }
 }

@@ -34,7 +34,10 @@ pub(in crate::interpreter) fn eval_scandir_declared_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [directory] => eval_scandir_result(*directory, values),
+        [directory] => eval_scandir_result(*directory, 0, values),
+        [directory, order] | [directory, order, _] => {
+            eval_scandir_result(*directory, eval_int_value(*order, values)?, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -46,16 +49,27 @@ pub(in crate::interpreter) fn eval_builtin_scandir(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [directory] = args else {
+    if !(1..=3).contains(&args.len()) {
         return Err(EvalStatus::RuntimeFatal);
+    }
+    let directory = eval_expr(&args[0], context, scope, values)?;
+    let order = if let Some(order) = args.get(1) {
+        let order = eval_expr(order, context, scope, values)?;
+        eval_int_value(order, values)?
+    } else {
+        0
     };
-    let directory = eval_expr(directory, context, scope, values)?;
-    eval_scandir_result(directory, values)
+    if let Some(context_arg) = args.get(2) {
+        let _ = eval_expr(context_arg, context, scope, values)?;
+    }
+    eval_scandir_result(directory, order, values)
 }
 
-/// Lists one local directory into an indexed string array, or an empty array on failure.
+/// Lists one local directory into an indexed string array using PHP's scandir ordering modes, or
+/// an empty array on failure.
 pub(in crate::interpreter) fn eval_scandir_result(
     directory: RuntimeCellHandle,
+    sorting_order: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(directory, values)?;
@@ -67,7 +81,11 @@ pub(in crate::interpreter) fn eval_scandir_result(
         let entry = entry.map_err(|_| EvalStatus::RuntimeFatal)?;
         names.push(entry.file_name().to_string_lossy().into_owned());
     }
-    names.sort();
+    if sorting_order == 0 {
+        names.sort();
+    } else if sorting_order != 2 {
+        names.sort_by(|left, right| right.cmp(left));
+    }
     let mut result = values.array_new(names.len())?;
     for (index, name) in names.iter().enumerate() {
         result = eval_array_set_indexed_bytes(result, index, name.as_bytes(), values)?;

@@ -15,7 +15,6 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 
 use super::*;
-
 eval_builtin! {
     contract: "getenv",
     area: NetworkEnv,
@@ -61,6 +60,9 @@ pub(in crate::interpreter) fn eval_getenv_result(
     name: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if values.is_null(name)? {
+        return eval_getenv_all_result(values);
+    }
     let name = values.string_bytes(name)?;
     match std::env::var_os(OsStr::from_bytes(&name)) {
         Some(value) => values.string_bytes_value(value.as_bytes()),

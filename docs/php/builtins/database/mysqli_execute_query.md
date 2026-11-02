@@ -2,7 +2,7 @@
 title: "mysqli_execute_query()"
 description: "Prepares, binds, and executes a statement in one call."
 sidebar:
-  order: 117
+  order: 128
 ---
 
 ## mysqli_execute_query()

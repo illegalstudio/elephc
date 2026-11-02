@@ -29,14 +29,14 @@ sidebar:
 | [`bcscale()`](./math/bcscale.md) | `(?int $scale = null): int` | `int` | ✓ | ✓ |
 | [`bcsqrt()`](./math/bcsqrt.md) | `(string $num, ?int $scale = null): string` | `string` | ✓ | ✓ |
 | [`bcsub()`](./math/bcsub.md) | `(string $num1, string $num2, ?int $scale = null): string` | `string` | ✓ | ✓ |
-| [`bindec()`](./math/bindec.md) | `(string $binary_string): mixed` | `mixed` | ✓ | - |
+| [`bindec()`](./math/bindec.md) | `(string $binary_string): mixed` | `mixed` | ✓ | ✓ |
 | [`ceil()`](./math/ceil.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`clamp()`](./math/clamp.md) | `(int $value, int $min, int $max): mixed` | `mixed` | ✓ | ✓ |
 | [`cos()`](./math/cos.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`cosh()`](./math/cosh.md) | `(float $num): float` | `float` | ✓ | ✓ |
-| [`decbin()`](./math/decbin.md) | `(int $num): string` | `string` | ✓ | - |
-| [`dechex()`](./math/dechex.md) | `(int $num): string` | `string` | ✓ | - |
-| [`decoct()`](./math/decoct.md) | `(int $num): string` | `string` | ✓ | - |
+| [`decbin()`](./math/decbin.md) | `(int $num): string` | `string` | ✓ | ✓ |
+| [`dechex()`](./math/dechex.md) | `(int $num): string` | `string` | ✓ | ✓ |
+| [`decoct()`](./math/decoct.md) | `(int $num): string` | `string` | ✓ | ✓ |
 | [`deg2rad()`](./math/deg2rad.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`exp()`](./math/exp.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`fdiv()`](./math/fdiv.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
@@ -94,7 +94,7 @@ sidebar:
 | [`gmp_sub()`](./math/gmp_sub.md) | `(object|string|int $num1, object|string|int $num2): object` | `object` | ✓ | ✓ |
 | [`gmp_testbit()`](./math/gmp_testbit.md) | `(object|string|int $num, int $index): bool` | `bool` | ✓ | ✓ |
 | [`gmp_xor()`](./math/gmp_xor.md) | `(object|string|int $num1, object|string|int $num2): object` | `object` | ✓ | ✓ |
-| [`hexdec()`](./math/hexdec.md) | `(string $hex_string): mixed` | `mixed` | ✓ | - |
+| [`hexdec()`](./math/hexdec.md) | `(string $hex_string): mixed` | `mixed` | ✓ | ✓ |
 | [`hypot()`](./math/hypot.md) | `(float $x, float $y): float` | `float` | ✓ | ✓ |
 | [`intdiv()`](./math/intdiv.md) | `(int $num1, int $num2): int` | `int` | ✓ | ✓ |
 | [`is_finite()`](./math/is_finite.md) | `(float $num): bool` | `bool` | ✓ | ✓ |
@@ -109,7 +109,7 @@ sidebar:
 | [`mt_getrandmax()`](./math/mt_getrandmax.md) | `(): int` | `int` | ✓ | - |
 | [`mt_rand()`](./math/mt_rand.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
 | [`mt_srand()`](./math/mt_srand.md) | `(?int $seed = null, int $mode = 0): void` | `void` | ✓ | - |
-| [`octdec()`](./math/octdec.md) | `(string $octal_string): mixed` | `mixed` | ✓ | - |
+| [`octdec()`](./math/octdec.md) | `(string $octal_string): mixed` | `mixed` | ✓ | ✓ |
 | [`pi()`](./math/pi.md) | `(): float` | `float` | ✓ | ✓ |
 | [`pow()`](./math/pow.md) | `(float $num, float $exponent): float` | `float` | ✓ | ✓ |
 | [`rad2deg()`](./math/rad2deg.md) | `(float $num): float` | `float` | ✓ | ✓ |

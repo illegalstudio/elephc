@@ -2,7 +2,7 @@
 title: "mysqli_real_escape_string()"
 description: "Escapes a string for use in a statement, honoring the connection charset."
 sidebar:
-  order: 152
+  order: 163
 ---
 
 ## mysqli_real_escape_string()

@@ -67,7 +67,9 @@ lifetimeBorrowed(ALifetimeTight::A);
 "#));
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "mvt|SDMR:xxx:string|SDVR:xxx|SDTR:ok|SDTR:ok|SVB:LifetimeCastSource|D");
-    assert!(out.stderr.lines().next().unwrap().contains("live_blocks=2 live_bytes=80"), "{}", out.stderr);
+    // The heap is clean at exit: this build releases the enum case singletons too, where the
+    // assertion used to expect them still live (`live_blocks=2 live_bytes=80`).
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Static argument lifetime does not depend on EIR optimization.
@@ -92,7 +94,9 @@ lifetimeUnpack(ALifetimeTight::A);
 "#));
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "mvt|SDVR|SDVR|SDTR|SDTR|SDSDTR|SVB:LifetimeCastSource|D");
-    assert!(out.stderr.lines().next().unwrap().contains("live_blocks=2 live_bytes=80"), "{}", out.stderr);
+    // The heap is clean at exit: this build releases the enum case singletons too, where the
+    // assertion used to expect them still live (`live_blocks=2 live_bytes=80`).
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Runtime-unpack source retention follows the same contract without EIR optimization.
@@ -129,7 +133,9 @@ lifetimeThrowRef(ALifetimeTight::A); lifetimeThrowValue(ALifetimeTight::A);
 "#));
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, format!("mvt|SDC:destructor:anchor:string|{}", "SDC:destructor:anchor|".repeat(6)));
-    assert!(out.stderr.lines().next().unwrap().contains("live_blocks=2 live_bytes=80"), "{}", out.stderr);
+    // The heap is clean at exit: this build releases the enum case singletons too, where the
+    // assertion used to expect them still live (`live_blocks=2 live_bytes=80`).
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Exceptional snapshot retirement preserves the same unwind guarantees without EIR optimization.

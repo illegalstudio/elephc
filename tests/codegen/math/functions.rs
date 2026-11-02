@@ -694,6 +694,13 @@ var_dump(hexdec("ff"), hexdec("FF"), hexdec("a0"), hexdec(""),
     );
 }
 
+/// Verifies unary negation accepts a runtime `int|float` result and preserves PHP numeric value.
+#[test]
+fn test_negate_base_conversion_numeric_union() {
+    let out = compile_and_run(r#"<?php echo -octdec("17");"#);
+    assert_eq!(out, "-15");
+}
+
 /// Verifies the base parsers ignore characters that are not digits of the requested base,
 /// which is what makes `hexdec("a0z")` `160` and `bindec("12")` `1` in reference PHP.
 /// (PHP additionally raises an `E_DEPRECATED` notice here; elephc emits no deprecation

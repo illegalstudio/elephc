@@ -142,6 +142,7 @@ pub(super) fn collect_expr_reads(
                 collect_expr_reads(value, scope, warnings);
             }
         }
+        ExprKind::ArrayReference(value) => collect_expr_reads(value, scope, warnings),
         ExprKind::ArrayLiteralMixed(entries) => {
             for entry in entries.iter() {
                 for expr in entry.exprs() {
@@ -220,8 +221,14 @@ pub(super) fn collect_expr_reads(
             collect_expr_reads(property, scope, warnings);
         }
         ExprKind::StaticPropertyAccess { .. } => {},
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            collect_expr_reads(property, scope, warnings);
+        }
         ExprKind::BufferNew { len, .. } => collect_expr_reads(len, scope, warnings),
         ExprKind::ObjectClassName { object } => collect_expr_reads(object, scope, warnings),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            collect_expr_reads(receiver, scope, warnings)
+        }
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {}
         ExprKind::NewScopedObject { args, .. } => {
             for arg in args {
@@ -312,6 +319,9 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
         | StmtKind::ConstDecl { value: expr, .. } => {
             collect_expr_reads(expr, &mut ScopeUsage::default(), warnings);
         }
+        StmtKind::Include { path, .. } => {
+            collect_expr_reads(path, &mut ScopeUsage::default(), warnings);
+        }
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }
         | StmtKind::ArrayPush { value, .. }
@@ -330,6 +340,24 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
             collect_expr_reads(index, &mut scope, warnings);
             collect_expr_reads(value, &mut scope, warnings);
         }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            let mut scope = ScopeUsage::default();
+            collect_expr_reads(index, &mut scope, warnings);
+            collect_expr_reads(source, &mut scope, warnings);
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            let mut scope = ScopeUsage::default();
+            collect_expr_reads(property, &mut scope, warnings);
+            if let Some(index) = index {
+                collect_expr_reads(index, &mut scope, warnings);
+            }
+            collect_expr_reads(value, &mut scope, warnings);
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             let mut scope = ScopeUsage::default();
             collect_expr_reads(target, &mut scope, warnings);
@@ -339,6 +367,11 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
             let mut scope = ScopeUsage::default();
             collect_expr_reads(object, &mut scope, warnings);
             collect_expr_reads(value, &mut scope, warnings);
+        }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            let mut scope = ScopeUsage::default();
+            collect_expr_reads(object, &mut scope, warnings);
+            collect_expr_reads(source, &mut scope, warnings);
         }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             let mut scope = ScopeUsage::default();
@@ -481,7 +514,6 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
-        | StmtKind::Include { .. }
         | StmtKind::Global { .. }
         | StmtKind::StaticVar { .. }
         | StmtKind::Return(None)
@@ -490,6 +522,7 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
         | StmtKind::Continue(_)
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. } => {}

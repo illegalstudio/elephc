@@ -381,6 +381,11 @@ fn expr_refs_mysqli(expr: &Expr) -> bool {
             key.as_deref().is_some_and(expr_refs_mysqli)
                 || value.as_deref().is_some_and(expr_refs_mysqli)
         }
+        ExprKind::ArrayReference(inner) => expr_refs_mysqli(inner),
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            receiver_refs_mysqli(receiver) || expr_refs_mysqli(property)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_refs_mysqli(receiver),
     }
 }
 
@@ -401,6 +406,7 @@ fn stmt_refs_mysqli(stmt: &Stmt) -> bool {
         | StmtKind::Global { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => false,
 
         // An aliased import (`use mysqli as Db;`) names mysqli only here; the
@@ -588,6 +594,29 @@ fn stmt_refs_mysqli(stmt: &Stmt) -> bool {
             ..
         } => {
             expr_refs_mysqli(object) || expr_refs_mysqli(index) || expr_refs_mysqli(value)
+        }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            expr_refs_mysqli(object) || expr_refs_mysqli(source)
+        }
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            index,
+            source,
+            ..
+        } => {
+            receiver_refs_mysqli(receiver) || expr_refs_mysqli(index) || expr_refs_mysqli(source)
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            value,
+            ..
+        } => {
+            receiver_refs_mysqli(receiver)
+                || expr_refs_mysqli(property)
+                || index.as_ref().is_some_and(expr_refs_mysqli)
+                || expr_refs_mysqli(value)
         }
     }
 }

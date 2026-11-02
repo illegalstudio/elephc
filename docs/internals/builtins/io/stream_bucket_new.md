@@ -2,7 +2,7 @@
 title: "stream_bucket_new() - internals"
 description: "Compiler internals for stream_bucket_new(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 368
+  order: 380
 ---
 
 ## `stream_bucket_new()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_bucket_new.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_bucket_new.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

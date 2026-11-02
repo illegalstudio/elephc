@@ -18,11 +18,11 @@ pub(super) fn read_and_parse(
     defines: &HashSet<String>,
     timings: &mut CompileTimings,
     generated_source: Option<&str>,
-) -> parser::ast::Program {
+) -> (parser::ast::Program, crate::resolver::SourceUnit) {
     crate::progress::phase("read");
     let phase_started = Instant::now();
     let source = match generated_source.map(str::to_owned).map(Ok)
-        .unwrap_or_else(|| fs::read_to_string(filename)) {
+        .unwrap_or_else(|| crate::source::read_physical_source(filename)) {
         Ok(s) => s,
         Err(e) => {
             crate::progress::clear();
@@ -83,5 +83,33 @@ pub(super) fn read_and_parse(
         }
     };
     timings.record_since("magic-constants", phase_started);
-    parsed
+    let unit = crate::resolver::SourceUnit {
+        canonical_path: main_file_path.canonicalize().unwrap_or(main_file_path),
+        mode: if generated_source.is_some() { SourceMode::Internal } else { source_mode },
+        source: source.into(),
+    };
+    (parsed, unit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entry_source_snapshot_precedes_magic_constant_substitution() {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("elephc_entry_source_{}_{nonce}.php", std::process::id()));
+        let source = "<?php return __FILE__;";
+        std::fs::write(&path, source).unwrap();
+        let canonical = path.canonicalize().unwrap();
+        let mut timings = CompileTimings::new(false);
+        let (parsed, unit) = read_and_parse(
+            path.to_str().unwrap(), SourceMode::Php, &HashSet::new(), &mut timings, None,
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(unit.canonical_path, canonical);
+        assert_eq!(unit.mode, SourceMode::Php);
+        assert_eq!(&*unit.source, source);
+        assert!(!format!("{parsed:?}").contains("__FILE__"));
+    }
 }

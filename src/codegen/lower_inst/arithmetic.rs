@@ -181,6 +181,38 @@ pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 /// Reference PHP 8.4 raises a catchable `DivisionByZeroError("Division by zero")` for a zero
 /// divisor, so the hardware quotient (`INF` / `NaN`) is never observable. The guard runs before
 /// the promotion for both supported targets.
+/// Lowers php `int / int`: a zero divisor raises `DivisionByZeroError` here, anything else goes
+/// to `__rt_int_div_checked`, which boxes an exact quotient as `int` and every other as a double.
+pub(super) fn lower_int_checked_div(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let lhs_reg = abi::int_result_reg(ctx.emitter);
+    let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
+    load_integer_operand(ctx, lhs, lhs_reg, inst)?;
+    load_integer_operand(ctx, rhs, rhs_reg, inst)?;
+    let zero_label = ctx.next_label("div_zero");
+    let done_label = ctx.next_label("div_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", rhs_reg, zero_label)); // branch to the zero-divisor throw when the divisor is zero
+            ctx.emitter.instruction(&format!("mov x1, {}", rhs_reg));           // place the divisor in the helper's second argument register
+            abi::emit_call_label(ctx.emitter, "__rt_int_div_checked");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", rhs_reg, rhs_reg)); // test whether the divisor is zero
+            ctx.emitter.instruction(&format!("je {}", zero_label));             // branch to the zero-divisor throw when the divisor is zero
+            ctx.emitter.instruction(&format!("mov rdi, {}", lhs_reg));          // place the dividend in the first SysV argument register
+            ctx.emitter.instruction(&format!("mov rsi, {}", rhs_reg));          // place the divisor in the second SysV argument register
+            abi::emit_call_label(ctx.emitter, "__rt_int_div_checked");
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&zero_label);
+    super::exceptions::emit_division_by_zero_error(ctx, DIVISION_BY_ZERO_MESSAGE);
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
 pub(super) fn lower_int_div_to_float(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -409,17 +441,12 @@ pub(super) fn lower_mixed_numeric_binop(
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     materialize_value_as_mixed(ctx, rhs, &rhs_ty)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
-        }
-        Arch::X86_64 => {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
-        }
+    if op == MixedNumericOp::Add {
+        lower_mixed_add_runtime_dispatch(ctx)?;
+    } else {
+        load_mixed_binary_operands(ctx);
+        abi::emit_call_label(ctx.emitter, mixed_numeric_helper(op));
     }
-    abi::emit_call_label(ctx.emitter, mixed_numeric_helper(op));
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     if left_box_temp {
         decref_mixed_temp_at(ctx, 32);
@@ -429,6 +456,23 @@ pub(super) fn lower_mixed_numeric_binop(
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    // `__rt_mixed_numeric_div` answers a zero divisor with a null cell; the temporaries are
+    // already released, so the throw leaves nothing behind.
+    if op == MixedNumericOp::Div {
+        let ok_label = ctx.next_label("mixed_div_ok");
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbnz {}, {}", result_reg, ok_label)); // a non-null cell is the quotient
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // is the quotient cell null?
+                ctx.emitter.instruction(&format!("jnz {}", ok_label));             // a non-null cell is the quotient
+            }
+        }
+        super::exceptions::emit_division_by_zero_error(ctx, DIVISION_BY_ZERO_MESSAGE);
+        ctx.emitter.label(&ok_label);
+    }
     store_if_result(ctx, inst)
 }
 
@@ -444,6 +488,122 @@ fn integer_rhs_constant(function: &Function, value: ValueId) -> Option<i64> {
         (Op::ConstI64, Some(Immediate::I64(integer))) => Some(*integer),
         _ => None,
     }
+}
+
+/// Dispatches boxed PHP `+` operands between numeric addition and array union at runtime.
+fn lower_mixed_add_runtime_dispatch(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let left_array = ctx.next_label("mixed_add_left_array");
+    let array_union = ctx.next_label("mixed_add_array_union");
+    let numeric = ctx.next_label("mixed_add_numeric");
+    let right_array_error = ctx.next_label("mixed_add_right_array_error");
+    let done = ctx.next_label("mixed_add_done");
+
+    load_mixed_cell_at(ctx, 16, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_if_array_tag(ctx, &left_array);
+
+    load_mixed_cell_at(ctx, 0, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_if_array_tag(ctx, &right_array_error);
+    abi::emit_jump(ctx.emitter, &numeric);
+
+    ctx.emitter.label(&left_array);
+    load_mixed_cell_at(ctx, 0, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_if_array_tag(ctx, &array_union);
+    super::exceptions::emit_type_error(ctx, "Unsupported operand types: array + non-array");
+
+    ctx.emitter.label(&right_array_error);
+    super::exceptions::emit_type_error(ctx, "Unsupported operand types: non-array + array");
+
+    ctx.emitter.label(&array_union);
+    emit_mixed_array_union(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&numeric);
+    load_mixed_binary_operands(ctx);
+    abi::emit_call_label(ctx.emitter, mixed_numeric_helper(MixedNumericOp::Add));
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Branches when the current unboxed Mixed tag denotes an indexed or associative array.
+fn emit_branch_if_array_tag(ctx: &mut FunctionContext<'_>, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 denotes indexed array storage
+            ctx.emitter.instruction(&format!("b.eq {}", label));
+            ctx.emitter.instruction("cmp x0, #5");                              // runtime tag 5 denotes associative array storage
+            ctx.emitter.instruction(&format!("b.eq {}", label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // runtime tag 4 denotes indexed array storage
+            ctx.emitter.instruction(&format!("je {}", label));
+            ctx.emitter.instruction("cmp rax, 5");                              // runtime tag 5 denotes associative array storage
+            ctx.emitter.instruction(&format!("je {}", label));
+        }
+    }
+}
+
+/// Converts two boxed arrays to owned hashes, unions them, and returns a boxed Mixed hash.
+fn emit_mixed_array_union(ctx: &mut FunctionContext<'_>) {
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    load_mixed_cell_at(ctx, 16, arg_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+
+    load_mixed_cell_at(ctx, 16, arg_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_union");
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    decref_hash_temp_at(ctx, 32);
+    decref_hash_temp_at(ctx, 16);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    crate::codegen::emit_box_current_owned_value_as_mixed(
+        ctx.emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
+}
+
+/// Loads one boxed Mixed cell from the temporary operand stack.
+fn load_mixed_cell_at(ctx: &mut FunctionContext<'_>, offset: usize, reg: &str) {
+    abi::emit_load_temporary_stack_slot(ctx.emitter, reg, offset);
+}
+
+/// Loads the two boxed Mixed operands into the runtime helper ABI registers.
+fn load_mixed_binary_operands(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_mixed_cell_at(ctx, 16, "x0");
+            load_mixed_cell_at(ctx, 0, "x1");
+        }
+        Arch::X86_64 => {
+            load_mixed_cell_at(ctx, 16, "rax");
+            load_mixed_cell_at(ctx, 0, "rdi");
+        }
+    }
+}
+
+/// Releases an owned hash stored in one temporary stack slot.
+fn decref_hash_temp_at(ctx: &mut FunctionContext<'_>, offset: usize) {
+    load_mixed_cell_at(ctx, offset, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
 }
 
 /// Returns true when a PHP type is already represented as a boxed Mixed pointer.
@@ -505,5 +665,9 @@ fn mixed_numeric_helper(op: MixedNumericOp) -> &'static str {
         MixedNumericOp::Sub => "__rt_mixed_numeric_sub",
         MixedNumericOp::Mul => "__rt_mixed_numeric_mul",
         MixedNumericOp::Pow => "__rt_mixed_numeric_pow",
+        MixedNumericOp::Div => "__rt_mixed_numeric_div",
+        MixedNumericOp::BitAnd => "__rt_mixed_bitwise_and",
+        MixedNumericOp::BitOr => "__rt_mixed_bitwise_or",
+        MixedNumericOp::BitXor => "__rt_mixed_bitwise_xor",
     }
 }

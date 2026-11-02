@@ -49,8 +49,31 @@ impl Checker {
         if let Some((array, index)) = string_offset_write {
             refuse_string_offset_read_modify_write(array, index, prelude, span)?;
         }
+        // The prelude is whatever had to run before the assignment, and an include in value
+        // position contributes its own bookkeeping statements (`IncludeOnceMark`): the static
+        // property write `self::$data ?? self::$data = require 'data.php'` panicked the checker
+        // when only assignment-shaped statements were accepted here.
         for stmt in prelude {
             self.check_stmt(stmt, env)?;
+        }
+
+        if let (
+            ExprKind::Variable(target_name),
+            ExprKind::Variable(value_name),
+            [Stmt {
+                kind: StmtKind::RefAssign {
+                    target: ref_target,
+                    ..
+                },
+                ..
+            }],
+        ) = (&target.kind, &value.kind, prelude)
+        {
+            if target_name == value_name && target_name == ref_target {
+                return env.get(target_name).cloned().ok_or_else(|| {
+                    CompileError::new(span, &format!("Undefined variable: ${}", target_name))
+                });
+            }
         }
         if let Some((array, index)) = string_offset_write {
             // PHP's `($s[$i] = $v)` evaluates to the one-byte string it stored, never to `$v`
@@ -86,11 +109,9 @@ impl Checker {
                 span,
                 env,
             )?;
-            let result_expr = match result_target {
-                Some(result_target) if result_target != target => result_target,
-                _ => value,
-            };
-            return self.infer_type(result_expr, env);
+            let result_expr = result_target.unwrap_or(value);
+            let mut result_env = env.clone();
+            return self.infer_type_with_assignment_effects(result_expr, &mut result_env);
         }
 
         let stmt_kind = match &target.kind {
@@ -145,7 +166,8 @@ impl Checker {
             Some(result_target) if result_target != target => result_target,
             _ => value,
         };
-        let result_ty = self.infer_type(result_expr, env)?;
+        let mut result_env = env.clone();
+        let result_ty = self.infer_type_with_assignment_effects(result_expr, &mut result_env)?;
         if may_be_string_offset_write {
             return Ok(PhpType::Mixed);
         }
@@ -179,9 +201,7 @@ impl Checker {
         }
 
         let property_ty = self.infer_type(property, env)?;
-        // See the read gate in `inference::objects::access`: relaxed for neither `mixed` nor
-        // `int|float`, because the lowering has no arm for a boxed runtime property name.
-        if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
+        if !property_ty.is_dynamic_property_name() {
             return Err(CompileError::new(
                 property.span,
                 "Dynamic property name must be string or integer",
@@ -198,9 +218,10 @@ impl Checker {
             &receiver_ty,
         );
 
-        self.infer_type(value, env)?;
+        self.infer_type_with_assignment_effects(value, env)?;
         if let Some(result_target) = result_target {
-            self.infer_type(result_target, env)?;
+            let mut result_env = env.clone();
+            self.infer_type_with_assignment_effects(result_target, &mut result_env)?;
         }
         Ok(())
     }

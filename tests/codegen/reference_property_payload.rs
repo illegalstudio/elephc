@@ -391,3 +391,112 @@ exerciseScope();
     assert_eq!(out.stdout, "receiver|scope|drop|caught|receiver|scope|ok|drop|done");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// `$this->p = &$param` on a by-reference parameter binds the property to the CALLER's variable,
+/// and a property passed to a by-reference parameter is passed as its own cell.
+///
+/// The parser spells the binding as a copy into the property plus `$param = &$this->p`, which
+/// re-pointed the parameter at a fresh cell: the caller's variable was cut off (it even read back
+/// `null`), and a property handed on to another constructor (`new Keeper($this->p)`) arrived as a
+/// copy. Symfony's `ContainerConfigurator` -> `ServicesConfigurator` -> `ServiceConfigurator`
+/// chain shares the loader's `$instanceof` exactly this way, and every container-building console
+/// command died on "Cannot assign null to property ServiceConfigurator::$instanceof". Expected
+/// output is `php -n` 8.5's.
+#[test]
+fn test_property_bound_to_by_ref_parameter_shares_the_callers_variable() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function fill(array &$p) { $p = ['f' => 1]; }
+class Keeper {
+    private array $p;
+    public function __construct(array &$p) { $this->p = &$p; $p['seen'] = true; }
+    public function get(): array { return $this->p; }
+}
+class Holder {
+    private array $p;
+    public array $own = ['x' => 1];
+    public function __construct(array &$p) { $this->p = &$p; }
+    public function touch(): array { $r = &$this->p; $r['t'] = 1; return $this->p; }
+    public function keeper(): Keeper { return new Keeper($this->p); }
+    public function fillOwn(): void { fill($this->own); }
+}
+function forward(array &$z): Keeper { return new Keeper($z); }
+$b = ['b' => 1];
+$h = new Holder($b);
+echo json_encode($h->touch()), json_encode($b), "\n";
+$k = $h->keeper();
+$b['late'] = 2;
+echo json_encode($k->get()), json_encode($b), "\n";
+$h->fillOwn();
+echo json_encode($h->own), "\n";
+$w = ['w' => 1];
+$k2 = forward($w);
+$w['after'] = 3;
+echo json_encode($k2->get()), json_encode($w), "\n";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"b\":1,\"t\":1}{\"b\":1,\"t\":1}\n\
+         {\"b\":1,\"t\":1,\"seen\":true,\"late\":2}{\"b\":1,\"t\":1,\"seen\":true,\"late\":2}\n\
+         {\"f\":1}\n\
+         {\"w\":1,\"seen\":true,\"after\":3}{\"w\":1,\"seen\":true,\"after\":3}\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A by-reference parameter bound to a property keeps the property's declared representation,
+/// including when the argument is OMITTED and its default seeds the cell.
+///
+/// Recording such a parameter as escaping must not widen it to `mixed` the way a closure capture
+/// is widened: the `int` property then read the box pointer as an integer, and a caller's `int`
+/// local was boxed into a temporary the property could not keep (Symfony's
+/// `ContainerConfigurator::__construct(..., int &$anonymousCount = 0)`). Expected output is
+/// `php -n` 8.5's.
+#[test]
+fn test_property_bound_by_ref_parameter_with_omitted_default_keeps_its_type() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Counted {
+    private array $a; private int $n;
+    public function __construct(array &$a, int &$n = 0) { $this->a = &$a; $this->n = &$n; }
+    function bump() { $this->n++; $this->a[] = $this->n; return $this->a; }
+}
+$x = [];
+$c = new Counted($x);
+echo json_encode($c->bump()), json_encode($x), "\n";
+$m = 5;
+$d = new Counted($x, $m);
+$d->bump();
+echo $m, json_encode($x), "\n";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "[1][1]\n6[1,6]\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Only a call that reaches a property-bound by-reference parameter promotes the caller's local.
+///
+/// Keyed by the parameter's NAME instead, `array_splice($tail, ...)` matched a user method's
+/// `array &$array` that binds a property, the local became a reference cell that could no longer
+/// be re-typed, and `$tail = '/' . implode('/', $tail); strlen($tail)` stopped compiling
+/// (Symfony's `DebugClassLoader::checkCase`). Expected output is `php -n` 8.5's.
+#[test]
+fn test_builtin_by_ref_argument_named_like_a_property_bound_parameter_stays_a_plain_local() {
+    let out = compile_and_run(
+        r#"<?php
+class Binder { private array $x = []; function bind(array &$array) { $this->x = &$array; } }
+function tailOf(string $p) {
+    $tail = explode('/', $p);
+    array_splice($tail, 0, 1);
+    if (!$tail) { return null; }
+    $tail = '/' . implode('/', $tail);
+    return strlen($tail);
+}
+echo tailOf('a/b/c'), "\n";
+"#,
+    );
+    assert_eq!(out, "4\n");
+}

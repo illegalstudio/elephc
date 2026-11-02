@@ -2,7 +2,7 @@
 title: "array_pad()"
 description: "Pads an array to the specified length with a value."
 sidebar:
-  order: 29
+  order: 35
 ---
 
 ## array_pad()

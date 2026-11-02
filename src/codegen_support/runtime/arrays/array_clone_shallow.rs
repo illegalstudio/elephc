@@ -77,9 +77,11 @@ pub fn emit_array_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // is this an array of objects?
     emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // nested refcounted payloads need retains
     emitter.instruction("cmp x9, #7");                                          // is this an array of boxed mixed values?
-    emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // boxed mixed payloads also need retains
+    emitter.instruction("b.eq __rt_array_clone_shallow_boxes");                 // boxed slots may hold references the copy must unwrap
     emitter.instruction("cmp x9, #10");                                         // is this an array of callable descriptors?
     emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // callable descriptor slots need retains for the clone
+    emitter.instruction("cmp x9, #11");                                         // is this an array of reference cells?
+    emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // reference cells survive the COW copy and retain one share
     emitter.instruction("b __rt_array_clone_shallow_done");                     // scalar payloads are already correct after the byte copy
 
     // -- string arrays must own their own persisted payloads after the split --
@@ -122,6 +124,19 @@ pub fn emit_array_clone_shallow(emitter: &mut Emitter) {
     emitter.label("__rt_array_clone_shallow_next_child");
     emitter.instruction("add x23, x23, #1");                                    // advance to the next live child slot
     emitter.instruction("b __rt_array_clone_shallow_refs_loop");                // continue retaining shared child pointers
+
+    // -- boxed slots: share each box, but copy the value of a reference nobody else holds --
+    emitter.label("__rt_array_clone_shallow_boxes");
+    emitter.instruction("mov x23, #0");                                         // x23 = slot index for boxed-slot fixups
+    emitter.instruction("add x24, x20, #24");                                   // x24 = cloned payload base for 8-byte box pointers
+    emitter.label("__rt_array_clone_shallow_boxes_loop");
+    emitter.instruction("cmp x23, x19");                                        // have we visited every live box slot?
+    emitter.instruction("b.ge __rt_array_clone_shallow_done");                  // yes -- boxed fixups are complete
+    emitter.instruction("ldr x0, [x24, x23, lsl #3]");                          // load the copied box pointer
+    emitter.instruction("bl __rt_ref_copy_slot");                               // x0 = what the clone holds, retained for it
+    emitter.instruction("str x0, [x24, x23, lsl #3]");                          // install it in the cloned slot
+    emitter.instruction("add x23, x23, #1");                                    // advance to the next box slot
+    emitter.instruction("b __rt_array_clone_shallow_boxes_loop");               // continue with the next box
 
     // -- restore callee-saved registers and return the cloned array --
     emitter.label("__rt_array_clone_shallow_done");
@@ -196,9 +211,11 @@ fn emit_array_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, 6");                                           // does the clone store object child pointers that need a retain for the cloned owner?
     emitter.instruction("je __rt_array_clone_shallow_refs");                    // retain every live child pointer for object payloads
     emitter.instruction("cmp r9, 7");                                           // does the clone store boxed mixed child pointers that need a retain for the cloned owner?
-    emitter.instruction("je __rt_array_clone_shallow_refs");                    // retain every live child pointer for boxed mixed payloads
+    emitter.instruction("je __rt_array_clone_shallow_boxes");                   // boxed slots may hold references the copy must unwrap
     emitter.instruction("cmp r9, 10");                                          // does the clone store callable descriptors that need a retain for the cloned owner?
     emitter.instruction("je __rt_array_clone_shallow_refs");                    // retain every callable descriptor for callable payloads
+    emitter.instruction("cmp r9, 11");                                          // does the clone store reference cells that need a retain?
+    emitter.instruction("je __rt_array_clone_shallow_refs");                    // share and retain every reference cell for the cloned owner
     emitter.instruction("jmp __rt_array_clone_shallow_done");                   // scalar and float payloads are already correct after the shallow byte copy
     emitter.label("__rt_array_clone_shallow_strings");
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // start the cloned string-slot fixup loop from the first live indexed-array slot
@@ -248,6 +265,21 @@ fn emit_array_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, 1");                                          // advance to the next live child-pointer slot in the cloned indexed-array payload
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // persist the next child slot index across the following retain call
     emitter.instruction("jmp __rt_array_clone_shallow_refs_loop");              // continue retaining live child pointers for the cloned indexed array
+    emitter.label("__rt_array_clone_shallow_boxes");
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // start the boxed-slot fixup loop from the first live slot
+    emitter.label("__rt_array_clone_shallow_boxes_loop");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // reload the current box slot index after any nested call
+    emitter.instruction("cmp r10, r12");                                        // have we visited every live box slot?
+    emitter.instruction("jae __rt_array_clone_shallow_done");                   // finish once every box slot is fixed up
+    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // reload the cloned indexed-array pointer
+    emitter.instruction("mov rax, QWORD PTR [r8 + r10 * 8 + 24]");              // load the copied box pointer
+    emitter.instruction("call __rt_ref_copy_slot");                             // rax = what the clone holds, retained for it
+    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // restore the slot index after the call
+    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // reload the cloned indexed-array pointer after the call
+    emitter.instruction("mov QWORD PTR [r8 + r10 * 8 + 24], rax");              // install it in the cloned slot
+    emitter.instruction("add r10, 1");                                          // advance to the next box slot
+    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // persist the next slot index across the following call
+    emitter.instruction("jmp __rt_array_clone_shallow_boxes_loop");             // continue with the next box
     emitter.label("__rt_array_clone_shallow_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // return the cloned indexed-array pointer in the x86_64 integer result register
     emitter.instruction("add rsp, 32");                                         // release the spill slots used below the saved callee-saved registers

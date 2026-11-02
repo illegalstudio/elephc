@@ -21,6 +21,8 @@ use crate::errors::EvalStatus;
 #[cfg(not(test))]
 use crate::interpreter::eval_dynamic_destructor_for_object_cell;
 #[cfg(not(test))]
+use crate::interpreter::eval_json_encode_serialized_object;
+#[cfg(not(test))]
 use crate::interpreter::eval_object_clone_with_properties_for_ffi;
 #[cfg(not(test))]
 use crate::interpreter::RuntimeValueOps;
@@ -29,13 +31,63 @@ use crate::runtime_hooks::{self, ElephcRuntimeOps};
 #[cfg(not(test))]
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-static DYNAMIC_DESTRUCTOR_CONTEXTS: OnceLock<Mutex<HashMap<u64, usize>>> = OnceLock::new();
+/// Hashes an object address for the owner registry.
+///
+/// The runtime asks this registry about EVERY object it frees once the bridge is linked, and
+/// SipHash on those lookups was 4% of a Symfony request. Addresses are not adversarial input,
+/// only aligned: the low four bits carry nothing, and the bucket is taken from the low bits, so
+/// they are dropped before a multiplicative mix whose high half is folded back down.
+#[derive(Default)]
+struct ObjectAddressHasher(u64);
+
+impl Hasher for ObjectAddressHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0.rotate_left(8) ^ u64::from(*byte)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+
+    fn write_u64(&mut self, address: u64) {
+        let mixed = (address >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        self.0 = mixed ^ (mixed >> 32);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+type ObjectOwnerMap = HashMap<u64, usize, BuildHasherDefault<ObjectAddressHasher>>;
+
+static DYNAMIC_DESTRUCTOR_CONTEXTS: OnceLock<Mutex<ObjectOwnerMap>> = OnceLock::new();
+
+/// Buckets in the owner filter. Must match `EVAL_OWNER_FILTER_MASK` in the generated runtime,
+/// which picks a bucket as `(identity >> 4) & (OWNER_FILTER_BUCKETS - 1)`.
+pub(crate) const OWNER_FILTER_BUCKETS: usize = 4096;
+
+/// How many registered identities fall in each bucket, read by generated code without a call.
+///
+/// WHY. Once the bridge is linked, every non-final method call and declared-property read on a
+/// typed receiver asks this registry whether the receiver is eval-owned, and every object free
+/// asks it for an eval destructor: some 900 calls and a mutex per Symfony request, for a map
+/// that holds a handful of objects. A zero bucket answers "no owner" for all of them. The counts
+/// change only under the registry mutex and always equal the map's membership per bucket, so a
+/// zero is exact; a non-zero bucket only means "ask".
+static OWNER_FILTER: [AtomicU32; OWNER_FILTER_BUCKETS] =
+    [const { AtomicU32::new(0) }; OWNER_FILTER_BUCKETS];
+
+/// Returns the filter bucket of one object identity, as the generated probe computes it.
+fn owner_filter_bucket(identity: u64) -> &'static AtomicU32 {
+    &OWNER_FILTER[(identity >> 4) as usize & (OWNER_FILTER_BUCKETS - 1)]
+}
 
 /// Returns the process-local dynamic object to eval context registry.
-fn dynamic_destructor_contexts() -> &'static Mutex<HashMap<u64, usize>> {
-    DYNAMIC_DESTRUCTOR_CONTEXTS.get_or_init(|| Mutex::new(HashMap::new()))
+fn dynamic_destructor_contexts() -> &'static Mutex<ObjectOwnerMap> {
+    DYNAMIC_DESTRUCTOR_CONTEXTS.get_or_init(|| Mutex::new(ObjectOwnerMap::default()))
 }
 
 /// Reports whether a raw object identity belongs to a live eval-declared class.
@@ -56,6 +108,7 @@ pub(crate) fn install_dynamic_object_destructor_hook() {
     unsafe {
         runtime_hooks::install_dynamic_object_destructor_hook(
             __elephc_eval_dynamic_object_destruct as *const () as usize,
+            OWNER_FILTER.as_ptr() as usize,
         );
         runtime_hooks::install_dynamic_object_clone_hook(
             __elephc_eval_dynamic_object_clone as *const () as usize,
@@ -72,7 +125,9 @@ pub(crate) fn register_dynamic_object_context(identity: u64, context: *mut Eleph
         return;
     }
     if let Ok(mut contexts) = dynamic_destructor_contexts().lock() {
-        contexts.insert(identity, context as usize);
+        if contexts.insert(identity, context as usize).is_none() {
+            owner_filter_bucket(identity).fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -82,7 +137,9 @@ pub(crate) fn unregister_dynamic_object(identity: u64) {
         return;
     }
     if let Ok(mut contexts) = dynamic_destructor_contexts().lock() {
-        contexts.remove(&identity);
+        if contexts.remove(&identity).is_some() {
+            owner_filter_bucket(identity).fetch_sub(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -93,8 +150,39 @@ pub(crate) fn unregister_dynamic_objects_for_context(context: *mut ElephcEvalCon
     }
     let context = context as usize;
     if let Ok(mut contexts) = dynamic_destructor_contexts().lock() {
-        contexts.retain(|_, owner| *owner != context);
+        contexts.retain(|identity, owner| {
+            let keep = *owner != context;
+            if !keep {
+                owner_filter_bucket(*identity).fetch_sub(1, Ordering::Relaxed);
+            }
+            keep
+        });
     }
+}
+
+/// Forgets every dynamic object at a generated web request boundary.
+///
+/// The key is the object's IDENTITY, which is its address in the PHP arena, and `__rt_web_reset`
+/// hands that whole arena back to pure-bump allocation. Keeping the map means the next request's
+/// object lands on a previous request's address and inherits its entry: `__rt_heap_free` then
+/// asks this registry for an owner, gets one, and runs a `__destruct()` belonging to a class the
+/// new object never had, through a context whose own tables were emptied at the same boundary.
+/// Nothing in the map can still be valid after the wipe, so the whole map goes.
+#[cfg(not(test))]
+pub(crate) fn reset_dynamic_object_contexts() {
+    if let Ok(mut contexts) = dynamic_destructor_contexts().lock() {
+        contexts.clear();
+        for bucket in &OWNER_FILTER {
+            bucket.store(0, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Unit tests run a single interpreter context with no registry, so no object has a foreign
+/// owner; the cross-context closure path (`eval_foreign_closure_owner`) then stays inert.
+#[cfg(test)]
+pub(crate) fn dynamic_object_owner_context(_identity: u64) -> Option<*mut ElephcEvalContext> {
+    None
 }
 
 /// Looks up the eval context that owns one dynamic object identity.
@@ -105,14 +193,104 @@ pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcE
     Some(context as *mut ElephcEvalContext)
 }
 
+/// Returns one borrowed cell the owning eval context holds for an object, or zero past the end.
+///
+/// Feeds the native cycle collector's hidden-edge walk (`object_owners::object_gc_child`): see
+/// `ElephcEvalContext::dynamic_object_gc_child`. The owner filter answers most objects, which
+/// have no eval owner, without taking the registry mutex.
+#[cfg(not(test))]
+pub(crate) fn dynamic_object_gc_child(identity: u64, index: usize) -> usize {
+    if identity == 0 || owner_filter_bucket(identity).load(Ordering::Relaxed) == 0 {
+        return 0;
+    }
+    let Some(context) = dynamic_object_owner_context(identity) else { return 0; };
+    let Some(context) = (unsafe { context.as_ref() }) else { return 0; };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
+    context
+        .dynamic_object_gc_child(identity, index)
+        .map_or(0, |cell| cell.as_ptr() as usize)
+}
+
+/// Unit tests have no owner registry, so no object has context-held edges.
+#[cfg(test)]
+pub(crate) fn dynamic_object_gc_child(_identity: u64, _index: usize) -> usize {
+    0
+}
+
+/// Checks an object identity without allocating argument cells or dereferencing the object.
+#[cfg(not(test))]
+#[no_mangle]
+pub extern "C" fn __elephc_eval_object_has_dynamic_owner(identity: u64) -> u64 {
+    u64::from(dynamic_object_owner_context(identity).is_some())
+}
+
+/// Answers what a compiled `json_encode()` should encode for an object the interpreter owns.
+///
+/// Returns an owned boxed Mixed cell -- the object's `jsonSerialize()` result, or an array of its
+/// public properties -- or null when the interpreter does not own the object or cannot answer, in
+/// which case the compiled encoder emits `null`.
+///
+/// # Safety
+/// `object` must be null or a live elephc runtime object pointer.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_json_serialize(object: *mut RuntimeCell) -> *mut RuntimeCell {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_json_serialize");
+    std::panic::catch_unwind(|| unsafe { json_serialize_inner(object) })
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// Executes the serializer body after the exported ABI shim has installed a panic boundary.
+///
+/// # Safety
+/// Mirrors `__elephc_eval_json_serialize`.
+#[cfg(not(test))]
+unsafe fn json_serialize_inner(object: *mut RuntimeCell) -> *mut RuntimeCell {
+    if object.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Some(context) = dynamic_object_owner_context(object as u64) else {
+        return std::ptr::null_mut();
+    };
+    let Some(context) = (unsafe { context.as_mut() }) else {
+        return std::ptr::null_mut();
+    };
+    if context.abi_version() != ABI_VERSION {
+        return std::ptr::null_mut();
+    }
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let Ok(object_cell) = ElephcRuntimeOps::object_from_raw(object) else {
+        return std::ptr::null_mut();
+    };
+    let result = eval_json_encode_serialized_object(object_cell, context, &mut values);
+    let _ = values.release(object_cell);
+    match result {
+        Ok(handle) => handle.as_ptr(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 /// Drops final object metadata after receiver release, preserving it during collector destructors.
 #[cfg(not(test))]
 pub(crate) fn forget_released_object(identity: u64) {
-    let Some(context) = dynamic_object_owner_context(identity) else { return; };
+    let Some(context_ptr) = dynamic_object_owner_context(identity) else { return; };
     // Context teardown unregisters its identities before freeing the context.
-    let Some(context) = (unsafe { context.as_mut() }) else { return; };
+    let Some(context) = (unsafe { context_ptr.as_mut() }) else { return; };
     if context.abi_version() == ABI_VERSION {
-        context.forget_dynamic_object(identity);
+        // The context also owns the object's property overlay values and any array-iterator
+        // storage or lazy-ghost initializer; they are released here, with the identity, and the
+        // context itself is finalized when this was the last thing keeping it alive.
+        let (property_values, should_finalize) = context.forget_dynamic_object(identity);
+        let mut values = ElephcRuntimeOps::with_context(context_ptr as *const ElephcEvalContext);
+        for value in property_values {
+            let _ = values.release(value);
+        }
+        drop(values);
+        if should_finalize {
+            unsafe { crate::ffi::context::finalize_eval_context_free(context_ptr) };
+        }
     }
 }
 
@@ -176,6 +354,7 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_object_destruct(
     object: *mut RuntimeCell,
     throwable_out: *mut *mut RuntimeCell,
 ) -> u64 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_dynamic_object_destruct");
     match std::panic::catch_unwind(|| unsafe { dynamic_object_destruct_inner(object, throwable_out) }) {
         Ok(Ok(status)) => status,
         Ok(Err(_)) | Err(_) => {
@@ -204,6 +383,15 @@ unsafe fn dynamic_object_destruct_inner(
         return Ok(0);
     }
     let identity = object as u64;
+    if crate::eval_trace::enabled() {
+        let owner_class = dynamic_object_owner_context(identity)
+            .and_then(|owner| unsafe { owner.as_ref() })
+            .and_then(|context| context.dynamic_object_class(identity))
+            .map(|class| class.name().to_string());
+        eprintln!(
+            "[elephc-eval-trace] phase=dynamic_object_destruct_begin object={object:p} identity={identity} class={owner_class:?}"
+        );
+    }
     let Some(context) = dynamic_object_owner_context(identity) else {
         return Ok(0);
     };
@@ -215,9 +403,17 @@ unsafe fn dynamic_object_destruct_inner(
         unregister_dynamic_object(identity);
         return Ok(0);
     }
-    if context.dynamic_object_class(identity).is_none() {
-        // Closure metadata may own a foreign eval context needed by its receiver's
-        // destructor. Its final owner callback drops metadata after child release.
+    // A generator the interpreter created is an instance of the compiled `Generator` class, not
+    // of an eval class, but its frame lives in this context and has to go with the object:
+    // `eval_dynamic_destructor_for_object_cell` runs its pending `finally` blocks and drops it.
+    // Returning here left the frame registered under the freed ADDRESS, and the next compiled
+    // generator allocated there was answered for by the dead one -- "finished" before it ran,
+    // so an interpreted `yield from compiled_gen()` produced nothing the second time (every
+    // Twig block after the first rendered empty).
+    if context.dynamic_object_class(identity).is_none() && !context.has_eval_generator(identity) {
+        // Closure metadata may own a foreign eval context needed by its receiver's destructor.
+        // The receiver is owned by the closure object's native child edges, so the final owner
+        // callback (`forget_released_object`) drops the metadata after that child release.
         if context.closure_object_target(identity).is_none() {
             unregister_dynamic_object(identity);
         }

@@ -338,3 +338,36 @@ return call_user_func_array($cb, ["right" => "B", "left" => "A"]);"#,
     assert_eq!(values.output, "Y:");
     assert_eq!(values.get(result), FakeValue::String("AB".to_string()));
 }
+
+/// Verifies a method first-class callable reflects its own method, never a same-named global.
+///
+/// Symfony's `YamlExtension::getFilters()` builds `$this->dump(...)` while var-dumper defines a
+/// global `dump(...$vars)`. Resolving the closure by bare name first made
+/// `(new ReflectionMethod($cb, '__invoke'))->getParameters()` answer with the global's single
+/// variadic, so `debug:twig` printed `yaml_dump` without its parameters.
+#[test]
+fn execute_program_method_closure_reflection_ignores_a_same_named_global_function() {
+    let program = parse_fragment(
+        br##"function dump(...$vars) {
+    return $vars;
+}
+class EvalClosureNameCollisionTarget {
+    public function dump($value, $inline = 0, $dumpObjects = 0) {
+        return "";
+    }
+}
+$cb = (new EvalClosureNameCollisionTarget())->dump(...);
+$params = (new ReflectionMethod($cb, "__invoke"))->getParameters();
+echo count($params); echo ":";
+foreach ($params as $param) { echo $param->getName(); echo ","; }
+return true;"##,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "3:value,inline,dumpObjects,");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}

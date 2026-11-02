@@ -2,7 +2,7 @@
 title: "atan()"
 description: "Returns the arctangent of a number in radians."
 sidebar:
-  order: 558
+  order: 571
 ---
 
 ## atan()

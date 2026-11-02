@@ -64,7 +64,8 @@ pub(super) fn eval_call_arg_default_is_supported(arg: &EvalCallArg) -> bool {
 pub(super) fn eval_array_element_default_is_supported(element: &EvalArrayElement) -> bool {
     match element {
         EvalArrayElement::Value(value) => eval_constant_expression_default_is_supported(value),
-        EvalArrayElement::Reference(_) => false,
+        // A spread has to READ its operand, so it is never a compile-time constant default.
+        EvalArrayElement::Reference(_) | EvalArrayElement::Spread(_) => false,
         EvalArrayElement::KeyValue { key, value } => {
             eval_constant_expression_default_is_supported(key)
                 && eval_constant_expression_default_is_supported(value)

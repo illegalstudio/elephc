@@ -202,6 +202,9 @@ for ($i = 0; $i < 4; $i++) { run(false); run(true); }
 }
 
 /// Preserves a callback-rescued cyclic graph and releases it later without repeating its destructor.
+///
+/// The cycle is collected by an explicit `gc_collect_cycles()`: php 8.5 only buffers the possible
+/// root at `unset()` and prints `missing` for the rescued graph without it.
 #[test]
 fn test_mbstring_destructor_resurrection_cycles() {
     let body = r#"
@@ -221,7 +224,7 @@ function release_saved(KeptCycle $saved): void {
     CycleKeeper::$saved = null;
 }
 function run(bool $fail): void {
-    try { $value = new KeptCycle("cycle", $fail); unset($value); }
+    try { $value = new KeptCycle("cycle", $fail); unset($value); gc_collect_cycles(); }
     catch (Throwable $error) { echo "caught:", $error->getMessage(), "\n"; }
     $saved = CycleKeeper::$saved;
     if ($saved instanceof KeptCycle) { release_saved($saved); }

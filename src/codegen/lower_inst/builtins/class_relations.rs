@@ -19,7 +19,10 @@ use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
-use super::{expect_operand, has_eval_context, lower_eval_class_relation, store_if_result};
+use super::{
+    expect_operand, has_eval_context,
+    lower_eval_class_relation, store_if_result,
+};
 
 enum ClassLikeTarget {
     Class(String),
@@ -39,10 +42,21 @@ pub(crate) fn lower_class_relation(
     if has_eval_context(ctx) {
         return lower_eval_class_relation(ctx, inst, target_value, name);
     }
+    let target_ty = ctx.value_php_type(target_value)?;
+    let runtime_target = match target_ty.codegen_repr() {
+        PhpType::Str => optional_const_string_operand(ctx, target_value)?.is_none(),
+        PhpType::Mixed => true,
+        PhpType::Object(class_name) => lookup_class_name(ctx, &class_name).is_none(),
+        _ => false,
+    };
+    if runtime_target {
+        lower_runtime_class_relation(ctx, target_value, name)?;
+        return store_if_result(ctx, inst);
+    }
 
     let target = resolve_relation_target(ctx, target_value)?;
     if matches!(target, ClassLikeTarget::Unknown) {
-        emit_boxed_bool(ctx, false);
+        emit_unknown_relation_answer(ctx, target_value, name)?;
         return store_if_result(ctx, inst);
     }
 
@@ -50,6 +64,156 @@ pub(crate) fn lower_class_relation(
     emit_string_hash(ctx, &names);
     emit_box_current_value_as_mixed(ctx.emitter, &class_relation_array_type());
     store_if_result(ctx, inst)
+}
+
+/// Resolves a runtime object or class-like name through the compact relation registry.
+fn lower_runtime_class_relation(
+    ctx: &mut FunctionContext<'_>,
+    target: ValueId,
+    name: &str,
+) -> Result<()> {
+    let payload_offset = match name {
+        "class_implements" => 16,
+        "class_parents" => 32,
+        "class_uses" => 48,
+        _ => {
+            return Err(CodegenIrError::unsupported(format!(
+                "class-relation builtin {}",
+                name
+            )));
+        }
+    };
+    materialize_runtime_relation_target_name(ctx, target, name)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // class-like name pointer becomes lookup argument zero
+            ctx.emitter.instruction("mov x1, x2");                              // class-like name length becomes lookup argument one
+            abi::emit_load_int_immediate(ctx.emitter, "x2", payload_offset);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // class-like name pointer becomes lookup argument zero
+            ctx.emitter.instruction("mov rsi, rdx");                            // class-like name length becomes lookup argument one
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", payload_offset);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_class_relation_lookup");
+
+    let found_label = ctx.next_label("class_relation_dynamic_found");
+    let done_label = ctx.next_label("class_relation_dynamic_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));      // materialize the relation hash only for a known target
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // distinguish an unknown name from an empty relation list
+            ctx.emitter.instruction(&format!("jnz {}", found_label));           // materialize the relation hash only for a known target
+        }
+    }
+    emit_unknown_relation_answer(ctx, target, name)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&found_label);
+    if ctx.emitter.target.arch == Arch::AArch64 {
+        ctx.emitter.instruction("mov x0, x1");                                  // relation list pointer becomes hash-builder argument zero
+        ctx.emitter.instruction("mov x1, x2");                                  // relation list count becomes hash-builder argument one
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_from_name_list");
+    emit_box_current_value_as_mixed(ctx.emitter, &class_relation_array_type());
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Answers a relation probe for a name the compile-time registry does not know.
+///
+/// With the eval bridge linked the name may belong to a class an eval declared, so the
+/// process-global eval metadata is asked first; `false` is PHP's answer for a genuinely unknown
+/// name. The boxed answer is left in the result register.
+fn emit_unknown_relation_answer(
+    ctx: &mut FunctionContext<'_>,
+    target: ValueId,
+    name: &str,
+) -> Result<()> {
+    if ctx.module.required_runtime_features.eval_bridge {
+        return super::lower_eval_global_class_relation_to_result(ctx, target, name);
+    }
+    emit_boxed_bool(ctx, false);
+    Ok(())
+}
+
+/// Materializes an object|string gradual target as a runtime class-like name.
+fn materialize_runtime_relation_target_name(
+    ctx: &mut FunctionContext<'_>,
+    target: ValueId,
+    name: &str,
+) -> Result<()> {
+    match ctx.value_php_type(target)?.codegen_repr() {
+        PhpType::Object(_) => {
+            ctx.load_value_to_result(target)?;
+            super::types::emit_dynamic_object_class_name(ctx, name);
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            ctx.load_string_value_to_regs(target, ptr_reg, len_reg)?;
+        }
+        PhpType::Mixed => materialize_gradual_relation_target_name(ctx, target, name)?,
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} target PHP type {:?}",
+                name, other
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Unboxes a gradual class-relation target and accepts only runtime object or string payloads.
+fn materialize_gradual_relation_target_name(
+    ctx: &mut FunctionContext<'_>,
+    target: ValueId,
+    name: &str,
+) -> Result<()> {
+    let object_label = ctx.next_label("class_relation_dynamic_object");
+    let string_label = ctx.next_label("class_relation_dynamic_string");
+    let ready_label = ctx.next_label("class_relation_dynamic_target_ready");
+    ctx.load_value_to_result(target)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // boxed object targets resolve through their runtime class id
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));
+            ctx.emitter.instruction("cmp x0, #1");                              // boxed string targets already carry a class-like name
+            ctx.emitter.instruction(&format!("b.eq {}", string_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // boxed object targets resolve through their runtime class id
+            ctx.emitter.instruction(&format!("je {}", object_label));
+            ctx.emitter.instruction("cmp rax, 1");                              // boxed string targets already carry a class-like name
+            ctx.emitter.instruction(&format!("je {}", string_label));
+        }
+    }
+    super::super::exceptions::emit_type_error(
+        ctx,
+        &format!(
+            "{}(): Argument #1 ($object_or_class) must be of type object|string, mixed given",
+            name
+        ),
+    );
+
+    ctx.emitter.label(&object_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // object payload becomes get_class input
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // object payload becomes get_class input
+    }
+    super::types::emit_dynamic_object_class_name(ctx, name);
+    abi::emit_jump(ctx.emitter, &ready_label);
+
+    ctx.emitter.label(&string_label);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rax, rdi");                                // move the unboxed string pointer into result convention
+        ctx.emitter.instruction("mov rdx, rsi");                                // move the unboxed string length into result convention
+    }
+    ctx.emitter.label(&ready_label);
+    Ok(())
 }
 
 /// Returns the associative string-set type used by class-relation builtins.

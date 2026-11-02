@@ -10,7 +10,7 @@
 
 use super::super::cursor::Cursor;
 use super::super::token::{spanned, SpannedToken, Token};
-use super::identifiers::is_ident_continue;
+use super::identifiers::{is_ident_continue, is_ident_start};
 use crate::errors::CompileError;
 use crate::span::Span;
 use std::iter::Peekable;
@@ -172,6 +172,10 @@ fn interpolate(
                     continue;
                 }
                 input.advance_escape(); // consume '$'
+                if !input.peek_escape().is_some_and(is_ident_start) {
+                    current.push('$');
+                    continue;
+                }
                 let mut name = String::new();
                 while let Some(ch) = input.peek_escape() {
                     if is_ident_continue(ch) {
@@ -750,7 +754,10 @@ fn scan_unicode_escape(
                 ));
             }
             if let Some(scalar) = char::from_u32(value) {
-                push_literal_char(scalar, out);
+                // An ESCAPE names a codepoint, never a raw source byte, so even U+E000..U+E0FF
+                // takes the general encoding: `"\u{e000}"` is the three bytes EE 80 80, which
+                // `push_literal_char` would have kept as the byte marker for 0x00.
+                crate::string_bytes::push_literal_char(scalar, out);
             } else if (0xd800..=0xdfff).contains(&value) {
                 push_codepoint_utf8_bytes(value, out);
             } else {
@@ -797,5 +804,14 @@ fn push_byte_escape(byte: u8, out: &mut String) {
 
 /// Appends a single literal character to `out` using the runtime literal helper.
 fn push_literal_char(ch: char, out: &mut String) {
+    // A char in the byte-marker range reached the lexer from `source::decode_physical_source`,
+    // the ONLY producer of one: a source that spells such a char itself is normalised there
+    // first. So it means "one raw byte" and must survive to `string_bytes::literal_bytes`
+    // unchanged -- re-encoding it through the general collision rule turned a raw `0xA9` source
+    // byte into the three bytes of U+E0A9.
+    if ('\u{e000}'..='\u{e0ff}').contains(&ch) {
+        out.push(ch);
+        return;
+    }
     crate::string_bytes::push_literal_char(ch, out);
 }

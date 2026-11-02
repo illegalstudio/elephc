@@ -81,7 +81,9 @@ pub(super) fn conditional_declarations(body: &[Stmt]) -> HashSet<String> {
             | StmtKind::StaticPropertyArrayPush { .. } | StmtKind::StaticPropertyArrayAssign { .. }
             | StmtKind::PropertyArrayPush { .. } | StmtKind::PropertyArrayAssign { .. }
             | StmtKind::ExternFunctionDecl { .. } | StmtKind::ExternClassDecl { .. }
-            | StmtKind::ExternGlobalDecl { .. } => {}
+            | StmtKind::ExternGlobalDecl { .. } | StmtKind::ClassLikeActivate { .. }
+            | StmtKind::PropertyRefAssign { .. } | StmtKind::StaticPropertyElementRefAssign { .. }
+            | StmtKind::DynamicStaticPropertyWrite { .. } => {}
         }
     }
     names

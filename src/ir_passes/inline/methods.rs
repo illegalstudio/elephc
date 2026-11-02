@@ -418,6 +418,12 @@ fn op_is_frame_independent(op: Op) -> bool {
             | Op::StrLen
             | Op::StrPersist
             | Op::ReturnBoundaryMixedToInt
+            // Calls into register-preserving runtime helpers that number a `new`'s object before
+            // its arguments run; they consult neither the frame nor the function identity.
+            | Op::MixedBox
+            | Op::ObjectHandleReserve
+            | Op::ObjectHandlePend
+            | Op::ObjectHandleUnpend
             // A message fixed at lowering, such as a receiver null check an earlier round
             // spliced into this body: `emit_error` reads nothing from the frame.
             | Op::ThrowError

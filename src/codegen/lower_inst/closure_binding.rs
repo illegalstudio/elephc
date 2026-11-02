@@ -78,6 +78,10 @@ fn lower_scoped_bind(
     if let Some(object_scope) = object_scope {
         emit_object_scope_class_id(ctx, object_scope)?;
         abi::emit_store_to_sp(ctx.emitter, result, 24);
+    } else {
+        // A compile-time scope that no variant serves is stamped like a runtime one below.
+        abi::emit_load_int_immediate(ctx.emitter, result, scope.map(i64::from).unwrap_or(-1));
+        abi::emit_store_to_sp(ctx.emitter, result, 24);
     }
     let entry = abi::secondary_scratch_reg(ctx.emitter);
     let candidate = abi::tertiary_scratch_reg(ctx.emitter);
@@ -102,9 +106,11 @@ fn lower_scoped_bind(
         }
         ctx.emitter.label(&next_scope);
     }
-    // -- an incompatible capture layout must not silently keep the wrong lexical scope --
-    abi::emit_release_temporary_stack(ctx.emitter, 64);
-    exceptions::emit_error(ctx, "Native closure binding cannot apply the requested scope to this callable");
+    // -- a closure no variant serves (a static one, one with only `use` captures, or one whose
+    // scope rides in the hidden scope capture) is bound plainly and stamped at run time below --
+    let plain = ctx.next_label("closure_scope_plain_bind");
+    let finish = ctx.next_label("closure_scope_bound");
+    abi::emit_jump(ctx.emitter, &plain);
     for (_, _, header, matched) in &headers {
         ctx.emitter.label(matched);
         abi::emit_symbol_address(ctx.emitter, result, header);
@@ -121,8 +127,89 @@ fn lower_scoped_bind(
         abi::emit_load_from_address(ctx.emitter, entry, candidate, offset);
         abi::emit_store_to_address(ctx.emitter, entry, result, offset);
     }
+    {
+        // A selected variant already has its compile-time lexical class; a closure that ALSO
+        // carries the hidden scope capture (`self::class`, `static::class`, `parent::`, runtime
+        // member names read it) needs the stamp as well, and the plain path needs nothing else.
+        let stamp = ctx.next_label("closure_scope_stamp");
+        abi::emit_jump(ctx.emitter, &stamp);
+        ctx.emitter.label(&plain);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 8);
+        abi::emit_call_label(ctx.emitter, "__rt_closure_bind");
+        ctx.emitter.label(&stamp);
+        abi::emit_store_to_sp(ctx.emitter, result, 40);
+        abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), result);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 24);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("add x1, x1, #1"),         // encode the class id as id + 1 so a miss (-1) stays "unchanged" (0)
+            Arch::X86_64 => ctx.emitter.instruction("add rsi, 1"),              // encode the class id as id + 1 so a miss (-1) stays "unchanged" (0)
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_closure_set_scope");
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 40);
+        ctx.emitter.label(&finish);
+        if let Some(object_scope) = object_scope {
+            emit_interpreted_scope_stamp(ctx, object_scope)?;
+        }
+    }
     abi::emit_release_temporary_stack(ctx.emitter, 64);
     store_if_result(ctx, inst)
+}
+
+/// Stamps a bound copy with an interpreter-declared scope class (the "negative stamp").
+///
+/// The variants only know compiled classes: a runtime scope naming a class that only the
+/// interpreter declared resolves to id -1 (or to stdClass, which carries eval-declared objects),
+/// so the copy kept global scope. When the program links the interpreter, ask it for the scope's
+/// interned name record and stamp it, with bit 63 set, into the copy's hidden scope capture
+/// (`__rt_closure_set_scope`; a no-op for a closure without one). The eval bridges read it back in
+/// `scope_context::emit_effective_scope_name`. The bound descriptor is in the result register on
+/// entry and exit; the scope operand is the boxed value saved in slot 16 and its class id in 24.
+fn emit_interpreted_scope_stamp(ctx: &mut FunctionContext<'_>, scope: ValueId) -> Result<()> {
+    if ctx.value_php_type(scope)?.codegen_repr() != PhpType::Mixed
+        || !crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module)
+    {
+        return Ok(());
+    }
+    let result = abi::int_result_reg(ctx.emitter);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    let ask = ctx.next_label("closure_scope_ask_interpreter");
+    let done = ctx.next_label("closure_scope_interpreted_done");
+    abi::emit_store_to_sp(ctx.emitter, result, 40);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 24);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, -1);
+    ctx.emitter.instruction(&format!("cmp {result}, {scratch}"));               // a name no compiled class has?
+    abi::emit_branch_if_equal_wide(ctx.emitter, &ask);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_stdclass_class_id", 0);
+    ctx.emitter.instruction(&format!("cmp {result}, {scratch}"));               // stdClass also carries eval-declared objects
+    abi::emit_branch_if_equal_wide(ctx.emitter, &ask);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&ask);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);                    // a null scope names nothing
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rsi, rdi");                                // payload low word becomes the second argument
+        ctx.emitter.instruction("mov rdi, rax");                                // runtime tag becomes the first argument
+    }
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_name_token");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);                    // the interpreter does not know it: keep the compiled scope
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("orr x1, x0, #0x8000000000000000");         // bit 63 marks a name record, not a class id
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 40);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                            // the interned name record
+            ctx.emitter.instruction("bts rsi, 63");                             // bit 63 marks a name record, not a class id
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 40);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_closure_set_scope");
+    ctx.emitter.label(&done);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 40);
+    Ok(())
 }
 
 /// Extracts the class of an explicit object scope, accepting boxed nullable object storage.
@@ -143,7 +230,26 @@ fn emit_object_scope_class_id(ctx: &mut FunctionContext<'_>, scope: ValueId) -> 
         ctx.emitter.instruction(&format!("cmp {scratch}, {}", abi::tertiary_scratch_reg(ctx.emitter))); // every supported non-null scope is an object
         let object = ctx.next_label("closure_scope_object");
         abi::emit_branch_if_equal_wide(ctx.emitter, &object);
+        // php accepts any string naming a class at run time as the scope; a name no compiled
+        // class has resolves to -1, which selects the global scope.
+        abi::emit_load_int_immediate(ctx.emitter, abi::tertiary_scratch_reg(ctx.emitter), 1);
+        ctx.emitter.instruction(&format!("cmp {scratch}, {}", abi::tertiary_scratch_reg(ctx.emitter))); // a boxed string names the scope class
+        let string = ctx.next_label("closure_scope_string");
+        abi::emit_branch_if_equal_wide(ctx.emitter, &string);
         abi::emit_jump(ctx.emitter, &invalid);
+        ctx.emitter.label(&string);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("ldr x1, [{result}, #16]"));  // string length becomes helper arg1
+                ctx.emitter.instruction(&format!("ldr x0, [{result}, #8]"));   // string pointer becomes helper arg0
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("mov rsi, QWORD PTR [{result} + 16]")); // string length becomes helper arg1
+                ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [{result} + 8]"));  // string pointer becomes helper arg0
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_class_id_by_name");
+        abi::emit_jump(ctx.emitter, &done);
         ctx.emitter.label(&object);
         abi::emit_load_from_address(ctx.emitter, result, result, 8);
     }
@@ -155,7 +261,7 @@ fn emit_object_scope_class_id(ctx: &mut FunctionContext<'_>, scope: ValueId) -> 
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&invalid);
     abi::emit_release_temporary_stack(ctx.emitter, 64);
-    exceptions::emit_error(ctx, "Native closure binding needs an object or null for this runtime scope");
+    exceptions::emit_error(ctx, "Native closure binding needs an object, a class name or null for this runtime scope");
     ctx.emitter.label(&done);
     Ok(())
 }

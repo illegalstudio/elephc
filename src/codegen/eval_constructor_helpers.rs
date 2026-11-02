@@ -36,10 +36,23 @@ use super::eval_ref_arg_helpers::{
     eval_normalized_ref_params, eval_ref_arg_slots, eval_signature_ref_params_supported,
     emit_aarch64_write_back_ref_args, emit_acquire_mixed_ref_args, emit_x86_64_write_back_ref_args,
 };
+use super::eval_callable_helpers::{EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET, EVAL_ARG_BOXED_VALUE_X86_64_OFFSET,
+    EVAL_ARG_CONTEXT_AARCH64_OFFSET};
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
+use super::class_id_dispatch::{emit_class_id_switch, ClassIdSwitch};
 use super::eval_argument_helpers::emit_borrowed_string_arg;
 
-const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
+/// Every builtin Throwable the eval bridge can construct from a runtime string.
+///
+/// ONE LIST, TWO HALVES, AND THEY MUST NOT DRIFT. This side emits a constructor helper for each
+/// of these whenever `eval_bridge` is required; `codegen::runtime_metadata::classes::
+/// seed_runtime_throwable_class_names` reads the same list under the same gate to keep the
+/// ALLOCATION half — the `_classes_by_name` entry `__rt_new_by_name` scans — in step. A name
+/// present here but absent there ships a constructor for a class that cannot be allocated:
+/// `__rt_new_by_name` answers null, `RuntimeValueOps::new_object` turns that into
+/// `EvalStatus::RuntimeFatal`, and the interpreter reports a fatal where PHP throws a catchable
+/// Throwable. Add a class here and both halves follow.
+pub(in crate::codegen) const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "ClosedGeneratorException",
     "CompileError",
     "ParseError",
@@ -115,7 +128,7 @@ pub(super) fn emit_eval_constructor_helpers(
     data: &mut DataSection,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
-    if !module_uses_eval(module) {
+    if !module.required_runtime_features.eval_bridge {
         return;
     }
     let slots = collect_eval_constructor_slots(module);
@@ -172,12 +185,44 @@ fn collect_eval_constructor_slots(module: &Module) -> Vec<EvalConstructorSlot> {
 }
 
 /// Collects compact builtin Throwable class ids that eval can initialize directly.
+///
+/// THE INHERITING SUBCLASSES BELONG HERE TOO, and leaving them out is a fatal, not a
+/// missing optimization. A builtin Throwable's `__construct` has no EIR body — AOT
+/// `new Exception(...)` lowers to a runtime helper, never to an `Exception::__construct`
+/// function — so `collect_class_constructor_slot` can never build a slot for a class that
+/// INHERITS that constructor. Such a class then matches neither dispatch: not this one
+/// (its own id is not a builtin id) and not the slot table (it has no slot). The
+/// interpreter has meanwhile resolved the declaring class, so the trailing
+/// "resolved target matched no slot" branch reports failure and the bridge raises
+/// `EvalStatus::RuntimeFatal` where PHP constructs the object.
+///
+/// Measured against `php -n` 8.5.10: an AOT class `AotEx extends InvalidArgumentException`
+/// declaring no constructor, instantiated from a runtime-included file, printed
+/// `Fatal error: eval() runtime failed: unsupported NewObject expression` and exited 1,
+/// where PHP printed `caught:AotEx:boom`. This is Symfony's `EnvNotFoundException`, which
+/// blocked the `--web` request at `EnvVarProcessor.php:224`.
+///
+/// Running the builtin initializer for them is correct, not a fallback: PHP resolves
+/// `new AotEx($m)` to `Exception::__construct`, and the object carries the inherited
+/// throwable fields at the same offsets because it descends from the builtin.
 fn collect_builtin_throwable_constructor_class_ids(module: &Module) -> Vec<u64> {
     let mut class_ids = BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES
         .iter()
         .filter_map(|class_name| module.class_infos.get(*class_name))
         .map(|class_info| class_info.class_id)
         .collect::<Vec<_>>();
+    let constructor_key = php_symbol_key("__construct");
+    for class_info in module.class_infos.values() {
+        let Some(impl_class) = class_info.method_impl_classes.get(&constructor_key) else {
+            continue;
+        };
+        if BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES
+            .iter()
+            .any(|builtin| *builtin == impl_class.trim_start_matches('\\'))
+        {
+            class_ids.push(class_info.class_id);
+        }
+    }
     class_ids.sort_unstable();
     class_ids.dedup();
     class_ids
@@ -311,7 +356,10 @@ fn constructor_param_supported(ty: &PhpType) -> bool {
     )
 }
 
-/// Emits `__elephc_eval_value_construct_object(Mixed*, MixedArray*, scope, scope_len, ctx) -> bool`.
+/// Emits `__elephc_eval_value_construct_object(Mixed*, MixedArray*, scope, scope_len, ctx, target, target_len) -> bool`.
+///
+/// A null target dispatches from the receiver class id. A non-null target selects the resolved
+/// AOT declaring class, allowing an eval-declared subclass to invoke an inherited constructor.
 fn emit_constructor_helper(
     module: &Module,
     emitter: &mut Emitter,
@@ -369,6 +417,8 @@ fn emit_constructor_aarch64(
     emitter.instruction("str x3, [sp, #8]");                                    // save the active eval class-scope length
     emitter.instruction("str x1, [sp, #24]");                                   // save the boxed eval argument array
     emitter.instruction("str x4, [sp, #64]");                                   // save the active eval context for callable descriptors
+    emitter.instruction("str x5, [sp, #40]");                                   // save an optional resolved AOT constructor target name
+    emitter.instruction("str x6, [sp, #72]");                                   // save the optional AOT constructor target name length
     emitter.instruction(&format!("cbz x0, {}", success_label));                 // a null object pointer means there is nothing to construct
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
@@ -383,6 +433,7 @@ fn emit_constructor_aarch64(
         success_label,
         callable_support,
     );
+    emit_aarch64_constructor_dispatch_target(emitter);
     emit_aarch64_constructor_dispatch(
         module,
         emitter,
@@ -392,7 +443,9 @@ fn emit_constructor_aarch64(
         success_label,
         callable_support,
     );
-    emitter.instruction(&format!("b {}", success_label));                       // no constructor metadata matched this class id
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the optional resolved AOT constructor target name
+    emitter.instruction(&format!("cbnz x9, {}", fail_label));                   // a resolved target must match one generated constructor slot
+    emitter.instruction(&format!("b {}", success_label));                       // no receiver constructor metadata means a PHP no-op
     emitter.label(fail_label);
     emitter.instruction("mov x0, #0");                                          // report constructor dispatch failure to Rust
     emitter.instruction(&format!("b {}", done_label));                          // skip the success result after a failure
@@ -425,6 +478,7 @@ fn emit_constructor_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the active eval class-scope length
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the boxed eval argument array
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the active eval context for callable descriptors
+    emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save an optional resolved AOT constructor target name
     emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", success_label));                      // a null object pointer means there is nothing to construct
     emitter.instruction("mov rax, rdi");                                        // move the receiver into the mixed-unbox input register
@@ -441,6 +495,7 @@ fn emit_constructor_x86_64(
         success_label,
         callable_support,
     );
+    emit_x86_64_constructor_dispatch_target(emitter);
     emit_x86_64_constructor_dispatch(
         module,
         emitter,
@@ -450,7 +505,10 @@ fn emit_constructor_x86_64(
         success_label,
         callable_support,
     );
-    emitter.instruction(&format!("jmp {}", success_label));                     // no constructor metadata matched this class id
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the optional resolved AOT constructor target name
+    emitter.instruction("test r11, r11");                                       // did the interpreter resolve an inherited AOT constructor?
+    emitter.instruction(&format!("jne {}", fail_label));                        // a resolved target must match one generated constructor slot
+    emitter.instruction(&format!("jmp {}", success_label));                     // no receiver constructor metadata means a PHP no-op
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // report constructor dispatch failure to Rust
     emitter.instruction(&format!("jmp {}", done_label));                        // skip the success result after a failure
@@ -565,13 +623,17 @@ fn emit_aarch64_builtin_throwable_constructor_dispatch(
     success_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
-    for class_id in class_ids {
-        let next_label = format!("__elephc_eval_builtin_throwable_next_{}", class_id);
-        emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this builtin class test
-        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for builtin constructor dispatch
-        abi::emit_load_int_immediate(emitter, "x10", *class_id as i64);
-        emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this builtin Throwable class
-        emitter.instruction(&format!("b.ne {}", next_label));                   // try the next builtin Throwable class when ids differ
+    let ids = sorted_class_ids(class_ids);
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("ldr {}, [sp, #16]", reg));                // reload the unboxed object pointer before this builtin class test
+        emitter.instruction(&format!("ldr {0}, [{0}]", reg));                   // load the receiver class id for builtin constructor dispatch
+    };
+    let switch = ClassIdSwitch {
+        load_id: &load_id,
+        stem: "__elephc_eval_builtin_throwable",
+        suffix: "",
+    };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, _| {
         emit_aarch64_builtin_throwable_constructor_body(
             module,
             emitter,
@@ -580,8 +642,7 @@ fn emit_aarch64_builtin_throwable_constructor_dispatch(
             success_label,
             callable_support,
         );
-        emitter.label(&next_label);
-    }
+    });
 }
 
 /// Emits x86_64 dispatch for compact builtin Throwable constructors.
@@ -594,13 +655,17 @@ fn emit_x86_64_builtin_throwable_constructor_dispatch(
     success_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
-    for class_id in class_ids {
-        let next_label = format!("__elephc_eval_builtin_throwable_next_{}_x", class_id);
-        emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this builtin class test
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for builtin constructor dispatch
-        abi::emit_load_int_immediate(emitter, "r10", *class_id as i64);
-        emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this builtin Throwable class
-        emitter.instruction(&format!("jne {}", next_label));                    // try the next builtin Throwable class when ids differ
+    let ids = sorted_class_ids(class_ids);
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("mov {}, QWORD PTR [rbp - 24]", reg));     // reload the unboxed object pointer before this builtin class test
+        emitter.instruction(&format!("mov {0}, QWORD PTR [{0}]", reg));         // load the receiver class id for builtin constructor dispatch
+    };
+    let switch = ClassIdSwitch {
+        load_id: &load_id,
+        stem: "__elephc_eval_builtin_throwable",
+        suffix: "_x",
+    };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, _| {
         emit_x86_64_builtin_throwable_constructor_body(
             module,
             emitter,
@@ -609,8 +674,15 @@ fn emit_x86_64_builtin_throwable_constructor_dispatch(
             success_label,
             callable_support,
         );
-        emitter.label(&next_label);
-    }
+    });
+}
+
+/// The builtin Throwable class ids in ascending order, as the class-id switch needs them.
+pub(super) fn sorted_class_ids(class_ids: &[u64]) -> Vec<u64> {
+    let mut ids = class_ids.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 /// Initializes the compact Throwable payload for eval-created ARM64 builtin exceptions.
@@ -726,7 +798,7 @@ fn emit_aarch64_builtin_throwable_previous_arg(
     emitter.instruction("csel x0, x1, x0, eq");                                 // compact objects instead retain the unboxed previous object
     abi::emit_call_label(emitter, "__rt_incref");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the receiver after retaining its previous owner
-    emitter.instruction("str x0, [x9, #40]");                                   // store the previous owner in the representation its reader and cleanup expect
+    emitter.instruction(&format!("str x0, [x9, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // store the previous owner in the representation its reader and cleanup expect
     emitter.instruction(&format!("b {}", success_label));                       // builtin Throwable construction completed
 }
 
@@ -755,7 +827,7 @@ fn emit_x86_64_builtin_throwable_previous_arg(
     emitter.instruction("cmove rax, rdi");                                      // compact objects instead retain the unboxed previous object
     abi::emit_call_label(emitter, "__rt_incref");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the receiver after retaining its previous owner
-    emitter.instruction("mov QWORD PTR [r11 + 40], rax");                       // store the previous owner in its reader and cleanup representation
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // store the previous owner in its reader and cleanup representation
     emitter.instruction(&format!("jmp {}", success_label));                     // builtin Throwable construction completed
 }
 
@@ -787,6 +859,24 @@ fn emit_x86_64_validate_builtin_throwable_arg_count(
     emitter.instruction(&format!("jg {}", fail_label));                         // reject excess builtin Throwable arguments from eval
 }
 
+/// Selects the constructor dispatch id from either an AOT target name or the receiver on ARM64.
+fn emit_aarch64_constructor_dispatch_target(emitter: &mut Emitter) {
+    let receiver_label = "__elephc_eval_constructor_receiver_target";
+    let done_label = "__elephc_eval_constructor_target_ready";
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the optional resolved AOT constructor target name
+    emitter.instruction(&format!("cbz x9, {}", receiver_label));                // use the receiver class when no declaring target was supplied
+    emitter.instruction("mov x0, x9");                                          // pass the resolved AOT constructor target name to the class registry
+    emitter.instruction("ldr x1, [sp, #72]");                                   // pass the resolved AOT constructor target name length to the class registry
+    abi::emit_call_label(emitter, "__rt_class_id_by_name");
+    emitter.instruction("str x0, [sp, #72]");                                   // retain the selected constructor class id across dispatch tests
+    emitter.instruction(&format!("b {}", done_label));                          // skip receiver-id extraction after a named target lookup
+    emitter.label(receiver_label);
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for receiver-id dispatch
+    emitter.instruction("ldr x9, [x9]");                                        // load the receiver runtime class id
+    emitter.instruction("str x9, [sp, #72]");                                   // retain the receiver constructor class id across dispatch tests
+    emitter.label(done_label);
+}
+
 /// Writes ARM64 empty-message, zero-code, and null-previous Throwable defaults.
 fn emit_aarch64_default_builtin_throwable_fields(emitter: &mut Emitter) {
     emit_release_builtin_throwable_defaults(emitter);
@@ -794,7 +884,25 @@ fn emit_aarch64_default_builtin_throwable_fields(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x9, #8]");                                   // default the message pointer to an empty string payload
     emitter.instruction("str xzr, [x9, #16]");                                  // default the message length to zero
     emitter.instruction("str xzr, [x9, #24]");                                  // default the exception code to zero
-    emitter.instruction("str xzr, [x9, #40]");                                  // default the previous Throwable pointer to null
+    emitter.instruction(&format!("str xzr, [x9, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // default the previous Throwable pointer to null
+}
+
+/// Selects the constructor dispatch id from either an AOT target name or the receiver on x86_64.
+fn emit_x86_64_constructor_dispatch_target(emitter: &mut Emitter) {
+    let receiver_label = "__elephc_eval_constructor_receiver_target_x";
+    let done_label = "__elephc_eval_constructor_target_ready_x";
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the optional resolved AOT constructor target name
+    emitter.instruction("test rdi, rdi");                                       // does the interpreter provide a declaring constructor target?
+    emitter.instruction(&format!("jz {}", receiver_label));                     // use the receiver class when no declaring target was supplied
+    emitter.instruction("mov rsi, QWORD PTR [rbp + 16]");                       // load the seventh C ABI argument holding the target name length
+    abi::emit_call_label(emitter, "__rt_class_id_by_name");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // retain the selected constructor class id across dispatch tests
+    emitter.instruction(&format!("jmp {}", done_label));                        // skip receiver-id extraction after a named target lookup
+    emitter.label(receiver_label);
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for receiver-id dispatch
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the receiver runtime class id
+    emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // retain the receiver constructor class id across dispatch tests
+    emitter.label(done_label);
 }
 
 /// Writes x86_64 empty-message, zero-code, and null-previous Throwable defaults.
@@ -804,7 +912,7 @@ fn emit_x86_64_default_builtin_throwable_fields(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11 + 8], 0");                          // default the message pointer to an empty string payload
     emitter.instruction("mov QWORD PTR [r11 + 16], 0");                         // default the message length to zero
     emitter.instruction("mov QWORD PTR [r11 + 24], 0");                         // default the exception code to zero
-    emitter.instruction("mov QWORD PTR [r11 + 40], 0");                         // default the previous Throwable pointer to null
+    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // default the previous Throwable pointer to null
 }
 
 /// Releases the default owners installed by by-name allocation before compact Throwable setup.
@@ -815,7 +923,7 @@ fn emit_release_builtin_throwable_defaults(emitter: &mut Emitter) {
     };
     let object = abi::symbol_scratch_reg(emitter);
     let value = abi::int_result_reg(emitter);
-    for (offset, release) in [(8, "__rt_heap_free_safe"), (40, "__rt_decref_any")] {
+    for (offset, release) in [(8, "__rt_heap_free_safe"), (crate::codegen_support::throwable_layout::PREVIOUS_OFFSET, "__rt_decref_any")] {
         abi::load_at_offset(emitter, object, object_frame_offset);
         abi::emit_load_from_address(emitter, value, object, offset);
         // Detach before release, since a previous exception may run a user destructor.
@@ -837,14 +945,14 @@ fn emit_aarch64_constructor_dispatch(
     success_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
-    for (class_id, class_slots) in grouped_slots(slots) {
-        let next_label = format!("__elephc_eval_constructor_next_{}", class_id);
-        emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this class test
-        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for constructor dispatch
-        abi::emit_load_int_immediate(emitter, "x10", class_id as i64);
-        emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this constructor class
-        emitter.instruction(&format!("b.ne {}", next_label));                   // try the next constructor class when ids differ
-        for slot in class_slots {
+    let groups = grouped_slots(slots).into_iter().collect::<Vec<_>>();
+    let ids = groups.iter().map(|(class_id, _)| *class_id).collect::<Vec<_>>();
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("ldr {}, [sp, #72]", reg));                // reload the selected constructor dispatch class id
+    };
+    let switch = ClassIdSwitch { load_id: &load_id, stem: "__elephc_eval_constructor", suffix: "" };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, index| {
+        for slot in &groups[index].1 {
             emit_aarch64_constructor_body(
                 module,
                 emitter,
@@ -855,8 +963,7 @@ fn emit_aarch64_constructor_dispatch(
                 callable_support,
             );
         }
-        emitter.label(&next_label);
-    }
+    });
 }
 
 /// Emits x86_64 class-id dispatch for supported constructor bodies.
@@ -869,14 +976,14 @@ fn emit_x86_64_constructor_dispatch(
     success_label: &str,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
-    for (class_id, class_slots) in grouped_slots(slots) {
-        let next_label = format!("__elephc_eval_constructor_next_{}_x", class_id);
-        emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this class test
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for constructor dispatch
-        abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
-        emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this constructor class
-        emitter.instruction(&format!("jne {}", next_label));                    // try the next constructor class when ids differ
-        for slot in class_slots {
+    let groups = grouped_slots(slots).into_iter().collect::<Vec<_>>();
+    let ids = groups.iter().map(|(class_id, _)| *class_id).collect::<Vec<_>>();
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("mov {}, QWORD PTR [rbp - 40]", reg));     // reload the selected constructor dispatch class id
+    };
+    let switch = ClassIdSwitch { load_id: &load_id, stem: "__elephc_eval_constructor", suffix: "_x" };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, index| {
+        for slot in &groups[index].1 {
             emit_x86_64_constructor_body(
                 module,
                 emitter,
@@ -887,8 +994,7 @@ fn emit_x86_64_constructor_dispatch(
                 callable_support,
             );
         }
-        emitter.label(&next_label);
-    }
+    });
 }
 
 /// Emits one ARM64 constructor body or failure branch for an unsupported constructor.
@@ -913,6 +1019,8 @@ fn emit_aarch64_constructor_body(
     emit_aarch64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let body_label = constructor_body_label(module, slot);
     let prep_fail_label = format!("{}_prep_fail", body_label);
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
+    super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
     let (arg_temp_bytes, ref_slots) =
         emit_aarch64_prepare_constructor_args(
             module,
@@ -945,6 +1053,7 @@ fn emit_aarch64_constructor_body(
     );
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_aarch64_constructor_exception_boundary_pop(emitter);
+    super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
     emitter.instruction(&format!("b {}", success_label));                       // constructor returned normally
     emitter.label(&escape_label);
     abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -952,6 +1061,7 @@ fn emit_aarch64_constructor_body(
     emit_aarch64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_aarch64_constructor_exception_boundary_pop(emitter);
+    super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
     emitter.instruction(&format!("b {}", fail_label));                          // return failure after preserving by-reference writes
     emitter.label(&prep_fail_label);
     emit_aarch64_constructor_prep_fail_cleanup(emitter, fail_label);
@@ -979,6 +1089,8 @@ fn emit_x86_64_constructor_body(
     emit_x86_64_validate_constructor_arg_count(module, emitter, slot, fail_label);
     let body_label = constructor_body_label(module, slot);
     let prep_fail_label = format!("{}_prep_fail_x", body_label);
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
+    super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
     let (arg_temp_bytes, ref_slots) =
         emit_x86_64_prepare_constructor_args(
             module,
@@ -1011,6 +1123,7 @@ fn emit_x86_64_constructor_body(
     );
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_x86_64_constructor_exception_boundary_pop(emitter);
+    super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
     emitter.instruction(&format!("jmp {}", success_label));                     // constructor returned normally
     emitter.label(&escape_label);
     abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1018,6 +1131,7 @@ fn emit_x86_64_constructor_body(
     emit_x86_64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
     abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
     emit_x86_64_constructor_exception_boundary_pop(emitter);
+    super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
     emitter.instruction(&format!("jmp {}", fail_label));                        // return failure after preserving by-reference writes
     emitter.label(&prep_fail_label);
     emit_x86_64_constructor_prep_fail_cleanup(emitter, fail_label);
@@ -1153,6 +1267,8 @@ fn emit_aarch64_prepare_constructor_args(
         fail_label,
         callable_support,
     );
+    // The body reserved one zeroed owner slot per by-value callable below these cells.
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("ldr x0, [x29, #-32]");                                 // load the unboxed receiver as the first constructor argument
@@ -1204,6 +1320,12 @@ fn emit_aarch64_prepare_constructor_args(
                     ConstructorArgOwner::Borrowed,
                 );
             }
+            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
+                emitter,
+                &callable_owners,
+                index,
+                ref_slots.len() * 32 + arg_temp_bytes,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1231,6 +1353,8 @@ fn emit_x86_64_prepare_constructor_args(
         fail_label,
         callable_support,
     );
+    // The body reserved one zeroed owner slot per by-value callable below these cells.
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the unboxed receiver as the first constructor argument
@@ -1283,6 +1407,12 @@ fn emit_x86_64_prepare_constructor_args(
                     ConstructorArgOwner::Borrowed,
                 );
             }
+            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
+                emitter,
+                &callable_owners,
+                index,
+                ref_slots.len() * 32 + arg_temp_bytes,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1451,6 +1581,8 @@ fn emit_aarch64_cast_eval_arg(
                 callable_support,
                 label_prefix,
                 fail_label,
+                EVAL_ARG_CONTEXT_AARCH64_OFFSET,
+                EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET,
             );
         }
         PhpType::TaggedScalar => {
@@ -1468,10 +1600,10 @@ fn emit_aarch64_cast_eval_arg(
             emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
         }
         PhpType::Array(_) => {
-            emit_aarch64_cast_eval_array_arg(emitter, param_ty, 4, fail_label, owner);
+            emit_aarch64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label, owner);
         }
         PhpType::AssocArray { .. } => {
-            emit_aarch64_cast_eval_array_arg(emitter, param_ty, 5, fail_label, owner);
+            emit_aarch64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label, owner);
         }
         PhpType::Iterable => {
             emit_aarch64_cast_eval_iterable_arg(
@@ -1505,15 +1637,18 @@ fn emit_aarch64_cast_eval_tagged_scalar_arg(emitter: &mut Emitter, label_prefix:
 fn emit_aarch64_cast_eval_array_arg(
     emitter: &mut Emitter,
     param_ty: &PhpType,
-    expected_tag: i64,
+    label_prefix: &str,
     fail_label: &str,
     owner: ConstructorArgOwner,
 ) {
+    let accepted_label = format!("{label_prefix}_array_accepted");
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the eval array payload for the constructor ABI
-    abi::emit_load_int_immediate(emitter, "x9", expected_tag);
-    emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject array payloads with an incompatible ABI shape
+    emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("b.eq {}", accepted_label));                   // indexed arrays satisfy PHP array parameters
+    emitter.instruction("cmp x0, #5");                                          // runtime tag 5 means associative array
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array payloads for PHP array parameters
+    emitter.label(&accepted_label);
     emitter.instruction("mov x0, x1");                                          // move the unboxed array payload into the result register
     emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
 }
@@ -1617,6 +1752,7 @@ fn emit_x86_64_cast_eval_arg(
                 label_prefix,
                 fail_label,
                 X86_64_CONSTRUCTOR_CONTEXT_FRAME_OFFSET,
+                EVAL_ARG_BOXED_VALUE_X86_64_OFFSET,
             );
         }
         PhpType::TaggedScalar => {
@@ -1634,10 +1770,10 @@ fn emit_x86_64_cast_eval_arg(
             emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
         }
         PhpType::Array(_) => {
-            emit_x86_64_cast_eval_array_arg(emitter, param_ty, 4, fail_label, owner);
+            emit_x86_64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label, owner);
         }
         PhpType::AssocArray { .. } => {
-            emit_x86_64_cast_eval_array_arg(emitter, param_ty, 5, fail_label, owner);
+            emit_x86_64_cast_eval_array_arg(emitter, param_ty, label_prefix, fail_label, owner);
         }
         PhpType::Iterable => {
             emit_x86_64_cast_eval_iterable_arg(
@@ -1669,15 +1805,18 @@ fn emit_x86_64_cast_eval_tagged_scalar_arg(emitter: &mut Emitter, label_prefix: 
 fn emit_x86_64_cast_eval_array_arg(
     emitter: &mut Emitter,
     param_ty: &PhpType,
-    expected_tag: i64,
+    label_prefix: &str,
     fail_label: &str,
     owner: ConstructorArgOwner,
 ) {
+    let accepted_label = format!("{label_prefix}_array_accepted");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // expose the eval array payload for the constructor ABI
-    abi::emit_load_int_immediate(emitter, "r10", expected_tag);
-    emitter.instruction("cmp rax, r10");                                        // compare the eval payload tag with the expected array ABI
-    emitter.instruction(&format!("jne {}", fail_label));                        // reject array payloads with an incompatible ABI shape
+    emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("je {}", accepted_label));                     // indexed arrays satisfy PHP array parameters
+    emitter.instruction("cmp rax, 5");                                          // runtime tag 5 means associative array
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array payloads for PHP array parameters
+    emitter.label(&accepted_label);
     emitter.instruction("mov rax, rdi");                                        // move the unboxed array payload into the result register
     emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
 }
@@ -1894,10 +2033,10 @@ mod catalog_tests {
             assert_eq!(asm.matches("__rt_heap_free_safe").count(), 1, "{name}");
             assert_eq!(asm.matches("__rt_decref_any").count(), 1, "{name}");
             let cleared_previous = match target.arch {
-                super::Arch::AArch64 => "str xzr, [x9, #40]",
-                super::Arch::X86_64 => "mov QWORD PTR [r11 + 40], 0",
+                super::Arch::AArch64 => format!("str xzr, [x9, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET),
+                super::Arch::X86_64 => format!("mov QWORD PTR [r11 + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET),
             };
-            assert!(asm.find(cleared_previous).unwrap() < asm.find("__rt_decref_any").unwrap(), "{name}");
+            assert!(asm.find(cleared_previous.as_str()).unwrap() < asm.find("__rt_decref_any").unwrap(), "{name}");
         }
     }
 
@@ -1914,6 +2053,7 @@ mod catalog_tests {
                     &module,
                     &mut support_emitter,
                     &mut data,
+                    false,
                     false,
                 );
             let mut emitter = super::Emitter::new(target);
@@ -1996,7 +2136,7 @@ mod argument_ownership_tests {
         let mut emitter = Emitter::new(target);
         let mut data = DataSection::new();
         let callable_support =
-            emit_eval_callable_descriptor_support(&module, &mut emitter, &mut data, false);
+            emit_eval_callable_descriptor_support(&module, &mut emitter, &mut data, false, false);
         let slot = constructor_slot(param_ty, by_ref);
         match target.arch {
             Arch::AArch64 => {
@@ -2156,7 +2296,7 @@ mod zero_default_argument_tests {
         let mut emitter = Emitter::new(target);
         let mut data = DataSection::new();
         let callable_support =
-            emit_eval_callable_descriptor_support(&module, &mut emitter, &mut data, false);
+            emit_eval_callable_descriptor_support(&module, &mut emitter, &mut data, false, false);
         let slot = spl_fixed_array_slot();
         match target.arch {
             Arch::AArch64 => {

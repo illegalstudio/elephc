@@ -2,7 +2,7 @@
 title: "linkinfo()"
 description: "Gets information about a link."
 sidebar:
-  order: 291
+  order: 302
 ---
 
 ## linkinfo()

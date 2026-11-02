@@ -138,7 +138,7 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the widened indexed-array pointer
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the target index
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the consumed boxed Mixed value
-    emitter.instruction("bl __rt_array_set_mixed");                             // store the value into packed indexed storage and return the array
+    emitter.instruction("bl __rt_array_set_mixed");                             // store the value; the returned array carries the slot's reference
     emitter.instruction("b __rt_array_set_mixed_key_done");                     // finish after an indexed write
 
     // -- indexed destination + out-of-range int key: promote to hash then set --
@@ -172,8 +172,8 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #48]");                                   // save the promoted merged hash pointer
     emitter.instruction("ldr x0, [sp, #40]");                                   // reload the temporary hash for release
     emitter.instruction("bl __rt_decref_hash");                                 // release the empty temporary hash after the union copy
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source indexed array this promotion abandons
-    emitter.instruction("bl __rt_decref_array");                                // release the reference the lowering acquired: hash_union only BORROWED it
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the indexed source whose reference this write consumed
+    emitter.instruction("bl __rt_decref_array");                                // release it now that the promoted hash holds its entries
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the promoted merged hash for Mixed-box conversion
     emitter.instruction("bl __rt_hash_to_mixed");                               // box union-copied scalar slots as Mixed cells so foreach readback is correct
     emitter.instruction("str x0, [sp, #48]");                                   // save the Mixed-boxed promoted hash pointer (ensure_unique may reallocate)
@@ -216,7 +216,51 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.label("__rt_array_set_mixed_key_hash_string");
     emitter.instruction("bl __rt_hash_normalize_key");                          // normalize the string key payload (x1/x2) into a hash key pair
     emitter.label("__rt_array_set_mixed_key_hash_set");
+    emitter.instruction("str x1, [sp, #24]");                                   // preserve the normalized key low word across value-shape dispatch
+    emitter.instruction("str x2, [sp, #32]");                                   // preserve the normalized key high word across value-shape dispatch
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the existing hash to inspect its homogeneous value type
+    emitter.instruction("ldr x10, [x9, #16]");                                  // load the hash header value_type tag
+    emitter.instruction("cmp x10, #7");                                         // are entries already boxed Mixed cells?
+    emitter.instruction("b.eq __rt_array_set_mixed_key_hash_boxed");            // an already-Mixed hash can consume the incoming box directly
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the consumed boxed value for runtime-tag inspection
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the incoming value tag and payload words
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the hash after the helper call
+    emitter.instruction("ldr x10, [x9, #16]");                                  // reload the expected homogeneous value tag
+    emitter.instruction("cmp x0, x10");                                         // does the replacement preserve the hash's storage representation?
+    emitter.instruction("b.ne __rt_array_set_mixed_key_hash_widen");            // heterogeneous replacement requires a coherent Mixed conversion
+    emitter.instruction("stp x1, x2, [sp, #56]");                               // save the raw payload that will replace the boxed input
+    emitter.instruction("str x0, [sp, #72]");                                   // save the matching runtime value tag
+    emitter.instruction("cmp x0, #1");                                          // strings carry a refcounted payload when heap-backed
+    emitter.instruction("b.eq __rt_array_set_mixed_key_hash_retain_raw");       // retain the raw string payload before releasing its Mixed owner
+    emitter.instruction("cmp x0, #4");                                          // tags below indexed-array are unowned scalars
+    emitter.instruction("b.lo __rt_array_set_mixed_key_hash_raw_ready");        // scalar payloads need no ownership transfer
+    emitter.instruction("cmp x0, #7");                                          // indexed arrays, hashes, objects, and Mixed are refcounted
+    emitter.instruction("b.le __rt_array_set_mixed_key_hash_retain_raw");       // retain container-shaped payloads
+    emitter.instruction("cmp x0, #10");                                         // callable descriptors are refcounted runtime values
+    emitter.instruction("b.eq __rt_array_set_mixed_key_hash_retain_raw");       // retain callable descriptor storage
+    emitter.instruction("cmp x0, #11");                                         // reference cells also own managed runtime storage
+    emitter.instruction("b.ne __rt_array_set_mixed_key_hash_raw_ready");        // other tags are scalar or externally managed
+    emitter.label("__rt_array_set_mixed_key_hash_retain_raw");
+    emitter.instruction("mov x0, x1");                                          // pass the raw payload pointer to the generic heap retain helper
+    emitter.instruction("bl __rt_incref");                                      // create the ownership slot consumed by hash_set
+    emitter.label("__rt_array_set_mixed_key_hash_raw_ready");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the helper-owned Mixed box
+    emitter.instruction("bl __rt_decref_mixed");                                // release that box now that its payload ownership was transferred
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the homogeneous hash pointer
+    emitter.instruction("ldr x1, [sp, #24]");                                   // reload the normalized key low word
+    emitter.instruction("ldr x2, [sp, #32]");                                   // reload the normalized key high word
+    emitter.instruction("ldp x3, x4, [sp, #56]");                               // load the raw replacement payload words
+    emitter.instruction("ldr x5, [sp, #72]");                                   // load the preserved homogeneous value tag
+    emitter.instruction("bl __rt_hash_set");                                    // replace the entry without changing the caller-visible hash representation
+    emitter.instruction("b __rt_array_set_mixed_key_done");                     // the returned hash carries the slot's reference
+    emitter.label("__rt_array_set_mixed_key_hash_widen");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the typed hash that must widen to Mixed entries
+    emitter.instruction("bl __rt_hash_to_mixed");                               // coherently box every existing entry before inserting a different type
+    emitter.instruction("str x0, [sp, #0]");                                    // preserve the possibly COW-relocated Mixed hash pointer
+    emitter.label("__rt_array_set_mixed_key_hash_boxed");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash pointer as the set target
+    emitter.instruction("ldr x1, [sp, #24]");                                   // reload the normalized key low word
+    emitter.instruction("ldr x2, [sp, #32]");                                   // reload the normalized key high word
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the consumed boxed Mixed value
     emitter.instruction("mov x4, #0");                                          // boxed Mixed hash payloads leave the high value word empty
     emitter.instruction("mov x5, #7");                                          // value_type 7 marks the slot as a boxed Mixed pointer
@@ -321,7 +365,7 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the widened indexed-array pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the target index as the indexed-set index argument
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the consumed boxed Mixed value
-    emitter.instruction("call __rt_array_set_mixed");                           // store the value into packed indexed storage and return the array
+    emitter.instruction("call __rt_array_set_mixed");                           // store the value; the returned array carries the slot's reference
     emitter.instruction("jmp __rt_array_set_mixed_key_done");                   // finish after an indexed write
 
     // -- indexed destination + out-of-range int key: promote to hash then set --
@@ -354,8 +398,8 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the promoted merged hash pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the temporary hash for release
     emitter.instruction("call __rt_decref_hash");                               // release the empty temporary hash after the union copy
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source indexed array this promotion abandons
-    emitter.instruction("call __rt_decref_array");                              // release the reference the lowering acquired: hash_union only BORROWED it
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the indexed source whose reference this write consumed
+    emitter.instruction("call __rt_decref_array");                              // release it now that the promoted hash holds its entries
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the promoted merged hash for Mixed-box conversion
     emitter.instruction("call __rt_hash_to_mixed");                             // box union-copied scalar slots as Mixed cells so foreach readback is correct
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the Mixed-boxed promoted hash pointer (ensure_unique may reallocate)
@@ -402,7 +446,53 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_normalize_key");                        // normalize the string key into a hash key pair in rax/rdx
     emitter.instruction("mov rsi, rax");                                        // publish the normalized key low word as the hash key low word
     emitter.label("__rt_array_set_mixed_key_hash_set");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // preserve the normalized key low word across value-shape dispatch
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // preserve the normalized key high word across value-shape dispatch
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the existing hash to inspect its homogeneous value type
+    emitter.instruction("mov r10, QWORD PTR [rdi + 16]");                       // load the hash header value_type tag
+    emitter.instruction("cmp r10, 7");                                          // are entries already boxed Mixed cells?
+    emitter.instruction("je __rt_array_set_mixed_key_hash_boxed");              // an already-Mixed hash can consume the incoming box directly
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the consumed boxed value for runtime-tag inspection
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the incoming value tag and payload words
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash after the helper call
+    emitter.instruction("mov r10, QWORD PTR [r10 + 16]");                       // reload the expected homogeneous value tag
+    emitter.instruction("cmp rax, r10");                                        // does the replacement preserve the hash's storage representation?
+    emitter.instruction("jne __rt_array_set_mixed_key_hash_widen");             // heterogeneous replacement requires a coherent Mixed conversion
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // save the raw low payload that replaces the boxed input
+    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // save the raw high payload word
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the matching runtime value tag
+    emitter.instruction("cmp rax, 1");                                          // strings carry a refcounted payload when heap-backed
+    emitter.instruction("je __rt_array_set_mixed_key_hash_retain_raw");         // retain the raw string payload before releasing its Mixed owner
+    emitter.instruction("cmp rax, 4");                                          // tags below indexed-array are unowned scalars
+    emitter.instruction("jb __rt_array_set_mixed_key_hash_raw_ready");          // scalar payloads need no ownership transfer
+    emitter.instruction("cmp rax, 7");                                          // indexed arrays, hashes, objects, and Mixed are refcounted
+    emitter.instruction("jbe __rt_array_set_mixed_key_hash_retain_raw");        // retain container-shaped payloads
+    emitter.instruction("cmp rax, 10");                                         // callable descriptors are refcounted runtime values
+    emitter.instruction("je __rt_array_set_mixed_key_hash_retain_raw");         // retain callable descriptor storage
+    emitter.instruction("cmp rax, 11");                                         // reference cells also own managed runtime storage
+    emitter.instruction("jne __rt_array_set_mixed_key_hash_raw_ready");         // other tags are scalar or externally managed
+    emitter.label("__rt_array_set_mixed_key_hash_retain_raw");
+    emitter.instruction("mov rax, rdi");                                        // pass the raw payload pointer to the generic heap retain helper
+    emitter.instruction("call __rt_incref");                                    // create the ownership slot consumed by hash_set
+    emitter.label("__rt_array_set_mixed_key_hash_raw_ready");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the helper-owned Mixed box
+    emitter.instruction("call __rt_decref_mixed");                              // release that box now that its payload ownership was transferred
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the homogeneous hash pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the normalized key low word
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the normalized key high word
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // load the raw replacement low payload word
+    emitter.instruction("mov r8, QWORD PTR [rbp - 56]");                        // load the raw replacement high payload word
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // load the preserved homogeneous value tag
+    emitter.instruction("call __rt_hash_set");                                  // replace the entry without changing the caller-visible hash representation
+    emitter.instruction("jmp __rt_array_set_mixed_key_done");                   // the returned hash carries the slot's reference
+    emitter.label("__rt_array_set_mixed_key_hash_widen");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the typed hash that must widen to Mixed entries
+    emitter.instruction("call __rt_hash_to_mixed");                             // coherently box every existing entry before inserting a different type
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the possibly COW-relocated Mixed hash pointer
+    emitter.label("__rt_array_set_mixed_key_hash_boxed");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash pointer as the set target
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload the normalized key low word
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the normalized key high word
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the consumed boxed Mixed value
     emitter.instruction("xor r8, r8");                                          // boxed Mixed hash payloads leave the high value word empty
     emitter.instruction("mov r9, 7");                                           // value_type 7 marks the slot as a boxed Mixed pointer
@@ -427,7 +517,7 @@ mod tests {
             let mut emitter = Emitter::new(target);
             emit_array_set_mixed_key(&mut emitter);
             super::super::super::objects::emit_mixed_array_set(&mut emitter);
-            super::super::super::system::emit_json_encode_mixed(&mut emitter);
+            super::super::super::system::emit_json_encode_mixed(&mut emitter, false);
             let asm = emitter.output();
             assert!(asm.contains("__rt_json_encode_mixed_invoker:"), "{name}");
             assert!(asm.contains("__rt_json_encode_mixed_nested:"), "{name}");

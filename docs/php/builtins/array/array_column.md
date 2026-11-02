@@ -2,13 +2,13 @@
 title: "array_column()"
 description: "Returns the values from a single column of an array of arrays."
 sidebar:
-  order: 4
+  order: 5
 ---
 
 ## array_column()
 
 ```php
-function array_column(array $array, string $column_key): array
+function array_column(array $array, string $column_key, mixed $index_key = null): array
 ```
 
 Returns the values from a single column of an array of arrays.
@@ -16,6 +16,7 @@ Returns the values from a single column of an array of arrays.
 **Parameters**:
 - `$array` (`array`)
 - `$column_key` (`string`)
+- `$index_key` (`mixed`), default `null`, optional
 
 **Returns**: `array`
 

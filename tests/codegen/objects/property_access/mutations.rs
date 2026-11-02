@@ -28,6 +28,423 @@ unset($box);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Verifies element writes into a property the compiler never saw declared. A stdClass built by
+/// `(object) [...]` carries keys no class schema records, so `$state->vars[] = $v` and
+/// `$state->routes[$k] = $v` had no declared slot to name and were refused with "Undefined
+/// property: stdClass::vars" — even though the plain `$state->mark = 7` beside them was accepted.
+/// Symfony's `CompiledUrlMatcherDumper` builds its entire working state exactly this way.
+/// PHP outputs "7|a,b|3|n1,n2|v|5".
+#[test]
+fn test_stdclass_dynamic_property_element_writes() {
+    let out = compile_and_run(
+        r#"<?php
+$state = (object) [
+    'mark' => 0,
+    'vars' => [],
+    'routes' => [],
+];
+
+$state->vars[] = 'a';
+$state->vars[] = 'b';
+$state->routes['x'] = 1;
+$state->routes['y'] = 2;
+$state->mark = 7;
+
+$state->fresh[] = 'n1';
+$state->fresh[] = 'n2';
+$state->keyed['k'] = 'v';
+
+echo $state->mark, '|';
+echo implode(',', $state->vars), '|';
+echo $state->routes['x'] + $state->routes['y'], '|';
+echo implode(',', $state->fresh), '|';
+echo $state->keyed['k'], '|';
+echo count((array) $state);
+"#,
+    );
+    assert_eq!(out, "7|a,b|3|n1,n2|v|5");
+}
+
+/// Verifies the same element writes through `#[\AllowDynamicProperties]`, where an undeclared
+/// property lives in the per-object side table while the declared one keeps its slot.
+/// PHP outputs "p,q|n|1".
+#[test]
+fn test_allow_dynamic_properties_element_writes() {
+    let out = compile_and_run(
+        r#"<?php
+#[\AllowDynamicProperties]
+class Loose {
+    public int $declared = 1;
+}
+
+$loose = new Loose();
+$loose->bag[] = 'p';
+$loose->bag[] = 'q';
+$loose->map['m'] = 'n';
+echo implode(',', $loose->bag), '|', $loose->map['m'], '|', $loose->declared;
+"#,
+    );
+    assert_eq!(out, "p,q|n|1");
+}
+
+/// Verifies prefix increment on a property returns the updated value while mutating the slot.
+#[test]
+fn test_prefix_increment_property_expression_returns_updated_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter { public int $value = 0; }
+$counter = new Counter();
+if (++$counter->value === 1) { echo 'yes'; }
+echo ':' . $counter->value;
+"#,
+    );
+    assert_eq!(out, "yes:1");
+}
+
+/// A prefix increment in an assignment RHS is not misclassified as a discarded postfix statement.
+#[test]
+fn test_prefix_increment_this_property_after_concat_returns_updated_value() {
+    let out = compile_and_run(
+        r#"<?php
+class InlineIdCounter {
+    public string $currentId = 'service';
+    public int $counter = 0;
+    public function nextId(): string {
+        $id = '.autowire_inline.'.$this->currentId.'.'.++$this->counter;
+        return $id;
+    }
+}
+echo (new InlineIdCounter())->nextId();
+"#,
+    );
+    assert_eq!(out, ".autowire_inline.service.1");
+}
+
+/// Verifies coercive typed-property assignment invokes `__toString()` and stores
+/// the resulting string rather than the source object representation.
+#[test]
+fn test_string_property_assignment_accepts_stringable_object() {
+    let out = compile_and_run(
+        r#"<?php
+class PropertyText {
+    public function __toString(): string {
+        return "converted";
+    }
+}
+
+class PropertyTextHolder {
+    public string $value = "";
+
+    public function fill(): void {
+        $this->value = new PropertyText();
+    }
+}
+
+$holder = new PropertyTextHolder();
+$holder->fill();
+echo $holder->value;
+"#,
+    );
+    assert_eq!(out, "converted");
+}
+
+/// Verifies an interface-typed source is checked against a narrower nominal
+/// property at runtime, accepting matching objects and throwing for siblings.
+#[test]
+fn test_nominal_property_assignment_guards_interface_source() {
+    let out = compile_and_run(
+        r#"<?php
+interface PropertyPass {}
+class ExpectedPropertyPass implements PropertyPass {}
+class OtherPropertyPass implements PropertyPass {}
+
+class NominalPropertyHolder {
+    private ExpectedPropertyPass $pass;
+
+    public function set(PropertyPass $pass): void {
+        $this->pass = $pass;
+    }
+
+    public function valid(): bool {
+        return $this->pass instanceof ExpectedPropertyPass;
+    }
+}
+
+$holder = new NominalPropertyHolder();
+$holder->set(new ExpectedPropertyPass());
+echo $holder->valid() ? "ok" : "bad";
+try {
+    $holder->set(new OtherPropertyPass());
+} catch (TypeError $error) {
+    echo ":type";
+}
+"#,
+    );
+    assert_eq!(out, "ok:type");
+}
+
+/// Verifies a nominal property guard retains the borrowed interface parameter it forwards.
+///
+/// The source variable is released before the property is read, so heap debug catches a
+/// guard that labels its result owned without materializing the matching object reference.
+#[test]
+fn test_nominal_property_guard_retains_borrowed_object_parameter() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+interface RetainedPropertyService {}
+
+final class RetainedPropertyServiceImplementation implements RetainedPropertyService {
+    public function label(): string {
+        return 'retained';
+    }
+}
+
+final class RetainedPropertyHolder {
+    private RetainedPropertyServiceImplementation $service;
+
+    public function set(RetainedPropertyService $service): void {
+        $this->service = $service;
+    }
+
+    public function label(): string {
+        return $this->service->label();
+    }
+}
+
+$service = new RetainedPropertyServiceImplementation();
+$holder = new RetainedPropertyHolder();
+$holder->set($service);
+unset($service);
+echo $holder->label();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "retained");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies null coalescing probes a statically undeclared property without a
+/// compile error or runtime read, while still evaluating the receiver once.
+#[test]
+fn test_null_coalesce_accepts_missing_declared_property() {
+    let out = compile_and_run(
+        r#"<?php
+class OptionalPropertyOwner {
+    public static int $constructed = 0;
+
+    public function __construct() {
+        self::$constructed++;
+    }
+}
+
+echo (new OptionalPropertyOwner())->missing ?? "fallback";
+echo ":", OptionalPropertyOwner::$constructed;
+"#,
+    );
+    assert_eq!(out, "fallback:1");
+}
+
+/// Verifies `??` and `??=` treat an uninitialized typed property as null before reading it.
+#[test]
+fn test_null_coalesce_initializes_uninitialized_typed_property() {
+    let out = compile_and_run(
+        r#"<?php
+class LazyTypedProperty {
+    private readonly stdClass $value;
+
+    public function peek(): ?object {
+        return $this->value ?? null;
+    }
+
+    public function resolve(): object {
+        return $this->value ??= new stdClass();
+    }
+}
+
+$box = new LazyTypedProperty();
+var_dump($box->peek());
+echo get_class($box->resolve()), ':', get_class($box->resolve());
+"#,
+    );
+    assert_eq!(out, "NULL\nstdClass:stdClass");
+}
+
+/// Verifies an uninitialized named property keeps its concrete object representation through a
+/// fluent `??=` result, rather than exposing the temporary boxed-null merge cell to the call.
+#[test]
+fn test_null_coalesce_initializes_named_property_for_fluent_call() {
+    let out = compile_and_run(
+        r#"<?php
+interface LazyBuilderParent {}
+
+final class LazyBuilder {
+    private array $mapping;
+
+    public function __construct() {
+        $this->mapping = ['builder' => self::class];
+    }
+
+    public function attach(LazyBuilderParent $parent): self {
+        return $this;
+    }
+
+    public function label(): string {
+        return 'ready';
+    }
+}
+
+final class LazyBuilderHolder implements LazyBuilderParent {
+    private LazyBuilder $builder;
+    private LazyBuilder $statementBuilder;
+    private LazyBuilder $initializedStatementBuilder;
+
+    public function __construct() {
+        $this->initializedStatementBuilder = clone new LazyBuilder();
+    }
+
+    public function resolve(): string {
+        return ($this->builder ??= new LazyBuilder())->attach($this)->label();
+    }
+
+    public function resolveStatement(): string {
+        $this->statementBuilder ??= new LazyBuilder();
+
+        return $this->statementBuilder->attach($this)->label();
+    }
+
+    public function resolveInitializedStatement(): string {
+        $this->initializedStatementBuilder ??= new LazyBuilder();
+
+        return $this->initializedStatementBuilder->attach($this)->label();
+    }
+}
+
+$holder = new LazyBuilderHolder();
+echo $holder->resolve(), ':', $holder->resolveStatement(), ':', $holder->resolveInitializedStatement();
+"#,
+    );
+    assert_eq!(out, "ready:ready:ready");
+}
+
+/// Verifies null-coalescing element assignment autovivifies an uninitialized typed array property.
+#[test]
+fn test_null_coalesce_element_initializes_uninitialized_typed_array_property() {
+    let out = compile_and_run(
+        r#"<?php
+class LazyTypedArrayProperty {
+    private array $items;
+    private array $direct;
+    private array $list;
+    private int $created = 0;
+
+    private function create(): stdClass {
+        ++$this->created;
+        return new stdClass();
+    }
+
+    public function has(string $key): bool {
+        return isset($this->items[$key]);
+    }
+
+    public function resolve(string $key): object {
+        return $this->items[$key] ??= $this->create();
+    }
+
+    public function created(): int {
+        return $this->created;
+    }
+
+    public function writeDirect(string $key, object $value): int {
+        $this->direct[$key] = $value;
+        $this->direct[] = $value;
+        return count($this->direct);
+    }
+
+    public function append(object $value): int {
+        $this->list[] = $value;
+        return count($this->list);
+    }
+}
+
+$box = new LazyTypedArrayProperty();
+var_dump($box->has("service"));
+$first = $box->resolve("service");
+$second = $box->resolve("service");
+echo get_class($first), ":", $first === $second ? "same" : "different", ":", $box->created(), ":",
+     $box->writeDirect("named", new stdClass()), ":", $box->append(new stdClass());
+"#,
+    );
+    assert_eq!(out, "bool(false)\nstdClass:same:1:2:1");
+}
+
+/// Verifies `??=` keeps working when a nullable object parameter uses the gradual receiver path.
+#[test]
+fn test_null_coalesce_assignment_on_nullable_object_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class GradualCoalesceBox {
+    public ?string $name = null;
+}
+
+function resolveGradualName(?GradualCoalesceBox $box): string {
+    return $box->name ??= 'fallback';
+}
+
+$box = new GradualCoalesceBox();
+echo resolveGradualName($box), ':', resolveGradualName($box);
+"#,
+    );
+    assert_eq!(out, "fallback:fallback");
+}
+
+/// Verifies a gradual union crossing a nullable nominal property is checked at runtime.
+#[test]
+fn test_guarded_union_assignment_to_nullable_nominal_property() {
+    let out = compile_and_run(
+        r#"<?php
+class NominalBase {}
+class NominalChild extends NominalBase {}
+class NominalHolder {
+    public ?NominalChild $value = null;
+    public function set(NominalBase|string $candidate): void {
+        $isChild = $candidate instanceof NominalChild;
+        $this->value = $isChild ? $candidate : null;
+    }
+}
+$holder = new NominalHolder();
+$holder->set(new NominalChild());
+echo get_class($holder->value);
+"#,
+    );
+    assert_eq!(out, "NominalChild");
+}
+
+/// Verifies `foreach ($this)` iterates ordinary object properties visible in class scope.
+#[test]
+fn test_foreach_plain_object_properties_inside_class() {
+    let out = compile_and_run(
+        r#"<?php
+class PropertyIterationProbe {
+    public int $publicValue = 1;
+    protected int $protectedValue = 2;
+    private int $privateValue = 3;
+
+    public function dump(): void {
+        foreach ($this as $name => $value) {
+            echo $name, '=', $value, ';';
+        }
+    }
+}
+(new PropertyIterationProbe())->dump();
+"#,
+    );
+    assert_eq!(out, "publicValue=1;protectedValue=2;privateValue=3;");
+}
+
 /// Compiles a loop over an array of class instances, reading the `price` field
 /// of each `Item` object via `$items[$i]->price` and accumulating the sum.
 #[test]
@@ -355,6 +772,32 @@ echo (($row instanceof Row) ? "Row" : "not-row") . ":" . $row->id . ":" . $row->
     assert_eq!(out, "Row:1:Ada");
 }
 
+/// Verifies runtime-named reads and writes dispatch across concrete classes hidden by `object`.
+#[test]
+fn test_dynamic_property_read_write_through_generic_object_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class FirstDynamicPropertyTarget {
+    public int $value = 1;
+}
+
+class SecondDynamicPropertyTarget {
+    public int $value = 2;
+}
+
+function replaceDynamicProperty(object $object, string $name, int $value): int {
+    $object->{$name} = $value;
+    return $object->{$name};
+}
+
+echo replaceDynamicProperty(new FirstDynamicPropertyTarget(), "value", 3);
+echo ":";
+echo replaceDynamicProperty(new SecondDynamicPropertyTarget(), "value", 4);
+"#,
+    );
+    assert_eq!(out, "3:4");
+}
+
 /// Verifies that an untyped `public $headers = []` property (array default)
 /// accepts a string-keyed assignment (`$r->headers["Host"] = ...`) and the
 /// value is retrievable via the same key.
@@ -372,6 +815,38 @@ echo $r->headers["Host"];
 "#,
     );
     assert_eq!(out, "example.com");
+}
+
+/// Verifies a string-key-refined property uses hash storage even before its first keyed write.
+#[test]
+fn test_empty_array_property_default_iterates_before_first_string_key_write() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    private array $items = [];
+
+    public function set(string $key, mixed $value): void {
+        $this->items[$key] = $value;
+    }
+
+    public function sizeByIteration(): int {
+        $size = 0;
+        foreach ($this->items as $value) {
+            $size++;
+        }
+        return $size;
+    }
+}
+
+class ChildRegistry extends Registry {}
+
+$registry = new ChildRegistry();
+echo $registry->sizeByIteration();
+$registry->set('item', 1);
+echo ':', $registry->sizeByIteration();
+"#,
+    );
+    assert_eq!(out, "0:1");
 }
 
 /// Exercises `+=` and `*=` compound assignment on a `public $value` property,
@@ -945,6 +1420,506 @@ var_dump(isset($u->v), $u->v);
     assert_eq!(out, "bool(false)\nbool(true)\nbool(true)\nint(5)\n");
 }
 
+/// Verifies an inherited method sees its private typed slot as uninitialized on a child object.
+#[test]
+fn test_isset_on_inherited_private_uninitialized_typed_property_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+class PrivateTypedBase {
+    private string $path;
+    public function path(): string {
+        if (!isset($this->path)) {
+            $this->path = "initialized";
+        }
+        return $this->path;
+    }
+}
+class PrivateTypedMiddle extends PrivateTypedBase {
+    public string $middle = "middle";
+}
+final class PrivateTypedChild extends PrivateTypedMiddle {
+    public string $child = "child";
+}
+echo (new PrivateTypedChild())->path();
+"#,
+    );
+    assert_eq!(out, "initialized");
+}
+
+/// Verifies a bare `object` receiver selects the runtime class when property names collide.
+#[test]
+fn test_generic_object_property_write_dispatches_by_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class TextPropertyOwner {
+    public string $value = '';
+}
+class ObjectPropertyOwner {
+    public object $value;
+}
+function assignObjectProperty(object $owner, object $value): void {
+    $owner->value = $value;
+}
+$owner = new ObjectPropertyOwner();
+assignObjectProperty($owner, new stdClass());
+echo $owner->value instanceof stdClass ? 'ok' : 'bad';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies an array write through a bare `object` receiver dispatches an anonymous class property
+/// before applying ArrayAccess offset assignment semantics.
+#[test]
+fn test_generic_object_anonymous_property_supports_array_writes() {
+    let out = compile_and_run(
+        r#"<?php
+class AnonymousArrayPropertyFactory {
+    public function fill(object $result, ArrayObject $storage): void {
+        $result->values = $storage;
+        $result->values[0] = 'first';
+    }
+}
+
+$storage = new ArrayObject();
+$value = new class {
+    public $values;
+};
+(new AnonymousArrayPropertyFactory())->fill($value, $storage);
+echo $storage[0];
+"#,
+    );
+    assert_eq!(out, "first");
+}
+
+/// Verifies a nullable attribute instance keeps its runtime class when a same-named property on
+/// another class would otherwise make the static slot guess incompatible with the assigned value.
+#[test]
+fn test_nullable_attribute_property_write_falls_back_to_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class RequestContextCollision {
+    public string $method = '';
+}
+
+#[Attribute(Attribute::TARGET_METHOD)]
+class MethodMarker {
+    private ReflectionMethod $method;
+
+    public static function from(ReflectionMethod $method): ?self {
+        /** @var self|null $self */
+        if (!$self = ($method->getAttributes(self::class)[0] ?? null)?->newInstance()) {
+            return null;
+        }
+        $self->method = $method;
+        return $self;
+    }
+
+    public function name(): string {
+        return $this->method->getName();
+    }
+}
+
+class MarkedHandler {
+    #[MethodMarker]
+    public function run(): void {}
+}
+
+$marker = MethodMarker::from(new ReflectionMethod(MarkedHandler::class, 'run'));
+echo $marker?->name();
+"#,
+    );
+    assert_eq!(out, "run");
+}
+
+/// Verifies append on a nullable array property mutates its boxed property cell in place and
+/// autovivifies the initial null value before retaining subsequent elements.
+#[test]
+fn test_nullable_array_property_push_autovivifies_mixed_cell() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableRows {
+    private ?array $rows = null;
+
+    public function push(string $value): void {
+        $this->rows[] = $value;
+    }
+
+    public function joined(): string {
+        return implode(',', $this->rows);
+    }
+}
+
+$rows = new NullableRows();
+$rows->push('first');
+$rows->push('second');
+echo $rows->joined();
+"#,
+    );
+    assert_eq!(out, "first,second");
+}
+
+/// Verifies that assigning `[]` to an associative instance property preserves hash storage.
+#[test]
+fn test_empty_array_resets_associative_instance_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public array $items = ['seed' => 1];
+
+    public function reset(): void {
+        $this->items = [];
+    }
+}
+$registry = new Registry();
+$registry->reset();
+$registry->items['next'] = 2;
+echo count($registry->items), ':', $registry->items['next'];
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
+/// Verifies resetting a private array property clears prior child-resolution state between calls.
+#[test]
+fn test_private_array_property_reset_clears_prior_search_path() {
+    let out = compile_and_run(
+        r#"<?php
+class ChildPathResolver {
+    private array $currentPath;
+
+    public function resolve(string $parent): string {
+        $this->currentPath = [];
+        $searchKey = array_search($parent, $this->currentPath);
+        $this->currentPath[] = $parent;
+
+        return false !== $searchKey ? 'circular' : 'ok';
+    }
+}
+
+echo eval('$resolver = new ChildPathResolver(); return $resolver->resolve("cache.system") . $resolver->resolve("cache.adapter.system");');
+"#,
+    );
+    assert_eq!(out, "okok");
+}
+
+/// Verifies nested associative writes preserve dynamic keys and sibling adapter values.
+#[test]
+fn test_nested_associative_pool_configuration_preserves_each_adapter() {
+    let out = compile_and_run(
+        r#"<?php
+$config = ['app' => 'cache.adapter.filesystem', 'system' => 'cache.adapter.system', 'pools' => []];
+foreach (['app', 'system'] as $name) {
+    $config['pools']['cache.'.$name] = ['adapters' => [$config[$name]], 'public' => true];
+}
+echo $config['pools']['cache.app']['adapters'][0], ':';
+echo $config['pools']['cache.system']['adapters'][0], ':';
+echo count($config['pools']);
+"#,
+    );
+    assert_eq!(out, "cache.adapter.filesystem:cache.adapter.system:2");
+}
+
+/// Verifies an inherited-definition path does not confuse distinct service ids with a common prefix.
+#[test]
+fn test_array_search_distinguishes_child_definition_parent_service_ids() {
+    let out = compile_and_run(
+        r#"<?php
+$currentPath = [];
+$currentPath[] = 'cache.system';
+$searchKey = array_search('cache.adapter.system', $currentPath);
+$currentPath[] = 'cache.adapter.system';
+echo false !== $searchKey ? 'circular' : implode(' -> ', $currentPath);
+"#,
+    );
+    assert_eq!(out, "cache.system -> cache.adapter.system");
+}
+
+/// Verifies a private string property returned by a getter retains exact array-search semantics.
+#[test]
+fn test_private_string_getter_preserves_child_definition_parent_search() {
+    let out = compile_and_run(
+        r#"<?php
+class ChildDefinitionLike {
+    public function __construct(private string $parent) {}
+
+    public function getParent(): string {
+        return $this->parent;
+    }
+}
+
+$currentPath = ['cache.system'];
+$parent = (new ChildDefinitionLike('cache.adapter.system'))->getParent();
+$searchKey = array_search($parent, $currentPath);
+echo false !== $searchKey ? 'circular' : $parent;
+"#,
+    );
+    assert_eq!(out, "cache.adapter.system");
+}
+
+/// Verifies an eval-created child keeps its private string slot after a broad inherited layout.
+#[test]
+fn test_eval_child_private_string_after_broad_inherited_layout() {
+    let out = compile_and_run(
+        r#"<?php
+class DefinitionLayoutLike {
+    private ?string $class = null;
+    private ?string $file = null;
+    private string|array|null $factory = null;
+    private bool $shared = true;
+    private array $deprecation = [];
+    private array $properties = [];
+    private array $calls = [];
+    private array $instanceof = [];
+    private bool $autoconfigured = false;
+    private string|array|null $configurator = null;
+    private array $tags = [];
+    private bool $public = false;
+    private bool $synthetic = false;
+    private bool $abstract = false;
+    private bool $lazy = false;
+    private ?array $decoratedService = null;
+    private bool $autowired = false;
+    private array $changes = [];
+    private array $bindings = [];
+    private array $errors = [];
+    protected array $arguments = [];
+    public ?string $innerServiceId = null;
+    public ?int $decorationOnInvalid = null;
+    public ?int $decorationPriority = null;
+}
+class ChildDefinitionLayoutLike extends DefinitionLayoutLike {
+    public function __construct(private string $parent) {}
+    public function getParent(): string { return $this->parent; }
+}
+echo eval('$definition = new ChildDefinitionLayoutLike("cache.adapter.system"); return array_search($definition->getParent(), ["cache.system"]) === false ? $definition->getParent() : "circular";');
+"#,
+    );
+    assert_eq!(out, "cache.adapter.system");
+}
+
+/// Verifies nested pool iteration forwards each adapter to its child-definition constructor.
+#[test]
+fn test_nested_pool_iteration_preserves_child_definition_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class ChildDefinitionLike {
+    public function __construct(private string $parent) {}
+    public function getParent(): string { return $this->parent; }
+}
+$config = [
+    'app' => 'cache.adapter.filesystem',
+    'system' => 'cache.adapter.system',
+    'pools' => [],
+];
+foreach (['app', 'system'] as $name) {
+    $config['pools']['cache.'.$name] = ['adapters' => [$config[$name]], 'public' => true];
+}
+$definitions = [];
+foreach ($config['pools'] as $name => $pool) {
+    foreach ($pool['adapters'] as $provider => $adapter) {
+    }
+    $definitions[$name] = new ChildDefinitionLike($adapter);
+}
+echo $definitions['cache.app']->getParent(), ':';
+echo $definitions['cache.system']->getParent();
+"#,
+    );
+    assert_eq!(out, "cache.adapter.filesystem:cache.adapter.system");
+}
+
+/// Verifies a populated service-definition hash distinguishes prefix-sharing service ids.
+#[test]
+fn test_large_service_definition_hash_distinguishes_prefixed_ids() {
+    let out = compile_and_run(
+        r#"<?php
+$definitions = [];
+for ($i = 0; $i < 128; ++$i) {
+    $definitions['service.'.$i] = $i;
+}
+$definitions['cache.adapter.system'] = 'parent';
+$definitions['cache.system'] = 'child';
+echo $definitions['cache.system'], ':';
+echo $definitions['cache.adapter.system'], ':';
+echo count($definitions);
+"#,
+    );
+    assert_eq!(out, "child:parent:130");
+}
+
+/// Verifies that indexed values assigned to an associative property are promoted to hash storage.
+#[test]
+fn test_indexed_array_replaces_associative_instance_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public array $items = ['seed' => 1];
+
+    public function replace(): void {
+        $this->items = [2, 3];
+    }
+}
+$registry = new Registry();
+$registry->replace();
+echo count($registry->items), ':', $registry->items[0], ':', $registry->items[1];
+"#,
+    );
+    assert_eq!(out, "2:2:3");
+}
+
+/// Verifies an array property refined by string-key writes can later receive indexed storage;
+/// numeric keys must survive the representation change alongside subsequent string keys.
+#[test]
+fn test_indexed_array_replaces_string_key_refined_property() {
+    let out = compile_and_run(
+        r#"<?php
+class RefinedRegistry {
+    private array $items = [];
+
+    public function set(string $key, mixed $value): void {
+        $this->items[$key] = $value;
+    }
+
+    public function replace(array $items): void {
+        $this->items = $items;
+    }
+
+    public function values(): array {
+        return $this->items;
+    }
+}
+$registry = new RefinedRegistry();
+$registry->set('seed', 1);
+$registry->replace([2, 3]);
+$registry->set('tail', 4);
+$values = $registry->values();
+echo count($values), ':', $values[0], ':', $values[1], ':', $values['tail'];
+"#,
+    );
+    assert_eq!(out, "3:2:3:4");
+}
+
+/// Verifies runtime `mixed` property names use PHP string coercion for both declared-property
+/// writes and reads instead of reaching the backend as an unmaterializable boxed name.
+#[test]
+fn test_dynamic_property_access_coerces_mixed_string_name() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicNameRow {
+    public mixed $value = null;
+
+    public function write(mixed $name, mixed $value): void {
+        $this->{$name} = $value;
+    }
+
+    public function read(mixed $name): mixed {
+        return $this->{$name};
+    }
+}
+
+$row = new DynamicNameRow();
+$row->write('value', 'ok');
+echo $row->read('value');
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies runtime-named unset dispatch for generic objects, Mixed receivers, and stdClass.
+#[test]
+fn test_dynamic_property_unset_dispatches_and_marks_declared_slots_uninitialized() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicUnsetBox {
+    public string $value = 'live';
+}
+
+function clearObject(object $object, string $name): void {
+    unset($object->$name);
+}
+
+function clearMixed(mixed $object, string $name): void {
+    unset($object->$name);
+}
+
+$first = new DynamicUnsetBox();
+clearObject($first, 'value');
+echo isset($first->value) ? '1' : '0';
+
+$second = new DynamicUnsetBox();
+clearMixed($second, 'value');
+echo isset($second->value) ? '1' : '0';
+
+$dynamic = new stdClass();
+$dynamic->value = 'live';
+clearObject($dynamic, 'value');
+echo isset($dynamic->value) ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "000");
+}
+
+/// Verifies a Mixed source is runtime-checked and widened before entering a declared array slot.
+#[test]
+fn test_mixed_array_values_replace_declared_instance_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeArrayHolder {
+    public array $generic = [];
+    public array $associative = ['seed' => 0];
+
+    public function replaceGeneric(mixed $value): void {
+        $this->generic = $value;
+    }
+
+    public function replaceAssociative(mixed $value): void {
+        $this->associative = $value;
+    }
+}
+
+$holder = new RuntimeArrayHolder();
+$holder->replaceGeneric([1, 'two']);
+$holder->replaceAssociative(['name' => 'value', 'count' => 2]);
+echo $holder->generic[0], ':', $holder->generic[1], '|';
+echo $holder->associative['name'], ':', $holder->associative['count'];
+try {
+    $holder->replaceGeneric('not an array');
+} catch (TypeError $error) {
+    echo '|type';
+}
+"#,
+    );
+    assert_eq!(out, "1:two|value:2|type");
+}
+
+/// Verifies lossless numeric widening and array-to-iterable assignment for typed properties.
+#[test]
+fn test_declared_property_accepts_int_float_widening_and_array_iterable() {
+    let out = compile_and_run(
+        r#"<?php
+class WidenedPropertyHolder {
+    public float $ratio = 0.0;
+    public iterable $values = [];
+
+    public function fill(int $ratio, array $values): void {
+        $this->ratio = $ratio;
+        $this->values = $values;
+    }
+}
+
+$holder = new WidenedPropertyHolder();
+$holder->fill(7, ['left' => 2, 'right' => 3]);
+echo $holder->ratio, ':', count($holder->values);
+foreach ($holder->values as $key => $value) {
+    if ($key === 'right') {
+        echo ':', $value;
+    }
+}
+"#,
+    );
+    assert_eq!(out, "7:2:3");
+}
+
 /// Pins the `??=` container targets that reach the BORROWED-write scope, and the one that does
 /// not.
 ///
@@ -984,12 +1959,13 @@ echo implode(",", $shared->a);
     assert_eq!(out, "1,2,5,owned");
 }
 
-/// The bound on that accept set: an element write through a call result the compiler cannot
-/// place is refused, where PHP accepts it and prints 5. An over-rejection, not a wrong answer —
-/// but it is the reason the shapes above are the whole of what the borrowed-write scope sees.
+/// The bound on that accept set, lifted: an element write through a call result writes a
+/// temporary copy and is otherwise a no-op, which `php -n` 8.5.6 accepts and prints nothing but
+/// `unreachable` for. It used to be refused by the EIR backend ("array set with receiver PHP
+/// type"); the merged Laravel work places the receiver, so the program now runs as php does.
 #[test]
-fn test_coalesce_assign_on_a_returned_array_is_refused() {
-    let error = compile_expect_type_error(
+fn test_coalesce_assign_on_a_returned_array_runs_as_php_does() {
+    let out = compile_and_run(
         r#"<?php
 function mkArr(): array {
     return [1, 2];
@@ -998,11 +1974,108 @@ mkArr()[2] ??= 5;
 echo "unreachable";
 "#,
     );
-    assert!(
-        error.contains("Nested array assignment requires a Mixed or ArrayAccess target"),
-        "expected the nested-assignment refusal, got: {}",
-        error
+    assert_eq!(out, "unreachable");
+}
+
+/// An indexed write auto-initializes an uninitialized typed property, nullable and nested too.
+///
+/// PHP auto-initializes the CONTAINER of an indexed write rather than raising, and `php -n`
+/// 8.5.6 treats `array`, `?array` and an untyped property alike. The nullable case represents
+/// as `Mixed` (every union does), and the nested case reaches the property through a different
+/// lowering than the one-level case, so all three are asserted together: keying the
+/// auto-initialization on the representation missed the first, and the nested parent chain
+/// missed the second.
+#[test]
+fn test_indexed_write_auto_initializes_uninitialized_typed_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag { public array $a; public ?array $na; public $u; }
+$one = new Bag(); $one->a['k'] = 1;      echo count($one->a), ';';
+$two = new Bag(); $two->a[] = 2;         echo count($two->a), ';';
+$three = new Bag(); $three->na['k'] = 3; echo count($three->na), ';';
+$four = new Bag(); $four->u['k'] = 4;    echo count($four->u), ';';
+$five = new Bag(); $five->a['k']['j'] = 5; echo $five->a['k']['j'], ';';
+$six = new Bag(); $six->a['k'] = 6;      echo isset($six->a) ? 'set' : 'unset';
+"#,
     );
+    assert_eq!(out, "1;1;1;1;5;set");
+}
+
+/// Verifies a runtime property name on a receiver of unknown class reaches the right class's slot.
+///
+/// A read, write or unset through `$object->$name` on a `mixed` or `object` receiver dispatches
+/// over every declared property of the program: the receiver's class is found by a binary search
+/// over class ids, then the name is compared within that class. Ten classes, inherited and
+/// redeclared properties, a property name several classes share, a name no class declares, and a
+/// non-object element cover each side of that search; `Req` writes through a cached
+/// `ReflectionProperty::setRawValue()`, which is how Symfony's `Request` sets its properties.
+#[test]
+fn test_runtime_property_name_dispatch_finds_the_receiver_class() {
+    let out = compile_and_run(
+        r#"<?php
+class A0 { public $a = 'a0'; public $shared = 's0'; }
+class A1 { public $b = 'b1'; public $shared = 's1'; public $z = 'z1'; }
+class A2 extends A1 { public $c = 'c2'; }
+class A3 { public int $n = 3; public $shared = 's3'; }
+class A4 { public $d = 'd4'; }
+class A5 extends A4 { public $e = 'e5'; public $shared = 's5'; }
+class A6 { public $f = 'f6'; }
+class A7 { public $g = 'g7'; public $shared = 's7'; }
+class A8 { public $h = 'h8'; }
+class A9 extends A8 { public $i = 'i9'; public $shared = 's9'; }
+final class Req {
+    public $query = null;
+    public $request = null;
+    public $attributes = null;
+
+    public static function set(self $r, string $name, mixed $value): void
+    {
+        static $cache;
+        $p = $cache[$name] ??= new \ReflectionProperty(self::class, $name);
+        $p->setRawValue($r, $value);
+    }
+}
+function objects(): array {
+    return [new A0(), new A1(), new A2(), new A3(), new A4(), new A5(), new A6(), new A7(), new A8(), new A9(), 42];
+}
+function drop(object $o, string $n): void { unset($o->$n); }
+
+$names = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'n', 'z', 'shared', 'missing'];
+foreach (objects() as $index => $object) {
+    $row = [];
+    foreach ($names as $name) {
+        if (is_object($object) && property_exists($object, $name)) {
+            $row[] = $name . '=' . $object->$name;
+        }
+    }
+    echo $index, ':', implode(',', $row), "\n";
+}
+foreach (objects() as $index => $object) {
+    if (!is_object($object)) {
+        continue;
+    }
+    $row = [];
+    foreach ($names as $name) {
+        if (property_exists($object, $name)) {
+            $object->$name = $name === 'n' ? 30 + $index : $name . $index;
+            $row[] = $object->$name;
+        }
+    }
+    echo implode(',', $row), "\n";
+}
+$u = new A9();
+drop($u, $argc > 5 ? 'h' : 'i');
+echo isset($u->i) ? 'set' : 'unset', ' ', $u->h, "\n";
+$r = new Req();
+foreach (['query' => 'q', 'request' => 'r', 'attributes' => 'a'] as $k => $v) {
+    for ($i = 0; $i < 2; $i++) {
+        Req::set($r, $k, $v . $i);
+    }
+}
+echo $r->query, $r->request, $r->attributes, "\n";
+"#,
+    );
+    assert_eq!(out, "0:a=a0,shared=s0\n1:b=b1,z=z1,shared=s1\n2:b=b1,c=c2,z=z1,shared=s1\n3:n=3,shared=s3\n4:d=d4\n5:d=d4,e=e5,shared=s5\n6:f=f6\n7:g=g7,shared=s7\n8:h=h8\n9:h=h8,i=i9,shared=s9\n10:\na0,shared0\nb1,z1,shared1\nb2,c2,z2,shared2\n33,shared3\nd4\nd5,e5,shared5\nf6\ng7,shared7\nh8\nh9,i9,shared9\nunset h8\nq1r1a1\n");
 }
 
 /// A declared property written through a `mixed`-typed receiver actually reaches the object.
@@ -1223,4 +2296,64 @@ echo $total, "\n";
     assert!(out.success, "stderr: {}", out.stderr);
     assert_eq!(out.stdout, "1225\n");
     assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
+
+/// A runtime-name `unset($object->$name)` compiles even though SOME class in the program declares
+/// an untyped property whose slot cannot hold the removed state.
+///
+/// The name is only known at run time, and the closure is bound to a scope that sees protected
+/// members, so the removal ladder has an arm for `Error::$code`, an untyped slot that cannot hold
+/// the removed state. That arm used to refuse the whole closure at compile time ("unset() of
+/// untyped property slot Failure::$code"), which handed Symfony's DeepClone hydrators -- and every
+/// file depending on them -- to the interpreter. The arm now raises only if it actually runs; this
+/// program never reaches it. Expected output is `php -n` 8.5's.
+#[test]
+fn test_runtime_name_unset_compiles_beside_an_untyped_error_slot() {
+    let out = compile_and_run(
+        r#"<?php
+class Failure extends \Error {}
+class Item { public ?string $label = 'x'; public ?int $count = 3; }
+function hydrator(string $class): \Closure {
+    return \Closure::bind(static function ($object, array $values, array $unsetOnNull): void {
+        foreach ($values as $name => $value) {
+            if (null === $value && isset($unsetOnNull[$name])) {
+                unset($object->$name);
+                continue;
+            }
+            $object->$name = $value;
+        }
+    }, null, $class);
+}
+$item = new Item();
+hydrator(Item::class)($item, ['label' => null, 'count' => 7], ['label' => true]);
+var_dump(isset($item->label), $item->count);
+$e = new Failure('m');
+hydrator(Failure::class)($e, ['message' => 'n'], []);
+echo get_class($e), " ", $e->getMessage(), "\n";
+"#,
+    );
+    assert_eq!(out, "bool(false)\nint(7)\nFailure n\n");
+}
+
+/// An element write into a property declared `array|SomeObject` goes through the boxed cell's
+/// run-time dispatch, like a `mixed` property (symfony/http-kernel's `DataCollector::$data`).
+#[test]
+fn test_element_write_into_an_array_or_object_union_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Data { }
+class Coll {
+    protected array|Data $data = [];
+    public function collect(bool $r): void {
+        if ($r) { $this->data["redirect"] = true; $this->data["url"] = "/x"; }
+        $this->data["n"] = 3;
+    }
+    public function get(): array { return $this->data; }
+}
+$c = new Coll();
+$c->collect(true);
+echo json_encode($c->get()), "\n";
+"#,
+    );
+    assert_eq!(out, "{\"redirect\":true,\"url\":\"\\/x\",\"n\":3}\n");
 }

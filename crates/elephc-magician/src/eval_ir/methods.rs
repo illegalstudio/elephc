@@ -8,6 +8,7 @@
 //! - Parameters, statics, visibility, hook bodies, return types, and source metadata remain aligned.
 
 use super::*;
+use std::sync::Arc;
 
 /// Public method metadata for a runtime eval class.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -30,10 +31,22 @@ pub struct EvalClassMethod {
     parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
-    /// Whether the declaration returns by reference. Eval's grammar has no `function &m()`,
-    /// so only an `&get` property hook sets it.
+    /// Whether the method was declared `function &name()`, PHP's return-by-reference form.
     returns_by_ref: bool,
-    body: Vec<EvalStmt>,
+    /// Whether the FILE that declared this was under `declare(strict_types=1)`.
+    ///
+    /// php scopes strict typing to the file containing the code doing the coercing, so a `return`
+    /// obeys the file the function was DECLARED in while an argument obeys the file the CALL was
+    /// written in. Stamping the declaration is what lets the interpreter restore the right mode
+    /// while a body runs. Deliberately absent from `PartialEq`, like `source_location`: two
+    /// declarations of the same shape are the same declaration whatever file mode they were read
+    /// under, and every parser-shape expectation compares shapes.
+    strict_types: bool,
+    /// SHARED, not owned. `class_method()` hands callers an `EvalClassMethod` BY VALUE on
+    /// every interpreted dispatch, and deep-copying a method body — the whole statement and
+    /// expression tree — on each call was the single largest cost in a Symfony request.
+    /// Behind an `Arc` the copy is a refcount bump; `body()` still hands out `&[EvalStmt]`.
+    body: Arc<Vec<EvalStmt>>,
 }
 
 impl PartialEq for EvalClassMethod {
@@ -62,6 +75,17 @@ impl PartialEq for EvalClassMethod {
 }
 
 impl EvalClassMethod {
+    /// Returns a copy of this method stamped with its declaring file's strict-types mode.
+    pub const fn with_strict_types(mut self, strict_types: bool) -> Self {
+        self.strict_types = strict_types;
+        self
+    }
+
+    /// Returns whether the file that declared this method was under `strict_types=1`.
+    pub const fn strict_types(&self) -> bool {
+        self.strict_types
+    }
+
     /// Creates a public eval class method with source-order parameters and body.
     pub fn new(name: impl Into<String>, params: Vec<String>, body: Vec<EvalStmt>) -> Self {
         Self::with_modifiers(name, false, false, params, body)
@@ -120,9 +144,10 @@ impl EvalClassMethod {
             parameter_defaults,
             parameter_is_by_ref,
             parameter_is_variadic,
-            return_type: None,
             returns_by_ref: false,
-            body,
+            strict_types: false,
+            return_type: None,
+            body: Arc::new(body),
         }
     }
 
@@ -236,13 +261,18 @@ impl EvalClassMethod {
         self
     }
 
-    /// Returns a copy of this method recording whether it is declared to return by reference.
+    /// Returns a copy of this class method marked as returning by reference.
+    ///
+    /// PHP's `function &name()`. It is recorded rather than dropped because an implementation
+    /// may ADD the `&` its interface does not require but may never REMOVE one it does:
+    /// `php -n` 8.5.6 refuses that with `Declaration of Bad::get() must be compatible with
+    /// & Ref::get()`.
     pub const fn with_returns_by_ref(mut self, returns_by_ref: bool) -> Self {
         self.returns_by_ref = returns_by_ref;
         self
     }
 
-    /// Returns whether this method is declared to return by reference (an `&get` hook).
+    /// Returns whether this class method was declared to return by reference.
     pub const fn returns_by_ref(&self) -> bool {
         self.returns_by_ref
     }

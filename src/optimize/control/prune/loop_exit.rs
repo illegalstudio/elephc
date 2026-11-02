@@ -22,6 +22,10 @@ use super::super::*;
 /// inside a loop becomes `break 2` out of the include's `do { … } while (false)`), which is how
 /// it surfaced.
 ///
+/// A `goto` lowered to a guarded segment has the same shape: `$sel = i; break <n>;` inside a
+/// `Synthetic` block, `break 2` from inside an inner `foreach`, and its `do { } while (false)`
+/// segment wrapper must keep the loop it breaks out of.
+///
 /// `Synthetic` blocks and the include wrappers are walked at the same depth — they are grouping,
 /// not loops. A `switch` is walked at the same depth too, which over-counts a `break` that only
 /// leaves the switch; that errs on the side of keeping the loop, which is always safe.

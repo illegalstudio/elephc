@@ -76,19 +76,38 @@ bindDynamicReference($argc);
     }
 }
 
-/// A reference assignment from a plain by-value call is refused rather than bound.
+/// A reference assignment from a plain by-value call binds the returned value, as php does.
+///
+/// php raises "Only variables should be assigned by reference" and assigns the call's value; the
+/// alias shares nothing with the callee's storage. That is lowered now rather than refused
+/// (`php -n` 8.5 prints the notice, then `1` and `12` for the program below).
 #[test]
-fn by_value_call_reference_assignment_is_refused() {
-    let message = refusal(
+fn by_value_call_reference_assignment_binds_the_value() {
+    lowers(
         r#"<?php
 class ValueOnlyHolder { public array $items = [1]; }
 function valueOnlySource(ValueOnlyHolder $holder): array { return $holder->items; }
 $holder = new ValueOnlyHolder();
 $alias = &valueOnlySource($holder);
-echo count($alias);
+echo count($alias), "\n";
+$alias[] = 2;
+echo count($holder->items), count($alias), "\n";
 "#,
     );
-    assert!(message.contains("Unsupported reference assignment"), "{message}");
+}
+
+/// Lowers `source` for every supported target, failing if any target refuses it.
+fn lowers(source: &str) {
+    for name in TARGETS {
+        if let Err(error) = super::try_lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        ) {
+            panic!("{name}: expected the program to lower, got {error:?}");
+        }
+    }
 }
 
 /// An enum branch cannot mark a copied class interface fallback as an adopted reference.
@@ -337,22 +356,24 @@ echo $alias;
     assert!(message.contains("different payload representation"), "{message}");
 }
 
-/// Returning a value expression by reference is refused instead of lowered as a scalar.
+/// Returning an array element by reference binds that element, as php does.
+///
+/// `return $numbers[0];` from a `function &` hands back a reference to the element, so the
+/// program lowers (`php -n` 8.5 prints `1` then `5` for the program below) instead of being
+/// refused as a value-shaped return.
 #[test]
-fn value_shaped_reference_return_is_refused() {
-    let message = refusal(
+fn element_reference_return_lowers() {
+    lowers(
         r#"<?php
 function &valueShapedReference(): int {
     $numbers = [1, 2];
     return $numbers[0];
 }
 $alias = &valueShapedReference();
-echo $alias;
+echo $alias, "\n";
+$alias = 5;
+echo $alias, "\n";
 "#,
-    );
-    assert!(
-        message.contains("from a variable or a property"),
-        "{message}"
     );
 }
 

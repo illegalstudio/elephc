@@ -317,12 +317,12 @@ fn date_period_constructor() -> ClassMethod {
         call("is_int", vec![var("end")]),
         vec![
             assign_this("useCount", int_lit(1)),
-            assign_this("recurrences", cast_int(var("end"))),
+            assign_this("recurrenceCount", cast_int(var("end"))),
             assign_this("endTs", int_lit(0)),
         ],
         Some(vec![
             assign_this("useCount", int_lit(0)),
-            assign_this("recurrences", int_lit(0)),
+            assign_this("recurrenceCount", int_lit(0)),
             assign_this("endTs", mcall(var("end"), "getTimestamp", Vec::new())),
         ]),
     ));
@@ -365,6 +365,7 @@ fn date_period_rewind() -> ClassMethod {
         vec![
             assign_this("curTs", this_prop("startTs")),
             assign_this("idx", int_lit(0)),
+            assign_this("started", int_lit(1)),
             if_else(
                 this_prop("excludeStart"),
                 vec![expr_stmt(mcall(Expr::new(ExprKind::This, dummy()), "_advance", Vec::new()))],
@@ -384,7 +385,7 @@ fn date_period_valid() -> ClassMethod {
     let count_branch = vec![ret(bin(
         this_prop("idx"),
         BinOp::LtEq,
-        bin(this_prop("recurrences"), BinOp::Sub, this_prop("excludeStart")),
+        bin(this_prop("recurrenceCount"), BinOp::Sub, this_prop("excludeStart")),
     ))];
     let date_branch = vec![if_else(
         this_prop("includeEnd"),
@@ -454,9 +455,20 @@ return $d;
 #[cfg(test)]
 const GET_END_DATE_SRC: &str = r#"<?php
 if ($this->useCount) { return null; }
-$d = new DateTime();
-$d->setTimestamp($this->endTs);
-return $d;
+$d = $this->getStartDate();
+return $d->setTimestamp($this->endTs);
+"#;
+
+#[cfg(test)]
+const MAGIC_GET_SRC: &str = r#"<?php
+if ($name === 'start') { return $this->getStartDate(); }
+if ($name === 'end') { return $this->getEndDate(); }
+if ($name === 'interval') { return $this->getDateInterval(); }
+if ($name === 'recurrences') { return $this->recurrenceCount + 1 - $this->excludeStart + ($this->includeEnd ? 1 : 0); }
+if ($name === 'include_start_date') { return $this->excludeStart === 0; }
+if ($name === 'include_end_date') { return $this->includeEnd !== 0; }
+if ($name === 'current') { return $this->started ? $this->current() : null; }
+return null;
 "#;
 
 /// `DatePeriod::getStartDate(): DateTimeInterface` — returns the start instant as the same
@@ -471,15 +483,93 @@ fn date_period_get_start_date() -> ClassMethod {
     )
 }
 
-/// `DatePeriod::getEndDate(): ?DateTime` — returns the end bound for the end-date form, or `null`
-/// when the period was constructed with a recurrence count.
+/// `DatePeriod::getEndDate(): ?DateTimeInterface` — returns the end bound for the end-date form, or
+/// `null` when the period was constructed with a recurrence count. Like php, the bound is an
+/// instance of the START's class: an immutable start gives a `DateTimeImmutable` end. The declared type is php's own:
+/// it is the contract an overriding subclass is checked against, and `?DateTime` refused Carbon's
+/// `CarbonPeriod::getEndDate(): ?CarbonInterface`, which php accepts.
 fn date_period_get_end_date() -> ClassMethod {
     let body = bodies::get_end_date();
     method(
         "getEndDate",
         Vec::new(),
-        Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified("DateTime"))))),
+        Some(TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified(
+            "DateTimeInterface",
+        ))))),
         body,
+    )
+}
+
+/// `DatePeriod::__get(string $name): mixed` — php's read-only public properties (`start`, `end`,
+/// `interval`, `recurrences`, `include_start_date`, `include_end_date`, `current`). Each read of a
+/// date is a fresh copy, as in php (`$p->start === $p->start` is false). Carbon's
+/// `CarbonPeriod::instance()` reads them off a plain `DatePeriod`.
+fn date_period_magic_get() -> ClassMethod {
+    method(
+        "__get",
+        vec![param("name", Some(TypeExpr::Named(Name::unqualified("string"))), None)],
+        Some(TypeExpr::Named(Name::unqualified("mixed"))),
+        bodies::magic_get(),
+    )
+}
+
+#[cfg(test)]
+const SERIALIZE_SRC: &str = r#"<?php
+return ['start' => $this->__get('start'), 'current' => $this->__get('current'), 'end' => $this->__get('end'), 'interval' => $this->__get('interval'), 'recurrences' => $this->__get('recurrences'), 'include_start_date' => $this->__get('include_start_date'), 'include_end_date' => $this->__get('include_end_date')];
+
+"#;
+
+#[cfg(test)]
+const UNSERIALIZE_SRC: &str = r#"<?php
+$start = $data['start'];
+$this->startTs = $start->getTimestamp();
+$this->startIsImmutable = $start instanceof DateTimeImmutable;
+$iv = $data['interval'];
+$this->iv_y = $iv->y;
+$this->iv_m = $iv->m;
+$this->iv_d = $iv->d;
+$this->iv_h = $iv->h;
+$this->iv_i = $iv->i;
+$this->iv_s = $iv->s;
+$this->iv_invert = $iv->invert;
+$this->excludeStart = $data['include_start_date'] ? 0 : 1;
+$this->includeEnd = $data['include_end_date'] ? 2 : 0;
+$end = $data['end'];
+if ($end === null) {
+    $this->useCount = 1;
+    $this->recurrenceCount = (int) $data['recurrences'] - 1 + $this->excludeStart - ($this->includeEnd ? 1 : 0);
+    $this->endTs = 0;
+} else {
+    $this->useCount = 0;
+    $this->recurrenceCount = 0;
+    $this->endTs = $end->getTimestamp();
+}
+$this->curTs = $this->startTs;
+$this->idx = 0;
+$this->started = 0;
+$current = $data['current'];
+if ($current !== null) {
+    $this->curTs = $current->getTimestamp();
+    $this->started = 1;
+}
+
+"#;
+
+/// `DatePeriod::__serialize(): array` -- php's seven keys, the values its public properties read.
+/// Carbon's `CarbonPeriod` hands `$native->__serialize()` to `parent::__unserialize()` to re-seed
+/// itself without re-running the constructor.
+fn date_period_serialize() -> ClassMethod {
+    method("__serialize", Vec::new(), Some(TypeExpr::Named(Name::unqualified("array"))), bodies::serialize())
+}
+
+/// `DatePeriod::__unserialize(array $data): void` -- rebuilds the stored state from those keys;
+/// an end-date period stores no count, and a count period's `recurrences` counts the occurrences.
+fn date_period_unserialize() -> ClassMethod {
+    method(
+        "__unserialize",
+        vec![param("data", Some(TypeExpr::Named(Name::unqualified("array"))), None)],
+        Some(TypeExpr::Void),
+        bodies::unserialize(),
     )
 }
 
@@ -504,7 +594,7 @@ fn date_period_get_recurrences() -> ClassMethod {
         Some(TypeExpr::Nullable(Box::new(TypeExpr::Int))),
         vec![if_else(
             this_prop("useCount"),
-            vec![ret(this_prop("recurrences"))],
+            vec![ret(this_prop("recurrenceCount"))],
             Some(vec![ret(null_lit())]),
         )],
     )
@@ -650,6 +740,9 @@ fn date_period_methods() -> Vec<ClassMethod> {
         date_period_get_end_date(),
         date_period_get_interval(),
         date_period_get_recurrences(),
+        date_period_magic_get(),
+        date_period_serialize(),
+        date_period_unserialize(),
         date_period_get_iterator(),
         date_period_create_from_iso8601_string(),
     ]
@@ -665,9 +758,12 @@ fn date_period_properties() -> Vec<ClassProperty> {
     props.push(int_property("includeEnd"));
     props.push(int_property("curTs"));
     props.push(int_property("idx"));
-    // useCount selects the count form; recurrences holds its repeat count.
+    // useCount selects the count form; recurrenceCount holds its repeat count. php's public
+    // `recurrences` property is a different number, answered by `__get`.
     props.push(int_property("useCount"));
-    props.push(int_property("recurrences"));
+    props.push(int_property("recurrenceCount"));
+    // Set by `rewind()`: php's `current` property is null until iteration starts.
+    props.push(int_property("started"));
     props
 }
 
@@ -713,6 +809,9 @@ mod tests {
             ("CURRENT_SRC", CURRENT_SRC, bodies::current()),
             ("GET_START_DATE_SRC", GET_START_DATE_SRC, bodies::get_start_date()),
             ("GET_END_DATE_SRC", GET_END_DATE_SRC, bodies::get_end_date()),
+            ("MAGIC_GET_SRC", MAGIC_GET_SRC, bodies::magic_get()),
+            ("SERIALIZE_SRC", SERIALIZE_SRC, bodies::serialize()),
+            ("UNSERIALIZE_SRC", UNSERIALIZE_SRC, bodies::unserialize()),
             ("CREATE_FROM_ISO8601_SRC", CREATE_FROM_ISO8601_SRC, bodies::create_from_iso8601()),
         ]
     }

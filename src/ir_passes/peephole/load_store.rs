@@ -110,6 +110,7 @@ fn escaping_slots(function: &Function) -> HashSet<LocalSlotId> {
                 | Op::ReleaseLocalSlot
                 | Op::PushCallOperandOwner
                 | Op::InvokerRefArg
+                | Op::ArrayLocalRefCell
         ) {
             for slot in slots_of(inst) {
                 escaping.insert(slot);
@@ -205,6 +206,10 @@ fn consumes_operands_by_value(op: Op) -> bool {
             | MixedCastString
             | StrConcat
             | StrAppend
+            | StrBitAnd
+            | StrBitOr
+            | StrBitXor
+            | StrSetOffset
             | StrLen
             | StrCharAt
             | StrInterpolate

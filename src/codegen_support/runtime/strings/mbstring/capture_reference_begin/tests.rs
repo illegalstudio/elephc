@@ -42,6 +42,11 @@ fn native_mbstring_capture_reference_begin_preserves_publication_and_owners() {
 /// Bridges private unary conventions to checked C ownership and rejects unused boxing paths.
 fn adapters(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
+    crate::codegen_support::runtime::arrays::hash_layout::tests::runtime_state_stubs(emitter);
+    emitter.label_global("__rt_heap_kind");
+    emitter.instruction(if arm { "ldr x0, [x0, #-8]" } else { "mov rax, QWORD PTR [rax - 8]" }); // read the independently allocated fixture's uniform heap-kind word
+    emitter.instruction(if arm { "and x0, x0, #255" } else { "and eax, 255" }); // expose the fixture kind without the production arena range check
+    emitter.instruction("ret");                                                 // return the independently stamped heap kind
     for (symbol, destination) in [("__rt_heap_alloc", "fixture_allocate"),
         ("__rt_decref_hash", "fixture_release"), ("__rt_decref_any", "fixture_release"),
         ("__rt_incref", "fixture_retain")] {

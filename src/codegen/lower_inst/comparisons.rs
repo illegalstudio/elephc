@@ -121,8 +121,23 @@ pub(super) fn lower_strict_eq(
                 PhpType::Pointer(_) | PhpType::Packed(_),
                 PhpType::Pointer(_) | PhpType::Packed(_)
             )
+            // Two Closures are identical when they are the same object: the same descriptor.
+            | (PhpType::Callable, PhpType::Callable)
     ) {
         emit_pointer_compare(ctx, lhs, rhs, is_equal)?;
+        return store_if_result(ctx, inst);
+    }
+    if matches!(
+        (&lhs_ty, &rhs_ty),
+        (PhpType::Object(_) | PhpType::Callable | PhpType::Iterable, PhpType::Void)
+            | (PhpType::Void, PhpType::Object(_) | PhpType::Callable | PhpType::Iterable)
+    ) {
+        // A statically object-typed slot can still hold null at runtime (an untyped property
+        // declared `= null` whose only assignments are objects). `=== null` must then test the
+        // pointer against both null encodings (zero slot, scalar null sentinel) instead of
+        // folding to false.
+        let object = if lhs_ty == PhpType::Void { rhs } else { lhs };
+        emit_object_null_compare(ctx, object, is_equal)?;
         return store_if_result(ctx, inst);
     }
     if lhs_ty != rhs_ty {
@@ -140,6 +155,9 @@ pub(super) fn lower_strict_eq(
         PhpType::Str => {
             emit_string_eq_call(ctx, lhs, rhs, is_equal, "__rt_str_eq")?;
         }
+        PhpType::Array(_) => {
+            emit_array_eq_call(ctx, lhs, rhs, is_equal)?;
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for PHP type {:?}",
@@ -149,6 +167,65 @@ pub(super) fn lower_strict_eq(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Compares two borrowed indexed arrays through PHP's recursive strict-equality helper.
+fn emit_array_eq_call(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    rhs: ValueId,
+    is_equal: bool,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(lhs, "x0")?;
+            ctx.load_value_to_reg(rhs, "x1")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_strict_eq");
+            if !is_equal {
+                ctx.emitter.instruction("eor x0, x0, #1");                      // invert recursive strict equality for PHP !==
+            }
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(lhs, "rdi")?;
+            ctx.load_value_to_reg(rhs, "rsi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_strict_eq");
+            if !is_equal {
+                ctx.emitter.instruction("xor rax, 1");                          // invert recursive strict equality for PHP !==
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Tests a pointer-like operand against PHP null: a zeroed slot and the runtime null sentinel
+/// both encode null for an object-shaped value.
+pub(in crate::codegen::lower_inst) fn emit_object_null_compare(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    is_equal: bool,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x9", 0x7fff_ffff_ffff_fffe);
+            ctx.emitter.instruction("cmp x0, #0");                              // is the pointer slot zeroed
+            ctx.emitter.instruction("ccmp x0, x9, #4, ne");                     // otherwise compare against the null sentinel
+            ctx.emitter.instruction(&format!("cset x0, {}", if is_equal { "eq" } else { "ne" })); // materialize the null test
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r10", 0x7fff_ffff_ffff_fffe);
+            ctx.emitter.instruction("test rax, rax");                           // is the pointer slot zeroed
+            ctx.emitter.instruction("sete cl");                                 // remember the zero encoding of null
+            ctx.emitter.instruction("cmp rax, r10");                            // compare against the null sentinel
+            ctx.emitter.instruction("sete al");                                 // remember the sentinel encoding of null
+            ctx.emitter.instruction("or al, cl");                               // either encoding is PHP null
+            if !is_equal {
+                ctx.emitter.instruction("xor al, 1");                           // invert for !==
+            }
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the result register
+        }
+    }
+    Ok(())
 }
 
 /// Emits a pointer-like identity comparison for strict equality.
@@ -933,25 +1010,105 @@ pub(super) fn lower_spaceship(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let uses_float_compare = lhs_ty == PhpType::Float || rhs_ty == PhpType::Float;
     if uses_float_compare {
         emit_numeric_float_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
-    } else if intish_or_null(&lhs_ty) && intish_or_null(&rhs_ty) {
+    } else if spaceship_static_intish(&lhs_ty) && spaceship_static_intish(&rhs_ty) {
         emit_numeric_int_compare(ctx, lhs, rhs)?;
     } else {
-        return Err(CodegenIrError::unsupported(format!(
-            "spaceship for PHP types {:?} and {:?}",
-            lhs_ty,
-            rhs_ty
-        )));
+        emit_php_runtime_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
+        return store_if_result(ctx, inst);
     }
     emit_spaceship_result(ctx, uses_float_compare);
     store_if_result(ctx, inst)
 }
 
+/// Returns whether spaceship can compare a statically integer-like payload without runtime tags.
+fn spaceship_static_intish(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar
+    )
+}
+
+/// Compares arbitrary PHP runtime values through the shared unboxed comparison table.
+fn emit_php_runtime_compare(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    lhs_ty: &PhpType,
+    rhs: ValueId,
+    rhs_ty: &PhpType,
+) -> Result<()> {
+    let left_box_temp = !is_mixed_like(lhs_ty);
+    let right_box_temp = !is_mixed_like(rhs_ty);
+    materialize_value_as_mixed(ctx, lhs, lhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    materialize_value_as_mixed(ctx, rhs, rhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_push_reg(ctx.emitter, "x1");
+            abi::emit_push_reg(ctx.emitter, "x2");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 48);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("mov x5, x2");                              // stage the right high payload word for PHP comparison
+            ctx.emitter.instruction("mov x4, x1");                              // stage the right low payload word for PHP comparison
+            ctx.emitter.instruction("mov x3, x0");                              // stage the right runtime tag for PHP comparison
+            abi::emit_pop_reg(ctx.emitter, "x2");
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            abi::emit_push_reg(ctx.emitter, "rdx");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 48);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("mov r9, rdx");                             // stage the right high payload word for PHP comparison
+            ctx.emitter.instruction("mov r8, rdi");                             // stage the right low payload word for PHP comparison
+            ctx.emitter.instruction("mov rcx, rax");                            // stage the right runtime tag for PHP comparison
+            abi::emit_pop_reg(ctx.emitter, "rdx");
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_php_compare");
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if left_box_temp {
+        decref_mixed_temp_at(ctx, 32);
+    }
+    if right_box_temp {
+        decref_mixed_temp_at(ctx, 16);
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
+}
+
 /// Lowers a PHP relational comparison whose operands require runtime tag dispatch.
+///
+/// The opcode is chosen while lowering the expression, from the types the operands have THEN.
+/// A later EIR pass can narrow an operand and leave the opcode behind: a class constant whose
+/// initializer is a nested expression (`16 * 1024 * 1024`) lowers as a runtime-tagged value, so
+/// `strlen($b) > self::MAX` picks `php_rel_cmp`, and constant folding then replaces the operand
+/// with `const_i64 16777216`. The instruction that arrives here has two statically typed
+/// operands and no runtime tag to dispatch on, which is not a malformed module — it is the same
+/// comparison with better types. Two statically integer operands take the ordinary signed
+/// integer predicate, which is exactly PHP's rule for `int` against `int`; every other shape is
+/// boxed into `Mixed` cells and ordered by PHP's runtime comparison table, the same path a
+/// runtime-tagged operand takes (`emit_runtime_ordering_compare` already boxes whichever side is
+/// not `Mixed`). Reducing those to a typed opcode instead would be wrong: `2 > true` compares as
+/// booleans in PHP, `"10" > "9"` compares numerically, and every NaN predicate is `false`.
 pub(super) fn lower_php_rel_cmp(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    if crate::codegen::stack_numeric::numeric_comparison(ctx.function, &ctx.numeric_values, inst) {
+    if crate::codegen::stack_numeric::numeric_comparison(&ctx.numeric_values, inst, |values| {
+        ctx.proves_numeric(values)
+    }) {
         return super::numeric_comparisons::lower(ctx, inst);
     }
     let lhs = expect_operand(inst, 0)?;
@@ -960,13 +1117,10 @@ pub(super) fn lower_php_rel_cmp(
     let rhs_ty = ctx.value_php_type(rhs)?;
     if !needs_runtime_ordering_compare(&lhs_ty)
         && !needs_runtime_ordering_compare(&rhs_ty)
-        && !is_string_ordering_pair(&lhs_ty, &rhs_ty)
-        && !has_nullable_pointer_operand(ctx, lhs, rhs)?
+        && lhs_ty.codegen_repr() == PhpType::Int
+        && rhs_ty.codegen_repr() == PhpType::Int
     {
-        return Err(CodegenIrError::invalid_module(format!(
-            "php_rel_cmp requires a runtime-tagged operand, a nullable pointer or two strings, got {:?} and {:?}",
-            lhs_ty, rhs_ty
-        )));
+        return super::local_loads::lower_int_compare(ctx, inst);
     }
     emit_runtime_ordering_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
     emit_runtime_relational_result(ctx, super::expect_cmp_predicate(inst)?)?;
@@ -1102,7 +1256,10 @@ fn emit_runtime_relational_result(
     Ok(())
 }
 
-/// Returns true for scalar values that can participate in the current loose integer path.
+/// Returns true for scalar values whose loose comparison can use integer slots.
+///
+/// `Mixed` is deliberately excluded: it can hold a string, array, object, or float, each of
+/// which requires PHP's runtime loose-comparison table rather than integer coercion.
 fn intish_or_null(ty: &PhpType) -> bool {
     matches!(
         ty,
@@ -1110,12 +1267,11 @@ fn intish_or_null(ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::Void
             | PhpType::Never
-            | PhpType::Mixed
             | PhpType::TaggedScalar
     )
 }
 
-/// Returns true for the scalar loose-equality subset that can normalize through integer slots.
+/// Returns true when both loose-equality operands have statically int-like representations.
 fn loose_intish_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
     // Boxed runtime tags must select PHP's rule, not an integer coercion of every payload.
     !matches!(lhs_ty, PhpType::Mixed) && !matches!(rhs_ty, PhpType::Mixed)

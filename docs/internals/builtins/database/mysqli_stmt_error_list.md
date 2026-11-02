@@ -2,7 +2,7 @@
 title: "mysqli_stmt_error_list() - internals"
 description: "Compiler internals for mysqli_stmt_error_list(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 168
+  order: 179
 ---
 
 ## `mysqli_stmt_error_list()` - internals

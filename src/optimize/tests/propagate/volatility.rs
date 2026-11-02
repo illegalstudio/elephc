@@ -211,6 +211,32 @@ fn test_ref_assign_marks_source_lvalue_root_volatile() {
     assert!(is_reference_volatile("t"), "the ref-assign target stays volatile");
 }
 
+/// `$a[0] = &$x` keeps `$x` volatile after the binding because later writes through the
+/// array element can change it without a direct local assignment.
+#[test]
+fn test_array_element_reference_marks_source_local_volatile() {
+    let program = vec![
+        Stmt::new(
+            StmtKind::ArrayAssign {
+                array: "a".to_string(),
+                index: Expr::int_lit(0),
+                value: Expr::new(
+                    ExprKind::ArrayReference(Box::new(Expr::var("x"))),
+                    Span::dummy(),
+                ),
+            },
+            Span::dummy(),
+        ),
+        Stmt::assign("x", Expr::int_lit(7)),
+        Stmt::echo(Expr::var("x")),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert!(is_reference_volatile("x"));
+    assert_eq!(propagated[2], Stmt::echo(Expr::var("x")));
+}
+
 /// Request superglobals are writable from any scope under `--web`, so their
 /// names are volatile from the start of every propagation run.
 #[test]

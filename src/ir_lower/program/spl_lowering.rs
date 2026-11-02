@@ -55,13 +55,7 @@ pub(in crate::ir_lower) fn class_method_already_lowered(
     method_key: &str,
     is_static: bool,
 ) -> bool {
-    module.class_methods.iter().any(|function| {
-        function.flags.is_static == is_static
-            && function
-                .name
-                .rsplit_once("::")
-                .is_some_and(|(candidate_class, candidate_method)| {
-                    candidate_class == class_name && php_method_key(candidate_method) == method_key
-                })
-    })
+    // The module's incremental index: a scan of every body lowered so far, per question, was
+    // the SPL discovery fixpoint's inner loop.
+    module.class_method(class_name, method_key, is_static).is_some()
 }

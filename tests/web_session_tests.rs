@@ -398,6 +398,46 @@ fn extract_phpsessid(resp: &str) -> Option<String> {
     extract_session_id(resp, "PHPSESSID")
 }
 
+/// A `--web` program that loads code at run time gives a closure calling a method on a `mixed`
+/// receiver its own eval context. With an untraced `Closure::bind($fn, null, null)` site, the
+/// compiler also plans a NO-scope variant of every `$this`-capturing closure, and in that variant
+/// `self::$cache` resolved to nothing: the eval-target probe propagated the error and refused the
+/// whole build (Symfony's `Router` closures stopped a `--web` build with preload). php raises the
+/// scope `Error` only if the access runs, so the build must succeed and answer like php does.
+#[test]
+fn web_unscoped_closure_variant_with_self_static_access_compiles() {
+    let dir = make_test_dir("web_unscoped_closure_variant");
+    let source = r#"<?php
+eval('final class EvalPath { public function __construct(private string $p) {} public function getPath(): string { return $this->p; } }');
+class Router {
+    private static array $cache = ['a' => 1, 'b' => 2, 'c' => 3];
+    private int $hits = 0;
+    public function forget(string $key): string {
+        $class = 'EvalPath';
+        $drop = function ($cache) {
+            $this->hits++;
+            unset(self::$cache[$cache->getPath()]);
+            return count(self::$cache) + $this->hits;
+        };
+        return $drop(new $class($key)) . ':' . implode(',', array_keys(self::$cache));
+    }
+}
+function unscope(array $closures): array {
+    return array_map(fn ($c) => Closure::bind($c, null, null), $closures);
+}
+echo (new Router())->forget('b'), "|", unscope([fn () => 'unscoped'])[0](), "\n";
+"#;
+    let bin = compile_web(&dir, source, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = server.kill();
+    let _ = server.wait();
+    // php -n: `3:a,c|unscoped`.
+    assert!(response.ends_with("3:a,c|unscoped\n"), "response: {response:?}");
+}
+
 /// Verifies request reset preserves stderr when a prior request leaks a PHP stream alias.
 #[test]
 fn web_request_reset_preserves_standard_stream_aliases() {
@@ -790,6 +830,69 @@ fn session_counter_persists() {
         "second request counter should be 2: {:?}",
         r2
     );
+}
+
+/// Verifies `$session = &$_SESSION` aliases the superglobal itself, and that the session decode
+/// still grows `$_SESSION` correctly once that reference has moved it into a shared cell.
+///
+/// This is Symfony's `NativeSessionStorage::loadSession()`: `$session = &$_SESSION`, then every
+/// bag binds a property to `$session[$key]`. The alias used to bind a stray, empty frame slot
+/// named `_SESSION`, so the bags never saw the decoded session; and once the superglobal lived in
+/// a shared cell, a relocating `$_SESSION[$k] = ...` in the decode wrote the new hash over the
+/// CELL pointer, corrupting the hash header ("a hash whose insertion order left the table" under
+/// `--heap-debug`, a corrupted password string and a logged-out user without it). Every admin
+/// page of the demo app redirected to the login after signing in.
+/// Expected bodies measured against `php -S` 8.5.10.
+#[test]
+fn session_superglobal_reference_alias_reaches_decoded_session() {
+    let dir = make_test_dir("sess_superglobal_alias");
+    let save_path = dir.to_string_lossy().replace('\\', "/");
+    let src = format!(
+        "<?php\n\
+        final class Bag {{\n\
+            private array $data = [];\n\
+            public function initialize(array &$data): void {{ $this->data = &$data; }}\n\
+            public function set(string $k, string $v): void {{ $this->data[$k] = $v; }}\n\
+            public function all(): array {{ return $this->data; }}\n\
+        }}\n\
+        function load(array $bags): void {{\n\
+            $session = &$_SESSION;\n\
+            foreach ($bags as $key => $bag) {{\n\
+                $session[$key] = isset($session[$key]) && is_array($session[$key]) ? $session[$key] : [];\n\
+                $bag->initialize($session[$key]);\n\
+            }}\n\
+        }}\n\
+        session_start(['save_path' => '{save_path}']);\n\
+        $bags = ['attrs' => new Bag(), 'meta' => new Bag()];\n\
+        load($bags);\n\
+        $before = json_encode($_SESSION);\n\
+        if (!isset($_GET['read'])) {{\n\
+            for ($i = 0; $i < 12; $i++) {{ $bags['attrs']->set('k' . $i, str_repeat('v', $i + 1)); }}\n\
+            $bags['meta']->set('u', '$2y$13$' . str_repeat('s', 8));\n\
+        }}\n\
+        echo $before, ' ', count($bags['attrs']->all()), ' ', $_SESSION['meta']['u'] ?? '-';\n"
+    );
+    let bin = compile_web_with_flags(&dir, &src, "app", &["--heap-debug"]);
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/");
+    let cookie = extract_phpsessid(&r1).expect("first response should set a PHPSESSID cookie");
+    let cookie = format!("PHPSESSID={}", cookie);
+    let r2 = http_request(&addr, "GET", "/?read=1", &[("Cookie", &cookie)], "");
+    let r3 = http_request(&addr, "GET", "/?read=1", &[("Cookie", &cookie)], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    let stored = "{\"attrs\":{\"k0\":\"v\",\"k1\":\"vv\",\"k2\":\"vvv\",\"k3\":\"vvvv\",\"k4\":\"vvvvv\",\
+        \"k5\":\"vvvvvv\",\"k6\":\"vvvvvvv\",\"k7\":\"vvvvvvvv\",\"k8\":\"vvvvvvvvv\",\
+        \"k9\":\"vvvvvvvvvv\",\"k10\":\"vvvvvvvvvvv\",\"k11\":\"vvvvvvvvvvvv\"},\
+        \"meta\":{\"u\":\"$2y$13$ssssssss\"}} 12 $2y$13$ssssssss";
+    assert!(
+        r1.ends_with("{\"attrs\":[],\"meta\":[]} 12 $2y$13$ssssssss"),
+        "writes through the bags must reach $_SESSION: {r1:?}"
+    );
+    assert!(r2.ends_with(stored), "the decoded session must reach the bags: {r2:?}");
+    assert!(r3.ends_with(stored), "a re-saved session must decode again: {r3:?}");
 }
 
 /// Verifies file-backed sessions persist across the process boundary in both
@@ -1552,6 +1655,115 @@ fn trigger_error_returns_true_and_preserves_body() {
         resp.contains("RET_TRUE|body-after"),
         "trigger_error must return true and leave the body intact: {:?}",
         resp
+    );
+}
+
+/// Verifies `exit()` completes only the current web request and leaves the worker available for
+/// a subsequent request, matching PHP's request-scoped termination semantics.
+#[test]
+fn exit_completes_web_request_without_killing_worker() {
+    let dir = make_test_dir("web_exit");
+    let bin = compile_web(&dir, "<?php echo 'ready'; exit(0);", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("ready"), "unexpected first response: {first:?}");
+    assert!(second.ends_with("ready"), "unexpected second response: {second:?}");
+}
+
+/// Verifies the web error-handler API exposes the current handler and restores nested handlers in
+/// the same stack order as PHP.
+#[test]
+fn get_error_handler_tracks_nested_set_and_restore() {
+    let dir = make_test_dir("geterrhandler");
+    let src = r#"<?php
+class ErrorHandlerProbe { public function handle(): bool { return true; } }
+$first = new ErrorHandlerProbe();
+$second = new ErrorHandlerProbe();
+echo get_error_handler() === null ? 'N' : 'n';
+echo set_error_handler([$first, 'handle']) === null ? 'N' : 'n';
+$current = get_error_handler();
+echo is_array($current) ? 'A' : 'a';
+$previous = set_error_handler([$second, 'handle']);
+echo is_array($previous) ? 'A' : 'a';
+restore_error_handler();
+$current = get_error_handler();
+echo is_array($current) ? 'A' : 'a';
+restore_error_handler();
+echo get_error_handler() === null ? 'N' : 'n';
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("NNAAAN"), "unexpected handler stack: {resp:?}");
+}
+
+/// Verifies a diagnostic raised by COMPILED code reaches the installed `set_error_handler()`
+/// callback, that returning true from it suppresses the default display, and that once the
+/// handler is gone the same diagnostic is displayed in php's full ` in FILE on line N` form.
+///
+/// This is the assertion the error-handler coverage was missing. `get_error_handler_tracks_…`
+/// above exercises the REGISTRY — what set/get/restore return — and never invokes a handler, so
+/// two defects lived underneath it: `__rt_diag_warning` wrote to fd 2 without ever consulting
+/// the handler, and the one path that did consult it (`trigger_error`) aborted the worker with
+/// "mixed value is not callable" the moment it tried to call one.
+///
+/// Both channels are asserted, because either one alone passes for the wrong reason: a handler
+/// that runs but does not suppress leaves the body right and stderr wrong, and a diagnostic
+/// that is merely swallowed leaves stderr right and the body wrong.
+#[test]
+fn set_error_handler_receives_a_warning_raised_by_compiled_code() {
+    let dir = make_test_dir("errhandler_invoked");
+    let src = r#"<?php
+set_error_handler(function (int $severity, string $message, string $file, int $line): bool {
+    echo "HANDLER[$severity]:$message|";
+    return true;
+});
+$a = ['k' => 'v'];
+$first = $a['absent-one'];
+restore_error_handler();
+$second = $a['absent-two'];
+echo 'body-after';
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let stderr_file = dir.join("server.stderr");
+    let mut child = spawn_server_stderr_to_file(&bin, &addr, "1", &stderr_file);
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        resp.contains(r#"HANDLER[2]:Undefined array key "absent-one"|"#),
+        "the handler must receive the engine-raised warning, with E_WARNING and php's message: {resp:?}"
+    );
+    assert!(
+        resp.ends_with("body-after"),
+        "the handler must not disturb the response body: {resp:?}"
+    );
+    assert!(
+        !resp.contains("absent-two"),
+        "a diagnostic raised after restore_error_handler() must not reach the handler: {resp:?}"
+    );
+
+    let logged = fs::read_to_string(&stderr_file).unwrap_or_default();
+    assert!(
+        !logged.contains("absent-one"),
+        "a handler returning true suppresses the default display entirely: {logged:?}"
+    );
+    assert!(
+        logged.contains(r#"Warning: Undefined array key "absent-two" in "#)
+            && logged.contains("on line 9"),
+        "once the handler is restored the diagnostic is displayed with php's file and line: {logged:?}"
     );
 }
 

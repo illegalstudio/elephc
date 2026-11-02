@@ -320,11 +320,20 @@ echo "after\n";
 "#
     );
     let bin = compile(&dir, &source, "elephc_interp_refusal");
-    let (stdout, stderr) = run_binary_expecting_failure(&dir, &bin);
-    assert_eq!(stdout, "before\n");
+    let (stdout, _stderr) = run_binary_expecting_failure(&dir, &bin);
+    // PHP prints a parse diagnostic on standard output, after whatever the fixture already
+    // echoed, and elephc does the same now that the bridge names the failing token.
     assert!(
-        stderr.contains("Parse error: eval() fragment is invalid"),
-        "expected an eval parse-error refusal, got stderr:\n{stderr}"
+        stdout.starts_with("before\n"),
+        "the fixture output before the refusal is missing:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Parse error: syntax error, unexpected"),
+        "expected an eval parse-error refusal, got stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("after"),
+        "the refused fragment must stop the program:\n{stdout}"
     );
     let _ = fs::remove_dir_all(&dir);
 }

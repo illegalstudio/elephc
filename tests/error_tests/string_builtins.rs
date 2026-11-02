@@ -75,6 +75,18 @@ expect_builtin_arity_error!(
     "mb_strlen() takes 1 or 2 arguments"
 );
 
+expect_builtin_arity_error!(
+    test_error_mb_strtoupper_wrong_args,
+    "<?php mb_strtoupper();",
+    "mb_strtoupper() takes 1 or 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_mb_strtolower_too_many_args,
+    "<?php mb_strtolower('a', 'UTF-8', 1);",
+    "mb_strtolower() takes 1 or 2 arguments"
+);
+
 /// Verifies the OpenSSL IV-length helper rejects a missing cipher name.
 #[test]
 fn test_error_openssl_cipher_iv_length_wrong_args() {
@@ -117,6 +129,24 @@ fn test_error_mb_strlen_encoding_type() {
     expect_error(
         "<?php declare(strict_types=1); mb_strlen('abc', 123);",
         "mb_strlen() encoding argument must be string or null",
+    );
+}
+
+/// Verifies that `mb_strtoupper()` rejects a statically non-string subject.
+#[test]
+fn test_error_mb_strtoupper_string_type() {
+    expect_error(
+        "<?php mb_strtoupper([1, 2]);",
+        "mb_strtoupper() string argument must be string",
+    );
+}
+
+/// Verifies that `mb_strtolower()` accepts only string or null encoding arguments.
+#[test]
+fn test_error_mb_strtolower_encoding_type() {
+    expect_error(
+        "<?php mb_strtolower('abc', [1]);",
+        "mb_strtolower() encoding argument must be string or null",
     );
 }
 
@@ -243,27 +273,26 @@ fn test_error_quoted_printable_encode_too_many_args() {
     );
 }
 
-/// Verifies that a function returning `int` that returns `strpos()` directly is rejected,
-/// because `strpos()` returns `Int|Bool` (false on miss), not `int`. This is a type
-/// incompatibility regression test.
+/// Returning `strpos()` (`int|false`) from a function declared `: int` is valid in php's weak mode
+/// (`false` coerces to `0`); elephc now accepts it and the program output matches php.
 #[test]
-fn test_error_strpos_false_return_rejects_int_return_type() {
-    expect_error(
+fn test_strpos_false_return_coerces_to_declared_int() {
+    expect_no_error(
         r#"<?php
 function pos(): int {
     return strpos("abc", "z");
 }
 "#,
-        "Function 'pos' return type expects int, got int|false",
     );
 }
 
-/// Verifies that `str_replace()` with only two arguments produces the correct arity error.
+/// Verifies that `str_replace()` with only two arguments produces the correct arity error
+/// (three, or four with the by-reference `$count`).
 #[test]
 fn test_error_str_replace_wrong_args() {
     expect_error(
         "<?php str_replace(\"a\", \"b\");",
-        "str_replace() takes exactly 3 arguments",
+        "str_replace() takes 3 or 4 arguments",
     );
 }
 
@@ -366,12 +395,12 @@ fn test_error_sha1_wrong_args() {
 
 /// Verifies that `htmlspecialchars()` with no arguments produces the correct arity error.
 /// htmlspecialchars() accepts optional `$flags` and `$encoding` arguments, so the message
-/// reports 1 to 3 args.
+/// reports 1 to 4 args.
 #[test]
 fn test_error_htmlspecialchars_wrong_args() {
     expect_error(
         "<?php htmlspecialchars();",
-        "htmlspecialchars() takes 1 to 3 arguments",
+        "htmlspecialchars() takes 1 to 4 arguments",
     );
 }
 
@@ -494,6 +523,15 @@ fn test_error_sscanf_wrong_args() {
     );
 }
 
+/// Verifies every by-reference scanner output is a writable caller variable.
+#[test]
+fn test_error_sscanf_output_must_be_variable() {
+    expect_error(
+        r#"<?php sscanf("12", "%d", "not writable");"#,
+        "sscanf() variadic parameter $vars must be passed a variable",
+    );
+}
+
 // --- v0.5: I/O function errors ---
 
 /// Verifies that `ptr_set()` rejects a string value, since ptr_set only accepts
@@ -604,12 +642,49 @@ fn test_error_join_too_many_args() {
     expect_error("<?php join(\"a\", [\"b\"], \"c\");", "join() takes 1 or 2 arguments");
 }
 
+/// Verifies that `substr_compare()` with two arguments produces the correct arity error.
+/// `$offset` is REQUIRED in php, so the floor is three, not two.
+#[test]
+fn test_error_substr_compare_wrong_args() {
+    expect_error(
+        "<?php substr_compare(\"abc\", \"a\");",
+        "substr_compare() takes 3 to 5 arguments",
+    );
+}
+
+/// Verifies that `substr_compare()` with six arguments produces the correct arity error.
+#[test]
+fn test_error_substr_compare_too_many_args() {
+    expect_error(
+        "<?php substr_compare(\"abc\", \"a\", 0, 1, true, 9);",
+        "substr_compare() takes 3 to 5 arguments",
+    );
+}
+
 /// Verifies that `substr_count()` with a single argument produces the correct arity error.
 #[test]
 fn test_error_substr_count_wrong_args() {
     expect_error(
         "<?php substr_count(\"abc\");",
         "substr_count() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies `strcspn()` requires its subject and character mask.
+#[test]
+fn test_error_strcspn_wrong_args() {
+    expect_error(
+        "<?php strcspn(\"abc\");",
+        "strcspn() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies `strspn()` rejects arguments beyond its optional length bound.
+#[test]
+fn test_error_strspn_too_many_args() {
+    expect_error(
+        "<?php strspn(\"abc\", \"abc\", 0, null, 1);",
+        "strspn() takes 2 to 4 arguments",
     );
 }
 

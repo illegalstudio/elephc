@@ -5,12 +5,24 @@
 //! - Owned-value exception guards and the mbstring diagnostic/release callback emitters.
 //!
 //! Key details:
-//! - Four C inputs are retained at offsets 224, 232, 240, and 248 on both architectures.
+//! - Four C inputs are retained right after the handler record, at [`PROTECTED_INPUT_OFFSET`]
+//!   plus 0, 8, 16 and 24 on both architectures; bodies read them through that constant.
 //! - Handler, activation, diagnostic suppression, and GC suppression are restored on both returns.
 //! - A pending throwable returns status two; recursive deep-free completion needs separate GC handling.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::try_handlers::{TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE};
+
+/// Offset of the first retained C input: the slot right after the complete handler record.
+pub(crate) const PROTECTED_INPUT_OFFSET: usize = TRY_HANDLER_SLOT_SIZE;
+/// Offset of the saved `_gc_release_suppressed` word, after the four inputs.
+const GC_STATE_OFFSET: usize = PROTECTED_INPUT_OFFSET + 32;
+/// AArch64 frame-pointer/link-register pair, after the GC word and its padding.
+const AARCH64_LINKAGE_OFFSET: usize = PROTECTED_INPUT_OFFSET + 48;
+/// AArch64 frame bytes: handler record, inputs, GC state, linkage.
+const AARCH64_FRAME_BYTES: usize = PROTECTED_INPUT_OFFSET + 64;
+/// SysV frame bytes below the saved `rbp`: handler record, inputs, GC state, padding.
+const X86_64_FRAME_BYTES: usize = PROTECTED_INPUT_OFFSET + 48;
 
 /// Emits an exception-contained callback around a body using the retained C input slots.
 pub(crate) fn emit(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter)) {
@@ -24,7 +36,7 @@ pub(crate) fn emit_status(emitter: &mut Emitter, name: &str, body: fn(&mut Emitt
 
 /// Selects the target boundary and whether its body already supplies the success/failure status.
 fn emit_inner(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_status: bool) {
-    assert_eq!(TRY_HANDLER_SLOT_SIZE, 224, "protected callback spills follow the complete native handler");
+    assert_eq!(TRY_HANDLER_SLOT_SIZE % 16, 0, "protected callback spills follow the complete native handler");
     emitter.label_global(name);
     if emitter.target.arch == Arch::AArch64 { aarch64(emitter, name, body, body_status); }
     else { x86_64(emitter, name, body, body_status); }
@@ -32,13 +44,13 @@ fn emit_inner(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_st
 
 /// Installs an AArch64 exception boundary and restores every captured runtime state after a throw.
 fn aarch64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_status: bool) {
-    emitter.instruction("sub sp, sp, #288");                                    // reserve the full PHP handler, callback inputs, GC state, and linkage
-    emitter.instruction("stp x29, x30, [sp, #272]");                            // preserve the C caller across setjmp and nested PHP execution
-    emitter.instruction("add x29, sp, #272");                                   // establish a stable protected callback frame
-    emitter.instruction("stp x0, x1, [sp, #224]");                              // retain the first two callback-specific C arguments
-    emitter.instruction("stp x2, x3, [sp, #240]");                              // retain byte/output pointers and optional message length
+    emitter.instruction(&format!("sub sp, sp, #{AARCH64_FRAME_BYTES}"));        // reserve the full PHP handler, callback inputs, GC state, and linkage
+    emitter.instruction(&format!("stp x29, x30, [sp, #{AARCH64_LINKAGE_OFFSET}]")); // preserve the C caller across setjmp and nested PHP execution
+    emitter.instruction(&format!("add x29, sp, #{AARCH64_LINKAGE_OFFSET}"));    // establish a stable protected callback frame
+    emitter.instruction(&format!("stp x0, x1, [sp, #{PROTECTED_INPUT_OFFSET}]")); // retain the first two callback-specific C arguments
+    emitter.instruction(&format!("stp x2, x3, [sp, #{}]", PROTECTED_INPUT_OFFSET + 16)); // retain byte/output pointers and optional message length
     for (offset, symbol) in [(0, "_exc_handler_top"), (8, "_exc_call_frame_top"),
-        (16, "_rt_diag_suppression"), (256, "_gc_release_suppressed")] {
+        (16, "_rt_diag_suppression"), (GC_STATE_OFFSET, "_gc_release_suppressed")] {
         abi::emit_load_symbol_to_reg(emitter, "x10", symbol, 0);
         emitter.instruction(&format!("str x10, [sp, #{offset}]"));              // preserve the caller's exception, suppression, or GC state
     }
@@ -56,12 +68,12 @@ fn aarch64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_statu
     emitter.instruction("mov x0, #2");                                          // preserve the throwable already published by the PHP unwinder
     emitter.label(&format!("{name}_done"));
     for (offset, symbol) in [(0, "_exc_handler_top"), (8, "_exc_call_frame_top"),
-        (16, "_rt_diag_suppression"), (256, "_gc_release_suppressed")] {
+        (16, "_rt_diag_suppression"), (GC_STATE_OFFSET, "_gc_release_suppressed")] {
         emitter.instruction(&format!("ldr x10, [sp, #{offset}]"));              // recover the state captured before any nested callback
         abi::emit_store_reg_to_symbol(emitter, "x10", symbol, 0);
     }
-    emitter.instruction("ldp x29, x30, [sp, #272]");                            // restore the original C caller after callback cleanup
-    emitter.instruction("add sp, sp, #288");                                    // release the complete exception boundary and callback spills
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{AARCH64_LINKAGE_OFFSET}]")); // restore the original C caller after callback cleanup
+    emitter.instruction(&format!("add sp, sp, #{AARCH64_FRAME_BYTES}"));        // release the complete exception boundary and callback spills
     emitter.instruction("ret");                                                 // return success or PendingThrowable without unwinding through Rust
 }
 
@@ -69,12 +81,13 @@ fn aarch64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_statu
 fn x86_64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_status: bool) {
     emitter.instruction("push rbp");                                            // preserve linkage and align the protected C callback frame
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame across setjmp and PHP calls
-    emitter.instruction("sub rsp, 272");                                        // reserve the complete handler, four inputs, and saved GC state
-    for (offset, register) in [(224, "rdi"), (232, "rsi"), (240, "rdx"), (248, "rcx")] {
+    emitter.instruction(&format!("sub rsp, {X86_64_FRAME_BYTES}"));             // reserve the complete handler, four inputs, and saved GC state
+    for (offset, register) in [(PROTECTED_INPUT_OFFSET, "rdi"), (PROTECTED_INPUT_OFFSET + 8, "rsi"),
+        (PROTECTED_INPUT_OFFSET + 16, "rdx"), (PROTECTED_INPUT_OFFSET + 24, "rcx")] {
         emitter.instruction(&format!("mov QWORD PTR [rsp + {offset}], {register}")); // retain each incoming C argument before setjmp clobbers registers
     }
     for (offset, symbol) in [(0, "_exc_handler_top"), (8, "_exc_call_frame_top"),
-        (16, "_rt_diag_suppression"), (256, "_gc_release_suppressed")] {
+        (16, "_rt_diag_suppression"), (GC_STATE_OFFSET, "_gc_release_suppressed")] {
         abi::emit_load_symbol_to_reg(emitter, "r10", symbol, 0);
         emitter.instruction(&format!("mov QWORD PTR [rsp + {offset}], r10"));   // preserve the caller's exception, suppression, or GC state
     }
@@ -93,7 +106,7 @@ fn x86_64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_status
     emitter.instruction("mov eax, 2");                                          // retain the native unwinder's published pending throwable
     emitter.label(&format!("{name}_done"));
     for (offset, symbol) in [(0, "_exc_handler_top"), (8, "_exc_call_frame_top"),
-        (16, "_rt_diag_suppression"), (256, "_gc_release_suppressed")] {
+        (16, "_rt_diag_suppression"), (GC_STATE_OFFSET, "_gc_release_suppressed")] {
         emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {offset}]"));   // recover each state captured before nested PHP execution
         abi::emit_store_reg_to_symbol(emitter, "r10", symbol, 0);
     }

@@ -26,12 +26,30 @@ impl Parser {
                 Ok(EvalExpr::Const(EvalConst::Float(value)))
             }
             TokenKind::String(value) => {
-                let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+                let value = value.clone();
                 self.advance();
-                Ok(EvalExpr::Const(match String::from_utf8(bytes) {
-                    Ok(value) => EvalConst::String(value),
-                    Err(error) => EvalConst::Bytes(error.into_bytes()),
-                }))
+                Ok(EvalExpr::Const(eval_string_constant(value)))
+            }
+            // `$$name` / `$${expr}`: the inner variable (itself possibly variable) names this one.
+            TokenKind::Dollar => {
+                self.advance();
+                let inner = match self.current() {
+                    TokenKind::DollarIdent(name) => {
+                        let name = name.clone();
+                        self.advance();
+                        EvalExpr::LoadVar(name)
+                    }
+                    TokenKind::Dollar | TokenKind::DollarLBrace => self.parse_primary()?,
+                    _ => return Err(EvalParseError::ExpectedVariable),
+                };
+                Ok(EvalExpr::DynamicVar(Box::new(inner)))
+            }
+            // `${expr}` outside a string: the expression names the variable.
+            TokenKind::DollarLBrace => {
+                self.advance();
+                let name = self.parse_expr()?;
+                self.expect(TokenKind::RBrace)?;
+                Ok(EvalExpr::DynamicVar(Box::new(name)))
             }
             TokenKind::DollarIdent(name) => {
                 let name = name.clone();
@@ -70,7 +88,22 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 Ok(EvalExpr::Print(Box::new(expr)))
             }
+            TokenKind::Ident(name) if ident_eq(name, "throw") => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                Ok(EvalExpr::Throw(Box::new(expr)))
+            }
+            TokenKind::AttributeStart => self.parse_attributed_closure_expr(),
+            TokenKind::Ident(name) if ident_eq(name, "fn") => {
+                self.parse_arrow_closure_expr(false, Vec::new())
+            }
             TokenKind::Ident(name) if ident_eq(name, "function") => self.parse_closure_expr(false),
+            TokenKind::Ident(name)
+                if ident_eq(name, "static")
+                    && matches!(self.peek(), TokenKind::Ident(next) if ident_eq(next, "fn")) =>
+            {
+                self.parse_arrow_closure_expr(true, Vec::new())
+            }
             TokenKind::Ident(name)
                 if ident_eq(name, "static")
                     && matches!(self.peek(), TokenKind::Ident(next) if ident_eq(next, "function")) =>
@@ -177,8 +210,11 @@ impl Parser {
             if !self.consume(TokenKind::Comma) {
                 break;
             }
+            // PHP's `match_arm_cond_list` admits a trailing comma, so `'a', 'b', => …` is one arm
+            // with two conditions, not a missing third one. A comma with nothing after it but the
+            // closing brace stays a syntax error, which is the check below.
             if matches!(self.current(), TokenKind::FatArrow) {
-                return Err(EvalParseError::UnexpectedToken);
+                break;
             }
             if matches!(self.current(), TokenKind::Eof | TokenKind::RBrace) {
                 return Err(EvalParseError::UnexpectedToken);
@@ -228,4 +264,32 @@ impl Parser {
         Ok(EvalExpr::ConstFetch(name))
     }
 
+}
+
+/// Restores binary-string marker characters emitted before lexing to their original bytes.
+fn eval_string_constant(value: String) -> EvalConst {
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut has_binary_marker = false;
+    for ch in value.chars() {
+        if (0xF0000..=0xF00FF).contains(&(ch as u32)) {
+            let byte = (ch as u32 - 0xF0000) as u8;
+            bytes.push(byte);
+            has_binary_marker = true;
+        } else if (0xE000..=0xE0FF).contains(&(ch as u32)) {
+            // Main's shared literal marker (`elephc_builtin_contract::string_literal`).
+            bytes.push((ch as u32 - 0xE000) as u8);
+            has_binary_marker = true;
+        } else {
+            let mut encoded = [0; 4];
+            bytes.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
+        }
+    }
+    if has_binary_marker {
+        match String::from_utf8(bytes) {
+            Ok(text) => EvalConst::String(text),
+            Err(error) => EvalConst::Bytes(error.into_bytes()),
+        }
+    } else {
+        EvalConst::String(value)
+    }
 }

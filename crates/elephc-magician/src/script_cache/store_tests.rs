@@ -51,12 +51,19 @@ fn write_fixture(name: &str, contents: &str) -> PathBuf {
 ///
 /// A file is one program, so the shape names its statement count: version A of the
 /// fixtures below (`<?php $x = 1;`) is `code(1)`, version B (`B<?php $x = 1;`) is `code(2)`,
-/// its inline `B` being an `echo`.
+/// its inline `B` being an `echo`. `SourceLine` markers are bookkeeping, not statements.
 fn shape(segments: &[ScriptSegment]) -> Vec<String> {
     segments
         .iter()
         .map(|segment| match segment {
-            ScriptSegment::Code(program) => format!("code({})", program.statements().len()),
+            ScriptSegment::Code(program) => format!(
+                "code({})",
+                program
+                    .statements()
+                    .iter()
+                    .filter(|stmt| !matches!(stmt, crate::eval_ir::EvalStmt::SourceLine(_)))
+                    .count()
+            ),
             ScriptSegment::ParseError(_) => "err".to_string(),
         })
         .collect()

@@ -322,6 +322,19 @@ type, or as `mixed`, when returning associative stat arrays with string keys.
 | `stream_socket_pair()` | `stream_socket_pair(int $domain, int $type, int $protocol): array` | Create a pair of connected socket streams, for example `STREAM_PF_UNIX`, `STREAM_SOCK_STREAM`, `0`. |
 | `popen()` | `popen(string $command, string $mode): resource\|false` | Open a pipe to a process in read (`"r"`) or write (`"w"`) mode. |
 | `pclose()` | `pclose($handle): int` | Close a process pipe and return its termination status. |
+| `proc_open()` | `proc_open(array\|string $command, array $descriptor_spec, &$pipes, ?string $cwd = null, ?array $env_vars = null, ?array $options = null): resource\|false` | Start a process with a descriptor table. `['pipe', 'r'\|'w']`, `['file', path, mode]`, `['null']`, `['redirect', n]`, and a stream resource are supported. An array `$command` runs without a shell (program found through `PATH`); a string runs through `/bin/sh -c`. `$pipes` receives the parent ends as ordinary stream resources, usable with `fread`, `fwrite`, `fgets`, `stream_get_contents`, `stream_select`, `stream_set_blocking`, and `fclose`. `$env_vars` replaces the environment; `$options` is accepted and ignored. |
+| `proc_close()` | `proc_close($process): int` | Close any pipes still open, wait for the child, and return its exit code (the raw wait status when a signal ended it, `-1` when `proc_get_status()` already reaped it). |
+| `proc_get_status()` | `proc_get_status($process): array` | Return `command`, `pid`, `cached`, `running`, `signaled`, `stopped`, `exitcode`, `termsig`, `stopsig` in php 8.5's order. A normal exit is cached and repeated; a signal death is reported once. |
+| `proc_terminate()` | `proc_terminate($process, int $signal = 15): bool` | Send a signal to the child without reaping it. |
+| `proc_nice()` | `proc_nice(int $priority): bool` | Change the priority of the current process through `nice(3)`. |
+
+The `proc_*` family is declared by an injected prelude over the small `elephc_proc`
+bridge (`--with-proc` forces it), so a program that never names one carries none of
+it. The process handle is a stream resource over `/dev/null` whose descriptor keys
+the bridge's status table: `is_resource()` turns false after `proc_close()` exactly as
+in PHP, but `get_resource_type()` answers `stream`, not `process`. PHP warnings from
+`proc_open()` surface as `E_USER_WARNING`, and the family is refused when compiling
+for targets whose sandbox forbids spawning a process.
 
 Socket addresses use `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or
 `udg:///path`. Host names are resolved through the system resolver to IPv4.

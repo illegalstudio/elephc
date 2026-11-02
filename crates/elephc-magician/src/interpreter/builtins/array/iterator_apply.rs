@@ -104,14 +104,26 @@ pub(in crate::interpreter) fn eval_iterator_apply_result(
     if values.type_tag(iterator)? != EVAL_TAG_OBJECT {
         return Err(EvalStatus::RuntimeFatal);
     }
+    // The callback is invoked once per position with the SAME arguments, and a call settles the
+    // owner of every owned argument it is handed. Handing the owned originals to every iteration
+    // settled that owner once per call: a spread element, which comes out of `array_get` owned,
+    // was given back N times for one reference. The loop gets borrowed views and the owners are
+    // settled once, here, on every exit edge.
+    let borrowed_args: Vec<EvaluatedCallArg> = callback_args
+        .iter()
+        .map(|arg| EvaluatedCallArg {
+            value: arg.value.borrowed(),
+            ..arg.clone()
+        })
+        .collect();
     let count = match eval_iterator_apply_iterator_object(
         iterator,
         callback,
-        &callback_args,
+        &borrowed_args,
         context,
         values,
     ) {
-        Ok(count) => count,
+        Ok(count) => Ok(count),
         Err(EvalStatus::UnsupportedConstruct) => {
             let iterator = eval_native_method_with_positional_values(
                 iterator,
@@ -123,14 +135,29 @@ pub(in crate::interpreter) fn eval_iterator_apply_result(
             eval_iterator_apply_iterator_object(
                 iterator,
                 callback,
-                &callback_args,
+                &borrowed_args,
                 context,
                 values,
-            )?
+            )
         }
-        Err(err) => return Err(err),
+        Err(err) => Err(err),
     };
-    values.int(count)
+    let released = eval_release_owned_call_args(&callback_args, context, values);
+    values.int(released.and(count)?)
+}
+
+/// Gives back the one release the call machinery owed on each owned argument.
+fn eval_release_owned_call_args(
+    args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for arg in args {
+        if !arg.value.is_borrowed() {
+            eval_release_value(context, values, arg.value)?;
+        }
+    }
+    Ok(())
 }
 
 /// Drives one Iterator object through `rewind()`, `valid()`, callback, and `next()`.

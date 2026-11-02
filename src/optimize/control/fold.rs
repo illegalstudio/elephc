@@ -27,9 +27,10 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
     let attributes = stmt.attributes.clone();
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(fold_block(stmts)),
-        StmtKind::IncludeOnceMark { label } => StmtKind::IncludeOnceMark { label },
-        StmtKind::IncludeOnceGuard { label, body } => StmtKind::IncludeOnceGuard {
-            label,
+        StmtKind::IncludeOnceMark { source_path } => StmtKind::IncludeOnceMark { source_path },
+        StmtKind::IncludeOnceGuard { source_path, required, body } => StmtKind::IncludeOnceGuard {
+            source_path,
+            required,
             body: fold_block(body),
         },
         StmtKind::Echo(expr) => StmtKind::Echo(fold_expr(expr)),
@@ -43,15 +44,15 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             then_body,
             elseif_clauses,
             else_body,
-        } => StmtKind::If {
-            condition: fold_condition_expr(condition),
-            then_body: fold_block(then_body),
-            elseif_clauses: elseif_clauses
-                .into_iter()
-                .map(|(condition, body)| (fold_condition_expr(condition), fold_block(body)))
-                .collect(),
-            else_body: else_body.map(fold_block),
-        },
+        } => fold_if_statement(
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+            span,
+            source_mode,
+            strict_types,
+        ),
         StmtKind::IfDef {
             symbol,
             then_body,
@@ -219,6 +220,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         StmtKind::ClassDecl {
             generics,
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -231,6 +233,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         } => StmtKind::ClassDecl {
             generics,
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -300,6 +303,15 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             property,
             value: fold_expr(value),
         },
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => StmtKind::PropertyRefAssign {
+            object: Box::new(fold_expr(*object)),
+            property,
+            source: fold_expr(source),
+        },
         StmtKind::StaticPropertyAssign {
             receiver,
             property,
@@ -327,6 +339,30 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             receiver,
             property,
             index: fold_expr(index),
+            value: fold_expr(value),
+        },
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index,
+            source,
+        } => StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index: fold_expr(index),
+            source: fold_expr(source),
+        },
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property: Box::new(fold_expr(*property)),
+            index: index.map(fold_expr),
+            append,
             value: fold_expr(value),
         },
         StmtKind::PropertyArrayPush {
@@ -361,6 +397,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             library,
         },
         StmtKind::ExternClassDecl { name, fields } => StmtKind::ExternClassDecl { name, fields },
+        StmtKind::ClassLikeActivate { name, kind, source_path } => StmtKind::ClassLikeActivate { name, kind, source_path },
         StmtKind::ExternGlobalDecl { name, c_type } => {
             StmtKind::ExternGlobalDecl { name, c_type }
         }
@@ -405,7 +442,16 @@ pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
                 }
                 _ => false,
             };
-            let stmt = fold_stmt(stmt);
+            // A target-dependent `if` keeps its STRUCTURE through folding so
+            // `prune_target_boolean_if` below can splice the surviving branch into this block.
+            // The ordinary folder would have replaced it with a `Synthetic` wrapper first, which
+            // that pruner cannot see into — and a wrapper is not what the branch's statements
+            // should become here: pruning a target guard means the branch was never written.
+            let stmt = if active_fold_target().is_some() && target_dependent_if {
+                fold_target_dependent_if(stmt)
+            } else {
+                fold_stmt(stmt)
+            };
             if active_fold_target().is_some() && target_dependent_if {
                 prune_target_boolean_if(stmt)
             } else {
@@ -413,6 +459,29 @@ pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
             }
         })
         .collect()
+}
+
+/// Folds a target-dependent `if` without collapsing it, leaving the structure `prune_target_boolean_if` needs.
+fn fold_target_dependent_if(stmt: Stmt) -> Stmt {
+    let Stmt { kind, span, source_mode, strict_types, attributes } = stmt;
+    let StmtKind::If { condition, then_body, elseif_clauses, else_body } = kind else {
+        return fold_stmt(Stmt { kind, span, source_mode, strict_types, attributes });
+    };
+    Stmt {
+        kind: StmtKind::If {
+            condition: fold_condition_expr(condition),
+            then_body: fold_block(then_body),
+            elseif_clauses: elseif_clauses
+                .into_iter()
+                .map(|(condition, body)| (fold_condition_expr(condition), fold_block(body)))
+                .collect(),
+            else_body: else_body.map(fold_block),
+        },
+        span,
+        source_mode,
+        strict_types,
+        attributes,
+    }
 }
 
 /// Detects conditions whose compile-time value depends on the selected output target.
@@ -530,4 +599,163 @@ fn prune_target_boolean_if(stmt: Stmt) -> Vec<Stmt> {
             attributes,
         }],
     }
+}
+
+/// Folds an if-chain and removes a leading branch whose condition became a scalar literal.
+///
+/// This early, effect-safe pruning happens before type checking so a statically unreachable
+/// branch cannot report diagnostics for expressions PHP never evaluates. Dynamic conditions
+/// retain the original if-chain shape and all source-order evaluation rules.
+fn fold_if_statement(
+    condition: Expr,
+    then_body: Vec<Stmt>,
+    elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+    source_mode: crate::source::SourceMode,
+    strict_types: bool,
+) -> StmtKind {
+    let condition = fold_condition_expr(condition);
+    let Some((truthy, required_evaluation)) = known_condition_truthiness(&condition) else {
+        return StmtKind::If {
+            condition,
+            then_body: fold_block(then_body),
+            elseif_clauses: elseif_clauses
+                .into_iter()
+                .map(|(condition, body)| (fold_condition_expr(condition), fold_block(body)))
+                .collect(),
+            else_body: else_body.map(fold_block),
+        };
+    };
+
+    if truthy {
+        return prefix_required_condition_evaluation(
+            StmtKind::Synthetic(fold_block(then_body)),
+            required_evaluation,
+            span,
+            source_mode,
+            strict_types,
+        );
+    }
+
+    let selected = fold_reachable_elseif_chain(
+        elseif_clauses,
+        else_body,
+        span,
+        source_mode,
+        strict_types,
+    );
+    prefix_required_condition_evaluation(
+        selected,
+        required_evaluation,
+        span,
+        source_mode,
+        strict_types,
+    )
+}
+
+/// Selects the first statically true elseif branch or preserves the suffix beginning at the
+/// first dynamic condition; when every elseif is false, it selects the optional else body.
+fn fold_reachable_elseif_chain(
+    mut elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+    source_mode: crate::source::SourceMode,
+    strict_types: bool,
+) -> StmtKind {
+    while !elseif_clauses.is_empty() {
+        let (condition, body) = elseif_clauses.remove(0);
+        let condition = fold_expr(condition);
+        match known_condition_truthiness(&condition) {
+            Some((true, required_evaluation)) => {
+                return prefix_required_condition_evaluation(
+                    StmtKind::Synthetic(fold_block(body)),
+                    required_evaluation,
+                    span,
+                    source_mode,
+                    strict_types,
+                );
+            }
+            Some((false, required_evaluation)) => {
+                if let Some(evaluation) = required_evaluation {
+                    let selected = fold_reachable_elseif_chain(
+                        elseif_clauses,
+                        else_body,
+                        span,
+                        source_mode,
+                        strict_types,
+                    );
+                    return prefix_required_condition_evaluation(
+                        selected,
+                        Some(evaluation),
+                        span,
+                        source_mode,
+                        strict_types,
+                    );
+                }
+            }
+            None => {
+                return StmtKind::If {
+                    condition,
+                    then_body: fold_block(body),
+                    elseif_clauses: elseif_clauses
+                        .into_iter()
+                        .map(|(condition, body)| (fold_expr(condition), fold_block(body)))
+                        .collect(),
+                    else_body: else_body.map(fold_block),
+                };
+            }
+        }
+    }
+
+    StmtKind::Synthetic(else_body.map(fold_block).unwrap_or_default())
+}
+
+/// Determines scalar truthiness and the expression that still must be evaluated before a
+/// short-circuit identity can select a branch (`$value || true`, `$value && false`).
+fn known_condition_truthiness(condition: &Expr) -> Option<(bool, Option<Expr>)> {
+    if let Some(value) = scalar_value(condition) {
+        return Some((value.truthy(), None));
+    }
+    let ExprKind::BinaryOp { left, op, right } = &condition.kind else {
+        return None;
+    };
+    let right = scalar_value(right)?;
+    match op {
+        BinOp::Or if right.truthy() => Some((true, Some((**left).clone()))),
+        BinOp::And if !right.truthy() => Some((false, Some((**left).clone()))),
+        _ => None,
+    }
+}
+
+/// Prefixes a selected branch with the expression PHP must still evaluate for a short-circuit
+/// identity, retaining the original statement's source and strict-types profile.
+fn prefix_required_condition_evaluation(
+    selected: StmtKind,
+    required_evaluation: Option<Expr>,
+    span: crate::span::Span,
+    source_mode: crate::source::SourceMode,
+    strict_types: bool,
+) -> StmtKind {
+    let Some(required_evaluation) = required_evaluation else {
+        return selected;
+    };
+    let mut body = vec![Stmt {
+        kind: StmtKind::ExprStmt(required_evaluation),
+        span,
+        source_mode,
+        strict_types,
+        attributes: Vec::new(),
+    }];
+    match selected {
+        StmtKind::Synthetic(mut selected_body) => body.append(&mut selected_body),
+        selected => body.push(Stmt {
+            kind: selected,
+            span,
+            source_mode,
+            strict_types,
+            attributes: Vec::new(),
+        }),
+    }
+    StmtKind::Synthetic(body)
 }

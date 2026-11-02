@@ -72,6 +72,7 @@ fn opcache_names_are_checked_and_constructs_are_not() {
 /// (the signature caught up, or the builtin left the registry) fails here instead of rotting.
 #[test]
 fn every_php_arity_override_is_live_and_needed() {
+    let mut stale = Vec::new();
     for (name, arity) in super::super::arity::PHP_ARITY_OVERRIDES {
         let spec = eval_raw_declared_builtin_spec(name)
             .unwrap_or_else(|| panic!("override {name} is not an eval registry builtin"));
@@ -79,7 +80,11 @@ fn every_php_arity_override_is_live_and_needed() {
             spec.required_param_count(),
             spec.variadic.is_none().then_some(spec.params.len()),
         );
-        assert_ne!(*arity, from_signature, "override {name} repeats its eval signature");
+        if *arity == from_signature {
+            stale.push(*name);
+            continue;
+        }
         assert_eq!(spec.php_arity(), *arity, "{name}");
     }
+    assert!(stale.is_empty(), "overrides that repeat their eval signature: {stale:?}");
 }

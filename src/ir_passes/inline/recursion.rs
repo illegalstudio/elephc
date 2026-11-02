@@ -25,8 +25,15 @@ pub(super) fn compute_recursive_callees(
 ) -> HashSet<String> {
     let mut nodes: Vec<&Function> = module.functions.iter().chain(methods.bodies().iter()).collect();
     let roots = nodes.len();
-    let mut by_name: HashMap<String, usize> = nodes.iter().enumerate()
-        .map(|(index, body)| (php_symbol_key(&body.name), index)).collect();
+    // Same rule as `build_name_to_index`: the entry (`main`) is no call target, and the first body
+    // carrying a name wins, so a user `function main()` is never shadowed by the entry.
+    let mut by_name: HashMap<String, usize> = HashMap::new();
+    for (index, body) in nodes.iter().enumerate() {
+        if body.flags.is_main {
+            continue;
+        }
+        by_name.entry(php_symbol_key(&body.name)).or_insert(index);
+    }
     let method_bodies: HashMap<String, &Function> = module.class_methods.iter()
         .map(|body| (php_symbol_key(&body.name), body)).collect();
     let mut adjacency = vec![Vec::new(); nodes.len()];

@@ -40,6 +40,7 @@ pub fn emit_symlink(emitter: &mut Emitter) {
     emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment after preceding runtime literals
     emitter.comment("--- runtime: symlink ---");
     emitter.label_global("__rt_symlink");
+    super::emit_realpath_cache_invalidate(emitter);                          // a path may change: forget cached realpaths
     emitter.instruction("sub sp, sp, #48");                                     // allocate frame + spill slots
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
@@ -64,6 +65,7 @@ pub fn emit_symlink(emitter: &mut Emitter) {
     emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment for the next runtime helper
     emitter.comment("--- runtime: link ---");
     emitter.label_global("__rt_link");
+    super::emit_realpath_cache_invalidate(emitter);                          // a path may change: forget cached realpaths
     emitter.instruction("sub sp, sp, #48");                                     // allocate frame + spill slots
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
@@ -174,6 +176,7 @@ fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: symlink ---");
     emitter.label_global("__rt_symlink");
+    super::emit_realpath_cache_invalidate(emitter);                          // a path may change: forget cached realpaths
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish frame
     emitter.instruction("sub rsp, 32");                                         // reserve spill slots
@@ -200,6 +203,7 @@ fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: link ---");
     emitter.label_global("__rt_link");
+    super::emit_realpath_cache_invalidate(emitter);                          // a path may change: forget cached realpaths
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish frame
     emitter.instruction("sub rsp, 32");                                         // reserve spill slots

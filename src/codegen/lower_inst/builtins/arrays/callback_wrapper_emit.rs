@@ -219,19 +219,7 @@ pub(super) fn reserve_static_callback_env(
             }
         }
         StaticCallbackEnvSource::ThisObject(slot) => {
-            let source_ty = ctx.load_local_to_result(slot)?;
-            if !matches!(source_ty.codegen_repr(), PhpType::Object(_)) {
-                return Err(CodegenIrError::invalid_module(format!(
-                    "this local has PHP type {:?} for forwarded called-class id",
-                    source_ty
-                )));
-            }
-            abi::emit_load_from_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                abi::int_result_reg(ctx.emitter),
-                0,
-            );
+            super::super::super::materialize_this_object_called_class_id(ctx, slot)?;
         }
         StaticCallbackEnvSource::Value(value) => {
             let source_ty = ctx.load_value_to_result(value)?;
@@ -269,4 +257,3 @@ pub(super) fn load_static_callback_env_arg(ctx: &mut FunctionContext<'_>, env_re
         abi::emit_temporary_stack_address(ctx.emitter, env_reg, 0);
     }
 }
-

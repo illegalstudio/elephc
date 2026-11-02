@@ -200,14 +200,22 @@ pub(super) fn lower_eval_call_user_func_fallback(
     let dynamic_name = php_symbol_key(callback_name.trim_start_matches('\\'));
     let data = ctx.intern_function_name(&dynamic_name);
     let operands = lower_args(ctx, callback_args);
-    Some(ctx.emit_value(
+    let result = ctx.emit_value(
         Op::EvalFunctionCall,
-        operands,
+        operands.clone(),
         Some(Immediate::Data(data)),
         PhpType::Mixed,
         Op::EvalFunctionCall.default_effects(),
         Some(expr.span),
-    ))
+    );
+    release_owned_call_arg_temporaries(
+        ctx,
+        &operands,
+        Some(result.value),
+        &ReturnArgAlias::None,
+        expr.span,
+    );
+    Some(result)
 }
 
 /// Lowers unresolved `call_user_func_array()` string callbacks through the eval table.
@@ -231,18 +239,34 @@ pub(super) fn lower_eval_call_user_func_array_fallback(
     let dynamic_name = php_symbol_key(callback_name.trim_start_matches('\\'));
     let data = ctx.intern_function_name(&dynamic_name);
     let arg_array = lower_expr(ctx, arg_array);
-    let arg_array = coerce_eval_function_arg_array(ctx, arg_array, expr.span);
-    Some(ctx.emit_value(
+    let boxed_arg_array = coerce_eval_function_arg_array(ctx, arg_array, expr.span);
+    let result = ctx.emit_value(
         Op::EvalFunctionCallArray,
-        vec![arg_array.value],
+        vec![boxed_arg_array.value],
         Some(Immediate::Data(data)),
         PhpType::Mixed,
         Op::EvalFunctionCallArray.default_effects(),
         Some(expr.span),
-    ))
+    );
+    release_owned_call_arg_temporaries(
+        ctx,
+        &[boxed_arg_array.value],
+        Some(result.value),
+        &ReturnArgAlias::None,
+        expr.span,
+    );
+    Some(result)
 }
 
 /// Boxes a post-barrier dynamic-call argument container for the eval bridge ABI.
+///
+/// Boxing goes through `box_value_as_mixed` so an owning temporary container -- an array literal
+/// spread straight into the call -- hands its reference to the box instead of keeping a second one
+/// alive (issue #484). The box it returns is itself an owning temporary, and the bridge borrows the
+/// container rather than taking it, so the caller pairs this with
+/// `release_owned_call_arg_temporaries` once the call has returned. Releasing the box is neutral
+/// for the elements the container spreads: `__rt_mixed_from_array_kind` retains only the container
+/// and `__rt_mixed_free_deep` decrefs that same container.
 pub(super) fn coerce_eval_function_arg_array(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -254,12 +278,5 @@ pub(super) fn coerce_eval_function_arg_array(
     ) {
         return value;
     }
-    ctx.emit_value(
-        Op::MixedBox,
-        vec![value.value],
-        None,
-        PhpType::Mixed,
-        Op::MixedBox.default_effects(),
-        Some(span),
-    )
+    ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
 }

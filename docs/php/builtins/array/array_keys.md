@@ -2,19 +2,21 @@
 title: "array_keys()"
 description: "Returns all the keys of an array."
 sidebar:
-  order: 23
+  order: 29
 ---
 
 ## array_keys()
 
 ```php
-function array_keys(array $array): array
+function array_keys(array $array, mixed $filter_value, bool $strict = false): array
 ```
 
 Returns all the keys of an array.
 
 **Parameters**:
 - `$array` (`array`)
+- `$filter_value` (`mixed`)
+- `$strict` (`bool`), default `false`, optional
 
 **Returns**: `array`
 

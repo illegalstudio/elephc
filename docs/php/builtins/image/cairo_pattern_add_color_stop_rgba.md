@@ -2,7 +2,7 @@
 title: "cairo_pattern_add_color_stop_rgba()"
 description: "Adds a color stop with alpha to a gradient pattern."
 sidebar:
-  order: 433
+  order: 446
 ---
 
 ## cairo_pattern_add_color_stop_rgba()

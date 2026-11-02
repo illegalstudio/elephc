@@ -9,6 +9,71 @@
 
 use super::*;
 
+/// Verifies boxed gradual arrays are checked and unboxed at an iterable parameter boundary.
+#[test]
+fn test_mixed_arrays_bind_to_iterable_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function choose(bool $assoc): mixed {
+    return $assoc ? ['a' => 3, 'b' => 4] : [1, 2];
+}
+
+function total(iterable $values): int {
+    $sum = 0;
+    foreach ($values as $value) {
+        $sum += $value;
+    }
+    return $sum;
+}
+
+echo total(choose(false)), ':', total(choose(true));
+"#,
+    );
+    assert_eq!(out, "3:7");
+}
+
+/// Verifies a boxed Traversable object is validated and unboxed at an iterable boundary.
+#[test]
+fn test_mixed_traversable_object_binds_to_iterable_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function choose(): mixed {
+    return new ArrayIterator([5, 6]);
+}
+
+function total(iterable $values): int {
+    $sum = 0;
+    foreach ($values as $value) {
+        $sum += $value;
+    }
+    return $sum;
+}
+
+echo total(choose());
+"#,
+    );
+    assert_eq!(out, "11");
+}
+
+/// Verifies a non-iterable boxed gradual value raises a runtime type error at the boundary.
+#[test]
+fn test_mixed_scalar_rejected_by_iterable_parameter() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function choose(): mixed {
+    return 42;
+}
+
+function total(iterable $values): int {
+    return count($values);
+}
+
+echo total(choose());
+"#,
+    );
+    assert!(err.contains("Value must be of type iterable, int given"));
+}
+
 /// Verifies that `iterable` typed parameter returns "array" from `gettype()` for both hash and indexed arrays.
 #[test]
 fn test_gettype_iterable_returns_array() {
@@ -23,6 +88,71 @@ fn test_gettype_iterable_returns_array() {
         ",
     );
     assert_eq!(out, "array|array");
+}
+
+/// `is_array()` and `is_object()` on an `iterable` answer from the VALUE, never from the
+/// declaration.
+///
+/// PHP's `iterable` is `array|Traversable`, so the two predicates split it: `is_array($x)` is true
+/// exactly when the value is an array, and `is_object($x)` exactly when it is a Traversable. Both
+/// used to be answered statically as `false` for every `iterable`-typed value, with the comment
+/// that an iterable "may hold a Traversable" — which made the ARRAY case wrong on the commonest
+/// shape there is, a promoted constructor property `private iterable $items = []`:
+/// `is_array($this->items)` said `false` while `\count($this->items)` (which has always dispatched
+/// on the heap kind) answered `2`, so the two disagreed about one value and a `!is_array(…)` guard
+/// took a branch php never takes.
+#[test]
+fn test_is_array_and_is_object_on_an_iterable_read_the_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements IteratorAggregate {
+    public function __construct(private array $items) {}
+    public function getIterator(): Traversable { return new ArrayIterator($this->items); }
+}
+class Holder {
+    public function __construct(private iterable $items = []) {}
+    public function probe(): string {
+        return var_export(is_array($this->items), true) . '/' . var_export(is_object($this->items), true);
+    }
+}
+function probeParam(iterable $x): string {
+    return var_export(is_array($x), true) . '/' . var_export(is_object($x), true);
+}
+echo (new Holder())->probe(), ' ';
+echo (new Holder([1, 2]))->probe(), ' ';
+echo (new Holder(['k' => 'v']))->probe(), ' ';
+echo (new Holder(new Bag([1])))->probe(), ' ';
+echo probeParam([1, 2]), ' ';
+echo probeParam(new Bag([1]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "true/false true/false true/false false/true true/false false/true"
+    );
+}
+
+/// `gettype()` and `get_debug_type()` on an `iterable` read the value's heap kind for the same
+/// reason the predicates above do.
+///
+/// Both named every `iterable` `array`, which is right for an array and wrong for the Traversable
+/// half: php answers `object` / the class name. Measured before the fix, one value reported
+/// `is_object=true` and `get_debug_type=array` at the same time.
+#[test]
+fn test_gettype_and_debug_type_on_an_iterable_read_the_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements IteratorAggregate {
+    public function __construct(private array $items) {}
+    public function getIterator(): Traversable { return new ArrayIterator($this->items); }
+}
+function name(iterable $x): string { return gettype($x) . '/' . get_debug_type($x); }
+echo name([1, 2]), ' ';
+echo name(['k' => 'v']), ' ';
+echo name(new Bag([1]));
+"#,
+    );
+    assert_eq!(out, "array/array array/array object/Bag");
 }
 
 /// Verifies `var_dump` on a hash (associative) `iterable` prints the array shell with correct count.

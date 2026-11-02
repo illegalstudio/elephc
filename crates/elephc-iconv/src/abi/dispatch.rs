@@ -8,18 +8,21 @@
 //! Key details:
 //! - Every failure is converted here into the diagnostic line php-src prints plus the
 //!   PHP `false` result, so the generated runtime never formats messages itself.
-//! - `iconv_strpos()`'s out-of-range `$offset` is the one outcome that must throw rather
-//!   than warn, and it is reported through a dedicated result kind.
+//! - `iconv_strpos()`'s out-of-range `$offset` must throw rather than warn, and it is
+//!   reported through a dedicated result kind; the mbstring case operations report a
+//!   refused `$encoding` as `KIND_VALUE_ERROR` with the whole message as payload.
 //! - Operation names are needed only to render diagnostics; dispatch itself is by opcode.
 
 use crate::abi::args::{
-    IconvCallArgs, OP_CONVERT, OP_GET_ENCODING, OP_MIME_DECODE, OP_MIME_DECODE_HEADERS,
-    OP_MIME_ENCODE, OP_SET_ENCODING, OP_STRLEN, OP_STRPOS, OP_STRRPOS, OP_SUBSTR,
+    IconvCallArgs, OP_CONVERT, OP_GET_ENCODING, OP_MB_STRTOLOWER, OP_MB_STRTOUPPER,
+    OP_MIME_DECODE, OP_MIME_DECODE_HEADERS, OP_MIME_ENCODE, OP_SET_ENCODING, OP_STRLEN,
+    OP_STRPOS, OP_STRRPOS, OP_SUBSTR,
 };
 use crate::abi::result::{
     pack_entries, IconvResultBlock, KIND_ARRAY, KIND_INT, KIND_OFFSET_VALUE_ERROR, KIND_STRING,
-    KIND_TRUE,
+    KIND_TRUE, KIND_VALUE_ERROR,
 };
+use crate::case::{convert_case, CaseMode};
 use crate::encoding_state::{self, EncodingKind};
 use crate::error::{IconvError, IconvResult};
 use crate::mime::encode::{MimeEncodeOptions, Scheme, DEFAULT_LINE_BREAK, DEFAULT_LINE_LENGTH};
@@ -102,6 +105,8 @@ pub unsafe fn dispatch(args: &IconvCallArgs, out: *mut IconvResultBlock) {
         }
         OP_GET_ENCODING => get_encoding(args, out),
         OP_SET_ENCODING => set_encoding(args, out),
+        OP_MB_STRTOUPPER => convert_case_op(CaseMode::Upper, args, out),
+        OP_MB_STRTOLOWER => convert_case_op(CaseMode::Lower, args, out),
         // An unknown opcode can only come from a miscompiled call site; report PHP false.
         _ => {}
     }
@@ -128,6 +133,24 @@ unsafe fn get_encoding(args: &IconvCallArgs, out: *mut IconvResultBlock) {
     }
     if let Some(kind) = EncodingKind::parse(requested) {
         IconvResultBlock::set_bytes(out, KIND_STRING, encoding_state::get(kind).into_bytes());
+    }
+}
+
+/// Implements `mb_strtoupper()` / `mb_strtolower()`, which answer a string or throw.
+///
+/// A refused `$encoding` is reported as `KIND_VALUE_ERROR` carrying the finished message,
+/// so the runtime throws it without formatting anything itself.
+///
+/// # Safety
+/// Same requirements as [`dispatch`].
+unsafe fn convert_case_op(mode: CaseMode, args: &IconvCallArgs, out: *mut IconvResultBlock) {
+    match convert_case(mode, args.bytes_or_empty(0), args.bytes(1)) {
+        Ok(bytes) => IconvResultBlock::set_bytes(out, KIND_STRING, bytes),
+        Err(error) => IconvResultBlock::set_bytes(
+            out,
+            KIND_VALUE_ERROR,
+            error.value_error_message(mode.function_name()),
+        ),
     }
 }
 

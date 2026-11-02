@@ -2,7 +2,7 @@
 title: "bcfloor()"
 description: "Rounds an arbitrary-precision decimal number down to an integer."
 sidebar:
-  order: 566
+  order: 579
 ---
 
 ## bcfloor()

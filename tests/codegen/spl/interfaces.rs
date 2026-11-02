@@ -447,6 +447,38 @@ var_dump($s instanceof Stringable);
     assert_eq!(out, "[hi]bool(true)\n");
 }
 
+/// Verifies Stringable interface receivers dispatch casts, interpolation, and echo dynamically.
+#[test]
+fn test_stringable_subinterface_receiver_string_contexts() {
+    let out = compile_and_run(
+        r#"<?php
+interface RuntimeResourceLabel extends Stringable {
+    public function __toString(): string;
+}
+
+final class RuntimeResourceA implements RuntimeResourceLabel {
+    public function __toString(): string { return "A"; }
+}
+
+final class RuntimeResourceB implements RuntimeResourceLabel {
+    public function __toString(): string { return "B"; }
+}
+
+function formatResource(RuntimeResourceLabel $resource): string {
+    return "$resource:" . (string) $resource;
+}
+
+function echoResource(RuntimeResourceLabel $resource): void {
+    echo $resource;
+}
+
+echo formatResource(new RuntimeResourceA()), "|";
+echoResource(new RuntimeResourceB());
+"#,
+    );
+    assert_eq!(out, "A:A|B");
+}
+
 /// Verifies a class with `__toString()` implicitly satisfies `Stringable`
 /// (no explicit `implements Stringable` needed).
 #[test]
@@ -597,6 +629,36 @@ echo Holder::$staticBox["k"];
     assert_eq!(out, "ps");
 }
 
+/// Verifies a nullable property narrowed by `??=` retains its `ArrayAccess` contract for an
+/// object-keyed subscript write and read.
+#[test]
+fn test_nullable_array_access_property_subscript_write() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableStorageHolder {
+    private ?SplObjectStorage $storage = null;
+
+    public function contains(object $key): bool {
+        return isset($this->storage[$key]);
+    }
+
+    public function store(object $key): string {
+        $this->storage ??= new SplObjectStorage();
+        $this->storage[$key] = "stored";
+        return $this->storage[$key];
+    }
+}
+
+$holder = new NullableStorageHolder();
+$key = new stdClass();
+var_dump($holder->contains($key));
+echo $holder->store($key), ":";
+var_dump($holder->contains($key));
+"#,
+    );
+    assert_eq!(out, "bool(false)\nstored:bool(true)\n");
+}
+
 /// Verifies subscript assignment expressions (`$b["k"] = 5`), compound assignment
 /// (`+=`), and null-coalescing assignment (`??=`) return the computed value.
 #[test]
@@ -635,7 +697,62 @@ $c = new MaybeBox();
 echo ($c["k"] ??= 3);
 "#,
     );
-    assert_eq!(out, "=S5|GS17|GS3");
+    // php asks `offsetExists()` first for `??=` and, when it answers false, never calls
+    // `offsetGet()`: `=S5|GS17|S3` (verified against php 8.5 with an echoing offsetExists).
+    assert_eq!(out, "=S5|GS17|S3");
+}
+
+/// Verifies a dimension write whose base is `$this` or a call result writes to that value:
+/// `return $this['env'] = …`, `$obj->self()['k'] = …`, `f()[] = …`, `Cls::shared()['s'] = …`,
+/// and on an array-returning call, a write to the discarded temporary.
+///
+/// php compiles all of them; the parser refused every one with "Invalid assignment target", and
+/// that refused Laravel's `Illuminate\Foundation\Application` (`return $this['env'] = …;`) and
+/// `Illuminate/Support/functions.php` (`fn ($d) => app(Collection::class)[] = $d`).
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_array_access_write_through_this_and_call_results() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements ArrayAccess {
+    private array $d = [];
+    public function offsetExists(mixed $k): bool { return isset($this->d[$k]); }
+    public function offsetGet(mixed $k): mixed { return $this->d[$k] ?? null; }
+    public function offsetSet(mixed $k, mixed $v): void { if ($k === null) { $this->d[] = $v; } else { $this->d[$k] = $v; } }
+    public function offsetUnset(mixed $k): void { unset($this->d[$k]); }
+    public function setViaThis(): mixed { return $this['env'] = 'prod'; }
+    public function self(): Bag { return $this; }
+    public static function shared(): Bag { static $b; return $b ??= new Bag(); }
+    public function dump(): string { return json_encode($this->d); }
+}
+function bag(): Bag { static $b; return $b ??= new Bag(); }
+function numbers(): array { return [1, 2]; }
+
+$b = new Bag();
+echo $b->setViaThis(), "|";
+$b->self()['k'] = 'v';
+$b->self()[] = 'pushed';
+echo $b->dump(), "\n";
+
+bag()[] = 'x';
+bag()['k'] = 'y';
+$f = fn ($v) => bag()[] = $v;
+$f('z');
+echo bag()->dump(), "\n";
+
+Bag::shared()['s'] = 1;
+echo Bag::shared()->dump(), "\n";
+
+echo (numbers()[5] = 7), "|";
+numbers()[] = 3;
+echo json_encode(numbers()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "prod|{\"env\":\"prod\",\"k\":\"v\",\"0\":\"pushed\"}\n{\"0\":\"x\",\"k\":\"y\",\"1\":\"z\"}\n{\"s\":1}\n7|[1,2]\n"
+    );
 }
 
 /// Verifies subscript read on a union type (`LeftBox|RightBox`) dispatches to the

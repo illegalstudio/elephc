@@ -231,6 +231,7 @@ fn expr_refs_fileinfo(expr: &Expr) -> bool {
         | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Spread(inner)
         | ExprKind::YieldFrom(inner) => expr_refs_fileinfo(inner),
         ExprKind::NullCoalesce { value, default }
@@ -343,6 +344,8 @@ fn expr_refs_fileinfo(expr: &Expr) -> bool {
         }
         ExprKind::ClassConstant { receiver }
         | ExprKind::ScopedConstantAccess { receiver, .. } => receiver_refs_fileinfo(receiver),
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => receiver_refs_fileinfo(receiver) || expr_refs_fileinfo(property),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_refs_fileinfo(receiver),
         ExprKind::ObjectClassName { object } => expr_refs_fileinfo(object),
         ExprKind::NewScopedObject { receiver, args } => {
             receiver_refs_fileinfo(receiver) || args.iter().any(expr_refs_fileinfo)
@@ -537,6 +540,25 @@ fn stmt_refs_fileinfo(stmt: &Stmt) -> bool {
                 || methods.iter().any(class_method_refs_fileinfo)
                 || constants.iter().any(class_const_refs_fileinfo)
         }
+        // Compiler-generated activation event: names a class by string, never in a class-name position.
+        StmtKind::ClassLikeActivate { .. } => false,
+        StmtKind::PropertyRefAssign { object, source, .. } => expr_refs_fileinfo(object) || expr_refs_fileinfo(source),
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            index,
+            source,
+            ..
+        } => receiver_refs_fileinfo(receiver) || expr_refs_fileinfo(index) || expr_refs_fileinfo(source),
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            value,
+            ..
+        } => receiver_refs_fileinfo(receiver)
+            || expr_refs_fileinfo(property)
+            || index.as_ref().is_some_and(expr_refs_fileinfo)
+            || expr_refs_fileinfo(value),
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_refs_fileinfo(object) || expr_refs_fileinfo(value)
         }

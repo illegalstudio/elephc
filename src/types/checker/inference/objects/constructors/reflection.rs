@@ -77,6 +77,24 @@ impl Checker {
         if self.interfaces.contains_key(class_name) || self.declared_traits.contains(class_name) {
             return Ok(());
         }
+        // A NAME THIS WALK CANNOT SEE IS NOT THE SAME AS A NAME THAT DOES NOT EXIST. When the
+        // program includes PHP at run time or registers an autoloader, the reflected class can be
+        // declared by text that does not exist at compile time, and refusing here turns a program
+        // `php -n` 8.5.6 runs to completion into a compile error. Measured: `main.php` doing
+        // `include $computedPath;` then `new ReflectionClass("S1Plain")`, with `S1Plain` declared
+        // by the included file, reported
+        // `error[4:26]: ReflectionClass::__construct(): undefined class 'S1Plain'` where PHP
+        // printed `loaded;S1Plain;done`. `include_reflection::
+        // test_caller_reflects_on_a_class_a_runtime_include_declared` is the pinned case.
+        //
+        // Only the ATTRIBUTE validation is skipped by deferring, and that is the honest trade:
+        // this function exists to reject attribute argument metadata the reflection surface
+        // cannot materialize, and there is no metadata to inspect for a class the compiler has
+        // never seen. The reflection itself resolves at run time through the bridge, and a name
+        // nothing supplies still raises PHP's own `ReflectionException` there.
+        if self.reflection_defers_unknown_classes() {
+            return Ok(());
+        }
         Err(CompileError::new(
             expr.span,
             &format!(
@@ -178,6 +196,12 @@ impl Checker {
                 ),
             ));
         }
+        // Same reasoning as `validate_reflection_class_attrs`: a class a runtime include or an
+        // autoloader supplies is not a class that does not exist, and its METHOD set is unknown
+        // for the same reason its attributes are. Refusing here would reject a program PHP runs.
+        if self.reflection_defers_unknown_classes() {
+            return Ok(());
+        }
         Err(CompileError::new(
             expr.span,
             &format!(
@@ -198,6 +222,12 @@ impl Checker {
         expr: &Expr,
     ) -> Result<(), CompileError> {
         let Some(class_info) = self.classes.get(class_name) else {
+            // Same reasoning as the two validators above: a class a runtime include or an
+            // autoloader supplies has no property set this walk can read, and refusing here would
+            // reject a program PHP runs to completion.
+            if self.reflection_defers_unknown_classes() {
+                return Ok(());
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!(
@@ -206,7 +236,10 @@ impl Checker {
                 ),
             ));
         };
-        if !class_info
+        let builtin_throwable_virtual_property = class_name == "Exception"
+            && matches!(property_name, "file" | "line" | "trace");
+        if !builtin_throwable_virtual_property
+            && !class_info
             .properties
             .iter()
             .any(|(name, _)| name == property_name)
@@ -266,13 +299,8 @@ impl Checker {
             .or_else(|| self.reflection_interface_constant_metadata(class_name, constant_name))
             .or_else(|| self.reflection_trait_constant_metadata(class_name, constant_name))
         else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "ReflectionClassConstant::__construct(): undefined class constant '{}::{}'",
-                    class_name, constant_name
-                ),
-            ));
+            // php's `Constant P::X does not exist` is a run-time ReflectionException.
+            return Ok(());
         };
         self.validate_reflection_attribute_metadata(
             &names,
@@ -293,31 +321,18 @@ impl Checker {
         require_backed: bool,
         expr: &Expr,
     ) -> Result<(), CompileError> {
-        let Some(enum_info) = self.enums.get(enum_name) else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!("{} is not an enum", enum_name),
-            ));
-        };
-        if require_backed && enum_info.backing_type.is_none() {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "Enum case {}::{} is not a backed case",
-                    enum_name, case_name
-                ),
-            ));
+        // A name that is no enum, a pure enum's case asked for as backed, or a missing case is
+        // php's catchable `ReflectionException` at run time (`Constant P::K is not a case`,
+        // `Enum case E::A is not a backed case`), which the interpreter raises; refusing the
+        // program here rejected a `try`/`catch` php runs.
+        let _ = require_backed;
+        if !self.enums.contains_key(enum_name) {
+            return Ok(());
         }
         let Some((names, args)) =
             self.reflection_enum_case_attribute_metadata(enum_name, case_name)
         else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!(
-                    "ReflectionEnumUnitCase::__construct(): undefined enum case '{}::{}'",
-                    enum_name, case_name
-                ),
-            ));
+            return Ok(());
         };
         self.validate_reflection_attribute_metadata(
             &names,

@@ -10,6 +10,7 @@
 
 mod call_user_func;
 mod call_user_func_array;
+mod first_class_callable_values;
 mod first_class_objects;
 mod runtime_callables;
 mod undefined_functions;

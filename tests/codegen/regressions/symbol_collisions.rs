@@ -126,3 +126,34 @@ a_b(1); aéb(1); a_b(-1); aéb(-1);
     );
     assert_eq!(out, "pPnN");
 }
+
+
+/// `class_alias()` with a literal `false` third argument is still statically resolvable.
+///
+/// That argument is PHP's `$autoload` -- whether to autoload the ORIGINAL class before aliasing.
+/// It says nothing about whether the two names are known at compile time, but refusing it made
+/// the whole call "requires statically resolvable class names", which is what kept Symfony's
+/// generated container out of the compiled world: it emits
+/// `\class_alias(\ContainerXXXX\App_KernelProdContainer::class, App_KernelProdContainer::class, false)`,
+/// both names `::class` constants.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_class_alias_accepts_a_literal_false_autoload_flag() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Inner {
+    class Original { public function hello(): string { return 'hi'; } }
+}
+namespace {
+    if (!\class_exists(\Aliased::class, false)) {
+        \class_alias(\Inner\Original::class, \Aliased::class, false);
+    }
+    $a = new \Aliased();
+    echo $a->hello(), '|', var_export($a instanceof \Inner\Original, true),
+         '|', var_export(\class_exists(\Aliased::class, false), true);
+}
+"#,
+    );
+    assert_eq!(out, "hi|true|true");
+}

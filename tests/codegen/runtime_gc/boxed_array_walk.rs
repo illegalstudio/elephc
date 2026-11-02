@@ -10,7 +10,8 @@
 
 use crate::support::*;
 
-/// A callback cannot publish an unmanaged element reference through a closure capture.
+/// A callback that publishes the element reference through a closure capture keeps a managed
+/// reference: php prints `missed|done`, and the heap ends clean.
 #[test]
 fn test_core_boxed_array_walk_rejects_escaped_reference_capture() {
     let source = r#"<?php
@@ -30,7 +31,8 @@ try {
 unset($saved, $items);
 echo "done";
 "#;
-    let expected = "Escaping a borrowed boxed array_walk() element reference is not supported|changed|done";
+    // php 8.5 output: the capture keeps a real reference, so nothing is refused.
+    let expected = "missed|done";
     let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
     assert!(out.success, "stdout={:?}\nstderr={}\n{assembly}", out.stdout, out.stderr);
     assert_eq!(out.stdout, expected, "{}\n{assembly}", out.stderr);

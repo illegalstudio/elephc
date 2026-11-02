@@ -2,7 +2,7 @@
 title: "gmp_random_range() - internals"
 description: "Compiler internals for gmp_random_range(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 626
+  order: 639
 ---
 
 ## `gmp_random_range()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_random_range.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_random_range.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

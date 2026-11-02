@@ -9,7 +9,7 @@
 //! - Time builtins are effectful and must reuse the target-aware runtime
 //!   helpers rather than duplicating libc/syscall behavior in the EIR backend.
 
-use crate::codegen::abi;
+use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen::platform::{Arch, Platform};
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
@@ -17,6 +17,30 @@ use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
+
+/// Lowers `setlocale($category, $locale, ...)` through Elephc's deterministic `C`-locale model.
+pub(crate) fn lower_setlocale(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "setlocale", 2, usize::MAX)?;
+    let locale = expect_operand(inst, 1)?;
+    let locale_ty = ctx.load_value_to_result(locale)?;
+    match locale_ty.codegen_repr() {
+        PhpType::Str => {
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        }
+        _ => {
+            let (label, len) = ctx.data.add_string(b"C");
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+            abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        }
+    }
+    store_if_result(ctx, inst)
+}
 
 /// Lowers `date(format, timestamp?)` through the shared formatter runtime helper.
 pub(crate) fn lower_date(
@@ -418,9 +442,19 @@ fn resolve_integer_arg_to_result(
         PhpType::Int | PhpType::Bool => {
             ctx.load_value_to_result(value)?;
         }
+        PhpType::TaggedScalar => {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             load_value_to_first_int_arg(ctx, value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        }
+        // A numeric string converts by php's weak-mode rules: `mktime(0, 0, 0, 12, 28, $year)`
+        // over a year `explode()`d out of "2024-W05" (symfony/validator `WeekValidator`).
+        PhpType::Str => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
         }
         ty => {
             return Err(CodegenIrError::unsupported(format!(
@@ -572,6 +606,44 @@ pub(crate) fn lower_elephc_strtotime_raw(
     store_if_result(ctx, inst)
 }
 
+/// Reads an integer field of the last-diagnostic record (`__rt_last_error_int`).
+pub(crate) fn lower_elephc_last_error_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_last_error_int", 1)?;
+    load_last_error_field(ctx, inst, "__elephc_last_error_int field")?;
+    abi::emit_call_label(ctx.emitter, "__rt_last_error_int");
+    store_if_result(ctx, inst)
+}
+
+/// Reads a string field of the last-diagnostic record as an owned copy (`__rt_last_error_str`).
+pub(crate) fn lower_elephc_last_error_str(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_last_error_str", 1)?;
+    load_last_error_field(ctx, inst, "__elephc_last_error_str field")?;
+    abi::emit_call_label(ctx.emitter, "__rt_last_error_str");
+    store_if_result(ctx, inst)
+}
+
+/// Places the record field selector in the first integer argument register.
+fn load_last_error_field(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    context: &str,
+) -> Result<()> {
+    let field = expect_operand(inst, 0)?;
+    resolve_integer_arg_to_result(ctx, field, context)?;
+    abi::emit_reg_move(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        abi::int_result_reg(ctx.emitter),
+    );
+    Ok(())
+}
+
 /// Tests whether a dynamically named AOT class exposes an inherited or declared constructor.
 pub(crate) fn lower_elephc_class_has_constructor(
     ctx: &mut FunctionContext<'_>,
@@ -719,8 +791,43 @@ pub(crate) fn lower_usleep(
 }
 
 /// Lowers `exit(status?)` and `die(status?)` by terminating the current process.
+///
+/// The FIRST thing emitted is the `register_shutdown_function()` drain, and its position is the
+/// whole point of the surface: php runs those callbacks on `exit()` and does NOT run `finally`
+/// blocks there, so a `try`/`finally` drain — which is what `--web` had, and all a CLI copy of
+/// it would have given — misses exactly the path a console application takes
+/// (`Application::run()` ends in `exit($code)`). Measured on php 8.5.10 and on elephc alike:
+/// `try { exit(3); } finally { echo "FINALLY"; }` prints no `FINALLY` in either.
+///
+/// It goes ahead of the status load rather than after it because the callbacks are PHP and may
+/// write output, and that output must be produced before the `__rt_ob_flush_all` below. The
+/// status operand survives the call: it is loaded from its frame home afterwards, the same way
+/// it already survives whatever `exit(f())` called to compute it. The `--web` arm gets the same
+/// call for the same reason — `exit()` in a request handler returns through the handler
+/// epilogue and never reaches the request wrapper's `finally` either.
+///
+/// `emit_php_shutdown_drain` emits nothing when the program has no shutdown registry, so a
+/// program that never names `register_shutdown_function` keeps its previous exit sequence byte
+/// for byte.
 pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "exit", 0, 1)?;
+    crate::codegen::frame::emit_php_shutdown_drain(ctx);
+    if ctx.web {
+        // A web worker invokes the compiled top level once per HTTP request. PHP `exit` ends
+        // that request, not the prefork worker: flush captured output and return to
+        // `elephc_web_run` so it can construct the response and serve the next request.
+        if let Some(status) = inst.operands.first().copied() {
+            let status_ty = ctx.load_value_to_result(status)?;
+            if matches!(status_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            } else {
+                require_integer_like(status_ty, "exit status")?;
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
+        crate::codegen::frame::emit_web_handler_epilogue(ctx);
+        return Ok(());
+    }
     let Some(status) = inst.operands.first().copied() else {
         if ctx.shared.instrument.is_on() {
             // Shutdown output handlers are PHP calls and must finish inside the
@@ -731,18 +838,24 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
-    require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
+    let status_ty = ctx.load_value_to_result(status)?;
+    if matches!(status_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+    } else {
+        require_integer_like(status_ty, "exit status")?;
+    }
     emit_dynamic_exit(ctx);
     Ok(())
 }
 
-/// Lowers `getenv(name)` through the target-aware environment lookup helper and
-/// boxes its string-or-false result.
+/// Lowers environment enumeration and named lookups through target-aware runtime helpers.
 ///
-/// The boxing is what makes the two answers distinguishable. Without it the
-/// result was a plain string, so a variable that is NOT SET came back as `""` —
-/// indistinguishable from one set to the empty string, and `getenv($x) !== false`,
-/// which is the idiom for "is this set", was true for every name.
+/// A NAMED lookup boxes its result as string-or-false, which is what makes the two answers
+/// distinguishable. Without that boxing the result was a plain string, so a variable that is
+/// NOT SET came back as `""` — indistinguishable from one set to the empty string, and
+/// `getenv($x) !== false`, which is the idiom for "is this set", was true for every name.
+/// `__rt_getenv` reports "not set" as a null string pointer and every set value as an owned
+/// heap copy, so `box_owned_string_or_false_result` is the boxing that matches its contract.
 pub(crate) fn lower_getenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -851,6 +964,26 @@ pub(crate) fn lower_php_uname(
         abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
     }
     abi::emit_call_label(ctx.emitter, "__rt_php_uname");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `error_log()` through the stderr-oriented runtime helper.
+pub(crate) fn lower_error_log(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "error_log", 1, 4)?;
+    let message = expect_operand(inst, 0)?;
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    super::strings::load_value_as_string_to_regs(
+        ctx,
+        message,
+        "error_log message",
+        ptr_reg,
+        len_reg,
+    )?;
+    abi::emit_call_label(ctx.emitter, "__rt_error_log");
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     store_if_result(ctx, inst)
 }
 
@@ -1014,6 +1147,7 @@ fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
     let done = ctx.next_label("putenv_done");
     let copy_loop = ctx.next_label("putenv_copy");
     let copy_done = ctx.next_label("putenv_copy_done");
+    let out_of_memory = ctx.next_label("putenv_oom");
     ctx.emitter.instruction("mov x3, #0");                                      // start scanning the argument for PHP's assignment separator
     ctx.emitter.label(&scan_loop);
     ctx.emitter.instruction("cmp x3, x2");                                      // a bare name unsets the environment variable
@@ -1029,10 +1163,14 @@ fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("cset x0, eq");                                     // widen libc's zero status into PHP true
     ctx.emitter.instruction(&format!("b {}", done));                            // join the assignment and unset result paths
     ctx.emitter.label(&set_variable);
+    // libc keeps the pointer putenv() receives, so the buffer must outlive the PHP heap: a
+    // `--web` worker wipes that arena between requests, and an arena copy left the environment
+    // pointing at whatever the next request allocated there.
     ctx.emitter.instruction("add x0, x2, #1");                                  // allocate space for the environment string plus trailing null
-    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the source string pointer and length across heap allocation
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the source string pointer and length after heap allocation
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the source string pointer and length across malloc()
+    ctx.emitter.bl_c("malloc");
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the source string pointer and length after malloc()
+    ctx.emitter.instruction(&format!("cbz x0, {}", out_of_memory));             // putenv() fails when no buffer could be allocated
     ctx.emitter.instruction("mov x3, x0");                                      // keep the persistent destination buffer for copying and putenv()
     ctx.emitter.instruction("mov x4, #0");                                      // start copying at byte offset zero
     ctx.emitter.label(&copy_loop);
@@ -1048,6 +1186,9 @@ fn lower_putenv_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.bl_c("putenv");
     ctx.emitter.instruction("cmp x0, #0");                                      // compare libc putenv() status against success
     ctx.emitter.instruction("cset x0, eq");                                     // return true when putenv() accepted the assignment
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the allocation-failure result
+    ctx.emitter.label(&out_of_memory);
+    ctx.emitter.instruction("mov x0, #0");                                      // report PHP false when malloc() failed
     ctx.emitter.label(&done);
 }
 
@@ -1059,6 +1200,7 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     let done = ctx.next_label("putenv_done");
     let copy_loop = ctx.next_label("putenv_copy");
     let copy_done = ctx.next_label("putenv_copy_done");
+    let out_of_memory = ctx.next_label("putenv_oom");
     ctx.emitter.instruction("mov rcx, 0");                                      // start scanning the argument for PHP's assignment separator
     ctx.emitter.label(&scan_loop);
     ctx.emitter.instruction("cmp rcx, rdx");                                    // a bare name unsets the environment variable
@@ -1075,15 +1217,18 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register
     ctx.emitter.instruction(&format!("jmp {}", done));                          // join the assignment and unset result paths
     ctx.emitter.label(&set_variable);
-    ctx.emitter.instruction("sub rsp, 16");                                     // reserve aligned spill space for the source string across heap allocation
+    // libc keeps the pointer putenv() receives; see the AArch64 lowering for why it is malloc()ed.
+    ctx.emitter.instruction("sub rsp, 16");                                     // reserve aligned spill space for the source string across malloc()
     ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the source environment string pointer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                    // save the source environment string length
-    ctx.emitter.instruction("mov rax, rdx");                                    // seed the heap allocation size from the source length
-    ctx.emitter.instruction("add rax, 1");                                      // allocate space for the environment string plus trailing null
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter.instruction("mov rdi, rdx");                                    // seed the malloc() size from the source length
+    ctx.emitter.instruction("add rdi, 1");                                      // allocate space for the environment string plus trailing null
+    ctx.emitter.bl_c("malloc");
     ctx.emitter.instruction("mov rcx, QWORD PTR [rsp]");                        // restore the source environment string pointer
     ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 8]");                     // restore the source environment string length
     ctx.emitter.instruction("add rsp, 16");                                     // release the temporary source string spill space
+    ctx.emitter.instruction("test rax, rax");                                   // did malloc() return a buffer?
+    ctx.emitter.instruction(&format!("jz {}", out_of_memory));                  // putenv() fails when no buffer could be allocated
     ctx.emitter.instruction("mov r9, rax");                                     // keep the persistent destination buffer for copying and putenv()
     ctx.emitter.instruction("mov r10, 0");                                      // start copying at byte offset zero
     ctx.emitter.label(&copy_loop);
@@ -1100,6 +1245,9 @@ fn lower_putenv_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction("cmp rax, 0");                                      // compare libc putenv() status against success
     ctx.emitter.instruction("sete al");                                         // return true when putenv() accepted the assignment
     ctx.emitter.instruction("movzx rax, al");                                   // widen the boolean byte into the integer result register
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the allocation-failure result
+    ctx.emitter.label(&out_of_memory);
+    ctx.emitter.instruction("xor eax, eax");                                    // report PHP false when malloc() failed
     ctx.emitter.label(&done);
 }
 

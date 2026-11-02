@@ -410,6 +410,11 @@ fn expr_refs_curl(expr: &Expr) -> bool {
         // curl detection runs, so it should never reach here. Recurse into the path
         // expression defensively to keep detection exhaustive and correct.
         ExprKind::IncludeValue { path, .. } => expr_refs_curl(path),
+        ExprKind::ArrayReference(inner) => expr_refs_curl(inner),
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            receiver_refs_curl(receiver) || expr_refs_curl(property)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_refs_curl(receiver),
     }
 }
 
@@ -421,6 +426,7 @@ fn stmt_refs_curl(stmt: &Stmt) -> bool {
     match &stmt.kind {
         // Statements with no curl-name position and no child expr/stmt.
         StmtKind::RefAssign { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
@@ -441,6 +447,27 @@ fn stmt_refs_curl(stmt: &Stmt) -> bool {
             .iter()
             .any(|item| name_is_curl_class(&item.name) || name_is_curl_function(&item.name)),
 
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            expr_refs_curl(object) || expr_refs_curl(source)
+        }
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            index,
+            source,
+            ..
+        } => receiver_refs_curl(receiver) || expr_refs_curl(index) || expr_refs_curl(source),
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            value,
+            ..
+        } => {
+            receiver_refs_curl(receiver)
+                || expr_refs_curl(property)
+                || index.as_ref().is_some_and(expr_refs_curl)
+                || expr_refs_curl(value)
+        }
         StmtKind::Echo(expr) | StmtKind::Throw(expr) | StmtKind::ExprStmt(expr) => {
             expr_refs_curl(expr)
         }

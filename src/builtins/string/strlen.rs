@@ -5,8 +5,8 @@
 //! - The builtin registry, checker, optimizer, and AST-to-EIR builtin lowering path.
 //!
 //! Key details:
-//! - Shared validation accepts `Str`, `Mixed`, and `Union` types (PHP coerces the argument to a
-//!   string per standard type-juggling rules); other types are rejected.
+//! - Shared validation accepts strings, weakly coercible scalars, and gradual values; arrays and
+//!   other unsupported concrete values are rejected.
 //! - Dynamic operands use `Cast(Str) -> StrLen -> Release` to retire the detached string copy.
 
 use crate::builtins::semantics::{
@@ -46,15 +46,30 @@ fn validate(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
             "strlen() takes exactly 1 argument",
         ));
     };
-    // Accept Str, Mixed, and Union types — PHP's strlen() coerces its
+    // Accept strings, weakly coercible scalars, and gradual types — PHP's strlen() coerces its
     // argument to a string per the standard PHP type juggling rules
     // (numbers become their decimal representation, true → "1",
     // false/null → ""). Dynamic inputs first use the ordinary EIR
     // string-cast operation, then the same string-length operation.
-    if !matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
+    if !matches!(
+        ty,
+        PhpType::Str
+            | PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::TaggedScalar
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    ) {
         return Err(CompileError::new(
             input.span,
-            "strlen() argument must be string",
+            &format!(
+                "strlen() argument must be string-compatible, {:?} given",
+                ty
+            ),
         ));
     }
     Ok(())
@@ -76,7 +91,14 @@ fn lower(
     let value = call.operand(0)?;
     let string = match ctx.value_php_type(value).codegen_repr() {
         PhpType::Str => value,
-        PhpType::Mixed | PhpType::Union(_) => {
+        PhpType::Int
+        | PhpType::Float
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Void
+        | PhpType::TaggedScalar
+        | PhpType::Mixed
+        | PhpType::Union(_) => {
             ctx.emit_value(
                 Op::Cast,
                 vec![value],

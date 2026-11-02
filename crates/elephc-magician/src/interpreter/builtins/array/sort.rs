@@ -479,6 +479,86 @@ pub(in crate::interpreter) fn eval_trim_leading_zeroes(digits: &[u8]) -> &[u8] {
     }
 }
 
+/// php's `SORT_*` flag values.
+const EVAL_SORT_REGULAR: i64 = 0;
+const EVAL_SORT_NUMERIC: i64 = 1;
+const EVAL_SORT_NATURAL: i64 = 6;
+const EVAL_SORT_FLAG_CASE: i64 = 8;
+
+/// Returns whether one ordering builtin takes php's optional `$flags` argument.
+fn eval_array_sort_takes_flags(name: &str) -> bool {
+    matches!(name, "arsort" | "asort" | "krsort" | "ksort" | "rsort" | "sort")
+}
+
+/// Builds the sorted replacement array for an ordering builtin called with `$flags`.
+///
+/// `SORT_REGULAR` keeps [`eval_array_sort_replacement`]'s comparison. The other flags compare every
+/// element in ONE domain, which is what php does: `SORT_NUMERIC` as floats, `SORT_STRING` (and
+/// `SORT_LOCALE_STRING`) as byte strings, `SORT_NATURAL` in natural order, the last two folded to
+/// lower case under `SORT_FLAG_CASE`. Laravel's `LoadConfiguration` sorts the config file map with
+/// `ksort($files, SORT_NATURAL)`, which eval refused outright.
+pub(in crate::interpreter) fn eval_array_sort_replacement_with_flags(
+    name: &str,
+    array: RuntimeCellHandle,
+    flags: i64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let domain = flags & !EVAL_SORT_FLAG_CASE;
+    if domain == EVAL_SORT_REGULAR || !eval_array_sort_takes_flags(name) {
+        return eval_array_sort_replacement(name, array, flags, values);
+    }
+    let by_key = matches!(name, "krsort" | "ksort");
+    let case_fold = flags & EVAL_SORT_FLAG_CASE != 0;
+    let len = values.array_len(array)?;
+    let mut entries = Vec::with_capacity(len);
+    for position in 0..len {
+        let source_key = values.array_iter_key(array, position)?;
+        let value = values.array_get(array, source_key)?;
+        let operand = if by_key { source_key } else { value };
+        let sort_key = match domain {
+            EVAL_SORT_NUMERIC => EvalArraySortKey::Numeric(eval_float_value(operand, values)?),
+            EVAL_SORT_NATURAL => {
+                EvalArraySortKey::Natural(eval_array_sort_flag_bytes(operand, case_fold, values)?)
+            }
+            _ => EvalArraySortKey::String(eval_array_sort_flag_bytes(operand, case_fold, values)?),
+        };
+        entries.push(EvalArraySortEntry {
+            sort_key,
+            source_key,
+            value,
+        });
+    }
+    let descending = matches!(name, "arsort" | "krsort" | "rsort");
+    // A stable sort: php's ordering keeps equal elements in their original order.
+    entries.sort_by(|left, right| {
+        let order = eval_array_sort_key_cmp(&left.sort_key, &right.sort_key);
+        if descending {
+            order.reverse()
+        } else {
+            order
+        }
+    });
+    if matches!(name, "rsort" | "sort") {
+        eval_array_reindex_sort_result(entries, values)
+    } else {
+        eval_array_preserve_key_sort_result(entries, values)
+    }
+}
+
+/// Returns one element's string form for a string-domain sort, case-folded when asked.
+fn eval_array_sort_flag_bytes(
+    value: RuntimeCellHandle,
+    case_fold: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<u8>, EvalStatus> {
+    let string = values.cast_string(value)?;
+    let mut bytes = values.string_bytes(string)?;
+    if case_fold {
+        bytes.make_ascii_lowercase();
+    }
+    Ok(bytes)
+}
+
 /// Evaluates direct by-reference array ordering calls and writes back the array.
 pub(in crate::interpreter) fn eval_array_sort_declared_call(
     name: &str,
@@ -490,7 +570,13 @@ pub(in crate::interpreter) fn eval_array_sort_declared_call(
     let (array, target, flags) =
         eval_array_sort_direct_args(name, args, context, scope, values)?;
 
-    let replacement = eval_array_sort_replacement(name, array, flags, values)?;
+    // `ksort`/`krsort` take their `$flags` through the key-sort modes; the value sorts take them as
+    // a single comparison domain (`SORT_NUMERIC`, `SORT_STRING`, `SORT_NATURAL`, ...).
+    let replacement = if flags != 0 && !matches!(name, "ksort" | "krsort") {
+        eval_array_sort_replacement_with_flags(name, array, flags, values)?
+    } else {
+        eval_array_sort_replacement(name, array, flags, values)?
+    };
     let result = values.bool_value(true)?;
     eval_write_direct_ref_target(&target, replacement, context, values, None)?;
     Ok(result)
@@ -521,8 +607,24 @@ fn eval_array_sort_direct_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, EvalReferenceTarget, i64), EvalStatus> {
     if !matches!(name, "ksort" | "krsort") {
-        let (array, target) = eval_array_sort_direct_arg(args, context, scope, values)?;
-        return Ok((array, target, 0));
+        // The value sorts take one optional `$flags`, positionally: a comparison domain.
+        let (array_arg, flags_arg) = match args {
+            [array_arg] => (array_arg, None),
+            [array_arg, flags_arg] if eval_array_sort_takes_flags(name) && !flags_arg.is_spread() => {
+                (array_arg, Some(flags_arg))
+            }
+            _ => return Err(EvalStatus::RuntimeFatal),
+        };
+        let (array, target) =
+            eval_array_sort_direct_arg(std::slice::from_ref(array_arg), context, scope, values)?;
+        let flags = match flags_arg {
+            Some(flags_arg) => {
+                let flags = eval_expr(flags_arg.value(), context, scope, values)?;
+                eval_int_value(flags, values)?
+            }
+            None => EVAL_SORT_REGULAR,
+        };
+        return Ok((array, target, flags));
     }
 
     let mut receiver = None;

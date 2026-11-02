@@ -115,6 +115,9 @@ fn eval_array_filter_result_from_scope(
         }
         _ => None,
     };
+    // A callable array's receiver read (`[$object, 'method']`) is an owner the dispatch
+    // borrows for the whole walk; `with_optional_evaluated_callable` releases it once, after the
+    // last callback.
     with_optional_evaluated_callable(callback, context, values, |callback, context, values| {
         let mode = match mode {
             Some(mode) => eval_array_filter_mode_value(mode, context, values)?,
@@ -128,14 +131,19 @@ fn eval_array_filter_result_from_scope(
             let value = values.array_get(array, key)?;
             let keep = if let Some(callback) = callback.as_ref() {
                 let args = eval_array_filter_callback_args(mode, key, value)?;
-                let result = eval_evaluated_callable_with_values(callback, args, context, values)?;
-                values.truthy(result)?
+                let verdict = eval_evaluated_callable_with_values(callback, args, context, values)?;
+                let keep = values.truthy(verdict);
+                values.release(verdict)?;
+                keep?
             } else {
                 values.truthy(value)?
             };
             if keep {
                 result = values.array_set(result, key, value)?;
             }
+            // `array_set` retains what it keeps; this iteration's key and value reads are released.
+            values.release(key)?;
+            values.release(value)?;
         }
         Ok(result)
     })

@@ -234,14 +234,39 @@ pub(super) fn lower(
                     crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Reverse,
                 )
         }),
+        RuntimeFnId::Strcspn => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_span(
+                ctx,
+                inst,
+                "strcspn",
+                "__rt_strcspn",
+            )
+        }),
+        RuntimeFnId::Strspn => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_span(
+                ctx,
+                inst,
+                "strspn",
+                "__rt_strspn",
+            )
+        }),
         RuntimeFnId::Strstr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_strstr(ctx, inst)
+        }),
+        RuntimeFnId::Strrchr => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_strrchr(ctx, inst)
+        }),
+        RuntimeFnId::Strpbrk => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_strpbrk(ctx, inst)
         }),
         RuntimeFnId::ParseUrl => Some({
             crate::codegen::lower_inst::builtins::strings::lower_parse_url(ctx, inst)
         }),
         RuntimeFnId::Substr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_substr(ctx, inst)
+        }),
+        RuntimeFnId::SubstrCompare => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_substr_compare(ctx, inst)
         }),
         RuntimeFnId::SubstrCount => Some({
             crate::codegen::lower_inst::builtins::strings::lower_substr_count(ctx, inst)
@@ -281,6 +306,18 @@ pub(super) fn lower(
         }),
         RuntimeFnId::ElephcStrtotimeRaw => Some({
             crate::codegen::lower_inst::builtins::system::lower_elephc_strtotime_raw(ctx, inst)
+        }),
+        RuntimeFnId::ElephcLastErrorInt => Some({
+            crate::codegen::lower_inst::builtins::system::lower_elephc_last_error_int(ctx, inst)
+        }),
+        RuntimeFnId::ElephcStreamFd => Some({
+            crate::codegen::lower_inst::builtins::io::lower_elephc_stream_fd(ctx, inst)
+        }),
+        RuntimeFnId::ElephcFdToStream => Some({
+            crate::codegen::lower_inst::builtins::io::lower_elephc_fd_to_stream(ctx, inst)
+        }),
+        RuntimeFnId::ElephcLastErrorStr => Some({
+            crate::codegen::lower_inst::builtins::system::lower_elephc_last_error_str(ctx, inst)
         }),
         RuntimeFnId::Checkdate => Some({
             crate::codegen::lower_inst::builtins::system::lower_checkdate(ctx, inst)

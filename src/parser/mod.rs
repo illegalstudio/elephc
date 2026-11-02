@@ -23,6 +23,9 @@ pub(crate) mod declaration_groups;
 /// Resolves relative `namespace\name` references against the namespace being parsed.
 mod relative_names;
 pub(crate) mod stmt;
+pub(crate) use stmt::classlike_doc_comment;
+mod terminal_goto;
+pub(crate) mod variable_variables;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};
 pub(crate) use relative_names::{
@@ -127,8 +130,17 @@ pub(crate) fn register_anonymous_class(decl: Stmt) {
 }
 
 /// Removes and returns every anonymous-class declaration collected so far in this thread.
-fn take_anonymous_classes() -> Vec<Stmt> {
+pub(crate) fn take_anonymous_classes() -> Vec<Stmt> {
     ANONYMOUS_CLASSES.with(|classes| std::mem::take(&mut *classes.borrow_mut()))
+}
+
+/// Puts back declarations taken with [`take_anonymous_classes`], ahead of any collected since.
+pub(crate) fn restore_anonymous_classes(mut earlier: Vec<Stmt>) {
+    ANONYMOUS_CLASSES.with(|classes| {
+        let mut classes = classes.borrow_mut();
+        earlier.append(&mut classes);
+        *classes = earlier;
+    });
 }
 
 /// Parses tokens into an AST program, returning the first error if any.
@@ -213,15 +225,30 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
         if tokens[pos].0 == Token::Eof {
             break;
         }
-        let allows_strict_types = leading_declares && tokens[pos].0 == Token::Declare;
+        let allows_strict_types = leading_declares
+            && tokens
+                .get(declare_context::skip_doc_comments(tokens, pos))
+                .is_some_and(|(token, _)| *token == Token::Declare);
         leading_declares = allows_strict_types;
+        let item_start = stmts.len();
         match stmt::parse_file_or_namespace_scope_item(
             tokens,
             &mut pos,
             &mut stmts,
             allows_strict_types,
         ) {
-            Ok(()) => {}
+            Ok(()) => {
+                // A `namespace X;` ends the previous namespace's scope, so the anonymous
+                // classes hoisted out of it are emitted before it: appended at the end of
+                // the file they would be resolved in the LAST namespace, with its imports.
+                if let Some(offset) = stmts[item_start..].iter().position(|stmt| {
+                    matches!(stmt.kind, crate::parser::ast::StmtKind::NamespaceDecl { .. })
+                }) {
+                    let hoisted = take_anonymous_classes();
+                    let at = item_start + offset;
+                    stmts.splice(at..at, hoisted);
+                }
+            }
             Err(error) => {
                 errors.extend(error.flatten());
                 stmt::recover_to_statement_boundary(tokens, &mut pos);
@@ -232,6 +259,12 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
     // Append anonymous-class declarations hoisted out of expression position. Their position in
     // the program does not matter: declaration discovery scans all declarations before use.
     stmts.append(&mut take_anonymous_classes());
+
+    if errors.is_empty() {
+        if let Err(error) = terminal_goto::desugar_scope(&mut stmts) {
+            errors.extend(error.flatten());
+        }
+    }
 
     if errors.is_empty() {
         if crate::source::current_strict_types() {

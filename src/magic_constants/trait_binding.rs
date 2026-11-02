@@ -22,15 +22,16 @@ pub(super) fn bind_trait_constant_values(constants: Vec<ClassConst>, class_name:
 
 /// Rebinds `__CLASS__` magic constant placeholders in trait members to the concrete class name.
 ///
-/// Walks trait properties and methods after they are applied to a class, replacing the
+/// Walks trait constants, properties, and methods after they are applied to a class, replacing the
 /// `TRAIT_CLASS_PLACEHOLDER` marker in string literals with `class_name`. Magic constants
 /// themselves (`__CLASS__`, `__METHOD__`, `__TRAIT__`) are passed through unchanged;
 /// only the placeholder text inside string literals is substituted.
 pub(super) fn bind_trait_class_constants(
     properties: Vec<ClassProperty>,
     methods: Vec<ClassMethod>,
+    constants: Vec<ClassConst>,
     class_name: &str,
-) -> (Vec<ClassProperty>, Vec<ClassMethod>) {
+) -> (Vec<ClassProperty>, Vec<ClassMethod>, Vec<ClassConst>) {
     let mut pass = TraitClassPass {
         class_name: class_name.to_string(),
     };
@@ -42,7 +43,11 @@ pub(super) fn bind_trait_class_constants(
         .into_iter()
         .map(|method| walk_class_method(method, &mut pass))
         .collect();
-    (properties, methods)
+    let constants = constants
+        .into_iter()
+        .map(|constant| walk_class_constant(constant, &mut pass))
+        .collect();
+    (properties, methods, constants)
 }
 
 /// State carried through the trait-member rebinding pass.

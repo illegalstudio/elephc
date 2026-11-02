@@ -43,7 +43,7 @@
 //! - NEGATIVE CONTROL for the `wider_type` change this regression came from:
 //!   `unhinted_function_returning_null_still_infers_nullable` pins that an unhinted function that
 //!   can return null STILL yields `NULL` (not `""`). Fixing BUG 1 must not undo that.
-//! - NOT-IMPLEMENTED PIN: `strstr`'s PHP siblings (`stristr`, `strrchr`, `strpbrk`, `strchr`)
+//! - NOT-IMPLEMENTED PIN: unsupported `strstr` siblings (`stristr`, `strchr`)
 //!   do not exist in elephc at all, so they never shared BUG 2 — they are hard compile errors,
 //!   not silently wrong values. `strstr_siblings_are_rejected_rather_than_silently_wrong` pins
 //!   that, so whoever adds one has to come here and give it the `string|false` treatment.
@@ -575,18 +575,18 @@ fn strstr_accepts_two_or_three_arguments() {
     );
 }
 
-/// NOT-IMPLEMENTED PIN: `strstr`'s PHP siblings never shared BUG 2 because elephc does not
+/// NOT-IMPLEMENTED PIN: the remaining unsupported `strstr` siblings never shared BUG 2 because elephc does not
 /// implement them at all — each is a hard "Undefined function" compile error rather than a
 /// silently wrong value.
 ///
-/// Reference PHP 8.5.6 for a miss on each: `stristr("hello","ZZZ")`, `strrchr("hello","z")`,
-/// `strpbrk("hello","zq")` and `strchr("hello","zzz")` all return `bool(false)`, exactly like
+/// Reference PHP 8.5.6 for a miss on each: `stristr("hello","ZZZ")` and
+/// `strchr("hello","zzz")` return `bool(false)`, exactly like
 /// `strstr`. Whoever implements one must give it the same `string|false` treatment — this test
 /// failing is the reminder to come back here.
 #[test]
 fn strstr_siblings_are_rejected_rather_than_silently_wrong() {
     let dir = make_test_dir("strstr_siblings");
-    for sibling in ["stristr", "strrchr", "strpbrk", "strchr"] {
+    for sibling in ["stristr", "strchr"] {
         let src = format!("<?php var_dump({sibling}(\"hello\", \"z\"));");
         let diagnostics = compile_expecting_failure(&dir, &src, sibling);
         assert!(

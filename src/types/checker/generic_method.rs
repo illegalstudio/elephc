@@ -139,6 +139,8 @@ impl Checker {
                 })?
             }
         };
+        let mut bindings = bindings;
+        let mut doc_erasures: Vec<String> = Vec::new();
         for param in &template.type_params {
             let Some(bound) = param.bound.as_ref() else {
                 continue;
@@ -151,6 +153,13 @@ impl Checker {
                 self.resolve_type_expr(&generics::substitute_value_type(bound, &bindings), expr.span)?;
             let argument_ty = self.resolve_generic_bound_argument(argument, expr.span)?;
             if !self.type_accepts(&bound_ty, &argument_ty) {
+            // A PHPDoc template's bound is advice php never enforces: an argument outside it
+            // (`id("seven")` under `@template T of int`) reads the parameter as `mixed`, the
+            // erased signature php itself calls, instead of refusing a call php runs.
+                if param.doc_annotated {
+                    doc_erasures.push(param.name.clone());
+                    continue;
+                }
                 return Err(CompileError::new(
                     expr.span,
                     &format!(
@@ -164,6 +173,12 @@ impl Checker {
                     ),
                 ));
             }
+        }
+        for name in &doc_erasures {
+            generics::erase_doc_binding(
+                &mut bindings,
+                name,
+            );
         }
         let instantiated =
             generics::instantiated_name(&template.declared_method, &bindings);

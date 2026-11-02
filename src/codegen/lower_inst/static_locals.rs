@@ -48,13 +48,36 @@ pub(super) fn lower_load_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     ctx.store_result_value(result)
 }
 
+/// Returns the type a value stored into a static local is TAGGED with when the slot boxes it.
+///
+/// A RESOURCE keeps its PHP type; everything else keeps its representation. `codegen_repr()` maps
+/// `Resource` to `Int` — the right representation, since a resource payload is an i64, and the
+/// wrong TAG: 0 instead of 9. A stream boxed as an int makes `is_resource()` answer false for the
+/// rest of its life, which is how `Symfony\Component\Console\Output\ConsoleOutput`'s stream cache
+/// — a static slot written from three returns of disagreeing types, so the slot is Mixed — handed
+/// `StreamOutput` a stream it then rejected as "not a stream".
+///
+/// The exception is deliberately narrow. `codegen_repr()` also maps a closure `Object` to
+/// `Callable` (tag 6 to tag 10) and a `Union` to `Mixed`; the boxing WANTS those, so only the
+/// resource case is lifted out.
+fn static_local_store_type(raw: PhpType, repr: PhpType) -> PhpType {
+    match raw {
+        PhpType::Resource(_) => raw,
+        _ => repr,
+    }
+}
+
 /// Lowers a static-local assignment from one SSA operand into symbol-backed storage.
 pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let slot = resolve_static_local_slot(ctx, inst)?;
     ensure_static_local_type_supported(&slot, inst)?;
     ensure_static_local_value_supported(ctx, &slot, value, inst)?;
-    let mut loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    // `load_value_to_result` answers `value_php_type`, which has ALREADY been through
+    // `codegen_repr()` — so the resource is `Int` by the time it gets back here and the old
+    // `.codegen_repr()` on it was a no-op. The raw type is the only place the tag survives.
+    let loaded_repr = ctx.load_value_to_result(value)?;
+    let mut loaded_ty = static_local_store_type(ctx.raw_value_php_type(value)?, loaded_repr);
     // Narrow Mixed to Int when the static local slot is Int-typed
     // (from checked integer arithmetic that may overflow to float).
     if matches!(slot.php_type.codegen_repr(), PhpType::Int)
@@ -80,12 +103,23 @@ pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Ins
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         loaded_ty = PhpType::Int;
     }
-    // A persistent Mixed slot needs a box even when this arm has a concrete scalar or object.
-    // The fresh box owns its payload independently of the source SSA value.
-    if matches!(slot.php_type.codegen_repr(), PhpType::Mixed) && loaded_ty != PhpType::Mixed {
-        let box_ty = if matches!(loaded_ty, PhpType::Pointer(_)) { ctx.mixed_box_type(value)? } else { loaded_ty.clone() };
+    // A pointer word (a `?ptr<T>` value, which used to arrive as a Mixed cell) stored into a
+    // Mixed-typed static local is boxed by its declared type, a null address as PHP null; the
+    // fresh box is the slot's only owner.
+    let boxed_for_mixed_slot = matches!(slot.php_type.codegen_repr(), PhpType::Mixed)
+        && !matches!(loaded_ty, PhpType::Mixed);
+    if boxed_for_mixed_slot {
+        // Store instructions do not consume their SSA source. The ordinary EIR cleanup remains
+        // responsible for that value, while the new box becomes the static slot's owner.
+        let box_ty = if matches!(loaded_ty, PhpType::Pointer(_)) {
+            ctx.mixed_box_type(value)?
+        } else {
+            loaded_ty.clone()
+        };
         crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
-    } else if loaded_ty.is_refcounted() {
+        loaded_ty = PhpType::Mixed;
+    }
+    if !boxed_for_mixed_slot && loaded_ty.is_refcounted() {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty);
     }
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, true);
@@ -128,7 +162,11 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &initialized_label);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
-    let mut loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
+    // `load_value_to_result` answers `value_php_type`, which has ALREADY been through
+    // `codegen_repr()` — so the resource is `Int` by the time it gets back here and the old
+    // `.codegen_repr()` on it was a no-op. The raw type is the only place the tag survives.
+    let loaded_repr = ctx.load_value_to_result(value)?;
+    let mut loaded_ty = static_local_store_type(ctx.raw_value_php_type(value)?, loaded_repr);
     // Narrow Mixed to Int when the static local slot is Int-typed.
     if matches!(slot.php_type.codegen_repr(), PhpType::Int)
         && matches!(loaded_ty, PhpType::Mixed)
@@ -148,8 +186,10 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         loaded_ty = PhpType::Int;
     }
-    // Box Int/Float/Bool/Void as Mixed when the static local slot is Mixed-typed. A pointer
-    // word boxes by its declared type, so a null `?ptr<T>` initializer is PHP null.
+    // Box a concrete initializer as Mixed when the static slot must persist values with multiple
+    // representations across calls. Transfer an owning temporary into the box when possible;
+    // otherwise retain the borrowed payload while creating the slot's owner. A pointer word
+    // boxes by its declared type, so a null `?ptr<T>` initializer is PHP null.
     if matches!(slot.php_type.codegen_repr(), PhpType::Mixed)
         && !matches!(loaded_ty, PhpType::Mixed)
     {
@@ -158,7 +198,11 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
         } else {
             loaded_ty.clone()
         };
-        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        if ctx.value_can_own_mixed_box_source(value)? {
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
+        } else {
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        }
     }
     let store_ty = slot.php_type.codegen_repr();
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &store_ty, false);
@@ -261,16 +305,11 @@ fn static_local_value_type_matches(value_ty: &PhpType, slot_ty: &PhpType) -> boo
         return true;
     }
     // PHP coercive mode: Mixed (from checked arithmetic) can be narrowed to Int,
-    // and Int/Bool/Void/Float can be boxed to Mixed for init.
+    // and any concrete PHP value can be boxed into a Mixed static slot.
     if matches!(slot_ty, PhpType::Int) && matches!(value_ty, PhpType::Mixed) {
         return true;
     }
-    if matches!(slot_ty, PhpType::Mixed)
-        && matches!(
-            value_ty,
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Float | PhpType::Pointer(_) | PhpType::Object(_)
-        )
-    {
+    if matches!(slot_ty, PhpType::Mixed) {
         return true;
     }
     // Any pointer fits a pointer slot once the checker accepted the assignment.
@@ -281,6 +320,9 @@ fn static_local_value_type_matches(value_ty: &PhpType, slot_ty: &PhpType) -> boo
         (value_ty, slot_ty),
         (PhpType::Array(value_elem), PhpType::Array(_))
             if matches!(value_elem.codegen_repr(), PhpType::Never | PhpType::Void)
+    ) || matches!(
+        (value_ty, slot_ty),
+        (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
     )
 }
 

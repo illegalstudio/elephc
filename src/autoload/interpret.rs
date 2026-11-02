@@ -193,6 +193,16 @@ impl Interpreter {
                             is_class_name: false,
                         })
                     }
+                    // Integer addition exists for one reason: the canonical PSR-4 leaf
+                    // expression `substr($class, strrpos($class, '\\') + 1)`. `strrpos`
+                    // returns `int|false`, and PHP's `false + 1` is `1` — so the operand
+                    // conversion must accept booleans, not just ints, or a global-namespace
+                    // class would abort the rule instead of matching PHP.
+                    BinOp::Add => {
+                        let ls = value_to_arith_int(&l)?;
+                        let rs = value_to_arith_int(&r)?;
+                        ls.checked_add(rs).map(Value::Int)
+                    }
                     BinOp::Eq | BinOp::StrictEq => Some(Value::Bool(values_equal(&l, &r))),
                     BinOp::NotEq | BinOp::StrictNotEq => Some(Value::Bool(!values_equal(&l, &r))),
                     BinOp::And => Some(Value::Bool(l.truthy() && r.truthy())),
@@ -201,6 +211,14 @@ impl Interpreter {
                 }
             }
             ExprKind::Not(inner) => self.eval(inner).map(|v| Value::Bool(!v.truthy())),
+            // The parser keeps `-6` as `Negate(IntLiteral(6))`, so without this arm no
+            // negative literal can be written at all and `substr`'s negative offset and
+            // negative length — both ordinary PHP — would abort every rule that used one.
+            // Integers only: no other unary operator folds.
+            ExprKind::Negate(inner) => match self.eval(inner)? {
+                Value::Int(n) => n.checked_neg().map(Value::Int),
+                _ => None,
+            },
             ExprKind::FunctionCall { name, args } => {
                 let canonical = name.as_canonical();
                 let trimmed = canonical.trim_start_matches('\\');
@@ -249,6 +267,59 @@ impl Interpreter {
                 Some(Value::Bool(
                     hay.as_str()?.ends_with(needle.as_str()?),
                 ))
+            }
+            // `substr` and `strrpos` are the pair behind the ordinary hand-written
+            // PSR-4 loader: `substr($class, strrpos($class, '\\') + 1)`.
+            "substr" => {
+                if args.len() > 3 {
+                    return None;
+                }
+                let subject = self.eval(args.first()?)?;
+                // PHP would coerce an int/bool/null subject to string here. The
+                // interpreter aborts instead: a coerced subject never appears in a
+                // real autoloader, and a wrong guess picks a wrong file.
+                let subject_s = subject.as_str()?.to_string();
+                let offset = match self.eval(args.get(1)?)? {
+                    Value::Int(n) => n,
+                    _ => return None,
+                };
+                let length = match args.get(2) {
+                    None => None,
+                    // An explicit `null` length means "to the end", same as omitting it.
+                    Some(arg) => match self.eval(arg)? {
+                        Value::Null => None,
+                        Value::Int(n) => Some(n),
+                        _ => return None,
+                    },
+                };
+                fold_substr(&subject_s, offset, length).map(|value| Value::Str {
+                    value,
+                    // Every derived string in this interpreter clears `is_class_name`,
+                    // and `substr` follows that rule even though a leaf name arguably
+                    // still *is* a class name. `is_class_name` only widens `==` to
+                    // PHP's case-insensitive class lookup; a substring is no longer a
+                    // whole class name, so comparing it case-insensitively would claim
+                    // a PHP semantic that does not exist for it.
+                    is_class_name: false,
+                })
+            }
+            "strrpos" => {
+                if args.len() > 3 {
+                    return None;
+                }
+                let haystack = self.eval(args.first()?)?;
+                let haystack_s = haystack.as_str()?.to_string();
+                let needle = self.eval(args.get(1)?)?;
+                // PHP 8 stringifies a non-string needle; aborting is the safe read.
+                let needle_s = needle.as_str()?.to_string();
+                let offset = match args.get(2) {
+                    None => 0,
+                    Some(arg) => match self.eval(arg)? {
+                        Value::Int(n) => n,
+                        _ => return None,
+                    },
+                };
+                fold_strrpos(&haystack_s, &needle_s, offset)
             }
             "strtolower" => self
                 .eval(args.first()?)
@@ -426,6 +497,99 @@ fn fold_dirname(path: &str, levels: i64) -> Option<String> {
         }
     }
     Some(current)
+}
+
+/// `substr($string, $offset, $length)` over bytes, matching PHP 8's clamping:
+///
+/// - a negative `offset` counts from the end and clamps at 0;
+/// - an `offset` past the end yields `""` (PHP 8 no longer returns `false`);
+/// - a negative `length` drops that many bytes from the end and clamps at 0;
+/// - `length` is clamped to the bytes remaining after `offset`.
+///
+/// Returns `None` when the byte window would split a multi-byte UTF-8 sequence.
+/// PHP is byte-oriented and would happily return the broken bytes, but the rest
+/// of the pass threads Rust `String`s, so the rule aborts rather than guess.
+fn fold_substr(subject: &str, offset: i64, length: Option<i64>) -> Option<String> {
+    let bytes = subject.as_bytes();
+    let len = bytes.len() as i64;
+
+    // Saturating throughout: PHP accepts `PHP_INT_MIN` here and clamps, so the
+    // fold must not overflow on the way to the same answer.
+    let start = if offset < 0 {
+        len.saturating_add(offset).max(0)
+    } else {
+        offset.min(len)
+    };
+    let remaining = len - start;
+
+    let take = match length {
+        None => remaining,
+        Some(n) if n < 0 => remaining.saturating_add(n).max(0),
+        Some(n) => n.min(remaining),
+    };
+
+    let from = start as usize;
+    let to = from + take as usize;
+    std::str::from_utf8(bytes.get(from..to)?)
+        .ok()
+        .map(|s| s.to_string())
+}
+
+/// `strrpos($haystack, $needle, $offset)` over bytes.
+///
+/// Returns `Value::Int(byte_index)` on a hit and `Value::Bool(false)` on a miss —
+/// the `false`-versus-`0` distinction callers depend on. Returns `None` (aborting
+/// the rule) when PHP would throw: an `$offset` outside the haystack raises
+/// `ValueError`, and the interpreter has no way to represent a thrown exception.
+///
+/// Offset semantics, measured against php 8.5.10:
+/// - `$offset >= 0`: the match must *start* at or after `$offset`.
+/// - `$offset < 0`: the match must *start* at or before `strlen + $offset`; the
+///   needle itself is allowed to extend past that point.
+fn fold_strrpos(haystack: &str, needle: &str, offset: i64) -> Option<Value> {
+    let hay = haystack.as_bytes();
+    let nee = needle.as_bytes();
+    let len = hay.len() as i64;
+
+    // PHP: "Argument #3 ($offset) must be contained in argument #1 ($haystack)".
+    if offset > len || offset < -len {
+        return None;
+    }
+
+    if nee.len() > hay.len() {
+        return Some(Value::Bool(false));
+    }
+
+    // Window of permitted *start* positions for the needle.
+    let min_start = if offset >= 0 { offset } else { 0 };
+    let max_start = if offset >= 0 {
+        len - nee.len() as i64
+    } else {
+        (len + offset).min(len - nee.len() as i64)
+    };
+
+    let mut candidate = max_start;
+    while candidate >= min_start {
+        let from = candidate as usize;
+        if &hay[from..from + nee.len()] == nee {
+            return Some(Value::Int(candidate));
+        }
+        candidate -= 1;
+    }
+    Some(Value::Bool(false))
+}
+
+/// Convert a Value to an integer for `+`, following PHP's scalar rules for the
+/// only operand kinds this subset can produce: `int` stays, `false` is `0` and
+/// `true` is `1`. Strings and null abort — a numeric string would need PHP's
+/// full numeric-string parse and a non-numeric one is a `TypeError`.
+fn value_to_arith_int(value: &Value) -> Option<i64> {
+    match value {
+        Value::Int(n) => Some(*n),
+        Value::Bool(true) => Some(1),
+        Value::Bool(false) => Some(0),
+        _ => None,
+    }
 }
 
 /// Check if a path is readable (file or directory).

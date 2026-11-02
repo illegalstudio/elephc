@@ -71,6 +71,22 @@ fn test_parse_mixed_array_preserves_leading_positional_element() {
     assert_eq!(items[0].1.kind, ExprKind::IntLiteral(10));
 }
 
+/// Verifies a referenced web superglobal is preserved as an explicit array-reference value.
+#[test]
+fn test_parse_array_reference_to_superglobal() {
+    let stmts = parse_source("<?php $m = ['session' => &$_SESSION];");
+    let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+        panic!("expected Assign");
+    };
+    let ExprKind::ArrayLiteralAssoc(items) = &value.kind else {
+        panic!("expected ArrayLiteralAssoc");
+    };
+    let ExprKind::ArrayReference(inner) = &items[0].1.kind else {
+        panic!("expected ArrayReference");
+    };
+    assert_eq!(inner.kind, ExprKind::Variable("_SESSION".into()));
+}
+
 /// Verifies a spread beside an explicit key parses to the ORDERED entry list, not to either
 /// single-shape node.
 ///
@@ -167,6 +183,21 @@ fn test_parse_standalone_match_expression_statement() {
     match &stmts[0].kind {
         StmtKind::ExprStmt(expr) => assert!(matches!(&expr.kind, ExprKind::Match { .. })),
         other => panic!("expected ExprStmt containing Match, got {:?}", other),
+    }
+}
+
+/// Verifies PHP's optional trailing comma after a match arm's condition list.
+#[test]
+fn test_parse_match_condition_list_with_trailing_comma() {
+    let stmts = parse_source(
+        "<?php match ($name) { 'a', 'b', => $value = 1, default => null, };",
+    );
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::Match { arms, .. } => assert_eq!(arms[0].0.len(), 2),
+            other => panic!("expected match expression, got {:?}", other),
+        },
+        other => panic!("expected match expression statement, got {:?}", other),
     }
 }
 

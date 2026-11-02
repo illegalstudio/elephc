@@ -8,7 +8,11 @@
 //! Key details:
 //! - Symbol names and table layouts are link-time ABI shared with generated code and runtime helper labels.
 
-mod fixed;
+mod class_methods_registry;
+mod class_relation_registry;
+mod const_registry;
+mod member_exists_registry;
+pub(crate) mod fixed;
 /// Also home of `escaped_bytes()`, the crate's single assembler-string escaper:
 /// reachable outside this module so non-runtime emitters (`crate::debug_info`)
 /// escape quoted directive operands the same way.
@@ -19,10 +23,22 @@ mod serialization;
 
 pub(crate) use serialization::SerializableReturnAbi;
 
+/// Emit the closed-world class/interface/trait registry data tables for runtime lookups.
+pub(crate) use const_registry::{emit_class_registry_data, emit_interface_registry_data};
+/// Emit the closed-world per-class public-method payload registry.
+pub(crate) use class_methods_registry::emit_class_methods_registry_data;
+/// Emit the closed-world per-class relation payload registry.
+pub(crate) use class_relation_registry::emit_class_relation_registry_data;
+/// Emit the closed-world constant/enum registry data tables for runtime lookups.
+pub(crate) use const_registry::emit_const_registry_data;
+/// Emit the closed-world member-existence registry backing dynamic member names.
+pub(crate) use member_exists_registry::emit_member_exists_registry_data;
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;
-pub(crate) use user::{is_user_filter_contract_method, is_user_wrapper_contract_method};
+pub(crate) use user::{
+    is_user_filter_contract_method, is_user_wrapper_contract_method, user_wrapper_contract_param_type,
+};
 pub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 pub(crate) use user::USER_WRAPPER_VTABLE_CAST_RESULT_OFFSET;
 
@@ -334,11 +350,6 @@ pub(crate) const UNSER_PROPERTY_ASSIGN_PREFIX: &str = "Cannot assign ";
 /// as a controlled fatal instead of writing past the conversion buffer.
 pub(crate) const SPRINTF_WIDTH_MSG: &str =
     "Fatal error: Uncaught ValueError: Width must be between 0 and 2147483647\n";
-/// Fatal error message when a `printf`-family conversion would write past the shared
-/// `_concat_buf` result arena. The arena follows `--heap-size`, so this only reports a
-/// result larger than the program's configured memory budget.
-pub(crate) const SPRINTF_OVERFLOW_MSG: &str =
-    "Fatal error: sprintf(): formatted result exceeds the configured string buffer\n";
 /// Fatal error message when a `printf`-family format string consumes more arguments than
 /// were supplied. PHP raises `ArgumentCountError`; elephc reports the same class of error
 /// as a controlled fatal because the alternative is reading past the pushed argument records.

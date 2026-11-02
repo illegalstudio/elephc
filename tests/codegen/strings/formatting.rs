@@ -16,6 +16,25 @@ fn test_sprintf_string() {
     assert_eq!(out, "Hello World");
 }
 
+/// Verifies string-typed builtin arguments invoke a concrete object's `__toString()` method for
+/// both printf-family packing and ordinary internal string-parameter coercion.
+#[test]
+fn test_string_builtins_coerce_stringable_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class StringBuiltinValue {
+    public function __toString(): string {
+        return 'banana';
+    }
+}
+
+$value = new StringBuiltinValue();
+echo sprintf('[%s]', $value) . '|' . substr_count($value, 'an');
+"#,
+    );
+    assert_eq!(out, "[banana]|2");
+}
+
 /// Tests sprintf with %d integer formatting.
 #[test]
 fn test_sprintf_int() {
@@ -193,8 +212,7 @@ echo $result[0] . " " . $result[1];
     assert_eq!(out, "John 30");
 }
 
-/// sscanf %f captures a float slice. Like %d, sscanf returns the matched
-/// substring (Array(Str)), so the assertion compares the captured text.
+/// Verifies `%f` produces a PHP float rather than preserving its source spelling.
 #[test]
 fn test_sscanf_float() {
     let out = compile_and_run(
@@ -206,7 +224,7 @@ echo $r[0];
     assert_eq!(out, "3.14");
 }
 
-/// %f accepts a leading sign and a scientific exponent.
+/// Verifies `%f` accepts a leading sign and exponent and returns the parsed numeric value.
 #[test]
 fn test_sscanf_float_negative_and_exponent() {
     let out = compile_and_run(
@@ -215,10 +233,10 @@ $r = sscanf("-2.5e3", "%f");
 echo $r[0];
 "#,
     );
-    assert_eq!(out, "-2.5e3");
+    assert_eq!(out, "-2500");
 }
 
-/// %f composes with %s and %d in one format, each capturing its slice.
+/// Verifies `%f` composes with `%s` and `%d` while preserving each PHP scalar type.
 #[test]
 fn test_sscanf_float_mixed_with_string_and_int() {
     let out = compile_and_run(
@@ -228,6 +246,47 @@ echo $r[0] . "|" . $r[1] . "|" . $r[2];
 "#,
     );
     assert_eq!(out, "alice|1.5|30");
+}
+
+/// Verifies scanner arrays contain PHP-typed values for every supported conversion.
+#[test]
+fn test_sscanf_returns_typed_mixed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$r = sscanf("12 3.5 pear", "%d %f %s");
+echo gettype($r[0]) . ":" . $r[0];
+echo "|" . gettype($r[1]) . ":" . $r[1];
+echo "|" . gettype($r[2]) . ":" . $r[2];
+"#,
+    );
+    assert_eq!(out, "integer:12|double:3.5|string:pear");
+}
+
+/// Verifies by-reference outputs are created, typed, written, and counted in source order.
+#[test]
+fn test_sscanf_writes_variadic_output_variables() {
+    let out = compile_and_run(
+        r#"<?php
+$count = sscanf("\033[12;34R", "\033[%d;%dR", $row, $column);
+echo $count . "|" . gettype($row) . ":" . $row;
+echo "|" . gettype($column) . ":" . $column;
+"#,
+    );
+    assert_eq!(out, "2|integer:12|integer:34");
+}
+
+/// Verifies missing conversions overwrite the corresponding output with PHP null.
+#[test]
+fn test_sscanf_missing_output_becomes_null() {
+    let out = compile_and_run(
+        r#"<?php
+$first = 99;
+$second = "old";
+$count = sscanf("12", "%d %d", $first, $second);
+echo $count . "|" . $first . "|" . gettype($second);
+"#,
+    );
+    assert_eq!(out, "1|12|NULL");
 }
 
 /// The string-search builtins must coerce a Mixed/Union haystack (e.g. a
@@ -539,6 +598,31 @@ fn test_sprintf_result_larger_than_buffer_reports_runtime_error() {
     );
 }
 
+/// Formatted results must move beyond the shared 64 KiB scratch arena without truncation or
+/// corruption. This covers a large `%s` operand, a dynamically-built literal-only format,
+/// and width padding, which exercise the conversion and literal append paths independently.
+#[test]
+fn test_sprintf_result_larger_than_scratch_grows_without_truncation() {
+    let out = compile_and_run(
+        r#"<?php
+$subject = str_repeat("a", 70000);
+$conversion = sprintf("%s", $subject);
+$literal = sprintf(str_repeat(".", 66000));
+$padded = sprintf("%70000s", "x");
+echo strlen($conversion), "|", strlen($literal), "|", strlen($padded), "|", $padded[69999];
+"#,
+    );
+    assert_eq!(out, "70000|66000|70000|x");
+}
+
+/// A representable width that exceeds the configured heap ceiling must still fail through the
+/// shared allocation-overflow path rather than attempting a wrapped or out-of-bounds write.
+#[test]
+fn test_sprintf_result_larger_than_heap_reports_runtime_error() {
+    let err = compile_and_run_expect_failure(r#"<?php echo sprintf("%2000000000s", "x");"#);
+    assert!(err.contains("Possible integer overflow in memory allocation"), "{err}");
+}
+
 /// A format string that consumes more arguments than were supplied must stop instead of
 /// reading past the pushed argument records on the caller's stack.
 #[test]
@@ -706,4 +790,76 @@ echo "[", sprintf($f, null), "]";
 "#,
     );
     assert_eq!(out, "[][][0][0][]");
+}
+
+/// Releases the `(string)` copy of a Mixed format once `sprintf()`/`vsprintf()` returns.
+///
+/// Both formatters write a new string, but they sat in the "may alias an argument" bucket, so
+/// the cast copy of a boxed format lived as long as the result: four blocks per iteration here.
+/// Expected output is `php -n` 8.5's.
+#[test]
+fn test_sprintf_with_a_mixed_format_releases_its_string_copy() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function a(mixed $format, mixed $v): string { return \sprintf($format, $v, "q$v"); }
+function b(string $f, array $vals): string { return vsprintf($f, $vals) . sprintf('%05.1f|%s', 3.14159, strtoupper($f)); }
+function c(?string $f): string { return sprintf($f ?? '%s-%s', 'x', 'y'); }
+$f = $argc > 5 ? 1 : '<%s|%s>';
+for ($i = 0; $i < 4; $i++) {
+    $r = a($f, "v$i") . b('%s+%d', ["s$i", $i]) . c($argc > 5 ? 'z' : null) . sprintf('plain');
+}
+echo $r, "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "<v3|qv3>s3+3003.1|%S+%Dx-yplain\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Formats the values of a boxed `array` parameter, a keyed array or a call result in order.
+///
+/// `__rt_vsprintf` walks packed slots, and a source `array` parameter arrives boxed, so
+/// `vsprintf('%s+%s', $vals)` printed two addresses. Expected output is `php -n` 8.5's.
+#[test]
+fn test_vsprintf_lists_boxed_and_keyed_value_arrays() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function b(string $f, array $vals): string { return vsprintf($f, $vals); }
+function vals(int $i): array { return ['k' => "s$i", 'n' => $i]; }
+function m(mixed $v): string { return vsprintf('%s/%s', $v); }
+$i = $argc;
+for ($j = 0; $j < 3; $j++) {
+    $r = vsprintf('%s+%d', ["s$i", $i]) . "|" . b('%s+%d', ["s$i", $i]) . "|" . b('%s+%s', ['a', 'b'])
+        . "|" . vsprintf('%s=%s', ['x' => 'u', 'y' => "w$i"]) . "|" . vsprintf('%s~%d', vals($i))
+        . "|" . m($argc > 5 ? 1 : ["p$i", 'q']);
+}
+echo $r, "\n";
+vprintf("%s-%s\n", vals($i));
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "s1+1|s1+1|a+b|u=w1|s1~1|p1/q\ns1-1\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Unpacks a spread into the values of `sprintf()` and `printf()`.
+///
+/// Each source argument became one packed record, so `sprintf('%s+%d', ...$m)` formatted the
+/// array itself ("Array to string conversion") and then failed with too few arguments.
+/// Expected output is `php -n` 8.5's.
+#[test]
+fn test_sprintf_and_printf_unpack_a_spread_argument() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$i = $argc;
+$m = ["s$i", $i];
+echo sprintf('%s+%d', ...$m), "|", sprintf('%s-%s', ...['x', 'y']), "|", sprintf('%s:%s', 'a', ...['b']), "\n";
+function f(array $a): string { return sprintf('%s/%s', ...$a); }
+echo f(['p', 'q']), "\n";
+printf("%s=%s\n", ...$m);
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "s1+1|x-y|a:b\np/q\ns1=1\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }

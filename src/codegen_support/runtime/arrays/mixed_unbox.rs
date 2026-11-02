@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
+//! - An array element that owns a share of a reference (tags 12 and 13) unboxes as the value
+//!   its cell currently holds, so every consumer that dispatches on the unboxed tag -- implode,
+//!   json_encode, print_r, casts -- reads the referenced value instead of an internal marker.
+//!   Tag 11 is not dereferenced here: it also names type-erased Iterable records.
 //! - Legacy container-shaped boxes with a null/sentinel payload unbox as canonical
 //!   PHP null, so every tag-dispatch consumer receives a safe structural shape.
 //! - The return triple is `(tag, payload_lo, payload_hi)` in `x0`/`x1`/`x2` on AArch64 and
@@ -14,6 +18,9 @@
 //!   `crate::codegen_support::mixed_unbox_payload_reg()`; the test below holds that helper
 //!   and this emitter together on every supported target.
 
+use crate::codegen_support::callable_invoker_args::{
+    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG,
+};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
@@ -41,16 +48,35 @@ pub fn emit_mixed_unbox(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_unbox_loop");
     emitter.instruction("mov x10, x0");                                         // preserve the current mixed cell pointer while inspecting its tag
     emitter.instruction("ldr x9, [x0]");                                        // x9 = boxed payload tag
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_GLOBAL_REF_CELL_TAG));    // is this an array element that owns a global reference?
+    emitter.instruction("b.eq __rt_mixed_unbox_ref");                           // read the referenced value, never the marker
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_LOCAL_REF_CELL_TAG));     // is this an array element that owns a local reference?
+    emitter.instruction("b.eq __rt_mixed_unbox_ref");                           // read the referenced value, never the marker
     emitter.instruction("cmp x9, #7");                                          // does this mixed box wrap another mixed value?
     emitter.instruction("b.ne __rt_mixed_unbox_done");                          // stop once the payload tag is concrete
     emitter.instruction("ldr x0, [x0, #8]");                                    // follow the nested mixed pointer stored in value_lo
     emitter.instruction("cbz x0, __rt_mixed_unbox_null");                       // null nested boxes unwrap to the null runtime tag
     emitter.instruction("b __rt_mixed_unbox_loop");                             // continue peeling nested mixed wrappers
 
+    emitter.label("__rt_mixed_unbox_ref");
+    emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = the shared reference cell the marker owns a share of
+    emitter.instruction("ldr x9, [x0, #16]");                                   // x9 = the runtime tag of the value the cell stores
+    emitter.instruction("cmp x9, #7");                                          // does the cell hold a boxed Mixed handle?
+    emitter.instruction("b.ne __rt_mixed_unbox_ref_typed");                     // typed cells store the payload words in place
+    emitter.instruction("ldr x0, [x10]");                                       // follow the cell to the referenced Mixed box
+    emitter.instruction("cbz x0, __rt_mixed_unbox_null");                       // an unset cell reads as null
+    emitter.instruction("b __rt_mixed_unbox_loop");                             // peel the referenced box like any other
+    emitter.label("__rt_mixed_unbox_ref_typed");
+    emitter.instruction("mov x0, x9");                                          // return the cell's runtime tag in x0
+    emitter.instruction("ldr x1, [x10]");                                       // return the cell's low payload word in x1
+    emitter.instruction("ldr x2, [x10, #8]");                                   // return the cell's high payload word in x2
+    emitter.instruction("b __rt_mixed_unbox_check");                            // normalize null container payloads like a box
+
     emitter.label("__rt_mixed_unbox_done");
     emitter.instruction("mov x0, x9");                                          // return the concrete runtime tag in x0
     emitter.instruction("ldr x1, [x10, #8]");                                   // return the concrete payload low word in x1
     emitter.instruction("ldr x2, [x10, #16]");                                  // return the concrete payload high word in x2
+    emitter.label("__rt_mixed_unbox_check");
     emitter.instruction("cmp x0, #4");                                          // only container-shaped tags can encode null in their payload pointer
     emitter.instruction("b.lt __rt_mixed_unbox_return");                        // scalar payloads preserve sentinel-colliding integer bit patterns
     emitter.instruction("cmp x0, #6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6
@@ -78,6 +104,10 @@ fn emit_mixed_unbox_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_unbox_loop");
     emitter.instruction("mov r10, rax");                                        // preserve the current mixed cell pointer while inspecting its tag
     emitter.instruction("mov r11, QWORD PTR [rax]");                            // r11 = boxed payload tag
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG));    // is this an array element that owns a global reference?
+    emitter.instruction("je __rt_mixed_unbox_ref");                             // read the referenced value, never the marker
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG));     // is this an array element that owns a local reference?
+    emitter.instruction("je __rt_mixed_unbox_ref");                             // read the referenced value, never the marker
     emitter.instruction("cmp r11, 7");                                          // does this mixed box wrap another mixed value?
     emitter.instruction("jne __rt_mixed_unbox_done");                           // stop once the payload tag is concrete
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // follow the nested mixed pointer stored in value_lo
@@ -85,10 +115,26 @@ fn emit_mixed_unbox_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_unbox_null");                            // normalize null nested boxes to the null runtime tag
     emitter.instruction("jmp __rt_mixed_unbox_loop");                           // continue peeling nested mixed wrappers
 
+    emitter.label("__rt_mixed_unbox_ref");
+    emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // r10 = the shared reference cell the marker owns a share of
+    emitter.instruction("mov r11, QWORD PTR [rax + 16]");                       // r11 = the runtime tag of the value the cell stores
+    emitter.instruction("cmp r11, 7");                                          // does the cell hold a boxed Mixed handle?
+    emitter.instruction("jne __rt_mixed_unbox_ref_typed");                      // typed cells store the payload words in place
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // follow the cell to the referenced Mixed box
+    emitter.instruction("test rax, rax");                                       // an unset cell reads as null
+    emitter.instruction("je __rt_mixed_unbox_null");                            // normalize an empty cell to the null runtime tag
+    emitter.instruction("jmp __rt_mixed_unbox_loop");                           // peel the referenced box like any other
+    emitter.label("__rt_mixed_unbox_ref_typed");
+    emitter.instruction("mov rax, r11");                                        // return the cell's runtime tag in rax
+    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // return the cell's low payload word in rdi
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // return the cell's high payload word in rdx
+    emitter.instruction("jmp __rt_mixed_unbox_check");                          // normalize null container payloads like a box
+
     emitter.label("__rt_mixed_unbox_done");
     emitter.instruction("mov rax, r11");                                        // return the concrete runtime tag in rax
     emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // return the concrete payload low word in rdi
     emitter.instruction("mov rdx, QWORD PTR [r10 + 16]");                       // return the concrete payload high word in rdx
+    emitter.label("__rt_mixed_unbox_check");
     emitter.instruction("cmp rax, 4");                                          // only container-shaped tags can encode null in their payload pointer
     emitter.instruction("jl __rt_mixed_unbox_return");                          // scalar payloads preserve sentinel-colliding integer bit patterns
     emitter.instruction("cmp rax, 6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6

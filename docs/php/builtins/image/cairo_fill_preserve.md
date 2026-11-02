@@ -2,7 +2,7 @@
 title: "cairo_fill_preserve()"
 description: "Fills the current path with the current source and keeps the path."
 sidebar:
-  order: 414
+  order: 427
 ---
 
 ## cairo_fill_preserve()

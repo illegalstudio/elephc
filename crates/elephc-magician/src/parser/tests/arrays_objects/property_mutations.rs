@@ -10,24 +10,32 @@
 
 use super::super::support::*;
 
-/// Verifies object property writes parse as dedicated EvalIR statements.
+/// Verifies an object property write parses as an assignment expression over a property target.
+///
+/// This asserted a dedicated `EvalStmt::PropertySet` until the parser moved every property write
+/// onto the general assignment path, and then said nothing for months while red. The behaviour it
+/// was standing in for is pinned against `php -n` 8.5.6 in
+/// `interpreter::tests::classes::basics::execute_program_writes_every_property_mutation_form`, so
+/// what is left here is the SHAPE the interpreter has to understand.
 #[test]
 fn parse_fragment_accepts_property_write_source() {
     let program = parse_fragment(br#"$this->x = $this->x + 1;"#).expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::PropertySet {
-            object: EvalExpr::LoadVar("this".to_string()),
-            property: "x".to_string(),
-            value: EvalExpr::Binary {
+        &[EvalStmt::Expr(EvalExpr::Assign {
+            target: Box::new(EvalExpr::PropertyGet {
+                object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                property: "x".to_string(),
+            }),
+            value: Box::new(EvalExpr::Binary {
                 op: EvalBinOp::Add,
                 left: Box::new(EvalExpr::PropertyGet {
                     object: Box::new(EvalExpr::LoadVar("this".to_string())),
                     property: "x".to_string(),
                 }),
                 right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
-            },
-        }]
+            }),
+        })]
     );
 }
 
@@ -62,13 +70,16 @@ fn parse_fragment_accepts_property_array_write_source() {
     assert_eq!(
         program.statements(),
         &[
-            EvalStmt::PropertyArraySet {
-                object: EvalExpr::LoadVar("this".to_string()),
-                property: "items".to_string(),
-                index: EvalExpr::Const(EvalConst::Int(0)),
-                op: None,
-                value: EvalExpr::Const(EvalConst::String("x".to_string())),
-            },
+            EvalStmt::Expr(EvalExpr::Assign {
+                target: Box::new(EvalExpr::ArrayGet {
+                    array: Box::new(EvalExpr::PropertyGet {
+                        object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                        property: "items".to_string(),
+                    }),
+                    index: Box::new(EvalExpr::Const(EvalConst::Int(0))),
+                }),
+                value: Box::new(EvalExpr::Const(EvalConst::String("x".to_string()))),
+            }),
             EvalStmt::PropertyArrayAppend {
                 object: EvalExpr::LoadVar("this".to_string()),
                 property: "items".to_string(),
@@ -84,13 +95,17 @@ fn parse_fragment_accepts_property_array_compound_assignment_source() {
     let program = parse_fragment(br#"$this->items[0] += 2;"#).expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::PropertyArraySet {
-            object: EvalExpr::LoadVar("this".to_string()),
-            property: "items".to_string(),
-            index: EvalExpr::Const(EvalConst::Int(0)),
-            op: Some(EvalBinOp::Add),
-            value: EvalExpr::Const(EvalConst::Int(2)),
-        }]
+        &[EvalStmt::Expr(EvalExpr::CompoundAssign {
+            target: Box::new(EvalExpr::ArrayGet {
+                array: Box::new(EvalExpr::PropertyGet {
+                    object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                    property: "items".to_string(),
+                }),
+                index: Box::new(EvalExpr::Const(EvalConst::Int(0))),
+            }),
+            op: EvalBinOp::Add,
+            value: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+        })]
     );
 }
 
@@ -101,11 +116,13 @@ fn parse_fragment_accepts_property_inc_dec_source() {
     assert_eq!(
         program.statements(),
         &[
-            EvalStmt::PropertyIncDec {
-                object: EvalExpr::LoadVar("this".to_string()),
-                property: "x".to_string(),
+            EvalStmt::Expr(EvalExpr::PostfixIncDec {
+                target: Box::new(EvalExpr::PropertyGet {
+                    object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                    property: "x".to_string(),
+                }),
                 increment: true,
-            },
+            }),
             EvalStmt::PropertyIncDec {
                 object: EvalExpr::LoadVar("this".to_string()),
                 property: "x".to_string(),
@@ -121,11 +138,13 @@ fn parse_fragment_accepts_dynamic_property_write_source() {
     let program = parse_fragment(br#"$this->{$name} = 7;"#).expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::DynamicPropertySet {
-            object: EvalExpr::LoadVar("this".to_string()),
-            property: EvalExpr::LoadVar("name".to_string()),
-            value: EvalExpr::Const(EvalConst::Int(7)),
-        }]
+        &[EvalStmt::Expr(EvalExpr::Assign {
+            target: Box::new(EvalExpr::DynamicPropertyGet {
+                object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                property: Box::new(EvalExpr::LoadVar("name".to_string())),
+            }),
+            value: Box::new(EvalExpr::Const(EvalConst::Int(7))),
+        })]
     );
 }
 
@@ -137,13 +156,16 @@ fn parse_fragment_accepts_dynamic_property_array_write_source() {
     assert_eq!(
         program.statements(),
         &[
-            EvalStmt::DynamicPropertyArraySet {
-                object: EvalExpr::LoadVar("this".to_string()),
-                property: EvalExpr::LoadVar("name".to_string()),
-                index: EvalExpr::Const(EvalConst::Int(0)),
-                op: None,
-                value: EvalExpr::Const(EvalConst::String("x".to_string())),
-            },
+            EvalStmt::Expr(EvalExpr::Assign {
+                target: Box::new(EvalExpr::ArrayGet {
+                    array: Box::new(EvalExpr::DynamicPropertyGet {
+                        object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                        property: Box::new(EvalExpr::LoadVar("name".to_string())),
+                    }),
+                    index: Box::new(EvalExpr::Const(EvalConst::Int(0))),
+                }),
+                value: Box::new(EvalExpr::Const(EvalConst::String("x".to_string()))),
+            }),
             EvalStmt::DynamicPropertyArrayAppend {
                 object: EvalExpr::LoadVar("this".to_string()),
                 property: EvalExpr::LoadVar("name".to_string()),
@@ -161,18 +183,22 @@ fn parse_fragment_accepts_property_compound_assignment_source() {
     assert_eq!(
         program.statements(),
         &[
-            EvalStmt::PropertyCompoundAssign {
-                object: EvalExpr::LoadVar("this".to_string()),
-                property: "x".to_string(),
+            EvalStmt::Expr(EvalExpr::CompoundAssign {
+                target: Box::new(EvalExpr::PropertyGet {
+                    object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                    property: "x".to_string(),
+                }),
                 op: EvalBinOp::Add,
-                value: EvalExpr::Const(EvalConst::Int(2)),
-            },
-            EvalStmt::PropertyCompoundAssign {
-                object: EvalExpr::LoadVar("this".to_string()),
-                property: "label".to_string(),
+                value: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+            }),
+            EvalStmt::Expr(EvalExpr::CompoundAssign {
+                target: Box::new(EvalExpr::PropertyGet {
+                    object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                    property: "label".to_string(),
+                }),
                 op: EvalBinOp::Concat,
-                value: EvalExpr::Const(EvalConst::String("ok".to_string())),
-            },
+                value: Box::new(EvalExpr::Const(EvalConst::String("ok".to_string()))),
+            }),
         ]
     );
 }
@@ -186,18 +212,22 @@ fn parse_fragment_accepts_dynamic_property_compound_assignment_source() {
     assert_eq!(
         program.statements(),
         &[
-            EvalStmt::DynamicPropertyCompoundAssign {
-                object: EvalExpr::LoadVar("this".to_string()),
-                property: EvalExpr::LoadVar("name".to_string()),
+            EvalStmt::Expr(EvalExpr::CompoundAssign {
+                target: Box::new(EvalExpr::DynamicPropertyGet {
+                    object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                    property: Box::new(EvalExpr::LoadVar("name".to_string())),
+                }),
                 op: EvalBinOp::Add,
-                value: EvalExpr::Const(EvalConst::Int(2)),
-            },
-            EvalStmt::DynamicPropertyCompoundAssign {
-                object: EvalExpr::LoadVar("this".to_string()),
-                property: EvalExpr::LoadVar("label".to_string()),
+                value: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+            }),
+            EvalStmt::Expr(EvalExpr::CompoundAssign {
+                target: Box::new(EvalExpr::DynamicPropertyGet {
+                    object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                    property: Box::new(EvalExpr::LoadVar("label".to_string())),
+                }),
                 op: EvalBinOp::Concat,
-                value: EvalExpr::Const(EvalConst::String("ok".to_string())),
-            },
+                value: Box::new(EvalExpr::Const(EvalConst::String("ok".to_string()))),
+            }),
         ]
     );
 }
@@ -210,11 +240,13 @@ fn parse_fragment_accepts_dynamic_property_inc_dec_source() {
     assert_eq!(
         program.statements(),
         &[
-            EvalStmt::DynamicPropertyIncDec {
-                object: EvalExpr::LoadVar("this".to_string()),
-                property: EvalExpr::LoadVar("name".to_string()),
+            EvalStmt::Expr(EvalExpr::PostfixIncDec {
+                target: Box::new(EvalExpr::DynamicPropertyGet {
+                    object: Box::new(EvalExpr::LoadVar("this".to_string())),
+                    property: Box::new(EvalExpr::LoadVar("name".to_string())),
+                }),
                 increment: true,
-            },
+            }),
             EvalStmt::DynamicPropertyIncDec {
                 object: EvalExpr::LoadVar("this".to_string()),
                 property: EvalExpr::LoadVar("name".to_string()),

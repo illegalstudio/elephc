@@ -26,7 +26,9 @@ pub(crate) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         .as_deref()
         .map(|path| path.starts_with("phar://"))
         .unwrap_or(true);
-    if can_be_phar {
+    // A runtime path publishes only when the link carries the bridge; see
+    // `dynamic_phar_libraries_linked`. The unpublished slot makes a `phar://` unlink fail.
+    if can_be_phar && (path_literal.is_some() || super::phar_read::dynamic_phar_libraries_linked(ctx)) {
         publish_phar_delete_function_pointer(ctx);
     }
     load_string_to_result(ctx, path, "unlink")?;
@@ -38,8 +40,16 @@ pub(crate) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
-/// Lowers `mkdir(path)` through the target-aware runtime helper.
+/// Lowers `mkdir(path, permissions?, recursive?, context?)` through wrapper-aware runtime helpers.
 pub(crate) fn lower_mkdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::super::ensure_arg_count_between(inst, "mkdir", 1, 4)?;
+    if inst.operands.len() > 3 {
+        // The stream `$context` operand is already evaluated for its effects; no wrapper dispatch
+        // consumes it, so the wrapper-aware lowering sees only path, permissions and recursive.
+        let mut without_context = inst.clone();
+        without_context.operands.truncate(3);
+        return lower_mkdir_wrapper_op(ctx, &without_context);
+    }
     lower_mkdir_wrapper_op(ctx, inst)
 }
 
@@ -70,12 +80,107 @@ pub(crate) fn lower_tempnam(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
 /// Lowers `scandir(path)` through the target-aware runtime directory listing helper.
 pub(crate) fn lower_scandir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_array(ctx, inst, "scandir", "__rt_scandir")
+    super::super::ensure_arg_count_between(inst, "scandir", 1, 3)?;
+    let path = expect_operand(inst, 0)?;
+    if let Some(order) = inst.operands.get(1).copied() {
+        require_int(
+            ctx.load_value_to_result(order)?.codegen_repr(),
+            "scandir sorting_order",
+        )?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    }
+    let order_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    load_string_to_result(ctx, path, "scandir")?;
+    abi::emit_call_label(ctx.emitter, "__rt_scandir");
+    abi::emit_pop_reg(ctx.emitter, order_reg);
+
+    let sort_ascending = ctx.next_label("scandir_sort_ascending");
+    let sort_descending = ctx.next_label("scandir_sort_descending");
+    let done = ctx.next_label("scandir_sort_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #2", order_reg));         // SCANDIR_SORT_NONE preserves the directory stream order
+            ctx.emitter.instruction(&format!("b.eq {}", done));                // skip sorting for PHP's no-sort mode
+            ctx.emitter.instruction(&format!("cbz {}, {}", order_reg, sort_ascending)); // zero selects ascending lexical order
+            ctx.emitter.instruction(&format!("b {}", sort_descending));        // every other integer selects descending order like php-src
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 2", order_reg));          // SCANDIR_SORT_NONE preserves the directory stream order
+            ctx.emitter.instruction(&format!("je {}", done));                  // skip sorting for PHP's no-sort mode
+            ctx.emitter.instruction(&format!("test {}, {}", order_reg, order_reg)); // zero selects ascending lexical order
+            ctx.emitter.instruction(&format!("jz {}", sort_ascending));
+            ctx.emitter.instruction(&format!("jmp {}", sort_descending));      // every other integer selects descending order like php-src
+        }
+    }
+
+    ctx.emitter.label(&sort_ascending);
+    emit_scandir_string_sort(ctx, "__rt_sort_str");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&sort_descending);
+    emit_scandir_string_sort(ctx, "__rt_rsort_str");
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
 }
 
-/// Lowers `glob(pattern)` through the target-aware runtime glob expansion helper.
+/// Sorts the current scandir string array in place while preserving its pointer as the builtin
+/// result across the void string-sort runtime helper.
+fn emit_scandir_string_sort(ctx: &mut FunctionContext<'_>, runtime_label: &str) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if arg_reg != result_reg {
+        ctx.emitter
+            .instruction(&format!("mov {}, {}", arg_reg, result_reg));
+    }
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+}
+
+/// Lowers `glob(pattern, flags?)` through the target-aware runtime glob expansion helper.
 pub(crate) fn lower_glob(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_array(ctx, inst, "glob", "__rt_glob")
+    super::super::ensure_arg_count_between(inst, "glob", 1, 2)?;
+    let pattern = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, pattern, "glob pattern")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #16");                         // preserve the pattern string pair while loading optional flags
+            ctx.emitter.instruction("stp x1, x2, [sp]");                        // save the pattern pointer and length
+            if inst.operands.len() == 2 {
+                let flags = expect_operand(inst, 1)?;
+                require_int(
+                    ctx.load_value_to_result(flags)?.codegen_repr(),
+                    "glob flags",
+                )?;
+            } else {
+                ctx.emitter.instruction("mov x0, #0");                          // use the default zero flag mask
+            }
+            ctx.emitter.instruction("mov x3, x0");                              // pass the portable PHP flag mask in the helper's scalar register
+            ctx.emitter.instruction("ldp x1, x2, [sp]");                        // restore the pattern pointer and length
+            ctx.emitter.instruction("add sp, sp, #16");                         // release pattern scratch storage
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // preserve the pattern string pair while loading optional flags
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the pattern pointer
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // save the pattern length
+            if inst.operands.len() == 2 {
+                let flags = expect_operand(inst, 1)?;
+                require_int(
+                    ctx.load_value_to_result(flags)?.codegen_repr(),
+                    "glob flags",
+                )?;
+            } else {
+                ctx.emitter.instruction("xor eax, eax");                        // use the default zero flag mask
+            }
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the portable PHP flag mask in the helper's scalar register
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the pattern pointer
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // restore the pattern length
+            ctx.emitter.instruction("add rsp, 16");                             // release pattern scratch storage
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_glob");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `chmod(path, mode)` through the target-aware runtime helper.
@@ -287,4 +392,3 @@ pub(crate) fn lower_pathinfo(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     }
     store_if_result(ctx, inst)
 }
-

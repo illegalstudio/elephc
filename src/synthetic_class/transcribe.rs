@@ -180,8 +180,10 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
             trait_uses,
             is_abstract,
             is_readonly_class,
+            doc_comment,
         } => {
             assert!(trait_uses.is_empty(), "trait uses are not modelled");
+            assert!(doc_comment.is_none(), "doc comments are not modelled");
             assert!(!is_readonly_class, "readonly classes are not modelled");
             let mut out = format!("{}class({})", pad(depth), lit(name));
             if *is_final {
@@ -644,6 +646,16 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             expr(index, depth),
             expr(value, depth)
         ),
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => format!(
+            "s_prop_ref_assign({}, {}, {})",
+            expr(object, depth),
+            lit(property),
+            expr(source, depth)
+        ),
         StmtKind::PropertyAssign {
             object,
             property,
@@ -906,6 +918,9 @@ fn expr(value: &Expr, depth: usize) -> String {
         ExprKind::Variable(name) => format!("e_var({})", lit(name)),
         ExprKind::ConstRef(name) => format!("e_const({})", lit(&name.as_canonical())),
         ExprKind::PostIncrement(name) => format!("e_post_inc({})", lit(name)),
+        ExprKind::PostDecrement(name) => format!("e_post_dec({})", lit(name)),
+        ExprKind::PreIncrement(name) => format!("e_pre_inc({})", lit(name)),
+        ExprKind::PreDecrement(name) => format!("e_pre_dec({})", lit(name)),
         ExprKind::Negate(inner) => format!("e_neg({})", expr(inner, depth)),
         ExprKind::Not(inner) => format!("e_not({})", expr(inner, depth)),
         ExprKind::Cast { target, expr: inner } => format!(
@@ -1356,9 +1371,11 @@ class Demo implements Iterator {
     const MODE = 2;
     private int $handle;
     private $target;
+    private $alias;
     public function __construct(int $handle) {
         $this->handle = $handle;
         $this->target = null;
+        $this->alias = &$this->target;
     }
     private function fail(string $message): void {
         if ($this->handle == 2) {
@@ -1395,6 +1412,7 @@ function demo_match($value) {
             ".private_prop(\"handle\"",
             ".private_untyped_prop(\"target\"",
             ".private()",
+            "s_prop_ref_assign(e_this(), \"alias\", e_this_prop(\"target\"))",
             "s_prop_assign(e_this()",
             "s_throw(e_new(\"DemoException\"",
             "e_null_coalesce",

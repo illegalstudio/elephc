@@ -31,16 +31,52 @@ pub(super) fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[Strin
     } else {
         crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span))
     };
+    // An `ArrayAccess` object (the checker admits no other object) is read through the boxed
+    // reader, which dispatches `offsetGet()` per position. Boxing moves the owned reference into
+    // the box, which becomes the source this statement releases.
+    let source = if matches!(source.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object)) {
+        ctx.box_value_as_mixed(source, PhpType::Mixed, Some(span))
+    } else {
+        source
+    };
     let item_type = list_unpack_item_type(ctx, source.value);
     let get_op = list_unpack_get_op(source.ir_type);
+    // Boxed `Mixed` sources read through `__rt_mixed_array_get`, which takes an explicit
+    // warn-on-missing flag. Destructuring is an ordinary read, so a short source reports PHP's
+    // undefined-key warning like `$src[$i]` would -- but destructuring NULL is silent in PHP,
+    // every target simply becomes null. `PhpDumper::addServices()` destructures each
+    // `$services[$id]`, null for a synthetic service, and printed "Trying to access array offset
+    // on null" for each. The flag is therefore "the source is not null", decided at run time.
+    let warning_flag = matches!(get_op, Op::RuntimeCall).then(|| {
+        let is_null = ctx.emit_value(
+            Op::IsNull,
+            vec![source.value],
+            None,
+            PhpType::Bool,
+            Op::IsNull.default_effects(),
+            Some(span),
+        );
+        let zero = ctx.emit_value(
+            Op::ConstI64,
+            Vec::new(),
+            Some(Immediate::I64(0)),
+            PhpType::Int,
+            Op::ConstI64.default_effects(),
+            Some(span),
+        );
+        ctx.emit_value(
+            Op::ICmp,
+            vec![is_null.value, zero.value],
+            Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Eq)),
+            PhpType::Bool,
+            Op::ICmp.default_effects(),
+            Some(span),
+        )
+    });
     for (index, var) in vars.iter().enumerate() {
         let index_value = lower_list_unpack_index(ctx, index, span);
         let mut operands = vec![source.value, index_value.value];
-        // Boxed `Mixed` sources read through `__rt_mixed_array_get`, which takes an
-        // explicit warn-on-missing flag. Destructuring is an ordinary read, so a
-        // short source reports PHP's undefined-key warning like `$src[$i]` would.
-        if matches!(get_op, Op::RuntimeCall) {
-            let warning_flag = crate::ir_lower::expr::emit_bool_literal(ctx, true, Some(span));
+        if let Some(warning_flag) = warning_flag {
             operands.push(warning_flag.value);
         }
         let item = ctx.emit_value(
@@ -53,7 +89,9 @@ pub(super) fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[Strin
         );
         ctx.store_local(var, item, item_type.clone(), Some(span));
     }
-    crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
 }
 
 /// Emits the positional integer key used to read one list-unpack element.
@@ -120,10 +158,9 @@ pub(super) fn normalize_array_write_element_type(item_type: PhpType) -> PhpType 
 }
 
 /// Declares global aliases in the local slot table.
-pub(super) fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String]) {
+pub(super) fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String], span: Span) {
     for var in vars {
-        let php_type = ctx.global_alias_type(var);
-        ctx.declare_local_with_kind(var, php_type, LocalKind::GlobalAlias);
+        ctx.bind_global_local(var, Some(span));
     }
 }
 
@@ -142,12 +179,28 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
     let after_block = ctx.builder.create_named_block("static_local_after", Vec::new());
 
     ctx.builder.position_at_end(init_block);
-    let value = lower_expr(ctx, init);
+    let mut value = lower_expr(ctx, init);
     // The initializer runs once; subsequent calls may enter with an object or another value.
     // A null initializer therefore requires boxed persistent storage and no null-only flow fact.
     let initialized_type = ctx.builder.value_php_type(value.value);
     let storage_type = if initialized_type == PhpType::Void { PhpType::Mixed } else { initialized_type };
     let slot = ctx.declare_local_with_kind(name, storage_type.clone(), LocalKind::StaticLocal);
+    // A string-keyed `static $m = [];` is declared as a hash (see
+    // `required_static_local_storage_type`); the empty initializer becomes one to match. The
+    // literal is an owned temporary, which the conversion consumes.
+    let slot_ty = ctx.builder.local_php_type(slot);
+    if matches!(slot_ty.codegen_repr(), PhpType::AssocArray { .. })
+        && matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Array(_))
+    {
+        value = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![value.value],
+            None,
+            slot_ty,
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+    }
     ctx.builder.emit_with_effects(
         Op::InitStaticLocal,
         vec![value.value],
@@ -182,6 +235,10 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
         else_args: Vec::new(),
     });
     ctx.builder.position_at_end(after_block);
-    ctx.set_local_type(name, storage_type);
+    // The slot's DECLARED type, not the initializer's: a string-keyed `static $m = [];` was
+    // declared as a hash above, and an `array<never>` fact here made the next nested write
+    // convert the slot's boxed value as if it were still a packed array.
+    let declared_type = ctx.builder.local_php_type(slot);
+    ctx.set_local_type(name, declared_type);
     ctx.clear_static_callable_locals();
 }

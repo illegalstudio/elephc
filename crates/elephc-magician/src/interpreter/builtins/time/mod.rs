@@ -21,6 +21,9 @@ mod getdate;
 mod gmdate;
 mod gmmktime;
 mod header;
+mod header_remove;
+mod headers_list;
+mod headers_sent;
 mod hrtime;
 mod http_response_code;
 mod localtime;
@@ -40,6 +43,7 @@ pub(in crate::interpreter) use getdate::*;
 pub(in crate::interpreter) use gmdate::*;
 pub(in crate::interpreter) use gmmktime::*;
 pub(in crate::interpreter) use header::*;
+pub(in crate::interpreter) use headers_sent::*;
 pub(in crate::interpreter) use hrtime::*;
 pub(in crate::interpreter) use http_response_code::*;
 pub(in crate::interpreter) use localtime::*;
@@ -70,6 +74,7 @@ pub(in crate::interpreter) fn eval_builtin_time_call(
         "gmmktime" => eval_builtin_gmmktime(args, context, scope, values),
         "mktime" => eval_builtin_mktime(args, context, scope, values),
         "header" => eval_builtin_header(args, context, scope, values),
+        "headers_sent" => eval_builtin_headers_sent(args, context, scope, values),
         "hrtime" => eval_builtin_hrtime(args, context, scope, values),
         "http_response_code" => eval_builtin_http_response_code(args, context, scope, values),
         "localtime" => eval_builtin_localtime(args, context, scope, values),
@@ -143,6 +148,12 @@ pub(in crate::interpreter) fn eval_time_values_result(
             }
             _ => Err(EvalStatus::RuntimeFatal),
         },
+        "headers_sent" => {
+            if evaluated_args.len() > 2 {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_headers_sent_flag(values)
+        }
         "hrtime" => match evaluated_args {
             [] => eval_hrtime_result(None, values),
             [as_number] => eval_hrtime_result(Some(*as_number), values),

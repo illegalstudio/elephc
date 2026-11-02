@@ -208,8 +208,10 @@ pub(super) fn language_construct_call_requires_eval(
     module: &Module,
     inst: &crate::ir::Instruction,
 ) -> bool {
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return false;
+    // `eval` carries its strict-PHP profile (`ProfiledData`); every other construct a plain id.
+    let data = match inst.immediate {
+        Some(Immediate::Data(data)) | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => return false,
     };
     module
         .data

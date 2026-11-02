@@ -9,6 +9,22 @@
 
 use crate::support::*;
 
+/// Verifies the one-argument assertion form returns true or throws a catchable AssertionError.
+#[test]
+fn test_assert_one_argument_success_and_failure() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(assert(true));
+try {
+    assert(false);
+} catch (AssertionError $error) {
+    echo get_class($error), ':', $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "bool(true)\nAssertionError:assertion failed");
+}
+
 /// Compiles a program whose source begins with a UTF-8 BOM (U+FEFF) before `<?php` and
 /// verifies it builds and runs end-to-end, matching editors that emit BOM-prefixed UTF-8.
 #[test]
@@ -653,6 +669,48 @@ echo isset($_SESSION) ? "y" : "n";
     assert_eq!(out, "yyn");
 }
 
+/// Assigning a whole array to a superglobal is legal PHP, and the array need not already have
+/// the hash shape the program's request storage uses.
+///
+/// `Request::overrideGlobals()` is the shape, verbatim in structure: five superglobals taken
+/// from a method's `array` return, then `$_REQUEST = [[]]` and an `array_merge` spread over it.
+/// Each of those was `cannot reassign $_GET from array<string, mixed> to array<mixed>` — the
+/// merge treated the superglobal as an ordinary local binding, and the widening arm refuses it
+/// for the right reason (this frame does not own that storage). A superglobal assignment does
+/// neither: it stores INTO the storage, whose type nothing about the assignment can change.
+#[test]
+fn superglobal_assigned_a_runtime_array_keeps_the_program_storage_type() {
+    let out = compile_and_run(
+        r#"<?php
+function bag(int $n): array { return ["q" => "v" . $n]; }
+class R { public function overrideGlobals(int $n): void { $_GET = bag($n); $_SERVER = bag($n); $_REQUEST = [[]]; $_REQUEST[] = $_GET; $_REQUEST = array_merge(...$_REQUEST); } }
+(new R())->overrideGlobals($argc);
+function read() { return $_GET["q"]; }
+echo $_GET["q"], "|", $_SERVER["q"], "|", $_REQUEST["q"], "|", read();
+"#,
+    );
+    assert_eq!(out, "v1|v1|v1|v1");
+}
+
+/// The INDEXED half of the same rule: the value has to be converted on the way in, because every
+/// reader of the superglobal's symbol dereferences it as a hash.
+///
+/// The conversion already existed for an array LITERAL. A call's `array<mixed>` reaches the same
+/// store, and keeping its indexed pointer would publish it through a symbol nothing reads that
+/// way — so the conversion is now driven by the target being program storage rather than by the
+/// syntax of the value. PHP's own keys survive it: `0` and `1`, in order.
+#[test]
+fn superglobal_assigned_a_runtime_indexed_array_becomes_a_hash() {
+    let out = compile_and_run(
+        r#"<?php
+function listOf(int $n): array { return ["x" . $n, "y"]; }
+$_GET = listOf($argc);
+echo $_GET[0], "|", $_GET[1], "|", \count($_GET), "|", \implode(",", \array_keys($_GET));
+"#,
+    );
+    assert_eq!(out, "x1|y|2|0,1");
+}
+
 /// A superglobal is visible in EVERY scope, which is the half a top-level test cannot show.
 /// The seeding is driven by MENTION — the same thing that makes PHP materialize an auto-global —
 /// so a closure with no `use`, an arrow function and a method all reach them, and a write from
@@ -713,6 +771,32 @@ var_dump(defined('PHP_SESSION_NONE'));
     assert_eq!(out, "012|bool(true)\n");
 }
 
+/// `defined()` on a name only a `define()` creates answers whether that define has RUN: a guard
+/// inside a function called twice defines once and never warns, and a define in a branch that
+/// was not taken leaves the name undefined. Both used to fold at compile time -- to `false`
+/// before the define in source order and `true` after it, whatever actually executed.
+#[test]
+fn defined_reads_whether_a_define_ran() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function guard(): string {
+    $before = defined('GUARDED_TWICE') ? 'y' : 'n';
+    if (!defined('GUARDED_TWICE')) {
+        define('GUARDED_TWICE', 1);
+    }
+    return $before;
+}
+echo guard(), guard(), GUARDED_TWICE, "|";
+if ($argc > 50) {
+    define('NEVER_TAKEN', 1);
+}
+echo defined('NEVER_TAKEN') ? 'y' : 'n';
+"#,
+    );
+    assert_eq!(out.stdout, "ny1|n");
+    assert!(!out.stderr.contains("already defined"), "{}", out.stderr);
+}
+
 /// A2 regression: `SID` is a predefined string constant (deprecated in PHP 8.4+).
 /// elephc's session support is cookie-only, matching PHP's own cookie-mode `SID`,
 /// so it always resolves to the empty string. Wired via the same ad-hoc
@@ -723,6 +807,115 @@ var_dump(defined('PHP_SESSION_NONE'));
 fn sid_constant_resolves_to_empty_string() {
     let out = compile_and_run(r#"<?php echo "[" . SID . "]"; echo "|"; var_dump(defined('SID'));"#);
     assert_eq!(out, "[]|bool(true)\n");
+}
+
+/// Verifies `defined()` accepts a runtime string and probes both present and absent names.
+#[test]
+fn test_defined_accepts_dynamic_constant_names() {
+    let out = compile_and_run(
+        r#"<?php
+const PRESENT_DYNAMIC_NAME = 42;
+$present = 'PRESENT_' . 'DYNAMIC_NAME';
+$missing = strtolower('MISSING_DYNAMIC_NAME');
+echo defined($present) ? 'Y' : 'N';
+echo defined($missing) ? 'Y' : 'N';
+"#,
+    );
+    assert_eq!(out, "YN");
+}
+
+/// Verifies `PHP_WINDOWS_VERSION_*` are undefined off Windows, as php says: `defined()` answers
+/// false for a literal, a runtime name and inside eval, a Windows-only branch that reads them
+/// still compiles, and a read throws `Undefined constant`. They were defined as `0` on every
+/// target, so `\defined('PHP_WINDOWS_VERSION_BUILD')` -- Composer's `Platform::isWindows()` --
+/// answered true on macOS.
+#[test]
+fn test_windows_version_constants_are_undefined_off_windows() {
+    let out = compile_and_run(
+        r#"<?php
+function windowsBuild(): string {
+    if ('\\' === DIRECTORY_SEPARATOR) {
+        return PHP_WINDOWS_VERSION_MAJOR . '.' . PHP_WINDOWS_VERSION_BUILD;
+    }
+    return 'posix';
+}
+var_dump(defined('PHP_WINDOWS_VERSION_BUILD'));
+$name = 'PHP_WINDOWS_VERSION_' . 'MINOR';
+var_dump(defined($name));
+var_dump(eval('return defined("PHP_WINDOWS_VERSION_MAJOR");'));
+echo windowsBuild(), "\n";
+try {
+    echo PHP_WINDOWS_VERSION_BUILD, "\n";
+} catch (\Error $e) {
+    echo get_class($e), ': ', $e->getMessage(), "\n";
+}
+try {
+    echo constant('PHP_WINDOWS_VERSION_MAJOR'), "\n";
+} catch (\Error $e) {
+    echo get_class($e), ': ', $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(false)\nposix\n\
+         Error: Undefined constant \"PHP_WINDOWS_VERSION_BUILD\"\n\
+         Error: Undefined constant \"PHP_WINDOWS_VERSION_MAJOR\"\n"
+    );
+}
+
+/// Verifies a read of a constant nothing defines compiles and throws php's `Error: Undefined
+/// constant` when it runs: behind a `defined()` guard it is never reached, a bare statement read
+/// is kept for its throw, and an unqualified name in a namespace reports the namespaced spelling.
+/// The read was a compile error, so `\defined('X') && X` -- a common library guard -- refused the
+/// whole program.
+#[test]
+fn test_undefined_constant_read_compiles_and_throws_at_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+function win(): bool { return \defined('SOME_UNKNOWN_CONST') && SOME_UNKNOWN_CONST >= 10; }
+var_dump(win());
+if (\defined('OTHER_UNKNOWN')) { echo OTHER_UNKNOWN, "\n"; } else { echo "absent\n"; }
+try { echo \constant('THIRD_UNKNOWN'); } catch (\Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { BARE_UNKNOWN; } catch (\Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { $x = \FOURTH_UNKNOWN; echo "unreached\n"; } catch (\Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nabsent\n\
+         Error: Undefined constant \"THIRD_UNKNOWN\"\n\
+         Error: Undefined constant \"App\\BARE_UNKNOWN\"\n\
+         Undefined constant \"FOURTH_UNKNOWN\"\n"
+    );
+}
+
+/// Verifies `constant('Class::NAME')` reads class constants, interface constants and enum cases
+/// at run time, with php's messages for a missing constant and a missing class. Monolog's
+/// `Logger::toMonologLevel()` builds the name as `Level::class . '::' . ucfirst($name)`, which was
+/// a compile error for a literal and `Undefined constant "Level::Debug"` for a runtime name.
+#[test]
+fn test_constant_reads_class_constants_and_enum_cases_by_name() {
+    let out = compile_and_run(
+        r#"<?php
+enum L: int { case A = 1; const P = "p"; }
+class C { const X = 3.5; }
+interface I { const Z = "iz"; }
+foreach (["L::A", "L::P", "L::B", "C::X", "C::Y", "Nope::X", "I::Z"] as $n) {
+    try { var_dump(constant($n)); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+}
+var_dump(constant("L::A") === L::A, constant("C::X"));
+$k = $argc > 5 ? "B" : "A";
+var_dump(constant(L::class . "::" . $k)->value);
+"#,
+    );
+    assert_eq!(
+        out,
+        "enum(L::A)\nstring(1) \"p\"\nError: Undefined constant L::B\nfloat(3.5)\n\
+         Error: Undefined constant C::Y\nError: Class \"Nope\" not found\nstring(2) \"iz\"\n\
+         bool(true)\nfloat(3.5)\nint(1)\n"
+    );
 }
 
 /// Verifies a ternary in a function where both branches return strings produces correct output
@@ -796,4 +989,201 @@ echo constant("APP_X"), "|", \constant("APP_X");
 "#,
     );
     assert_eq!(out, "11|11");
+}
+
+/// Verifies `constant()` resolves a runtime-computed global name through the emitted registry.
+#[test]
+fn test_constant_accepts_dynamic_global_name() {
+    let out = compile_and_run(
+        r#"<?php
+const RUNTIME_CONSTANT_NAME = "resolved";
+$prefix = "RUNTIME_";
+$name = $prefix . "CONSTANT_NAME";
+echo constant($name);
+"#,
+    );
+    assert_eq!(out, "resolved");
+}
+
+/// `assert($x)` inside a namespace falls back to the global function like any other builtin.
+/// The resolver only knew the fallback for registry builtins, and `assert()` is served by a
+/// prelude, so the call stayed `A\assert` and died with "Call to undefined function A\assert()".
+#[test]
+fn test_assert_in_a_namespace_resolves_to_the_global_function() {
+    let out = compile_and_run(
+        r#"<?php
+namespace A;
+
+class K {
+    public function f(?object $o): int {
+        assert($o instanceof \stdClass);
+        return 1;
+    }
+}
+function g($x) { assert($x); return 2; }
+echo (new K())->f(new \stdClass()), g(true), "\n";
+try {
+    g(false);
+} catch (\AssertionError $error) {
+    echo get_class($error), "\n";
+}
+try {
+    (new K())->f(null);
+} catch (\AssertionError $error) {
+    echo get_class($error), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "12\nAssertionError\nAssertionError\n");
+}
+
+/// Checks a heap-debug run's stdout and its shared "leak summary: clean" verdict.
+fn assert_ran_clean(out: &ProgramOutput, expected_stdout: &str) {
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, expected_stdout);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// A property store through an `instanceof`-narrowed untyped parameter retained the unboxed
+/// receiver and never released it, leaking the object once per call.
+#[test]
+fn test_property_store_through_instanceof_narrowed_parameter_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class X { public $p; }
+class Y { public $v = 3; }
+function once($n, $v) {
+    if ($n instanceof X) {
+        $n->p = $v;
+    }
+    return $n->p->v;
+}
+$sum = 0;
+for ($i = 0; $i < 300; $i++) {
+    $sum += once(new X(), new Y());
+}
+echo $sum, "\n";
+"#,
+    );
+    assert_ran_clean(&out, "900\n");
+}
+
+/// `$local->a->b = $x` left the owned read of `$local->a` unreleased after the store.
+#[test]
+fn test_chained_property_store_does_not_leak_the_intermediate_read() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class B { public $b; public $v = 4; }
+class A { public $a; }
+function once() {
+    $l = new A();
+    $l->a = new B();
+    $l->a->b = new B();
+    return $l->a->b->v;
+}
+$sum = 0;
+for ($i = 0; $i < 300; $i++) {
+    $sum += once();
+}
+echo $sum, "\n";
+"#,
+    );
+    assert_ran_clean(&out, "1200\n");
+}
+
+/// `array_pop()`/`array_shift()` on a local widened to a boxed slot, a `while` condition that
+/// first assigns its own variable, and `unset($obj->arr[$k])` each dropped one owner.
+#[test]
+fn test_array_pop_shift_loop_condition_and_property_element_unset_do_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class O { public $v = 1; }
+class H { public $arr = []; }
+function popMixed($which) {
+    if ($which == 1) {
+        $u = [new O(), new O(), new O()];
+        $t = array_pop($u);
+        return $t->v + count($u);
+    }
+    if ($which == 2) {
+        $u = ['k' => new O()];
+        return count($u);
+    }
+    return 0;
+}
+function shiftMixed($which) {
+    if ($which == 1) {
+        $u = [new O(), new O(), new O()];
+        $t = array_shift($u);
+        return $t->v + count($u);
+    }
+    if ($which == 2) {
+        $u = ['k' => new O()];
+        return count($u);
+    }
+    return 0;
+}
+function drain() {
+    $stack = [new O(), new O()];
+    $n = 0;
+    while (($item = array_pop($stack)) !== null) {
+        $n += $item->v;
+    }
+    return $n;
+}
+function unsetElement() {
+    $h = new H();
+    $h->arr = ['a' => new O(), 'b' => new O()];
+    unset($h->arr['a']);
+    return count($h->arr);
+}
+$sum = 0;
+for ($i = 0; $i < 200; $i++) {
+    $sum += popMixed(1) + shiftMixed(1) + drain() + unsetElement();
+}
+echo $sum, "\n";
+"#,
+    );
+    assert_ran_clean(&out, "1800\n");
+}
+
+/// A nullable typed property read passed to an object parameter (narrowing guard) or to a
+/// `?Box` parameter (forwarding guard) kept the property read's boxed copy alive, whether or
+/// not the callee rewrote the same property.
+#[test]
+fn test_nullable_property_read_passed_as_argument_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box { public $q = 2; }
+class Holder {
+    public ?Box $tp = null;
+    public function run() {
+        $this->tp = new Box();
+        return $this->take($this->tp);
+    }
+    public function take(?Box $v) {
+        $this->tp = null;
+        return $v->q;
+    }
+}
+function useBox(Box $v) { return $v->q; }
+function keep(?Box $v) { return $v->q; }
+function once() {
+    $h = new Holder();
+    $h->tp = new Box();
+    $n = useBox($h->tp) + keep($h->tp);
+    return $n + $h->run();
+}
+$sum = 0;
+for ($i = 0; $i < 300; $i++) {
+    $sum += once();
+}
+echo $sum, "\n";
+"#,
+    );
+    assert_ran_clean(&out, "1800\n");
 }

@@ -9,10 +9,8 @@
 //! Key details:
 //! - `internal: true`: never PHP-visible, so `--strict-php` cannot hide it from
 //!   the prelude and no user program can call it.
-//! - There is no PHP-visible equivalent to alias. `$v instanceof UnitEnum` is the
-//!   PHP spelling, but elephc does not yet report enum cases as implementing
-//!   `UnitEnum`, and `enum_exists()` requires a string LITERAL in AOT mode — so a
-//!   prelude that only ever sees a runtime `mixed` has no other way to ask.
+//! - This internal alias lets injected support code query enum object metadata
+//!   directly without exposing an additional PHP-visible function.
 //! - Answers from the class id in the object header via `_class_enum_kinds`, so it
 //!   is a bounds-checked table load with no allocation and no class-name compare.
 

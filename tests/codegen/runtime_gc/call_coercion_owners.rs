@@ -42,7 +42,10 @@ echo "done";
     assert_eq!(compile_and_run_tagged(source), expected);
 }
 
-/// Static CUF, FCC and closure calls retire temporary arrays before a same-frame catch.
+/// Static CUF, FCC and closure calls retire temporary arrays once the caught exception dies.
+///
+/// php records every frame's arguments in the exception's trace (`zend.exception_ignore_args=Off`, also what `php -n` runs with), so an argument stays alive until the caught exception is released. Verified against php 8.5: the array is
+/// destroyed by `unset($error)` after the catch body printed `caught|`, not before it.
 #[test]
 fn test_core_static_callable_argument_owners_retire_on_throw() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -68,11 +71,14 @@ unset($function, $closure);
 echo "done";
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, format!("{}done", "1:drop|caught|".repeat(9)), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}done", "1:caught|drop|".repeat(9)), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Returned array and Mixed shadows survive caller-root retirement, including exceptional calls.
+///
+/// php records every frame's arguments in the exception's trace (`zend.exception_ignore_args=Off`, also what `php -n` runs with), so an argument stays alive until the caught exception is released. On the throwing calls the
+/// array therefore drops at `unset($error)`, after `caught|` (verified against php 8.5).
 #[test]
 fn test_core_user_call_shadow_arguments_retire_on_return_and_throw() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -100,7 +106,7 @@ for ($i = 0; $i < 3; $i++) {
 echo "done";
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, format!("{}done", "1:drop|drop|caught|1:drop|drop|caught|".repeat(3)), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}done", "1:drop|caught|drop|1:drop|caught|drop|".repeat(3)), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

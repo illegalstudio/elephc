@@ -57,21 +57,95 @@ pub(super) fn emit_property_overrides(
     if super::value_is_empty_array_literal(ctx, properties)? {
         return Ok(());
     }
-    let applicators = applicators_by_class(ctx);
-    let done = ctx.next_label("clone_overrides_done");
-    let miss = ctx.next_label("clone_overrides_unsupported");
-    if applicators.is_empty() {
+    let driver = crate::ir_lower::clone_override_driver_function_name();
+    if !ctx.module.functions.iter().any(|function| function.name == driver) {
         // Nothing in this program can take overrides, so every reachable clone reports.
         super::emit_property_override_guard(ctx, properties)?;
         return Ok(());
     }
 
+    // The class ladder lives in ONE place, `lower_clone_apply_one()` inside the shared driver, so
+    // this site is a call: (clone box, overrides, invocation scope) in the first three argument
+    // registers. The clone box rides in the callee-saved nested-call register while the other
+    // operands are materialized (a Mixed box made for them pushes its own owner record, which
+    // would move the stack slot the clone box lives in). The scope is the transported hidden
+    // operand, or the lexical class id of a direct site (`-1` is global scope, as in the callable
+    // wrapper).
     let receiver_reg = abi::nested_call_reg(ctx.emitter).to_string();
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        clone_box_offset,
-    );
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &receiver_reg, clone_box_offset);
+    let mut operands = vec![properties, properties];
+    // The receiver slot takes the register, never the operand; typing it as an object (as every
+    // receiver-register call does) keeps the materializer from boxing a second owner of the array.
+    let receiver_ty = PhpType::Object("stdClass".to_string());
+    let mut params = vec![receiver_ty.clone(), PhpType::Mixed];
+    if let Some(scope) = invocation_scope {
+        operands.push(scope);
+        params.push(PhpType::Int);
+    }
+    let refs = vec![false; operands.len()];
+    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
+        ctx,
+        &receiver_reg,
+        &receiver_ty,
+        &operands,
+        &params,
+        &refs,
+        RefArgCellLifetime::CallOnly,
+    )?;
+    if call_args.overflow_bytes != 0 {
+        return Err(crate::codegen::CodegenIrError::unsupported(
+            "clone() override driver call with stack arguments",
+        ));
+    }
+    if invocation_scope.is_none() {
+        let scope_id = ctx
+            .function
+            .lexical_class
+            .as_deref()
+            .and_then(|name| ctx.module.class_infos.get(name))
+            .map_or(-1, |info| info.class_id as i64);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 2),
+            scope_id,
+        );
+    }
+    let pad = direct_call_stack_pad_bytes(ctx, 0);
+    abi::emit_reserve_temporary_stack(ctx.emitter, pad);
+    abi::emit_call_label(ctx.emitter, &crate::names::function_symbol(&driver));
+    abi::emit_release_temporary_stack(ctx.emitter, pad);
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
+    emit_ref_arg_writebacks(ctx, &call_args)?;
+    Ok(())
+}
+
+/// Lowers `__elephc_clone_apply_one($object, $name, $value, $scope)`: applies ONE override entry
+/// to the clone through the generated applicator of the clone's RUNTIME class, picking the body by
+/// the transported invocation scope (`-1` is global scope and every unlisted scope).
+///
+/// This is the class ladder the clone sites used to carry each; it now exists once, inside the
+/// shared driver. A runtime class with no applicator REPORTS, exactly like the old per-site miss.
+pub(crate) fn lower_clone_apply_one(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "__elephc_clone_apply_one", 4)?;
+    ctx.emitter.blank();
+    ctx.emitter.comment("__elephc_clone_apply_one()");
+    let object = expect_operand(inst, 0)?;
+    let name = expect_operand(inst, 1)?;
+    let value = expect_operand(inst, 2)?;
+    let scope = expect_operand(inst, 3)?;
+    let applicators = applicators_by_class(ctx);
+    let done = ctx.next_label("clone_apply_one_done");
+    let miss = ctx.next_label("clone_apply_one_unsupported");
+    if applicators.is_empty() {
+        super::super::super::exceptions::emit_error(ctx, super::PROPERTY_OVERRIDE_MESSAGE);
+        return store_if_result(ctx, inst);
+    }
+
+    let receiver_reg = abi::nested_call_reg(ctx.emitter).to_string();
+    ctx.load_value_to_result(object)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
     abi::emit_reg_move(ctx.emitter, &receiver_reg, payload_reg);
@@ -82,17 +156,16 @@ pub(super) fn emit_property_overrides(
         .collect::<Vec<_>>();
     emit_class_id_dispatch(ctx, &receiver_reg, &class_labels, &miss);
 
-    for ((class_id, label), entries) in class_labels.iter().zip(applicators.values()) {
-        let _ = class_id;
+    for ((_, label), entries) in class_labels.iter().zip(applicators.values()) {
         ctx.emitter.label(label);
-        emit_class_arm(ctx, &receiver_reg, properties, invocation_scope, entries)?;
+        emit_class_arm(ctx, &receiver_reg, object, name, value, scope, entries)?;
         abi::emit_jump(ctx.emitter, &done);
     }
 
     ctx.emitter.label(&miss);
-    super::emit_property_override_guard(ctx, properties)?;
+    super::super::super::exceptions::emit_error(ctx, super::PROPERTY_OVERRIDE_MESSAGE);
     ctx.emitter.label(&done);
-    Ok(())
+    store_if_result(ctx, inst)
 }
 
 /// Refuses ONE override entry whose value still belongs to a PHP reference set.
@@ -219,6 +292,11 @@ fn emit_entry_reference_probe(
     abi::emit_reserve_temporary_stack(ctx.emitter, 16);
     let result = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_store_to_sp(ctx.emitter, &result, 0);
+    // This compiler's own element references (`['n' => &$v]`, `$a['n'] = &$v`) are a boxed
+    // Mixed entry whose box is the marker `{12|13, cell, source_tag}`; they belong to a reference
+    // set on the same "the cell has another owner" rule as a tag-11 entry.
+    let marker = ctx.next_label("clone_reference_override_marker");
+    let marker_cell = ctx.next_label("clone_reference_override_marker_cell");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_string_value_to_regs(name, "x1", "x2")?;
@@ -229,11 +307,27 @@ fn emit_entry_reference_probe(
             ctx.emitter.instruction("mov x6, x4");                              // hold the matching entry address across the payload loads
             ctx.emitter.instruction("ldr x3, [x6, #24]");                       // x3 = the entry's value_lo, its managed reference cell when tagged 11
             ctx.emitter.instruction("ldr x5, [x6, #40]");                       // x5 = the entry's value tag
+            ctx.emitter.instruction("cmp x5, #7");                              // a boxed entry may hold an element reference marker
+            ctx.emitter.instruction(&format!("b.eq {marker}"));                 // inspect the box for `{12|13, cell, source_tag}`
             ctx.emitter.instruction("cmp x5, #11");                             // is this entry a member of a PHP reference set?
             ctx.emitter.instruction(&format!("b.ne {probe_done}"));             // ordinary entry values are by-value overrides
             ctx.emitter.instruction("ldr w10, [x3, #-12]");                     // load the shared reference cell's owner count
             ctx.emitter.instruction("cmp w10, #1");                             // does anything besides this entry still own the cell?
             ctx.emitter.instruction(&format!("b.hi {reject}"));                 // shared cell ownership preserves PHP reference identity
+            ctx.emitter.instruction(&format!("b {probe_done}"));                // a singleton cell is an ordinary by-value override
+            ctx.emitter.label(&marker);
+            ctx.emitter.instruction(&format!("cbz x3, {probe_done}"));          // a null box carries no reference
+            ctx.emitter.instruction("ldr x9, [x3]");                            // the box's runtime tag
+            ctx.emitter.instruction("cmp x9, #12");                             // an element's global reference marker
+            ctx.emitter.instruction(&format!("b.eq {marker_cell}"));            // check the referenced cell's owners
+            ctx.emitter.instruction("cmp x9, #13");                             // an element's local reference marker
+            ctx.emitter.instruction(&format!("b.ne {probe_done}"));             // any other box is a by-value override
+            ctx.emitter.label(&marker_cell);
+            ctx.emitter.instruction("ldr x3, [x3, #8]");                        // the reference cell the marker shares
+            ctx.emitter.instruction(&format!("cbz x3, {probe_done}"));          // a detached marker carries no live reference
+            ctx.emitter.instruction("ldr w10, [x3, #-12]");                     // the cell's owner count
+            ctx.emitter.instruction("cmp w10, #1");                             // does anything besides this element still own it?
+            ctx.emitter.instruction(&format!("b.hi {reject}"));                 // a live alias makes the element a PHP reference
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(name, "rax", "rdx")?;
@@ -246,11 +340,29 @@ fn emit_entry_reference_probe(
             ctx.emitter.instruction("mov r10, r8");                             // hold the matching entry address across the payload loads
             ctx.emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");           // rcx = the entry's value_lo, its managed reference cell when tagged 11
             ctx.emitter.instruction("mov r9, QWORD PTR [r10 + 40]");            // r9 = the entry's value tag
+            ctx.emitter.instruction("cmp r9, 7");                               // a boxed entry may hold an element reference marker
+            ctx.emitter.instruction(&format!("je {marker}"));                   // inspect the box for `{12|13, cell, source_tag}`
             ctx.emitter.instruction("cmp r9, 11");                              // is this entry a member of a PHP reference set?
             ctx.emitter.instruction(&format!("jne {probe_done}"));              // ordinary entry values are by-value overrides
             ctx.emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");          // load the shared reference cell's owner count
             ctx.emitter.instruction("cmp r10d, 1");                             // does anything besides this entry still own the cell?
             ctx.emitter.instruction(&format!("ja {reject}"));                   // shared cell ownership preserves PHP reference identity
+            ctx.emitter.instruction(&format!("jmp {probe_done}"));              // a singleton cell is an ordinary by-value override
+            ctx.emitter.label(&marker);
+            ctx.emitter.instruction("test rcx, rcx");                           // a null box carries no reference
+            ctx.emitter.instruction(&format!("jz {probe_done}"));               // nothing to inspect
+            ctx.emitter.instruction("mov r9, QWORD PTR [rcx]");                 // the box's runtime tag
+            ctx.emitter.instruction("cmp r9, 12");                              // an element's global reference marker
+            ctx.emitter.instruction(&format!("je {marker_cell}"));              // check the referenced cell's owners
+            ctx.emitter.instruction("cmp r9, 13");                              // an element's local reference marker
+            ctx.emitter.instruction(&format!("jne {probe_done}"));              // any other box is a by-value override
+            ctx.emitter.label(&marker_cell);
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rcx + 8]");            // the reference cell the marker shares
+            ctx.emitter.instruction("test rcx, rcx");                           // a detached marker carries no live reference
+            ctx.emitter.instruction(&format!("jz {probe_done}"));               // nothing to inspect
+            ctx.emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");          // the cell's owner count
+            ctx.emitter.instruction("cmp r10d, 1");                             // does anything besides this element still own it?
+            ctx.emitter.instruction(&format!("ja {reject}"));                   // a live alias makes the element a PHP reference
         }
     }
     Ok(())
@@ -306,8 +418,10 @@ fn emit_class_id_dispatch(
 fn emit_class_arm(
     ctx: &mut FunctionContext<'_>,
     receiver_reg: &str,
-    properties: ValueId,
-    invocation_scope: Option<ValueId>,
+    object: ValueId,
+    name: ValueId,
+    value: ValueId,
+    invocation_scope: ValueId,
     entries: &[CloneOverrideApplicator],
 ) -> Result<()> {
     let Some(default) = entries
@@ -317,24 +431,6 @@ fn emit_class_arm(
     else {
         return Ok(());
     };
-    let Some(invocation_scope) = invocation_scope else {
-        // A direct call site knows its own lexical class, so one symbol is the whole answer.
-        let scope_id = ctx
-            .function
-            .lexical_class
-            .as_deref()
-            .and_then(|name| ctx.module.class_infos.get(name))
-            .map(|info| info.class_id);
-        let selected = scope_id
-            .and_then(|scope_id| {
-                entries
-                    .iter()
-                    .find(|entry| entry.scope_class_ids.contains(&scope_id))
-            })
-            .unwrap_or(default);
-        let selected = selected.clone();
-        return emit_applicator_call(ctx, receiver_reg, properties, &selected);
-    };
     let scoped = entries
         .iter()
         .filter(|entry| !entry.scope_class_ids.is_empty())
@@ -342,7 +438,7 @@ fn emit_class_arm(
         .collect::<Vec<_>>();
     let default = default.clone();
     if scoped.is_empty() {
-        return emit_applicator_call(ctx, receiver_reg, properties, &default);
+        return emit_applicator_call(ctx, receiver_reg, object, name, value, &default);
     }
     let arm_done = ctx.next_label("clone_overrides_scope_done");
     let default_label = ctx.next_label("clone_overrides_scope_default");
@@ -360,27 +456,29 @@ fn emit_class_arm(
     abi::emit_jump(ctx.emitter, &default_label);
     for (entry, label) in scoped.iter().zip(scope_labels.iter()) {
         ctx.emitter.label(label);
-        emit_applicator_call(ctx, receiver_reg, properties, entry)?;
+        emit_applicator_call(ctx, receiver_reg, object, name, value, entry)?;
         abi::emit_jump(ctx.emitter, &arm_done);
     }
     ctx.emitter.label(&default_label);
-    emit_applicator_call(ctx, receiver_reg, properties, &default)?;
+    emit_applicator_call(ctx, receiver_reg, object, name, value, &default)?;
     ctx.emitter.label(&arm_done);
     Ok(())
 }
 
-/// Calls one applicator with the clone as `$this` and the override array as the second argument.
+/// Calls one applicator with the clone as `$this`, the entry's name and its value.
 fn emit_applicator_call(
     ctx: &mut FunctionContext<'_>,
     receiver_reg: &str,
-    properties: ValueId,
+    object: ValueId,
+    name: ValueId,
+    value: ValueId,
     applicator: &CloneOverrideApplicator,
 ) -> Result<()> {
     let receiver_ty = PhpType::Object(applicator.class_name.clone());
-    let params = [receiver_ty.clone(), PhpType::Mixed];
-    let refs = [false, false];
+    let params = [receiver_ty.clone(), PhpType::Str, PhpType::Mixed];
+    let refs = [false, false, false];
     // The first operand is never read: the receiver comes from the register instead.
-    let operands = [properties, properties];
+    let operands = [object, name, value];
     let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
         ctx,
         receiver_reg,

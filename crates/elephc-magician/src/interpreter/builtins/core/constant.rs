@@ -38,7 +38,7 @@ pub(in crate::interpreter) fn eval_builtin_constant(
 /// Evaluates `constant(...)` from already materialized call arguments.
 pub(in crate::interpreter) fn eval_constant_result(
     evaluated_args: &[RuntimeCellHandle],
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [name] = evaluated_args else {
@@ -48,11 +48,34 @@ pub(in crate::interpreter) fn eval_constant_result(
 }
 
 /// Normalizes one dynamic constant name and returns its retained value.
+///
+/// A `Class::NAME` name is a class constant or an enum case, fetched exactly as the expression
+/// `Class::NAME` would be (autoloading the class, enforcing visibility). `defined()` already
+/// accepted that form; `constant()` looked it up as a GLOBAL constant and failed, which is what
+/// Monolog's `Logger::toMonologLevel()` hit with `\constant(Level::class . '::' . $upper)` on
+/// every request of the Symfony demo.
 fn eval_constant_lookup(
     name: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let name = eval_constant_name(name, values)?;
+    if let Some((class_name, constant)) = name.split_once("::") {
+        // The class-constant fetch hands back the cached cell (an enum case is its singleton)
+        // BORROWED, as an expression operand; a builtin's result is owned by its caller, so
+        // returning it unretained let the caller's release free the singleton -- the next
+        // `constant('TT::T_JOIN')` returned whatever the allocator had put there (Doctrine's DQL
+        // lexer typed the second `JOIN` of a query as an identifier).
+        let value = eval_class_constant_fetch_result(
+            class_name.trim_start_matches('\\'),
+            constant,
+            context,
+            values,
+        )?;
+        // Only a borrowed cell needs the retain. A constant of a COMPILED class comes back from
+        // the native bridge already owned (a fresh box); retaining that too leaked the box and
+        // its string on every call (`constant(static::class . '::FOO')` in a loop).
+        return if value.is_borrowed() { values.retain(value) } else { Ok(value) };
+    }
     eval_const_fetch(&name, context, values)
 }

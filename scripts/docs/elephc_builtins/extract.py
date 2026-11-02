@@ -196,13 +196,17 @@ def build_home_file_map(repo: Path) -> dict[str, str]:
         if path.name in _NON_HOME_FILES:
             continue
         text = path.read_text(encoding="utf-8")
-        contract_match = _CONTRACT_RE.search(text)
-        if contract_match is None:
-            contract_match = _CORE_HOME_RE.search(text)
-        if not contract_match:
-            continue
-        canonical = contract_match.group(1).lower()
-        out[canonical] = str(path.relative_to(repo))
+        # A home file may declare more than one `builtin!` — `src/builtins/system/gc.rs` hosts
+        # the five gc functions together because they answer as one story. Reading only the
+        # first left the rest unmapped, and the registry pass then refused the whole run with
+        # `registry builtin 'gc_collect_cycles' has no single-source home file`.
+        contract_matches = list(_CONTRACT_RE.finditer(text))
+        if not contract_matches:
+            core_match = _CORE_HOME_RE.search(text)
+            contract_matches = [core_match] if core_match else []
+        for contract_match in contract_matches:
+            canonical = contract_match.group(1).lower()
+            out[canonical] = str(path.relative_to(repo))
     return out
 
 
@@ -549,60 +553,132 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # ``src/builtins/parity_tests.rs``'s ``injected_prelude_programs``, and its
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
-PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
-    "io": ("fileinfo_prelude/build.rs", "fileinfo", "crates/elephc-builtin-contract/src/catalog_surfaces.rs"),
-    "tokenizer": ("tokenizer_prelude.rs", "tokenizer", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+PRELUDE_SOURCES: dict[str, tuple[tuple[tuple[str, ...], ...], str]] = {
+    "tokenizer": (
+        (("tokenizer_prelude.rs", "tokenizer"),),
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
     "curl": (
-        "curl_prelude.rs",
-        "curl",
+        (("curl_prelude.rs", "curl"),),
         "crates/elephc-builtin-contract/src/catalog_curl.rs",
     ),
-    # The four hash_* contracts (`Area::String`).
+    # The four hash_* contracts (`Area::String`), plus the string surfaces the backend-gap
+    # prelude provides (`levenshtein`). One area, two unrelated preludes: the label is per
+    # file precisely so the second one is not described as the first.
     "string": (
-        "hash_prelude.rs",
-        "hash",
+        (
+            ("hash_prelude.rs", "hash"),
+            ("backend_gap_prelude.rs", "backend-gap"),
+            ("parse_str_prelude.rs", "parse_str"),
+            ("addcslashes_prelude.rs", "addcslashes"),
+            ("strtok_prelude.rs", "strtok"),
+            ("sodium_prelude.rs", "sodium"),
+            ("hash_pbkdf2_prelude.rs", "hash_pbkdf2"),
+            ("version_compare_prelude.rs", "version_compare"),
+            ("password_prelude.rs", "password", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+        ),
         "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
     ),
     # Prelude-provided contracts seeded from the built prelude declarations live in
     # catalog_data.rs; each area maps to the prelude (or preludes) declaring it.
-    "image": ("image_prelude.rs", "image", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+    # `array_first` / `array_last` / `array_find_key` / `array_change_key_case`, and the
+    # user-comparator set family (`array_udiff_assoc` and its siblings).
+    "array": (
+        (
+            ("array_edge_prelude.rs", "array-edge"),
+            ("array_ucompare_prelude.rs", "array-ucompare"),
+        ),
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "image": (
+        (("image_prelude.rs", "image"),),
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    # Two preludes serve this area. `error_handling_prelude.rs` holds PHP's error/exception
+    # surface (`error_reporting`, the handler stacks, `trigger_error`), which used to sit
+    # inline in `web_prelude/build.rs` and is NOT a `--web` surface: the same declarations are
+    # injected pay-for-use into a plain CLI build. The label travels with the file so the page
+    # for `set_error_handler()` does not call it "the web prelude" any more.
     "web": (
-        ("web_prelude/build.rs", "shared_ini_prelude.rs"),
-        "web",
+        (
+            ("web_prelude/build.rs", "web"),
+            ("error_handling_prelude.rs", "error-handling"),
+            ("shared_ini_prelude.rs", "web"),
+        ),
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
     "mysqli": (
-        ("mysqli_prelude/build/procedural.rs", "mysqli_prelude/build/exception.rs"),
-        "mysqli",
+        (
+            ("mysqli_prelude/build/procedural.rs", "mysqli"),
+            ("mysqli_prelude/build/exception.rs", "mysqli"),
+        ),
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
-    "pdo": ("pdo_prelude/build.rs", "PDO", "crates/elephc-builtin-contract/src/catalog_data.rs"),
-    "date": ("tz_prelude.rs", "tz", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+    "pdo": (
+        (("pdo_prelude/build.rs", "PDO"),),
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "date": (
+        (("tz_prelude.rs", "tz"),),
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
     "types": (
-        "var_export_prelude.rs",
-        "var_export",
+        (("var_export_prelude.rs", "var_export"),),
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
-    "system": (
-        "version_prelude.rs",
-        "version",
+    # `var_export` renders to OUTPUT or to a string, so its contract sits in `Area::Io` while the
+    # prelude that provides it is the same one `types` names.
+    # The fileinfo functions are declared in `catalog_surfaces.rs`, so their home names that
+    # signature file as its optional third element.
+    "io": (
+        (
+            (
+                "fileinfo_prelude/build.rs",
+                "fileinfo",
+                "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+            ),
+            ("var_export_prelude.rs", "var_export"),
+        ),
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
     "random": (
-        "random_prelude.rs",
-        "random",
+        (("random_prelude.rs", "random"),),
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
+    # `preg_filter` is declared in `catalog_surfaces.rs`, not in the area's `catalog_data.rs`, so
+    # its home names its own signature file as an optional third element.
+    "system": (
+        (
+            ("version_prelude.rs", "version"),
+            (
+                "proc_prelude.rs",
+                "proc",
+                "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+            ),
+            (
+                "preg_array_prelude.rs",
+                "preg-array",
+                "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+            ),
+        ),
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    # `get_class_vars()` is built per program from its own class declarations.
+    "callables": (
+        (
+            ("preg_array_prelude.rs", "preg-array"),
+            ("class_vars_prelude.rs", "class-vars"),
+        ),
+        "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+    ),
     "opcache": (
-        "opcache_prelude/build.rs",
-        "OPcache",
+        (("opcache_prelude/build.rs", "OPcache"),),
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
     # The xml surface keeps its own catalog module; the built prelude splits the parser
     # (`xml_*`) and writer (`xmlwriter_*`) declarations across two generated files.
     "xml": (
-        ("xml_prelude/build/parser.rs", "xml_prelude/build/writer.rs"),
-        "xml",
+        (("xml_prelude/build/parser.rs", "xml"), ("xml_prelude/build/writer.rs", "xml")),
         "crates/elephc-builtin-contract/src/catalog_xml.rs",
     ),
 }
@@ -621,6 +697,10 @@ def find_prelude_declaration(source: str, canonical: str):
       prelude's embedded source. ``curl_prelude.rs`` is the last one shaped this way
       (see its injector for why, and the ROADMAP entry for the conversion).
 
+    A prelude that builds a FAMILY from a table (``array_ucompare_prelude.rs``: one
+    ``("array_diff_uassoc", ...)`` row per function, each fed to ``function(name)``) is
+    anchored on the function's table row, the one line that names it.
+
     Both patterns reject a longer identifier ending in the name, so
     ``__elephc_curl_easy_body`` cannot answer for ``curl_easy_body``. Returns the match, or
     ``None`` when neither form declares it — which the caller turns into a loud failure
@@ -631,7 +711,10 @@ def find_prelude_declaration(source: str, canonical: str):
     )
     if built is not None:
         return built
-    return re.search(rf"^function\s+{re.escape(canonical)}\s*\(", source, re.MULTILINE)
+    php = re.search(rf"^function\s+{re.escape(canonical)}\s*\(", source, re.MULTILINE)
+    if php is not None:
+        return php
+    return re.search(rf"^\s*\(\s*\"{re.escape(canonical)}\"\s*,", source, re.MULTILINE)
 
 
 def resolve_non_registry_lowering(
@@ -664,7 +747,7 @@ def resolve_non_registry_lowering(
     kind = aot_support.get("kind")
     if kind == "prelude":
         try:
-            source, label, sig_file = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
+            homes, sig_file = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
         except KeyError:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
@@ -673,17 +756,19 @@ def resolve_non_registry_lowering(
                 f"pointing at the wrong file with the wrong prose."
             ) from None
         lowering.sig_file = sig_file
-        sources = (source,) if isinstance(source, str) else source
-        prelude, match = None, None
-        for candidate in sources:
+        prelude, label, match = None, None, None
+        for candidate, candidate_label, *candidate_sig_file in homes:
             prelude = repo / "src" / candidate
             match = find_prelude_declaration(read(prelude), canonical)
             if match is not None:
+                label = candidate_label
+                if candidate_sig_file:
+                    lowering.sig_file = candidate_sig_file[0]
                 break
-        source = "/".join(sources) if match is None else str(prelude.relative_to(repo / "src"))
         if match is None:
+            listed = "/".join(home[0] for home in homes)
             raise ValueError(
-                f"prelude-provided builtin {canonical!r} is not declared by src/{source}. "
+                f"prelude-provided builtin {canonical!r} is not declared by src/{listed}. "
                 f"Its contract area {area!r} maps there, so either the contract's area or "
                 f"PRELUDE_SOURCES is wrong; a line-1 fallback would ship a page linking to "
                 f"an unrelated place in the file."

@@ -9,6 +9,23 @@
 
 use super::*;
 
+/// Returns a method's return type with php 8's implicit one filled in.
+///
+/// php declares `__toString()` as returning `string` when the source names no return type, so an
+/// untyped `__toString()` satisfies every contract that spells `: string` -- `Stringable`, or a
+/// compiled interface such as Laravel's `Enumerable`, whose `Collection` takes its untyped
+/// `__toString()` from the `EnumeratesValues` trait and was refused at declaration.
+pub(in crate::parser) fn eval_method_return_type_with_implicit(
+    method_name: &str,
+    declared: Option<EvalParameterType>,
+) -> Option<EvalParameterType> {
+    declared.or_else(|| {
+        method_name.eq_ignore_ascii_case("__toString").then(|| {
+            EvalParameterType::new(vec![EvalParameterTypeVariant::String], false)
+        })
+    })
+}
+
 impl Parser {
     /// Parses a method parameter list and records metadata plus promotion side effects.
     pub(in crate::parser) fn parse_method_params(
@@ -24,6 +41,7 @@ impl Parser {
         let mut parameter_is_variadic = Vec::new();
         let mut promoted_properties = Vec::new();
         let mut promoted_assignments = Vec::new();
+        let mut closed_after_trailing_comma = false;
         if self.consume(TokenKind::RParen) {
             return Ok(ParsedMethodParams {
                 params,
@@ -110,14 +128,17 @@ impl Parser {
             if !self.consume(TokenKind::Comma) {
                 break;
             }
+            if self.consume(TokenKind::RParen) {
+                closed_after_trailing_comma = true;
+                break;
+            }
             if is_variadic {
                 return Err(EvalParseError::UnsupportedConstruct);
             }
-            if matches!(self.current(), TokenKind::RParen) {
-                return Err(EvalParseError::ExpectedVariable);
-            }
         }
-        self.expect(TokenKind::RParen)?;
+        if !closed_after_trailing_comma {
+            self.expect(TokenKind::RParen)?;
+        }
         Ok(ParsedMethodParams {
             params,
             parameter_attributes,
@@ -236,6 +257,9 @@ impl Parser {
         if nullable_shorthand && matches!(self.current(), TokenKind::DollarIdent(_)) {
             return Err(EvalParseError::UnexpectedToken);
         }
+        if !nullable_shorthand && matches!(self.current(), TokenKind::LParen) {
+            return self.parse_dnf_type_decl(position);
+        }
         let first = self.parse_type_name(position)?;
         let mut variants = Vec::new();
         let mut allows_null = nullable_shorthand || matches!(first, None);
@@ -277,6 +301,54 @@ impl Parser {
             return Err(EvalParseError::UnsupportedConstruct);
         }
         Ok(Some(EvalParameterType::new(variants, allows_null)))
+    }
+
+    /// Parses a PHP 8.2 disjunctive normal form type: a parenthesized intersection inside a union.
+    ///
+    /// `(A&B)|null` is the shape PHP requires when an intersection has to accept null, and the one
+    /// Symfony writes; every atom of the group must match, or the value is null. A union that pairs
+    /// the group with a second class atom needs a list of conjunctions, which the retained metadata
+    /// does not carry, so it is refused rather than flattened into a union that would admit values
+    /// PHP rejects.
+    fn parse_dnf_type_decl(
+        &mut self,
+        position: EvalTypePosition,
+    ) -> Result<Option<EvalParameterType>, EvalParseError> {
+        let mut variants = Vec::new();
+        let mut allows_null = false;
+        let mut groups = 0usize;
+        loop {
+            if self.consume(TokenKind::LParen) {
+                groups += 1;
+                loop {
+                    let Some(variant) = self.parse_type_name(position)? else {
+                        return Err(self.fail(EvalParseError::UnsupportedConstruct));
+                    };
+                    variants.push(variant);
+                    if !self.consume(TokenKind::Ampersand) {
+                        break;
+                    }
+                }
+                self.expect(TokenKind::RParen)?;
+            } else if self.parse_type_name(position)?.is_none() {
+                allows_null = true;
+            } else {
+                return Err(self.fail(EvalParseError::UnsupportedConstruct));
+            }
+            if !self.consume(TokenKind::Pipe) {
+                break;
+            }
+        }
+        if groups != 1 || variants.len() < 2 {
+            return Err(self.fail(EvalParseError::UnsupportedConstruct));
+        }
+        if type_variants_contain_standalone_return_only_atoms(&variants) {
+            return Err(self.fail(EvalParseError::UnsupportedConstruct));
+        }
+        Ok(Some(EvalParameterType::intersection_allowing_null(
+            variants,
+            allows_null,
+        )))
     }
 
     /// Returns whether `&` belongs to by-reference parameter storage.
@@ -343,6 +415,11 @@ impl Parser {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
                 "callable" => Some(EvalParameterTypeVariant::Callable),
+                // PHP 8.2 standalone value types. Without these arms both fell through to the
+                // class branch below and became a class named "false"/"true", which no boolean
+                // can ever satisfy.
+                "false" => Some(EvalParameterTypeVariant::False),
+                "true" => Some(EvalParameterTypeVariant::True),
                 "float" => Some(EvalParameterTypeVariant::Float),
                 "int" => Some(EvalParameterTypeVariant::Int),
                 "iterable" => Some(EvalParameterTypeVariant::Iterable),
@@ -361,7 +438,14 @@ impl Parser {
                     Some(EvalParameterTypeVariant::Class(lower.to_string()))
                 }
                 "static" => return Err(EvalParseError::UnsupportedConstruct),
-                "self" | "parent" if !type_position_allows_class_scope_atoms(position) => {
+                // A closure or arrow function written inside a class body carries that class scope,
+                // so `static fn (self $bar) => …` is a type PHP resolves at call time. Its
+                // parameters are parsed in the plain function position, which is why the position
+                // alone cannot answer the question; the enclosing class-like body does.
+                "self" | "parent"
+                    if !type_position_allows_class_scope_atoms(position)
+                        && self.class_scope_depth == 0 =>
+                {
                     return Err(EvalParseError::UnsupportedConstruct);
                 }
                 "self" | "parent" => {

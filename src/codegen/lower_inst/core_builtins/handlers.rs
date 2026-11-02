@@ -474,6 +474,12 @@ fn emit_default_user_error(
     internal_category: Option<&[u8]>,
 ) -> Result<()> {
     let skip_output = ctx.next_label("trigger_error_skip_output");
+    if matches!(site, TriggerSite::Caller) {
+        // The caller location is published as one `php_site` record; expand it into the
+        // `_php_diagnostic_*` words read below (the helper preserves every register).
+        abi::emit_call_label(ctx.emitter, "__rt_diag_resolve_site");
+    }
+    emit_record_user_error(ctx, message, level, site)?;
     load_integer_operand(ctx, level)?;
     let level_reg = abi::nested_call_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, level_reg, abi::int_result_reg(ctx.emitter));
@@ -538,6 +544,48 @@ fn emit_default_user_error(
     let level_reg = abi::int_result_reg(ctx.emitter);
     emit_exit_if_user_error(ctx, level_reg);
     emit_bool_result(ctx, true);
+    Ok(())
+}
+
+/// Records an untaken user diagnostic as `error_get_last()`'s answer.
+///
+/// Reached on php's internal-handler path only (no handler, outside its mask, or it returned
+/// false), and BEFORE the reporting mask, which silences the display and never the record.
+fn emit_record_user_error(
+    ctx: &mut FunctionContext<'_>,
+    message: ValueId,
+    level: ValueId,
+    site: TriggerSite,
+) -> Result<()> {
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    match site {
+        TriggerSite::Operands { line, .. } => load_integer_operand(ctx, line)?,
+        TriggerSite::Caller => abi::emit_load_symbol_to_reg(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            "_php_diagnostic_line",
+            0,
+        ),
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match site {
+        TriggerSite::Operands { file, .. } => ctx.load_string_value_to_regs(file, ptr, len)?,
+        TriggerSite::Caller => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, ptr, "_php_diagnostic_file", 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, len, "_php_diagnostic_file_len", 0);
+        }
+    }
+    abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+    ctx.load_string_value_to_regs(message, ptr, len)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+    load_integer_operand(ctx, level)?;
+    let arg = |index| abi::int_arg_reg_name(ctx.emitter.target, index);
+    let (a0, a1, a2, a3, a4, a5) = (arg(0), arg(1), arg(2), arg(3), arg(4), arg(5));
+    abi::emit_reg_move(ctx.emitter, a0, abi::int_result_reg(ctx.emitter));
+    abi::emit_pop_reg_pair(ctx.emitter, a1, a2);
+    abi::emit_pop_reg_pair(ctx.emitter, a3, a4);
+    abi::emit_pop_reg(ctx.emitter, a5);
+    abi::emit_call_label(ctx.emitter, "__rt_last_error_record");
     Ok(())
 }
 

@@ -2,7 +2,7 @@
 title: "call_user_func_array() - internals"
 description: "Compiler internals for call_user_func_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 53
+  order: 63
 ---
 
 ## `call_user_func_array()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/call_user_func_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/call_user_func_array.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

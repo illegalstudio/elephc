@@ -50,12 +50,38 @@ pub(super) fn retain_object_children(
     Ok(())
 }
 
+/// Forgets every recorded edge at a `--web` request boundary, without releasing anything.
+///
+/// Keys are object identities and values are cell addresses, all in the arena the boundary
+/// wipes. An entry that survived answered for the NEXT request's object at the same address:
+/// `retain_object_children` replaced it and released the stale children, which by then were that
+/// request's live values. Laravel's `LoadConfiguration` builds `fn () => $config->get(...)` on
+/// every request, and the second time round the closure's predecessor entry released `$config`'s
+/// box out from under the method scope that still owned it.
+pub(crate) fn reset_object_owners() {
+    if let Some(owners) = OBJECT_OWNERS.get() {
+        if let Ok(mut owners) = owners.lock() {
+            owners.clear();
+        }
+    }
+}
+
 /// Returns one borrowed child cell address, or zero when the object's edge list is exhausted.
 pub(super) extern "C" fn object_gc_child(identity: u64, index: u64) -> usize {
     std::panic::catch_unwind(|| {
         let index = usize::try_from(index).ok()?;
-        let owners = object_owners().lock().ok()?;
-        owners.get(&identity)?.get(index).copied()
+        let owned = {
+            let owners = object_owners().lock().ok()?;
+            let children = owners.get(&identity);
+            if let Some(child) = children.and_then(|children| children.get(index)) {
+                return Some(*child);
+            }
+            children.map_or(0, Vec::len)
+        };
+        // Past the closure edges come the cells the owning eval context keeps for the object
+        // (property overlay, iterator storage), which are just as much the object's own edges.
+        let child = crate::ffi::dynamic_destructors::dynamic_object_gc_child(identity, index - owned);
+        (child != 0).then_some(child)
     }).ok().flatten().unwrap_or(0)
 }
 

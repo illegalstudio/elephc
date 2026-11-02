@@ -343,11 +343,28 @@ fn discover_stmt(
             discover_expr(index, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
         }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            discover_expr(index, base_dir, loaded_paths, include_chain, state, output)?;
+            discover_expr(source, base_dir, loaded_paths, include_chain, state, output)?;
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            discover_expr(property, base_dir, loaded_paths, include_chain, state, output)?;
+            if let Some(index) = index {
+                discover_expr(index, base_dir, loaded_paths, include_chain, state, output)?;
+            }
+            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             discover_expr(target, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
@@ -364,6 +381,7 @@ fn discover_stmt(
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => {}
     }
 

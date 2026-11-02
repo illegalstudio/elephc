@@ -92,8 +92,9 @@ fn test_error_mbstring_regex_settings_contracts() {
         ("<?php mb_regex_set_options([]);", "mb_regex_set_options() options argument must be string or null"),
         ("<?php declare(strict_types=1); mb_regex_encoding(1);", "mb_regex_encoding() encoding argument must be string or null"),
         ("<?php declare(strict_types=1); mb_regex_set_options(false);", "mb_regex_set_options() options argument must be string or null"),
-        ("<?php function encoding(): string { return mb_regex_encoding(); }", "Function 'encoding' return type expects string, got string|bool"),
     ] { expect_error(source, message); }
+    // `mb_regex_encoding()` returns `string|bool`; weak-mode php coerces that into a `: string` return.
+    expect_no_error("<?php function encoding(): string { return mb_regex_encoding(); }");
 }
 
 /// Rejects impossible information selector types and excessive arguments before lowering.
@@ -181,21 +182,17 @@ fn test_error_mbstring_scalar_contracts() {
     }
 }
 
-/// Verifies false and boolean alternatives cannot disappear behind narrower declared returns.
+/// `false` and boolean alternatives of the mbstring builtins coerce into narrower declared scalar
+/// returns in php's weak mode; elephc now accepts these programs and the output matches php.
 #[test]
-fn test_error_mbstring_union_returns_are_precise() {
-    for (source, message) in [
-        (r#"<?php function pos(): int { return mb_strpos("a", "z"); }"#,
-            "Function 'pos' return type expects int, got int|false"),
-        (r#"<?php function point(): int { return mb_ord("a"); }"#,
-            "Function 'point' return type expects int, got int|false"),
-        (r#"<?php function character(): string { return mb_chr(-1); }"#,
-            "Function 'character' return type expects string, got string|false"),
-        (r#"<?php function suffix(): string { return mb_strstr("a", "z"); }"#,
-            "Function 'suffix' return type expects string, got string|false"),
-        (r#"<?php function encoding(): string { return mb_internal_encoding(); }"#,
-            "Function 'encoding' return type expects string, got string|bool"),
-    ] { expect_error(source, message); }
+fn test_mbstring_union_returns_coerce_in_weak_mode() {
+    for source in [
+        r#"<?php function pos(): int { return mb_strpos("a", "z"); }"#,
+        r#"<?php function point(): int { return mb_ord("a"); }"#,
+        r#"<?php function character(): string { return mb_chr(-1); }"#,
+        r#"<?php function suffix(): string { return mb_strstr("a", "z"); }"#,
+        r#"<?php function encoding(): string { return mb_internal_encoding(); }"#,
+    ] { expect_no_error(source); }
 }
 
 /// Verifies array and metadata builtins reject incorrect arity and static parameter types.
@@ -270,6 +267,6 @@ fn test_error_mbstring_convert_variables_contract() {
         ("<?php mb_convert_variables();", "mb_convert_variables() takes at least 3 arguments"),
         ("<?php declare(strict_types=1); $value = \"\"; mb_convert_variables(\"UTF-8\", 1, $value);", "mb_convert_variables() from_encoding argument must be array or string"),
         ("<?php mb_convert_variables(\"UTF-8\", \"UTF-8\", null);", "mb_convert_variables(): Argument #3 ($var) could not be passed by reference"),
-        ("<?php $value = \"\"; mb_convert_variables(\"UTF-8\", \"UTF-8\", $value, null);", "mb_convert_variables(): Argument #4 ($vars) could not be passed by reference"),
+        ("<?php $value = \"\"; mb_convert_variables(\"UTF-8\", \"UTF-8\", $value, null);", "mb_convert_variables() variadic parameter $vars must be passed a variable"),
     ] { expect_error(source, message); }
 }

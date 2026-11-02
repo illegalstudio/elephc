@@ -2,7 +2,7 @@
 title: "array_pop() - internals"
 description: "Compiler internals for array_pop(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 30
+  order: 36
 ---
 
 ## `array_pop()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_pop.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_pop.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -13,7 +13,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
-use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -23,7 +23,7 @@ use super::{
     load_value_to_first_int_arg, store_if_result,
 };
 
-mod common;
+pub(in crate::codegen::lower_inst) mod common;
 mod compression;
 mod hash;
 mod implode_owners;
@@ -36,6 +36,7 @@ mod replace_wrap;
 mod scalar;
 mod search;
 mod simple;
+mod sodium;
 mod split;
 mod strip_tags;
 mod strip_tags_owners;
@@ -73,30 +74,32 @@ pub(crate) use hash::{
 };
 pub(crate) use mbstring::lower_mbstring;
 pub(crate) use network::{lower_inet, lower_ip2long, lower_long2ip};
+pub(crate) use sodium::{lower_sodium_box, lower_sodium_status};
 pub(crate) use parse_url::lower_parse_url;
 pub(crate) use printf::{lower_printf, lower_sprintf, lower_vprintf, lower_vsprintf};
 pub(crate) use replace_wrap::{lower_str_pad, lower_string_replace, lower_wordwrap};
 pub(crate) use scalar::{
     emit_explicit_float_result_to_int, emit_float_result_int_coercion_diagnostics,
-    emit_signal_float_result_to_int, load_as_explicit_int, lower_chr, lower_number_format,
+    emit_signal_float_result_to_int, emit_weak_float_result_to_int, load_as_explicit_int, lower_chr,
+    lower_number_format,
     lower_ord,
 };
 pub(crate) use search::{
-    lower_str_contains, lower_str_repeat, lower_string_position, lower_strstr, lower_substr,
-    lower_substr_replace,
+    lower_str_contains, lower_str_repeat, lower_string_position, lower_string_span, lower_strstr,
+    lower_strpbrk, lower_strrchr, lower_substr, lower_substr_replace,
 };
 pub(crate) use simple::{
     lower_binary_string_runtime, lower_grapheme_strrev, lower_html_escape, lower_lcfirst,
-    lower_trim_like, lower_ucfirst,
+    lower_preg_quote, lower_trim_like, lower_ucfirst,
 };
 pub(crate) use strip_tags::lower_strip_tags;
 pub(crate) use split::{lower_explode, lower_implode, lower_sscanf, lower_str_split};
 
 #[allow(unused_imports)]
 pub(super) use common::{
-    load_single_string_arg, load_string_arg_to_regs, load_value_as_string_to_regs,
-    materialize_truthy_flag,
+    load_single_string_arg, load_string_arg_to_regs, materialize_truthy_flag,
 };
+pub(in crate::codegen::lower_inst) use common::load_value_as_string_to_regs;
 #[allow(unused_imports)]
 pub(super) use printf::{
     load_optional_sprintf_eval_context, pack_sprintf_like_arg, sprintf_spec_cats_for_format,
@@ -192,6 +195,21 @@ const STR_SPLIT_NON_POSITIVE_LENGTH_MESSAGE: &str =
 /// php-src's verbatim `ValueError` wording for `str_word_count()` with an unknown `$format`.
 const STR_WORD_COUNT_FORMAT_MESSAGE: &str =
     "str_word_count(): Argument #2 ($format) must be a valid format value";
+
+/// php-src's verbatim `ValueError` wording for a `substr_compare()` `$offset` past the end of
+/// `$haystack`.
+///
+/// `$offset === strlen($haystack)` is LEGAL in php (it compares an empty window), so only a
+/// strictly greater offset reaches this message.
+const SUBSTR_COMPARE_OFFSET_OUT_OF_RANGE_MESSAGE: &str =
+    "substr_compare(): Argument #3 ($offset) must be contained in argument #1 ($haystack)";
+
+/// php-src's verbatim `ValueError` wording for `substr_compare()` with a negative `$length`.
+///
+/// Unlike `substr_count()`, php 8 refuses a negative `substr_compare()` `$length` outright
+/// instead of measuring it back from the subject end, and it checks this BEFORE `$offset`.
+const SUBSTR_COMPARE_NEGATIVE_LENGTH_MESSAGE: &str =
+    "substr_compare(): Argument #4 ($length) must be greater than or equal to 0";
 
 /// php-src's verbatim `ValueError` wording for `substr_count()` with an empty `$needle`.
 const SUBSTR_COUNT_EMPTY_NEEDLE_MESSAGE: &str =
@@ -390,6 +408,7 @@ pub(crate) use split::lower_dec_to_base;
 pub(crate) use split::lower_length_limited_compare;
 pub(crate) use replace_wrap::lower_str_word_count;
 pub(crate) use replace_wrap::lower_strtr;
+pub(crate) use search::lower_substr_compare;
 pub(crate) use search::lower_substr_count;
 
 /// php-src's verbatim `ValueError` wording for a `substr_count()` `$length` outside the subject.

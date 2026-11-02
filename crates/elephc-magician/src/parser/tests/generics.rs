@@ -77,7 +77,7 @@ fn generics_function_names_preserve_imports_and_source_spelling() {
 #[test]
 fn generics_typed_local_keeps_statement_keyword_precedence() {
     let assignment = EvalExpr::Assign {
-        name: "value".to_string(),
+        target: Box::new(EvalExpr::LoadVar("value".to_string())),
         value: Box::new(EvalExpr::Const(EvalConst::Int(1))),
     };
     let echo = parse_fragment(b"echo $value = 1;").expect("echo takes an expression list");

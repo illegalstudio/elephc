@@ -126,7 +126,9 @@ invokeMergedCallback($argc, "");
     );
     let function = module.functions.iter().find(|f| f.name == "invokeMergedCallback").unwrap();
     let extractions: Vec<_> = function.instructions.iter().filter(|inst| {
-        inst.op == Op::MixedUnbox && inst.result_php_type == PhpType::Callable
+        // Boxed callable storage is NORMALIZED, not merely unboxed (`unbox_callable_param_storage`):
+        // a bare unbox read `null` or `42` as a descriptor pointer and segfaulted on first call.
+        inst.op == Op::NormalizeCallable && inst.result_php_type == PhpType::Callable
     }).collect();
     assert_eq!(extractions.len(), 3, "{target}: every call surface must repair the callable ABI");
     for extraction in extractions {
@@ -507,6 +509,7 @@ dispatchCallableArgument(consumeCallableArgument(...), new CallableArgumentObjec
             true,
             false,
             crate::codegen::WebIsolation::Worker,
+            None,
         )
         .unwrap();
         assert!(
@@ -517,7 +520,7 @@ dispatchCallableArgument(consumeCallableArgument(...), new CallableArgumentObjec
             output.object_clone,
             "{target}: generated clone wrappers must reach the runtime"
         );
-        let asm = output.asm;
+        let asm = output.asm.into_string();
         assert_eq!(asm.matches("_eir_callable_argument_normalizer:").count(), 1, "{target}");
         let normalizer = asm.split_once("_eir_callable_argument_normalizer:\n").unwrap().1;
         let descriptor_label = normalizer.lines().find(|line| {
@@ -576,10 +579,21 @@ $callback();
             );
         }
         let alias = module.functions.iter().find(|f| f.name == "callbackAliasCaller").unwrap();
-        assert!(!alias.instructions.iter().any(|inst| inst.op == Op::PushCallOperandOwner),
-            "{target}: a single aliasing argument transfers directly to the returned value");
+        // An aliasing argument used to transfer straight to the returned value with no root. It is
+        // now rooted like any other temporary callable for the span of the call (a throw between
+        // creation and return must still release it); the probe `callbackAliasCaller` runs
+        // leak-clean under `--heap-debug`.
+        let alias_call = alias.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+        assert_final_operand_root_spans_call(
+            alias,
+            alias_call,
+            alias.instructions[alias_call].operands[0],
+            target,
+            "aliasing callback argument",
+        );
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        assert!(asm.contains("__rt_cleanup_call_operand_descriptor"), "{target}");
+        // The descriptor record link is the out-of-line `__rt_call_operand_link_descriptor` helper.
+        assert!(asm.contains("__rt_call_operand_link_descriptor") || asm.contains("__rt_call_operand_push_descriptor"), "{target}");
     }
 }
 
@@ -623,10 +637,20 @@ $callback();
                 "{target}: raw callable passthrough must retain its transfer contract");
             if name == "laterCallbackCaller" {
                 let callback = function.instructions[call].operands[1];
-                let ValueDef::Instruction { inst, .. } = function.value(callback).unwrap().def else {
-                    panic!("missing callback source");
+                // The callback reaches the call through an `acquire` of the freshly built closure.
+                let mut source = callback;
+                let producer = loop {
+                    let ValueDef::Instruction { inst, .. } = function.value(source).unwrap().def else {
+                        panic!("missing callback source");
+                    };
+                    let inst = function.instruction(inst).unwrap();
+                    if matches!(inst.op, Op::Acquire | Op::Borrow | Op::Move) {
+                        source = inst.operands[0];
+                    } else {
+                        break inst.op;
+                    }
                 };
-                assert_eq!(function.instruction(inst).unwrap().op, Op::ClosureNew, "{target}");
+                assert_eq!(producer, Op::ClosureNew, "{target}");
                 assert!(!function.instructions.iter().any(|instruction| {
                     instruction.op == Op::Release && instruction.operands == [callback]
                 }), "{target}: rooting parameter zero must not consume the returned callback");
@@ -783,17 +807,21 @@ echo coercionCaller($argc);
             (line.starts_with("bl ") || line.starts_with("call ")) && line.contains("coercionTarget")
         }).unwrap_or_else(|| panic!("{target}: missing native call in {body}"));
         let (before, after) = body.split_once(invoke).unwrap();
-        // One evaluation root protects the earlier source argument, two final EIR roots span
-        // the call, and two backend roots protect the implicit Mixed boxes.
-        assert_eq!(before.matches("publish temporary call operand owner").count(), 5, "{target}: {body}");
-        assert_eq!(after.matches("detach temporary call operand owner").count(), 4, "{target}: {body}");
-        let implicit = after.split_once("op=pop_call_operand_owner").unwrap().0;
-        assert_eq!(implicit.matches("detach temporary call operand owner").count(), 2, "{target}: {body}");
-        let (inner, outer) = if target == "linux-x86_64" {
-            ("mov r10, QWORD PTR [rsp + 80]", "mov r10, QWORD PTR [rsp + 16]")
-        } else {
-            ("ldr x10, [sp, #80]", "ldr x10, [sp, #16]")
-        };
-        assert!(after.find(inner).unwrap() < after.find(outer).unwrap(), "{target}: {after}");
+        // The implicit Mixed boxes of the two array arguments are now made in EIR (`mixed_box`,
+        // stored in a hidden temp), so each box is rooted by an ordinary `push_call_operand_owner`
+        // rather than by a backend-inline record: one evaluation root keeps the first box alive
+        // while the second argument is evaluated, and two final roots span the native call.
+        // That is the three records below, published before the call and detached after the
+        // evaluation root's own pop. The invariant is unchanged -- every box has an unwind-visible
+        // owner for as long as the call can throw, released in LIFO order -- only the emitter of
+        // the roots moved. (The program prints the same and ends heap-clean.)
+        assert_eq!(before.matches("publish temporary call operand owner").count(), 3, "{target}: {body}");
+        assert_eq!(after.matches("detach temporary call operand owner").count(), 2, "{target}: {body}");
+        // Both final roots are retired before the function returns, innermost first.
+        let first_release = after.find("op=release_local_slot").expect("final roots release their boxes");
+        assert!(
+            after[..first_release].matches("detach temporary call operand owner").count() == 1,
+            "{target}: the innermost final root must be detached before its box is released: {after}"
+        );
     }
 }

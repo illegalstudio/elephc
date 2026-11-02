@@ -2,7 +2,7 @@
 title: "sizeof()"
 description: "Alias of count()."
 sidebar:
-  order: 69
+  order: 80
 ---
 
 ## sizeof()

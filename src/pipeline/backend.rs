@@ -52,6 +52,9 @@ pub(super) struct BackendInputs<'a> {
     pub(super) emit_source_map: bool,
     pub(super) emit_asm: bool,
     pub(super) timings: &'a mut CompileTimings,
+    /// Present when bodies the backend refuses may belong to class files the runtime autoloader
+    /// can load instead; see `autoload::deferral::BackendDeferral`.
+    pub(super) deferral: Option<crate::autoload::deferral::BackendDeferral>,
 }
 
 /// Generates user assembly, resolves native requirements, and links the requested artifact.
@@ -102,6 +105,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         emit_source_map,
         emit_asm,
         timings,
+        deferral,
     } = inputs;
 
     // Dynamic source is opaque to AOT feature detection. `--with-regex`
@@ -153,11 +157,18 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     let runtime_link_requirements =
         codegen::link_requirements_for_runtime_features(runtime_features);
+    let embedded_bridges: &[&str] = if runtime_features.eval_bridge {
+        &["elephc_crypto", "elephc_phar"]
+    } else {
+        &[]
+    };
 
     // Bridge-backed `--with-<name>` values force-link their staticlib
     // (whole-archived via `forced_bridge_libs`) regardless of feature
-    // auto-detection. Runtime-only capabilities such as regex have already
-    // updated `runtime_features` and intentionally do not map to a bridge.
+    // auto-detection. `--web` separately whole-archives the web bridge because it
+    // owns the process entry point; CLI session calls use its referenced archive
+    // members without pulling in that entry point. Runtime-only capabilities such
+    // as regex have already updated `runtime_features` and do not map to a bridge.
     let mut forced_bridge_libs: Vec<String> = Vec::new();
     let mut sorted_with_crates: Vec<&String> = with_crates.iter().collect();
     sorted_with_crates.sort();
@@ -166,6 +177,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             forced_bridge_libs.push(lib.to_string());
         }
     }
+    let forced_whole_archive_bridges = whole_archive_bridges(&forced_bridge_libs, web);
 
     // Collect the named libraries that the typed link planner will consider.
     // This preserves codegen-time bridge feature reporting without flattening
@@ -228,6 +240,20 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
 
     crate::progress::phase("codegen");
     let phase_started = Instant::now();
+    // Completed text leaves memory in 32 MB steps; the spill file becomes the `.s` itself.
+    let mut spill_path = output_paths.asm.clone().into_os_string();
+    spill_path.push(".spill");
+    let spill_path = std::path::PathBuf::from(spill_path);
+    // Nobody reads this assembly in an ordinary build, so it is written compact (no comments,
+    // short local labels). `--emit-asm` hands it to the user, `--debug-info` is stepped
+    // through and the source map reads its `@src`/`@block` markers, so all three keep the
+    // readable form.
+    crate::codegen_support::emit::set_compact_asm(
+        !emit_asm
+            && !emit_debug_info
+            && !emit_source_map
+            && !matches!(std::env::var("ELEPHC_COMPACT_ASM").as_deref(), Ok("0") | Ok("off")),
+    );
     let generated_user_asm = match codegen::generate_user_asm_from_ir_with_options_and_features(
         &ir_module,
         gc_stats,
@@ -241,32 +267,52 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         regalloc_linear,
         web,
         web_isolation,
+        Some(&spill_path),
     ) {
         Ok(output) => output,
         Err(err) => {
+            // Bodies of a class php would have autoloaded lazily are handed to the runtime and
+            // the build runs again; this returns only when nothing new can be handed back.
+            if let Some(deferral) = &deferral {
+                // The re-run replaces this process, so nothing would remove the partial spill.
+                let _ = std::fs::remove_file(&spill_path);
+                deferral.rerun_without_refused_bodies(err.failed_bodies());
+            }
             crate::progress::clear();
             eprintln!("EIR backend error: {}", err);
             process::exit(1);
         }
     };
+    codegen::print_op_stats();
     runtime_features.handler_state |= generated_user_asm.handler_state;
     runtime_features.object_clone |= generated_user_asm.object_clone;
     let user_asm = if emit_debug_info {
-        debug_info::inject_line_directives(&generated_user_asm.asm, filename, target.platform)
+        codegen::UserAssembly::from_text(debug_info::inject_line_directives(
+            &generated_user_asm.asm.into_string(),
+            filename,
+            target.platform,
+        ))
     } else {
         generated_user_asm.asm
     };
     let user_asm = if emit == Emit::Phpext {
-        match crate::phpext::build::assembly(&user_asm, heap_size, target, runtime_features) {
-            Ok(asm) => asm,
+        // The extension build combines text, so the structured assembly is flattened first.
+        match crate::phpext::build::assembly(&user_asm.into_string(), heap_size, target, runtime_features) {
+            Ok(asm) => codegen::UserAssembly::from_text(asm),
             Err(error) => { eprintln!("PHP extension error: {error}"); process::exit(1); }
         }
     } else { user_asm };
     timings.record_since("codegen", phase_started);
+    // The EIR module is not read past this point (only its probe key is), and it is one of the
+    // largest live structures: freeing it here lets the phases below reuse its pages instead of
+    // growing the heap past them.
+    let probe_key = ir_module.probe_key;
+    let runs_interpreted_code = crate::ir_lower::module_runs_interpreted_code(&ir_module);
+    drop(ir_module);
 
     crate::progress::phase("write-asm");
     let phase_started = Instant::now();
-    if let Err(e) = crate::pipeline::artifact_io::write_artifact(&output_paths.asm, user_asm.as_bytes()) {
+    if let Err(e) = user_asm.write_to(&output_paths.asm) {
         crate::progress::clear();
         eprintln!("Error writing '{}': {}", output_paths.asm.display(), e);
         process::exit(1);
@@ -276,6 +322,15 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if emit_source_map {
         crate::progress::phase("source-map");
         let phase_started = Instant::now();
+        // The text is on disk now; this rare path reads it back rather than keeping a copy.
+        let user_asm = match fs::read_to_string(&output_paths.asm) {
+            Ok(text) => text,
+            Err(err) => {
+                crate::progress::clear();
+                eprintln!("Source map error: {}", err);
+                process::exit(1);
+            }
+        };
         if let Err(err) =
             source_map::write_source_map(
                 &user_asm,
@@ -308,7 +363,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if emit == Emit::Phpext {
         crate::progress::phase("php-extension-link");
         let phase_started = Instant::now();
-        if let Err(error) = crate::phpext::build::link(&user_asm, exported_functions, exported_constants, exported_classes, target, &output_paths.bin) {
+        // The assembly is on disk by now; the extension linker takes its text.
+        let linked = fs::read_to_string(&output_paths.asm)
+            .map_err(|error| format!("read PHP extension assembly: {error}"))
+            .and_then(|text| crate::phpext::build::link(&text, exported_functions, exported_constants, exported_classes, target, &output_paths.bin));
+        if let Err(error) = linked {
             crate::progress::clear();
             eprintln!("PHP extension error: {error}");
             process::exit(1);
@@ -422,13 +481,29 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         runtime_requirements: &runtime_link_requirements,
         managed_packages: &resolved_native,
         forced_bridges: &forced_bridge_libs,
+        embedded_bridges,
         web,
     });
 
     crate::progress::phase("assemble");
     let phase_started = Instant::now();
-    linker::assemble(target, &output_paths.asm, &output_paths.obj);
+    // `as` is single-threaded and the user object is the largest input in the
+    // build, so on a large program this one call is a serial wall. When the
+    // target supports it the finished `.s` is cut into contiguous slices that
+    // assemble in parallel; every slice object then joins the link line in
+    // emission order. `ELEPHC_ASM_JOBS=1` keeps the single call.
+    let assembled = linker::assemble_parallel(
+        target,
+        emit,
+        emit_debug_info,
+        &output_paths.asm,
+        &output_paths.obj,
+    );
     timings.record_since("assemble", phase_started);
+    if let Some(note) = &assembled.note {
+        timings.note(note.clone());
+    }
+    let extra_objects: &[std::path::PathBuf] = assembled.objects.get(1..).unwrap_or(&[]);
 
     for (lib_name, flag_name) in linker::bridges_in(&planned_link_libraries) {
         let detail = if forced_bridge_libs.iter().any(|l| l == lib_name) {
@@ -451,9 +526,10 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             emit,
             &output_paths.bin,
             &output_paths.obj,
+            extra_objects,
             &runtime_object.path,
             &link_plan,
-            &forced_bridge_libs,
+            &forced_whole_archive_bridges,
         );
         match linked {
             Ok(inputs) if repl_build => {
@@ -508,11 +584,18 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     }
     if !keep_obj_for_debug {
         let _ = fs::remove_file(&output_paths.obj);
+        // The extra slice objects only exist for the link that just happened.
+        // `--debug-info` never splits, so `keep_obj_for_debug` cannot be true
+        // while this list is non-empty; the guard is shared anyway so a future
+        // split under a debug map cannot silently delete its own debug objects.
+        for object in extra_objects {
+            let _ = fs::remove_file(object);
+        }
     }
 
     // Write the build key next to the binary: `elephc monitor <address> --key`
     // reads it to run the HMAC handshake. Keep it like a `.env` secret.
-    if let Some(key) = ir_module.probe_key {
+    if let Some(key) = probe_key {
         let sidecar = output_paths.bin.with_extension("key");
         if let Err(err) = crate::pipeline::artifact_io::write_private_artifact(
             &sidecar,
@@ -533,7 +616,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     timings.report();
     if let Some(warning) = dynamic_eval_capability_warning(
         runtime_features,
-        crate::ir_lower::module_runs_interpreted_code(&ir_module),
+        runs_interpreted_code,
     ) {
         eprintln!("{warning}");
     }
@@ -590,4 +673,27 @@ fn append_hosted_extensions(
         frameworks: Vec::new(),
     });
     Ok(())
+}
+
+/// Adds the web entrypoint bridge to the whole-archive set only in server mode.
+fn whole_archive_bridges(forced: &[String], web: bool) -> Vec<String> {
+    let mut bridges = forced.to_vec();
+    if web && !bridges.iter().any(|name| name == "elephc_web") {
+        bridges.push("elephc_web".to_string());
+    }
+    bridges
+}
+
+#[cfg(test)]
+mod tests {
+    use super::whole_archive_bridges;
+
+    #[test]
+    fn web_mode_whole_archives_only_its_entrypoint_in_addition_to_explicit_bridges() {
+        assert_eq!(
+            whole_archive_bridges(&["elephc_crypto".to_string()], true),
+            ["elephc_crypto", "elephc_web"]
+        );
+        assert!(whole_archive_bridges(&[], false).is_empty());
+    }
 }

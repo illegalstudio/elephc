@@ -9,6 +9,8 @@
 //!   scope for Phase 02.
 
 mod builder_test;
+mod classlike_activation_test;
+mod data_pool_test;
 mod effects_test;
 mod function_test;
 mod local_load_ownership;

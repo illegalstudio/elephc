@@ -101,7 +101,44 @@ fn parse_fragment_skips_comments_and_preserves_line_metadata() {
 #[test]
 fn parse_fragment_rejects_unterminated_block_comment() {
     assert_eq!(
-        parse_fragment(b"/* open").unwrap_err(),
+        parse_fragment_error(b"/* open").unwrap_err(),
         EvalParseError::UnterminatedComment
     );
+}
+/// Verifies a doc comment is transparent everywhere the grammar does not read one.
+///
+/// PHP's `zendlex()` skips `T_DOC_COMMENT` exactly like whitespace and parks the text for the next
+/// declaration, so a doc comment inside a parameter list, an argument list or an array literal is
+/// trivia. Keeping the token in the stream made `function f(/** @var int */ int $a)` — the shape
+/// `symfony/http-kernel/Event/ControllerAttributeEvent.php` writes — a parse error that killed the
+/// whole file.
+#[test]
+fn parse_fragment_skips_a_doc_comment_the_grammar_never_reads() {
+    let program = parse_fragment(
+        b"function withdoc(/** @var int */ int $a, /** @var int */ int $b): int { return $a + $b; }
+return withdoc(/** here */ 1, 2);",
+    )
+    .expect("fragment should parse");
+    assert_eq!(program.statements().len(), 2);
+    let program = parse_fragment(b"return [/** k */ 1, 2];").expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Array(vec![
+            EvalArrayElement::Value(EvalExpr::Const(EvalConst::Int(1))),
+            EvalArrayElement::Value(EvalExpr::Const(EvalConst::Int(2))),
+        ])))]
+    );
+}
+/// Verifies the one doc comment the grammar does read, a class declaration's, still reaches it.
+#[test]
+fn parse_fragment_keeps_the_doc_comment_a_class_declaration_reads() {
+    let program = parse_fragment(b"/** retained */ final class DocumentedByComment {}")
+        .expect("fragment should parse");
+    let [EvalStmt::ClassDecl(class)] = program.statements() else {
+        panic!(
+            "expected one class declaration, got {:?}",
+            program.statements()
+        );
+    };
+    assert_eq!(class.doc_comment(), Some("/** retained */"));
 }

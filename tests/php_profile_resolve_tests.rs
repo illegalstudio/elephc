@@ -90,16 +90,11 @@ fn bare_file_needs_no_manifest() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// A malformed `composer.json` never fails the build, and says why the pin was not read.
-///
-/// This is the branch where elephc knows a project TRIED to declare something and could not
-/// honor it. Failing would make elephc the arbiter of a file it does not own; staying silent
-/// would leave a pin that looks applied and is not. The note is the only honest answer, and
-/// the profile falls back to the default rather than to a guess.
+/// An arbitrary malformed JSON document never fails the build or masquerades as metadata.
 #[test]
-fn a_malformed_manifest_compiles_and_explains_itself() {
+fn arbitrary_malformed_json_is_ignored() {
     let dir = make_test_dir("elephc_resolve_malformed");
-    fs::write(dir.join("composer.json"), r#"{"config": {"platform": "#).unwrap();
+    fs::write(dir.join("broken.json"), r#"{"config": {"platform": "#).unwrap();
     fs::write(dir.join("prog.php"), PROBE).unwrap();
 
     let compile = Command::new(elephc_bin())
@@ -112,11 +107,7 @@ fn a_malformed_manifest_compiles_and_explains_itself() {
         "a manifest elephc does not own must never fail the build:\n{}",
         String::from_utf8_lossy(&compile.stderr)
     );
-    let stderr = String::from_utf8_lossy(&compile.stderr);
-    assert!(
-        stderr.contains("composer.json could not be parsed"),
-        "expected a note explaining the unread pin, got:\n{stderr}"
-    );
+    assert!(compile.stderr.is_empty());
 
     let run = Command::new(dir.join("prog"))
         .output()
@@ -127,10 +118,10 @@ fn a_malformed_manifest_compiles_and_explains_itself() {
 
 /// A `config.platform.php` pin reaches the baked version surface, with no flag passed.
 #[test]
-fn composer_platform_pin_reaches_the_binary() {
+fn project_manifest_platform_pin_reaches_the_binary() {
     let dir = make_test_dir("elephc_resolve_platform");
     fs::write(
-        dir.join("composer.json"),
+        dir.join("project.json"),
         r#"{"name":"acme/app","config":{"platform":{"php":"8.3.11"}}}"#,
     )
     .unwrap();
@@ -143,7 +134,7 @@ fn composer_platform_pin_reaches_the_binary() {
 fn pin_is_found_from_a_nested_source_dir() {
     let dir = make_test_dir("elephc_resolve_nested");
     fs::write(
-        dir.join("composer.json"),
+        dir.join("project.json"),
         r#"{"config":{"platform":{"php":"8.4"}}}"#,
     )
     .unwrap();
@@ -151,17 +142,17 @@ fn pin_is_found_from_a_nested_source_dir() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// `composer.lock` outranks `composer.json`: it records what was actually installed against.
+/// A lock-manifest declaration outranks a project-manifest declaration.
 #[test]
 fn lock_outranks_manifest_in_the_binary() {
     let dir = make_test_dir("elephc_resolve_lock");
     fs::write(
-        dir.join("composer.json"),
+        dir.join("project.json"),
         r#"{"config":{"platform":{"php":"8.2"}}}"#,
     )
     .unwrap();
     fs::write(
-        dir.join("composer.lock"),
+        dir.join("resolution.json"),
         r#"{"platform-overrides":{"php":"8.4"}}"#,
     )
     .unwrap();
@@ -174,7 +165,7 @@ fn lock_outranks_manifest_in_the_binary() {
 fn explicit_flag_still_wins() {
     let dir = make_test_dir("elephc_resolve_flag");
     fs::write(
-        dir.join("composer.json"),
+        dir.join("project.json"),
         r#"{"config":{"platform":{"php":"8.3"}}}"#,
     )
     .unwrap();
@@ -189,7 +180,7 @@ fn explicit_flag_still_wins() {
 #[test]
 fn require_constraint_leaves_the_default() {
     let dir = make_test_dir("elephc_resolve_require");
-    fs::write(dir.join("composer.json"), r#"{"require":{"php":"^8.2"}}"#).unwrap();
+    fs::write(dir.join("project.json"), r#"{"require":{"php":"^8.2"}}"#).unwrap();
     assert_eq!(build_and_run(&dir, "", &[]), "8.5.0|80500");
     let _ = fs::remove_dir_all(&dir);
 }

@@ -206,3 +206,100 @@ echo score(1) . "|" . score(2) . "|" . score(3) . "|" . score(9);
     );
     assert_eq!(out, "100|80|60|0");
 }
+
+/// Verifies unsetting one indexed element through a declared instance-array property
+/// preserves the remaining element and writes the sparse representation back.
+#[test]
+fn test_unset_declared_instance_array_property_element() {
+    let out = compile_and_run(
+        r#"<?php
+final class DeferredValues {
+    private array $values = [];
+
+    public function add(int $key, int $value): void {
+        $this->values[$key] = $value;
+    }
+
+    public function remove(int $key): void {
+        unset($this->values[$key]);
+    }
+
+    public function contains(int $key): bool {
+        return isset($this->values[$key]);
+    }
+}
+
+$values = new DeferredValues();
+$values->add(0, 1);
+$values->add(1, 2);
+$values->remove(0);
+echo ($values->contains(0) ? 'present' : 'removed')."\n";
+echo ($values->contains(1) ? 'present' : 'removed')."\n";
+"#,
+    );
+    assert_eq!(out, "removed\npresent\n");
+}
+
+/// `$this->p[$k] = f()` evaluates `f()` BEFORE fetching `$this->p` for write, as php's delayed
+/// dim fetch does, so writes `f()` makes to the same property survive.
+///
+/// The property container used to be fetched first: a recursive resolver that fills its own
+/// cache (`$this->types[$name] = $this->resolveType($type)` in Symfony's
+/// `FormRegistry::getType()`) wrote the outer entry into a stale copy and every inner entry was
+/// lost, so the next `return $this->types[$name]` raised "Undefined array key". Covers typed and
+/// untyped array properties, keyed writes and appends. Expected output is `php -n` 8.5's.
+#[test]
+fn test_property_element_write_evaluates_rhs_before_fetching_the_property() {
+    let source = r#"<?php
+class Reg {
+    private array $types = [];
+    public $loose = [];
+    private array $list = [];
+    private $plain = [];
+    public function getType(string $name): string {
+        if (!isset($this->types[$name])) {
+            $this->types[$name] = $this->resolve($name);
+        }
+        return $this->types[$name];
+    }
+    private function resolve(string $name): string {
+        $parent = strlen($name) > 1 ? substr($name, 1) : "";
+        return $name . '<' . ($parent !== "" ? $this->getType($parent) : '') . '>';
+    }
+    public function loose(string $name): string {
+        if (!isset($this->loose[$name])) {
+            $this->loose[$name] = strlen($name) > 1 ? $name . $this->loose(substr($name, 1)) : $name;
+        }
+        return $this->loose[$name];
+    }
+    public function add(int $n): int {
+        $this->list[] = $n > 0 ? $this->add($n - 1) + 10 : 0;
+        return count($this->list);
+    }
+    public function addPlain(int $n): int {
+        $this->plain[] = $n > 0 ? $this->addPlain($n - 1) : 0;
+        return count($this->plain);
+    }
+    public function keys(): string {
+        return implode(',', array_keys($this->types)) . '|' . implode(',', array_keys($this->loose))
+            . '|' . implode(',', $this->list) . '|' . implode(',', $this->plain);
+    }
+}
+$r = new Reg();
+echo $r->getType('abcd'), "\n";
+echo $r->add(3), "\n";
+echo $r->addPlain(3), "\n";
+if ($argc > 1) { echo $r->loose('xyz'), "\n"; }
+echo $r->keys(), "\n";
+unset($r);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "abcd<bcd<cd<d<>>>>\n4\n4\nd,cd,bcd,abcd||0,11,12,13|0,1,2,3\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    let runs = compile_and_run_per_argv(source, &[&["x"]]);
+    assert_eq!(
+        runs[0],
+        "abcd<bcd<cd<d<>>>>\n4\n4\nxyzyzz\nd,cd,bcd,abcd|z,yz,xyz|0,11,12,13|0,1,2,3\n"
+    );
+}

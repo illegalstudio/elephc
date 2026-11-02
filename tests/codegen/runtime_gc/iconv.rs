@@ -37,6 +37,52 @@ echo "clean";
     );
 }
 
+/// Verifies the mbstring case pair releases its string results and thrown `ValueError`s.
+///
+/// The string entry point persists the bridge's bytes into a runtime string and the
+/// refused-encoding path hands a persisted message to the exception, so a leak here means
+/// the copy, the bridge release, or the exception's ownership of its message broke.
+///
+/// The conversions and the throw live in separate functions on purpose: a string local
+/// that is `unset()` after a `try`/`catch` inside the same top-level loop body currently
+/// trips a double free for ANY string builtin (`strtoupper()`, `str_repeat()` measured
+/// too), which is a separate defect this fixture must not depend on.
+#[test]
+fn test_mb_case_results_and_value_errors_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r##"<?php
+function convert_all(int $i, ?string $encoding): int {
+    $upper = mb_strtoupper("straße éà " . $i);
+    $lower = mb_strtolower("ΣΑΣ " . $i, $encoding);
+    $latin = mb_strtoupper("\xe9t\xe9", "ISO-8859-1");
+    return strlen($upper) + strlen($lower) + strlen($latin);
+}
+function refuse(int $i): string {
+    try {
+        mb_strtoupper("x", "nope" . $i);
+    } catch (ValueError $e) {
+        return $e->getMessage();
+    }
+    return "";
+}
+$encoding = $argc > 5 ? "UTF-8" : null;
+$total = 0;
+for ($i = 0; $i < 25; $i++) {
+    $total += convert_all($i, $encoding);
+    $message = refuse($i);
+}
+echo $total === 655 && strlen($message) === 81 ? "clean" : "wrong $total " . strlen($message);
+"##,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "clean");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected mb_strtoupper()/mb_strtolower() to leave a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies the array-returning builtins release their hash, keys, and nested lists.
 #[test]
 fn test_iconv_array_results_are_heap_clean() {

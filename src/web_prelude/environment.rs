@@ -16,10 +16,20 @@ use crate::prelude_prune::usage::{self, Usage};
 
 /// Retains population for direct storage access and indirect variable-table observers.
 /// `getenv()` reads the process environment independently and needs no PHP array copy.
+/// `$_SERVER` observes it too: like `php -S`, the bootstrap copies every environment name the
+/// request did not set into `$_SERVER` (Symfony reads `$_SERVER['APP_ENV']`).
+///
+/// The parser rewrites `$GLOBALS['_ENV']` to its global alias and a whole-array `$GLOBALS` read
+/// to the globals snapshot call, so both spellings are checked here as well.
 pub(super) fn is_observable(program: &[Stmt], usage: &Usage) -> bool {
-    ["_ENV", "GLOBALS"].iter().any(|name| {
-        usage.variables.contains(*name) || usage.storage_variables.contains(*name)
-    }) || ["eval", "get_defined_vars", "compact"].iter().any(|name| usage.references(name))
+    let observed = |name: &str| {
+        usage.variables.contains(name) || usage.storage_variables.contains(name)
+    };
+    ["_ENV", "_SERVER", "GLOBALS"].iter().any(|name| {
+        observed(name) || observed(&crate::globals_array::alias_name(name))
+    }) || ["eval", "get_defined_vars", "compact", crate::globals_array::SNAPSHOT_FUNCTION]
+        .iter()
+        .any(|name| usage.references(name))
         || ["eval", "get_defined_vars"].iter().any(|name| usage.literals.contains(*name))
         || (usage.callable_names.has_unknown_target()
             && usage::has_reachable_unknown_callable(program, usage))
@@ -40,6 +50,7 @@ mod tests {
             true,
             PhpVersion::Php85,
             &[],
+            std::path::Path::new("index.php"),
             &mut Default::default(),
             None,
         );
@@ -52,7 +63,6 @@ mod tests {
         for source in [
             "<?php echo 'ok';",
             "<?php echo getenv('PATH');",
-            "<?php echo $_SERVER['REQUEST_METHOD'];",
             "<?php $_env = []; echo count($_env);",
             "<?php $fn = 'strlen'; echo $fn('ok');",
             "<?php $fn = 'strlen'; echo $fn('compact');",
@@ -71,6 +81,7 @@ mod tests {
     fn web_environment_population_keeps_observable_values() {
         for source in [
             "<?php echo $_ENV['PATH'];",
+            "<?php echo $_SERVER['APP_ENV'];",
             "<?php function env_value() { return $_ENV['PATH']; } echo env_value();",
             "<?php $fn = fn() => $_ENV['PATH']; echo $fn();",
             "<?php class Config { public string $path { get => $_ENV['PATH']; } }",

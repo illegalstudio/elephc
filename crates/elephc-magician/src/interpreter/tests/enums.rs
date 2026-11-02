@@ -444,3 +444,39 @@ return enum_exists("EvalAllowedEnumMagic");"#,
 
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies `constant('Class::NAME')` fetches an enum case and a class constant by runtime name.
+///
+/// Monolog's `Logger::toMonologLevel()` resolves a level with
+/// `\constant(Level::class . '::' . $upper)`; the interpreter looked the whole string up as a
+/// global constant and every request of the Symfony demo died on "undefined constant". Expected
+/// output is php 8.5.10's.
+#[test]
+fn execute_program_constant_fetches_enum_case_and_class_constant_by_name() {
+    let program = parse_fragment(
+        br#"enum EvalConstantLevel: int {
+    case Debug = 100;
+    case Info = 200;
+    const DEFAULT_NAME = 'info';
+}
+echo constant('EvalConstantLevel::DEFAULT_NAME'); echo ";";
+$names = ['Debug', 'Info'];
+foreach ($names as $n) {
+    $level = constant(EvalConstantLevel::class . '::' . $n);
+    echo $level->name; echo "="; echo $level->value;
+    $direct = $n === 'Debug' ? EvalConstantLevel::Debug : EvalConstantLevel::Info;
+    echo $level === $direct ? " same;" : " other;";
+}
+echo constant('\EvalConstantLevel::DEFAULT_NAME');
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values);
+    let result = result.unwrap_or_else(|status| panic!("{status:?} after {:?}", values.output));
+
+    assert_eq!(values.output, "info;Debug=100 same;Info=200 same;info");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}

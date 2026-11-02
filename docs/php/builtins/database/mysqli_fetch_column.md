@@ -2,7 +2,7 @@
 title: "mysqli_fetch_column()"
 description: "Returns one column of the next row."
 sidebar:
-  order: 121
+  order: 132
 ---
 
 ## mysqli_fetch_column()

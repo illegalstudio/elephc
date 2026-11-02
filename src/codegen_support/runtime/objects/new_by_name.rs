@@ -18,6 +18,14 @@
 //!   the uniform heap-kind word (heap kind 4 = object) ahead of the
 //!   payload, writes the class id at offset 0, and zeroes the property
 //!   region so later property-store paths see clean memory.
+//! - Zeroing is not the whole layout, though, and everything the DIRECT
+//!   allocator (`lower_inst::objects::emit_object_allocation`) does after its
+//!   own zero-fill has to be reproduced here from a class id known only at run
+//!   time: the typed-uninitialized markers (`_class_uninit_prop_*`) and the
+//!   object-owned reference cells (`_class_ref_prop_*`). An owned reference
+//!   slot holds a POINTER to a 16-byte cell rather than a value, and the
+//!   property-default thunk called next stores THROUGH it — so a slot left at
+//!   zero is a null store inside compiled code, with no PHP-level diagnostic.
 //! - On miss: returns 0 (null), which EIR object lowering boxes as PHP
 //!   null (`gettype()` reports "NULL").
 
@@ -44,6 +52,7 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #64");                                     // helper frame
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    emitter.instruction("bl __rt_class_alias_resolve");                         // a class_alias() name instantiates its class
     emitter.instruction("str x1, [sp, #16]");                                   // save the name pointer
     emitter.instruction("str x2, [sp, #24]");                                   // save the name length
 
@@ -118,6 +127,62 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("b __rt_nbn_zero");                                     // continue zeroing
 
     emitter.label("__rt_nbn_done");
+    // -- restore typed-uninitialized markers after zeroing the selected layout --
+    emitter.instruction("ldr x12, [sp, #32]");                                  // reload the matched class id for marker-table lookup
+    abi::emit_symbol_address(emitter, "x9", "_class_uninit_prop_counts");
+    emitter.instruction("ldr x10, [x9, x12, lsl #3]");                          // load the number of typed-uninitialized slots
+    emitter.instruction("cbz x10, __rt_nbn_no_uninit_markers");                 // a class without such slots needs no marker stores
+    abi::emit_symbol_address(emitter, "x9", "_class_uninit_prop_offset_ptrs");
+    emitter.instruction("ldr x9, [x9, x12, lsl #3]");                           // load the physical-offset table for this class
+    emitter.instruction("movz x11, #0xfffd");                                   // materialize the typed-uninitialized sentinel low bits
+    emitter.instruction("movk x11, #0xffff, lsl #16");                          // materialize the typed-uninitialized sentinel bits 16..31
+    emitter.instruction("movk x11, #0xffff, lsl #32");                          // materialize the typed-uninitialized sentinel bits 32..47
+    emitter.instruction("movk x11, #0x7fff, lsl #48");                          // materialize the typed-uninitialized sentinel high bits
+    emitter.instruction("mov x13, #0");                                         // start at the first marker offset
+    emitter.label("__rt_nbn_uninit_marker_loop");
+    emitter.instruction("cmp x13, x10");                                        // have all typed-uninitialized slots been marked?
+    emitter.instruction("b.ge __rt_nbn_no_uninit_markers");                     // continue once every marker is in place
+    emitter.instruction("ldr x14, [x9, x13, lsl #3]");                          // load one property high-word offset
+    emitter.instruction("str x11, [x0, x14]");                                  // stamp the slot as PHP-typed but uninitialized
+    emitter.instruction("add x13, x13, #1");                                    // advance to the next marker offset
+    emitter.instruction("b __rt_nbn_uninit_marker_loop");                       // continue marking this object's typed slots
+    emitter.label("__rt_nbn_no_uninit_markers");
+    // -- allocate the ref-cells this layout's object-owned reference properties need --
+    // An owned reference slot holds a POINTER to a 16-byte cell, not a value: every read and
+    // every write of the property dereferences it, including the property-default stores in
+    // `_class_propinit_<id>` below. The direct EIR allocator allocates those cells right after
+    // zeroing the layout; the by-name allocator must do the same or the very next instruction
+    // stores through the null the zero-fill left behind.
+    emitter.instruction("ldr x12, [sp, #32]");                                  // reload the matched class id for the reference-cell table lookup
+    abi::emit_symbol_address(emitter, "x9", "_class_ref_prop_counts");
+    emitter.instruction("ldr x10, [x9, x12, lsl #3]");                          // load the number of object-owned reference slots
+    emitter.instruction("cbz x10, __rt_nbn_no_ref_cells");                      // a class without reference properties needs no cells
+    abi::emit_symbol_address(emitter, "x9", "_class_ref_prop_offset_ptrs");
+    emitter.instruction("ldr x9, [x9, x12, lsl #3]");                           // load the slot-offset table for this class
+    emitter.instruction("str x0, [sp, #16]");                                   // save the object across __rt_heap_alloc (name_ptr slot is free now)
+    emitter.instruction("str x9, [sp, #24]");                                   // save the slot-offset table (name_len slot is free now)
+    emitter.instruction("str x10, [sp, #48]");                                  // save the slot count (entry cursor is free now)
+    emitter.instruction("str xzr, [sp, #56]");                                  // start at the first reference slot
+    emitter.label("__rt_nbn_ref_cell_loop");
+    emitter.instruction("ldr x11, [sp, #56]");                                  // reload the reference-slot index
+    emitter.instruction("ldr x10, [sp, #48]");                                  // reload the reference-slot count
+    emitter.instruction("cmp x11, x10");                                        // has every reference slot been given a cell?
+    emitter.instruction("b.ge __rt_nbn_ref_cells_done");                        // continue once every cell exists
+    emitter.instruction("mov x0, #16");                                         // 16-byte ref cell: value at +0, tag/length at +8
+    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = cell pointer
+    emitter.instruction("str xzr, [x0]");                                       // zero the cell value word
+    emitter.instruction("str xzr, [x0, #8]");                                   // zero the cell tag/length word
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the slot-offset table
+    emitter.instruction("ldr x11, [sp, #56]");                                  // reload the reference-slot index
+    emitter.instruction("ldr x14, [x9, x11, lsl #3]");                          // load this reference property's slot offset
+    emitter.instruction("ldr x13, [sp, #16]");                                  // reload the object pointer
+    emitter.instruction("str x0, [x13, x14]");                                  // store the cell pointer in the reference-property slot
+    emitter.instruction("add x11, x11, #1");                                    // advance to the next reference slot
+    emitter.instruction("str x11, [sp, #56]");                                  // persist the reference-slot index
+    emitter.instruction("b __rt_nbn_ref_cell_loop");                            // continue allocating this object's reference cells
+    emitter.label("__rt_nbn_ref_cells_done");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // restore the object pointer after the cell allocations
+    emitter.label("__rt_nbn_no_ref_cells");
     // -- run the per-class property-default thunk, if this class has one --
     emitter.instruction("ldr x12, [sp, #32]");                                  // reload the matched class_id
     abi::emit_symbol_address(emitter, "x10", "_class_propinit_ptrs");
@@ -127,6 +192,33 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("blr x10");                                             // _class_propinit_<id>(this = object in x0)
     emitter.instruction("ldr x0, [sp, #40]");                                   // restore the object pointer (the thunk may clobber x0)
     emitter.label("__rt_nbn_no_propinit");
+    // -- a private ancestor slot hidden by a same-named declaration keeps its own default --
+    // The thunk above assigns `$this-><name>` in the allocated class's scope, which reaches only
+    // the slot visible by name. Each ancestor that declares a hidden slot has a thunk of its own
+    // private defaults; run every ancestor's, nearest first (their slots never overlap).
+    emitter.instruction("ldr x12, [sp, #32]");                                  // reload the matched class_id
+    abi::emit_symbol_address(emitter, "x10", "_class_hidden_private_slot_flags");
+    emitter.instruction("ldr x10, [x10, x12, lsl #3]");                         // does this layout hide a private ancestor slot?
+    emitter.instruction("cbz x10, __rt_nbn_return_allocated");                  // ordinary layouts are fully initialized already
+    emitter.instruction("str x0, [sp, #40]");                                   // save the object across the ancestor thunks
+    abi::emit_symbol_address(emitter, "x10", "_class_parent_ids");
+    emitter.instruction("ldr x12, [x10, x12, lsl #3]");                         // start at the parent class id
+    emitter.label("__rt_nbn_private_init_loop");
+    emitter.instruction("cmp x12, #0");                                         // walked past the root class?
+    emitter.instruction("b.lt __rt_nbn_private_init_done");                     // every ancestor has had its turn
+    emitter.instruction("str x12, [sp, #48]");                                  // save the ancestor id across its thunk
+    abi::emit_symbol_address(emitter, "x10", "_class_propinit_private_ptrs");
+    emitter.instruction("ldr x10, [x10, x12, lsl #3]");                         // _class_propinit_private_ptrs[ancestor] (0 = none)
+    emitter.instruction("cbz x10, __rt_nbn_private_init_next");                 // this ancestor declares no hidden private slot
+    emitter.instruction("ldr x0, [sp, #40]");                                   // this = the allocated object
+    emitter.instruction("blr x10");                                             // _class_propinit_private_<ancestor>(this)
+    emitter.label("__rt_nbn_private_init_next");
+    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the ancestor id
+    abi::emit_symbol_address(emitter, "x10", "_class_parent_ids");
+    emitter.instruction("ldr x12, [x10, x12, lsl #3]");                         // advance to that ancestor's parent
+    emitter.instruction("b __rt_nbn_private_init_loop");                        // continue up the chain
+    emitter.label("__rt_nbn_private_init_done");
+    emitter.instruction("ldr x0, [sp, #40]");                                   // restore the object pointer
     emitter.label("__rt_nbn_return_allocated");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the frame
@@ -150,6 +242,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 48");                                         // helper frame
+    emitter.instruction("call __rt_class_alias_resolve");                       // a class_alias() name instantiates its class
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the name pointer (elephc string ABI: rax)
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the name length (elephc string ABI: rdx)
 
@@ -226,6 +319,61 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_nbn_zero_x86");                               // continue zeroing
 
     emitter.label("__rt_nbn_done_x86");
+    // -- restore typed-uninitialized markers after zeroing the selected layout --
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the matched class id for marker-table lookup
+    // ADDRESS, not load: both symbols name a dense class_id-indexed TABLE, and the next
+    // instruction indexes it. `emit_load_symbol_to_reg` would put the table's FIRST ENTRY in the
+    // register — a small integer — and `[r8 + rcx*8]` would then dereference it as a pointer.
+    // The AArch64 path above uses `emit_symbol_address` for exactly this reason.
+    abi::emit_symbol_address(emitter, "r8", "_class_uninit_prop_counts"); // marker-count table base
+    emitter.instruction("mov r9, QWORD PTR [r8 + rcx*8]");                      // load the number of typed-uninitialized slots
+    emitter.instruction("test r9, r9");                                         // does this class need any marker stores?
+    emitter.instruction("jz __rt_nbn_no_uninit_markers_x86");                   // skip marker initialization when every slot has a default
+    abi::emit_symbol_address(emitter, "r8", "_class_uninit_prop_offset_ptrs"); // marker-offset pointer table base
+    emitter.instruction("mov r8, QWORD PTR [r8 + rcx*8]");                      // load this class's physical-offset table
+    emitter.instruction("mov r11, 0x7ffffffffffffffd");                         // materialize the typed-uninitialized sentinel word
+    emitter.instruction("xor r10d, r10d");                                      // start at the first marker offset
+    emitter.label("__rt_nbn_uninit_marker_loop_x86");
+    emitter.instruction("cmp r10, r9");                                         // have all typed-uninitialized slots been marked?
+    emitter.instruction("jge __rt_nbn_no_uninit_markers_x86");                  // continue once every marker is in place
+    emitter.instruction("mov rdx, QWORD PTR [r8 + r10*8]");                     // load one property high-word offset
+    emitter.instruction("mov QWORD PTR [rax + rdx], r11");                      // stamp the slot as PHP-typed but uninitialized
+    emitter.instruction("add r10, 1");                                          // advance to the next marker offset
+    emitter.instruction("jmp __rt_nbn_uninit_marker_loop_x86");                 // continue marking this object's typed slots
+    emitter.label("__rt_nbn_no_uninit_markers_x86");
+    // -- allocate the ref-cells this layout's object-owned reference properties need --
+    // See the AArch64 path: an owned reference slot holds a POINTER to a 16-byte cell, and the
+    // property-default thunk below stores THROUGH it.
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the matched class id for the reference-cell table lookup
+    abi::emit_symbol_address(emitter, "r8", "_class_ref_prop_counts"); // reference-slot count table base
+    emitter.instruction("mov r9, QWORD PTR [r8 + rcx*8]");                      // load the number of object-owned reference slots
+    emitter.instruction("test r9, r9");                                         // does this class have any reference properties?
+    emitter.instruction("jz __rt_nbn_no_ref_cells_x86");                        // a class without reference properties needs no cells
+    abi::emit_symbol_address(emitter, "r8", "_class_ref_prop_offset_ptrs"); // slot-offset pointer table base
+    emitter.instruction("mov r8, QWORD PTR [r8 + rcx*8]");                      // load the slot-offset table for this class
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the object across __rt_heap_alloc (name_ptr slot is free now)
+    emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // save the slot-offset table (name_len slot is free now)
+    emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save the slot count (entry cursor is free now)
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // start at the first reference slot
+    emitter.label("__rt_nbn_ref_cell_loop_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the reference-slot index
+    emitter.instruction("cmp r10, QWORD PTR [rbp - 24]");                       // has every reference slot been given a cell?
+    emitter.instruction("jge __rt_nbn_ref_cells_done_x86");                     // continue once every cell exists
+    emitter.instruction("mov rax, 16");                                         // 16-byte ref cell: value at +0, tag/length at +8
+    emitter.instruction("call __rt_heap_alloc");                                // rax = cell pointer
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // zero the cell value word
+    emitter.instruction("mov QWORD PTR [rax + 8], 0");                          // zero the cell tag/length word
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the slot-offset table
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the reference-slot index
+    emitter.instruction("mov rdx, QWORD PTR [r8 + r10*8]");                     // load this reference property's slot offset
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("mov QWORD PTR [rcx + rdx], rax");                      // store the cell pointer in the reference-property slot
+    emitter.instruction("add r10, 1");                                          // advance to the next reference slot
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // persist the reference-slot index
+    emitter.instruction("jmp __rt_nbn_ref_cell_loop_x86");                      // continue allocating this object's reference cells
+    emitter.label("__rt_nbn_ref_cells_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the object pointer after the cell allocations
+    emitter.label("__rt_nbn_no_ref_cells_x86");
     // -- run the per-class property-default thunk, if this class has one --
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the matched class_id
     abi::emit_symbol_address(emitter, "r10", "_class_propinit_ptrs"); // property-init thunk table base
@@ -237,6 +385,34 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call r10");                                            // _class_propinit_<id>(this)
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore the object pointer (the thunk may clobber rax)
     emitter.label("__rt_nbn_no_propinit_x86");
+    // -- a private ancestor slot hidden by a same-named declaration keeps its own default --
+    // The thunk above assigns `$this-><name>` in the allocated class's scope, which reaches only
+    // the slot visible by name. Each ancestor that declares a hidden slot has a thunk of its own
+    // private defaults; run every ancestor's, nearest first (their slots never overlap).
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the matched class_id
+    abi::emit_symbol_address(emitter, "r10", "_class_hidden_private_slot_flags");
+    emitter.instruction("cmp QWORD PTR [r10 + rcx*8], 0");                      // does this layout hide a private ancestor slot?
+    emitter.instruction("je __rt_nbn_return_allocated_x86");                    // ordinary layouts are fully initialized already
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the object across the ancestor thunks
+    abi::emit_symbol_address(emitter, "r10", "_class_parent_ids");
+    emitter.instruction("mov rcx, QWORD PTR [r10 + rcx*8]");                    // start at the parent class id
+    emitter.label("__rt_nbn_private_init_loop_x86");
+    emitter.instruction("test rcx, rcx");                                       // walked past the root class?
+    emitter.instruction("js __rt_nbn_private_init_done_x86");                   // every ancestor has had its turn
+    emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save the ancestor id across its thunk
+    abi::emit_symbol_address(emitter, "r10", "_class_propinit_private_ptrs");
+    emitter.instruction("mov r10, QWORD PTR [r10 + rcx*8]");                    // _class_propinit_private_ptrs[ancestor] (0 = none)
+    emitter.instruction("test r10, r10");                                       // does this ancestor declare a hidden private slot?
+    emitter.instruction("jz __rt_nbn_private_init_next_x86");                   // no thunk to run for it
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // this = the allocated object (first SysV argument)
+    emitter.instruction("call r10");                                            // _class_propinit_private_<ancestor>(this)
+    emitter.label("__rt_nbn_private_init_next_x86");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the ancestor id
+    abi::emit_symbol_address(emitter, "r10", "_class_parent_ids");
+    emitter.instruction("mov rcx, QWORD PTR [r10 + rcx*8]");                    // advance to that ancestor's parent
+    emitter.instruction("jmp __rt_nbn_private_init_loop_x86");                  // continue up the chain
+    emitter.label("__rt_nbn_private_init_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore the object pointer
     emitter.label("__rt_nbn_return_allocated_x86");
     emitter.instruction("add rsp, 48");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -271,7 +447,14 @@ fn emit_runtime_managed_match_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10]");                                      // load SplFixedArray class id
     emitter.instruction("cmp x12, x10");                                        // is the requested class SplFixedArray?
     emitter.instruction("b.eq __rt_nbn_alloc_spl_fixed");                       // allocate the SPL fixed-array payload with size zero
+    abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
+    emitter.instruction("ldr x10, [x10]");                                      // load stdClass class id
+    emitter.instruction("cmp x12, x10");                                        // is the requested class stdClass?
+    emitter.instruction("b.eq __rt_nbn_alloc_stdclass");                        // stdClass keeps its properties in a hash, not in declared slots
     emitter.instruction("b __rt_nbn_generic_alloc");                            // continue with the generic property-object allocator
+    emitter.label("__rt_nbn_alloc_stdclass");
+    emitter.instruction("bl __rt_stdclass_new");                                // allocate the [class_id][hash_ptr] layout with an empty property hash
+    emitter.instruction("b __rt_nbn_return_allocated");                         // return the initialized runtime-managed object
     emitter.label("__rt_nbn_alloc_spl_dll");
     emitter.instruction("mov x0, x12");                                         // pass the matched concrete SPL list class id
     emitter.instruction("bl __rt_spl_dll_new");                                 // allocate the runtime-managed SPL list object layout
@@ -300,7 +483,13 @@ fn emit_runtime_managed_match_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_fixed_array_class_id", 0);
     emitter.instruction("cmp rcx, r10");                                        // is the requested class SplFixedArray?
     emitter.instruction("je __rt_nbn_alloc_spl_fixed_x86");                     // allocate the SPL fixed-array payload with size zero
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);
+    emitter.instruction("cmp rcx, r10");                                        // is the requested class stdClass?
+    emitter.instruction("je __rt_nbn_alloc_stdclass_x86");                      // stdClass keeps its properties in a hash, not in declared slots
     emitter.instruction("jmp __rt_nbn_generic_alloc_x86");                      // continue with the generic property-object allocator
+    emitter.label("__rt_nbn_alloc_stdclass_x86");
+    emitter.instruction("call __rt_stdclass_new");                              // allocate the [class_id][hash_ptr] layout with an empty property hash
+    emitter.instruction("jmp __rt_nbn_return_allocated_x86");                   // return the initialized runtime-managed object
     emitter.label("__rt_nbn_alloc_spl_dll_x86");
     emitter.instruction("mov rdi, rcx");                                        // pass the matched concrete SPL list class id
     emitter.instruction("call __rt_spl_dll_new");                               // allocate the runtime-managed SPL list object layout

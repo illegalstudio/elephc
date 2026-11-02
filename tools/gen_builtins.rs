@@ -19,7 +19,7 @@ use elephc_builtin_contract::{
     constants, contracts, eval_class_support, eval_constant_support, eval_signature,
     eval_support, lookup, Area, AotSignatureOverrideReason, BackendImplementation,
     BackendSupport, BuiltinContract, BuiltinKind, BuiltinSignature, ConstValue, ConstantRoute,
-    DefaultSpec, TypeSpec, UnsupportedReason,
+    DefaultSpec, PassingMode, TypeSpec, UnsupportedReason,
 };
 use serde_json::{json, Value};
 
@@ -103,8 +103,10 @@ fn contract_record_json(contract: &BuiltinContract) -> Value {
         "internal": contract.internal,
         "extension": contract.extension,
         "params": signature_params_json(signature),
-        "variadic": signature.variadic,
-        "variadic_by_ref": contract.variadic_by_ref,
+        "variadic": signature.variadic.map(|variadic| variadic.name),
+        "variadic_by_ref": signature
+            .variadic
+            .is_some_and(|variadic| variadic.passing == PassingMode::ByReference),
         "returns": type_name(contract.returns),
         "by_ref_return": contract.by_ref_return,
         "min_args": contract.min_args,
@@ -128,7 +130,7 @@ fn aot_support_json(contract: &BuiltinContract) -> Value {
     let signature = profile.signature;
     let common = json!({
         "params": signature_params_json(signature),
-        "variadic": signature.variadic,
+        "variadic": signature.variadic.map(|variadic| variadic.name),
         "required_param_count": signature.required_param_count(),
         "signature_override_reason": profile.override_reason.map(aot_override_reason_name),
     });
@@ -331,7 +333,20 @@ fn unsupported_reason_name(reason: UnsupportedReason) -> &'static str {
     match reason {
         UnsupportedReason::InternalCompilerSurface => "internal-compiler-surface",
         UnsupportedReason::EvalImplementationPending => "eval-implementation-pending",
+        UnsupportedReason::AotImplementationPending => "aot-implementation-pending",
     }
+}
+
+#[test]
+fn unsupported_reason_names_cover_both_backend_directions() {
+    assert_eq!(
+        unsupported_reason_name(UnsupportedReason::AotImplementationPending),
+        "aot-implementation-pending",
+    );
+    assert_eq!(
+        unsupported_reason_name(UnsupportedReason::EvalImplementationPending),
+        "eval-implementation-pending",
+    );
 }
 
 /// Returns the stable documentation spelling for an AOT signature override.
@@ -377,7 +392,7 @@ fn print_symbol_catalogs() {
     let constants: Vec<Value> = constants()
         .iter()
         .map(|constant| {
-            json!({
+            let mut entry = json!({
                 "name": constant.name,
                 "module": constant.module.php_name(),
                 "bundled": constant.module.is_bundled(),
@@ -392,7 +407,11 @@ fn print_symbol_catalogs() {
                 "eval": route_json(eval_constant_support(constant)),
                 "extension": constant.extension,
                 "internal": constant.internal,
-            })
+            });
+            if let Some(targets) = constant.target_support {
+                entry["target_support"] = json!(targets);
+            }
+            entry
         })
         .collect();
     let value = json!({ "classes": classes, "constants": constants });

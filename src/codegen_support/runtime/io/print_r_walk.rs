@@ -35,7 +35,7 @@
 //!   maps to the platform write number); the `_linux_x86_64` paths are SysV.
 
 use crate::codegen_support::abi;
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch, ref_markers};
 
 /// `__rt_print_r_spaces`: write `n` ASCII spaces to stdout in <=64-byte chunks.
 /// Input: AArch64 x0 / x86_64 rdi = space count.
@@ -299,6 +299,7 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #8]");                                    // save the value high word
     emitter.instruction("str x3, [sp, #16]");                                   // save the nested paren base indent
 
+    emitter.label("__rt_pr_val_dispatch");
     emitter.instruction("cmp x0, #7");                                          // boxed Mixed cell?
     emitter.instruction("b.eq __rt_pr_val_mixed");                              // unbox then redispatch
     emitter.instruction("cmp x0, #0");                                          // tag 0 = int
@@ -315,7 +316,18 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_pr_val_hash");                               // recurse into the hash walker
     emitter.instruction("cmp x0, #6");                                          // tag 6 = object
     emitter.instruction("b.eq __rt_pr_val_obj");                                // recurse into the object walker
-    emitter.instruction("b __rt_pr_val_done");                                  // tag 8 null → render nothing
+    ref_markers::emit_follow_ref_marker_triple(
+        emitter,
+        ("x0", "x1", "x2"),
+        "__rt_pr_val_ref",
+        "__rt_pr_val_done",
+        "__rt_pr_val",
+    );                                                                          // a reference element renders its value; tag 8 null renders nothing
+
+    emitter.label("__rt_pr_val_ref");
+    emitter.instruction("str x1, [sp, #0]");                                    // save the referenced value's low word
+    emitter.instruction("str x2, [sp, #8]");                                    // save the referenced value's high word
+    emitter.instruction("b __rt_pr_val_dispatch");                              // render the referenced value
 
     emitter.label("__rt_pr_val_int");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the integer payload
@@ -395,6 +407,7 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the nested paren base indent
     emitter.instruction("mov rax, rdi");                                        // tag → dispatch register
 
+    emitter.label("__rt_pr_val_dispatch_x86");
     emitter.instruction("cmp rax, 7");                                          // boxed Mixed cell?
     emitter.instruction("je __rt_pr_val_mixed_x86");                            // unbox then redispatch
     emitter.instruction("cmp rax, 0");                                          // tag 0 = int
@@ -411,7 +424,18 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_pr_val_hash_x86");                             // recurse into the hash walker
     emitter.instruction("cmp rax, 6");                                          // tag 6 = object
     emitter.instruction("je __rt_pr_val_obj_x86");                              // recurse into the object walker
-    emitter.instruction("jmp __rt_pr_val_done_x86");                            // tag 8 null → render nothing
+    ref_markers::emit_follow_ref_marker_triple(
+        emitter,
+        ("rax", "rsi", "rdx"),
+        "__rt_pr_val_ref_x86",
+        "__rt_pr_val_done_x86",
+        "__rt_pr_val_x86",
+    );                                                                          // a reference element renders its value; tag 8 null renders nothing
+
+    emitter.label("__rt_pr_val_ref_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the referenced value's low word
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the referenced value's high word
+    emitter.instruction("jmp __rt_pr_val_dispatch_x86");                        // render the referenced value
 
     emitter.label("__rt_pr_val_int_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the integer payload

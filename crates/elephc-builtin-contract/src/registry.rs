@@ -37,6 +37,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
                     + crate::catalog_gmp::CONTRACTS.len()
+                    + crate::catalog_data_additional::CONTRACTS.len()
                     + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
@@ -45,6 +46,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_gmp::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_data_additional::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
@@ -166,7 +168,12 @@ mod tests {
         // +4: the internal `__elephc_ptr_get` and `__elephc_zval_{pack,free,unpack}` aliases
         // the extension-hosting prelude calls.
         // +2: PHP 8.5 array value-edge functions.
-        assert_eq!(contracts().len(), 1248 + curl_surface);
+        // Main's catalog (ext/gmp's fifty-one `gmp_*` contracts included) plus the contracts the
+        // Symfony branch carries that main does not (`extract`, `filter_var`, the `gc_*` family,
+        // the password/array/preg/sodium/response-header surfaces, the `--web` handler prelude
+        // declarations, the two internal last-error readers `__elephc_last_error_int` / `_str`, ...),
+        // measured on the merged catalogs.
+        assert_eq!(contracts().len(), 1324 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

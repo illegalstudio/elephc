@@ -440,7 +440,7 @@ pub(super) fn datetime_create_from_format(class_name: &str) -> ClassMethod {
         variadic_type: None,
         return_type: Some(TypeExpr::Union(vec![
             TypeExpr::Named(Name::unqualified(class_name)),
-            TypeExpr::Bool,
+            TypeExpr::False,
         ])),
         by_ref_return: false,
         body,

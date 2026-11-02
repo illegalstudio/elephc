@@ -20,6 +20,80 @@ mod lower;
 
 use lower::lower_list_unpack;
 
+/// Parses a destructuring pattern that is immediately followed by `=` in expression position.
+///
+/// Returns `None` for ordinary array literals and `list(...)`-shaped calls so the Pratt parser
+/// can keep handling them normally. Once an assignment token follows the matching delimiter,
+/// the pattern is validated with the same parser used by statement and `foreach` destructuring.
+pub(crate) fn try_parse_destructuring_assignment_expression_pattern(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Option<ListPattern>, CompileError> {
+    let (open_pos, open, close) = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::LBracket) => (*pos, Token::LBracket, Token::RBracket),
+        Some(Token::Identifier(name))
+            if name.eq_ignore_ascii_case("list")
+                && matches!(
+                    tokens.get(*pos + 1).map(|(token, _)| token),
+                    Some(Token::LParen)
+                ) => (*pos + 1, Token::LParen, Token::RParen),
+        _ => return Ok(None),
+    };
+    let Some(close_pos) = find_matching_delimiter(tokens, open_pos, &open, &close) else {
+        return Ok(None);
+    };
+    if !matches!(
+        tokens.get(close_pos + 1).map(|(token, _)| token),
+        Some(Token::Assign)
+    ) {
+        return Ok(None);
+    }
+
+    let pattern = if open == Token::LBracket {
+        parse_bracket_list_pattern(tokens, pos, span)?
+    } else {
+        parse_list_construct_pattern(tokens, pos, span)?
+    };
+    *pos += 1; // consume the `=` proven to follow the matching pattern delimiter
+    Ok(Some(pattern))
+}
+
+/// Lowers a validated destructuring assignment used as an expression.
+///
+/// PHP evaluates the RHS once, assigns its elements to the pattern, and yields that original RHS
+/// as the expression result. A reserved temporary anchors the RHS; the ordinary list lowerer then
+/// performs the assignments from that temporary before the enclosing assignment-expression node
+/// reloads it as the result.
+pub(crate) fn lower_destructuring_assignment_expression(
+    pattern: ListPattern,
+    value: Expr,
+    span: Span,
+) -> Expr {
+    let result_name = format!("__elephc_list_expr_{}_{}", span.line, span.col);
+    let result = Expr::new(ExprKind::Variable(result_name.clone()), span);
+    let prelude = vec![
+        Stmt::new(
+            crate::parser::ast::StmtKind::Assign {
+                name: result_name,
+                value,
+            },
+            span,
+        ),
+        lower_list_unpack(pattern, result.clone(), span),
+    ];
+    Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(result.clone()),
+            value: Box::new(result),
+            result_target: None,
+            prelude,
+            conditional_value_temp: None,
+        },
+        span,
+    )
+}
+
 /// Parses a `list([]) = $x;` destructuring assignment statement.
 /// Consumes the opening `[`, parses the bracket-enclosed pattern, expects `=`, parses the
 /// right-hand side expression, and consumes the trailing semicolon. Returns the lowered statement.
@@ -110,7 +184,7 @@ pub(crate) fn starts_destructuring_pattern(
 
 /// Represents a list destructuring pattern with ordered entries.
 #[derive(Debug, Clone)]
-struct ListPattern {
+pub(crate) struct ListPattern {
     entries: Vec<ListEntry>,
 }
 

@@ -25,7 +25,8 @@ pub(super) fn lower_new_object(
     ) {
         return error;
     }
-    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionclass" {
+    let class_key = php_symbol_key(class_name.as_str().trim_start_matches('\\'));
+    if class_key == "reflectionclass" {
         if let Some(operands) = lower_reflection_class_constructor_operands(ctx, args) {
             let php_type = PhpType::Object(class_name.as_str().to_string());
             return emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
@@ -43,10 +44,44 @@ pub(super) fn lower_new_object(
             return emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
         }
     }
+    if class_key == "iteratoriterator"
+        && (ctx.has_eval_barrier() || ctx.can_resolve_runtime_dynamic_functions())
+    {
+        // An aggregate may hand back another aggregate (`Form::getIterator()` returns its
+        // `OrderedHashMap`), and php keeps asking until it holds an Iterator. Each round parks
+        // its answer in a hidden local so the next one can test it without evaluating twice.
+        let mut current = args.to_vec();
+        let mut staged = false;
+        for _ in 0..3 {
+            let Some(next) = unwrap_eval_aggregate_iterator_source(ctx, &current) else {
+                break;
+            };
+            let value = lower_expr(ctx, &next[0]);
+            let temp_type = ctx.builder.value_php_type(value.value).clone();
+            let temp = ctx.declare_synthetic_php_local(temp_type.clone());
+            ctx.store_local(&temp, value, temp_type, Some(expr.span));
+            current[0] = Expr::new(ExprKind::Variable(temp), args[0].span);
+            staged = true;
+        }
+        if staged {
+            return lower_new_object_resolved(ctx, class_name, &current, expr);
+        }
+    }
+    lower_new_object_resolved(ctx, class_name, args, expr)
+}
+
+/// Lowers fixed-class object construction once the argument rewrites above have been applied.
+fn lower_new_object_resolved(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &Name,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
     if ctx.has_eval_barrier()
         && !ctx.classes.contains_key(class_name.as_str())
         && plain_positional_call_args(args)
     {
+        ctx.declare_eval_context_local();
         let operands = lower_args_with_signature(ctx, None, args);
         let data = ctx.intern_class_name(class_name.as_str());
         return ctx.emit_value(
@@ -59,6 +94,33 @@ pub(super) fn lower_new_object(
         );
     }
     let sig = constructor_signature(ctx, class_name).cloned();
+    // A class the program names but never compiled a constructor for -- one the runtime
+    // autoloader supplies -- has no signature to place NAMED arguments with, and lowering them
+    // positionally handed `new LogRecord(datetime: ..., channel: ..., message: ..., level: ...)`
+    // its message as the level. The runtime construction path binds the names.
+    if sig.is_none()
+        && ctx.program_loads_code_at_run_time()
+        && (crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg))
+    {
+        let name_expr = Expr::new(
+            ExprKind::StringLiteral(class_name.as_str().trim_start_matches('\\').to_string()),
+            expr.span,
+        );
+        let name_value = lower_expr(ctx, &name_expr);
+        return lower_new_dynamic_generic(ctx, name_value, args, expr);
+    }
+    // php-src allocates the object before evaluating the arguments, so `new A(new B())` numbers
+    // A `#1`: reserve A's handle now when an argument may allocate one first.
+    let reserved_handle = args.iter().any(arg_may_allocate_object).then(|| {
+        ctx.emit_value(
+            Op::ObjectHandleReserve,
+            Vec::new(),
+            None,
+            PhpType::Int,
+            Op::ObjectHandleReserve.default_effects(),
+            Some(expr.span),
+        )
+    });
     let php_type = PhpType::Object(class_name.as_str().to_string());
     let result_staging = prepublish_user_call_result(
         ctx,
@@ -77,7 +139,7 @@ pub(super) fn lower_new_object(
     let call_args = ref_place_rewrite
         .as_ref()
         .map_or(args, |rewrite| rewrite.args.as_slice());
-    let mut operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let mut operands = lower_user_args_with_signature(ctx, sig.as_ref(), call_args);
     ctx.call_description = previous_description;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     let roots = root_user_call_operands(
@@ -89,15 +151,39 @@ pub(super) fn lower_new_object(
         expr.span,
     );
     ctx.invalidate_callable_ref_argument_locals(sig.as_ref(), &operands);
-    let data = ctx.intern_class_name(class_name.as_str());
-    let object = ctx.emit_value(
-        Op::ObjectNew,
-        operands.clone(),
-        Some(Immediate::Data(data)),
-        php_type,
-        Op::ObjectNew.default_effects(),
-        Some(expr.span),
-    );
+    if let Some(handle) = &reserved_handle {
+        ctx.emit_void(
+            Op::ObjectHandlePend,
+            vec![handle.value],
+            None,
+            Op::ObjectHandlePend.default_effects(),
+            Some(expr.span),
+        );
+    }
+    // A class with no constructor anywhere in its chain takes no constructor operands: php
+    // evaluates the arguments for their effects and discards them (`new A(f())`), which the
+    // lowering above already did, and the release below retires them.
+    let constructor_operands = if sig.is_none()
+        && ctx.classes.contains_key(class_name.as_str().trim_start_matches('\\'))
+        && crate::types::constructor_owner(&ctx.classes, class_name.as_str().trim_start_matches('\\'))
+            .is_none()
+    {
+        Vec::new()
+    } else {
+        operands.clone()
+    };
+    // The rooted operands are released below, once, by `release_owned_call_arg_temporaries_with_roots`.
+    let object =
+        emit_object_new_value(ctx, class_name.as_str(), constructor_operands, php_type, expr.span);
+    if reserved_handle.is_some() {
+        ctx.emit_void(
+            Op::ObjectHandleUnpend,
+            Vec::new(),
+            None,
+            Op::ObjectHandleUnpend.default_effects(),
+            Some(expr.span),
+        );
+    }
     stage_call_result(ctx, result_staging.as_ref(), object, expr.span);
     release_owned_call_arg_temporaries_with_roots(
         ctx,
@@ -115,6 +201,101 @@ pub(super) fn lower_new_object(
     take_prepublished_call_result(ctx, result_staging, object, expr.span)
 }
 
+
+/// Whether evaluating a constructor argument may allocate an object: anything but a literal,
+/// a variable or a constant read (a call, a `new`, a closure, an operator over those...).
+fn arg_may_allocate_object(arg: &Expr) -> bool {
+    match &arg.kind {
+        ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null
+        | ExprKind::Variable(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. }
+        | ExprKind::This => false,
+        ExprKind::NamedArg { value, .. } => arg_may_allocate_object(value),
+        ExprKind::Negate(inner) => arg_may_allocate_object(inner),
+        ExprKind::ArrayLiteral(items) => items.iter().any(arg_may_allocate_object),
+        ExprKind::ArrayLiteralAssoc(items) => items
+            .iter()
+            .any(|(key, value)| arg_may_allocate_object(key) || arg_may_allocate_object(value)),
+        _ => true,
+    }
+}
+
+
+/// Rewrites `new IteratorIterator($x)` so an interpreter-declared aggregate is unwrapped by the
+/// interpreter.
+///
+/// The compiled constructor recognizes an `IteratorAggregate` by its compiled class id, which a
+/// class that `eval()` or the runtime autoloader declared does not have: such a source reached
+/// "foreach over iterable with unsupported kind". The source variable is asked the way every other
+/// compiled `instanceof` and method call asks, through the bridge:
+/// `new IteratorIterator($x instanceof \\IteratorAggregate ? $x->getIterator() : $x)`. A source
+/// that is already an `Iterator` (or any non-aggregate) is passed through unchanged.
+///
+/// Only a plain variable source is rewritten, because the expression is evaluated more than once.
+fn unwrap_eval_aggregate_iterator_source(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Vec<Expr>> {
+    let first = args.first()?;
+    let ExprKind::Variable(name) = &first.kind else {
+        return None;
+    };
+    if matches!(args.get(1).map(|arg| &arg.kind), Some(ExprKind::NamedArg { .. })) {
+        return None;
+    }
+    // A source whose static class already is an Iterator needs no unwrapping.
+    if let PhpType::Object(class) = ctx.local_type(name) {
+        if class_implements_interface_for_ir(ctx, &class, "Iterator") {
+            return None;
+        }
+    }
+    let span = first.span;
+    // `is_a()` and `call_user_func()` rather than `instanceof` and a method call: narrowing the
+    // variable by `instanceof` re-types its loads in the arm, and the typed call that follows
+    // released a reference the load never took -- an eval-owned argument was freed under its
+    // caller. The function forms keep the variable boxed and go through the bridge-aware paths.
+    let condition = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("is_a"),
+            args: vec![
+                first.clone(),
+                Expr::new(ExprKind::StringLiteral("IteratorAggregate".to_string()), span),
+            ],
+        },
+        span,
+    );
+    let callable = Expr::new(
+        ExprKind::ArrayLiteral(vec![
+            first.clone(),
+            Expr::new(ExprKind::StringLiteral("getIterator".to_string()), span),
+        ]),
+        span,
+    );
+    let unwrapped = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("call_user_func"),
+            args: vec![callable],
+        },
+        span,
+    );
+    let source = Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(condition),
+            then_expr: Box::new(unwrapped),
+            else_expr: Box::new(first.clone()),
+        },
+        span,
+    );
+    let mut rewritten = args.to_vec();
+    rewritten[0] = source;
+    Some(rewritten)
+}
+
 /// Emits fixed-class object construction and releases owned constructor argument temporaries.
 ///
 /// A newly allocated object cannot alias a constructor argument. The constructor has already
@@ -127,15 +308,7 @@ pub(super) fn emit_fixed_object_new(
     php_type: PhpType,
     span: Span,
 ) -> LoweredValue {
-    let data = ctx.intern_class_name(class_name);
-    let object = ctx.emit_value(
-        Op::ObjectNew,
-        operands.clone(),
-        Some(Immediate::Data(data)),
-        php_type,
-        Op::ObjectNew.default_effects(),
-        Some(span),
-    );
+    let object = emit_object_new_value(ctx, class_name, operands.clone(), php_type, span);
     release_owned_call_arg_temporaries(
         ctx,
         &operands,
@@ -146,6 +319,92 @@ pub(super) fn emit_fixed_object_new(
     object
 }
 
+/// Emits the `ObjectNew` itself, leaving the operands' ownership to the caller.
+fn emit_object_new_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    operands: Vec<ValueId>,
+    php_type: PhpType,
+    span: Span,
+) -> LoweredValue {
+    // A fixed class name can still require runtime construction when this function is
+    // reachable from an eval barrier: codegen may need the eval-native fallback for
+    // declarations materialized by a runtime include. Reserve the context before
+    // emitting `ObjectNew`, so that fallback never reaches codegen without its slot.
+    if ctx.has_eval_barrier() {
+        ctx.declare_eval_context_local();
+    }
+    // A closed-world build has no interpreter to fall back to for a name the compiler did not see.
+    if !crate::closed_world::is_enabled()
+        && (is_reflection_owner_class_name(class_name)
+            || reflection_object_new_requires_eval_context(ctx, class_name, &operands))
+    {
+        ctx.declare_eval_context_local();
+    }
+    let data = ctx.intern_class_name(class_name);
+    ctx.emit_value(
+        Op::ObjectNew,
+        operands,
+        Some(Immediate::Data(data)),
+        php_type,
+        Op::ObjectNew.default_effects(),
+        Some(span),
+    )
+}
+
+/// Returns whether a construction targets a Reflection owner whose metadata may
+/// be supplied by a runtime include even when its constructor operands are literals.
+fn is_reflection_owner_class_name(class_name: &str) -> bool {
+    matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "reflectionclass"
+            | "reflectionobject"
+            | "reflectionfunction"
+            | "reflectionmethod"
+            | "reflectionproperty"
+            | "reflectionparameter"
+            | "reflectionclassconstant"
+            | "reflectionenum"
+            | "reflectionenumunitcase"
+            | "reflectionenumbackedcase"
+    )
+}
+
+/// Returns whether a fixed Reflection construction needs runtime metadata and its persistent
+/// eval context rather than compile-time literal metadata.
+fn reflection_object_new_requires_eval_context(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    operands: &[ValueId],
+) -> bool {
+    if !matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "reflectionclass"
+            | "reflectionobject"
+            | "reflectionfunction"
+            | "reflectionmethod"
+            | "reflectionproperty"
+            | "reflectionparameter"
+            | "reflectionclassconstant"
+            | "reflectionenum"
+            | "reflectionenumunitcase"
+            | "reflectionenumbackedcase"
+    ) {
+        return false;
+    }
+    operands.iter().any(|operand| {
+        let ty = ctx.builder.value_php_type(*operand).codegen_repr();
+        matches!(
+            ty,
+            PhpType::Callable | PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+        ) || (ty == PhpType::Str
+            && !matches!(
+                ctx.builder.value_defining_op(*operand),
+                Some(Op::ConstStr | Op::ConstClassName)
+            ))
+    })
+}
+
 /// Lowers `ReflectionClass(object)` while preserving object operands for runtime class metadata.
 pub(super) fn lower_reflection_class_constructor_operands(
     ctx: &mut LoweringContext<'_, '_>,
@@ -154,11 +413,15 @@ pub(super) fn lower_reflection_class_constructor_operands(
     let reflected_arg = reflection_class_constructor_class_arg(ctx, args)?;
     let class_name = instance_callable_object_class(ctx, &reflected_arg)?;
     let lowered = lower_expr(ctx, &reflected_arg);
-    if matches!(
-        ctx.builder.value_php_type(lowered.value).codegen_repr(),
-        PhpType::Object(_)
-    ) {
-        return Some(vec![lowered.value]);
+    match ctx.builder.value_php_type(lowered.value).codegen_repr() {
+        PhpType::Object(_) => return Some(vec![lowered.value]),
+        // A gradual value only CLAIMS the class: a by-reference `?\ReflectionClass &$class`
+        // keeps its declared type while holding the string the body stored into it, and folding
+        // that claim into a constant reflected `ReflectionClass` itself. Symfony's
+        // `LazyServiceDumper::getProxyClass()` is that shape, and every lazy ghost was dumped as
+        // `new \ReflectionClass('ReflectionClass')`. The runtime constructor reads the value.
+        PhpType::Mixed | PhpType::Union(_) => return Some(vec![lowered.value]),
+        _ => {}
     }
     if ctx.value_is_owning_temporary(lowered) {
         crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(reflected_arg.span));
@@ -191,6 +454,9 @@ pub(super) fn lower_reflection_method_constructor_operands(
 pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let object = lower_expr(ctx, inner);
     let object_ty = ctx.builder.value_php_type(object.value);
+    if matches!(object_ty, PhpType::Callable) {
+        return lower_closure_clone(ctx, inner, object, expr);
+    }
     let result_ty = match object_ty.codegen_repr() {
         PhpType::Object(class_name) => PhpType::Object(class_name),
         PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
@@ -213,6 +479,33 @@ pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr:
     );
     stage_call_result(ctx, result_staging.as_ref(), cloned, expr.span);
     if let Some(owner) = object_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
+    }
+    take_prepublished_call_result(ctx, result_staging, cloned, expr.span)
+}
+
+/// Lowers `clone $closure` to a null-receiver rebind: a fresh descriptor copy that keeps
+/// `$this`, scope and every capture, with its own references to them (as php's cloned Closure).
+fn lower_closure_clone(
+    ctx: &mut LoweringContext<'_, '_>,
+    inner: &Expr,
+    closure: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let result_staging = prepublish_call_result(ctx, &PhpType::Callable, expr.span);
+    let (closure, closure_owner) = root_owned_call_operand(ctx, closure, inner.span);
+    // A raw zero, not a tagged null: `__rt_closure_bind` tests its receiver word against 0.
+    let no_receiver = lower_int_literal(ctx, 0, expr);
+    let cloned = emit_closure_bind_with_scope(
+        ctx,
+        closure.value,
+        no_receiver.value,
+        None,
+        None,
+        expr,
+    );
+    stage_call_result(ctx, result_staging.as_ref(), cloned, expr.span);
+    if let Some(owner) = closure_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
     }
     take_prepublished_call_result(ctx, result_staging, cloned, expr.span)
@@ -420,8 +713,23 @@ pub(super) fn lower_new_dynamic(
     if owns_name { guard_descriptor_container(ctx, name_value, expr.span); }
     crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name_value, expr.span);
     if owns_name { ctx.unguard_call_argument(name_value.value, expr.span); }
-    if let Some(value) = lower_new_dynamic_planned_dispatch(ctx, name_value, &args, expr) {
-        return value;
+    // The bodies of the builtin `ReflectionClass::newInstance()` family are `new $this->__name(...$args)`
+    // over a runtime array: planning that per class repeats a class-specific argument binder for
+    // every class in the module, in every one of those bodies (about 1M instructions each in a
+    // framework build). The runtime-argument-container form binds the same arguments at run time
+    // through the shared dynamic-new helper instead.
+    let reflection_body_with_runtime_args = !std::env::var_os("ELEPHC_NO_OUTLINED_DYNAMIC_NEW")
+        .is_some()
+        && ctx
+            .current_class
+            .as_deref()
+            .is_some_and(|class| crate::ir_lower::reflection::canonical_builtin_reflection_class_name(class).is_some())
+        && args.len() == 1
+        && is_spread_arg(&args[0]);
+    if !reflection_body_with_runtime_args {
+        if let Some(value) = lower_new_dynamic_planned_dispatch(ctx, name_value, &args, expr) {
+            return value;
+        }
     }
     lower_new_dynamic_generic(ctx, name_value, &args, expr)
 }
@@ -435,17 +743,35 @@ pub(super) fn lower_new_dynamic(
 /// arrive as plain positional arguments. What survives both — a spread whose operand is
 /// only known at runtime, or named arguments the planner could not resolve to a class —
 /// is passed through the runtime argument container rather than dropped on the floor.
+///
+/// This is also the planned-dispatch fallback. It once had a positional-only twin in `expr/mod.rs`
+/// that shadowed it there, so a runtime `...$args` reaching an eval-declared class through that
+/// fallback was bound as ONE array argument -- `ReflectionAttribute::newInstance()` on an
+/// attribute class only the autoloader supplied.
 pub(super) fn lower_new_dynamic_generic(
     ctx: &mut LoweringContext<'_, '_>,
     name_value: LoweredValue,
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if ctx.web && !crate::closed_world::is_enabled() {
+        ctx.declare_eval_context_local();
+    }
     let mut operands = vec![name_value.value];
+    let mut positional_operands: Vec<crate::ir::ValueId> = Vec::new();
     let uses_runtime_arg_container =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
     let arg_container = if uses_runtime_arg_container {
         let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
+        // A variadic parameter that received a named argument is typed `iterable` (its storage
+        // may be a list or a hash), and the invoker normalizes only arrays and boxed values. The
+        // box carries the run-time kind; it is owned here and released with the container below.
+        let arg_container =
+            if ctx.builder.value_php_type(arg_container.value).codegen_repr() == PhpType::Iterable {
+                ctx.box_value_as_mixed(arg_container, PhpType::Mixed, Some(expr.span))
+            } else {
+                arg_container
+            };
         operands.push(arg_container.value);
         let owns_arguments = ctx.value_is_owning_temporary(arg_container);
         if owns_arguments && !ctx.has_call_argument_guard(arg_container.value) {
@@ -453,7 +779,8 @@ pub(super) fn lower_new_dynamic_generic(
         }
         Some((arg_container, owns_arguments))
     } else {
-        operands.extend(lower_args(ctx, args));
+        positional_operands = lower_args(ctx, args);
+        operands.extend(positional_operands.iter().copied());
         None
     };
     let result = ctx.emit_value(
@@ -464,6 +791,17 @@ pub(super) fn lower_new_dynamic_generic(
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),
     );
+    // The constructor copies what it keeps, so an owned temporary argument (an array element read,
+    // `strtoupper($x)`) is still the site's to retire: it leaked one block per call.
+    if !positional_operands.is_empty() {
+        release_owned_call_arg_temporaries(
+            ctx,
+            &positional_operands,
+            Some(result.value),
+            &ReturnArgAlias::Unknown,
+            expr.span,
+        );
+    }
     if let Some((arg_container, true)) = arg_container {
         let guard_result = ctx.value_is_owning_temporary(result);
         if guard_result {

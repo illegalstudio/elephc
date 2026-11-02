@@ -474,7 +474,9 @@ bindWithThrowingArgumentCleanup();
 /// Owned by-value arguments of a by-reference-returning callee are released when it throws.
 ///
 /// The arguments are rooted before the call, so a same-frame catch still retires both owned
-/// containers instead of stranding them in the caller's evaluation temporaries.
+/// containers instead of stranding them in the caller's evaluation temporaries. php records every frame's arguments in the exception's trace (`zend.exception_ignore_args=Off`, also what `php -n` runs with), so an argument stays alive until the caught exception is released.
+/// Both containers therefore die with `$error` when `bindThrowingReferenceCallee()` returns, after
+/// `caught` was printed (verified against php 8.5).
 #[test]
 fn test_core_reference_return_call_releases_value_arguments_when_the_callee_throws() {
     let source = r#"<?php
@@ -505,9 +507,9 @@ bindThrowingReferenceCallee();
 "#;
     let (out, asm) = compile_and_run_with_heap_debug_and_asm(source);
     assert!(out.success, "stdout={:?}\nstderr={}\n{asm}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "p|p|caught", "{}\n{asm}", out.stderr);
+    assert_eq!(out.stdout, "caughtp|p|", "{}\n{asm}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
-    assert_eq!(compile_and_run_tagged(source), "p|p|caught");
+    assert_eq!(compile_and_run_tagged(source), "caughtp|p|");
 }
 
 /// A throwing temporary receiver destructor cannot discard the transferred property cell.

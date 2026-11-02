@@ -105,6 +105,7 @@ fn test_fold_string_concat_and_property_default() {
         StmtKind::ClassDecl {
             generics: None,
             name: "Greeter".to_string(),
+            doc_comment: None,
             extends: None,
             implements: Vec::new(),
             is_abstract: false,

@@ -6,10 +6,8 @@
 //!
 //! Key details:
 //! - Returns `false` once the internal pointer has run past either end of the array.
-//! - The receiver's internal pointer lives in a compiler-allocated cursor slot beside the
-//!   array local, so the argument must be a plain variable. Both that rule and the
-//!   argument-type rule are shared with the other five pointer builtins in
-//!   `crate::builtins::array::internal_pointer`.
+//! - Plain locals retain their cursor between calls; other array expressions use the shared
+//!   internal-pointer lowering contract in `crate::builtins::array::internal_pointer`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;

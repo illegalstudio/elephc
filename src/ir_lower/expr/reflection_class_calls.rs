@@ -17,6 +17,10 @@ pub(super) fn lower_reflection_class_new_instance(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    // A closed-world build has no interpreter whose context a dynamic `new` could need.
+    if ctx.web && !crate::closed_world::is_enabled() {
+        ctx.declare_eval_context_local();
+    }
     let args = reflection_class_new_instance_args(args);
     let constructor_sig =
         reflection_class_new_instance_constructor_signature(ctx, object_expr, &args).cloned();
@@ -66,7 +70,53 @@ pub(super) fn lower_reflection_class_new_instance(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    release_reflected_class_name(ctx, class_name, expr);
     take_prepublished_call_result(ctx, result_staging, object, expr.span)
+}
+
+/// Releases the class name a `newInstance*()` lowering read from the reflector.
+///
+/// The read keeps its own reference so the receiver can be released first; nothing consumes it,
+/// so `$rc->newInstance()` leaked one string per call.
+fn release_reflected_class_name(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: LoweredValue,
+    expr: &Expr,
+) {
+    if ctx.value_is_owning_temporary(class_name) {
+        crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
+    }
+}
+
+/// Returns whether `newInstance()` source arguments can be forwarded to the constructor at
+/// compile time: no run-time spread, and named arguments only against a known constructor.
+///
+/// The other forms -- `newInstance(...$args)`, `newInstanceArgs($args)` with an array only
+/// known at run time -- used to be refused with an "unsupported" fatal. They are ordinary calls
+/// now: the method body spreads its arguments into `new $name(...)`.
+pub(super) fn reflection_class_new_instance_forwards_statically(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    args: &[Expr],
+) -> bool {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return false;
+    }
+    !crate::types::call_args::has_named_args(&args)
+        || reflection_class_new_instance_constructor_signature(ctx, object_expr, &args).is_some()
+}
+
+/// Returns whether `newInstanceArgs()` carries an argument array known at compile time that
+/// `reflection_class_new_instance_forwards_statically` accepts.
+pub(super) fn reflection_class_new_instance_args_forward_statically(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
+    args: &[Expr],
+) -> bool {
+    reflection_class_new_instance_args_array(ctx, args).is_some_and(|forwarded| {
+        reflection_class_new_instance_forwards_statically(ctx, object_expr, &forwarded)
+    })
 }
 
 /// Lowers `ReflectionClass::newInstanceArgs()` by unpacking one static argument array.
@@ -94,14 +144,16 @@ pub(super) fn lower_reflection_class_new_instance_without_constructor(
         return lower_reflection_class_new_instance_without_constructor_unsupported(ctx, expr);
     }
     let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
-    ctx.emit_value(
+    let instance = ctx.emit_value(
         Op::DynamicObjectNewWithoutConstructorMixed,
         vec![class_name.value],
         None,
         PhpType::Mixed,
         Op::DynamicObjectNewWithoutConstructorMixed.default_effects(),
         Some(expr.span),
-    )
+    );
+    release_reflected_class_name(ctx, class_name, expr);
+    instance
 }
 
 /// Lowers live static-property value access for statically-known `ReflectionClass` calls.
@@ -242,6 +294,10 @@ pub(super) fn lower_reflection_function_invoke_call(
     let method_key = php_symbol_key(method);
     let object_expr = object_expr?;
     let function_name = reflection_function_reflected_target(ctx, object_expr)?;
+    if method_key == "getclosure" {
+        let target = CallableTarget::Function(Name::from(function_name));
+        return Some(lower_first_class_callable(ctx, &target, expr));
+    }
     let Some(forwarded_args) = (match method_key.as_str() {
         "invoke" => Some(reflection_function_invoke_args(args)),
         "invokeargs" => reflection_function_invoke_args_array(ctx, args),

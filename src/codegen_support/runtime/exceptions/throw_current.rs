@@ -62,6 +62,39 @@ fn emit_instr_throw_hook(emitter: &mut Emitter) {
     emitter.label(skip);
 }
 
+/// Ends a `set_error_handler()` dispatch that this throw is leaving.
+///
+/// `__rt_diag_warning` sets `_rt_diag_dispatching` around its call into the PHP dispatch
+/// function and clears it when that call returns. A handler that throws — Symfony's cache
+/// adapters install `static fn (...) => throw new \ErrorException(...)` around every `include`
+/// of a cache file — never returns there, so the flag stayed set and every later diagnostic of
+/// the process bypassed the handler and was written to the output.
+///
+/// `handler_reg` holds the handler record this throw is about to longjmp to. The dispatch is
+/// over exactly when that is the record that was on top when the dispatch began: a `try` inside
+/// the user handler pushes a newer record, and catching there keeps the dispatch running.
+fn emit_end_escaped_diag_dispatch(emitter: &mut Emitter, handler_reg: &str) {
+    let done = "__rt_throw_current_diag_done";
+    if emitter.target.arch == Arch::X86_64 {
+        abi::emit_load_symbol_to_reg(emitter, "rax", "_rt_diag_dispatching", 0);
+        emitter.instruction("test rax, rax");                                   // is a diagnostic being handed to a PHP error handler?
+        emitter.instruction(&format!("jz {done}"));                             // ordinary throw: no dispatch to end
+        abi::emit_load_symbol_to_reg(emitter, "rax", "_rt_diag_dispatch_handler", 0);
+        emitter.instruction(&format!("cmp rax, {handler_reg}"));                // does this throw land in the handler the dispatch started under?
+        emitter.instruction(&format!("jne {done}"));                            // caught inside the error handler: the dispatch goes on
+        abi::emit_store_zero_to_symbol(emitter, "_rt_diag_dispatching", 0);
+    } else {
+        // x9 is the address scratch of every AArch64 symbol load, so compare in x10/x11.
+        abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_dispatching", 0);
+        emitter.instruction(&format!("cbz x10, {done}"));                       // ordinary throw: no dispatch to end
+        abi::emit_load_symbol_to_reg(emitter, "x11", "_rt_diag_dispatch_handler", 0);
+        emitter.instruction(&format!("cmp x11, {handler_reg}"));                // does this throw land in the handler the dispatch started under?
+        emitter.instruction(&format!("b.ne {done}"));                           // caught inside the error handler: the dispatch goes on
+        abi::emit_store_reg_to_symbol(emitter, "xzr", "_rt_diag_dispatching", 0);
+    }
+    emitter.label(done);
+}
+
 /// Emits the runtime helper that throws the exception in the current slot.
 ///
 /// x86_64 takes its own path: the two architectures differ in which register
@@ -93,6 +126,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.label("__rt_throw_current_no_debuginfo");
     emitter.instruction("cbz x19, __rt_throw_current_uncaught");                // fall back to a fatal uncaught-exception path when no handler exists
     emitter.instruction("bl __rt_pcntl_abort_dispatch");                        // restore PCNTL mask/guard state before a handler exception longjmps
+    emit_end_escaped_diag_dispatch(emitter, "x19");
     emitter.instruction("ldr x0, [x19, #8]");                                   // x0 = activation record that should survive this catch
     emitter.instruction("bl __rt_exception_cleanup_frames");                    // run cleanup callbacks for every unwound activation frame
     abi::emit_store_reg_to_symbol(emitter, "xzr", "_concat_off", 0);
@@ -134,6 +168,7 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r12, r12");                                       // is there an active exception handler to receive this throw?
     emitter.instruction("jz __rt_throw_current_uncaught");                      // fall back to a fatal uncaught-exception path when no handler exists
     emitter.instruction("call __rt_pcntl_abort_dispatch");                      // restore PCNTL mask/guard state before a handler exception longjmps
+    emit_end_escaped_diag_dispatch(emitter, "r12");
     emitter.instruction("mov rdi, QWORD PTR [r12 + 8]");                        // rdi = activation record that should survive this catch
     emitter.instruction("call __rt_exception_cleanup_frames");                  // run cleanup callbacks for every unwound activation frame
     abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);

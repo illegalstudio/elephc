@@ -320,6 +320,12 @@ pub(in crate::interpreter) fn eval_dispatch_php_error(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let handled = dispatch_user_error_handler(message, level, context, values)?;
+    if !handled {
+        // php's internal handler records before it consults the reporting mask, so a
+        // diagnostic `@` or `error_reporting(0)` silences is still the last error.
+        let (file, _, line, _) = context.call_site();
+        values.record_last_error(level, message, &file, line)?;
+    }
     let reporting_mask = match values.runtime_error_reporting(None) {
         Ok(mask) => mask,
         Err(EvalStatus::UnsupportedConstruct) => context.error_reporting_mask(),
@@ -474,13 +480,15 @@ fn core_constant_array(
         }
         return Ok(result.finish());
     }
+    // A name the catalog restricts to other platforms (`PHP_WINDOWS_VERSION_*` off Windows) is
+    // not defined here, so it is not listed either; asking for its value would be refused.
     let supported = constants()
         .iter()
         .filter(|constant| {
             matches!(
                 eval_constant_support(constant),
                 BackendSupport::Implemented(_)
-            )
+            ) && eval_constant_defined_on_host(constant)
         })
         .collect::<Vec<_>>();
     let mut result = EvalArrayBuilder::assoc(values, supported.len())?;
@@ -522,7 +530,7 @@ fn eval_get_defined_vars(
     if !args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let entries = scope.map(ElephcEvalScope::visible_entries).unwrap_or_default();
+    let entries = scope.map(defined_variable_entries).unwrap_or_default();
     assoc_from_entries(&entries, values)
 }
 
@@ -535,8 +543,21 @@ pub(in crate::interpreter) fn eval_get_defined_vars_from_scope(
     if !args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let entries = scope.visible_entries();
+    let entries = defined_variable_entries(scope);
     assoc_from_entries(&entries, values)
+}
+
+/// Returns a scope's variables the way php's `get_defined_vars()` lists them.
+///
+/// `$this` is not a variable in php's view and is never listed, though the interpreter keeps it
+/// in the scope of a method body: a Blade-style `get_defined_vars()` inside an eval'd method
+/// reported a `this` entry php never shows.
+fn defined_variable_entries(scope: &ElephcEvalScope) -> Vec<(String, RuntimeCellHandle)> {
+    scope
+        .visible_entries()
+        .into_iter()
+        .filter(|(name, _)| name != "this")
+        .collect()
 }
 
 /// Returns the Core extension's supported function list or false for unknown extensions.

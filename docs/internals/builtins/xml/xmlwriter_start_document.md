@@ -2,7 +2,7 @@
 title: "xmlwriter_start_document() - internals"
 description: "Compiler internals for xmlwriter_start_document(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1126
+  order: 1186
 ---
 
 ## `xmlwriter_start_document()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1264](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1264) (`xmlwriter_start_document`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:1274](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1274) (`xmlwriter_start_document`)
 - **Function symbol**: `xmlwriter_start_document()`
 
 

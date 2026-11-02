@@ -12,27 +12,6 @@
 
 use super::*;
 
-/// Regular (non-Zend) extension list returned by `get_loaded_extensions(false)`.
-///
-/// Most entries mirror AOT's `CORE_LOADED_EXTENSIONS`. BCMath deliberately differs: Magician
-/// always implements every `bc*` function, so eval always lists `bcmath`; AOT lists it only when
-/// `elephc_bcmath` is linked through static detection or `--with-bcmath`. Other bridge-linked AOT
-/// extensions remain absent because eval has no AOT link manifest — except `xml` / `xmlwriter`,
-/// which the host's registration of the xml prelude reveals (`XML_BRIDGE_EXTENSIONS`).
-const CORE_LOADED_EXTENSIONS: &[&str] = &[
-    "Core",
-    "standard",
-    "SPL",
-    "bcmath",
-    "json",
-    "pcre",
-    "date",
-    "ctype",
-    "mbstring",
-    "Reflection",
-    "Zend OPcache",
-];
-
 /// Zend extension list returned by `get_loaded_extensions(true)`.
 ///
 /// KEEP IN SYNC with `src/codegen/lower_inst/builtins.rs` (`ZEND_LOADED_EXTENSIONS`).
@@ -89,13 +68,17 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
     let set = if zend_extensions {
         ZEND_LOADED_EXTENSIONS
     } else {
-        CORE_LOADED_EXTENSIONS
+        // ONE set with `extension_loaded()`: see `extension_loaded::eval_loaded_extension_names`.
+        super::extension_loaded::eval_loaded_extension_names()
     };
     let with_curl = !zend_extensions && cfg!(feature = "curl");
     let with_xml = !zend_extensions && eval_xml_bridge_linked(context);
     let with_gmp = !zend_extensions && eval_gmp_bridge_linked(context);
+    let with_session =
+        !zend_extensions && super::extension_loaded::eval_session_bridge_linked(context);
     let extra_capacity = usize::from(with_curl)
         + usize::from(with_gmp)
+        + usize::from(with_session)
         + if with_xml { XML_BRIDGE_EXTENSIONS.len() } else { 0 };
     let mut names = values.string_array_new(set.len().max(1) + extra_capacity)?;
     for name in set {
@@ -115,5 +98,11 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
             names = values.string_array_push(names, name)?;
         }
     }
+    if with_session {
+        names = values.string_array_push(names, "session")?;
+    }
+    // Kept in php's registration order (`Core` first) by construction: the shared set is sorted,
+    // and `curl`/`xml`/`xmlwriter` are the only appended names. php would place `curl` earlier;
+    // positions past the shared set are not something a program can rely on across builds.
     Ok(names)
 }

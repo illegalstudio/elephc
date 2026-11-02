@@ -56,6 +56,9 @@ pub(in crate::interpreter) fn eval_unary_expr(
                 values.bool_value(!truthy)
             }
             EvalUnaryOp::BitNot => values.bit_not_dispatch(args[0]),
+            // `@expr` is evaluated by `eval_expr` itself, which raises the diagnostic-suppression
+            // level around the operand; it never reaches the generic unary path.
+            EvalUnaryOp::ErrorSuppress => Err(EvalStatus::RuntimeFatal),
         }
     })
 }

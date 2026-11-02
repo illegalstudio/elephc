@@ -67,15 +67,148 @@ pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         IrType::I64 => lower_cast_to_int(ctx, inst),
         IrType::F64 => lower_cast_to_float(ctx, inst),
         IrType::Str => lower_cast_to_string(ctx, inst),
-        IrType::Heap(IrHeapKind::Hash) => {
-            super::builtins::types::lower_object_array_cast(ctx, inst)
-        }
+        IrType::Heap(IrHeapKind::Array) => lower_cast_to_array(ctx, inst),
+        IrType::Heap(IrHeapKind::Hash) => lower_hash_cast(ctx, inst),
+        IrType::Heap(IrHeapKind::Object) => lower_cast_to_object(ctx, inst),
         IrType::Heap(IrHeapKind::Mixed) if inst.result_php_type.codegen_repr() == PhpType::Mixed => {
             lower_mixed_array_cast(ctx, inst)
         }
         target => Err(CodegenIrError::unsupported(format!(
             "cast to EIR type {:?}",
             target
+        ))),
+    }
+}
+
+/// Routes a hash-producing cast to the projection its EIR producer asked for.
+///
+/// Two unrelated lowerings emit `Cast` with a `Heap(Hash)` target and an object operand, and
+/// they are NOT the same projection. `(array) $obj` mangles private and protected property
+/// names (`\0Class\0prop`, `\0*\0prop`); an in-scope `foreach ($this as $k => $v)` exposes the
+/// very same properties with BARE names. `ir_lower` keeps them apart through the declared
+/// result key type: the explicit cast declares `AssocArray { key: Str, .. }`
+/// (`expr::cast_php_type`), the `foreach` conversion `AssocArray { key: Mixed, .. }`
+/// (`stmt::typed_foreach`).
+fn lower_hash_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if matches!(
+        &inst.result_php_type,
+        PhpType::AssocArray { key, .. } if key.codegen_repr() == PhpType::Mixed
+    ) {
+        return lower_object_to_foreach_array(ctx, inst);
+    }
+    super::builtins::types::lower_object_array_cast(ctx, inst)
+}
+
+/// Converts a concrete object to a property hash with bare names for in-scope `foreach`.
+fn lower_object_to_foreach_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let PhpType::Object(_) = ctx.value_php_type(value)?.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "object foreach conversion for PHP type {:?}",
+            ctx.value_php_type(value)?.codegen_repr()
+        )));
+    };
+    super::builtins::types::lower_object_foreach_projection(ctx, inst)
+}
+
+/// Lowers an associative-array cast to a fresh hash-backed stdClass instance.
+fn lower_cast_to_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let source_type = ctx.value_php_type(value)?.codegen_repr();
+    match source_type {
+        PhpType::AssocArray { .. } => {
+            let first_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+            ctx.load_value_to_reg(value, first_arg)?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
+        }
+        PhpType::Array(_) => lower_array_storage_to_owned_hash(ctx, value)?,
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "object cast for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let first_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if first_arg != result_reg {
+        abi::emit_reg_move(ctx.emitter, first_arg, result_reg);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+    if first_arg != result_reg {
+        abi::emit_reg_move(ctx.emitter, first_arg, result_reg);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_from_hash");
+    store_if_result(ctx, inst)
+}
+
+/// Produces an owned hash from storage that may already be a runtime-promoted hash.
+fn lower_array_storage_to_owned_hash(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let hash = ctx.next_label("object_cast_array_hash");
+            let done = ctx.next_label("object_cast_array_done");
+            ctx.load_value_to_reg(value, "x0")?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // distinguish a dynamically promoted hash from indexed storage
+            ctx.emitter.instruction(&format!("b.eq {}", hash));                 // clone an existing hash so the stdClass remains isolated
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");           // convert indexed storage into a fresh owned hash
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&hash);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");      // duplicate promoted associative storage for object value semantics
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            let hash = ctx.next_label("object_cast_array_hash");
+            let done = ctx.next_label("object_cast_array_done");
+            ctx.load_value_to_reg(value, "rax")?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                              // distinguish a dynamically promoted hash from indexed storage
+            ctx.emitter.instruction(&format!("je {}", hash));                   // clone an existing hash so the stdClass remains isolated
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");           // convert indexed storage into a fresh owned hash
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&hash);
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");      // duplicate promoted associative storage for object value semantics
+            ctx.emitter.label(&done);
+        }
+    }
+    Ok(())
+}
+
+/// Lowers PHP's `(array)` cast from a boxed runtime value to owned Mixed-element storage.
+fn lower_cast_to_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_from_mixed");
+            store_if_result(ctx, inst)
+        }
+        PhpType::Array(ref element) if element.codegen_repr() == PhpType::Mixed => {
+            ctx.load_value_to_result(value)?;
+            store_if_result(ctx, inst)
+        }
+        PhpType::Array(_) => super::arrays::lower_array_to_mixed(ctx, inst),
+        PhpType::Object(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_object_to_array");
+            store_if_result(ctx, inst)
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "array cast for PHP type {:?}",
+            other
         ))),
     }
 }
@@ -91,6 +224,11 @@ fn lower_mixed_array_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 /// Lowers an explicit cast to PHP int for concrete scalar operands.
 fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    if ctx.value_ir_type(value)? == IrType::TaggedScalar {
+        ctx.load_value_to_result(value)?;
+        crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+        return store_if_result(ctx, inst);
+    }
     let raw_ty = ctx.raw_value_php_type(value)?;
     if matches!(raw_ty, PhpType::Resource(_)) {
         ctx.load_value_to_result(value)?;
@@ -144,6 +282,10 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             predicates::emit_array_truthiness(ctx, value)?;
         }
+        PhpType::Object(class_name) => {
+            emit_object_to_int_warning(ctx, &class_name);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "int cast for PHP type {:?}",
@@ -154,9 +296,25 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     store_if_result(ctx, inst)
 }
 
+/// Emits PHP's warning for an object-to-integer cast; PHP still produces integer `1` afterward.
+fn emit_object_to_int_warning(ctx: &mut FunctionContext<'_>, class_name: &str) {
+    let message = format!(
+        "Warning: Object of class {} could not be converted to int\n",
+        class_name.trim_start_matches('\\')
+    );
+    let (label, len) = ctx.data.add_string(message.as_bytes());
+    crate::codegen::emit_write_literal_stderr(ctx.emitter, &label, len);
+}
+
 /// Lowers an explicit cast to PHP float for concrete scalar operands.
 fn lower_cast_to_float(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    if ctx.value_ir_type(value)? == IrType::TaggedScalar {
+        ctx.load_value_to_result(value)?;
+        crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+        abi::emit_int_result_to_float_result(ctx.emitter);
+        return store_if_result(ctx, inst);
+    }
     let raw_ty = ctx.raw_value_php_type(value)?;
     if matches!(raw_ty, PhpType::Resource(_)) {
         ctx.load_value_to_result(value)?;
@@ -248,6 +406,17 @@ pub(super) fn lower_cast_to_string(
             lower_array_like_to_string(ctx, inst)
         }
         PhpType::Object(class_name) => lower_object_to_string(ctx, inst, &class_name),
+        // A statically known closure (`$f instanceof \Closure`, a closure literal) has no
+        // `__toString()`: PHP throws a catchable `Error` where the cast runs. The nested-write
+        // lowering reaches this cast for the string-offset arm of `$a[$k][$j] = $closure`, an arm
+        // only a string container takes at run time, so it has to lower rather than refuse.
+        PhpType::Callable => {
+            super::exceptions::emit_error(
+                ctx,
+                "Object of class Closure could not be converted to string",
+            );
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "string cast for PHP type {:?}",
             other
@@ -369,13 +538,21 @@ pub(in crate::codegen) fn emit_mixed_string_dispatch_from_result(
         let return_ty = emit_mixed_tostring_candidate_call(ctx, value, receiver_reg, candidate)?;
         coerce_tostring_return_to_string_result(ctx, &return_ty)?;
         if matches!(mode, MixedStringContextMode::Stdout) {
-            abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+            // A `string`-declared `__toString()` hands back an owned result nothing else releases.
+            if return_ty.codegen_repr() == PhpType::Str {
+                super::output_values::emit_owned_string_result_to_stdout(ctx)?;
+            } else {
+                abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+            }
         }
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
     ctx.emitter.label(&no_match_label);
-    emit_mixed_missing_tostring_error(ctx, receiver_reg);
+    super::output_values::emit_dynamic_object_to_string(ctx, receiver_reg);
+    if matches!(mode, MixedStringContextMode::Stdout) {
+        super::output_values::emit_owned_string_result_to_stdout(ctx)?;
+    }
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -457,7 +634,53 @@ fn emit_mixed_tostring_candidate_call(
     emit_resolved_method_call(ctx, &candidate.target)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    retire_tostring_call_temporaries(ctx, &call_args, &candidate.target.return_ty);
     Ok(candidate.target.return_ty.clone())
+}
+
+/// Retires the argument temporaries a `__toString()` candidate call staged, keeping its result.
+///
+/// Once `debug_backtrace()` arms the hidden `func_get_args()` collector, the call passes a fresh
+/// empty array for it and links a cleanup record to it. The ladder never unlinked the record nor
+/// released its stack, so `exc_call_frame_top` kept pointing at stack the next call reused, and a
+/// later unwind ran the overwritten record: Laravel's `ResponseHeaderBag::all()` crashed on its
+/// `(string) $cookie`. The result sits in the result registers, which the releases clobber, so it
+/// is pushed first and every record offset moves by that push.
+fn retire_tostring_call_temporaries(
+    ctx: &mut FunctionContext<'_>,
+    call_args: &super::CallArgMaterialization,
+    return_ty: &PhpType,
+) {
+    if call_args.cleanup_slots.is_empty() && call_args.cleanup_guard_bytes == 0 {
+        return;
+    }
+    let repr = return_ty.codegen_repr();
+    let pushed = if matches!(repr, PhpType::Void | PhpType::Never) { 0 } else { 16 };
+    abi::emit_push_result_value(ctx.emitter, &repr);
+    for cleanup in call_args.cleanup_slots.iter().rev() {
+        abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, cleanup.offset + 16 + pushed);
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            cleanup.offset + pushed,
+        );
+        super::call_cleanup::emit_call_arg_cleanup_release(ctx, &cleanup.ty);
+    }
+    match repr {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        }
+        PhpType::Float => abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter)),
+        PhpType::TaggedScalar => {
+            let tag_reg = crate::codegen_support::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, abi::int_result_reg(ctx.emitter), tag_reg);
+        }
+        PhpType::Void | PhpType::Never => {}
+        _ => abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.cleanup_guard_bytes);
 }
 
 /// Normalizes a `__toString()` return into a string result pair.
@@ -477,60 +700,6 @@ fn coerce_tostring_return_to_string_result(
     }
 }
 
-/// Throws PHP's catchable object-to-string `Error`, including the runtime class name.
-fn emit_mixed_missing_tostring_error(ctx: &mut FunctionContext<'_>, receiver_reg: &str) {
-    let (message_ptr, message_len) = abi::string_result_regs(ctx.emitter);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr x9, [{}]", receiver_reg));    // load the receiver class id
-            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
-            ctx.emitter.instruction("add x10, x10, x9, lsl #4");                // address the receiver class-name row
-            ctx.emitter.instruction(&format!("ldr {}, [x10]", message_ptr));    // borrow the receiver class-name pointer
-            ctx.emitter.instruction(&format!("ldr {}, [x10, #8]", message_len)); // borrow the receiver class-name length
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov r9, QWORD PTR [{}]", receiver_reg)); // load the receiver class id
-            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
-            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to its metadata row
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9]", message_ptr)); // borrow the receiver class-name pointer
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", message_len)); // borrow the receiver class-name length
-        }
-    }
-    emit_string_result_concat_prefix(ctx, "Object of class ");
-    emit_string_result_concat_suffix(ctx, " could not be converted to string");
-    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-    super::exceptions::emit_error_from_string_result(ctx);
-}
-
-/// Prepends a static fragment to the active string result.
-fn emit_string_result_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
-    let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
-    let (right_ptr, right_len) = concat_right_operand_regs(ctx);
-    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
-    ctx.emitter.instruction(&format!("mov {}, {}", right_ptr, text_ptr));       // move the runtime class name into concat's right operand
-    ctx.emitter.instruction(&format!("mov {}, {}", right_len, text_len));       // preserve the runtime class-name length
-    abi::emit_symbol_address(ctx.emitter, text_ptr, &prefix_label);
-    abi::emit_load_int_immediate(ctx.emitter, text_len, prefix_len as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
-}
-
-/// Appends a static fragment to the active string result.
-fn emit_string_result_concat_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
-    let (right_ptr, right_len) = concat_right_operand_regs(ctx);
-    let (suffix_label, suffix_len) = ctx.data.add_string(suffix.as_bytes());
-    abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix_label);
-    abi::emit_load_int_immediate(ctx.emitter, right_len, suffix_len as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
-}
-
-/// Returns the register pair used by the right operand of `__rt_concat`.
-fn concat_right_operand_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ("x3", "x4"),
-        Arch::X86_64 => ("rdi", "rsi"),
-    }
-}
-
 /// Lowers an object string cast through `__toString()` or PHP's conversion fatal.
 fn lower_object_to_string(
     ctx: &mut FunctionContext<'_>,
@@ -538,11 +707,42 @@ fn lower_object_to_string(
     class_name: &str,
 ) -> Result<()> {
     let normalized = class_name.trim_start_matches('\\');
+    if interface_has_tostring(ctx, normalized) {
+        // The receiver may be an object the INTERPRETER built, whose class id is `stdClass` and
+        // therefore matches no interface table. The runtime resolver reaches its real
+        // `__toString()`; the scan's defensive zero would hand back a null string pointer.
+        let value = expect_operand(inst, 0)?;
+        return super::method_intrinsics::lower_interface_method_call_with_miss(
+            ctx,
+            inst,
+            normalized,
+            "__toString",
+            super::iterators::InterfaceDispatchMiss::DynamicToString(value),
+        );
+    }
     if object_class_has_tostring(ctx, normalized) {
         return lower_runtime_object_method_call(ctx, inst, normalized, "__toString");
     }
-    emit_missing_tostring_fatal(ctx, normalized);
-    Ok(())
+    // Everything left is a class whose `__toString` cannot be bound HERE, and neither remaining
+    // case is a compile-time refusal:
+    //   - `normalized` is empty, which is how the DECLARED type `object` is spelled. A value
+    //     typed `object` has a concrete class at run time and PHP calls its `__toString`; the
+    //     static fatal below used to fire for all of them, printing an empty class name.
+    //   - the class is named but publishes no `__toString`. A SUBCLASS of it may still publish
+    //     one, and even when none does PHP throws a CATCHABLE `Error` rather than dying.
+    // The runtime resolver settles both from the object itself.
+    let value = expect_operand(inst, 0)?;
+    super::output_values::emit_value_dynamic_object_to_string(ctx, value)?;
+    store_if_result(ctx, inst)
+}
+
+/// Returns true when interface metadata exposes a string-returning `__toString()` contract.
+fn interface_has_tostring(ctx: &FunctionContext<'_>, interface_name: &str) -> bool {
+    ctx.module
+        .interface_infos
+        .get(interface_name)
+        .and_then(|interface| interface.methods.get("__tostring"))
+        .is_some_and(|signature| signature.return_type.codegen_repr() == PhpType::Str)
 }
 
 /// Returns true when class metadata exposes a `__toString()` method.
@@ -551,33 +751,6 @@ fn object_class_has_tostring(ctx: &FunctionContext<'_>, class_name: &str) -> boo
         .class_infos
         .get(class_name)
         .is_some_and(|class_info| class_info.methods.contains_key("__tostring"))
-}
-
-/// Emits PHP's fatal diagnostic for object-to-string casts without `__toString()`.
-fn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) {
-    let message = format!(
-        "Fatal error: Object of class {} could not be converted to string\n",
-        class_name
-    );
-    let (label, len) = ctx.data.add_string(message.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the object string-cast fatal to stderr
-            ctx.emitter.adrp("x1", &label);
-            ctx.emitter.add_lo12("x1", "x1", &label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, 1);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the object string-cast fatal to Linux stderr
-            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            ctx.emitter.instruction(&format!("mov edx, {}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the object string-cast fatal before exiting
-            abi::emit_exit(ctx.emitter, 1);
-        }
-    }
 }
 
 /// Lowers array-like PHP values to the literal string used by PHP casts.

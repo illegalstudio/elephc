@@ -36,6 +36,7 @@ pub unsafe extern "C" fn __elephc_eval_class_constant_fetch(
     constant_len: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_class_constant_fetch");
     std::panic::catch_unwind(|| unsafe {
         eval_class_constant_fetch_inner(ctx, class_ptr, class_len, constant_ptr, constant_len, out)
     })
@@ -57,6 +58,7 @@ pub unsafe extern "C" fn __elephc_eval_static_property_get(
     property_len: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_static_property_get");
     std::panic::catch_unwind(|| unsafe {
         eval_static_property_get_inner(ctx, class_ptr, class_len, property_ptr, property_len, out)
     })
@@ -77,6 +79,7 @@ pub unsafe extern "C" fn __elephc_eval_native_frame_static_property_get(
     property_len: u64,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_native_frame_static_property_get");
     std::panic::catch_unwind(|| unsafe {
         eval_native_frame_static_property_get_inner(
             frame_class_ptr,
@@ -103,6 +106,7 @@ pub unsafe extern "C" fn __elephc_eval_static_property_set(
     value: *mut RuntimeCell,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_static_property_set");
     std::panic::catch_unwind(|| unsafe {
         eval_static_property_set_inner(ctx, target_ptr, target_len, value, out)
     })
@@ -124,6 +128,7 @@ pub unsafe extern "C" fn __elephc_eval_native_frame_static_property_set(
     value: *mut RuntimeCell,
     out: *mut ElephcEvalResult,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_native_frame_static_property_set");
     std::panic::catch_unwind(|| unsafe {
         eval_native_frame_static_property_set_inner(
             frame_class_ptr,

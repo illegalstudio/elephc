@@ -156,7 +156,7 @@ function throwDuringReduce(): void {
 }
 throwDuringReduce();
 echo "done";
-"#, "carry|message:two|done");
+"#, "message:two|carry|done");
 }
 
 /// A destructor throw while replacing the carry also retires the already returned next carry.

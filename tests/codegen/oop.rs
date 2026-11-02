@@ -61,8 +61,16 @@ mod abstract_properties;
 mod property_hooks;
 #[path = "oop/datetime.rs"]
 mod datetime;
+#[path = "oop/dom.rs"]
+mod dom;
 #[path = "oop/reflection_properties.rs"]
 mod reflection_properties;
+#[path = "oop/reflection_member_order.rs"]
+mod reflection_member_order;
+#[path = "oop/get_class_methods.rs"]
+mod get_class_methods;
+#[path = "oop/reflection_declaring_class.rs"]
+mod reflection_declaring_class;
 #[path = "oop/reflection_functions.rs"]
 mod reflection_functions;
 #[path = "oop/reflection_materialized_slots.rs"]
@@ -71,6 +79,8 @@ mod reflection_materialized_slots;
 mod reflection_methods;
 #[path = "oop/reflection_construction.rs"]
 mod reflection_construction;
+#[path = "oop/reflection_regressions.rs"]
+mod reflection_regressions;
 #[path = "oop/class_relation_names.rs"]
 mod class_relation_names;
 

@@ -62,7 +62,7 @@ pub(super) fn result_tail_micro(
     result_ts: Expr,
     result_micro: Option<Expr>,
     mutable: bool,
-    class_name: &str,
+    _class_name: &str,
 ) -> Vec<Stmt> {
     let micro = result_micro.unwrap_or_else(|| this_property("microsecond"));
     if mutable {
@@ -74,15 +74,11 @@ pub(super) fn result_tail_micro(
     } else {
         let new_var = || Expr::new(ExprKind::Variable("__new".to_string()), dummy());
         vec![
+            // php clones the receiver: a subclass (CarbonImmutable) keeps its class and its own
+            // properties, and its `__clone` runs.
             Stmt::assign(
                 "__new",
-                Expr::new(
-                    ExprKind::NewObject {
-                        class_name: Name::unqualified(class_name),
-                        args: Vec::new(),
-                    },
-                    dummy(),
-                ),
+                Expr::new(ExprKind::Clone(Box::new(Expr::new(ExprKind::This, dummy()))), dummy()),
             ),
             Stmt::new(
                 StmtKind::PropertyAssign {

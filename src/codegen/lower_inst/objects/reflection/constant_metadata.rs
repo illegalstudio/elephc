@@ -22,14 +22,24 @@ pub(super) fn reflection_class_constant_metadata(
     };
     let reflected_class =
         const_string_or_class_operand(ctx, class_operand, "ReflectionClassConstant")?;
+    reflection_class_constant_metadata_for_name(ctx, &reflected_class, constant_operand)
+}
+
+/// Resolves ReflectionClassConstant metadata for a runtime-selected declaring class.
+pub(super) fn reflection_class_constant_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+    constant_operand: ValueId,
+) -> Result<ReflectionOwnerMetadata> {
     let constant_name =
         const_required_string_operand(ctx, constant_operand, "ReflectionClassConstant")?;
     if let Some((enum_name, case)) =
-        resolve_reflection_enum_case(ctx, &reflected_class, &constant_name)
+        resolve_reflection_enum_case(ctx, reflected_class, &constant_name)
     {
         return Ok(ReflectionOwnerMetadata {
             rendered_to_string: None,
             reflected_name: Some(constant_name.clone()),
+            doc_comment: None,
             attr_names: case.attribute_names.clone(),
             attr_args: case.attribute_args.clone(),
             interface_names: Vec::new(),
@@ -85,7 +95,7 @@ pub(super) fn reflection_class_constant_metadata(
         });
     }
     Ok(
-        reflection_class_constant_lookup(ctx, &reflected_class, &constant_name)?
+        reflection_class_constant_lookup(ctx, reflected_class, &constant_name)?
             .map(|metadata| reflection_class_constant_owner_metadata(constant_name, metadata))
             .unwrap_or_else(empty_reflection_metadata),
     )
@@ -104,12 +114,23 @@ pub(super) fn reflection_enum_case_metadata(
         return Ok(empty_reflection_metadata());
     };
     let reflected_enum = const_string_or_class_operand(ctx, enum_operand, class_name)?;
+    reflection_enum_case_metadata_for_name(ctx, class_name, &reflected_enum, case_operand)
+}
+
+/// Resolves Reflection enum-case metadata for a runtime-selected enum class.
+pub(super) fn reflection_enum_case_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    reflected_enum: &str,
+    case_operand: ValueId,
+) -> Result<ReflectionOwnerMetadata> {
     let case_name = const_required_string_operand(ctx, case_operand, class_name)?;
     Ok(
-        resolve_reflection_enum_case(ctx, &reflected_enum, &case_name)
+        resolve_reflection_enum_case(ctx, reflected_enum, &case_name)
             .map(|(enum_name, case)| ReflectionOwnerMetadata {
                 rendered_to_string: None,
                 reflected_name: Some(case_name.clone()),
+                doc_comment: None,
                 attr_names: case.attribute_names.clone(),
                 attr_args: case.attribute_args.clone(),
                 interface_names: Vec::new(),
@@ -179,6 +200,7 @@ pub(super) fn reflection_class_constant_owner_metadata(
     ReflectionOwnerMetadata {
         rendered_to_string: None,
         reflected_name: Some(reflected_name),
+        doc_comment: None,
         attr_names: metadata.attr_names,
         attr_args: metadata.attr_args,
         interface_names: Vec::new(),
@@ -372,10 +394,10 @@ pub(super) fn resolve_reflection_class<'a>(
     class_name: &str,
 ) -> Option<(&'a str, &'a crate::types::ClassInfo)> {
     let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
+    let actual = ctx.shared.class_name_for_key(ctx.module, &class_key)?;
     ctx.module
         .class_infos
-        .iter()
-        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
+        .get_key_value(&actual)
         .map(|(name, info)| (name.as_str(), info))
 }
 
@@ -392,30 +414,22 @@ pub(super) fn resolve_reflection_interface<'a>(
     interface_name: &str,
 ) -> Option<&'a str> {
     let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
+    let actual = ctx.shared.interface_name_for_key(ctx.module, &interface_key)?;
     ctx.module
         .interface_infos
-        .keys()
-        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == interface_key)
-        .map(String::as_str)
+        .get_key_value(&actual)
+        .map(|(name, _)| name.as_str())
 }
 
 /// Looks up a declared trait by PHP-style case-insensitive name.
 pub(super) fn resolve_reflection_trait<'a>(ctx: &'a FunctionContext<'_>, trait_name: &str) -> Option<&'a str> {
     let trait_key = php_symbol_key(trait_name.trim_start_matches('\\'));
-    ctx.module
-        .trait_table
-        .names
-        .iter()
-        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == trait_key)
-        .map(String::as_str)
+    let position = ctx.shared.trait_position_for_key(ctx.module, &trait_key)?;
+    ctx.module.trait_table.names.get(position).map(String::as_str)
 }
 
 /// Looks up enum metadata by PHP-style case-insensitive name.
 pub(super) fn is_reflection_enum(ctx: &FunctionContext<'_>, enum_name: &str) -> bool {
     let enum_key = php_symbol_key(enum_name.trim_start_matches('\\'));
-    ctx.module
-        .enum_infos
-        .keys()
-        .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == enum_key)
+    ctx.shared.enum_name_for_key(ctx.module, &enum_key).is_some()
 }
-

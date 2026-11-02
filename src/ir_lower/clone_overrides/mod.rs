@@ -65,6 +65,14 @@ fn applicator_function_name(class_id: u64, index: usize) -> String {
     crate::names::internal_generated_function_name("clone_apply", &[class_id, index as u64])
 }
 
+/// Returns the reserved EIR function name of the shared override driver.
+///
+/// The driver is the ONE function that iterates a runtime override array; every `clone($o, [...])`
+/// site and the callable wrapper call it instead of carrying the class ladder themselves.
+pub(crate) fn driver_function_name() -> String {
+    crate::names::internal_generated_function_name("clone_apply_driver", &[])
+}
+
 /// Generates every `clone()` override applicator the lowered module can reach.
 ///
 /// Planning is a separate pass from lowering because an applicator arm can CALL a scoped setter
@@ -139,7 +147,8 @@ pub(crate) fn lower_clone_override_applicators(
                         body::THIS_PARAM.to_string(),
                         PhpType::Object(class_name.clone()),
                     ),
-                    (body::OVERRIDES_PARAM.to_string(), PhpType::Mixed),
+                    (body::NAME_LOCAL.to_string(), PhpType::Str),
+                    (body::VALUE_LOCAL.to_string(), PhpType::Mixed),
                 ],
                 group.scope.as_deref(),
                 &statements,
@@ -163,6 +172,24 @@ pub(crate) fn lower_clone_override_applicators(
     module
         .clone_override_applicators
         .sort_by(|left, right| left.function_name.cmp(&right.function_name));
+    if !module.clone_override_applicators.is_empty() {
+        let driver = body::build_driver();
+        crate::ir_lower::function::lower_clone_override_function(
+            &driver_function_name(),
+            &[
+                (body::DRIVER_OBJECT_PARAM.to_string(), PhpType::Mixed),
+                (body::OVERRIDES_PARAM.to_string(), PhpType::Mixed),
+                (body::DRIVER_SCOPE_PARAM.to_string(), PhpType::Int),
+            ],
+            None,
+            &driver,
+            module,
+            check_result,
+            &functions,
+            constants,
+            fiber_return_sigs,
+        );
+    }
     Ok(())
 }
 
@@ -473,15 +500,132 @@ fn collect_sites(module: &Module) -> Option<CloneOverrideSites> {
     }
     // A callable reference reaches the backend's builtin wrapper, which carries both the override
     // operand and the hidden invocation scope, and no lowered instruction names it here.
-    if module
-        .data
-        .strings
-        .iter()
-        .any(|value| value.eq_ignore_ascii_case("clone"))
-    {
+    if clone_name_may_reach_a_callable(module) {
         found = true;
         sites.any_runtime_class = true;
         sites.runtime_scope = true;
     }
     found.then_some(sites)
 }
+
+/// Whether the name `clone` is used as a VALUE somewhere, which is how it reaches the builtin
+/// callable wrapper (`array_map('clone', …)`, `call_user_func('clone', …)`).
+///
+/// The data pool also holds member names. Symfony's `DeepCloner::clone()` interned `clone` as a
+/// METHOD name, and treating that as a callable generated an applicator for every class in the
+/// program -- 357 bodies, about 15% of the compiled console's instructions -- for a program that
+/// never calls `clone()` with overrides. Only an instruction that materializes the string itself
+/// can hand it to a callable, and only when the string goes somewhere other than a comparison:
+/// the tokenizer prelude's keyword table compares a token against `"clone"`, and that alone
+/// generated 583 applicators, 12% of a small Symfony probe's instructions.
+fn clone_name_may_reach_a_callable(module: &Module) -> bool {
+    let Some(clone_ids) = clone_name_data_ids(module) else {
+        return false;
+    };
+    crate::ir_lower::program::all_lowered_functions(module).any(|function| {
+        function.instructions.iter().any(|inst| {
+            // Only `const_str` reads the STRING pool; other ops' data ids index other pools (an
+            // `ObjectNew` names a class-name entry), so the same number means nothing here.
+            inst.op == Op::ConstStr
+                && matches!(inst.immediate, Some(Immediate::Data(id)) if clone_ids.contains(&id))
+                && inst
+                    .result
+                    .is_none_or(|value| value_escapes_comparisons(module, function, value))
+        })
+    })
+}
+
+/// Whether `value` is used by anything other than a comparison.
+fn value_escapes_comparisons(
+    module: &Module,
+    function: &crate::ir::Function,
+    value: crate::ir::ValueId,
+) -> bool {
+    function.instructions.iter().any(|user| {
+        user.operands.contains(&value)
+            && !names_a_member(module, user)
+            && !matches!(
+                user.op,
+                Op::StrEq
+                    | Op::StrCmp
+                    | Op::StrLooseEq
+                    | Op::StrictEq
+                    | Op::StrictNotEq
+                    | Op::LooseEq
+                    | Op::LooseNotEq
+                    | Op::PhpRelCmp
+                    | Op::Spaceship
+            )
+    }) || function_terminators_use(function, value)
+}
+
+/// Whether `user` is `method_exists()` / `property_exists()`, whose string argument is a member
+/// name: Symfony's `ResolveDecoratorStackPass` asks whether its `DeepCloner` has `clone()`, and
+/// that alone planned an applicator for every class of the demo, 36 M instructions.
+///
+/// The magic-call helpers take a METHOD name too: a call on a receiver whose class is not
+/// compiled lowers to `__elephc_magic_call($r, 'clone', [...])`, which the same pass hit in the
+/// demo once `method_exists()` stopped counting.
+fn names_a_member(module: &Module, user: &crate::ir::Instruction) -> bool {
+    match (&user.op, &user.immediate) {
+        (
+            _,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                RuntimeFnId::MethodExists | RuntimeFnId::PropertyExists,
+            ))),
+        ) => true,
+        (Op::Call, Some(Immediate::Data(id))) => module
+            .data
+            .function_names
+            .get(id.as_raw() as usize)
+            .is_some_and(|name| {
+                name == crate::magic_call_prelude::MAGIC_CALL_HELPER_NAME
+                    || name == crate::magic_call_prelude::MAGIC_CALLABLE_HELPER_NAME
+            }),
+        _ => false,
+    }
+}
+
+/// Whether a block terminator (a branch argument, a return) uses `value`.
+fn function_terminators_use(function: &crate::ir::Function, value: crate::ir::ValueId) -> bool {
+    use crate::ir::Terminator;
+    function.blocks.iter().any(|block| match &block.terminator {
+        None => false,
+        Some(Terminator::Br { args, .. }) => args.contains(&value),
+        Some(Terminator::CondBr {
+            then_args,
+            else_args,
+            ..
+        }) => then_args.contains(&value) || else_args.contains(&value),
+        Some(Terminator::Switch {
+            cases,
+            default_args,
+            ..
+        }) => {
+            default_args.contains(&value) || cases.iter().any(|case| case.args.contains(&value))
+        }
+        Some(Terminator::Return { value: returned }) => *returned == Some(value),
+        Some(Terminator::Throw { value: thrown }) => *thrown == value,
+        Some(Terminator::Fatal { .. }) | Some(Terminator::Unreachable) => false,
+        Some(Terminator::GeneratorSuspend {
+            key,
+            value: yielded,
+            resume_args,
+            ..
+        }) => *key == Some(value) || *yielded == Some(value) || resume_args.contains(&value),
+    })
+}
+
+/// Data-pool ids of every spelling of `clone`.
+fn clone_name_data_ids(module: &Module) -> Option<Vec<crate::ir::DataId>> {
+    let ids = module
+        .data
+        .strings
+        .iter()
+        .enumerate()
+        .filter(|(_, value)| value.eq_ignore_ascii_case("clone"))
+        .map(|(index, _)| crate::ir::DataId::from_raw(index as u32))
+        .collect::<Vec<_>>();
+    (!ids.is_empty()).then_some(ids)
+}
+

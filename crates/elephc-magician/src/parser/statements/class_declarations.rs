@@ -12,13 +12,22 @@ use super::*;
 impl Parser {
     /// Parses `[abstract|final|readonly] class Name [extends Parent] [implements Iface, ...] { ... }`.
     pub(in crate::parser) fn parse_class_decl_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
-        self.parse_class_decl_stmt_with_attributes(Vec::new())
+        self.parse_class_decl_stmt_with_attributes_and_doc_comment(Vec::new(), None)
     }
 
-    /// Parses a class declaration and attaches already parsed class attributes.
-    pub(in crate::parser) fn parse_class_decl_stmt_with_attributes(
+    /// Parses a class declaration preceded by a retained PHP doc comment.
+    pub(in crate::parser) fn parse_class_decl_stmt_with_doc_comment(
+        &mut self,
+        doc_comment: Option<String>,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.parse_class_decl_stmt_with_attributes_and_doc_comment(Vec::new(), doc_comment)
+    }
+
+    /// Parses a class declaration and attaches already parsed attributes and doc-comment metadata.
+    pub(super) fn parse_class_decl_stmt_with_attributes_and_doc_comment(
         &mut self,
         attributes: Vec<EvalAttribute>,
+        doc_comment: Option<String>,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let template_start = self.pos;
         let type_scope = self.type_parameters.len();
@@ -38,7 +47,7 @@ impl Parser {
         let body = self.parse_class_body_members(is_readonly_class)?;
         let source_location = EvalSourceLocation::new(source_start_line, body.source_end_line);
         self.consume_semicolon();
-        let declaration = EvalStmt::ClassDecl(
+        let declaration = EvalStmt::class_decl(
             EvalClass::with_class_modifiers_traits_adaptations_and_constants(
                 name.clone(),
                 is_abstract,
@@ -53,7 +62,8 @@ impl Parser {
                 body.methods,
             )
             .with_source_location(source_location)
-            .with_attributes(attributes),
+            .with_attributes(attributes)
+            .with_doc_comment_option(doc_comment),
         );
         self.type_parameters.truncate(type_scope);
         self.type_parameter_origins.truncate(type_scope);
@@ -121,12 +131,24 @@ impl Parser {
         is_readonly_class: bool,
     ) -> Result<ParsedClassBody, EvalParseError> {
         self.expect(TokenKind::LBrace)?;
+        self.in_class_scope(|parser| parser.parse_class_body_member_list(is_readonly_class))
+    }
+
+    /// Parses one class body's member list up to its closing brace.
+    fn parse_class_body_member_list(
+        &mut self,
+        is_readonly_class: bool,
+    ) -> Result<ParsedClassBody, EvalParseError> {
         let mut constants = Vec::new();
         let mut properties = Vec::new();
         let mut methods = Vec::new();
         let mut traits = Vec::new();
         let mut trait_adaptations = Vec::new();
         loop {
+            if matches!(self.current(), TokenKind::DocComment(_)) {
+                self.advance();
+                continue;
+            }
             if matches!(self.current(), TokenKind::RBrace) {
                 let source_end_line = self.current_line();
                 self.advance();
@@ -362,6 +384,14 @@ impl Parser {
         attributes: &[EvalAttribute],
     ) -> Result<Vec<EvalClassConstant>, EvalParseError> {
         self.advance();
+        // PHP 8.3 typed class constants: `const array MAP = [...]`, `const ?string X = null`.
+        // A type is present exactly when the constant's name does not follow `const` directly,
+        // i.e. when the token after the current one is not `=`. The declared type constrains
+        // only the compile-time value, which php has already accepted, so it is parsed and
+        // dropped. Doctrine's `ConnectionFactory::DEFAULT_SCHEME_MAP` is declared this way.
+        if !matches!(self.peek(), TokenKind::Equal) {
+            self.parse_type_decl(EvalTypePosition::Property)?;
+        }
         let mut constants = Vec::new();
         loop {
             let TokenKind::Ident(name) = self.current() else {
@@ -617,14 +647,19 @@ impl Parser {
     }
 
     /// Consumes a PHP asymmetric visibility `(set)` marker after a visibility keyword.
+    ///
+    /// A parenthesis after a visibility keyword is not always that marker: `protected (A&B)|null $p`
+    /// opens a disjunctive normal form type. Only `(set)` is the marker, so the parenthesis is left
+    /// for the type parser whenever the word inside it is anything else.
     pub(super) fn consume_set_marker(&mut self) -> Result<bool, EvalParseError> {
-        if !self.consume(TokenKind::LParen) {
+        if !matches!(self.current(), TokenKind::LParen) {
             return Ok(false);
         }
-        match self.current() {
-            TokenKind::Ident(name) if ident_eq(name, "set") => self.advance(),
-            _ => return Err(EvalParseError::UnsupportedConstruct),
+        if !matches!(self.peek(), TokenKind::Ident(name) if ident_eq(name, "set")) {
+            return Ok(false);
         }
+        self.advance();
+        self.advance();
         self.expect(TokenKind::RParen)?;
         Ok(true)
     }

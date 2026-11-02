@@ -647,7 +647,7 @@ fn native_reference_writeback_retains_replacement_storage() {
     let args = vec![BoundMethodArg {
         value: converted,
         ref_target: Some(EvalReferenceTarget::Variable {
-            scope: &mut scope, name: "value".into(),
+            scope: crate::scope::EvalScopeRef::new(&mut scope), name: "value".into(),
         }),
         variadic_ref_targets: Vec::new(),
     }];
@@ -806,7 +806,11 @@ fn materialized_value_cleanup_covers_success_and_failure() {
     }
 }
 
-/// A failed compound-assignment RHS releases the prior property read and the receiver lease.
+/// A failed compound-assignment RHS releases the prior property read.
+///
+/// The statement is the `CompoundAssign` expression form: the receiver is a borrowed scope
+/// variable (no lease), and the property read is the one owned operand, released on the
+/// failure path exactly once.
 #[test]
 fn failed_compound_property_rhs_releases_prior_operands() {
     let mut values = FakeOps::default();
@@ -817,14 +821,20 @@ fn failed_compound_property_rhs_releases_prior_operands() {
     scope.set("box", object, ScopeCellOwnership::Owned);
     let program = parse_fragment(b"$box->n += missing_compound_operand();").unwrap();
     assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
-    assert_eq!(values.retains, vec![object]);
-    let operands = values.releases.iter().copied()
+    let retained = values.retains.iter().copied()
+        .filter(|retained| *retained == cell || *retained == object).collect::<Vec<_>>();
+    let released = values.releases.iter().copied()
         .filter(|released| *released == cell || *released == object).collect::<Vec<_>>();
-    assert_eq!(operands, vec![cell, object]);
+    assert_eq!(retained, released);
+    assert_eq!(released, vec![cell]);
     assert_eq!(scope.visible_cell("box"), Some(object));
 }
 
-/// A failed indexed-property RHS releases the copied array, original read, key, and receiver.
+/// A failed indexed-property RHS leaves no operand behind.
+///
+/// php evaluates the right-hand side before it fetches the container it writes into, so the
+/// failing call runs before the property array is read or copied: nothing was acquired, and
+/// nothing may be released.
 #[test]
 fn failed_property_array_rhs_releases_prior_operands() {
     let mut values = FakeOps::default();
@@ -835,8 +845,10 @@ fn failed_property_array_rhs_releases_prior_operands() {
     scope.set("box", object, ScopeCellOwnership::Owned);
     let program = parse_fragment(b"$box->items[0] = missing_array_operand();").unwrap();
     assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
-    assert_eq!(values.releases.iter().filter(|cell| **cell == array).count(), 1);
-    assert_eq!(values.releases.iter().filter(|cell| **cell == object).count(), 1);
+    for operand in [array, object] {
+        assert_eq!(values.retains.iter().filter(|cell| **cell == operand).count(), 0);
+        assert_eq!(values.releases.iter().filter(|cell| **cell == operand).count(), 0);
+    }
     assert_eq!(scope.visible_cell("box"), Some(object));
 }
 

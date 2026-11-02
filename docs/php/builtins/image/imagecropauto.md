@@ -2,7 +2,7 @@
 title: "imagecropauto()"
 description: "Crops an image automatically by the chosen mode."
 sidebar:
-  order: 505
+  order: 518
 ---
 
 ## imagecropauto()

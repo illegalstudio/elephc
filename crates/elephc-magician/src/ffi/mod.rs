@@ -11,6 +11,8 @@
 
 #[cfg(not(test))]
 pub mod callables;
+#[cfg(not(test))]
+pub(crate) mod highlight;
 pub(crate) mod array_references;
 #[cfg(not(test))]
 mod mbstring_array_references;
@@ -18,15 +20,38 @@ pub mod context;
 pub mod declared_symbols;
 pub(crate) mod dynamic_destructors;
 #[cfg(not(test))]
+pub(crate) mod class_autoload;
+#[cfg(not(test))]
+pub(crate) mod generator_protocol;
+#[cfg(not(test))]
+pub(crate) mod array_access;
+#[cfg(not(test))]
+pub(crate) mod object_clone_adopt;
+#[cfg(not(test))]
+pub(crate) mod object_relation;
+#[cfg(not(test))]
+pub(crate) mod serialize_objects;
+#[cfg(not(test))]
+pub(crate) mod throwable_trace;
+pub(crate) mod compiled_site;
+#[cfg(not(test))]
+pub(crate) mod unserialize_objects;
 mod dynamic_properties;
 pub(crate) mod ob_handlers;
 pub mod execute;
+pub mod include;
+#[cfg(not(test))]
+pub mod compiled_constants;
+#[cfg(not(test))]
+pub mod extract;
 #[cfg(not(test))]
 pub mod function_calls;
 pub mod native_catalog;
 pub mod native_functions;
 pub mod native_constants;
 pub mod native_methods;
+#[cfg(not(test))]
+pub mod reflection_construction;
 #[cfg(not(test))]
 pub mod object_construction;
 #[cfg(not(test))]
@@ -44,12 +69,19 @@ pub use callables::*;
 pub use context::*;
 pub use declared_symbols::*;
 pub use execute::*;
+pub use include::*;
+#[cfg(not(test))]
+pub use compiled_constants::*;
+#[cfg(not(test))]
+pub use extract::*;
 #[cfg(not(test))]
 pub use function_calls::*;
 pub use native_catalog::*;
 pub use native_functions::*;
 pub use native_constants::*;
 pub use native_methods::*;
+#[cfg(not(test))]
+pub use reflection_construction::*;
 #[cfg(not(test))]
 pub use object_construction::*;
 #[cfg(not(test))]

@@ -258,6 +258,35 @@ fclose($first);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a dynamic include does not leave `flock`'s by-reference boolean
+/// output as an unboxed scalar in a widened local.
+#[test]
+fn test_flock_would_block_output_after_dynamic_include() {
+    let out = compile_cli_files_and_run(
+        &[
+            (
+                "entry.php",
+                r#"<?php
+$include = str_replace('entry.php', 'barrier.php', __FILE__);
+require $include;
+file_put_contents("block.txt", "x");
+$first = fopen("block.txt", "r+");
+$second = fopen("block.txt", "r+");
+flock($first, LOCK_EX);
+$ok = flock($second, LOCK_EX | LOCK_NB, $would);
+echo ($ok ? "locked" : "blocked") . "|" . gettype($would) . ":" . $would;
+flock($first, LOCK_UN);
+fclose($second);
+fclose($first);
+"#,
+            ),
+            ("barrier.php", "<?php\n"),
+        ],
+        "entry.php",
+    );
+    assert_eq!(out, "blocked|integer:1");
+}
+
 /// Verifies `flock` with named arguments (`stream:`, `operation:`, `would_block:`)
 /// works correctly and the `would_block` output is set to `0` on success.
 #[test]
@@ -291,6 +320,29 @@ echo $wrote . "|" . $content;
 "#,
     );
     assert_eq!(out, "7|scratch");
+}
+
+/// Verifies `tmpfile` resolves the template through `TMPDIR`, the way PHP does.
+///
+/// PHP creates the temporary file in the environment's temp directory and fails when `TMPDIR`
+/// points somewhere unusable (it does not fall back to `/tmp`). elephc emulates `php://memory`
+/// with the same helper, so honoring `TMPDIR` is also what keeps that emulation inside a
+/// writable sandbox root.
+#[test]
+fn test_tmpfile_honors_tmpdir_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("TMPDIR=/nonexistent");
+$missing = tmpfile();
+putenv("TMPDIR=" . __DIR__);
+$present = tmpfile();
+fwrite($present, "ok");
+rewind($present);
+echo gettype($missing), "|", fread($present, 2), "\n";
+fclose($present);
+"#,
+    );
+    assert_eq!(out, "boolean|ok\n");
 }
 
 /// Verifies `tmpfile` returns a resource type (not `false`) and `gettype` reports "resource".
@@ -394,5 +446,25 @@ echo "|" . $bytes;
 "#,
     );
     assert_eq!(out, "hi|2");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `flock()` coerces a gradual operation value to the runtime integer flag word.
+#[test]
+fn test_flock_gradual_operation() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+function lock_with(mixed $operation): bool {
+    $stream = fopen("gradual-lock.txt", "w+");
+    $locked = flock($stream, $operation);
+    flock($stream, LOCK_UN);
+    fclose($stream);
+    return $locked;
+}
+echo lock_with(LOCK_EX) ? "locked" : "failed";
+unlink("gradual-lock.txt");
+"#,
+    );
+    assert_eq!(out, "locked");
     let _ = fs::remove_dir_all(&dir);
 }

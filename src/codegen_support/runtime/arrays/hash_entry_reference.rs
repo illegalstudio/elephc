@@ -16,6 +16,9 @@
 //! - `__rt_hash_iter_resync_successor` resumes from the entry AFTER a named key, which is how a
 //!   by-reference walk that already yielded the tail reaches an element appended afterwards.
 
+use crate::codegen_support::callable_invoker_args::{
+    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG,
+};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -61,6 +64,12 @@ pub fn emit_hash_entry_reference(emitter: &mut Emitter) {
 /// already carries tag 11 returns its existing cell untouched, which is what keeps a repeated
 /// by-reference foreach from restamping a live reference entry.
 ///
+/// An entry whose box is an element reference marker (`$x = &$a[$k]` made it a reference before:
+/// `{12|13, cell, 7}`) already belongs to a reference set. Its cell is the same managed reference
+/// cell shape, so the entry adopts that cell as tag 11 rather than wrapping the marker in a second
+/// cell: wrapping it left `$x` bound to the old cell while writes through the new one replaced
+/// the marker, so `$f(...$a)` into a by-reference variadic never reached `$x`.
+///
 /// Input: argument 0 = address of `entry.value_lo` (the by-reference foreach value address).
 /// Output: integer result register = managed reference-cell pointer.
 fn emit_make_reference(emitter: &mut Emitter) {
@@ -91,6 +100,12 @@ fn emit_make_reference(emitter: &mut Emitter) {
             emitter.label("__rt_hash_entry_make_reference_boxed");
             emitter.instruction("ldr x9, [x0]");                                // load the boxed Mixed cell this entry owns
             emitter.instruction("cbz x9, __rt_hash_entry_make_reference_separated"); // an absent payload has nothing to separate
+            emitter.instruction("ldr x10, [x9]");                               // read the boxed value's runtime tag
+            emitter.instruction(&format!("cmp x10, #{ARRAY_LOCAL_REF_CELL_TAG}"));// an element marker sharing a local cell?
+            emitter.instruction("b.eq __rt_hash_entry_make_reference_marker");  // adopt the cell the marker shares
+            emitter.instruction(&format!("cmp x10, #{ARRAY_GLOBAL_REF_CELL_TAG}"));// an element marker sharing a global cell?
+            emitter.instruction("b.eq __rt_hash_entry_make_reference_marker");  // adopt the cell the marker shares
+            emitter.label("__rt_hash_entry_make_reference_plain_box");
             emitter.instruction("ldr w10, [x9, #-12]");                         // read the cell refcount from the uniform heap header
             emitter.instruction("cmp w10, #1");                                 // is this zval shared with another array's bucket?
             emitter.instruction("b.ls __rt_hash_entry_make_reference_separated"); // a sole owner can join the reference set in place
@@ -127,6 +142,27 @@ fn emit_make_reference(emitter: &mut Emitter) {
             emitter.label("__rt_hash_entry_make_reference_existing");
             emitter.instruction("ldr x0, [x0]");                                // return the reference cell the entry already owns
             emitter.instruction("ret");                                         // idempotent promotion keeps the existing reference set intact
+            emitter.label("__rt_hash_entry_make_reference_marker");
+            emitter.instruction("ldr x10, [x9, #16]");                          // the marker's cell payload tag
+            emitter.instruction(&format!("cmp x10, #{REFERENCE_CELL_PAYLOAD_TAG}"));// does the cell hold a boxed Mixed value?
+            emitter.instruction("b.ne __rt_hash_entry_make_reference_plain_box");// a typed cell keeps the ordinary wrapping
+            emitter.instruction("stp x29, x30, [sp, #-32]!");                   // save frame pointer and return address across the adoption
+            emitter.instruction("mov x29, sp");                                 // establish the adoption frame
+            emitter.instruction("str x0, [sp, #16]");                           // save the mutable entry value address
+            emitter.instruction("ldr x0, [x9, #8]");                            // the cell the marker shares
+            emitter.instruction("str x0, [sp, #24]");                           // keep it across the release below
+            emitter.instruction("bl __rt_incref");                              // the entry takes a share of its own
+            emitter.instruction("ldr x9, [sp, #16]");                           // reload the entry value address
+            emitter.instruction("ldr x0, [x9]");                                // the marker box the entry gives up
+            emitter.instruction("bl __rt_decref_mixed");                        // drop the entry's marker and its share
+            emitter.instruction("ldr x9, [sp, #16]");                           // reload the entry value address
+            emitter.instruction("ldr x0, [sp, #24]");                           // reload the shared cell
+            emitter.instruction("str x0, [x9]");                                // publish the cell as the entry payload
+            emitter.instruction("str xzr, [x9, #8]");                           // reference entries carry no high payload word
+            emitter.instruction(&format!("mov x10, #{REFERENCE_CELL_VALUE_TAG}"));// runtime value tag 11 = managed reference cell
+            emitter.instruction("str x10, [x9, #16]");                          // stamp the entry as a member of the existing set
+            emitter.instruction("ldp x29, x30, [sp], #32");                     // restore frame pointer and return address
+            emitter.instruction("ret");                                         // return the shared cell in x0
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp QWORD PTR [rdi + 16], {REFERENCE_CELL_VALUE_TAG}")); // is this entry already part of a PHP reference set?
@@ -152,6 +188,11 @@ fn emit_make_reference(emitter: &mut Emitter) {
             emitter.instruction("mov r10, QWORD PTR [rdi]");                    // load the boxed Mixed cell this entry owns
             emitter.instruction("test r10, r10");                               // an absent payload has nothing to separate
             emitter.instruction("jz __rt_hash_entry_make_reference_separated"); // fall through to the ordinary promotion
+            emitter.instruction(&format!("cmp QWORD PTR [r10], {ARRAY_LOCAL_REF_CELL_TAG}"));// an element marker sharing a local cell?
+            emitter.instruction("je __rt_hash_entry_make_reference_marker");    // adopt the cell the marker shares
+            emitter.instruction(&format!("cmp QWORD PTR [r10], {ARRAY_GLOBAL_REF_CELL_TAG}"));// an element marker sharing a global cell?
+            emitter.instruction("je __rt_hash_entry_make_reference_marker");    // adopt the cell the marker shares
+            emitter.label("__rt_hash_entry_make_reference_plain_box");
             emitter.instruction("mov r11d, DWORD PTR [r10 - 12]");              // read the cell refcount from the uniform heap header
             emitter.instruction("cmp r11d, 1");                                 // is this zval shared with another array's bucket?
             emitter.instruction("jbe __rt_hash_entry_make_reference_separated"); // a sole owner can join the reference set in place
@@ -191,6 +232,27 @@ fn emit_make_reference(emitter: &mut Emitter) {
             emitter.label("__rt_hash_entry_make_reference_existing");
             emitter.instruction("mov rax, QWORD PTR [rdi]");                    // return the reference cell the entry already owns
             emitter.instruction("ret");                                         // idempotent promotion keeps the existing reference set intact
+            emitter.label("__rt_hash_entry_make_reference_marker");
+            emitter.instruction(&format!("cmp QWORD PTR [r10 + 16], {REFERENCE_CELL_PAYLOAD_TAG}"));// does the marker's cell hold a boxed Mixed value?
+            emitter.instruction("jne __rt_hash_entry_make_reference_plain_box");// a typed cell keeps the ordinary wrapping
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer across the adoption
+            emitter.instruction("mov rbp, rsp");                                // establish the adoption frame
+            emitter.instruction("sub rsp, 16");                                 // reserve spill slots for the entry address and the cell
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // save the mutable entry value address
+            emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                // the cell the marker shares
+            emitter.instruction("mov QWORD PTR [rbp - 16], rax");               // keep it across the release below
+            emitter.instruction("call __rt_incref");                            // the entry takes a share of its own
+            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the entry value address
+            emitter.instruction("mov rax, QWORD PTR [r10]");                    // the marker box the entry gives up
+            emitter.instruction("call __rt_decref_mixed");                      // drop the entry's marker and its share
+            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the entry value address
+            emitter.instruction("mov rax, QWORD PTR [rbp - 16]");               // reload the shared cell
+            emitter.instruction("mov QWORD PTR [r10], rax");                    // publish the cell as the entry payload
+            emitter.instruction("mov QWORD PTR [r10 + 8], 0");                  // reference entries carry no high payload word
+            emitter.instruction(&format!("mov QWORD PTR [r10 + 16], {REFERENCE_CELL_VALUE_TAG}"));// stamp the entry as a member of the existing set
+            emitter.instruction("add rsp, 16");                                 // release the adoption spill slots
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
+            emitter.instruction("ret");                                         // return the shared cell in rax
         }
     }
 }

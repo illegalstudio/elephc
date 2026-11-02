@@ -5,6 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
+//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, and the ownership regressions measured as heap slopes in `leak_slopes`.
 //! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, the containers an array literal allocates when it defaults a property, boxed or nested, and read-modify-write stores into a typed static property or a property array element.
 //! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, and the ownership of an array literal whose element is an array-returning builtin call.
 //! - The `assoc_chunk` submodule checks heap balance when `array_chunk()` copies an associative receiver.
@@ -54,6 +55,14 @@ mod array_cast;
 mod nullable_string_return;
 #[path = "runtime_gc/nullable_array_read_owners.rs"]
 mod nullable_array_read_owners;
+#[path = "runtime_gc/nominal_return.rs"]
+mod nominal_return;
+#[path = "runtime_gc/throwable_layout.rs"]
+mod throwable_layout;
+#[path = "runtime_gc/eval_assignment.rs"]
+mod eval_assignment;
+#[path = "runtime_gc/eval_globals.rs"]
+mod eval_globals;
 #[path = "runtime_gc/iconv.rs"]
 mod iconv;
 #[path = "runtime_gc/mbstring.rs"]
@@ -86,6 +95,10 @@ mod getenv;
 mod pcntl;
 #[path = "runtime_gc/putenv.rs"]
 mod putenv;
+#[path = "runtime_gc/bound_closure_trace_object.rs"]
+mod bound_closure_trace_object;
+#[path = "runtime_gc/property_return_ownership.rs"]
+mod property_return_ownership;
 #[path = "runtime_gc/regressions.rs"]
 mod regressions;
 #[path = "runtime_gc/assoc_rebind_release.rs"]
@@ -118,6 +131,8 @@ mod by_ref_variadic_writeback;
 mod variadic_key_writes;
 #[path = "runtime_gc/omitted_by_ref_default_args.rs"]
 mod omitted_by_ref_default_args;
+#[path = "runtime_gc/leak_slopes.rs"]
+mod leak_slopes;
 
 #[path = "runtime_gc/callable_property_owners.rs"]
 mod callable_property_owners;
@@ -191,6 +206,7 @@ mod object_mixed_return_owners;
 mod native_string_arguments;
 mod native_property_unset;
 mod eval_closure_receivers;
+mod eval_array_callbacks;
 mod eval_argument_lifetimes;
 mod eval_array_references;
 mod eval_method_adapter_owners;

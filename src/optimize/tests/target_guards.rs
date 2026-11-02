@@ -51,12 +51,25 @@ fn test_namespace_polyfill_date_alias_is_desugared() {
     let program = fold_source("<?php namespace App;
         if (!function_exists('date_create')) { function date_create(string $datetime) { return false; } }
         echo date_create('2020-01-01');", "linux-x86_64");
+    // `date_create()` answers `false` for a string it cannot parse where `new DateTime` throws,
+    // so the alias rewrite is `DateTime::__elephc_date_create(...)` (name_resolver/expressions.rs).
     assert!(matches!(&program.last().unwrap().kind,
-        StmtKind::Echo(Expr { kind: ExprKind::NewObject { class_name, .. }, .. })
-            if class_name.as_str() == "DateTime"), "{program:#?}");
+        StmtKind::Echo(Expr { kind: ExprKind::StaticMethodCall { receiver: StaticReceiver::Named(class_name), method, .. }, .. })
+            if class_name.as_str() == "DateTime" && method == "__elephc_date_create"), "{program:#?}");
 }
 
 /// Explicit qualification and function imports must not become calls to the global builtin.
+///
+/// The guard folds to `function_exists('str_contains') == true` on this target, so the local
+/// polyfill is pruned and nothing declares `App\str_contains` any more. Only an UNQUALIFIED
+/// call may then fall back to the global builtin: PHP's fallback rule is about unqualified
+/// names, and every form below names the namespaced function explicitly.
+///
+/// The call is left NAMING the function that no longer exists, which this compiler defers to
+/// PHP's own runtime lookup rather than rejecting at compile time — an executed call throws a
+/// catchable `Error` exactly as PHP does (`builtins::late_bound`), and an unexecuted one costs
+/// nothing. So the assertion is on the binding, which is what "must not fall back" means: the
+/// name reaching the checker is still the namespaced one, never `str_contains`.
 #[test]
 fn test_namespace_polyfill_explicit_references_do_not_fall_back() {
     for (imports, call) in [
@@ -72,10 +85,20 @@ fn test_namespace_polyfill_explicit_references_do_not_fall_back() {
             }}
             $result = {call};");
         let program = fold_source(&source, "linux-x86_64");
-        let error = crate::types::check_with_target(&program, Target::parse("linux-x86_64").unwrap())
-            .expect_err("an explicit missing function must not silently call a builtin");
-        assert!(error.message.contains("Undefined function") && error.message.contains("App\\str_contains"),
-            "{call}: {}", error.message);
+        assert!(
+            !program.iter().any(|stmt| matches!(&stmt.kind, StmtKind::FunctionDecl { .. })),
+            "{call}: the available builtin must prune the polyfill: {program:?}"
+        );
+        let StmtKind::Assign { value, .. } = &program.last().unwrap().kind
+            else { panic!("{call}: {program:?}") };
+        let bound = match &value.kind {
+            ExprKind::FunctionCall { name, .. } => name.as_str(),
+            ExprKind::FirstClassCallable(crate::parser::ast::CallableTarget::Function(name)) => {
+                name.as_str()
+            }
+            other => panic!("{call}: unexpected callee shape {other:?}"),
+        };
+        assert_eq!(bound, "App\\str_contains", "{call}");
     }
 }
 

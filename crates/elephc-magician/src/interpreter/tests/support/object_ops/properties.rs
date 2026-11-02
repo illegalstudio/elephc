@@ -18,10 +18,19 @@ impl FakeOps {
         property: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         match self.get(object) {
-            FakeValue::Object(properties) => properties
-                .iter()
-                .find_map(|(name, value)| (name == property).then_some(*value))
-                .map_or_else(|| self.null(), Ok),
+            FakeValue::Object(properties) => {
+                let found = properties
+                    .iter()
+                    .find_map(|(name, value)| (name == property).then_some(*value));
+                match found {
+                    // The real helper BOXES the slot through `__rt_mixed_from_value`, which
+                    // retains an object payload, so a property read hands the caller an OWNED
+                    // cell. Handing back the stored handle unretained made every caller that
+                    // correctly released it look like an over-release.
+                    Some(value) => self.runtime_retain(value),
+                    None => self.null(),
+                }
+            }
             _ => Err(EvalStatus::UnsupportedConstruct),
         }
     }
@@ -46,14 +55,29 @@ impl FakeOps {
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus> {
         let id = object.as_ptr() as usize;
+        if !matches!(self.values.get(&id), Some(FakeValue::Object(_))) {
+            return Err(EvalStatus::UnsupportedConstruct);
+        }
+        // An object's slot OWNS what it holds, which is what the real helper models by boxing the
+        // value through `__rt_mixed_from_value` and giving back the cell it displaces. Storing an
+        // unretained handle made a caller that correctly released its own reference look like the
+        // one at fault, and dropping the previous handle silently hid the release the slot owed.
+        let stored = self.runtime_retain(value)?;
         let Some(FakeValue::Object(properties)) = self.values.get_mut(&id) else {
             return Err(EvalStatus::UnsupportedConstruct);
         };
+        let mut replaced = None;
         if let Some((_, existing_value)) = properties.iter_mut().find(|(name, _)| name == property)
         {
-            *existing_value = value;
+            if *existing_value != stored {
+                replaced = Some(*existing_value);
+            }
+            *existing_value = stored;
         } else {
-            properties.push((property.to_string(), value));
+            properties.push((property.to_string(), stored));
+        }
+        if let Some(replaced) = replaced {
+            self.runtime_release(replaced)?;
         }
         Ok(())
     }
@@ -67,6 +91,14 @@ impl FakeOps {
             FakeValue::Object(properties) => properties.clone(),
             _ => return Err(EvalStatus::UnsupportedConstruct),
         };
+        // The copy's slots OWN what they hold, as `property_set` models it: a shallow clone shares
+        // each value with the source and takes its own reference to it. Without the retain, the
+        // clone's first overwrite gave back the SOURCE's reference (`clone($o, ["p" => ...])`).
+        for (_, value) in &properties {
+            if !value.as_ptr().is_null() {
+                self.runtime_retain(*value)?;
+            }
+        }
         let clone = self.alloc(FakeValue::Object(properties));
         if let Some(class_name) = self.object_classes.get(&id).cloned() {
             self.object_classes

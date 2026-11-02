@@ -305,6 +305,35 @@ pub(crate) fn lower_pclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
+/// Lowers the internal `__elephc_stream_fd(stream)`: the native descriptor behind a stream.
+///
+/// The `proc_open()` prelude hands the descriptor to the process bridge, which duplicates it into
+/// the child. An argument that is not a live stream resource raises PHP's stream `TypeError`.
+pub(crate) fn lower_elephc_stream_fd(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "__elephc_stream_fd", 1)?;
+    let stream = expect_operand(inst, 0)?;
+    load_stream_fd_to_result(ctx, stream, "__elephc_stream_fd")?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the internal `__elephc_fd_to_stream(fd)`: boxes an owned descriptor as a stream resource.
+///
+/// A negative descriptor boxes PHP `false`, exactly as a failed `fopen()` does. The resource owns
+/// the descriptor from here on: `fclose()` and scope exit close it like any other kind-1 stream.
+pub(crate) fn lower_elephc_fd_to_stream(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "__elephc_fd_to_stream", 1)?;
+    let fd = expect_operand(inst, 0)?;
+    resolve_int_operand_to_result(ctx, fd, "__elephc_fd_to_stream fd")?;
+    box_stream_fd_or_false_result(ctx, "fd_to_stream");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `fsockopen(host, port, errno?, errstr?, timeout?)`.
 pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fsockopen", 2, 5)?;
@@ -341,7 +370,7 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fsockopen");
-    store_fsockopen_error_outputs(ctx, inst)?;
+    store_socket_error_outputs(ctx, inst, 2, 3)?;
     box_stream_fd_or_false_result(ctx, "fsockopen");
     store_if_result(ctx, inst)
 }
@@ -353,8 +382,12 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 /// applies `FILE_IGNORE_NEW_LINES` / `FILE_SKIP_EMPTY_LINES` while it produces each line. The
 /// flags are resolved and spilled BEFORE the path, because coercing a non-string path calls a
 /// conversion helper that clobbers the caller-saved register the flags would otherwise sit in.
+///
+/// php's third parameter is `?resource $context = null`; a named-argument call materializes that
+/// default as a third operand. elephc's local-file reader takes no stream context, so it is not
+/// read, as the other context-taking filesystem builtins do.
 pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "file", 1, 2)?;
+    ensure_arg_count_between(inst, "file", 1, 3)?;
     let path = expect_operand(inst, 0)?;
     match inst.operands.get(1).copied() {
         None => {

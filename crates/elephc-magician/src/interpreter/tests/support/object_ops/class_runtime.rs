@@ -72,6 +72,7 @@ impl FakeOps {
     /// Reports one fake AOT class for eval `class_exists` unit tests.
     pub(in crate::interpreter::tests::support) fn runtime_class_exists(&mut self, name: &str) -> Result<bool, EvalStatus> {
         Ok(name.eq_ignore_ascii_case("KnownClass")
+            || name.eq_ignore_ascii_case("KnownRelationGapClass")
             || name.eq_ignore_ascii_case("KnownClonePrivate")
             || name.eq_ignore_ascii_case("KnownCloneProtected")
             || name.eq_ignore_ascii_case("KnownClonePublic")
@@ -86,6 +87,9 @@ impl FakeOps {
             "knownabstract" => Ok(Some(EVAL_REFLECTION_CLASS_FLAG_ABSTRACT)),
             "knownfinal" => Ok(Some(EVAL_REFLECTION_CLASS_FLAG_FINAL)),
             "knownreadonly" => Ok(Some(EVAL_REFLECTION_CLASS_FLAG_READONLY)),
+            // Compiled but not "declared" at run time: `interface_exists` refuses this one, so
+            // the relation reflector may only be built from the compiled metadata.
+            "knowninactiveinterface" => Ok(Some(EVAL_REFLECTION_CLASS_FLAG_INTERFACE)),
             _ => Ok(None),
         }
     }
@@ -95,6 +99,11 @@ impl FakeOps {
         class_name: &str,
         method_name: &str,
     ) -> Result<Option<u64>, EvalStatus> {
+        if class_name.eq_ignore_ascii_case("KnownConstructorOwner")
+            && method_name.eq_ignore_ascii_case("__construct")
+        {
+            return Ok(Some(EVAL_REFLECTION_MEMBER_FLAG_PUBLIC));
+        }
         if method_name.eq_ignore_ascii_case("__clone") {
             return match class_name.to_ascii_lowercase().as_str() {
                 "knowncloneprivate" => Ok(Some(EVAL_REFLECTION_MEMBER_FLAG_PRIVATE)),
@@ -203,6 +212,8 @@ impl FakeOps {
         let mut array = self.runtime_string_array_new(1)?;
         if class_name.eq_ignore_ascii_case("KnownClass") {
             array = self.runtime_string_array_push(array, "KnownInterface")?;
+        } else if class_name.eq_ignore_ascii_case("KnownRelationGapClass") {
+            array = self.runtime_string_array_push(array, "KnownInactiveInterface")?;
         } else if class_name.eq_ignore_ascii_case("KnownInterface") {
             array = self.runtime_string_array_push(array, "Traversable")?;
         }

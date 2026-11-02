@@ -35,6 +35,33 @@ echo Widget::FN;
     assert_eq!(out, "3|7|9|11|5");
 }
 
+/// Verifies that the semi-reserved rule also holds when the `::` receiver is dynamic. The
+/// named-class form (`Widget::new()`, covered above) is parsed by the prefix parser, while
+/// `$cls::do()` goes through the postfix loop — which used to accept only a plain identifier
+/// and rejected every keyword with "Expected method name after '::'". Symfony's generated DI
+/// container dispatches every service factory through exactly that shape
+/// (`$class::do($this, $lazyLoad)` in `Container::load()`), so the two paths must agree.
+/// PHP outputs "do:1|list:2|print:3|for:4".
+#[test]
+fn test_keyword_named_static_members_via_dynamic_class() {
+    let out = compile_and_run(
+        r#"<?php
+class K {
+    public static function do($n) { return "do:$n"; }
+    public static function list($n) { return "list:$n"; }
+    public static function print($n) { return "print:$n"; }
+    public static function for($n) { return "for:$n"; }
+}
+$cls = 'K';
+echo $cls::do(1), "|";
+echo $cls::list(2), "|";
+echo $cls::print(3), "|";
+echo $cls::for(4);
+"#,
+    );
+    assert_eq!(out, "do:1|list:2|print:3|for:4");
+}
+
 /// Verifies that an empty class (no properties or methods) can be instantiated and
 /// emits the expected "ok" output, confirming object allocation works for minimal classes.
 #[test]
@@ -200,6 +227,68 @@ echo $o->n . "|" . $o->s . "|" . $o->f . "|" . ($o->b ? "T" : "F") . "|" . count
     assert_eq!(out, "7|hi|1.5|T|3");
 }
 
+/// Verifies that a by-name allocation gives every object-owned reference property its ref-cell.
+///
+/// A property that has a reference taken to it anywhere in the program (`$r = &$this->second`)
+/// stops holding a value: its slot holds a POINTER to a 16-byte cell the object owns, and every
+/// read and every write dereferences it — including the `$this->second = false` that the
+/// property-default thunk runs. The direct allocator allocates those cells right after zeroing
+/// the layout; `__rt_new_by_name` did not, so the FIRST property default stored through the null
+/// the zero-fill left behind and the process died on SIGSEGV with no PHP-level diagnostic. The
+/// `$direct` half is the matched control: it takes the direct allocator and always worked.
+///
+/// Both defaults are asserted, not just the reference one: the fault was a store through a null
+/// pointer, so a test that only read the reference property back would pass on an object whose
+/// cell was allocated but never given its default.
+#[test]
+fn test_class_dynamic_instantiation_allocates_owned_reference_property_cells() {
+    let out = compile_and_run(
+        r#"<?php
+class RefDefaults {
+    private bool $first = true;
+    private bool $second = false;
+    public function bind(): void { $r = &$this->second; $r = true; }
+    public function show(): string {
+        return ($this->first ? "T" : "F") . ($this->second ? "T" : "F");
+    }
+}
+$direct = new RefDefaults();
+$cls = "RefDefaults";
+$byname = new $cls();
+echo $direct->show() . "|" . $byname->show() . "|";
+$byname->bind();
+echo $byname->show();
+"#,
+    );
+    assert_eq!(out, "TF|TF|TT");
+}
+
+/// Verifies a by-name allocation ZEROES the reference cells it creates, not just allocates them.
+///
+/// A refcounted default goes through `release_previous_referenced_value` first: it loads whatever
+/// the cell currently holds and hands it to `__rt_heap_free_safe`. A cell that exists but carries
+/// the allocator's leftover bytes therefore frees a garbage pointer on the very first store, so
+/// allocating the cell is only half the contract — it must arrive zeroed, exactly as the direct
+/// allocator's `emit_owned_reference_property_cell` leaves it.
+#[test]
+fn test_class_dynamic_instantiation_zeroes_owned_reference_property_cells() {
+    let out = compile_and_run(
+        r#"<?php
+class RefStringDefault {
+    private string $text = "hello";
+    public function bind(): void { $r = &$this->text; $r = "bye"; }
+    public function show(): string { return $this->text; }
+}
+$cls = "RefStringDefault";
+$o = new $cls();
+echo $o->show() . "|";
+$o->bind();
+echo $o->show();
+"#,
+    );
+    assert_eq!(out, "hello|bye");
+}
+
 /// Verifies that dynamic instantiation forwards constructor arguments.
 #[test]
 fn test_class_dynamic_instantiation_runs_constructor_args() {
@@ -215,6 +304,24 @@ echo $o->x;
 "#,
     );
     assert_eq!(out, "7");
+}
+
+/// Verifies planned dynamic construction keeps the class-name value alive while constructor
+/// arguments mutate the associative array from which that class name was read.
+#[test]
+fn test_dynamic_instantiation_keeps_class_name_alive_across_argument_mutation() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeFactory {
+    public function __construct($options) { echo $options['project_dir']; }
+}
+$state = ['runtime' => 'RuntimeFactory', 'options' => []];
+echo 'before|';
+$runtime = new $state['runtime']($state['options'] += ['project_dir' => 'ctor']);
+echo '|after';
+"#,
+    );
+    assert_eq!(out, "before|ctor|after");
 }
 
 /// Verifies a dynamic constructor accepts a sole spread from a declared `array` property in
@@ -493,6 +600,23 @@ echo gettype($o) . ":" . $o->x;
 "#,
     );
     assert_eq!(out, "object:12");
+}
+
+/// Verifies dynamic allocation resolves a global constant used by an instance-property default.
+#[test]
+fn test_dynamic_instantiation_resolves_global_constant_property_default() {
+    let out = compile_and_run(
+        r#"<?php
+const DYNAMIC_DEFAULT_VALUE = 3;
+class DynamicDefaultValue {
+    public int $value = DYNAMIC_DEFAULT_VALUE;
+}
+$class = "DynamicDefaultValue";
+$object = new $class();
+echo $object->value;
+"#,
+    );
+    assert_eq!(out, "3");
 }
 
 /// Verifies `new ClassName();` is valid as a standalone expression statement and preserves
@@ -1330,6 +1454,257 @@ echo "survived";
     assert_eq!(out, "bool(false)\nsurvived");
 }
 
+/// Verifies an uncalled optional adapter may invoke methods on its freshly constructed absent
+/// dependency without the backend mistaking the nominal receiver for a narrowed interface.
+#[test]
+fn test_uncalled_absent_optional_dependency_method_chain_still_links() {
+    let out = compile_and_run(
+        r#"<?php
+function optional_adapter() {
+    $options = new MissingExtensionOptions();
+    $options->credentials('user', 'password');
+}
+echo "linked";
+"#,
+    );
+    assert_eq!(out, "linked");
+}
+
+/// Verifies `parent::class` folds and `static::class` dispatches for member-existence probes.
+#[test]
+fn test_method_exists_accepts_parent_class_constant() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentMemberProbe {
+    public function ping() {}
+    public function __destruct() {}
+}
+class ChildMemberProbe extends ParentMemberProbe {
+    public static function probe(): string {
+        return parent::class
+            .(method_exists(parent::class, 'ping') ? ':ping' : ':no-ping')
+            .(method_exists(parent::class, '__destruct') ? ':destruct' : ':no-destruct');
+    }
+    public static function lateProbe(): bool {
+        return method_exists(static::class, 'probe');
+    }
+}
+class GrandchildMemberProbe extends ChildMemberProbe {}
+echo ChildMemberProbe::probe();
+echo ChildMemberProbe::lateProbe() ? ':late' : ':no-late';
+echo GrandchildMemberProbe::lateProbe() ? ':forwarded' : ':no-forwarded';
+"#,
+    );
+    assert_eq!(out, "ParentMemberProbe:ping:destruct:late:forwarded");
+}
+
+/// Verifies unsetting a reference-backed property detaches it without changing its old alias.
+#[test]
+fn test_unset_reference_property_detaches_alias() {
+    let out = compile_and_run(
+        r#"<?php
+class ReferencePropertyUnsetProbe {
+    public string $value = 'initial';
+
+    public function bind(string &$external): void {
+        $this->value =& $external;
+    }
+
+    public function clear(): void {
+        unset($this->value);
+    }
+}
+
+$external = 'aliased';
+$probe = new ReferencePropertyUnsetProbe();
+$probe->bind($external);
+$probe->clear();
+echo isset($probe->value) ? 'set' : 'unset';
+echo ':'.$external;
+$probe->value = 'replacement';
+echo ':'.$probe->value.':'.$external;
+"#,
+    );
+    assert_eq!(out, "unset:aliased:replacement:aliased");
+}
+
+/// Verifies erased `iterable` properties accept indexed arrays, associative arrays, and
+/// Traversable objects without boxing or changing their runtime payload representation.
+#[test]
+fn test_iterable_properties_accept_concrete_iterable_shapes() {
+    let out = compile_and_run(
+        r#"<?php
+class PropertyIterator implements Iterator {
+    private int $position = 0;
+    public function current(): mixed { return 7; }
+    public function key(): mixed { return 'iterator'; }
+    public function next(): void { $this->position++; }
+    public function rewind(): void { $this->position = 0; }
+    public function valid(): bool { return $this->position < 1; }
+}
+class IterablePropertyHolder {
+    public static iterable $shared = ['initial' => 5];
+
+    public function __construct(private iterable $items = []) {}
+
+    public function replace(iterable $items): void {
+        $this->items = $items;
+    }
+
+    public function dump(): void {
+        foreach ($this->items as $key => $value) {
+            echo $key, '=', $value, ';';
+        }
+    }
+}
+
+$holder = new IterablePropertyHolder([1, 2]);
+$holder->dump();
+$holder->replace(['left' => 3]);
+$holder->dump();
+$holder->replace(new PropertyIterator());
+$holder->dump();
+foreach (IterablePropertyHolder::$shared as $key => $value) {
+    echo $key, '=', $value, ';';
+}
+IterablePropertyHolder::$shared = ['static' => 4];
+foreach (IterablePropertyHolder::$shared as $key => $value) {
+    echo $key, '=', $value, ';';
+}
+"#,
+    );
+    assert_eq!(out, "0=1;1=2;left=3;iterator=7;initial=5;static=4;");
+}
+
+/// Verifies `get_parent_class()` dispatches a non-literal class-name string through AOT metadata.
+#[test]
+fn test_get_parent_class_on_runtime_class_string() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeParent {}
+class RuntimeChild extends RuntimeParent {}
+function runtime_parent(string $class): string {
+    return get_parent_class($class);
+}
+echo runtime_parent("RuntimeChild");
+"#,
+    );
+    assert_eq!(out, "RuntimeParent");
+}
+
+/// Verifies that unsetting fixed declared properties releases their old values, makes typed
+/// properties uninitialized and untyped properties null, and still permits later reassignment.
+#[test]
+fn test_unset_declared_typed_and_untyped_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class PropertyBox {
+    public string $typed = "typed";
+    public $untyped = "untyped";
+
+    public function clear(): void {
+        unset($this->typed, $this->untyped);
+        var_dump(isset($this->typed), isset($this->untyped));
+        $this->typed = "restored";
+        $this->untyped = "again";
+        echo $this->typed, ":", $this->untyped;
+    }
+}
+(new PropertyBox())->clear();
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(false)\nrestored:again");
+}
+
+/// Verifies that a dynamic `new` reads its class name through `$this`, including an array offset
+/// on a property and a property of a property.
+///
+/// THE BUG THIS PINS. PHP's `new_variable` production bottoms out in `simple_variable`, which
+/// covers `$this` as well as `$name`; `new $this->options['matcher_class'](...)` is therefore
+/// ordinary PHP. `$this` lexes as its own token rather than `Token::Variable`, and the dynamic
+/// class-name branch of `parse_new_object` matched only `Token::Variable`, so every `new $this->…`
+/// fell through to the class-name path and raised "Expected class name after 'new'".
+///
+/// This is what kept `Symfony\Component\Routing\Router` out of the compiled program: the file
+/// holds six such constructions, the whole file failed to parse, and the class was dropped
+/// silently rather than failing the build. `Symfony\Bundle\FrameworkBundle\Routing\Router` extends
+/// it, so `ReflectionClass::hasMethod('setConfigCacheFactory')` — an inherited method — answered
+/// false, and the container build died with:
+///
+/// ```text
+/// Invalid service "router.default": method
+/// "Symfony\Bundle\FrameworkBundle\Routing\Router::setConfigCacheFactory()" does not exist.
+/// ```
+///
+/// Reference value captured from `php -n` (PHP 8.5.6).
+#[test]
+fn test_dynamic_new_reads_class_name_through_this() {
+    let out = compile_and_run(
+        r#"<?php
+class Matcher { public function __construct(public string $tag = "") {} }
+class Dumper { public function __construct(public string $tag = "") {} }
+class Inner { public string $cls = "Dumper"; }
+class Router {
+    public array $options = ["matcher_class" => "Matcher", "dumper_class" => "Dumper"];
+    public string $single = "Matcher";
+    public Inner $inner;
+    public function __construct() { $this->inner = new Inner(); }
+    public function fromOption(string $key, string $tag): object { return new $this->options[$key]($tag); }
+    public function fromProperty(string $tag): object { return new $this->single($tag); }
+    public function fromNestedProperty(string $tag): object { return new $this->inner->cls($tag); }
+}
+$r = new Router();
+$a = $r->fromOption("matcher_class", "m");
+$b = $r->fromOption("dumper_class", "d");
+$c = $r->fromProperty("p");
+$e = $r->fromNestedProperty("n");
+echo get_class($a), ":", $a->tag, "|";
+echo get_class($b), ":", $b->tag, "|";
+echo get_class($c), ":", $c->tag, "|";
+echo get_class($e), ":", $e->tag;
+"#,
+    );
+    assert_eq!(out, "Matcher:m|Dumper:d|Matcher:p|Dumper:n");
+}
+
+/// Verifies `new` accepts a static property as its class name: `new static::$builder(...)`,
+/// `new self::$map['key'](...)` and `new Named::$map['key'](...)`.
+///
+/// PHP's `new_variable` production includes `class_name '::' simple_variable`, so the class a
+/// `new` instantiates may be the value of a static property, dereferenced further like any other
+/// `new_variable`. Laravel's `Application::configure()` is
+/// `new static::$applicationBuilder(new static($basePath))`; the parser read `new static`, met
+/// `::`, and refused the whole of `Illuminate\Foundation\Application` with "Parentheses are
+/// required before accessing a parenthesis-free new expression", which left the framework's core
+/// class to the interpreter. `static::` must follow late static binding, as `SubApp` shows.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_new_reads_class_name_from_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Builder { public function __construct(public object $app) {} public function name() { return static::class . '(' . get_class($this->app) . ')'; } }
+class OtherBuilder extends Builder {}
+class App {
+    protected static string $builder = Builder::class;
+    public static array $map = ['x' => OtherBuilder::class];
+    public static function configure() { return (new static::$builder(new static()))->name(); }
+    public static function viaSelf() { return (new self::$map['x'](new self()))->name(); }
+}
+class SubApp extends App { protected static string $builder = OtherBuilder::class; }
+echo App::configure(), "|";
+echo SubApp::configure(), "|";
+echo App::viaSelf(), "|";
+echo get_class(new App::$map['x'](new SubApp())), "|";
+$n = new App::$map['x'](new App());
+echo $n->name();
+"#,
+    );
+    assert_eq!(
+        out,
+        "Builder(App)|OtherBuilder(SubApp)|OtherBuilder(App)|OtherBuilder|OtherBuilder(App)"
+    );
+}
 
 /// Verifies a single declaration may introduce SEVERAL properties or class constants, separated
 /// by commas (issue #684).
@@ -1477,4 +1852,25 @@ echo $c->chained(), "\n";
             "4\n",
         )
     );
+}
+
+/// Verifies `new` with arguments on a class that declares no constructor anywhere in its chain:
+/// php evaluates the arguments for their effects and discards them, and the object is built
+/// normally. Symfony's generated container writes `new ReflectionTypeResolver($factory)` for such
+/// a class; elephc refused it in the checker and then in the backend. The heap stays clean.
+#[test]
+fn test_new_on_a_constructorless_class_evaluates_and_discards_its_arguments() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class NoCtor { public int $n = 3; }
+class NoCtorChild extends NoCtor {}
+function arg(): array { echo "evaluated|"; return [1, 2]; }
+$a = new NoCtor(arg(), "x");
+$b = new NoCtorChild(arg());
+echo $a->n + $b->n;
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "evaluated|evaluated|6");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

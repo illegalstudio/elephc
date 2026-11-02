@@ -21,7 +21,7 @@ fn parse_fragment_accepts_class_constant_declarations() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(
+        &[EvalStmt::class_decl(
             EvalClass::with_modifiers_traits_and_constants(
                 "EvalConstBox",
                 false,

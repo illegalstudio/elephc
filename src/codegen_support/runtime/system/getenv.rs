@@ -1,18 +1,24 @@
 //! Purpose:
-//! Emits the `__rt_getenv`, `__rt_cstr` runtime helper assembly for getenv.
+//! Emits the named and full-process environment lookup runtime helpers.
 //! Keeps PHP builtin semantics, libc/syscall boundaries, and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::system`.
 //!
 //! Key details:
-//! - The helper converts PHP strings to C strings. A MISSING variable returns a
+//! - Named lookup converts PHP strings to C strings. A MISSING variable returns a
 //!   null pointer and a PRESENT one returns an owned heap copy of its value —
 //!   the two are different answers, and only a null pointer means "not set".
 //!   libc hands back a pointer into the environment block, which the caller must
 //!   not own, so the found path persists before returning.
+//! - Full lookup (`__rt_getenv_all`, the no-argument `getenv()`) splits each process entry at
+//!   its first `=` and copies keys and values into a fresh hash.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{
+    abi,
+    emit::Emitter,
+    platform::Arch,
+};
 
 /// Emits `__rt_getenv` helper for ARM64 targets (macOS/Linux).
 ///
@@ -129,3 +135,4 @@ fn emit_getenv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the measured string result
     emitter.instruction("ret");                                                 // return to the caller with the owned string ptr/len in the x86_64 result regs
 }
+

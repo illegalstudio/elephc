@@ -12,6 +12,45 @@
 
 use super::*;
 
+/// Verifies a get-only hook whose body NAMES the property keeps its backing slot, so the declaring
+/// class may still write it. PHP calls such a property BACKED and refuses a write only to a
+/// VIRTUAL one, whose hooks never touch the store — the compiler applied the virtual rule to both
+/// and refused the write outright. Symfony's `ViewEvent` declares
+/// `public private(set) ?ControllerArgumentsEvent $controllerArgumentsEvent { get { … } }` whose
+/// getter does `$this->controllerArgumentsEvent ??= …`, and assigns it from the constructor.
+/// PHP outputs "seeded|computed|lazy".
+#[test]
+fn test_backed_get_only_hook_is_writable_by_its_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public private(set) ?string $cached {
+        get {
+            return $this->cached ??= 'computed';
+        }
+    }
+
+    public function __construct(?string $seed = null) {
+        if (null !== $seed) {
+            $this->cached = $seed;
+        }
+    }
+
+    public function warm(): string {
+        $this->cached = 'lazy';
+
+        return $this->cached;
+    }
+}
+
+echo (new Box('seeded'))->cached, '|';
+echo (new Box())->cached, '|';
+echo (new Box())->warm();
+"#,
+    );
+    assert_eq!(out, "seeded|computed|lazy");
+}
+
 /// Verifies a virtual get-only hook computes its value from other properties on read.
 #[test]
 fn test_get_only_virtual_property() {

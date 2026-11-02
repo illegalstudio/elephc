@@ -2,7 +2,7 @@
 title: "bcdiv()"
 description: "Divides two arbitrary-precision decimal numbers."
 sidebar:
-  order: 564
+  order: 577
 ---
 
 ## bcdiv()

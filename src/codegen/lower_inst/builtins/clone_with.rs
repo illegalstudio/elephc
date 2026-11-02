@@ -75,6 +75,11 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     let object = super::expect_operand(inst, 0)?;
     let object_ty = ctx.value_php_type(object)?.codegen_repr();
+    if matches!(object_ty, PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_))
+        && try_lower_outlined_clone(ctx, inst)?
+    {
+        return Ok(());
+    }
     if !matches!(
         object_ty,
         PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
@@ -135,6 +140,140 @@ pub(crate) fn lower_clone_with(ctx: &mut FunctionContext<'_>, inst: &Instruction
     // temporary stack already balanced, so both producers share one result store.
     ctx.emitter.label(&eval_handled);
     store_clone_result(ctx, inst)
+}
+
+/// Readable part of the shared clone helper's entry symbol.
+const CLONE_HELPER_PREFIX: &str = "clone_with";
+
+/// Fewest enum refusals plus `__clone()` arms worth a shared helper.
+const MIN_CLONE_ARMS: usize = 3;
+
+/// Returns whether the body being lowered IS a shared clone helper, or any other shared helper:
+/// a helper emitted outside the function stream (`_eir_shared_mixed_to_string`) never drains the
+/// helpers it requests, so a clone inside it must stay inline.
+fn inside_clone_helper(ctx: &FunctionContext<'_>) -> bool {
+    ctx.function.name.starts_with("_eir_shared_")
+        || (ctx.function.flags.is_synthetic
+            && ctx.function.name.contains(&format!("_{}_", CLONE_HELPER_PREFIX)))
+}
+
+/// Lowers a `clone` through one helper per module and key, instead of expanding at every site the
+/// enum refusals and the `__clone()` dispatch over every class of the program (about 3 000
+/// instructions per site in the compiled Symfony console).
+///
+/// The helper is an ordinary synthetic EIR function holding the ONE clone instruction, built by
+/// the method-call helper machinery, so this lowering runs unchanged inside it. The object
+/// reaches it boxed. The key holds the strict-types profile, the operand shapes and, only when
+/// the outcome depends on it, the site's lexical class: a non-public `__clone()` or property
+/// overrides resolve visibility against the invocation scope, which the helper then takes as
+/// its own. A site with a hidden invocation-scope operand passes that operand instead.
+///
+/// Returns `false` without emitting anything when this site keeps the inline lowering: a body
+/// with an eval context, a helper body itself, too few arms, or no result.
+fn try_lower_outlined_clone(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    use super::super::{
+        instruction_strict_php_profile, materialize_direct_call_args_with_refs_and_options,
+    };
+    use crate::codegen::shared_state::{DynamicPropHelperKind, MethodCallHelperTemplate};
+    use crate::ir::{IrHeapKind, IrType, Ownership};
+
+    if std::env::var_os("ELEPHC_NO_OUTLINED_CLONE").is_some()
+        || inside_clone_helper(ctx)
+        || super::has_eval_context(ctx)
+        || inst.result.is_none()
+        || inst.result_ownership != Ownership::Owned
+    {
+        return Ok(false);
+    }
+    let hooks = clone_hook_candidates(ctx)?;
+    let enums = ctx
+        .module
+        .enum_infos
+        .keys()
+        .filter(|name| ctx.module.class_infos.contains_key(*name))
+        .count();
+    if hooks.len() + enums < MIN_CLONE_ARMS {
+        return Ok(false);
+    }
+    let scope_operand = inst.operands.get(2).copied();
+    let mut site_operands = vec![inst.operands[0]];
+    let mut operands = vec![(IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)];
+    let mut has_overrides = false;
+    if let Some(properties) = inst.operands.get(1).copied() {
+        // An omitted second operand IS the empty override array, so a literal `[]` is dropped
+        // unless the hidden scope operand must keep its position.
+        if scope_operand.is_some() || !value_is_empty_array_literal(ctx, properties)? {
+            let php_type = ctx.raw_value_php_type(properties)?;
+            if matches!(php_type.codegen_repr(), PhpType::Void) {
+                return Ok(false);
+            }
+            has_overrides = true;
+            site_operands.push(properties);
+            operands.push((ctx.value_ir_type(properties)?, php_type));
+        }
+    }
+    if let Some(scope) = scope_operand {
+        site_operands.push(scope);
+        operands.push((ctx.value_ir_type(scope)?, ctx.raw_value_php_type(scope)?));
+    }
+    let scope = (scope_operand.is_none()
+        && (has_overrides
+            || hooks
+                .iter()
+                .any(|hook| hook.visibility != Visibility::Public)))
+    .then(|| ctx.function.lexical_class.clone())
+    .flatten();
+
+    let strict_php = instruction_strict_php_profile(inst);
+    let mut key = format!(
+        "{}:{}:{:?}:{:?}",
+        CLONE_HELPER_PREFIX, strict_php, inst.immediate, scope
+    );
+    for (ir_type, php_type) in &operands {
+        key.push_str(&format!(":{:?}/{:?}", ir_type, php_type));
+    }
+    let label = ctx.keyed_global_label(&key, CLONE_HELPER_PREFIX);
+    ctx.shared.request_dynamic_prop_helper(
+        &key,
+        &label,
+        DynamicPropHelperKind::MixedMethodCall,
+        scope.as_deref(),
+    );
+    ctx.shared
+        .method_call_templates
+        .entry(key)
+        .or_insert_with(|| MethodCallHelperTemplate {
+            op: inst.op,
+            immediate: inst.immediate.clone(),
+            operands: operands.clone(),
+            result_type: IrType::Heap(IrHeapKind::Mixed),
+            result_php_type: PhpType::Mixed,
+            result_ownership: Ownership::Owned,
+        });
+
+    let param_types = operands
+        .iter()
+        .map(|(_, php_type)| php_type.codegen_repr())
+        .collect::<Vec<_>>();
+    let ref_params = vec![false; param_types.len()];
+    let call_args = materialize_direct_call_args_with_refs_and_options(
+        ctx,
+        &site_operands,
+        &param_types,
+        &ref_params,
+        true,
+        RefArgCellLifetime::CallOnly,
+    )?;
+    let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_call_label(ctx.emitter, &label);
+    abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    // The helper returns the owned boxed clone, as the inline lowering's adapter does.
+    store_clone_result(ctx, inst)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
+    emit_ref_arg_writebacks(ctx, &call_args)?;
+    Ok(true)
 }
 
 /// Byte offsets inside the eval clone bridge's own temporary frame.
@@ -819,28 +958,34 @@ fn emit_static_clone_hook_visibility_error(
 }
 
 /// Emits the exact denial phrase for the transported runtime scope id.
+///
+/// The scope's name comes from the dense class-name table at run time. Spelling one static
+/// message per possible scope made every non-public `__clone` carry an arm per class of the
+/// program: the Symfony demo's `clone` callable wrapper was 9.9 M instructions of them.
 fn emit_runtime_clone_hook_visibility_error(
     ctx: &mut FunctionContext<'_>,
     visibility: &Visibility,
     declaring: &str,
     invocation_scope: ValueId,
 ) -> Result<()> {
-    let mut scopes = ctx
-        .module
-        .class_infos
-        .iter()
-        .map(|(name, info)| (info.class_id as i64, name.clone()))
-        .collect::<Vec<_>>();
-    scopes.sort_by_key(|(class_id, _)| *class_id);
-    let labels = scopes
-        .iter()
-        .map(|(class_id, _)| (*class_id, ctx.next_label("clone_hook_denied_scope")))
-        .collect::<Vec<_>>();
+    let global_label = ctx.next_label("clone_hook_denied_global");
     ctx.load_value_to_result(invocation_scope)?;
     let scope_reg = abi::int_result_reg(ctx.emitter).to_string();
-    for (class_id, label) in &labels {
-        emit_branch_if_reg_equals_immediate(ctx, &scope_reg, *class_id, label);
-    }
+    super::super::runtime_class_messages::emit_class_name_for_id_or_branch(
+        ctx,
+        &scope_reg,
+        &global_label,
+    );
+    super::super::runtime_class_messages::emit_concat_static_prefix(
+        ctx,
+        &format!(
+            "Call to {} method {}::__clone() from scope ",
+            visibility_name(visibility),
+            declaring,
+        ),
+    );
+    super::super::exceptions::emit_error_from_string_result(ctx);
+    ctx.emitter.label(&global_label);
     super::super::exceptions::emit_error(
         ctx,
         &format!(
@@ -849,18 +994,6 @@ fn emit_runtime_clone_hook_visibility_error(
             declaring,
         ),
     );
-    for ((_, class_name), (_, label)) in scopes.iter().zip(labels.iter()) {
-        ctx.emitter.label(label);
-        super::super::exceptions::emit_error(
-            ctx,
-            &format!(
-                "Call to {} method {}::__clone() from scope {}",
-                visibility_name(visibility),
-                declaring,
-                class_name,
-            ),
-        );
-    }
     Ok(())
 }
 

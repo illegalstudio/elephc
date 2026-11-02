@@ -38,12 +38,27 @@ $owner->borrow($callback);
             let method = module.class_methods.iter()
                 .find(|method| method.name == format!("PropertyCallableOwner::{method_name}"))
                 .unwrap();
+            // The property is untyped, so it stores a boxed Mixed: the callable is wrapped by a
+            // `mixed_box` (which takes its own reference) and the BOX is what `prop_set` consumes.
+            // The ownership contract therefore lives on the box's callable operand: a temporary
+            // descriptor is retired once boxed, a borrowed parameter never is, and the box itself
+            // is handed to the store, not released.
             let store_index = method.instructions.iter().position(|inst| inst.op == Op::PropSet).unwrap();
-            let source = method.instructions[store_index].operands[1];
+            let boxed = method.instructions[store_index].operands[1];
+            assert!(
+                method.instructions[..store_index].iter().any(|inst| inst.op == Op::MixedBox && inst.result == Some(boxed)),
+                "{name}: {method_name}: the stored value is a freshly boxed Mixed"
+            );
+            let box_index = method.instructions[..store_index].iter()
+                .position(|inst| inst.op == Op::MixedBox && inst.result == Some(boxed)).unwrap();
+            let source = method.instructions[box_index].operands[0];
             assert_eq!(method.value(source).unwrap().php_type.codegen_repr(), PhpType::Callable, "{name}");
-            let released = method.instructions[store_index + 1..].iter()
+            let released = method.instructions[box_index + 1..].iter()
                 .any(|inst| inst.op == Op::Release && inst.operands == [source]);
             assert_eq!(released, retires_source, "{name}: {method_name}");
+            let box_released = method.instructions[store_index + 1..].iter()
+                .any(|inst| inst.op == Op::Release && inst.operands == [boxed]);
+            assert!(!box_released, "{name}: {method_name}: the store consumes the box");
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));

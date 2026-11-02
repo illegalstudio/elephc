@@ -14,6 +14,7 @@
 mod arithmetic;
 mod basic;
 mod control_flow;
+mod eval_bridge;
 mod get_return;
 mod generator_identity;
 mod interop;

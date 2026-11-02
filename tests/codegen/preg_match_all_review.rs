@@ -340,16 +340,46 @@ echo preg_match_all(subject: 'ab', pattern: '//');
     assert_eq!(out, "3|3");
 }
 
-/// Variable syntax backed by global or static storage cannot discard capture output.
+/// A `$matches` destination backed by `global` or `static` storage receives the captures, as in
+/// php (this used to be refused at compile time), and keeps its value when the pattern does not
+/// compile. Expected output is `php -n` 8.5 verbatim; repeated calls must not leak the old matches.
 #[test]
-fn preg_match_all_review_rejects_global_and_static_destinations() {
-    for source in [
-        r#"<?php $matches = []; function collect(): void { global $matches; echo preg_match_all('/a/', 'a', $matches); } collect();"#,
-        r#"<?php function collect(): void { static $matches = []; echo preg_match_all('/a/', 'a', $matches); } collect();"#,
-    ] {
-        let error = compile_cli_file_with_flags_expect_failure(source, &[]);
-        assert!(error.contains("preg_match_all(): non-local $matches destinations are not supported"), "{error}");
-    }
+fn preg_match_all_review_fills_global_and_static_destinations() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$g = 5;
+function viaGlobal(string $s): int|false {
+    global $g;
+    return @preg_match_all('/a(b)?/', $s, $g);
+}
+function viaStatic(string $s): string {
+    static $m = [];
+    $n = preg_match('/(?<word>[a-z]+)(\d)/', $s, $m);
+    return $n . ':' . json_encode($m);
+}
+function badPattern(): string {
+    static $keep = ['kept'];
+    $r = @preg_match('/(/', 'a', $keep);
+    return var_export($r, true) . ':' . json_encode($keep);
+}
+var_dump(viaGlobal('ab a'));
+echo json_encode($g), "\n";
+var_dump(@preg_match_all('/(/', 'x', $g));
+echo json_encode($g), "\n";
+for ($i = 0; $i < 3; $i++) {
+    echo viaStatic("abc$i def"), "\n";
+}
+echo viaStatic('none'), "\n";
+echo badPattern(), "\n";
+function staticAll(): string {
+    static $all = [];
+    preg_match_all('/\d/', 'a1b2', $all, PREG_SET_ORDER);
+    return json_encode($all);
+}
+echo staticAll(), staticAll(), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "int(2)\n[[\"ab\",\"a\"],[\"b\",\"\"]]\nbool(false)\n[[\"ab\",\"a\"],[\"b\",\"\"]]\n1:{\"0\":\"abc0\",\"word\":\"abc\",\"1\":\"abc\",\"2\":\"0\"}\n1:{\"0\":\"abc1\",\"word\":\"abc\",\"1\":\"abc\",\"2\":\"1\"}\n1:{\"0\":\"abc2\",\"word\":\"abc\",\"1\":\"abc\",\"2\":\"2\"}\n0:[]\nfalse:[\"kept\"]\n[[\"1\"],[\"2\"]][[\"1\"],[\"2\"]]\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Native-backed dynamic eval uses the same terminal-empty and UTF-8 progression rules.
@@ -361,4 +391,95 @@ $source = 'echo preg_match_all("//u", "éé", $matches, PREG_SET_ORDER | PREG_OF
 eval($source);
 "#);
     assert_eq!(out, "3:4|1");
+}
+
+/// php lists a named group under its name AND its number, the name first, in both orders, with
+/// offset capture, and with `PREG_UNMATCHED_AS_NULL` (which also keeps trailing unmatched groups);
+/// a pattern that never matches still gets every key. The native capture runtime built numbered
+/// keys only, so `$m['k']` did not exist. The two keys are independent copies. The expected
+/// output is php 8.5's own.
+#[test]
+fn preg_match_all_lists_named_groups_under_name_and_number() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+preg_match_all("/(?<k>[a-z])(?<v>\\d)?/", "a1 b c3", $m);
+echo json_encode($m), "\n";
+preg_match_all("/(?<k>[a-z])(?<v>\\d)?/", "a1 b c3", $m, PREG_SET_ORDER);
+echo json_encode($m), "\n";
+preg_match_all("/(?<k>[a-z])(?<v>\\d)?/", "a1 b", $m, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+echo json_encode($m), "\n";
+preg_match_all("/(?<k>[a-z])(?<v>\\d)?/", "b", $m, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+echo json_encode($m), "\n";
+preg_match_all("/(?<k>z)/", "abc", $m);
+echo json_encode($m), "\n";
+$m["k"][] = "x"; echo count($m[1]), "\n";
+function f(string $p, string $s): array { preg_match_all($p, $s, $out, PREG_SET_ORDER); return $out; }
+for ($i = 0; $i < 3; $i++) { $r = f("/(?<w>\\w+)=(?<n>\\d+)/", "a=1,b=2"); }
+echo json_encode($r), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"0\":[\"a1\",\"b\",\"c3\"],\"k\":[\"a\",\"b\",\"c\"],\"1\":[\"a\",\"b\",\"c\"],\"v\":[\"1\",\"\",\"3\"],\"2\":[\"1\",\"\",\"3\"]}\n[{\"0\":\"a1\",\"k\":\"a\",\"1\":\"a\",\"v\":\"1\",\"2\":\"1\"},{\"0\":\"b\",\"k\":\"b\",\"1\":\"b\"},{\"0\":\"c3\",\"k\":\"c\",\"1\":\"c\",\"v\":\"3\",\"2\":\"3\"}]\n[{\"0\":[\"a1\",0],\"k\":[\"a\",0],\"1\":[\"a\",0],\"v\":[\"1\",1],\"2\":[\"1\",1]},{\"0\":[\"b\",3],\"k\":[\"b\",3],\"1\":[\"b\",3]}]\n[{\"0\":\"b\",\"k\":\"b\",\"1\":\"b\",\"v\":null,\"2\":null}]\n{\"0\":[],\"k\":[],\"1\":[]}\n0\n[{\"0\":\"a=1\",\"w\":\"a\",\"1\":\"a\",\"n\":\"1\",\"2\":\"1\"},{\"0\":\"b=2\",\"w\":\"b\",\"1\":\"b\",\"n\":\"2\",\"2\":\"2\"}]\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A SET_ORDER row ends at the last group that participated: php drops trailing unmatched
+/// groups unless `PREG_UNMATCHED_AS_NULL` asks for their nulls. The native runtime emitted every
+/// compiled group. The expected output is php 8.5's own.
+#[test]
+fn preg_match_all_set_order_rows_end_at_the_last_matched_group() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+preg_match_all('#(a)?(b)?(c)?#', 'b', $m, PREG_SET_ORDER);
+echo json_encode($m), "\n";
+preg_match_all('#(a)?(b)?(c)?#', 'b', $m, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+echo json_encode($m), "\n";
+preg_match_all('#(a)?(b)?(c)?#', 'b', $m, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+echo json_encode($m), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[\"b\",\"\",\"b\"],[\"\"]]\n[[[\"b\",0],[\"\",-1],[\"b\",0]],[[\"\",1]]]\n[[\"b\",null,\"b\",null],[\"\",null,null,null]]\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The name key and the number key of a group are two independent values: an in-place `.=` on one
+/// and a write through a reference to the other never show through the other key. The expected
+/// output is php 8.5's own.
+#[test]
+fn preg_match_all_named_and_numbered_keys_are_independent() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+preg_match_all("/(?<k>a)/", "a", $s, PREG_SET_ORDER);
+$s[0]["k"] .= "x";
+$r = &$s[0][1]; $r = "z"; unset($r);
+echo json_encode($s), "\n";
+preg_match_all("/(?<k>a)(?<v>b)/", "ab", $p);
+$p["v"][0] .= "!";
+$q = &$p[1][0]; $q = "Q"; unset($q);
+echo json_encode($p), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"0\":\"a\",\"k\":\"ax\",\"1\":\"z\"}]\n{\"0\":[\"ab\"],\"k\":[\"a\"],\"1\":[\"Q\"],\"v\":[\"b!\"],\"2\":[\"b\"]}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A `(*MARK:name)` verb adds `MARK` after every group key: the name itself in a SET_ORDER row
+/// (a plain string, even under OFFSET_CAPTURE), and `[match number => name]` for the marked
+/// matches in PATTERN_ORDER, absent when no match passed a mark. The table is a value: a copy
+/// written through leaves the result alone. The expected output is php 8.5's own.
+#[test]
+fn preg_match_all_reports_mark_verbs_in_both_orders() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$p = '/(?<w>a)(*MARK:A)|(?<v>b)(*MARK:B)|c/';
+foreach ([PREG_PATTERN_ORDER, PREG_SET_ORDER, PREG_SET_ORDER | PREG_OFFSET_CAPTURE, PREG_PATTERN_ORDER | PREG_UNMATCHED_AS_NULL] as $flags) {
+    $n = preg_match_all($p, 'acb', $m, $flags);
+    echo $n, ' ', json_encode($m), "\n";
+}
+preg_match_all('/x(*:M1)|y/', 'yxy', $m);
+echo json_encode($m), "\n";
+$copy = $m['MARK'];
+$copy[1] = 'changed';
+echo json_encode($m['MARK']), "\n";
+preg_match_all('/z/', 'zz', $m);
+echo json_encode($m), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3 {\"0\":[\"a\",\"c\",\"b\"],\"w\":[\"a\",\"\",\"\"],\"1\":[\"a\",\"\",\"\"],\"v\":[\"\",\"\",\"b\"],\"2\":[\"\",\"\",\"b\"],\"MARK\":{\"0\":\"A\",\"2\":\"B\"}}\n3 [{\"0\":\"a\",\"w\":\"a\",\"1\":\"a\",\"MARK\":\"A\"},[\"c\"],{\"0\":\"b\",\"w\":\"\",\"1\":\"\",\"v\":\"b\",\"2\":\"b\",\"MARK\":\"B\"}]\n3 [{\"0\":[\"a\",0],\"w\":[\"a\",0],\"1\":[\"a\",0],\"MARK\":\"A\"},[[\"c\",1]],{\"0\":[\"b\",2],\"w\":[\"\",-1],\"1\":[\"\",-1],\"v\":[\"b\",2],\"2\":[\"b\",2],\"MARK\":\"B\"}]\n3 {\"0\":[\"a\",\"c\",\"b\"],\"w\":[\"a\",null,null],\"1\":[\"a\",null,null],\"v\":[null,null,\"b\"],\"2\":[null,null,\"b\"],\"MARK\":{\"0\":\"A\",\"2\":\"B\"}}\n{\"0\":[\"y\",\"x\",\"y\"],\"MARK\":{\"1\":\"M1\"}}\n{\"1\":\"M1\"}\n[[\"z\",\"z\"]]\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

@@ -2,7 +2,7 @@
 title: "cairo_paint()"
 description: "Paints the current source over the whole clip region."
 sidebar:
-  order: 431
+  order: 444
 ---
 
 ## cairo_paint()

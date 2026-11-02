@@ -21,7 +21,8 @@
 //!   source key or value. The destination owns everything it stores — `__rt_hash_set` persists
 //!   the inserted string KEY itself, `Persist` results are copied through `__rt_str_persist`
 //!   before insertion, and `Owned`/`Scalar` results are values the callback wrapper already
-//!   transferred. No refcount traffic means no double-free surface.
+//!   transferred. When a gradual source entry is concrete, the helper creates one temporary
+//!   Mixed cell for the callback boundary and releases it after preserving the callback result.
 //! - The destination is allocated with `__rt_hash_new`, so it can never alias the source. That
 //!   is what makes `RuntimeFnId::ArrayMap`'s `Fresh` result ownership correct for this path too.
 
@@ -63,7 +64,7 @@ pub enum HashMapResultKind {
 /// - Input: `x0` / `rdi` = callback function pointer, `x1` / `rsi` = source hash pointer,
 ///   `x2` / `rdx` = callback environment pointer (`0` when the callback captures nothing),
 ///   `x3` / `rcx` = `HashMapResultKind` discriminant, `x4` / `r8` = destination `value_type`
-///   tag.
+///   tag, `x5` / `r9` = whether source entries need boxing for a `Mixed` callback argument.
 /// - Output: `x0` / `rax` = destination hash pointer.
 ///
 /// Dispatches to the target-specific implementation; x86_64 uses the System V register
@@ -85,19 +86,23 @@ pub fn emit_hash_map(emitter: &mut Emitter) {
     //   [sp, #16] = source key length (-1 marks an inline integer key)
     //   [sp, #24] = HashMapResultKind selector
     //   [sp, #32] = destination value_type tag
-    //   [sp, #48] = saved x21/x22
-    //   [sp, #64] = saved x19/x20
-    //   [sp, #80] = saved x29/x30
-    emitter.instruction("sub sp, sp, #96");                                     // allocate the hash-map frame
-    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #80");                                    // set up the hash-map frame pointer
-    emitter.instruction("stp x19, x20, [sp, #64]");                             // save callee-saved x19/x20 for the source and destination tables
-    emitter.instruction("stp x21, x22, [sp, #48]");                             // save callee-saved x21/x22 for the callback and its environment
+    //   [sp, #40] = source entries need boxed Mixed callback arguments
+    //   [sp, #48] = owned temporary Mixed argument cell, or zero
+    //   [sp, #56..#72] = callback result registers across temporary release
+    //   [sp, #80] = saved x21/x22
+    //   [sp, #96] = saved x19/x20
+    //   [sp, #112] = saved x29/x30
+    emitter.instruction("sub sp, sp, #128");                                    // allocate the hash-map frame and Mixed argument spill slots
+    emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
+    emitter.instruction("add x29, sp, #112");                                   // set up the hash-map frame pointer
+    emitter.instruction("stp x19, x20, [sp, #96]");                             // save callee-saved x19/x20 for the source and destination tables
+    emitter.instruction("stp x21, x22, [sp, #80]");                             // save callee-saved x21/x22 for the callback and its environment
     emitter.instruction("mov x21, x0");                                         // x21 = callback address, live across every loop iteration
     emitter.instruction("mov x19, x1");                                         // x19 = source hash pointer, live across every helper call
     emitter.instruction("mov x22, x2");                                         // x22 = callback environment pointer (0 when unused)
     emitter.instruction("str x3, [sp, #24]");                                   // save the result-kind selector for the post-callback dispatch
     emitter.instruction("str x4, [sp, #32]");                                   // save the destination value_type tag for every insertion
+    emitter.instruction("str x5, [sp, #40]");                                   // save the source Mixed-argument mode across iterator calls
 
     // -- allocate the destination table with headroom for every mapped entry --
     emitter.instruction("ldr x0, [x19]");                                       // x0 = source entry count
@@ -120,8 +125,27 @@ pub fn emit_hash_map(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the next insertion-order cursor
     emitter.instruction("str x1, [sp, #8]");                                    // save the source key pointer before the callback call
     emitter.instruction("str x2, [sp, #16]");                                   // save the source key length before the callback call
+    emitter.instruction("str xzr, [sp, #48]");                                  // default to no owned temporary callback argument
 
     // -- php passes the VALUE only; the argument ABI follows the entry's runtime value tag --
+    emitter.instruction("ldr x9, [sp, #40]");                                   // does this source require boxed Mixed callback arguments?
+    emitter.instruction("cbz x9, __rt_hash_map_dispatch_concrete");              // concrete source values retain their native callback ABI
+    emitter.instruction("cmp x5, #7");                                          // runtime tag 7 already carries a boxed Mixed cell pointer
+    emitter.instruction("b.eq __rt_hash_map_call_borrowed_mixed");              // reuse an existing box without taking ownership
+    emitter.instruction("mov x0, x5");                                          // pass the concrete runtime tag to the boxing helper
+    emitter.instruction("mov x1, x3");                                          // pass the concrete low payload word to the boxing helper
+    emitter.instruction("mov x2, x4");                                          // pass the concrete high payload word to the boxing helper
+    emitter.instruction("bl __rt_mixed_from_value");                            // create an owned Mixed cell for the callback boundary
+    emitter.instruction("str x0, [sp, #48]");                                   // preserve the temporary cell for balanced release after the callback
+    emitter.instruction("mov x1, x22");                                         // pass the capture environment after the boxed Mixed argument
+    emitter.instruction("b __rt_hash_map_call");                                // invoke the callback through the shared call site
+
+    emitter.label("__rt_hash_map_call_borrowed_mixed");
+    emitter.instruction("mov x0, x3");                                          // pass the borrowed boxed Mixed entry to the callback
+    emitter.instruction("mov x1, x22");                                         // pass the capture environment after the boxed Mixed argument
+    emitter.instruction("b __rt_hash_map_call");                                // invoke the callback without allocating another wrapper
+
+    emitter.label("__rt_hash_map_dispatch_concrete");
     emitter.instruction("cmp x5, #1");                                          // runtime tag 1 = string, which uses the two-register string ABI
     emitter.instruction("b.eq __rt_hash_map_call_str");                         // string values are passed as a pointer/length pair
     emitter.instruction("mov x0, x3");                                          // x0 = scalar source value (int, bool, or boxed Mixed pointer)
@@ -136,7 +160,20 @@ pub fn emit_hash_map(emitter: &mut Emitter) {
     emitter.label("__rt_hash_map_call");
     emitter.instruction("blr x21");                                             // invoke the user callback on this entry's value
 
+    // -- release a temporary Mixed argument without losing the callback result --
+    emitter.instruction("ldr x9, [sp, #48]");                                   // reload the owned temporary Mixed argument, if one was created
+    emitter.instruction("cbz x9, __rt_hash_map_result_dispatch");               // borrowed and concrete arguments require no release
+    emitter.instruction("str x0, [sp, #56]");                                   // preserve the scalar callback result across the decref helper
+    emitter.instruction("str x1, [sp, #64]");                                   // preserve the string callback result pointer across the decref helper
+    emitter.instruction("str x2, [sp, #72]");                                   // preserve the string callback result length across the decref helper
+    emitter.instruction("mov x0, x9");                                          // pass the owned temporary Mixed cell to the release helper
+    emitter.instruction("bl __rt_decref_mixed");                                // balance the per-entry boxing after the callback returns
+    emitter.instruction("ldr x0, [sp, #56]");                                   // restore the scalar callback result
+    emitter.instruction("ldr x1, [sp, #64]");                                   // restore the string callback result pointer
+    emitter.instruction("ldr x2, [sp, #72]");                                   // restore the string callback result length
+
     // -- read the callback result from wherever this result kind leaves it --
+    emitter.label("__rt_hash_map_result_dispatch");
     emitter.instruction("ldr x9, [sp, #24]");                                   // x9 = HashMapResultKind selector
     emitter.instruction("cmp x9, #1");                                          // is the result a borrowed string pair needing a copy?
     emitter.instruction("b.eq __rt_hash_map_result_persist");                   // yes - persist it before the destination takes ownership
@@ -168,10 +205,10 @@ pub fn emit_hash_map(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_map_done");
     emitter.instruction("mov x0, x20");                                         // return the destination hash pointer
-    emitter.instruction("ldp x21, x22, [sp, #48]");                             // restore callee-saved x21/x22
-    emitter.instruction("ldp x19, x20, [sp, #64]");                             // restore callee-saved x19/x20
-    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #96");                                     // deallocate the hash-map frame
+    emitter.instruction("ldp x21, x22, [sp, #80]");                             // restore callee-saved x21/x22
+    emitter.instruction("ldp x19, x20, [sp, #96]");                             // restore callee-saved x19/x20
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // deallocate the hash-map frame
     emitter.instruction("ret");                                                 // return with x0 = destination hash pointer
 }
 
@@ -203,14 +240,18 @@ fn emit_hash_map_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 56] = callback environment pointer
     //   [rbp - 64] = HashMapResultKind selector
     //   [rbp - 72] = destination value_type tag
+    //   [rbp - 80] = source entries need boxed Mixed callback arguments
+    //   [rbp - 88] = owned temporary Mixed argument cell, or zero
+    //   [rbp - 96..-104] = callback result registers across temporary release
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-map spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the mapping bookkeeping
-    emitter.instruction("sub rsp, 96");                                         // reserve aligned spill slots so nested helper calls stay 16-byte aligned
+    emitter.instruction("sub rsp, 128");                                        // reserve aligned spill slots so nested helper calls stay 16-byte aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // preserve the source hash pointer across every helper call
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // preserve the callback address across every helper call
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // preserve the callback environment pointer across every helper call
     emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // preserve the result-kind selector for the post-callback dispatch
     emitter.instruction("mov QWORD PTR [rbp - 72], r8");                        // preserve the destination value_type tag for every insertion
+    emitter.instruction("mov QWORD PTR [rbp - 80], r9");                        // preserve the source Mixed-argument mode across iterator calls
 
     // -- allocate the destination table with headroom for every mapped entry --
     emitter.instruction("mov rax, QWORD PTR [rsi]");                            // rax = source entry count
@@ -235,8 +276,28 @@ fn emit_hash_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the next insertion-order cursor
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // spill the key pointer before rdi is reused as argument zero
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // spill the source key length before the callback call
+    emitter.instruction("mov QWORD PTR [rbp - 88], 0");                         // default to no owned temporary callback argument
 
     // -- php passes the VALUE only; the argument ABI follows the entry's runtime value tag --
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // does this source require boxed Mixed callback arguments?
+    emitter.instruction("je __rt_hash_map_dispatch_concrete_x86");              // concrete source values retain their native callback ABI
+    emitter.instruction("cmp r9, 7");                                           // runtime tag 7 already carries a boxed Mixed cell pointer
+    emitter.instruction("je __rt_hash_map_call_borrowed_mixed_x86");            // reuse an existing box without taking ownership
+    emitter.instruction("mov rax, r9");                                         // pass the concrete runtime tag to the boxing helper
+    emitter.instruction("mov rdi, rcx");                                        // pass the concrete low payload word to the boxing helper
+    emitter.instruction("mov rsi, r8");                                         // pass the concrete high payload word to the boxing helper
+    emitter.instruction("call __rt_mixed_from_value");                          // create an owned Mixed cell for the callback boundary
+    emitter.instruction("mov QWORD PTR [rbp - 88], rax");                       // preserve the temporary cell for balanced release after the callback
+    emitter.instruction("mov rdi, rax");                                        // pass the owned boxed Mixed entry to the callback
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // pass the capture environment after the boxed Mixed argument
+    emitter.instruction("jmp __rt_hash_map_call_x86");                          // invoke the callback through the shared call site
+
+    emitter.label("__rt_hash_map_call_borrowed_mixed_x86");
+    emitter.instruction("mov rdi, rcx");                                        // pass the borrowed boxed Mixed entry to the callback
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // pass the capture environment after the boxed Mixed argument
+    emitter.instruction("jmp __rt_hash_map_call_x86");                          // invoke the callback without allocating another wrapper
+
+    emitter.label("__rt_hash_map_dispatch_concrete_x86");
     emitter.instruction("cmp r9, 1");                                           // runtime tag 1 = string, which uses the two-register string ABI
     emitter.instruction("je __rt_hash_map_call_str_x86");                       // string values are passed as a pointer/length pair
     emitter.instruction("mov rdi, rcx");                                        // rdi = scalar source value (int, bool, or boxed Mixed pointer)
@@ -252,7 +313,19 @@ fn emit_hash_map_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // load the callback address into a caller-saved scratch register
     emitter.instruction("call r10");                                            // invoke the user callback on this entry's value
 
+    // -- release a temporary Mixed argument without losing the callback result --
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // reload the owned temporary Mixed argument, if one was created
+    emitter.instruction("test r10, r10");                                       // distinguish owned temporary boxes from borrowed/native arguments
+    emitter.instruction("jz __rt_hash_map_result_dispatch_x86");                // borrowed and concrete arguments require no release
+    emitter.instruction("mov QWORD PTR [rbp - 96], rax");                       // preserve the scalar or string-pointer callback result
+    emitter.instruction("mov QWORD PTR [rbp - 104], rdx");                      // preserve the string callback result length
+    emitter.instruction("mov rax, r10");                                        // pass the owned temporary Mixed cell to the release helper
+    emitter.instruction("call __rt_decref_mixed");                              // balance the per-entry boxing after the callback returns
+    emitter.instruction("mov rax, QWORD PTR [rbp - 96]");                       // restore the scalar or string-pointer callback result
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 104]");                      // restore the string callback result length
+
     // -- read the callback result from wherever this result kind leaves it --
+    emitter.label("__rt_hash_map_result_dispatch_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // r10 = HashMapResultKind selector
     emitter.instruction("cmp r10, 1");                                          // is the result a borrowed string pair needing a copy?
     emitter.instruction("je __rt_hash_map_result_persist_x86");                 // yes - persist it before the destination takes ownership
@@ -284,7 +357,7 @@ fn emit_hash_map_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_map_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the destination hash pointer in rax
-    emitter.instruction("add rsp, 96");                                         // release the hash-map spill slots before returning
+    emitter.instruction("add rsp, 128");                                        // release the hash-map spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return with rax = destination hash pointer
 }

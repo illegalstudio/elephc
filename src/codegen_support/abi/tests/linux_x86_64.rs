@@ -317,6 +317,15 @@ fn test_emit_branch_helpers_use_native_zero_checks_on_linux_x86_64() {
     );
 }
 
+/// Verifies named long-range calls retain the native direct x86_64 call instruction.
+#[test]
+fn test_emit_call_label_long_range_uses_direct_linux_x86_64_call() {
+    let mut emitter = test_emitter_x86();
+    emit_call_label_long_range(&mut emitter, "_shared_helper");
+
+    assert_eq!(emitter.output(), "    call _shared_helper\n");
+}
+
 /// Verifies that emit_store_result_to_symbol stores a string result (pointer
 /// in rax, length in rdx) via RIP-relative mov, and emit_load_symbol_to_result
 /// loads it back. For strings, the result is stored as two adjacent QWORDs
@@ -338,7 +347,8 @@ fn test_emit_store_and_load_result_to_symbol_for_string_linux_x86_64() {
 /// emit_store_process_args_to_globals stores argc (rdi) and argv (rsi) to
 /// global symbols; emit_enable_heap_debug_flag sets the heap debug flag;
 /// emit_copy_frame_pointer copies rbp to a destination register; and
-/// emit_exit emits the process-wide exit syscall (syscall with eax=231, edi=exit_code).
+/// emit_exit loads edi=exit_code and tails into the shared flush-and-exit helper, whose body
+/// (emit_exit_code_helper) issues the process-wide exit syscall (eax=231).
 #[test]
 fn test_process_entry_helpers_linux_x86_64() {
     let mut emitter = test_emitter_x86();
@@ -347,6 +357,7 @@ fn test_process_entry_helpers_linux_x86_64() {
     emit_enable_heap_debug_flag(&mut emitter);
     emit_copy_frame_pointer(&mut emitter, "r10");
     emit_exit(&mut emitter, 7);
+    emit_exit_code_helper(&mut emitter);
 
     let out = emitter.output();
 
@@ -356,6 +367,8 @@ fn test_process_entry_helpers_linux_x86_64() {
     assert!(out.contains("    mov QWORD PTR [rip + _heap_debug_enabled], r10\n"));
     assert!(out.contains("    mov r10, rbp\n"));
     assert!(out.contains("    mov edi, 7\n"));
+    assert!(out.contains("    jmp __rt_exit_code\n"));
+    assert!(out.contains("__rt_exit_code:\n"));
     assert!(out.contains("    mov eax, 231\n"));
     assert!(out.contains("    syscall\n"));
 }

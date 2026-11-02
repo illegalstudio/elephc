@@ -37,6 +37,7 @@ pub(crate) fn generic_type(ty: &EvalParameterType) -> Type {
         EvalParameterTypeVariant::Array => Type::atom("array"),
         EvalParameterTypeVariant::Bool => Type::atom("bool"),
         EvalParameterTypeVariant::Callable => Type::atom("callable"),
+        EvalParameterTypeVariant::False => Type::atom("false"),
         EvalParameterTypeVariant::Float => Type::atom("float"),
         EvalParameterTypeVariant::Int => Type::atom("int"),
         EvalParameterTypeVariant::Iterable => Type::atom("iterable"),
@@ -44,6 +45,7 @@ pub(crate) fn generic_type(ty: &EvalParameterType) -> Type {
         EvalParameterTypeVariant::Never => Type::atom("never"),
         EvalParameterTypeVariant::Object => Type::atom("object"),
         EvalParameterTypeVariant::String => Type::atom("string"),
+        EvalParameterTypeVariant::True => Type::atom("true"),
         EvalParameterTypeVariant::Void => Type::atom("void"),
     }).collect::<Vec<_>>();
     if ty.allows_null() && types.len() == 1 && types[0] != Type::atom("mixed") {
@@ -68,7 +70,7 @@ pub(crate) fn parameter_type(ty: &Type) -> EvalParameterType {
         }
         Type::Atom(name) => {
             let variant = match name.as_str() {
-                "false" => EvalParameterTypeVariant::Generic(Type::atom("false")),
+                "false" => EvalParameterTypeVariant::False, "true" => EvalParameterTypeVariant::True,
                 "array" => EvalParameterTypeVariant::Array, "bool" => EvalParameterTypeVariant::Bool,
                 "callable" => EvalParameterTypeVariant::Callable, "float" => EvalParameterTypeVariant::Float,
                 "int" => EvalParameterTypeVariant::Int, "iterable" => EvalParameterTypeVariant::Iterable,

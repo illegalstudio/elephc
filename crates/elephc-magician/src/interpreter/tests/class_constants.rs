@@ -385,6 +385,202 @@ return EvalConstTraitBox::readTraitSeed();"#,
     assert_eq!(values.get(result), FakeValue::Int(6));
 }
 
+/// Verifies `self::CONST`, `parent::CONST`, and another class's constant compose inside a
+/// class-like constant initializer.
+///
+/// This is the exact shape that blocked the Symfony `--web` campaign:
+/// `symfony/http-foundation/Request.php` keys a private const array with
+/// `self::HEADER_X_FORWARDED_FOR => 'for'`, and `self`/`parent` resolution for a constant
+/// initializer only ever consulted `current_class_scope()`, which is the METHOD call-frame
+/// stack (`push_class_scope`/`pop_class_scope` from method dispatch) -- never populated while
+/// a constant/property default is being evaluated during class declaration. `self::A * 3`
+/// mirrors the campaign's `cc1.php` reducer (php answers 6).
+#[test]
+fn execute_program_reads_self_and_parent_reference_in_eval_constant_initializer() {
+    let program = parse_fragment(
+        br#"class EvalConstSelfBase {
+    public const A = 2;
+    public const B = self::A * 3;
+}
+class EvalConstSelfChild extends EvalConstSelfBase {
+    public const C = parent::A + 1;
+}
+class EvalConstOther {
+    public const X = 10;
+}
+class EvalConstCross {
+    public const Y = EvalConstOther::X + 1;
+}
+echo EvalConstSelfBase::B; echo ":";
+echo EvalConstSelfChild::C; echo ":";
+return EvalConstCross::Y;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "6:3:");
+    assert_eq!(values.get(result), FakeValue::Int(11));
+}
+
+/// Verifies `self::class` and `parent::class` resolve to the DECLARING class inside a constant
+/// initializer, matching php: the literal is fixed at the point the constant is written, so a
+/// subclass reading the inherited constant still sees the base class's name.
+#[test]
+fn execute_program_reads_self_and_parent_class_name_in_eval_constant_initializer() {
+    let program = parse_fragment(
+        br#"class EvalConstClassSelfBase {
+    public const NAME = self::class;
+}
+class EvalConstClassSelfChild extends EvalConstClassSelfBase {}
+class EvalConstClassParentBase {}
+class EvalConstClassParentChild extends EvalConstClassParentBase {
+    public const PARENT_NAME = parent::class;
+}
+echo EvalConstClassSelfBase::NAME; echo ":";
+echo EvalConstClassSelfChild::NAME; echo ":";
+return EvalConstClassParentChild::PARENT_NAME;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "EvalConstClassSelfBase:EvalConstClassSelfBase:"
+    );
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("EvalConstClassParentBase".to_string())
+    );
+}
+
+/// Verifies `self::CONST` resolves inside both instance and static property defaults.
+///
+/// Property defaults share the same `eval_class_like_member_default` path as constant
+/// initializers, so the same missing `push_class_scope` broke both.
+#[test]
+fn execute_program_reads_self_reference_in_eval_property_defaults() {
+    let program = parse_fragment(
+        br#"class EvalPropSelfBase {
+    public const A = 5;
+    public $instanceProp = self::A + 1;
+    public static $staticProp = self::A + 2;
+}
+$o = new EvalPropSelfBase();
+echo $o->instanceProp; echo ":";
+return EvalPropSelfBase::$staticProp;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "6:");
+    assert_eq!(values.get(result), FakeValue::Int(7));
+}
+
+/// Verifies `self::CONST` resolves as a backed enum case's value expression.
+#[test]
+fn execute_program_reads_self_reference_in_eval_enum_case_value() {
+    let program = parse_fragment(
+        br#"enum EvalEnumSelfRef: int {
+    const BASE = 10;
+    case A = self::BASE;
+    case B = self::BASE + 1;
+}
+echo EvalEnumSelfRef::A->value; echo ":";
+return EvalEnumSelfRef::B->value;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "10:");
+    assert_eq!(values.get(result), FakeValue::Int(11));
+}
+
+/// Verifies `static::` is refused inside compile-time-constant positions exactly like php:
+/// `"static::" is not allowed in compile-time constants` is a zend COMPILE error, uncatchable,
+/// so accepting it silently (treating `static` as `self`, which falling back to
+/// `current_class_scope()` would do once self-resolution works) would be a silent wrong-value
+/// hole rather than a visible refusal.
+#[test]
+fn execute_program_rejects_late_static_binding_in_eval_compile_time_constants() {
+    let const_case = parse_fragment(
+        br#"class EvalConstStaticBase {
+    public const A = 4;
+    public const B = static::A + 1;
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&const_case, &mut scope, &mut values).expect_err(
+        "static:: in a constant initializer should fail like php's compile-time refusal",
+    );
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+
+    let prop_case = parse_fragment(
+        br#"class EvalPropStaticBase {
+    public const A = 4;
+    public $p = static::A + 1;
+}
+new EvalPropStaticBase();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let err = execute_program(&prop_case, &mut scope, &mut values)
+        .expect_err("static:: in a property default should fail like php's compile-time refusal");
+    assert_eq!(err, EvalStatus::RuntimeFatal);
+}
+
+/// Verifies a self-referencing constant cycle raises a catchable `Error`, matching php's
+/// `Cannot declare self-referencing constant self::X`, instead of recursing without limit.
+///
+/// This shape only became reachable once `self::` resolution started working inside constant
+/// initializers: the eager evaluation in `initialize_eval_declared_constants` and the
+/// cache-on-miss in `eval_class_like_constant_cell` would otherwise recurse forever between
+/// `A`'s and `B`'s uncached cells.
+///
+/// php evaluates class constants LAZILY on first read, so its own version of this reducer
+/// (`p_cyclic_catch.php` in the campaign scratchpad) wraps the *usage* in try/catch. Elephc's
+/// `initialize_eval_declared_constants` evaluates every constant EAGERLY at the class-declaration
+/// statement instead (a pre-existing divergence, unrelated to this fix, documented below rather
+/// than fixed here), so the throw surfaces at the `class` statement -- this test wraps the
+/// declaration to catch it where it actually happens.
+#[test]
+fn execute_program_rejects_cyclic_eval_class_constant_initializers_as_catchable_error() {
+    let program = parse_fragment(
+        br#"try {
+    class EvalConstCyclic {
+        public const A = self::B;
+        public const B = self::A;
+    }
+    echo "bad";
+} catch (Error $e) {
+    echo get_class($e) . ":" . (str_contains($e->getMessage(), "self-referencing constant") ? "1" : "0");
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Error:1");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies compatible same-name trait constants are deduplicated during composition.
 #[test]
 fn execute_program_allows_compatible_eval_trait_constant_conflicts() {

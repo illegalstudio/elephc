@@ -2,7 +2,7 @@
 title: "get_object_vars()"
 description: "Returns the accessible non-static properties of an object."
 sidebar:
-  order: 94
+  order: 105
 ---
 
 ## get_object_vars()

@@ -2,7 +2,7 @@
 title: "stream_socket_get_name()"
 description: "Retrieve the name of the local or remote sockets."
 sidebar:
-  order: 397
+  order: 409
 ---
 
 ## stream_socket_get_name()

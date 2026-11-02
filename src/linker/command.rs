@@ -10,7 +10,7 @@
 //! - Whole-archive flags are scoped to exactly one archive and item order is preserved.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
 use crate::codegen::platform::{AppleVariant, Platform, Target};
@@ -36,12 +36,19 @@ use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan, LinuxLinkMode};
 /// apply to a given output kind.
 const LINUX_HARDENING_FLAGS: [&str; 3] = ["-Wl,-z,noexecstack", "-Wl,-z,relro", "-Wl,-z,now"];
 
-/// Paths for the final output and its two required input objects.
+/// Paths for the final output and its required input objects.
 pub(super) struct LinkPaths<'a> {
     /// Final executable or shared-library path.
     pub(super) bin: &'a Path,
-    /// Generated user-code object path.
+    /// Generated user-code object path, or the FIRST slice of one when the user
+    /// assembly was split across parallel `as` runs.
     pub(super) object: &'a Path,
+    /// Remaining user-object slices, in slice order. Empty for an unsplit build.
+    ///
+    /// Order is not cosmetic: `ld` concatenates each section in input order, and
+    /// an emitted `__data` record depends on the record next to it. A reordered
+    /// or size-packed input list links cleanly and dies at process start.
+    pub(super) extra_objects: &'a [PathBuf],
     /// Cached runtime object path.
     pub(super) runtime: &'a Path,
 }
@@ -181,6 +188,9 @@ fn render_macos_command(
         OsString::from("-o"),
         paths.bin.as_os_str().to_owned(),
         paths.object.as_os_str().to_owned(),
+    ]);
+    args.extend(paths.extra_objects.iter().map(|object| object.as_os_str().to_owned()));
+    args.extend([
         paths.runtime.as_os_str().to_owned(),
         OsString::from("-syslibroot"),
         OsString::from(sdk.path),
@@ -239,8 +249,9 @@ fn render_linux_command(
         OsString::from("-o"),
         paths.bin.as_os_str().to_owned(),
         paths.object.as_os_str().to_owned(),
-        paths.runtime.as_os_str().to_owned(),
     ]);
+    args.extend(paths.extra_objects.iter().map(|object| object.as_os_str().to_owned()));
+    args.push(paths.runtime.as_os_str().to_owned());
     if matches!(emit, Emit::Executable) && matches!(plan.linux_mode(), LinuxLinkMode::Static) {
         args.push(OsString::from("-static"));
     }
@@ -369,8 +380,70 @@ mod tests {
         LinkPaths {
             bin: Path::new("out"),
             object: Path::new("user.o"),
+            extra_objects: &[],
             runtime: Path::new("runtime.o"),
         }
+    }
+
+    /// Returns fixed paths for a user object that was assembled in three slices.
+    fn split_paths(extra: &[PathBuf]) -> LinkPaths<'_> {
+        LinkPaths {
+            bin: Path::new("out"),
+            object: Path::new("user.o"),
+            extra_objects: extra,
+            runtime: Path::new("runtime.o"),
+        }
+    }
+
+    /// Every user-object slice must reach the link line, between the first slice
+    /// and the runtime object, in slice order.
+    ///
+    /// `ld` concatenates section contents in input order. Emitted `__data`
+    /// records are adjacent by construction, so a dropped or reordered slice
+    /// produces a binary that links and then reads the wrong record at run time —
+    /// which is why this is asserted rather than left to review.
+    #[test]
+    fn split_user_objects_keep_their_order_before_the_runtime() {
+        let extra = vec![PathBuf::from("user.slice1.o"), PathBuf::from("user.slice2.o")];
+        for args in [
+            render_link_command(
+                Target::new(Platform::MacOS, Arch::AArch64),
+                Emit::Executable,
+                split_paths(&extra),
+                &LinkPlan::new(),
+                false,
+                Some(MacSdk { path: "/SDK", version: "14.0" }),
+                &[],
+            )
+            .arguments_lossy(),
+            render_link_command(
+                Target::new(Platform::Linux, Arch::X86_64),
+                Emit::Executable,
+                split_paths(&extra),
+                &LinkPlan::new(),
+                false,
+                None,
+                &[],
+            )
+            .arguments_lossy(),
+        ] {
+            let index = |needle: &str| {
+                args.iter()
+                    .position(|argument| argument == needle)
+                    .unwrap_or_else(|| panic!("{needle} missing from {args:?}"))
+            };
+            assert!(index("user.o") < index("user.slice1.o"));
+            assert!(index("user.slice1.o") < index("user.slice2.o"));
+            assert!(index("user.slice2.o") < index("runtime.o"));
+        }
+    }
+
+    /// An unsplit build must render exactly the command it renders today.
+    #[test]
+    fn an_unsplit_build_adds_no_object_arguments() {
+        let args = render_linux(&LinkPlan::new());
+        let object = args.iter().position(|argument| argument == "user.o").expect("user object");
+        assert_eq!(args.get(object + 1).map(String::as_str), Some("runtime.o"));
     }
 
     /// Renders one Linux executable command with no host probes.
@@ -584,6 +657,7 @@ mod tests {
             runtime_requirements: &[],
             managed_packages: &packages,
             forced_bridges: &forced,
+            embedded_bridges: &[],
             web: false,
         });
         // Bridge resolution turns each named bridge into its archive.

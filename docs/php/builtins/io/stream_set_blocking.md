@@ -2,7 +2,7 @@
 title: "stream_set_blocking()"
 description: "Sets blocking/non-blocking mode on a stream."
 sidebar:
-  order: 389
+  order: 401
 ---
 
 ## stream_set_blocking()

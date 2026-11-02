@@ -32,6 +32,7 @@ pub(crate) fn emit_native_frame_owners(e: &mut Emitter, label: &str, offsets: &[
 /// Emits the C-ABI slot reader and its independent native slot-identity set.
 pub fn emit_gc_frame_slots(e: &mut Emitter) {
     unique(e);
+    emit_gc_frame_owners_table(e);
     e.blank();
     e.label_global("__rt_gc_frame_owner_slot");
     abi::emit_frame_prologue(e, 64);
@@ -186,4 +187,94 @@ fn buckets(e: &mut Emitter, name: &str) {
     abi::emit_jump(e, &format!("__rt_gc_slot_set_{name}_probe"));
     e.label(&format!("__rt_gc_slot_set_{name}_store"));
     op(e, "str x0, [x9, x11, lsl #3]", "mov QWORD PTR [r8 + r10 * 8], rax", "record the physical slot address without adding a PHP owner");
+}
+
+/// Emits `__rt_gc_frame_owners_table`, the one walker behind every PHP function's
+/// `__gc_frame_owners` visitor.
+///
+/// In: the suspended frame's frame pointer, the traversal context, and a slot table:
+/// `[count, (offset, state_offset, tag) x count]`. Each entry is the owner slot at
+/// `frame - offset`; a nonzero `state_offset` names the slot's ref-cell state word at
+/// `frame - state_offset`, and a nonzero state skips the slot (the cell is visited through its
+/// own ref-cell entry). `tag` is the descriptor `__rt_gc_frame_owner_slot` takes.
+///
+/// Each function used to carry its own copy of this loop, unrolled: one address, tag and call
+/// per slot. On the Symfony `--web` build those visitors were 1.22 M instructions over 18 933
+/// functions; a visitor is now a three-instruction tail call naming an interned table.
+fn emit_gc_frame_owners_table(e: &mut Emitter) {
+    e.blank();
+    e.comment("--- runtime: gc_frame_owners_table ---");
+    e.label_global("__rt_gc_frame_owners_table");
+    if e.target.arch == Arch::AArch64 {
+        e.instruction("sub sp, sp, #64");                                       // reserve the walker frame
+        e.instruction("stp x29, x30, [sp, #48]");                               // save frame pointer and return address
+        e.instruction("add x29, sp, #48");                                      // establish the walker frame
+        e.instruction("stp x19, x20, [sp]");                                    // preserve the callee-saved frame and context registers
+        e.instruction("stp x21, x22, [sp, #16]");                               // preserve the callee-saved cursor and count registers
+        e.instruction("mov x19, x0");                                           // the suspended frame's frame pointer
+        e.instruction("mov x20, x1");                                           // the traversal context every slot visit shares
+        e.instruction("ldr x22, [x2]");                                         // the table's entry count
+        e.instruction("add x21, x2, #8");                                       // the first entry
+        e.label("__rt_gc_frame_owners_table_loop");
+        e.instruction("cbz x22, __rt_gc_frame_owners_table_done");              // every entry visited
+        e.instruction("ldr x10, [x21, #8]");                                    // the entry's ref-cell state offset, or 0
+        e.instruction("cbz x10, __rt_gc_frame_owners_table_visit");             // no state word: always visit
+        e.instruction("sub x10, x19, x10");                                     // address the state word
+        e.instruction("ldr x10, [x10]");                                        // load the slot's ref-cell state
+        e.instruction("cbnz x10, __rt_gc_frame_owners_table_next");             // a promoted cell is visited through its own entry
+        e.label("__rt_gc_frame_owners_table_visit");
+        e.instruction("ldr x9, [x21]");                                         // the owner slot's frame offset
+        e.instruction("sub x0, x19, x9");                                       // the owner slot's address
+        e.instruction("ldr x1, [x21, #16]");                                    // the slot's descriptor tag
+        e.instruction("mov x2, x20");                                           // the shared traversal context
+        e.instruction("bl __rt_gc_frame_owner_slot");                           // visit one owner slot
+        e.label("__rt_gc_frame_owners_table_next");
+        e.instruction("add x21, x21, #24");                                     // advance to the next entry
+        e.instruction("sub x22, x22, #1");                                      // one entry fewer to visit
+        e.instruction("b __rt_gc_frame_owners_table_loop");                     // continue the walk
+        e.label("__rt_gc_frame_owners_table_done");
+        e.instruction("ldp x21, x22, [sp, #16]");                               // restore the cursor and count registers
+        e.instruction("ldp x19, x20, [sp]");                                    // restore the frame and context registers
+        e.instruction("ldp x29, x30, [sp, #48]");                               // restore frame pointer and return address
+        e.instruction("add sp, sp, #64");                                       // release the walker frame
+        e.instruction("ret");                                                   // the visit has no result
+        return;
+    }
+    e.instruction("push rbp");                                                  // preserve the caller frame pointer
+    e.instruction("mov rbp, rsp");                                              // establish the walker frame
+    e.instruction("push rbx");                                                  // preserve the callee-saved frame register
+    e.instruction("push r12");                                                  // preserve the callee-saved context register
+    e.instruction("push r13");                                                  // preserve the callee-saved cursor register
+    e.instruction("push r14");                                                  // preserve the callee-saved count register (keeps rsp 16-aligned)
+    e.instruction("mov rbx, rdi");                                              // the suspended frame's frame pointer
+    e.instruction("mov r12, rsi");                                              // the traversal context every slot visit shares
+    e.instruction("mov r14, QWORD PTR [rdx]");                                  // the table's entry count
+    e.instruction("lea r13, [rdx + 8]");                                        // the first entry
+    e.label("__rt_gc_frame_owners_table_loop_x86");
+    e.instruction("test r14, r14");                                             // any entry left?
+    e.instruction("jz __rt_gc_frame_owners_table_done_x86");                    // every entry visited
+    e.instruction("mov rax, QWORD PTR [r13 + 8]");                              // the entry's ref-cell state offset, or 0
+    e.instruction("test rax, rax");                                             // does the slot have a state word?
+    e.instruction("jz __rt_gc_frame_owners_table_visit_x86");                   // no state word: always visit
+    e.instruction("mov rcx, rbx");                                              // start from the frame pointer
+    e.instruction("sub rcx, rax");                                              // address the state word
+    e.instruction("cmp QWORD PTR [rcx], 0");                                    // is the slot's cell promoted?
+    e.instruction("jne __rt_gc_frame_owners_table_next_x86");                   // a promoted cell is visited through its own entry
+    e.label("__rt_gc_frame_owners_table_visit_x86");
+    e.instruction("mov rdi, rbx");                                              // start from the frame pointer
+    e.instruction("sub rdi, QWORD PTR [r13]");                                  // the owner slot's address
+    e.instruction("mov rsi, QWORD PTR [r13 + 16]");                             // the slot's descriptor tag
+    e.instruction("mov rdx, r12");                                              // the shared traversal context
+    e.instruction("call __rt_gc_frame_owner_slot");                             // visit one owner slot
+    e.label("__rt_gc_frame_owners_table_next_x86");
+    e.instruction("add r13, 24");                                               // advance to the next entry
+    e.instruction("sub r14, 1");                                                // one entry fewer to visit
+    e.instruction("jmp __rt_gc_frame_owners_table_loop_x86");                   // continue the walk
+    e.label("__rt_gc_frame_owners_table_done_x86");
+    e.instruction("pop r14");                                                   // restore the count register
+    e.instruction("pop r13");                                                   // restore the cursor register
+    e.instruction("pop r12");                                                   // restore the context register
+    e.instruction("pop rbx");                                                   // restore the frame register
+    e.instruction("pop rbp");                                                   // restore the caller frame pointer
+    e.instruction("ret");                                                       // the visit has no result
 }

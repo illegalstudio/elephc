@@ -433,13 +433,20 @@ pub(super) fn resolve_function_reference(
     if name.function_fallback().is_some() {
         return resolved.with_function_fallback();
     }
-    if conditional && name.is_unqualified()
+    let unqualified_in_namespace = name.is_unqualified()
         && current_namespace.is_some_and(|namespace| !namespace.is_empty())
-        && !imports.functions.contains_key(&php_symbol_key(name.as_str()))
-    {
+        && !imports.functions.contains_key(&php_symbol_key(name.as_str()));
+    if conditional && unqualified_in_namespace {
         if super::function_fallbacks::global_candidate(symbols, name.as_str()).is_some() {
             return resolved.with_function_fallback();
         }
+    }
+    // Nothing declares the namespaced name: php will call the GLOBAL function of that name, and
+    // a global supplied later -- a prelude injected after this pass, `token_get_all()` for one --
+    // is not in `symbols` yet. Keep the fallback so `optimize::namespace_fallbacks` can rebind it
+    // and prelude detection can see the global name.
+    if unqualified_in_namespace && symbols.canonical_function(resolved.as_str()).is_none() {
+        return resolved.with_function_fallback();
     }
     resolved
 }
@@ -558,7 +565,13 @@ pub(super) fn resolve_constant_name(
 /// resolution: every constant the shared catalog registers unconditionally (`PHP_OS`, `SID`,
 /// `STDIN`, `JSON_*`, `CURLOPT_*`, ...), so a bare mention resolves to the global even inside
 /// a namespace, with or without the owning bridge or prelude being linked.
+///
+/// The two families the catalog cannot hold are asked of their own tables: PCNTL's values are
+/// TARGET-dependent and the tokenizer's `T_*` values are PROFILE-dependent, so neither has a
+/// single `ConstValue` to catalogue. Leaving one out is silent — `namespace App; echo T_STRING;`
+/// resolves to `App\T_STRING` and fails as an undefined constant.
 fn is_builtin_global_constant(name: &str) -> bool {
     crate::types::predefined_constants::is_registered_constant(name)
         || crate::types::pcntl_constants::is_pcntl_int_constant(name)
+        || crate::types::token_constants::is_token_int_constant(name)
 }

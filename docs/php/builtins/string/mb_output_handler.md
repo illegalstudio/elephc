@@ -2,7 +2,7 @@
 title: "mb_output_handler()"
 description: "Converts an output-buffer phase using the request encodings, MIME selection, and substitution settings."
 sidebar:
-  order: 938
+  order: 977
 ---
 
 ## mb_output_handler()

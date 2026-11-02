@@ -280,6 +280,43 @@ var_dump($c->s);
     assert_eq!(out, "int(1)\nstring(1) \"a\"\n");
 }
 
+/// Verifies an untyped property with a scalar default holds a value of another kind written
+/// later, from inside a method and from outside the class.
+///
+/// A scalar default (`= false`, `= ''`, `= 1.5`) is only the slot's FIRST value, but the slot kept
+/// the default's type and every other write was coerced into it: `$this->withinTransaction = 'db'`
+/// on a `= false` property (Laravel's `Pipeline`) read back as `true`, silently. An external
+/// `$p->withinTransaction = 'x'` was refused by the backend instead.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_untyped_scalar_default_property_holds_later_values_of_another_kind() {
+    let out = compile_and_run(
+        r#"<?php
+class Pipe {
+    public $withinTransaction = false;
+    public $label = '';
+    public $ratio = 1.5;
+    public function within($name) { $this->withinTransaction = $name; return $this; }
+    public function describe() { return $this->withinTransaction !== false ? "tx:" . $this->withinTransaction : "none"; }
+}
+$p = new Pipe();
+echo $p->describe(), "\n";
+$p->withinTransaction = 'x';
+echo $p->describe(), "\n";
+echo (new Pipe())->within('db')->describe(), "\n";
+$q = new Pipe();
+$q->label = 42;
+$q->ratio = 'half';
+var_dump($q->label, $q->ratio, (new Pipe())->label, (new Pipe())->ratio);
+"#,
+    );
+    assert_eq!(
+        out,
+        "none\ntx:x\ntx:db\nint(42)\nstring(4) \"half\"\nstring(0) \"\"\nfloat(1.5)\n"
+    );
+}
+
 
 /// Verifies an ARRAY LITERAL default on a `?array`, `mixed` or other union property compiles and
 /// reads back (issue #688).

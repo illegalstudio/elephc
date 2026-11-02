@@ -74,26 +74,6 @@ pub(super) fn eval_reflection_aot_member_names(
     Ok(names)
 }
 
-/// Returns one AOT method's DECLARED spelling, as the generated name table records it.
-///
-/// `ReflectionMethod` resolves case-insensitively, but PHP reports the declaration rather than
-/// the caller's lookup text, and the AOT branch used to answer with the lookup text lowercased
-/// — `match` for a method written `Match` (issue #571). The generated table carries the
-/// declaration, so the match is found there and the requested name is only a fallback, for a
-/// class-like the table does not describe.
-pub(super) fn eval_reflection_aot_declared_method_name(
-    class_name: &str,
-    requested_method_name: &str,
-    values: &mut impl RuntimeValueOps,
-) -> Result<String, EvalStatus> {
-    let names =
-        eval_reflection_aot_member_names(EVAL_REFLECTION_OWNER_METHOD, class_name, values)?;
-    Ok(names
-        .into_iter()
-        .find(|name| name.eq_ignore_ascii_case(requested_method_name))
-        .unwrap_or_else(|| requested_method_name.to_ascii_lowercase()))
-}
-
 /// Returns generated AOT interface names for one reflected class-like symbol.
 pub(super) fn eval_reflection_aot_class_interface_names(
     class_name: &str,
@@ -146,22 +126,9 @@ pub(super) fn eval_reflection_eval_class_interface_names(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {
-    let mut names = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    if let Some(parent) = context.class_native_parent_name(class_name) {
-        for name in eval_reflection_aot_class_interface_names(&parent, values)? {
-            eval_reflection_push_unique_class_name(name, &mut names, &mut seen);
-        }
-    }
-    for name in context.class_interface_names(class_name) {
-        eval_reflection_push_unique_class_name(name.clone(), &mut names, &mut seen);
-        if !context.has_interface(&name) && eval_runtime_interface_exists(&name, values)? {
-            for parent in eval_reflection_aot_class_interface_names(&name, values)? {
-                eval_reflection_push_unique_class_name(parent, &mut names, &mut seen);
-            }
-        }
-    }
-    Ok(names)
+    crate::interpreter::builtins::eval_class_relation_eval_class_interface_names(
+        class_name, context, values,
+    )
 }
 
 /// Returns eval interface parents plus inherited generated/AOT interface parents.
@@ -239,9 +206,16 @@ pub(super) fn eval_reflection_string_array_to_vec(
     let len = values.array_len(array)?;
     let mut result = Vec::with_capacity(len);
     for position in 0..len {
+        // Both the boxed key and the element come back OWNED; reading the string only borrows
+        // the element. Dropping them leaked a key box and a boxed string copy per name, so every
+        // `new ReflectionClass(X)` bled 3 blocks per property and per method of X.
         let key = values.int(position as i64)?;
-        let value = values.array_get(array, key)?;
-        result.push(eval_reflection_string_arg(value, values)?);
+        let value = values.array_get(array, key);
+        let _ = values.release(key);
+        let value = value?;
+        let name = eval_reflection_string_arg(value, values);
+        let _ = values.release(value);
+        result.push(name?);
     }
     Ok(result)
 }
@@ -304,6 +278,7 @@ pub(super) fn eval_reflection_class_like_attributes(
             resolved_name: class.name().trim_start_matches('\\').to_string(),
             source_location: class.source_location(),
             attributes: class.attributes().to_vec(),
+            doc_comment: class.doc_comment().map(str::to_string),
             interface_names: context.class_interface_names(class.name()),
             trait_names: context.class_trait_names(class.name()),
             method_names: context.class_method_names(class.name()),
@@ -318,6 +293,7 @@ pub(super) fn eval_reflection_class_like_attributes(
             resolved_name: interface.name().trim_start_matches('\\').to_string(),
             source_location: interface.source_location(),
             attributes: interface.attributes().to_vec(),
+            doc_comment: interface.doc_comment().map(str::to_string),
             interface_names: context.interface_parent_names(interface.name()),
             trait_names: Vec::new(),
             method_names: context.interface_method_names(interface.name()),
@@ -332,6 +308,7 @@ pub(super) fn eval_reflection_class_like_attributes(
             resolved_name: trait_decl.name().trim_start_matches('\\').to_string(),
             source_location: trait_decl.source_location(),
             attributes: trait_decl.attributes().to_vec(),
+            doc_comment: None,
             interface_names: Vec::new(),
             trait_names: context.trait_trait_names(trait_decl.name()),
             method_names: context.trait_method_names(trait_decl.name()),
@@ -347,6 +324,7 @@ pub(super) fn eval_reflection_class_like_attributes(
             resolved_name: enum_decl.name().trim_start_matches('\\').to_string(),
             source_location: enum_decl.source_location(),
             attributes: enum_decl.attributes().to_vec(),
+            doc_comment: None,
             interface_names: context.class_interface_names(enum_decl.name()),
             trait_names: context.class_trait_names(enum_decl.name()),
             method_names: context.class_method_names(enum_decl.name()),
@@ -467,10 +445,22 @@ pub(super) fn eval_reflection_builtin_class_is_iterable(class_name: &str) -> boo
 /// Every class-like the shared catalog knows (SPL, Core interfaces and throwables, date/time,
 /// Reflection, prelude classes, ...) is a builtin. The only name outside the catalog is the
 /// compiler's own `AppendIterator` storage helper, which user code never declares.
-pub(super) fn eval_reflection_class_like_is_internal(class_name: &str) -> bool {
+///
+/// ALSO THE CATALOG-MEMBERSHIP TEST for object construction, which is why it is visible beyond
+/// reflection. `expressions::evaluation::eval_new_object_result` asks it to tell two very
+/// different failures apart when a name resolves nowhere: a name PHP itself provides as a builtin
+/// class is a GAP IN THIS BUILD — PHP would have constructed the object, so reporting
+/// `Class "X" not found` would blame the user for the compiler's omission — while any other name
+/// is genuinely undefined and gets PHP's own catchable `Error`. The list is the same either way,
+/// which is the point of reusing it rather than growing a second one.
+pub(in crate::interpreter) fn eval_reflection_class_like_is_internal(class_name: &str) -> bool {
     let trimmed = class_name.trim_start_matches('\\');
-    elephc_builtin_contract::lookup_class(trimmed).is_some()
-        || trimmed.eq_ignore_ascii_case(UNCATALOGUED_INTERNAL_CLASS)
+    // A class php adds after the active profile (`SortDirection` is 8.6) is a user class here.
+    elephc_builtin_contract::lookup_class(trimmed).is_some_and(|class| {
+        class
+            .since
+            .is_none_or(|since| crate::eval_php_profile::eval_php_version_id() >= since.version_id())
+    }) || trimmed.eq_ignore_ascii_case(UNCATALOGUED_INTERNAL_CLASS)
 }
 
 /// The one compiler helper class reflection treats as internal without a catalog entry.
@@ -484,7 +474,7 @@ mod internal_class_tests {
     /// helper are internal, and the helper really has no catalog entry to fall back on.
     #[test]
     fn internal_predicate_follows_the_class_catalog() {
-        for name in ["Iterator", "\\Exception", "ReflectionClass", "Fiber", "SortDirection", "PDO"] {
+        for name in ["Iterator", "\\Exception", "ReflectionClass", "Fiber", "PDO"] {
             assert!(eval_reflection_class_like_is_internal(name), "{name}");
         }
         assert!(eval_reflection_class_like_is_internal(UNCATALOGUED_INTERNAL_CLASS));
@@ -776,12 +766,7 @@ pub(super) fn eval_throw_reflection_exception(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let exception = values.new_object("ReflectionException")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("ReflectionException", message, 0, context, values)
 }
 
 /// Creates a catchable `ValueError` and propagates it through eval throw state.
@@ -790,12 +775,7 @@ pub(super) fn eval_throw_value_error(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let exception = values.new_object("ValueError")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("ValueError", message, 0, context, values)
 }
 
 /// Creates a catchable `TypeError` and propagates it through eval throw state.
@@ -804,12 +784,7 @@ pub(super) fn eval_throw_type_error(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let exception = values.new_object("TypeError")?;
-    let message = values.string(message)?;
-    let code = values.int(0)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("TypeError", message, 0, context, values)
 }
 
 /// Returns PHP's type name spelling used in argument type error messages.

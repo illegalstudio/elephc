@@ -31,6 +31,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("str x0, [x9, #8]");                                // borrow the token owned by the retained native argument
         emitter.instruction(&format!("mov x10, #{INPUT_INI_IDENTITY}"));        // declare the string-specific identity payload contract
         emitter.instruction("str x10, [x9, #32]");                              // publish the identity capability after successful resolution
+        abi::emit_store_imm_to_symbol(emitter, "_mbstring_ini_native_active", 0, 1); // later copies and frees now keep this origin's metadata
         emitter.instruction("mov x0, #0");                                      // report a complete description with borrowed identity ownership
         emitter.instruction("b __rt_mbstring_ini_input_done");                  // share normal C frame teardown
         emitter.label("__rt_mbstring_ini_input_failed");
@@ -56,6 +57,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("mov r10, QWORD PTR [rsp]");                        // recover writable metadata after the registry callback
         emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // borrow the identity owned by the retained native argument
         emitter.instruction(&format!("mov QWORD PTR [r10 + 32], {INPUT_INI_IDENTITY}")); // publish the kind-specific identity capability
+        abi::emit_store_imm_to_symbol(emitter, "_mbstring_ini_native_active", 0, 1); // later copies and frees now keep this origin's metadata
         emitter.instruction("xor eax, eax");                                    // report successful metadata with no additional owner
         emitter.instruction("jmp __rt_mbstring_ini_input_done");                // share callback teardown after successful binding
         emitter.label("__rt_mbstring_ini_input_failed");

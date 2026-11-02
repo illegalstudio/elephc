@@ -50,7 +50,7 @@ pub(crate) fn lower_by_ref_foreach_element_source(
 ) -> LoweredValue {
     let array_value = lower_by_ref_foreach_source_receiver(ctx, array);
     let Some(op) = element_fetch_for_write_op(ctx, &array_value, index, expr) else {
-        if value_is_nullable(ctx, array_value.value) {
+        if receiver_needs_null_arm(ctx, array_value.value) {
             return lower_nullable_array_access(ctx, array_value, index, expr, true);
         }
         return lower_array_access_from_value(ctx, array_value, index, expr, true);
@@ -167,6 +167,22 @@ fn subscript_chain_is_variable_rooted(expr: &Expr) -> bool {
     }
 }
 
+/// Lowers `$container[$key]` without the undefined-key warning, when `expr` is a subscript.
+///
+/// Returns `None` for any other expression. This is the read a WRITE context does: the bucket of
+/// a nested append (`$a[$k][] = $v`) is fetched before it is appended to, and php vivifies a
+/// missing `$k` silently. The fused lowering in `stmt::nested_append` does that itself; the
+/// ordinary desugar it falls back to (a gradual container) read the bucket with the warning.
+pub(crate) fn lower_array_access_quietly(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::ArrayAccess { array, index } = &expr.kind else {
+        return None;
+    };
+    Some(lower_array_access_with_missing_warning(ctx, array, index, expr, false))
+}
+
 /// Lowers array, hash, string, or ArrayAccess indexing with configurable
 /// undefined-offset warning behavior for array and string reads. Suppressed
 /// warnings propagate through the whole subscript chain: PHP's `isset()` and `??`
@@ -178,12 +194,65 @@ pub(super) fn lower_array_access_with_missing_warning(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
+    if receiver_fetch_is_delayed(array) && crate::optimize::expr_has_side_effects(index) {
+        return lower_array_access_after_offset(ctx, array, index, expr, warn_on_missing);
+    }
     let array_value = if warn_on_missing {
         lower_expr(ctx, array)
     } else {
         lower_subscript_receiver_silently(ctx, array)
     };
     lower_array_access_from_receiver(ctx, array_value, index, expr, warn_on_missing)
+}
+
+/// Whether php reads this subscript receiver only AFTER evaluating the offset.
+///
+/// php compiles `$v[...]`, `$this->p[...]`, `$o->p[...]` and `Cls::$p[...]` reads with a delayed
+/// receiver fetch: the offset expression runs first, then the variable or property is read. An
+/// offset with side effects therefore sees its own writes: `$this->bytes[$this->mutate()]` and
+/// `$s[$f()]` with `$f` rewriting `$s` by reference read the NEW string.
+fn receiver_fetch_is_delayed(array: &Expr) -> bool {
+    match &array.kind {
+        ExprKind::Variable(_) | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => {
+            matches!(object.kind, ExprKind::Variable(_) | ExprKind::This)
+        }
+        _ => false,
+    }
+}
+
+/// Reads `$receiver[$offset]` in php's order when the offset has side effects: offset first, then
+/// the receiver.
+///
+/// Reading the receiver first was not only the wrong value but a read of freed memory: the string
+/// was loaded as a borrowed view, the offset's call replaced and released it, and the byte was
+/// then taken from the released buffer.
+fn lower_array_access_after_offset(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> LoweredValue {
+    let index_value = lower_expr(ctx, index);
+    // A property read may run a hook or `__get` that throws; the evaluated offset must not leak.
+    let pins = super::pin_in_flight_owners(ctx, &[index_value.value], index.span);
+    let array_value = if warn_on_missing {
+        lower_expr(ctx, array)
+    } else {
+        lower_subscript_receiver_silently(ctx, array)
+    };
+    super::unpin_in_flight_owners(ctx, pins, index.span);
+    // A receiver that may be null takes the boxed read, which answers null and raises php's
+    // `Trying to access array offset on null` itself.
+    let array_value = if receiver_needs_null_arm(ctx, array_value.value) {
+        ctx.box_value_as_mixed(array_value, PhpType::Mixed, Some(expr.span))
+    } else {
+        array_value
+    };
+    let array_value =
+        crate::ir_lower::ownership::persist_string_byte_view(ctx, array_value, Some(expr.span));
+    lower_array_access_from_values(ctx, array_value, index_value, index, expr, warn_on_missing, false)
 }
 
 /// Lowers array access over an already evaluated receiver, taking the null-safe route when
@@ -195,7 +264,7 @@ pub(super) fn lower_array_access_from_receiver(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
-    if value_is_nullable(ctx, array_value.value) {
+    if receiver_needs_null_arm(ctx, array_value.value) {
         return lower_nullable_array_access(ctx, array_value, index, expr, warn_on_missing);
     }
     lower_array_access_from_value(ctx, array_value, index, expr, warn_on_missing)
@@ -209,6 +278,61 @@ pub(super) fn lower_subscript_receiver_silently(
 ) -> LoweredValue {
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
+    }
+    if let Some(value) =
+        super::lazy_branches::lower_magic_property_null_coalesce_probe(ctx, array)
+    {
+        return value;
+    }
+    if let Some(value) =
+        super::lazy_branches::lower_initialized_property_null_coalesce_probe(ctx, array)
+    {
+        return value;
+    }
+    // A link whose receiver names no class (a `mixed` global, an untyped parameter) is resolved
+    // at run time, where an inaccessible name reaches `__isset`/`__get`. Those hooks may drop the
+    // receiver's last outside reference (`$root = null;` inside `__isset`), so the chain holds its
+    // own for the whole fetch -- the magic-prefix arm above does the same for a known class --
+    // and reads through the silent probe, as `isset()` requires of every link.
+    if let ExprKind::PropertyAccess { object, property } = &array.kind {
+        if super::native_isset::isset_object_expr_class(ctx, object).is_none() {
+            let receiver = lower_subscript_receiver_silently(ctx, object);
+            if matches!(
+                ctx.builder.value_php_type(receiver.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) {
+                let receiver = if ctx.value_is_owning_temporary(receiver) {
+                    receiver
+                } else {
+                    crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
+                        ctx,
+                        receiver,
+                        Some(array.span),
+                    )
+                };
+                // An intermediate link needs the VALUE (the next link reads it): php fetches it
+                // like `??` does, `__isset` and then `__get`, not `isset()`'s `__isset` alone.
+                let probed = super::property_access::lower_property_fetch_mode_from_value(
+                    ctx, receiver, property, PropertyFetchMode::Coalesce, array,
+                );
+                // The probe answers null for a name `__isset` denies, whatever `__get` declares,
+                // so the next link must see a nullable value and probe it rather than read it.
+                if matches!(
+                    ctx.builder.value_php_type(probed.value).codegen_repr(),
+                    PhpType::Mixed | PhpType::Union(_)
+                ) {
+                    return probed;
+                }
+                return ctx.box_value_as_mixed(probed, PhpType::Mixed, Some(array.span));
+            }
+            return super::property_access::lower_property_get_from_value(
+                ctx,
+                receiver,
+                property,
+                Op::PropGet,
+                array,
+            );
+        }
     }
     lower_expr(ctx, array)
 }
@@ -309,6 +433,29 @@ fn lower_array_access_from_values_with_receiver_pins(
     receiver_pins: Vec<super::PinnedInFlightOwner>,
     receiver_owner: Option<crate::ir::LocalSlotId>,
 ) -> LoweredValue {
+    // A named-argument variadic is typed `iterable` and holds a RAW list or hash pointer, while
+    // the generic read below expects a boxed Mixed receiver: it handed the bare hash to
+    // `__rt_mixed_array_get`. Box it (the tag comes from the heap kind); the box is an owning
+    // temporary that the receiver release at the end retires.
+    //
+    // An object typed by a contract or a non-final base that does not itself declare
+    // `ArrayAccess` (`Illuminate\Contracts\Container\Container`) is read the same way: the class
+    // behind it is what implements the interface, so the read dispatches on the boxed object at
+    // run time, exactly as it does for a `mixed` receiver.
+    let receiver_is_unproven_array_access = matches!(
+        ctx.builder.value_php_type(array_value.value).codegen_repr(),
+        PhpType::Object(ref class_name)
+            if !object_name_satisfies_interface_for_ir(ctx, class_name, "ArrayAccess")
+    );
+    let array_value = if receiver_is_unproven_array_access
+        || matches!(
+            ctx.builder.value_php_type(array_value.value).codegen_repr(),
+            PhpType::Iterable
+        ) {
+        ctx.box_value_as_mixed(array_value, PhpType::Mixed, Some(expr.span))
+    } else {
+        array_value
+    };
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             // Nullable scalar keys carry an inline tag. Preserve null as the empty-string
@@ -323,9 +470,9 @@ fn lower_array_access_from_values_with_receiver_pins(
             let index_is_mixed = matches!(index_value.ir_type, IrType::Heap(IrHeapKind::Mixed));
             if index_is_mixed {
                 if warn_on_missing {
-                    Op::ArrayGet
+                    Op::ArrayGetMixedKey
                 } else {
-                    Op::ArrayGetSilent
+                    Op::ArrayGetMixedKeySilent
                 }
             } else if index_ty == PhpType::Int {
                 index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
@@ -425,6 +572,11 @@ fn lower_array_access_from_values_with_receiver_pins(
         guard_descriptor_container(ctx, result, expr.span);
         retire_owned_call_operand(ctx, owner, expr.span);
         ctx.unguard_call_argument(result.value, expr.span);
+    } else if ctx.value_needs_release_after_use(index_value) {
+        // A string-local key whose slot is boxed Mixed (`$k` assigned only under an `if`) is read
+        // as a DETACHED copy; the provisional release is pruned when the slot lends a concrete
+        // string, and otherwise frees that copy, which leaked one block per read.
+        crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
     } else {
         release_coerced_source_if_owned(ctx, index_value, Some(index.span));
         // A string key is not a coerced Mixed/array source, so the call above
@@ -462,6 +614,43 @@ fn coerce_string_offset_to_int(
         result
     } else {
         coerce_to_int_at_span(ctx, value, Some(span))
+    }
+}
+
+/// Whether a subscript read needs the separate null-receiver arm.
+///
+/// Only a receiver that is statically `null` (or may be, next to concrete types) does: the read
+/// path cannot index it. A boxed `mixed` receiver goes through the runtime read, which handles a
+/// null payload itself AND raises php's `Trying to access array offset on null` warning; the arm
+/// answers a quiet null, so `function f(mixed $x) { return $x[0]; } f(null)` printed no warning.
+fn receiver_needs_null_arm(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> bool {
+    match ctx.builder.value_php_type(value) {
+        PhpType::Void | PhpType::Never => true,
+        PhpType::Union(members) => {
+            members.iter().any(|member| matches!(member, PhpType::Void))
+                && !members.iter().any(|member| matches!(member, PhpType::Mixed))
+        }
+        _ => false,
+    }
+}
+
+/// Evaluates, for its effects alone, an index the null-receiver edge does not read through.
+///
+/// PHP evaluates every dim operand of a fetch chain before it looks at the container, so
+/// `isset($seen[$group][$class = $def->getClass()])` assigns `$class` even when `$seen[$group]`
+/// is missing -- and Symfony's `PhpDumper::generateProxyClasses` reads `$class` right after that
+/// probe. Skipping the index on the null edge left `$class` holding the previous iteration's
+/// value (or nothing). A side-effect-free index is still skipped: evaluating it cannot be
+/// observed, and lowering it twice would only cost code.
+pub(super) fn lower_skipped_index_for_effects(ctx: &mut LoweringContext<'_, '_>, index: &Expr) {
+    if !crate::optimize::expr_has_side_effects(index) {
+        return;
+    }
+    // Discarded like an expression statement: `$class = …` yields the local's own storage, which
+    // must survive; only a value that owns a temporary is released.
+    let value = lower_expr(ctx, index);
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(index.span));
     }
 }
 
@@ -537,7 +726,7 @@ pub(crate) fn lower_array_access_from_lowered_receiver(
     index: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    if value_is_nullable(ctx, receiver.value) {
+    if receiver_needs_null_arm(ctx, receiver.value) {
         return lower_nullable_array_access(ctx, receiver, index, expr, true);
     }
     lower_array_access_from_value(ctx, receiver, index, expr, true)
@@ -545,22 +734,41 @@ pub(crate) fn lower_array_access_from_lowered_receiver(
 
 /// Returns the statically-known key type for an array index expression.
 /// Used to decide between Op::ArrayGet (int key) and Op::ArrayGetMixedKey.
-pub(crate) fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
-    let ty = infer_expr_type_syntactic(index);
+pub(crate) fn index_expr_key_type(ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
+    let ty = match &index.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| infer_expr_type_syntactic(index))
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_result_type(ctx, receiver, property, index)
+        }
+        _ => infer_expr_type_syntactic(index),
+    };
     normalized_array_key_type(index, ty)
 }
 
-/// Refines a read key's syntactic type from its lowered SSA value when it is definitely a string.
-pub(super) fn lowered_index_expr_key_type(
+/// Refines a read key's syntactic type from its lowered SSA value when it is definite.
+pub(crate) fn lowered_index_expr_key_type(
     ctx: &LoweringContext<'_, '_>,
     index: &Expr,
     index_value: ValueId,
 ) -> PhpType {
     let syntactic = index_expr_key_type(ctx, index);
-    if syntactic == PhpType::Int && ctx.builder.value_php_type(index_value) == PhpType::Str {
-        return normalized_array_key_type(index, PhpType::Str);
+    match ctx.builder.value_php_type(index_value).codegen_repr() {
+        // Dynamic strings still undergo PHP's numeric-key normalization inside the mixed-key/hash
+        // runtime helpers. Keep their definite lowered type here so write-context lowering can
+        // select that runtime path instead of abandoning a property store-back. Literal numeric
+        // strings remain statically classifiable as integer keys.
+        PhpType::Str if matches!(index.kind, ExprKind::StringLiteral(_)) => {
+            normalized_array_key_type(index, PhpType::Str)
+        }
+        PhpType::Str => PhpType::Str,
+        PhpType::Int => PhpType::Int,
+        gradual @ (PhpType::Mixed | PhpType::Union(_)) => gradual,
+        _ => syntactic,
     }
-    syntactic
 }
 
 /// Refines an `isset` key from its lowered value, including boxed Mixed keys.
@@ -570,10 +778,17 @@ pub(super) fn isset_index_expr_key_type(
     index_value: ValueId,
 ) -> PhpType {
     let syntactic = index_expr_key_type(ctx, index);
+    let lowered = ctx.builder.value_php_type(index_value);
+    // The lowered key is the authority when it is a plain integer: a call the syntactic guess
+    // cannot type (`isset($items[mark()])`, an inlined user function) still produced an `int`,
+    // and routing it to the mixed-key probe asked the backend for an indexed array read by a
+    // mixed key, which it refuses.
+    if lowered == PhpType::Int {
+        return PhpType::Int;
+    }
     if syntactic != PhpType::Int {
         return syntactic;
     }
-    let lowered = ctx.builder.value_php_type(index_value);
     if matches!(lowered.codegen_repr(), PhpType::TaggedScalar) {
         return syntactic;
     }
@@ -595,15 +810,11 @@ pub(super) fn array_access_result_type(
     match op {
         Op::StrCharAt => PhpType::Str,
         Op::ArrayGet | Op::ArrayGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
-            PhpType::Array(elem_ty) => {
-                array_access_element_result_type(normalize_value_php_type(*elem_ty))
-            }
+            PhpType::Array(elem_ty) => array_access_element_result_type(*elem_ty),
             _ => fallback_expr_type(expr),
         },
         Op::HashGet | Op::HashGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
-            PhpType::AssocArray { value, .. } => {
-                array_access_element_result_type(normalize_value_php_type(*value))
-            }
+            PhpType::AssocArray { value, .. } => array_access_element_result_type(*value),
             _ => fallback_expr_type(expr),
         },
         Op::BufferGet => match ctx.builder.value_php_type(array).codegen_repr() {
@@ -624,7 +835,11 @@ pub(super) fn array_access_result_type(
 /// A pointer element reads as `?ptr<T>`: the slot holds the bare word, a stored `null` is 0,
 /// and a missing key reads as 0 too, so the read must keep PHP null in its type.
 pub(crate) fn array_access_element_result_type(element_ty: PhpType) -> PhpType {
-    if crate::codegen::sentinels::null_repr_is_tagged() && matches!(element_ty, PhpType::Int) {
+    if matches!(element_ty, PhpType::Never) {
+        PhpType::Mixed
+    } else if crate::codegen::sentinels::null_repr_is_tagged()
+        && matches!(element_ty, PhpType::Int)
+    {
         PhpType::TaggedScalar
     } else {
         crate::types::pointer_element_read_type(element_ty)
@@ -640,7 +855,9 @@ pub(super) fn array_access_runtime_call_result_type(
     match ctx.builder.value_php_type(array).codegen_repr() {
         PhpType::Object(class_name) => array_access_offset_get_return_type(ctx, &class_name)
             .unwrap_or_else(|| fallback_expr_type(expr)),
-        PhpType::Mixed => PhpType::Mixed,
+        // A named-argument variadic (`iterable`): the runtime read answers a boxed value; the
+        // syntactic fallback guessed `int` from the literal index.
+        PhpType::Mixed | PhpType::Callable | PhpType::Iterable => PhpType::Mixed,
         _ => fallback_expr_type(expr),
     }
 }
@@ -670,6 +887,17 @@ pub(super) fn array_access_expr_satisfies_array_access(
             .get(name)
             .cloned()
             .unwrap_or_else(|| infer_expr_type_syntactic(array)),
+        ExprKind::PropertyAccess { object, property } => {
+            instance_callable_object_class(ctx, object)
+                .and_then(|class_name| {
+                    ctx.classes
+                        .get(class_name.trim_start_matches('\\'))?
+                        .visible_property(property)
+                        .map(|(_, (_, ty))| ty.clone())
+                })
+                .or_else(|| property_access_expr_type_for_ir(ctx, object, property))
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
         _ => infer_expr_type_syntactic(array),
     };
     type_satisfies_array_access_for_ir(ctx, &ty)

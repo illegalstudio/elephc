@@ -90,8 +90,6 @@ pub(crate) fn core_declarations() -> Program {
             .build());
         declarations.push(class("ErrorException").extends("Exception")
             .protected_prop("severity", TypeExpr::Int, Some(e_int(1)))
-            .private_prop("__elephc_filename", t_nullable(TypeExpr::Str), Some(e_null()))
-            .private_prop("__elephc_line", t_nullable(TypeExpr::Int), Some(e_null()))
             .method(method("__construct")
                 .param_default("message", TypeExpr::Str, e_str(""))
                 .param_default("code", TypeExpr::Int, e_int(0))
@@ -130,15 +128,15 @@ pub(crate) fn core_declarations() -> Program {
                     s_prop_assign(crate::synthetic_class::e_this(), "severity", e_var("severity")),
                     s_if(
                         e_binop(e_var("filename"), BinOp::StrictNotEq, e_null()),
-                        vec![s_prop_assign(crate::synthetic_class::e_this(), "__elephc_filename", e_var("filename"))],
+                        vec![s_prop_assign(crate::synthetic_class::e_this(), "file", e_var("filename"))],
                         vec![], None,
                     ),
                     s_if(
                         e_binop(e_var("line"), BinOp::StrictNotEq, e_null()),
-                        vec![s_prop_assign(crate::synthetic_class::e_this(), "__elephc_line", e_var("line"))],
+                        vec![s_prop_assign(crate::synthetic_class::e_this(), "line", e_var("line"))],
                         vec![(
                             e_binop(e_var("filename"), BinOp::StrictNotEq, e_null()),
-                            vec![s_prop_assign(crate::synthetic_class::e_this(), "__elephc_line", e_int(0))],
+                            vec![s_prop_assign(crate::synthetic_class::e_this(), "line", e_int(0))],
                         )], None,
                     ),
                 ]))

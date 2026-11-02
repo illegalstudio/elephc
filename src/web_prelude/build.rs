@@ -26,15 +26,37 @@
 //!   because two copies would be a redeclaration.
 
 use crate::opcache_prelude;
-use crate::parser::ast::{BinOp, CType, CastType, Program, Stmt, TypeExpr};
+use crate::parser::ast::{BinOp, CType, CastType, Expr, ExprKind, MagicConstant, Program, Stmt,
+    TypeExpr};
+use crate::span::Span;
 use crate::synthetic_class::{class, e_array, e_array_assoc, e_binop, e_bool, e_call, e_cast,
-    e_const, e_index, e_instance_of, e_int, e_method_call, e_neg, e_new, e_not, e_null,
-    e_post_inc, e_static_prop, e_str, e_ternary, e_this, e_this_prop, e_var, extern_fn,
-    function, interface, internal_declarations, method, s_array_assign, s_assign, s_continue,
-    s_do_while, s_expr, s_for, s_foreach, s_if, s_prop_assign, s_return, s_return_void,
-    s_static_prop_assign, s_throw, t_array, t_class, t_mixed, t_nullable, t_ptr, t_union
+    e_const, e_index, e_instance_of, e_int, e_method_call, e_new, e_not,
+    e_null, e_post_inc, e_static_prop, e_str, e_ternary, e_this, e_this_prop, e_var, extern_fn,
+    function, interface, internal_declarations, method, s_array_assign, s_assign,
+    s_continue, s_do_while, s_expr, s_for, s_foreach, s_if, s_prop_assign, s_return,
+    s_return_void, s_static_prop_assign, s_throw, t_array, t_class,
+    t_mixed, t_nullable, t_ptr, t_union
 };
 use crate::web_prelude::PhpVersion;
+
+/// `__FILE__` — the MAGIC-CONSTANT node, not a string literal.
+///
+/// `web_prelude::inject_if_web` runs `magic_constants::substitute_file_constants` over the built
+/// program, so this resolves against the entry file exactly as the PHP form's `__FILE__` did.
+/// Spelling a literal here would instead bake in whatever path the BUILDER happened to know,
+/// which is the compiler's own working directory rather than the script's.
+fn e_magic_file() -> Expr {
+    Expr::new(ExprKind::MagicConstant(MagicConstant::File), Span::dummy())
+}
+
+/// `__DIR__` — the magic-constant node; see `e_magic_file` for why it is not a literal.
+fn e_magic_dir() -> Expr {
+    Expr::new(ExprKind::MagicConstant(MagicConstant::Dir), Span::dummy())
+}
+
+// `__LINE__` had a helper here too; its only caller was `trigger_error()`, which moved to
+// `crate::error_handling_prelude` along with the rest of the error surface and took its copy
+// with it.
 
 /// `elephc_web_method` — transcribed from the PHP form.
 fn decl_extern_elephc_web_method() -> Stmt {
@@ -903,6 +925,33 @@ fn decl_stmt_bootstrap_6() -> Stmt {
     s_array_assign("_SERVER", e_str("QUERY_STRING"), e_call("elephc_web_query_string", vec![]))
 }
 
+/// `bootstrap 6a` — `$_SERVER['SCRIPT_FILENAME'] = __FILE__;`, transcribed from the PHP form.
+///
+/// LETTERED RATHER THAN RENUMBERED. The bootstrap statements run where they sit, so position is
+/// semantics: these four belong between `QUERY_STRING` (`bootstrap 6`) and the header sweep
+/// (`bootstrap 7`), which is where the PHP form put them. Renumbering the thirty-eight helpers
+/// that follow would touch every one of them to say the same thing this suffix says.
+fn decl_stmt_bootstrap_6a() -> Stmt {
+    s_array_assign("_SERVER", e_str("SCRIPT_FILENAME"), e_magic_file())
+}
+
+/// `bootstrap 6b` — `$_SERVER['DOCUMENT_ROOT'] = __DIR__;`, transcribed from the PHP form.
+fn decl_stmt_bootstrap_6b() -> Stmt {
+    s_array_assign("_SERVER", e_str("DOCUMENT_ROOT"), e_magic_dir())
+}
+
+/// `bootstrap 6c` — `$_SERVER['SCRIPT_NAME'] = '/' . basename(__FILE__);`, transcribed from the
+/// PHP form.
+fn decl_stmt_bootstrap_6c() -> Stmt {
+    s_array_assign("_SERVER", e_str("SCRIPT_NAME"), e_binop(e_str("/"), BinOp::Concat, e_call("basename", vec![e_magic_file()])))
+}
+
+/// `bootstrap 6d` — `$_SERVER['PHP_SELF'] = $_SERVER['SCRIPT_NAME'];`, transcribed from the PHP
+/// form. It READS the slot `bootstrap 6c` wrote, so it must stay after it.
+fn decl_stmt_bootstrap_6d() -> Stmt {
+    s_array_assign("_SERVER", e_str("PHP_SELF"), e_index(e_var("_SERVER"), e_str("SCRIPT_NAME")))
+}
+
 /// `bootstrap 7` — transcribed from the PHP form.
 fn decl_stmt_bootstrap_7() -> Stmt {
     s_assign("__elephc_hc", e_call("elephc_web_header_count", vec![]))
@@ -994,35 +1043,15 @@ fn decl_stmt_bootstrap_20() -> Stmt {
     s_assign("__elephc_qs", e_call("elephc_web_query_string", vec![]))
 }
 
-/// `bootstrap 21` — transcribed from the PHP form.
+/// `bootstrap 21` — `$_GET` is the query string parsed the way php parses it: `parse_str()`'s
+/// rules, which php's own request-variable parser shares (`c[]=x&c[]=y` nests into `['c' => [...]]`,
+/// `+` is a space, a key's dots and spaces become underscores). The hand-rolled split this
+/// replaced kept `c[]` as a literal key and left `+` alone, so every array-shaped query
+/// parameter reached the application as a different request than `php -S` served.
 fn decl_stmt_bootstrap_21() -> Stmt {
     s_if(
         e_binop(e_var("__elephc_qs"), BinOp::StrictNotEq, e_str("")),
-        vec![
-            s_assign("__elephc_pairs", e_call("explode", vec![e_str("&"), e_var("__elephc_qs")])),
-            s_foreach(e_var("__elephc_pairs"), None, "__elephc_pair", vec![
-                s_assign("__elephc_eq", e_call("strpos", vec![e_var("__elephc_pair"), e_str("=")])),
-                s_if(
-                    e_binop(e_var("__elephc_eq"), BinOp::StrictEq, e_bool(false)),
-                    vec![
-                        s_if(
-                            e_binop(e_var("__elephc_pair"), BinOp::StrictNotEq, e_str("")),
-                            vec![
-                                s_array_assign("_GET", e_call("rawurldecode", vec![e_var("__elephc_pair")]), e_str("")),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                    ],
-                    vec![],
-                    Some(vec![
-                    s_assign("__elephc_gk", e_call("rawurldecode", vec![e_call("substr", vec![e_var("__elephc_pair"), e_int(0), e_var("__elephc_eq")])])),
-                    s_assign("__elephc_gv", e_call("rawurldecode", vec![e_call("substr", vec![e_var("__elephc_pair"), e_binop(e_var("__elephc_eq"), BinOp::Add, e_int(1))])])),
-                    s_array_assign("_GET", e_var("__elephc_gk"), e_var("__elephc_gv")),
-                ]),
-                ),
-            ]),
-        ],
+        vec![s_expr(e_call("parse_str", vec![e_var("__elephc_qs"), e_var("__elephc_get_parsed")])), s_foreach(e_var("__elephc_get_parsed"), Some("__elephc_gpk"), "__elephc_gpv", vec![s_array_assign("_GET", e_var("__elephc_gpk"), e_var("__elephc_gpv"))])],
         vec![],
         None,
     )
@@ -1038,10 +1067,15 @@ fn decl_stmt_bootstrap_23() -> Stmt {
     s_assign("__elephc_ct", e_ternary(e_call("isset", vec![e_index(e_var("_SERVER"), e_str("CONTENT_TYPE"))]), e_index(e_var("_SERVER"), e_str("CONTENT_TYPE")), e_str("")))
 }
 
-/// `bootstrap 24` — transcribed from the PHP form.
+/// `bootstrap 24` — an urlencoded request body fills `$_POST` with the same rules as `$_GET`
+/// (see `bootstrap 21`).
 fn decl_stmt_bootstrap_24() -> Stmt {
     s_if(
-        e_binop(e_call("strpos", vec![e_call("strtoupper", vec![e_var("__elephc_ct")]), e_str("APPLICATION/X-WWW-FORM-URLENCODED")]), BinOp::StrictNotEq, e_bool(false)),
+        e_binop(
+            e_binop(e_index(e_var("_SERVER"), e_str("REQUEST_METHOD")), BinOp::StrictEq, e_str("POST")),
+            BinOp::And,
+            e_binop(e_call("strpos", vec![e_call("strtoupper", vec![e_var("__elephc_ct")]), e_str("APPLICATION/X-WWW-FORM-URLENCODED")]), BinOp::StrictNotEq, e_bool(false)),
+        ),
         vec![
             s_assign("__elephc_body_len", e_call("elephc_web_body_len", vec![])),
             s_assign("__elephc_body", e_str("")),
@@ -1055,31 +1089,7 @@ fn decl_stmt_bootstrap_24() -> Stmt {
             ),
             s_if(
                 e_binop(e_var("__elephc_body"), BinOp::StrictNotEq, e_str("")),
-                vec![
-                    s_assign("__elephc_ppairs", e_call("explode", vec![e_str("&"), e_var("__elephc_body")])),
-                    s_foreach(e_var("__elephc_ppairs"), None, "__elephc_ppair", vec![
-                        s_assign("__elephc_peq", e_call("strpos", vec![e_var("__elephc_ppair"), e_str("=")])),
-                        s_if(
-                            e_binop(e_var("__elephc_peq"), BinOp::StrictEq, e_bool(false)),
-                            vec![
-                                s_if(
-                                    e_binop(e_var("__elephc_ppair"), BinOp::StrictNotEq, e_str("")),
-                                    vec![
-                                        s_array_assign("_POST", e_call("rawurldecode", vec![e_var("__elephc_ppair")]), e_str("")),
-                                    ],
-                                    vec![],
-                                    None,
-                                ),
-                            ],
-                            vec![],
-                            Some(vec![
-                            s_assign("__elephc_pk", e_call("rawurldecode", vec![e_call("substr", vec![e_var("__elephc_ppair"), e_int(0), e_var("__elephc_peq")])])),
-                            s_assign("__elephc_pv", e_call("rawurldecode", vec![e_call("substr", vec![e_var("__elephc_ppair"), e_binop(e_var("__elephc_peq"), BinOp::Add, e_int(1))])])),
-                            s_array_assign("_POST", e_var("__elephc_pk"), e_var("__elephc_pv")),
-                        ]),
-                        ),
-                    ]),
-                ],
+                vec![s_expr(e_call("parse_str", vec![e_var("__elephc_body"), e_var("__elephc_post_parsed")])), s_foreach(e_var("__elephc_post_parsed"), Some("__elephc_ppk"), "__elephc_ppv", vec![s_array_assign("_POST", e_var("__elephc_ppk"), e_var("__elephc_ppv"))])],
                 vec![],
                 None,
             ),
@@ -1097,7 +1107,11 @@ fn decl_stmt_bootstrap_25() -> Stmt {
 /// `bootstrap 26` — transcribed from the PHP form.
 fn decl_stmt_bootstrap_26() -> Stmt {
     s_if(
-        e_binop(e_call("strpos", vec![e_call("strtoupper", vec![e_var("__elephc_ct")]), e_str("MULTIPART/FORM-DATA")]), BinOp::StrictNotEq, e_bool(false)),
+        e_binop(
+            e_binop(e_index(e_var("_SERVER"), e_str("REQUEST_METHOD")), BinOp::StrictEq, e_str("POST")),
+            BinOp::And,
+            e_binop(e_call("strpos", vec![e_call("strtoupper", vec![e_var("__elephc_ct")]), e_str("MULTIPART/FORM-DATA")]), BinOp::StrictNotEq, e_bool(false)),
+        ),
         vec![
             s_assign("__elephc_mpc", e_call("elephc_web_multipart_count", vec![])),
             s_for(Some(s_assign("__elephc_mpi", e_int(0))), Some(e_binop(e_var("__elephc_mpi"), BinOp::Lt, e_var("__elephc_mpc"))), Some(s_expr(e_post_inc("__elephc_mpi"))), vec![
@@ -1125,7 +1139,7 @@ fn decl_stmt_bootstrap_26() -> Stmt {
                         e_binop(e_var("__elephc_mptmp"), BinOp::StrictNotEq, e_bool(false)),
                         vec![
                             s_expr(e_call("file_put_contents", vec![e_var("__elephc_mptmp"), e_var("__elephc_mpv")])),
-                            s_array_assign("_FILES", e_var("__elephc_mpn"), e_array_assoc(vec![(e_str("name"), e_var("__elephc_mpf")), (e_str("type"), e_call("elephc_web_multipart_type", vec![e_var("__elephc_mpi")])), (e_str("tmp_name"), e_var("__elephc_mptmp")), (e_str("error"), e_int(0)), (e_str("size"), e_call("strlen", vec![e_var("__elephc_mpv")]))])),
+                            s_array_assign("_FILES", e_var("__elephc_mpn"), e_array_assoc(vec![(e_str("name"), e_var("__elephc_mpf")), (e_str("full_path"), e_var("__elephc_mpf")), (e_str("type"), e_call("elephc_web_multipart_type", vec![e_var("__elephc_mpi")])), (e_str("tmp_name"), e_var("__elephc_mptmp")), (e_str("error"), e_int(0)), (e_str("size"), e_call("strlen", vec![e_var("__elephc_mpv")]))])),
                         ],
                         vec![],
                         None,
@@ -1217,6 +1231,26 @@ fn decl_stmt_bootstrap_35() -> Stmt {
     ])
 }
 
+/// `bootstrap 35a` — mirrors `$_ENV` into `$_SERVER` for every name `$_SERVER` does not already
+/// define, transcribed from the PHP form.
+///
+/// Lettered for the reason `bootstrap 6a` is: it READS the array `bootstrap 35` has just filled
+/// and must not overwrite the request-derived keys `bootstrap 4`–`bootstrap 18` put in
+/// `$_SERVER`, so it sits between the `$_ENV` loop and `__elephc_emit_cookie` exactly as the PHP
+/// form did. The `isset` guard is what makes the direction one-way.
+fn decl_stmt_bootstrap_35a() -> Stmt {
+    s_foreach(e_var("_ENV"), Some("__elephc_env_name"), "__elephc_env_value", vec![
+        s_if(
+            e_not(e_call("isset", vec![e_index(e_var("_SERVER"), e_var("__elephc_env_name"))])),
+            vec![
+                s_array_assign("_SERVER", e_var("__elephc_env_name"), e_var("__elephc_env_value")),
+            ],
+            vec![],
+            None,
+        ),
+    ])
+}
+
 /// `__elephc_emit_cookie` — transcribed from the PHP form.
 fn decl_fn_elephc_emit_cookie() -> Stmt {
     function("__elephc_emit_cookie")
@@ -1288,6 +1322,95 @@ fn decl_fn_setcookie() -> Stmt {
         .param_untyped_default("httponly", e_bool(false))
         .body(vec![
             s_return(e_call("__elephc_emit_cookie", vec![e_var("name"), e_call("rawurlencode", vec![e_var("value")]), e_var("expires"), e_var("path"), e_var("domain"), e_var("secure"), e_var("httponly")])),
+        ])
+        .build()
+}
+
+/// `request_parse_body()` -- php 8.4: parses the request body of a non-POST request (PUT, PATCH,
+/// DELETE, QUERY) the way php fills `$_POST` / `$_FILES` for a POST, and returns `[$post, $files]`.
+/// A body of any other content type, or none, throws `RequestParseBodyException`. php leaves
+/// `$_POST` empty for these methods, so symfony/http-foundation's `Request::createFromGlobals()`
+/// calls this for every one of them.
+fn decl_fn_request_parse_body() -> Stmt {
+    function("request_parse_body")
+        .param_untyped_default("options", e_null())
+        .body(vec![
+            s_assign("__elephc_ct", e_ternary(e_call("isset", vec![e_index(e_var("_SERVER"), e_str("CONTENT_TYPE"))]), e_index(e_var("_SERVER"), e_str("CONTENT_TYPE")), e_str(""))),
+            s_assign("__elephc_post", e_array(vec![])),
+            s_assign("__elephc_files", e_array(vec![])),
+            s_if(
+                e_binop(e_var("__elephc_ct"), BinOp::StrictEq, e_str("")),
+                vec![s_throw(e_new("RequestParseBodyException", vec![e_str("Request does not provide a content type")]))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_call("strpos", vec![e_call("strtoupper", vec![e_var("__elephc_ct")]), e_str("APPLICATION/X-WWW-FORM-URLENCODED")]), BinOp::StrictNotEq, e_bool(false)),
+                vec![
+                    s_assign("__elephc_body_len", e_call("elephc_web_body_len", vec![])),
+                    s_assign("__elephc_body", e_str("")),
+                    s_if(
+                        e_binop(e_var("__elephc_body_len"), BinOp::Gt, e_int(0)),
+                        vec![s_assign("__elephc_body", e_call("__elephc_ptr_read_string", vec![e_call("elephc_web_body_ptr", vec![]), e_var("__elephc_body_len")]))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_binop(e_index(e_var("_SERVER"), e_str("REQUEST_METHOD")), BinOp::StrictNotEq, e_str("POST")), BinOp::And, e_binop(e_var("__elephc_body"), BinOp::StrictNotEq, e_str(""))),
+                        vec![s_expr(e_call("parse_str", vec![e_var("__elephc_body"), e_var("__elephc_post")]))],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_array(vec![e_var("__elephc_post"), e_var("__elephc_files")])),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_call("strpos", vec![e_call("strtoupper", vec![e_var("__elephc_ct")]), e_str("MULTIPART/FORM-DATA")]), BinOp::StrictNotEq, e_bool(false)),
+                vec![
+                    s_assign("__elephc_mpc", e_call("elephc_web_multipart_count", vec![])),
+                    s_if(
+                        e_binop(e_index(e_var("_SERVER"), e_str("REQUEST_METHOD")), BinOp::StrictEq, e_str("POST")),
+                        vec![s_assign("__elephc_mpc", e_int(0))],
+                        vec![],
+                        None,
+                    ),
+                    s_for(Some(s_assign("__elephc_mpi", e_int(0))), Some(e_binop(e_var("__elephc_mpi"), BinOp::Lt, e_var("__elephc_mpc"))), Some(s_expr(e_post_inc("__elephc_mpi"))), vec![
+                        s_assign("__elephc_mpn", e_call("elephc_web_multipart_name", vec![e_var("__elephc_mpi")])),
+                        s_assign("__elephc_mpf", e_call("elephc_web_multipart_filename", vec![e_var("__elephc_mpi")])),
+                        s_assign("__elephc_mpv_len", e_call("elephc_web_multipart_value_len", vec![e_var("__elephc_mpi")])),
+                        s_assign("__elephc_mpv", e_str("")),
+                        s_if(
+                            e_binop(e_var("__elephc_mpv_len"), BinOp::Gt, e_int(0)),
+                            vec![s_assign("__elephc_mpv", e_call("__elephc_ptr_read_string", vec![e_call("elephc_web_multipart_value_ptr", vec![e_var("__elephc_mpi")]), e_var("__elephc_mpv_len")]))],
+                            vec![],
+                            None,
+                        ),
+                        s_if(
+                            e_binop(e_var("__elephc_mpf"), BinOp::StrictEq, e_str("")),
+                            vec![s_array_assign("__elephc_post", e_var("__elephc_mpn"), e_var("__elephc_mpv"))],
+                            vec![],
+                            Some(vec![
+                                s_assign("__elephc_mptmp", e_call("tempnam", vec![e_call("sys_get_temp_dir", vec![]), e_str("elephc_up")])),
+                                s_if(
+                                    e_binop(e_var("__elephc_mptmp"), BinOp::StrictNotEq, e_bool(false)),
+                                    vec![
+                                        s_expr(e_call("file_put_contents", vec![e_var("__elephc_mptmp"), e_var("__elephc_mpv")])),
+                                        s_array_assign("__elephc_files", e_var("__elephc_mpn"), e_array_assoc(vec![(e_str("name"), e_var("__elephc_mpf")), (e_str("full_path"), e_var("__elephc_mpf")), (e_str("type"), e_call("elephc_web_multipart_type", vec![e_var("__elephc_mpi")])), (e_str("tmp_name"), e_var("__elephc_mptmp")), (e_str("error"), e_int(0)), (e_str("size"), e_call("strlen", vec![e_var("__elephc_mpv")]))])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ]),
+                        ),
+                    ]),
+                    s_return(e_array(vec![e_var("__elephc_post"), e_var("__elephc_files")])),
+                ],
+                vec![],
+                None,
+            ),
+            s_throw(e_new("RequestParseBodyException", vec![e_binop(e_binop(e_str("Content-Type \""), BinOp::Concat, e_call("strtolower", vec![e_call("trim", vec![e_call("strstr", vec![e_binop(e_var("__elephc_ct"), BinOp::Concat, e_str(";")), e_str(";"), e_bool(true)])])])), BinOp::Concat, e_str("\" is not supported"))])),
         ])
         .build()
 }
@@ -1757,72 +1880,20 @@ fn decl_class_elephccallablesessionhandler() -> Stmt {
         .build()
 }
 
-/// `error_log` — transcribed from the PHP form.
-fn decl_fn_error_log() -> Stmt {
-    function("error_log")
-        .param("message", TypeExpr::Str)
-        .param_default("message_type", TypeExpr::Int, e_int(0))
-        .param_default("destination", t_nullable(TypeExpr::Str), e_null())
-        .param_default("additional_headers", t_nullable(TypeExpr::Str), e_null())
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_if(
-                e_binop(e_var("message_type"), BinOp::StrictEq, e_int(3)),
-                vec![
-                    s_if(
-                        e_binop(e_var("destination"), BinOp::StrictEq, e_null()),
-                        vec![
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("__elephc_el_fh", e_call("fopen", vec![e_cast(CastType::String, e_var("destination")), e_str("a")])),
-                    s_if(
-                        e_binop(e_var("__elephc_el_fh"), BinOp::StrictEq, e_bool(false)),
-                        vec![
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_call("fwrite", vec![e_var("__elephc_el_fh"), e_var("message")])),
-                    s_expr(e_call("fclose", vec![e_var("__elephc_el_fh")])),
-                    s_return(e_bool(true)),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("message_type"), BinOp::StrictEq, e_int(0)),
-                vec![
-                    s_assign("__elephc_el_m", e_var("message")),
-                    s_if(
-                        e_binop(e_binop(e_var("__elephc_el_m"), BinOp::StrictEq, e_str("")), BinOp::Or, e_binop(e_call("substr", vec![e_var("__elephc_el_m"), e_neg(e_int(1))]), BinOp::StrictNotEq, e_str("\n"))),
-                        vec![
-                            s_assign("__elephc_el_m", e_binop(e_var("__elephc_el_m"), BinOp::Concat, e_str("\n"))),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_call("fwrite", vec![e_const("STDERR"), e_var("__elephc_el_m")])),
-                    s_return(e_bool(true)),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("message_type"), BinOp::StrictEq, e_int(1)),
-                vec![
-                    s_expr(e_call("fwrite", vec![e_const("STDERR"), e_binop(e_binop(e_binop(e_binop(e_binop(e_str("error_log(): mail delivery (type 1) is not supported under --web"), BinOp::Concat, e_str(" [to=")), BinOp::Concat, e_cast(CastType::String, e_var("destination"))), BinOp::Concat, e_str(", headers=")), BinOp::Concat, e_cast(CastType::String, e_var("additional_headers"))), BinOp::Concat, e_str("]\n"))])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_bool(false)),
-        ])
-        .build()
-}
+// `error_log()` used to sit here. It is NOT a `--web` surface: PHP declares it in every
+// SAPI, and off `--web` elephc answered it with the registry builtin
+// (`src/builtins/system/error_log.rs`), which writes to stderr and IGNORES `$message_type`
+// — so `error_log($m, 3, $file)` silently logged to the console instead of the file. The
+// body moved to `crate::error_handling_prelude` with the rest of PHP's error surface, which
+// `declarations()` splices in below and the non-`--web` path injects pay-for-use.
+
+// `__elephc_shutdown_function_state()` and `register_shutdown_function()` used to sit here.
+// They are NOT a `--web` surface either: php declares `register_shutdown_function()` in every
+// SAPI, and a plain CLI build had none of it (`Call to undefined function
+// register_shutdown_function()`). The bodies moved to `crate::error_handling_prelude`, which
+// `declarations()` splices in below and the non-`--web` path injects pay-for-use, together
+// with the zero-argument `__elephc_shutdown_run()` entry that codegen calls by symbol at every
+// process-exit site.
 
 /// Formats internal Web diagnostics without exposing non-user levels to `trigger_error`.
 fn decl_fn_elephc_web_trigger_error() -> Stmt {
@@ -3785,7 +3856,11 @@ fn decl_fn_session_module_name() -> Stmt {
 /// `session_set_save_handler` — transcribed from the PHP form.
 fn decl_fn_session_set_save_handler() -> Stmt {
     function("session_set_save_handler")
-        .param_untyped_default("handler_or_open", e_null())
+        // php declares `SessionHandlerInterface|callable $open`. Left untyped, the checker
+        // specialized it to a call site's `string` (the callback-name form), and the
+        // `instanceof SessionHandlerInterface` branch then stored a `string` into the typed
+        // `$handler` static: the whole program was refused.
+        .param_default("handler_or_open", t_mixed(), e_null())
         .param_untyped_default("register_or_close", e_bool(true))
         .param_untyped_default("read", e_null())
         .param_untyped_default("write", e_null())
@@ -5120,6 +5195,36 @@ fn decl_stmt_bootstrap_43() -> Stmt {
     s_static_prop_assign("__ElephcSessionState", "sendCookie", e_bool(false))
 }
 
+/// `bootstrap 43a` — `__elephc_shutdown_function_state(null, [], 3);`, transcribed from the PHP
+/// form.
+///
+/// A PER-REQUEST RESET, not initialization. The registry is a STATIC function local, so it
+/// outlives the request that filled it: a reused worker would otherwise re-run the previous
+/// request's shutdown callbacks. Lettered rather than renumbered for the reason `bootstrap 6a`
+/// is — it must sit after the `__ElephcSessionState` resets and BEFORE the `session.auto_start`
+/// check, because that check can run user code.
+fn decl_stmt_bootstrap_43a() -> Stmt {
+    s_expr(e_call("__elephc_shutdown_function_state", vec![e_null(), e_array(vec![]), e_int(3)]))
+}
+
+/// `bootstrap 43c` — `__elephc_last_error_int(2);`, the same per-request reset for
+/// `error_get_last()`'s native record.
+///
+/// php starts every request with no last error: a fresh php-fpm or `php -S` request answers
+/// `error_get_last()` with `null` however many diagnostics the PREVIOUS request raised.
+///
+/// The record is native process storage, and every request is served by a FORKED HANDLER CHILD
+/// (`elephc-web/src/isolated_worker.rs`), so a child already starts from whatever the parent
+/// held -- which is a record the parent wrote before forking, if any diagnostic fired while it
+/// booted. Clearing at the head of the request makes the record request-scoped whatever the
+/// isolation mode, beside `43a` and `43b`; what else crosses a boundary is listed under
+/// `REQUEST_SCOPED_RUNTIME_FLAGS` and `__elephc_eval_include_request_reset`.
+///
+/// Field 2 clears: the reader then returns `null` exactly as a first-ever call does.
+fn decl_stmt_bootstrap_43c() -> Stmt {
+    s_expr(e_call("__elephc_last_error_int", vec![e_int(2)]))
+}
+
 /// `bootstrap 44` — transcribed from the PHP form.
 fn decl_stmt_bootstrap_44() -> Stmt {
     s_if(
@@ -5264,6 +5369,10 @@ pub(crate) fn web_declarations_with_environment(
             decl_stmt_bootstrap_4(),
             decl_stmt_bootstrap_5(),
             decl_stmt_bootstrap_6(),
+            decl_stmt_bootstrap_6a(),
+            decl_stmt_bootstrap_6b(),
+            decl_stmt_bootstrap_6c(),
+            decl_stmt_bootstrap_6d(),
             decl_stmt_bootstrap_7(),
             decl_stmt_bootstrap_8(),
             decl_stmt_bootstrap_9(),
@@ -5293,12 +5402,17 @@ pub(crate) fn web_declarations_with_environment(
             decl_stmt_bootstrap_33(),
         ];
         if populate_environment {
-            declarations.extend([decl_stmt_bootstrap_34(), decl_stmt_bootstrap_35()]);
+            declarations.extend([
+                decl_stmt_bootstrap_34(),
+                decl_stmt_bootstrap_35(),
+                decl_stmt_bootstrap_35a(),
+            ]);
         }
         declarations.extend([
             decl_fn_elephc_emit_cookie(),
             decl_fn_setcookie(),
             decl_fn_setrawcookie(),
+            decl_fn_request_parse_body(),
             decl_stmt_bootstrap_36(),
             decl_stmt_bootstrap_37(),
             decl_stmt_bootstrap_38(),
@@ -5312,7 +5426,11 @@ pub(crate) fn web_declarations_with_environment(
             decl_class_sessionhandler(),
             decl_class_elephcsessionstate(),
             decl_class_elephccallablesessionhandler(),
-            decl_fn_error_log(),
+            // `decl_fn_error_log()` stood here, and `decl_fn_elephc_shutdown_function_state()` /
+            // `decl_fn_register_shutdown_function()` right after it; all three are now among the
+            // declarations `error_handling_prelude::declarations()` contributes further down.
+            // Function declarations are hoisted, so moving them past the session helpers is a
+            // change of reading order only.
             decl_fn_elephc_web_trigger_error(),
             decl_fn_elephc_session_start_option_known(),
             decl_fn_session_start(),
@@ -5348,6 +5466,19 @@ pub(crate) fn web_declarations_with_environment(
             decl_fn_elephc_ini_get_raw(),
         ]);
 
+        // PHP's error/exception-handling surface — `error_reporting()`, the two handler
+        // stacks, `trigger_error()` and the engine-diagnostic dispatch pair. It used to be
+        // spelled out inline right after `error_log()` above, but it is not a `--web` surface:
+        // every SAPI has it, and a plain CLI build had NONE of it (`Call to undefined function
+        // error_reporting()`). The bodies moved to `crate::error_handling_prelude`, which the
+        // non-`--web` path injects pay-for-use, and `--web` takes the SAME declarations from
+        // there. Two copies of PHP's error rule would diverge; one hands out both surfaces.
+        //
+        // The order moved with it (from between `error_log` and the shutdown registry to here).
+        // These twelve are all FUNCTION DECLARATIONS, which are hoisted — unlike the executable
+        // `bootstrap N` statements interleaved further down, whose position IS semantics.
+        declarations.extend(crate::error_handling_prelude::declarations());
+
         // The shared `opcache.*` INI helpers (`__elephc_opcache_ini_string` / `_access` / `_keys`
         // / `_all_details` / `_all_plain`), baked for the compile target so `ini_get`/`ini_set`/
         // `ini_get_all` can answer opcache directive queries ahead of the session dispatch. The
@@ -5367,9 +5498,10 @@ pub(crate) fn web_declarations_with_environment(
 
         // `__elephc_ini_module_known($m)`: the KNOWN-MODULE predicate `ini_get_all`'s extension
         // filter uses to tell "known module with no INI directives" (`[]`) from "no such module"
-        // (`E_WARNING` + `false`). Derived from `CORE_LOADED_EXTENSIONS`, lowercased, plus
-        // `'session'` (the extra module a `--web` binary registers), so the filter list cannot
-        // drift from the `extension_loaded()`/`get_loaded_extensions()` set.
+        // (`E_WARNING` + `false`). Rendered from `opcache_prelude::cli_ini::INI_KNOWN_MODULES`,
+        // lowercased, plus `'session'` (the extra module a `--web` binary registers). This is
+        // deliberately NOT the `extension_loaded()` set: recognition survives partial function
+        // coverage (`ini_get_all('ctype')` is `[]` in reference PHP), the loaded promise does not.
         declarations.push(opcache_prelude::ini_module_known_declaration(true));
 
         declarations.extend([
@@ -5393,9 +5525,164 @@ pub(crate) fn web_declarations_with_environment(
             decl_stmt_bootstrap_41(),
             decl_stmt_bootstrap_42(),
             decl_stmt_bootstrap_43(),
+            decl_stmt_bootstrap_43a(),
+            decl_stmt_bootstrap_43c(),
             decl_stmt_bootstrap_44(),
         ]);
 
+        declarations
+    })
+}
+
+/// Builds the same PHP-level session extension used by `--web`, with no HTTP globals or
+/// executable request bootstraps. The functions share the existing session C ABI; a CLI
+/// link pulls those referenced archive members without whole-archiving the web entrypoint.
+pub(crate) fn session_declarations(
+    php_version: PhpVersion,
+    _ini_overrides: &[(String, String)],
+) -> Program {
+    internal_declarations(|| {
+        let mut declarations: Program = vec![
+            decl_extern_elephc_web_session_reset(),
+            decl_extern_elephc_web_session_get_name(),
+            decl_extern_elephc_web_session_set_name(),
+            decl_extern_elephc_web_session_get_id(),
+            decl_extern_elephc_web_session_set_id(),
+            decl_extern_elephc_web_session_get_status(),
+            decl_extern_elephc_web_session_set_status(),
+            decl_extern_elephc_web_session_get_save_path(),
+            decl_extern_elephc_web_session_set_save_path(),
+            decl_extern_elephc_web_session_get_cache_limiter(),
+            decl_extern_elephc_web_session_set_cache_limiter(),
+            decl_extern_elephc_web_session_get_cache_expire(),
+            decl_extern_elephc_web_session_set_cache_expire(),
+            decl_extern_elephc_web_session_get_cookie_lifetime(),
+            decl_extern_elephc_web_session_get_cookie_path(),
+            decl_extern_elephc_web_session_get_cookie_domain(),
+            decl_extern_elephc_web_session_get_cookie_secure(),
+            decl_extern_elephc_web_session_get_cookie_partitioned(),
+            decl_extern_elephc_web_session_get_cookie_httponly(),
+            decl_extern_elephc_web_session_get_cookie_samesite(),
+            decl_extern_elephc_web_session_set_cookie_params(),
+            decl_extern_elephc_web_session_data_stage(),
+            decl_extern_elephc_web_session_data_len(),
+            decl_extern_elephc_web_session_read_bytes(),
+            decl_extern_elephc_web_session_last_read_ok(),
+            decl_extern_elephc_web_session_write_bytes(),
+            decl_extern_elephc_web_session_destroy(),
+            decl_extern_elephc_web_session_abort(),
+            decl_extern_elephc_web_session_create_id(),
+            decl_extern_elephc_web_session_gc(),
+            decl_extern_elephc_web_session_count_entries_bytes(),
+            decl_extern_elephc_web_session_entry_key_bytes(),
+            decl_extern_elephc_web_session_entry_value_bytes(),
+            decl_extern_elephc_web_session_snapshot_bytes(),
+            decl_extern_elephc_web_session_file_exists(),
+            decl_extern_elephc_web_session_touch(),
+            decl_extern_elephc_web_session_should_gc(),
+            decl_extern_elephc_web_session_get_strict_mode(),
+            decl_extern_elephc_web_session_set_strict_mode(),
+            decl_extern_elephc_web_session_get_serialize_handler(),
+            decl_extern_elephc_web_session_set_serialize_handler(),
+            decl_extern_elephc_web_session_get_gc_probability(),
+            decl_extern_elephc_web_session_set_gc_probability(),
+            decl_extern_elephc_web_session_get_gc_divisor(),
+            decl_extern_elephc_web_session_set_gc_divisor(),
+            decl_extern_elephc_web_session_get_gc_maxlifetime(),
+            decl_extern_elephc_web_session_set_gc_maxlifetime(),
+            decl_extern_elephc_web_session_get_sid_length(),
+            decl_extern_elephc_web_session_set_sid_length(),
+            decl_extern_elephc_web_session_get_sid_bits_per_character(),
+            decl_extern_elephc_web_session_set_sid_bits_per_character(),
+            decl_extern_elephc_web_session_count_entries_bin_bytes(),
+            decl_extern_elephc_web_session_entry_key_bin_bytes(),
+            decl_extern_elephc_web_session_entry_value_bin_bytes(),
+            decl_extern_elephc_web_session_get_referer_check(),
+            decl_extern_elephc_web_session_set_referer_check(),
+            decl_extern_elephc_web_session_get_use_only_cookies(),
+            decl_extern_elephc_web_session_set_use_only_cookies(),
+            decl_extern_elephc_web_session_get_use_cookies(),
+            decl_extern_elephc_web_session_set_use_cookies(),
+            decl_extern_elephc_web_session_get_lazy_write(),
+            decl_extern_elephc_web_session_set_lazy_write(),
+            decl_extern_elephc_web_session_get_use_trans_sid(),
+            decl_extern_elephc_web_session_set_use_trans_sid(),
+            decl_extern_elephc_web_session_get_trans_sid_tags(),
+            decl_extern_elephc_web_session_set_trans_sid_tags(),
+            decl_extern_elephc_web_session_get_trans_sid_hosts(),
+            decl_extern_elephc_web_session_set_trans_sid_hosts(),
+            decl_extern_elephc_web_session_get_upload_progress_enabled(),
+            decl_extern_elephc_web_session_set_upload_progress_enabled(),
+            decl_extern_elephc_web_session_get_upload_progress_cleanup(),
+            decl_extern_elephc_web_session_set_upload_progress_cleanup(),
+            decl_extern_elephc_web_session_get_upload_progress_prefix(),
+            decl_extern_elephc_web_session_set_upload_progress_prefix(),
+            decl_extern_elephc_web_session_get_upload_progress_name(),
+            decl_extern_elephc_web_session_set_upload_progress_name(),
+            decl_extern_elephc_web_session_get_upload_progress_freq(),
+            decl_extern_elephc_web_session_set_upload_progress_freq(),
+            decl_extern_elephc_web_session_get_upload_progress_min_freq(),
+            decl_extern_elephc_web_session_set_upload_progress_min_freq(),
+            decl_extern_elephc_web_session_get_auto_start(),
+            decl_extern_elephc_web_session_set_auto_start(),
+            decl_fn_elephc_php_version_id(php_version.version_id()),
+            decl_fn_elephc_emit_cookie(),
+            decl_fn_setcookie(),
+            decl_fn_setrawcookie(),
+            decl_stmt_bootstrap_36(),
+            decl_stmt_bootstrap_37(),
+            decl_stmt_bootstrap_38(),
+            decl_fn_elephc_session_stage_bytes(),
+            decl_fn_elephc_session_copy_bytes(),
+            decl_fn_elephc_session_read_file(),
+            decl_fn_elephc_session_write_file(),
+            decl_fn_elephc_session_snapshot_bytes(),
+            decl_fn_elephc_session_entry_count(),
+            decl_fn_elephc_session_entry_bytes(),
+            decl_class_sessionhandler(),
+            decl_class_elephcsessionstate(),
+            decl_class_elephccallablesessionhandler(),
+            decl_fn_elephc_session_start_option_known(),
+            decl_fn_session_start(),
+            decl_fn_elephc_session_start_core(),
+            decl_fn_session_write_close(),
+            decl_fn_session_destroy(),
+            decl_fn_session_id(),
+            decl_fn_session_name(),
+            decl_fn_session_status(),
+            decl_fn_session_unset(),
+            decl_fn_session_encode(),
+            decl_fn_session_decode(),
+            decl_fn_session_save_path(),
+            decl_fn_session_regenerate_id(),
+            decl_fn_session_create_id(),
+            decl_fn_session_gc(),
+            decl_fn_session_abort(),
+            decl_fn_session_reset(),
+            decl_fn_session_cache_limiter(),
+            decl_fn_session_cache_expire(),
+            decl_fn_session_get_cookie_params(),
+            decl_fn_session_set_cookie_params(),
+            decl_fn_session_commit(),
+            decl_fn_session_register_shutdown(),
+            decl_fn_session_module_name(),
+            decl_fn_session_set_save_handler(),
+            decl_fn_elephc_session_encode(),
+            decl_fn_elephc_session_decode(),
+            decl_fn_elephc_session_send_cookie(),
+            decl_fn_elephc_session_send_cache_headers(),
+            decl_fn_elephc_ini_session_keys(),
+            decl_fn_elephc_is_session_ini(),
+            decl_fn_elephc_ini_get_raw(),
+        ];
+        declarations.extend([
+            decl_fn_elephc_session_ini_perdir(),
+            decl_fn_elephc_session_ini_bool(),
+            decl_fn_elephc_session_name_valid(),
+            decl_fn_elephc_ini_session_details(),
+            decl_fn_elephc_ini_session_detail_value(),
+            decl_fn_elephc_ini_session_plain(),
+        ]);
         declarations
     })
 }

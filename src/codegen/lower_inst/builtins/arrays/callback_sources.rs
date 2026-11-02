@@ -86,8 +86,23 @@ pub(super) fn static_callback_source_instruction<'a>(
 }
 
 /// Returns whether a callback operand can use the static callback binding path.
+///
+/// A user function with a variadic tail is not: the static binding calls the function's symbol
+/// with the visible arguments only, and the tail -- a source `...$rest` or the hidden
+/// `func_get_args()` collector a frame with backtrace arguments gets -- arrives as whatever the
+/// helper left in the next argument register. `usort($ints, cmp(...))` against a comparator that
+/// throws dereferenced that null collector while building the trace. The descriptor path's
+/// invoker builds the tail like any other call.
 pub(super) fn static_callback_operand_is_recoverable(ctx: &FunctionContext<'_>, value: ValueId) -> bool {
-    static_callback_source_instruction(ctx, value, "static callback probe").is_ok()
+    let Ok(callback) = static_callback_name_operand(ctx, value, "static callback probe") else {
+        return false;
+    };
+    !ctx.callable_function_by_name(&callback.name).is_some_and(|callee| {
+        callee
+            .signature
+            .as_ref()
+            .is_some_and(|signature| signature.variadic.is_some())
+    })
 }
 
 /// Returns true when a callback operand is a dynamic callable local, such as a parameter.

@@ -17,6 +17,7 @@ use super::*;
 /// in argument registers 3 and 4, which are untouched by the shared setup above.
 pub(super) fn emit_array_map_runtime_call(
     ctx: &mut FunctionContext<'_>,
+    source_elem_ty: &PhpType,
     callback_elem_ty: &PhpType,
     env_bytes: usize,
     target: ArrayMapTarget,
@@ -33,8 +34,14 @@ pub(super) fn emit_array_map_runtime_call(
             let dest_value_tag = runtime_value_tag("array_map", callback_elem_ty)?;
             let kind_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
             let tag_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+            let source_mixed_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 5);
             abi::emit_load_int_immediate(ctx.emitter, kind_arg_reg, result_kind as i64);
             abi::emit_load_int_immediate(ctx.emitter, tag_arg_reg, dest_value_tag as i64);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                source_mixed_arg_reg,
+                i64::from(source_elem_ty.codegen_repr() == PhpType::Mixed),
+            );
             let helper = if target == ArrayMapTarget::Boxed {
                 "__rt_array_map_boxed"
             } else {
@@ -67,20 +74,14 @@ pub(super) fn hash_map_result_kind(callback_elem_ty: &PhpType, env_bytes: usize)
 
 /// Returns the source VALUE type when `__rt_hash_map` can map a hash faithfully.
 ///
-/// Only `Int`, `Bool` and `Str` values are accepted. A `Mixed`-valued hash is refused ON
-/// PURPOSE, for the same reason `hash_flip_source_value_type` refuses one: an associative array
-/// built entry by entry currently mis-tags heterogeneous values UPSTREAM of this lowering —
-/// `$a["k1"] = 1; $a["k2"] = "s";` stores the string payload under the int tag, which
-/// `var_dump()` of the source array already renders as `int(<pointer>)` with no `array_map()`
-/// involved. `__rt_hash_map` picks the callback ARGUMENT ABI from that per-entry tag, so
-/// accepting a Mixed-valued source would feed a raw string pointer to a callback expecting a
-/// boxed cell. Refusing keeps the failure honest until the hash-construction path tags Mixed
-/// values correctly.
+/// `Int`, `Bool`, `Str`, and `Mixed` values are accepted. Gradual hashes retain each entry's
+/// concrete runtime tag; `__rt_hash_map` uses its explicit source-Mixed flag to box concrete
+/// entries temporarily while reusing already-boxed entries directly.
 pub(super) fn hash_map_source_value_type(source_ty: &PhpType) -> Result<PhpType> {
     match source_ty {
         PhpType::AssocArray { value, .. } => {
             let value = value.codegen_repr();
-            if matches!(value, PhpType::Int | PhpType::Bool | PhpType::Str) {
+            if matches!(value, PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Mixed) {
                 return Ok(value);
             }
             Err(CodegenIrError::unsupported(format!(

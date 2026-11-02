@@ -10,6 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Stmt, StmtKind, TypeExpr};
+use crate::types::param_binding::param_accepts_weak_string_coercion;
 use crate::types::checker::type_compat::unions::normalize_union_members;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -21,6 +22,7 @@ use super::super::Checker;
 pub(crate) struct ReturnInfo {
     pub ty: PhpType,
     pub has_value: bool,
+    pub strict_types: bool,
 }
 
 /// Adds one scalar member to an inferred return type, the way [`nullable_return_type`] adds
@@ -49,6 +51,18 @@ fn union_return_type(other: &PhpType, member: PhpType) -> PhpType {
 /// `Mixed` already admits null and is left alone; an existing union gains `Void` as one more
 /// member rather than nesting; `Void`/`Never` collapse to plain `Void` so a function whose
 /// every path yields null does not become `null|null`.
+/// Returns whether `ty` is a scalar the legacy `string`/`float` return fold absorbs.
+///
+/// KNOWN DIVERGENCE kept on purpose: php returns `5` as `int(5)` from a function whose other
+/// return is a string, where this fold makes it `"5"`. Widening those to `mixed` too is correct but
+/// boxes every such return; it is left for its own measured change.
+fn scalar_absorbed_by_str_or_float(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Str | PhpType::Float
+    )
+}
+
 fn nullable_return_type(other: &PhpType) -> PhpType {
     match other {
         PhpType::Mixed => PhpType::Mixed,
@@ -67,6 +81,140 @@ fn nullable_return_type(other: &PhpType) -> PhpType {
 }
 
 impl Checker {
+    /// Resolves the array contract a declared bare `array` hint must carry, from what the body
+    /// actually returns, or `None` to keep the declared hint.
+    ///
+    /// PHP has ONE array type; elephc splits it into an indexed vector (`Array`) and a hash
+    /// (`AssocArray`). A bare `array` hint resolves to `Array(Mixed)` -- the INDEXED repr -- so when a
+    /// body returns a hash on one path and an indexed array on another, the contract has to say which
+    /// storage the caller will read. Answering indexed is not an option: `coerce_container_to_return_type`
+    /// then retypes the hash as indexed WITHOUT converting it (converting would discard string keys),
+    /// and every consumer that trusts the static type misreads the container -- `json_encode` prints raw
+    /// slot words, `serialize` writes integer keys, `in_array` faults. Measured on a 36-consumer survey,
+    /// 18 diverged from `php -n` 8.5.10 and 5 of those segfaulted.
+    ///
+    /// So the join of an indexed target and a hash target is the HASH, for the same reason
+    /// `types::array_storage::join_array_storage_conversion` gives: a hash represents any PHP array, a
+    /// packed vector cannot. It costs nothing in observable behavior -- a hash holding sequential
+    /// integer keys is indistinguishable from a list to every consumer, measured against `php -n`:
+    /// `json_encode` prints `["a","b"]`, `serialize` writes `a:2:{i:0;s:1:"a";i:1;s:1:"b";}`.
+    ///
+    /// Returning `None` leaves the declared hint in place, which is right when no return says otherwise
+    /// (an empty body, or a path returning something that is not an array at all -- that disagreement
+    /// is a return-type error the compatibility check reports, not something to widen here).
+    pub(crate) fn generic_array_return_contract(return_infos: &[ReturnInfo]) -> Option<PhpType> {
+        let mut specific: Option<PhpType> = None;
+        let mut empty_array: Option<PhpType> = None;
+        let mut saw_hash = false;
+        let mut saw_unshaped = false;
+        let mut disagreed = false;
+        for return_info in return_infos {
+            let return_ty = &return_info.ty;
+            if matches!(return_ty, PhpType::Void) {
+                continue;                                   // a `return null` path says nothing about storage
+            }
+            if !matches!(return_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                // A `Mixed` return -- `$this->h[$k] ?? []` boxes into one -- names no storage. It
+                // cannot argue AGAINST the hash, though: whatever it holds is unboxed into the
+                // contract, while a hash handed to an indexed contract is misread outright.
+                saw_unshaped = true;
+                continue;
+            }
+            if matches!(return_ty, PhpType::AssocArray { .. }) {
+                saw_hash = true;
+            } else if matches!(return_ty, PhpType::Array(elem) if elem.as_ref() == &PhpType::Never) {
+                // `return []` commits to no storage at all: it fits whichever shape the others pick.
+                empty_array = Some(return_ty.clone());
+                continue;
+            }
+            match &specific {
+                None => specific = Some(return_ty.clone()),
+                Some(existing) if existing == return_ty => {}
+                _ => disagreed = true,
+            }
+        }
+        if saw_hash && (disagreed || saw_unshaped) {
+            return Some(PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            });
+        }
+        if disagreed || saw_unshaped {
+            return None;                                    // no shape to prefer over the declared hint
+        }
+        match specific {
+            Some(ty) => Some(Self::generic_array_contract_payload(ty)),
+            None => empty_array,
+        }
+    }
+
+    /// Strips a CONTAINER payload from a resolved bare-`array` contract, keeping the storage kind.
+    ///
+    /// The contract exists to name the storage a caller will read -- packed slots or a hash -- and
+    /// that is ALL a bare `array` hint can promise. A container payload promises more: it says the
+    /// slots hold raw pointers, which only a writer of that same element type produces. Every
+    /// other writer boxes, and the two cannot be told apart at the call site.
+    ///
+    /// Both halves of the disagreement were live. `twig/twig`'s `Template::getBlocks(): array`
+    /// returns `$this->blocks`, whose base default is `[]` and whose subclasses assign a hash of
+    /// arrays: the contract said `array<string, array<mixed>>` over a value the lowering had as
+    /// `array<mixed>`, and the backend refused the conversion outright. Symfony's
+    /// `BufferingLogger::cleanLogs(): array` is the silent half -- `$this->logs[] = [$level,
+    /// $message, $context]` boxes each row into a `Mixed` slot, the contract said
+    /// `array<array<mixed>>`, and `$log[1]` / `$log[2]` then read a boxed cell as a raw array:
+    /// `php -S` prints the page, the compiled binary printed `Warning: Undefined array key 1` and
+    /// a row of `count() == 4`.
+    ///
+    /// A SCALAR payload keeps its precision: an `int` or `string` slot has one representation, so
+    /// the contract and the writer cannot drift apart, and widening it would cost every consumer
+    /// an unbox.
+    fn generic_array_contract_payload(ty: PhpType) -> PhpType {
+        fn payload_is_container(ty: &PhpType) -> bool {
+            // An OBJECT payload is deliberately absent: an object slot is a pointer whose class is
+            // read from the object itself, so every writer stores the same representation and the
+            // contract cannot drift from it. Widening it would also cost real behaviour --
+            // Symfony's `ArgumentMetadataFactory::createArgumentMetadata(): array` returns
+            // `ArgumentMetadata[]`, and `ArgumentResolver` reads `$metadata::IS_INSTANCEOF` off the
+            // loop variable: as `mixed` that class constant has no static receiver, so it went to
+            // the eval bridge as `dynamic::IS_INSTANCEOF` and every route with a controller
+            // argument died on it.
+            matches!(
+                ty.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable
+            )
+        }
+        match ty {
+            PhpType::Array(elem) if payload_is_container(&elem) => {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            }
+            PhpType::AssocArray { key, value } if payload_is_container(&value) => {
+                PhpType::AssocArray {
+                    key,
+                    value: Box::new(PhpType::Mixed),
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// Adds php's implicit `null` to the type inferred for an UNDECLARED return type whose body
+    /// can run off its end after some `return <value>;`.
+    ///
+    /// `function f($a) { if ($a) { return new X; } }` answers `null` when the end is reached, but
+    /// the returns alone inferred a non-null `X`: the default return then had no value of that
+    /// type to produce (the backend refused the whole file -- Laravel's `getGenericUser()`,
+    /// `TableGuesser::guess()`, `ProviderRepository::loadManifest()`), and a caller was free to
+    /// fold `=== null` on a result that can be null. A body whose end is unreachable (every path
+    /// returns or throws) keeps its exact type. `Mixed` already carries null.
+    pub(crate) fn widen_return_for_fall_off(&self, body: &[Stmt], inferred: PhpType) -> PhpType {
+        if matches!(inferred, PhpType::Void | PhpType::Never | PhpType::Mixed)
+            || self.body_cannot_fall_through(body)
+        {
+            return inferred;
+        }
+        Self::wider_type(&inferred, &PhpType::Void)
+    }
+
     /// Recursively collects ReturnInfo from all return statements in `stmt` and its
     /// nested blocks (if/while/try/etc.), appending each to `returns`. Untyped or unresolvable
     /// expressions are skipped silently — only well-typed returns contribute to the vector.
@@ -84,13 +232,17 @@ impl Checker {
                 // re-inference when nothing was recorded (e.g. an unchecked body).
                 let recorded = self
                     .flow_typed_returns
-                    .get(&(stmt as *const Stmt as usize))
+                    .get(&(
+                        self.current_loop_storage_scope.clone(),
+                        stmt as *const Stmt as usize,
+                    ))
                     .filter(|(span, _)| *span == stmt.span)
                     .map(|(_, ty)| ty.clone());
                 if let Some(ty) = recorded.or_else(|| self.infer_type(expr, env).ok()) {
                     returns.push(ReturnInfo {
                         ty,
                         has_value: true,
+                        strict_types: stmt.strict_types,
                     });
                 }
             }
@@ -98,7 +250,16 @@ impl Checker {
                 returns.push(ReturnInfo {
                     ty: PhpType::Void,
                     has_value: false,
+                    strict_types: stmt.strict_types,
                 });
+            }
+            // A body folded to a plain block (`if (true) { return false; }` becomes one
+            // before checking) still returns: skipping it dropped that return from the
+            // fold, and the function's type became the other exit's alone.
+            StmtKind::Synthetic(body) => {
+                for s in body {
+                    self.collect_return_infos(s, env, returns);
+                }
             }
             StmtKind::If {
                 then_body,
@@ -174,6 +335,14 @@ impl Checker {
             StmtKind::Return(Some(expr)) => {
                 if let Ok(Some(sig)) = self.resolve_expr_callable_sig(expr, env) {
                     returns.push(sig);
+                }
+            }
+            // A body folded to a plain block (`if (true) { return false; }` becomes one
+            // before checking) still returns: skipping it dropped that return from the
+            // fold, and the function's type became the other exit's alone.
+            StmtKind::Synthetic(body) => {
+                for s in body {
+                    self.collect_return_callable_sigs(s, env, returns);
                 }
             }
             StmtKind::If {
@@ -256,6 +425,14 @@ impl Checker {
                     returns.push(sig);
                 }
             }
+            // A body folded to a plain block (`if (true) { return false; }` becomes one
+            // before checking) still returns: skipping it dropped that return from the
+            // fold, and the function's type became the other exit's alone.
+            StmtKind::Synthetic(body) => {
+                for s in body {
+                    self.collect_return_callable_array_sigs(s, env, returns);
+                }
+            }
             StmtKind::If {
                 then_body,
                 elseif_clauses,
@@ -325,31 +502,22 @@ impl Checker {
         body.iter().any(Self::stmt_contains_return)
     }
 
-    /// Checks that a function or closure body ends with a return on every control-flow path
-    /// when the declared return type is not Void or Never. Uses the shared function-exit analysis,
-    /// extended with checker-known `never` calls, to determine if the body always exits; emits a
-    /// "must return a value" error if not.
+    /// Accepts a body that can fall off the end of a declared non-void return type.
+    ///
+    /// php compiles such a body and raises `TypeError: f(): Return value must be of type T, none
+    /// returned` only when a call really falls off the end, so refusing it here rejected programs
+    /// php runs: Symfony's `TagAwareAdapter::getItem(): CacheItem` returns from inside a `foreach`
+    /// and has nothing after it. EIR lowering raises that `TypeError` on the fall-off path
+    /// (`crate::ir_lower::function::terminate_open_block`); this stays the single place the
+    /// three declaration kinds consult, so a future compile-time warning has one home.
     pub(crate) fn require_declared_return_coverage(
         &self,
-        declared_ret: &PhpType,
-        body: &[Stmt],
-        span: crate::span::Span,
-        context: &str,
+        _declared_ret: &PhpType,
+        _body: &[Stmt],
+        _span: crate::span::Span,
+        _context: &str,
     ) -> Result<(), CompileError> {
-        if matches!(declared_ret, PhpType::Void | PhpType::Never) {
-            return Ok(());
-        }
-
-        if crate::termination::block_guarantees_function_exit_with_divergence(body, &|expr| {
-            self.expr_is_declared_never_call(expr)
-        }) {
-            Ok(())
-        } else {
-            Err(CompileError::new(
-                span,
-                &format!("{} must return a value on every path", context),
-            ))
-        }
+        Ok(())
     }
 
     /// Null-only declarations require an explicit value return despite sharing void storage.
@@ -365,25 +533,27 @@ impl Checker {
     /// Keeps source null and void return rules separate while retaining their shared runtime value.
     pub(crate) fn require_compatible_return_hint(
         &self, hint: &TypeExpr, expected: &PhpType, actual: &PhpType, has_value: bool,
-        span: crate::span::Span, context: &str,
+        strict_types: bool, span: crate::span::Span, context: &str,
     ) -> Result<(), CompileError> {
         if matches!(hint, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("null")) {
             if has_value && *actual == PhpType::Void { return Ok(()); }
             return Err(CompileError::new(span, &format!("{context} must return a null value")));
         }
-        self.require_compatible_return_type(expected, actual, has_value, span, context)
+        self.require_compatible_return_type(expected, actual, has_value, strict_types, span, context)
     }
 
     /// Checks that an actual return type is compatible with the declared return type.
     /// Handles three cases: void-returning functions (no value allowed), value-returning
     /// functions (value required and must be assignable to `expected`), and nullability
-    /// via `declared_type_accepts_null`. Delegates to `require_compatible_arg_type` for
-    /// the final assignability check.
+    /// via `declared_type_accepts_null`. In coercive source, a `Stringable` object may satisfy a
+    /// string return boundary; `strict_types` disables that PHP conversion. Delegates to
+    /// `require_compatible_arg_type` for the final assignability check.
     pub(crate) fn require_compatible_return_type(
         &self,
         expected: &PhpType,
         actual: &PhpType,
         has_value: bool,
+        strict_types: bool,
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
@@ -397,7 +567,11 @@ impl Checker {
             ));
         }
 
-        if matches!(expected, PhpType::Void) {
+        // A standalone `null` return type parses to the same `Void` as `void`, and its body says
+        // `return null;`. PHP refuses that statement only under `void`, at compile time, so no
+        // valid program reaches here with it: accepting it keeps `: null` methods compiled
+        // (Symfony's `NullCoalescedNameNode::evaluate(): null`).
+        if matches!(expected, PhpType::Void) && !matches!(actual, PhpType::Void) {
             return Err(CompileError::new(
                 span,
                 &format!("{} must not return a value", context),
@@ -412,6 +586,51 @@ impl Checker {
         }
 
         Self::require_matching_array_element_storage(expected, actual, span, context)?;
+
+        if !self.type_accepts(expected, actual)
+            && (crate::types::param_binding::object_requires_runtime_nominal_guard(
+                expected, actual,
+            ) || crate::types::param_binding::gradual_object_requires_runtime_nominal_guard(
+                expected, actual,
+            ))
+        {
+            return Ok(());
+        }
+
+        if !strict_types && param_accepts_weak_string_coercion(expected) {
+            if let PhpType::Object(class_name) = actual.codegen_repr() {
+                if self.object_supports_weak_string_coercion(&class_name) {
+                    return Ok(());
+                }
+            }
+        }
+
+        // A string name or indexed receiver/method pair can satisfy PHP's `callable` return
+        // contract. Lowering resolves the runtime value to a descriptor and raises at the
+        // boundary when no callable target exists, so these values must reach that validation.
+        if matches!(expected.codegen_repr(), PhpType::Callable)
+            && matches!(actual.codegen_repr(), PhpType::Str | PhpType::Array(_))
+        {
+            return Ok(());
+        }
+
+        if !strict_types
+            && crate::types::param_binding::scalar_param_cast(expected, actual).is_some()
+        {
+            return Ok(());
+        }
+
+        // Return lowering already normalizes a boxed gradual value into iterable storage.
+        // Parameter binding has a distinct ABI path and deliberately remains stricter.
+        if matches!((expected, actual), (PhpType::Iterable, PhpType::Mixed)) {
+            return Ok(());
+        }
+
+        // `?int` returned from a declared `int` is PHP's runtime TypeError, not a compile error,
+        // and `declared_int_return_boundary` already emits the check that raises it.
+        if Self::nullable_int_reaches_declared_int_return(expected, actual) {
+            return Ok(());
+        }
 
         self.require_compatible_arg_type(expected, actual, span, context)
     }
@@ -521,6 +740,24 @@ impl Checker {
     /// indexed or associative. The checker types it `Array(Never)`.
     fn returns_empty_array_literal_inner(ty: &PhpType) -> bool {
         matches!(ty, PhpType::Array(elem) if matches!(**elem, PhpType::Never))
+    }
+
+    /// Reports whether this is the nullable-int-into-declared-`int` return the backend verifies.
+    ///
+    /// Deliberately narrow: `ReturnBoundaryMixedToInt` is the only return boundary that TESTS the
+    /// value and raises PHP's message. A declared `float` or `string` return converts instead, so
+    /// admitting the same shape there would answer `0.0` or `""` where PHP throws.
+    fn nullable_int_reaches_declared_int_return(expected: &PhpType, actual: &PhpType) -> bool {
+        if !matches!(expected, PhpType::Int) {
+            return false;
+        }
+        let PhpType::Union(members) = actual else {
+            return false;
+        };
+        members.iter().any(|member| matches!(member, PhpType::Void))
+            && members
+                .iter()
+                .all(|member| matches!(member, PhpType::Int | PhpType::Void))
     }
 
     /// Returns true if `ty` can accept a null/void value — covers PhpType::Mixed,
@@ -663,6 +900,15 @@ impl Checker {
             (PhpType::Union(_), _) | (_, PhpType::Union(_)) => {
                 normalize_union_members(vec![a.clone(), b.clone()])
             }
+            // `string`/`float` absorb only the SCALARS they can stand for. An array, object,
+            // callable, `mixed` or union is not a string: `if (is_array($x)) { return [1]; }
+            // return "x";` inferred `string` and returned "Array" (with a conversion warning) for
+            // every array -- Twig's `first`/`last` filters over `slice()` among them.
+            (PhpType::Str | PhpType::Float, other) | (other, PhpType::Str | PhpType::Float)
+                if !scalar_absorbed_by_str_or_float(other) =>
+            {
+                PhpType::Mixed
+            }
             (PhpType::Str, _) | (_, PhpType::Str) => PhpType::Str,
             (PhpType::Float, _) | (_, PhpType::Float) => PhpType::Float,
             _ => PhpType::Mixed,
@@ -685,6 +931,13 @@ impl Checker {
                 if crate::codegen::sentinels::null_repr_is_tagged() =>
             {
                 PhpType::Union(vec![PhpType::Int, PhpType::Void])
+            }
+            // A `callable` slot has no null representation a call can pass through: the argument
+            // is normalized to a descriptor, and null fatals ("mixed value is not callable").
+            // Laravel's `Arr::sort($array, $callback = null)` forwards its null to
+            // `Collection::sortBy($callback)`, whose other callers pass closures.
+            (PhpType::Void, PhpType::Callable) | (PhpType::Callable, PhpType::Void) => {
+                PhpType::Union(vec![PhpType::Callable, PhpType::Void])
             }
             (PhpType::Void | PhpType::Never, other) | (other, PhpType::Void | PhpType::Never) => {
                 other.clone()

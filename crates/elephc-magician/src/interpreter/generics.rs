@@ -50,9 +50,34 @@ fn template_signature(template: &EvalGenericTemplate, method: &str) -> (Vec<Stri
 }
 
 /// Binds generic slots from declaration-ordered arguments or a fully written argument list.
+///
+/// A template that exists only because of a PHPDoc `@template` is not a contract PHP has: php
+/// never reads a docblock, so `resolveValue(string)` against `@template TValue of
+/// array<array|scalar>|scalar` simply runs. Such a template therefore never fails a call. A
+/// binding it cannot infer, or one outside its bound, erases every slot to `mixed`, which
+/// specializes the declaration back to the untyped PHP the file actually contains. Native
+/// `<T>` syntax keeps its checks: that is elephc's own language, and its errors are the
+/// contract.
 fn bind_template(
     template: &EvalGenericTemplate, written: Option<&[Type]>, args: &[EvaluatedCallArg], method: &str,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Bindings, EvalStatus> {
+    if template.native_syntax || written.is_some() {
+        return bind_template_checked(template, written, args, method, true, context, values);
+    }
+    bind_template_checked(template, written, args, method, false, context, values)
+}
+
+/// Every slot of `template` bound to `mixed`: the PHPDoc template read as the PHP it annotates.
+fn erased_bindings(template: &EvalGenericTemplate) -> Bindings {
+    template.parameters.iter().chain(&template.constructor_parameters)
+        .map(|param| (param.name.clone(), Type::atom("mixed"))).collect()
+}
+
+/// `bind_template`, raising its errors only when `enforce` is set.
+fn bind_template_checked(
+    template: &EvalGenericTemplate, written: Option<&[Type]>, args: &[EvaluatedCallArg], method: &str,
+    enforce: bool, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Bindings, EvalStatus> {
     let parameters = template.parameters.iter().chain(&template.constructor_parameters).cloned().collect::<Vec<_>>();
     // Class-only spelling leaves constructor slots inferable; longer lists bind both sets explicitly.
@@ -93,16 +118,21 @@ fn bind_template(
             }
             result
         } else { elephc_generics::unify(&names, &declared, &actual, &mut inferred) };
-        if let Err(error) = unified { return binding_error(&template.name, error, context, values); }
+        if let Err(error) = unified {
+            if !enforce { return Ok(erased_bindings(template)); }
+            return binding_error(&template.name, error, context, values);
+        }
     }
     let bindings = match elephc_generics::finish(&parameters, &inferred) {
         Ok(bindings) => bindings,
+        Err(_) if !enforce => return Ok(erased_bindings(template)),
         Err(error) => return binding_error(&template.name, error, context, values),
     };
     for (param, (_, actual)) in parameters.iter().zip(&bindings) {
         let Some(bound) = &param.bound else { continue; };
         let bound = bound.substitute(&bindings);
         if !generic_type_is_a(actual, &bound, context, values)? {
+            if !enforce { return Ok(erased_bindings(template)); }
             return eval_throw_type_error(&format!("Generic '{}' binds <{}> to {}, which does not satisfy its bound {}", template.name, param.name, actual, bound), context, values);
         }
     }

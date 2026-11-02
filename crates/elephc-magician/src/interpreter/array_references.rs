@@ -20,7 +20,7 @@ pub(in crate::interpreter) fn eval_owned_reference_target_value(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match target {
         EvalReferenceTarget::Variable { scope, name } => {
-            let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
+            let scope = unsafe { scope.live_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
             match visible_scope_cell(context, scope, name) {
                 Some(value) => values.retain(value),
                 None => values.null(),
@@ -28,18 +28,22 @@ pub(in crate::interpreter) fn eval_owned_reference_target_value(
         },
         EvalReferenceTarget::Cell { cell } => values.retain(*cell),
         EvalReferenceTarget::ArrayElement { scope, array_name, index } => {
-            let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
+            let scope = unsafe { scope.live_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
             let array = match visible_scope_cell(context, scope, array_name) {
                 Some(value) => values.retain(value)?,
                 None => values.null()?,
             };
             owners.push(array);
-            values.array_get(array, *index)
+            let key = super::array_literals::eval_array_reference_key_value(index, values)?;
+            owners.push(key);
+            values.array_get(array, key)
         },
         EvalReferenceTarget::NestedArrayElement { array_target, index } => {
             let array = eval_owned_reference_target_value(array_target, context, values, owners)?;
             owners.push(array);
-            values.array_get(array, *index)
+            let key = super::array_literals::eval_array_reference_key_value(index, values)?;
+            owners.push(key);
+            values.array_get(array, key)
         },
         EvalReferenceTarget::ObjectProperty { object, property, access_scope } => {
             let previous = context.replace_execution_scope(access_scope.clone());
@@ -53,6 +57,12 @@ pub(in crate::interpreter) fn eval_owned_reference_target_value(
             context.replace_execution_scope(previous);
             result
         },
+        EvalReferenceTarget::StaticLocal { function, name } => {
+            match context.static_local(function, name) {
+                Some(value) => values.retain(value),
+                None => values.null(),
+            }
+        }
         EvalReferenceTarget::InvokerSlot { .. } => eval_reference_target_value(target, context, values),
     }
 }

@@ -35,7 +35,14 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if !ty.is_php_array() && !matches!(
         ty,
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            // A variadic that may receive named arguments is typed `iterable`: its storage is
+            // a list or a hash, both of which the runtime check reads by heap kind. Laravel's
+            // `literal(...$arguments)` asks exactly this.
+            | PhpType::Iterable
     ) {
         return Err(CompileError::new(
             cx.span,

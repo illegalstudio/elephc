@@ -36,6 +36,10 @@ use sha2::{Digest, Sha256};
 const PCRE2_VERSION: &str = "10.47";
 
 /// Reads the fixture's recipe and source identity from the production catalog.
+///
+/// The catalog identity (recipe revision and source SHA-256) and the project files embedded
+/// below are canonicalized by `examples/date-json-regex/elephc.toml` and
+/// `examples/date-json-regex/elephc.lock`; reading the catalog keeps them from drifting.
 fn fixture_pcre2_version() -> &'static elephc::native_deps::PackageVersion {
     elephc::native_deps::packages()
         .iter()

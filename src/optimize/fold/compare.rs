@@ -216,8 +216,26 @@ fn compare_float_to_string(left: f64, right: &str) -> Option<Ordering> {
     match php_numeric_string(right) {
         Some(PhpNumeric::Int(right)) => Some(three_way(left - right as f64, 0.0)),
         Some(PhpNumeric::Float { value, .. }) => Some(three_way(left, value)),
-        None => None,
+        // php compares a non-numeric string with the float's string form, written at the
+        // `precision` ini (14 by default). That form is only certain here when the float's
+        // shortest representation is plain decimal notation of at most 14 significant digits,
+        // which is what `PHP_VERSION < 8.2` (Carbon's version guard) needs.
+        None => plain_float_string(left).map(|left| compare_strings(&left, right)),
     }
+}
+
+/// The string php writes for `value` at the default precision, when Rust's shortest
+/// representation is certain to match it: finite, in `[1e-4, 1e15)`, at most 14 significant
+/// digits. Returns `None` otherwise.
+fn plain_float_string(value: f64) -> Option<String> {
+    let magnitude = value.abs();
+    if !value.is_finite() || !(1e-4..1e15).contains(&magnitude) {
+        return None;
+    }
+    let text = format!("{}", value);
+    let digits = text.trim_start_matches('-').replace('.', "");
+    let significant = digits.trim_start_matches('0').trim_end_matches('0');
+    (significant.len() <= 14).then_some(text)
 }
 
 /// PHP 8's `zend_compare()` over two scalar literals.

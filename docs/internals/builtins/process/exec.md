@@ -2,7 +2,7 @@
 title: "exec() - internals"
 description: "Compiler internals for exec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 825
+  order: 859
 ---
 
 ## `exec()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/exec.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/exec.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,19 +39,21 @@ sidebar:
 ## Signature summary
 
 ```php
-function exec(string $command): string
+function exec(string $command, array $output = null, int $result_code = null): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–3 arguments (2 optional).
+- **By-reference parameters**: `$output`, `$result_code`.
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/exec.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/exec.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `runtime-state-or-resource`.
+- **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$output`, `$result_code`.
 
 ## Cross-references
 

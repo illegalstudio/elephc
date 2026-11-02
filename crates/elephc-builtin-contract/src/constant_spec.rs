@@ -97,4 +97,18 @@ pub struct ConstantContract {
     pub extension: bool,
     /// Whether this constant is compiler/runtime-internal, never PHP-visible.
     pub internal: bool,
+    /// Compiler targets whose PHP defines this name, when only some do (`PHP_WINDOWS_VERSION_*`
+    /// exists on Windows builds only). `None` means every target. A restricted name stays typed
+    /// for the checker, so a branch guarded by a platform test still compiles, but it is not
+    /// defined elsewhere: `defined()` answers false and a read throws php's `Undefined constant`.
+    pub target_support: Option<&'static [&'static str]>,
+}
+
+impl ConstantContract {
+    /// Returns whether php defines this constant on the target spelled `target`
+    /// (`macos-aarch64`, `linux-x86_64`, ...).
+    pub fn is_defined_on(&self, target: &str) -> bool {
+        self.target_support
+            .is_none_or(|targets| targets.contains(&target))
+    }
 }

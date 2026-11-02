@@ -2,7 +2,7 @@
 title: "file_get_contents()"
 description: "Reads an entire file into a string."
 sidebar:
-  order: 321
+  order: 332
 ---
 
 ## file_get_contents()

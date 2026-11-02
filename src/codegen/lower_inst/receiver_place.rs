@@ -34,6 +34,8 @@ pub(super) enum ReceiverPlace {
     Local(LocalSlotId),
     /// A slot whose value is reached through its ref-cell representation.
     RefCell(LocalSlotId),
+    /// A function `static`, whose storage is a `.comm` symbol rather than a frame slot.
+    StaticLocal(LocalSlotId),
     /// A declared object property whose runtime container owner may be replaced by COW.
     Property {
         object: ValueId,
@@ -47,8 +49,14 @@ pub(super) enum ReceiverPlace {
     /// helper handed back a DIFFERENT pointer — a growth or a copy-on-write split — and whether
     /// the previous pointer is then retired depends on the helper's convention
     /// (`RefCellStorePrevious`).
+    ///
+    /// A global some body takes a reference to (`$s = &$_SESSION`, `['s' => &$_SESSION]`,
+    /// `global $g` in a function) keeps a shared reference CELL in the symbol instead, and the
+    /// container is the cell's payload; the write-back goes through the cell (`name` answers
+    /// which, via `uses_shared_ref_cell`).
     Global {
         symbol: String,
+        name: String,
         php_type: PhpType,
     },
 }
@@ -75,6 +83,11 @@ impl ReceiverPlace {
                 Op::LoadRefCell if !ctx.local_ref_cell_representation_is_definite(slot)
                     && !ctx.local_ref_cell_representation_is_dynamic(slot) => Ok(Self::Local(slot)),
                 Op::LoadRefCell => Ok(Self::RefCell(slot)),
+                // A function `static` is a writable place too, just not a frame one. Leaving it
+                // `Opaque` made every relocating mutation on a `static` array publish its new
+                // pointer nowhere — silently, because `Opaque`'s write-back is `Ok(())` and only
+                // the growth paths call `require_writable`.
+                Op::LoadStaticLocal => Ok(Self::StaticLocal(slot)),
                 _ => Ok(Self::Opaque),
             };
         }
@@ -83,6 +96,7 @@ impl ReceiverPlace {
                 let name = ctx.global_name_data(data)?.to_string();
                 return Ok(Self::Global {
                     symbol: crate::names::ir_global_symbol(&name),
+                    name,
                     php_type: ctx.value_php_type(value)?,
                 });
             }
@@ -101,6 +115,11 @@ impl ReceiverPlace {
         match self {
             Self::Opaque => None,
             Self::Local(slot) | Self::RefCell(slot) => Some(*slot),
+            // NOT a frame slot. The pre-mutation bookkeeping this feeds
+            // (`release_mutated_source_local_owner`) releases the FRAME slot's occupant, and a
+            // `static` local has none — its owner lives in the `.comm` symbol and is released
+            // by `__rt_web_reset`, not per call.
+            Self::StaticLocal(_) => None,
             Self::Property { .. } | Self::Global { .. } => None,
         }
     }
@@ -146,7 +165,7 @@ impl ReceiverPlace {
             }
             // The symbol keeps its own owner of the cell and the helpers mutate the cell in
             // place, so there is no separate owner to hand over here.
-            Self::Opaque | Self::Property { .. } | Self::Global { .. } => Ok(()),
+            Self::Opaque | Self::StaticLocal(_) | Self::Property { .. } | Self::Global { .. } => Ok(()),
         }
     }
 
@@ -199,12 +218,27 @@ impl ReceiverPlace {
     ) -> Result<()> {
         let slot = match self {
             Self::Local(slot) | Self::RefCell(slot) => *slot,
-            Self::Global { symbol, php_type } => {
-                abi::emit_load_symbol_to_result(ctx.emitter, symbol, php_type);
+            Self::Global { symbol, name, php_type } => {
+                if ctx.shared.uses_shared_ref_cell(ctx.module, name) {
+                    super::globals_constants::load_shared_global_to_result(ctx, symbol, php_type);
+                } else {
+                    abi::emit_load_symbol_to_result(ctx.emitter, symbol, php_type);
+                }
                 return ctx.store_result_value(value);
             }
-            Self::Opaque | Self::Property { .. } => return Ok(()),
+            Self::Opaque | Self::StaticLocal(_) | Self::Property { .. } => return Ok(()),
         };
+        // A concrete load out of a Mixed-widened slot unboxes into a reference of its own, and so
+        // does the reload below. The stale snapshot's reference would be overwritten unreleased:
+        // `foreach ($o[0] as &$v) {} $o[0]["k"] = 1;` leaked `$o` whole once the nested write
+        // had widened the slot.
+        if matches!(self, Self::Local(_))
+            && ctx.mutated_source_local_owner_is_boxed(slot, value)?
+            && value_is_load_of_slot(ctx, value, slot)?
+        {
+            let stale_ty = ctx.load_value_to_result(value)?;
+            abi::emit_decref_if_refcounted(ctx.emitter, &stale_ty);
+        }
         let source_ty = ctx.load_local_to_result(slot)?;
         let result_ty = ctx.value_php_type(value)?;
         if ctx.needs_borrowed_container_lease(slot, value)? {
@@ -215,7 +249,23 @@ impl ReceiverPlace {
         ctx.store_result_value(value)
     }
 
-    /// Publishes the receiver's current pointer back into the place it was read from.
+    /// Publishes the receiver's current pointer back into the place it was read from, through a
+    /// ref cell TYPED at the value being published.
+    ///
+    /// `array_splice` is the only caller: its replacement insert can retype the receiver's
+    /// elements, and `store_value_through_ref_cell_slot` is what refuses that against a
+    /// by-reference parameter's declared cell instead of writing a representation the cell cannot
+    /// hold (`test_array_splice_type_changing_replacement_on_by_ref_parameter_is_refused`).
+    ///
+    /// The LOCAL arm goes through the mutated-container path all the other mutating builtins use.
+    /// It used to be the ordinary local store, whose boxing path TRANSFERS the SSA value's
+    /// reference into the new Mixed cell — while that same value stays live for the splice call
+    /// and is released again by the ordinary cleanup. A frame slot a LATER store had widened to
+    /// boxed `Mixed` therefore held a cell whose payload had already been freed:
+    /// `$c = ['bb', 'aa']; array_splice($c, 0, 1); var_dump($c); $c = null;` printed
+    /// `array(0) {}` where php prints the one remaining element, and then looped forever inside
+    /// the runtime. The slot only ends up boxed when a later store widens it, which is why the
+    /// indexed path looked correct on its own.
     pub(super) fn store_back(
         &self,
         ctx: &mut FunctionContext<'_>,
@@ -225,6 +275,9 @@ impl ReceiverPlace {
         match self {
             Self::Opaque => Ok(()),
             Self::Local(slot) => ctx.store_receiver_value_to_local(*slot, value),
+            Self::StaticLocal(slot) => {
+                ctx.store_relocated_container_to_static_local(*slot, value)
+            }
             Self::RefCell(slot) => super::store_value_through_ref_cell_slot(
                 ctx,
                 *slot,
@@ -235,9 +288,10 @@ impl ReceiverPlace {
             Self::Property { object, slot } => {
                 super::objects::store_mutated_container_property_owner(ctx, *object, slot, value)
             }
-            Self::Global { symbol, php_type } => emit_global_receiver_store_back(
+            Self::Global { symbol, name, php_type } => emit_global_receiver_store_back(
                 ctx,
                 symbol,
+                name,
                 php_type,
                 value,
                 crate::codegen::lower_inst::local_stores::RefCellStorePrevious::Retire,
@@ -265,10 +319,14 @@ impl ReceiverPlace {
         match self {
             Self::Opaque => Ok(()),
             Self::Local(slot) => ctx.store_mutated_container_writeback_to_local(*slot, value),
+            Self::StaticLocal(slot) => {
+                ctx.store_relocated_container_to_static_local(*slot, value)
+            }
             Self::RefCell(_) | Self::Property { .. } => self.store_back_value(ctx, value),
-            Self::Global { symbol, php_type } => emit_global_receiver_store_back(
+            Self::Global { symbol, name, php_type } => emit_global_receiver_store_back(
                 ctx,
                 symbol,
+                name,
                 php_type,
                 value,
                 crate::codegen::lower_inst::local_stores::RefCellStorePrevious::Keep,
@@ -303,9 +361,10 @@ impl ReceiverPlace {
         value: ValueId,
     ) -> Result<()> {
         match self {
-            Self::Global { symbol, php_type } => emit_global_receiver_store_back(
+            Self::Global { symbol, name, php_type } => emit_global_receiver_store_back(
                 ctx,
                 symbol,
+                name,
                 php_type,
                 value,
                 crate::codegen::lower_inst::local_stores::RefCellStorePrevious::Keep,
@@ -340,9 +399,16 @@ impl ReceiverPlace {
 /// here (`Retire`, the mutating builtins' convention) or was already dropped by the helper
 /// (`Keep`, the element-write helpers' convention) is the caller's call — see
 /// [`ReceiverPlace::store_back_container_writeback`].
+///
+/// A global held in a shared reference cell compares and republishes the cell's PAYLOAD. Writing
+/// the new container into the symbol itself replaced the cell pointer with a hash pointer, and the
+/// next cell store then wrote a payload and a tag word over that hash's header: a grown
+/// `$_SESSION` in a program that also takes `&$_SESSION` (Symfony's session storage) failed
+/// heap-debug with "a hash whose insertion order left the table" inside the session decode.
 fn emit_global_receiver_store_back(
     ctx: &mut FunctionContext<'_>,
     symbol: &str,
+    name: &str,
     php_type: &PhpType,
     value: ValueId,
     previous: crate::codegen::lower_inst::local_stores::RefCellStorePrevious,
@@ -351,6 +417,32 @@ fn emit_global_receiver_store_back(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let old_reg = abi::secondary_scratch_reg(ctx.emitter);
     let new_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    if ctx.shared.uses_shared_ref_cell(ctx.module, name) {
+        let publish = ctx.next_label("global_cell_receiver_publish");
+        ctx.load_value_to_reg(value, new_reg)?;
+        abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, symbol, 0);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &publish);
+        abi::emit_load_from_address(ctx.emitter, old_reg, result_reg, 0);
+        match ctx.emitter.target.arch {
+            crate::codegen::platform::Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {new_reg}, {old_reg}"));  // did the helper hand back the container the cell already holds?
+                ctx.emitter.instruction(&format!("b.eq {unchanged}"));          // same container: nothing to republish or retire
+            }
+            crate::codegen::platform::Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {new_reg}, {old_reg}"));  // did the helper hand back the container the cell already holds?
+                ctx.emitter.instruction(&format!("je {unchanged}"));            // same container: nothing to republish or retire
+            }
+        }
+        ctx.emitter.label(&publish);
+        abi::emit_reg_move(ctx.emitter, result_reg, new_reg);
+        if previous == crate::codegen::lower_inst::local_stores::RefCellStorePrevious::Retire {
+            super::globals_constants::lower_store_shared_global(ctx, symbol, php_type)?;
+        } else {
+            super::globals_constants::lower_writeback_shared_global(ctx, symbol, php_type)?;
+        }
+        ctx.emitter.label(&unchanged);
+        return Ok(());
+    }
     ctx.load_value_to_reg(value, new_reg)?;
     abi::emit_load_symbol_to_reg(ctx.emitter, old_reg, symbol, 0);
     match ctx.emitter.target.arch {
@@ -413,4 +505,19 @@ fn direct_property_receiver(
             _ => return Ok(None),
         }
     }
+}
+
+/// Returns whether `value` is a direct `LoadLocal` of `slot`, the only snapshot that owns the
+/// unbox reference `ReceiverPlace::reload_local_value` retires before reloading.
+fn value_is_load_of_slot(ctx: &FunctionContext<'_>, value: ValueId, slot: LocalSlotId) -> Result<bool> {
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+    };
+    Ok(inst_ref.op == Op::LoadLocal && inst_ref.immediate == Some(Immediate::LocalSlot(slot)))
 }

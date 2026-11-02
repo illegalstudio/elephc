@@ -10,6 +10,17 @@
 use super::super::*;
 use super::support::*;
 
+/// Raw payload extraction must retain the full signed width and leave the input alive.
+#[test]
+fn eval_int_value_preserves_signed_extremes_and_input_owner() {
+    let mut values = FakeOps::default();
+    for expected in [i64::MIN, -1, 0, 1, i64::MAX] {
+        let input = values.int(expected).unwrap();
+        assert_eq!(eval_int_value(input, &mut values).unwrap(), expected);
+        assert_eq!(values.raw_value_word(input).unwrap() as i64, expected);
+    }
+}
+
 /// Verifies eval type-predicate builtins inspect boxed runtime tags directly and by callable.
 #[test]
 fn execute_program_dispatches_type_predicate_builtins() {

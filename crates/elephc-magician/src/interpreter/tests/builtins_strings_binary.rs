@@ -140,6 +140,20 @@ return function_exists("substr");"#,
     assert_eq!(values.output, "cdef:bcde:ef:cd:cd:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies eval `str_replace()` writes its by-reference replacement count.
+#[test]
+fn execute_program_str_replace_writes_its_count() {
+    let program = parse_fragment(
+        br#"$c = str_replace(["a", "b"], "x", "abcab", $n); echo $c, " ", $n;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "xxcxx 4");
+}
 /// Verifies eval `substr_replace()` dispatches through direct, named, and callable paths.
 #[test]
 fn execute_program_dispatches_substr_replace_builtin() {
@@ -287,4 +301,31 @@ return function_exists("base64_decode");"#,
 
     assert_eq!(values.output, "Hello:Hi:Test 123!::");
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval `strtok()` skips leading delimiters, consumes the ending one, restarts on a new
+/// string and answers false once nothing is left or before any string was given.
+#[test]
+fn execute_program_dispatches_strtok_builtin() {
+    crate::context::reset_request_statics();
+    let program = parse_fragment(
+        br#"echo var_export(strtok("x"), true); echo ":";
+$t = strtok("//a//b/c", "/");
+while ($t !== false) { echo "[", $t, "]"; $t = strtok("/"); }
+echo ":", strtok("one two", " "), "-", strtok("three four", " "), "-", strtok(" "), ":";
+echo var_export(strtok("abc", ""), true), var_export(strtok(""), true), ":";
+echo call_user_func("strtok", "p,q", ","), call_user_func("strtok", ",");
+return function_exists("strtok");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.output, "false:[a][b][c]:one-three-four:'abc'false:pq");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    crate::context::reset_request_statics();
+    let program = parse_fragment(br#"return strtok("x");"#).expect("parse");
+    let mut scope = ElephcEvalScope::new();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
 }

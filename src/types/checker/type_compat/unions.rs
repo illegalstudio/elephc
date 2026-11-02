@@ -28,6 +28,7 @@ pub(crate) fn normalize_union_members(members: Vec<PhpType>) -> PhpType {
         match member {
             PhpType::Union(inner) => flat.extend(inner),
             PhpType::Mixed => return PhpType::Mixed,
+            PhpType::Never => {}
             other => flat.push(other),
         }
     }
@@ -47,7 +48,9 @@ pub(crate) fn normalize_union_members(members: Vec<PhpType>) -> PhpType {
         }
     }
 
-    if deduped.len() == 1 {
+    if deduped.is_empty() {
+        PhpType::Never
+    } else if deduped.len() == 1 {
         deduped.pop().expect("union member exists")
     } else {
         PhpType::Union(deduped)
@@ -72,6 +75,36 @@ impl Checker {
         // The arithmetic union is decided by the arms below, not here: this per-member rule asks
         // whether `int` accepts `float`, which is false, so it would refuse `int|float` at every
         // position — including the `int` parameters the preludes pass a loop counter to.
+        // A union that CONTAINS `callable` is a value already PROVEN callable, whose runtime shape
+        // is merely not decided: that is what `is_callable($x)` narrows an unconstrained value to
+        // (`callable|string`), because the storage stays the boxed cell it was and a callable may
+        // be a plain function-name string. Decomposing it member by member asks the wrong
+        // question — `string` alone is not proven callable, so the `string` member would sink the
+        // whole union — while PHP's own `callable` destination accepts every one of these shapes.
+        // A union WITHOUT a `callable` member (`string|array`) carries no such proof and keeps the
+        // member-by-member rule below.
+        if matches!(expected, PhpType::Callable) {
+            if let PhpType::Union(actual_members) = actual {
+                if actual_members.contains(&PhpType::Callable)
+                    && actual_members.iter().all(|member| {
+                        matches!(
+                            member,
+                            PhpType::Callable
+                                | PhpType::Str
+                                | PhpType::Array(_)
+                                | PhpType::AssocArray { .. }
+                                | PhpType::Object(_)
+                        )
+                    })
+                {
+                    return true;
+                }
+            }
+        }
+        // A value whose flow type is a union is assignable only when every possible runtime
+        // member satisfies the destination. Apply this before dispatching on `expected` so
+        // non-union supertypes such as `iterable`, `object`, and generic arrays see each member
+        // instead of rejecting the union wrapper itself.
         if let PhpType::Union(members) = actual {
             if !actual.is_int_float_union() {
                 // Inside a WIDER union the arithmetic pair is still judged as the unit it is:
@@ -90,9 +123,54 @@ impl Checker {
                 return members.iter().all(|member| self.type_accepts(expected, member));
             }
         }
+        // A `callable` value is, at run time, exactly one of three things: a function-name string,
+        // an `[object, 'method']` array, or an invokable object. PHP has no `callable` PROPERTY or
+        // return type, so code that needs to store one declares those three shapes instead —
+        // Symfony's `ControllerEvent::$controller` is `private string|array|object`, written
+        // straight from a `callable $controller` parameter. Such a destination accepts a callable
+        // exactly when it accepts ALL THREE shapes; one that leaves a shape out (`string|object`,
+        // say) would still fail at run time for the shape it omitted, so it is refused.
+        if matches!(actual, PhpType::Callable) && !matches!(expected, PhpType::Callable) {
+            return self.type_accepts(expected, &PhpType::Str)
+                && self.type_accepts(expected, &PhpType::Array(Box::new(PhpType::Mixed)))
+                && self.type_accepts(expected, &PhpType::Object(String::new()));
+        }
         match expected {
             PhpType::Mixed => true,
             PhpType::Bool if matches!(actual, PhpType::False) => true,
+            PhpType::Callable if actual.is_closure_object() => true,
+            // The third callable shape: an object whose class declares `__invoke`.
+            // symfony/event-dispatcher's `TraceableEventDispatcher::getListenerPriority(...,
+            // callable|array $listener)` is handed a `WrappedListener`, and the union refused it
+            // (a bare `callable` parameter already accepted it through the call-site coercion).
+            PhpType::Callable
+                if matches!(actual, PhpType::Object(class) if self.class_declares_invoke(class)) =>
+            {
+                true
+            }
+            // php's `callable` accepts an ARRAY: `[$object, 'method']` and `['Class', 'method']`
+            // are two of the three shapes a callable HAS, not a coercion into one. elephc already
+            // resolves both in builtin callback position (`array_map([$g, 'hello'], …)` compiles
+            // and runs), so refusing them at a user-declared `callable` parameter was an
+            // inconsistency rather than a policy: `symfony/http-foundation`'s
+            // `SessionFactory(…, ?callable $usageReporter)` is handed exactly such a pair by the
+            // generated container, and the whole build stopped there.
+            //
+            // The element bound is not cosmetic. `Op::NormalizeCallable` -- which
+            // `coerce_scalar_arg_to_param_storage` emits to turn the pair into the descriptor the
+            // parameter's storage actually holds -- implements `Array` of `Mixed` or `Str` and
+            // refuses anything else, so accepting a wider element here would hand the backend a
+            // shape it cannot convert. Whether the pair NAMES something real stays a runtime
+            // question, exactly as it is in php.
+            PhpType::Callable
+                if matches!(
+                    actual,
+                    PhpType::Array(element)
+                        if matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Str)
+                ) =>
+            {
+                true
+            }
             // PHP coercive mode: scalars accept Mixed with runtime narrowing. `False`
             // belongs here alongside `Bool` — it is the same runtime representation, and
             // leaving it out would make a `T|false` contract stricter than the `T|bool`
@@ -189,6 +267,14 @@ impl Checker {
                         // thing that can relate them, and it relates them here rather than
                         // through an inheritance edge — see `generic_variance`.
                         || self.variance_permits(expected_name, actual_name)
+                        || (expected_name == "Throwable"
+                            && self.object_type_implements_throwable(actual_name))
+                        // A class the closed world does not have (one the runtime autoloader
+                        // supplies) cannot be PROVEN incompatible: its parents and interfaces are
+                        // unknown here, and php checks the relation when the value arrives.
+                        // Refusing it invents an answer where the closed world has none.
+                        || self.absent_class_defers_to_runtime(actual_name)
+                        || self.absent_class_defers_to_runtime(expected_name)
                 }
                 _ => false,
             },
@@ -238,10 +324,9 @@ impl Checker {
         }
     }
 
-    /// Returns true if `ty` is a union type where every member supports mixed-int dispatch.
-    pub(crate) fn is_union_with_mixed_int_dispatch(&self, ty: &PhpType) -> bool {
-        matches!(ty, PhpType::Union(_)) && self.type_supports_mixed_int_dispatch(ty)
-    }
+    // `is_union_with_mixed_int_dispatch` lived here until the merge: every caller now asks
+    // `is_union_with_mixed_numeric_dispatch`, which subsumes it (it falls through to
+    // `type_supports_mixed_int_dispatch` for every non-float member).
 
     /// Returns true if every member of `ty` can take part in a numeric comparison once boxed.
     ///
@@ -291,6 +376,14 @@ impl Checker {
         }
     }
 
+    /// Whether `class` (or a class it inherits from) declares `__invoke`, which makes its
+    /// instances callable.
+    pub(crate) fn class_declares_invoke(&self, class: &str) -> bool {
+        self.classes
+            .get(class.trim_start_matches('\\'))
+            .is_some_and(|class_info| class_info.methods.contains_key("__invoke"))
+    }
+
     /// The type a slot holds after being assigned `new_ty` while holding
     /// `existing` — the widening that a second write to one variable forces.
     pub(crate) fn merged_assignment_type(
@@ -298,6 +391,20 @@ impl Checker {
         existing: &PhpType,
         new_ty: &PhpType,
     ) -> Option<PhpType> {
+        // A `Callable` slot is a callable DESCRIPTOR: a string or an array stored into it would be
+        // converted, and php keeps the value. `$callback = [$r->getClosureThis(), $r->name]` after
+        // `$callback instanceof \Closure` narrowed it to `Callable` came out of `is_array()` false
+        // and out of `$callback[0]` as "Cannot index non-array" (symfony/cache's
+        // `EarlyExpirationMessage::create()`). Such a store widens the slot to `Mixed`, which keeps
+        // the value as is and still resolves it when it is called, as the scalar pairs below widen.
+        if *existing == PhpType::Callable
+            && matches!(
+                new_ty.codegen_repr(),
+                PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+        {
+            return Some(PhpType::Mixed);
+        }
         if self.type_contains_values(existing, new_ty) {
             return Some(existing.clone());
         }
@@ -325,6 +432,19 @@ impl Checker {
         }
         if matches!(existing, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Never))
             && matches!(new_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
+            return Some(new_ty.clone());
+        }
+        // The unrestricted `array` contract (`PhpType::php_array()`, what `array_flip()` and
+        // `array_filter()` return) is a boxed union of the two array layouts, not one of them. An
+        // empty-array binding must still accept it: Symfony's `ChoiceType` seeds
+        // `$unknownValues = []` outside a `use (&$unknownValues)` closure and the closure stores
+        // `$unknownValues = $valueMap` (`array_flip(...)`) -- `cannot reassign ... from
+        // array<never> to array`.
+        if matches!(existing, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Never))
+            && matches!(new_ty, PhpType::Union(members)
+                if !members.is_empty()
+                    && members.iter().all(|m| matches!(m, PhpType::Array(_) | PhpType::AssocArray { .. })))
         {
             return Some(new_ty.clone());
         }
@@ -453,9 +573,10 @@ impl Checker {
     /// Specializes a bare PHP `array` parameter without pinning object elements to one class.
     ///
     /// PHP does not expose array element generics, so a concrete object element inferred from
-    /// one call site is not a valid contract for later calls. Indexed object arrays therefore
-    /// stay `Array(Mixed)`, while associative arrays retain their key/storage shape but erase an
-    /// object value to `Mixed`. Scalar element types remain specialized for existing inference.
+    /// one call site is not a valid contract for later calls. An empty literal contributes no
+    /// element evidence and therefore keeps the generic declaration. Indexed object arrays stay
+    /// `Array(Mixed)`, while associative arrays retain their key/storage shape but erase an object
+    /// value to `Mixed`. Scalar element types remain specialized for existing inference.
     pub(crate) fn specialize_generic_array_param_hint(
         declared_ty: &PhpType,
         actual_ty: &PhpType,
@@ -469,6 +590,9 @@ impl Checker {
             }
         }
         match actual_ty {
+            PhpType::Array(element) if matches!(element.as_ref(), PhpType::Never) => {
+                declared_ty.clone()
+            }
             PhpType::Array(element)
                 if matches!(element.as_ref(), PhpType::Object(_))
                     || matches!(element.as_ref(), PhpType::Union(members) if members
@@ -491,5 +615,31 @@ impl Checker {
             PhpType::Array(_) | PhpType::AssocArray { .. } => actual_ty.clone(),
             _ => declared_ty.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{Arch, Platform, Target};
+
+    /// Verifies inferred bottom paths do not make nullable values reject nullsafe access.
+    #[test]
+    fn normalize_union_drops_never_when_a_value_member_exists() {
+        let checker = Checker::new(Target::new(Platform::MacOS, Arch::AArch64));
+        assert_eq!(
+            checker.normalize_union_type(vec![PhpType::Void, PhpType::Never]),
+            PhpType::Void
+        );
+    }
+
+    /// Verifies a union containing only bottom paths remains bottom.
+    #[test]
+    fn normalize_union_of_only_never_is_never() {
+        let checker = Checker::new(Target::new(Platform::MacOS, Arch::AArch64));
+        assert_eq!(
+            checker.normalize_union_type(vec![PhpType::Never, PhpType::Never]),
+            PhpType::Never
+        );
     }
 }

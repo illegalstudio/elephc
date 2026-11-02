@@ -2,7 +2,7 @@
 title: "gmp_scan0()"
 description: "Finds the first zero bit."
 sidebar:
-  order: 630
+  order: 643
 ---
 
 ## gmp_scan0()

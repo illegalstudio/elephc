@@ -2,7 +2,7 @@
 title: "xmlwriter_write_dtd() - internals"
 description: "Compiler internals for xmlwriter_write_dtd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1139
+  order: 1199
 ---
 
 ## `xmlwriter_write_dtd()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1326](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1326) (`xmlwriter_write_dtd`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:1336](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1336) (`xmlwriter_write_dtd`)
 - **Function symbol**: `xmlwriter_write_dtd()`
 
 

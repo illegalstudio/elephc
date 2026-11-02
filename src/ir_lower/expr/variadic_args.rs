@@ -156,6 +156,38 @@ pub(super) fn lower_variadic_tail_array(
         .map(|arg| arg.span)
         .unwrap_or_else(crate::span::Span::dummy);
     let array_ty = variadic_array_type(sig);
+    // `collect(...$hash)` into `function collect(...$args)`: a string key of the spread binds as a
+    // named extra, so `$args` keeps it. The checker types such a variadic slot `iterable` (it may
+    // hold a list or a hash); every source is evaluated first, in order, and the tail is built as
+    // a hash when any of them is keyed, exactly like an array literal that spreads one.
+    let mut prelowered: Option<Vec<SpreadItem>> = None;
+    if variadic_param_is_iterable(sig)
+        && !variadic_param_is_by_ref(sig)
+        && tail.iter().any(is_spread_arg)
+    {
+        let mut lowered = Vec::with_capacity(tail.len());
+        let mut any_keyed = false;
+        for item in tail {
+            if let ExprKind::Spread(inner) = &item.kind {
+                let source = lower_expr(ctx, inner);
+                // A bare `array` declaration (`array<mixed>`), a `mixed` and a union may hold a
+                // hash at run time as well, so they take the keyed builder like an iterable.
+                any_keyed |= match ctx.builder.value_php_type(source.value).codegen_repr() {
+                    PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => true,
+                    PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+                    _ => false,
+                };
+                lowered.push(SpreadItem::Spread(source));
+            } else {
+                let value = lower_array_reference_or_value(ctx, item);
+                lowered.push(SpreadItem::Element(value));
+            }
+        }
+        if any_keyed {
+            return lower_array_literal_as_hash_from_lowered(ctx, tail, &lowered, &tail[0]);
+        }
+        prelowered = Some(lowered);
+    }
     let array = ctx.emit_value(
         Op::ArrayNew,
         Vec::new(),
@@ -180,8 +212,31 @@ pub(super) fn lower_variadic_tail_array(
             span,
         );
     }
-    for item in tail {
-        let value = lower_variadic_tail_source_value(ctx, item, by_ref_variadic, None, &array_ty);
+    for (index, item) in tail.iter().enumerate() {
+        // `f($fixed, $extra, ...$rest)`: the spread's elements join the variadic after the plain
+        // extras. The generic path handed every source argument over as one operand each, so the
+        // call reached codegen with more operands than parameters and the build failed --
+        // polyfill-mbstring's `mb_convert_variables()` forwarding `$var, ...$vars` is this shape.
+        let lowered_item = prelowered.as_ref().map(|items| &items[index]);
+        if let ExprKind::Spread(inner) = &item.kind {
+            let source = match lowered_item {
+                Some(SpreadItem::Spread(source)) => *source,
+                _ => lower_expr(ctx, inner),
+            };
+            lower_indexed_array_spread_into_array(ctx, array, source, elem_ty.as_ref(), item.span);
+            continue;
+        }
+        let prelowered_value = match lowered_item {
+            Some(SpreadItem::Element(value)) => Some(value.value),
+            _ => None,
+        };
+        let value = lower_variadic_tail_source_value(
+            ctx,
+            item,
+            by_ref_variadic,
+            prelowered_value,
+            &array_ty,
+        );
         ctx.emit_void(
             Op::ArrayPush,
             vec![array.value, value.value],
@@ -291,6 +346,18 @@ pub(super) fn variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
         .unwrap_or(false)
 }
 
+/// Returns whether the checker typed the variadic slot `iterable`: its storage may be a list or
+/// a hash, because a named argument or a keyed spread can reach it.
+pub(super) fn variadic_param_is_iterable(sig: &FunctionSig) -> bool {
+    let Some(variadic_name) = sig.variadic.as_ref() else {
+        return false;
+    };
+    sig.params
+        .iter()
+        .find(|(name, _)| name == variadic_name)
+        .is_some_and(|(_, ty)| matches!(ty, PhpType::Iterable))
+}
+
 /// Returns the element type expected inside a variadic tail container.
 pub(super) fn variadic_tail_value_type(sig: &FunctionSig) -> PhpType {
     if variadic_param_is_by_ref(sig) {
@@ -338,16 +405,23 @@ pub(super) fn variadic_container_element_type(ty: PhpType) -> PhpType {
     }
 }
 
-/// Boxes variadic tail values when the callee expects an `array<mixed>` slot.
+/// Applies declared-parameter coercion to one variadic element, then boxes it when the callee
+/// stores the tail in an `array<mixed>` slot.
 pub(super) fn coerce_variadic_tail_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     array_ty: &PhpType,
     span: crate::span::Span,
 ) -> LoweredValue {
-    let PhpType::Array(elem_ty) = array_ty.codegen_repr() else {
+    let PhpType::Array(elem_ty) = array_ty else {
         return value;
     };
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if !param_accepts_object_without_string_coercion(ctx, elem_ty, &source_ty) {
+        if let Some(cast) = crate::types::param_binding::scalar_param_cast(elem_ty, &source_ty) {
+            return apply_scalar_param_cast(ctx, cast, value, elem_ty, Some(span));
+        }
+    }
     if elem_ty.codegen_repr() != PhpType::Mixed {
         return value;
     }

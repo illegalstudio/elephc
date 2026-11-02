@@ -184,7 +184,9 @@ pub(super) fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x9, x1");                                          // copy for arg-order swap
     emitter.instruction("mov x1, x0");                                          // child = Mixed*
     emitter.instruction("mov x0, x9");                                          // x0 = array ptr
+    emitter.instruction("str x1, [sp, #-16]!");                                 // keep the element box: the push retains its own reference
     emitter.instruction("bl __rt_array_push_refcounted");                       // returns x0 = updated array
+    emitter.instruction("ldr x1, [sp], #16");                                   // reload the element box
     emitter.instruction("str x0, [sp, #24]");                                   // store updated JSON decoder state
     emitter.instruction("ldr x0, [sp, #32]");                                   // recover the parser's fresh child owner
     emitter.instruction("bl __rt_decref_mixed");                                // retire the reference retained by the destination array
@@ -400,7 +402,10 @@ pub(super) fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the fresh child owner across append
     emitter.instruction("mov rsi, rax");                                        // child = Mixed*
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // array ptr
+    emitter.instruction("sub rsp, 16");                                         // aligned slot for the element box across the push
+    emitter.instruction("mov QWORD PTR [rsp], rsi");                            // keep the element box: the push retains its own reference
     emitter.instruction("call __rt_array_push_refcounted");                     // rax = updated array
+    emitter.instruction("add rsp, 16");                                         // release the element-box slot so the loop's stack depth stays constant
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // load or prepare JSON decoder state
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover the parser's fresh child owner
     emitter.instruction("call __rt_decref_mixed");                              // retire the reference retained by the destination array

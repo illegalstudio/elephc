@@ -11,6 +11,110 @@
 
 use super::*;
 
+/// Verifies a descendant that NARROWS the constructor may still inherit a `new static` factory.
+/// PHP raises `ArgumentCountError` only for too FEW arguments; surplus positional arguments are
+/// evaluated and then discarded, so `Narrow::make(1, 'x', [])` binds `$message` from the first
+/// argument and drops the rest. The compiler used to validate the factory against EVERY concrete
+/// descendant and refuse the whole program — which is how Symfony's
+/// `HttpException::fromStatusCode()` (ending in
+/// `new static($statusCode, $message, $previous, $headers, $code)`) was rejected because
+/// `AccessDeniedHttpException` declares four parameters. PHP outputs
+/// "Base:200:ok:1|Narrow:403:1".
+#[test]
+fn test_late_static_factory_with_a_narrowing_descendant() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function __construct(
+        public int $status = 0,
+        public string $message = '',
+        public array $headers = [],
+    ) {
+    }
+
+    public static function make(int $status, string $message, array $headers): static {
+        return new static($status, $message, $headers);
+    }
+}
+
+class Narrow extends Base {
+    public function __construct(string $message = '') {
+        parent::__construct(403, $message, []);
+    }
+}
+
+$b = Base::make(200, 'ok', ['h' => 1]);
+echo get_class($b), ':', $b->status, ':', $b->message, ':', count($b->headers), '|';
+
+$n = Narrow::make(1, 'x', []);
+echo get_class($n), ':', $n->status, ':', $n->message;
+"#,
+    );
+    assert_eq!(out, "Base:200:ok:1|Narrow:403:1");
+}
+
+/// Verifies a descendant whose constructor parameter TYPES disagree with the inherited factory's
+/// arguments does not refuse the whole program. Symfony's `MethodNotAllowedHttpException` takes
+/// `array $allow` first where `HttpException::fromStatusCode()` passes `$statusCode`; PHP raises a
+/// TypeError only for a program that calls the factory on that descendant, and constructs the
+/// class normally otherwise. PHP outputs "Base:200:ok|Mismatch:405:direct:1".
+#[test]
+fn test_late_static_factory_with_a_type_mismatched_descendant() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function __construct(public int $status = 0, public string $message = '') {}
+
+    public static function make(int $status, string $message): static {
+        return new static($status, $message);
+    }
+}
+
+class Mismatch extends Base {
+    public function __construct(array $allow, string $message = '') {
+        parent::__construct(405, $message . ':' . count($allow));
+    }
+}
+
+$b = Base::make(200, 'ok');
+echo get_class($b), ':', $b->status, ':', $b->message, '|';
+
+$m = new Mismatch(['GET'], 'direct');
+echo get_class($m), ':', $m->status, ':', $m->message;
+"#,
+    );
+    assert_eq!(out, "Base:200:ok|Mismatch:405:direct:1");
+}
+
+/// Verifies a descendant that WIDENS the constructor still binds its own defaults for the
+/// parameters the factory does not pass. PHP outputs "Base:1:made|Wide:2:made:x".
+#[test]
+fn test_late_static_factory_with_a_widening_descendant() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function __construct(public int $status = 0, public string $tag = 'base') {}
+
+    public static function make(int $status): static {
+        return new static($status, 'made');
+    }
+}
+
+class Wide extends Base {
+    public function __construct(int $status = 0, string $tag = 'wide', public string $extra = 'x') {
+        parent::__construct($status, $tag);
+    }
+}
+
+$b = Base::make(1);
+echo get_class($b), ':', $b->status, ':', $b->tag, '|';
+$w = Wide::make(2);
+echo get_class($w), ':', $w->status, ':', $w->tag, ':', $w->extra;
+"#,
+    );
+    assert_eq!(out, "Base:1:made|Wide:2:made:x");
+}
+
 /// Verifies that a `self` return type lets a method return `$this` and be chained.
 #[test]
 fn test_self_return_type_chains() {
@@ -22,6 +126,29 @@ fn test_self_return_type_chains() {
         }
         echo (new C())->me()->v();
         ",
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a closure declared inside a class resolves `self` in both its parameter and return
+/// contract against the lexical class, including when the closure is static.
+#[test]
+fn test_closure_relative_types_use_lexical_class() {
+    let out = compile_and_run(
+        r#"<?php
+class RelativeClosureOwner {
+    public function __construct(public string $label) {}
+
+    public static function run(): string {
+        $identity = static function (self $value): self {
+            return $value;
+        };
+        return $identity(new self("ok"))->label;
+    }
+}
+
+echo RelativeClosureOwner::run();
+"#,
     );
     assert_eq!(out, "ok");
 }
@@ -231,15 +358,14 @@ echo $reflected->newInstance()->n;
 /// signature, so no padding and no constructor call at all, leaving the promoted property at
 /// its zero value.
 ///
-/// NOTE ON THE SHAPE: php-src rejects this program outright with
-/// `Error: Call to private PrivOwner::__construct()`, because `newInstance()` enforces
-/// constructor visibility and elephc does not yet. That separate gap is what makes the shape
-/// reachable here at all. When it is closed this fixture should become a REJECTION test rather
-/// than being deleted — the lookup it pins is still the one doing the work, and it is what
-/// decides which class's constructor the visibility check will then be asked about.
+/// php-src rejects this program with `Error: Call to private PrivReflOwner::__construct()`,
+/// because `newInstance()` enforces constructor visibility, and elephc now does too. It stays a
+/// REJECTION test: the owner walk is still what names `PrivReflOwner` -- the class whose
+/// constructor the visibility check is asked about -- rather than the descendant, which has none.
+/// (php words the scope `from scope PrivReflChild`; elephc's wording of the scope differs.)
 #[test]
 fn test_reflection_new_instance_resolves_an_inherited_private_constructor() {
-    let out = compile_and_run(
+    let out = compile_and_run_expect_failure(
         r#"<?php
 class PrivReflOwner {
     private function __construct(public int $n = 6) {}
@@ -249,7 +375,10 @@ $reflected = new ReflectionClass('PrivReflChild');
 echo $reflected->newInstance()->n;
 "#,
     );
-    assert_eq!(out, "6");
+    assert!(
+        out.contains("Uncaught Error: Call to private PrivReflOwner::__construct() from"),
+        "{out}"
+    );
 }
 
 /// An inherited PUBLIC constructor with defaults is unaffected — the owner walk stops at the
@@ -577,4 +706,54 @@ fn test_static_in_trait() {
 fn test_example_relative_class_types_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/relative-class-types/main.php"));
     assert_eq!(out, "599\n3\n6\ntail\nSELECT * WHERE active = 1\n");
+}
+
+
+/// Verifies a descendant whose constructor needs MORE arguments than an inherited `new static`
+/// factory passes does not refuse the program, and raises php's `ArgumentCountError` only when a
+/// receiver of that descendant reaches the factory.
+///
+/// Laravel's `Collection::newInstance()` is `new static($items)`, and `SortedMiddleware extends
+/// Collection` takes two required parameters. The checker refused `Collection` as a whole, the
+/// deferred class then failed to declare at run time and every `--web` request died. The lowering
+/// leaves such a class out of its candidates; its arm now throws instead of reaching the
+/// uncatchable "Dynamic factory class must extend" fatal. Values from `php -n` 8.5.10.
+#[test]
+fn test_new_static_descendant_with_too_few_arguments_throws_only_when_reached() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Coll {
+    public function __construct(protected array $items = []) {}
+    public function map(callable $f): static { return $this->newInstance(array_map($f, $this->items)); }
+    protected function newInstance(array $items = []): static { return new static($items); }
+    public function all(): array { return $this->items; }
+}
+class Sorted extends Coll {
+    public function __construct(array $priority, $middlewares) { parent::__construct([$priority, $middlewares]); }
+}
+class Plain extends Coll {}
+class Base { public static function make(): Base { return new static(); } }
+class Child extends Base { public function __construct(string $name) {} }
+$sorted = new Sorted(['a'], 'm');
+for ($i = 0; $i < 3; $i++) {
+    $a = json_encode((new Coll([1, 2]))->map(fn($x) => $x * 2)->all());
+    $b = get_class((new Plain([3]))->map(fn($x) => $x));
+    $c = json_encode($sorted->all());
+    try {
+        $sorted->map(fn($x) => $x);
+    } catch (ArgumentCountError $e) {
+        $d = strstr($e->getMessage(), ' passed in', true);
+    }
+    try {
+        Child::make();
+    } catch (ArgumentCountError $e) {
+        $f = strstr($e->getMessage(), ' passed in', true);
+    }
+}
+echo $a, "|", $b, "|", $c, "|", $d, "|", $f, "\n";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "[2,4]|Plain|[[\"a\"],\"m\"]|Too few arguments to function Sorted::__construct(), 1|Too few arguments to function Child::__construct(), 0\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

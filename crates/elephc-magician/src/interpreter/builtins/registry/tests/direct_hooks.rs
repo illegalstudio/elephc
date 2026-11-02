@@ -18,9 +18,18 @@ fn source_argument_bindings_are_explicit_and_have_direct_hooks() {
         .filter(|name| eval_declared_builtin_requires_source_arguments(name))
         .collect::<Vec<_>>();
     source_arguments.sort_unstable();
+    // `extract` writes the CALLER's variables, so it needs the source arguments to reach its
+    // direct hook (codegen test `eval::test_eval_extract_reaches_its_direct_hook`).
     assert_eq!(
         source_arguments,
-        ["buffer_free", "call_user_func", "call_user_func_array", "clone", "get_defined_vars"]
+        [
+            "buffer_free",
+            "call_user_func",
+            "call_user_func_array",
+            "clone",
+            "extract",
+            "get_defined_vars",
+        ]
     );
     for name in source_arguments {
         assert!(
@@ -52,6 +61,7 @@ fn declared_builtin_registry_marks_only_pre_dispatched_adapters_without_direct_h
                 "array_splice",
                 "array_unshift",
                 "array_walk",
+                "array_walk_recursive",
                 "arsort",
                 "asort",
                 "end",
@@ -64,6 +74,7 @@ fn declared_builtin_registry_marks_only_pre_dispatched_adapters_without_direct_h
                 "next",
                 "pfsockopen",
                 "prev",
+                "proc_open",
                 "reset",
                 "rsort",
                 "settype",
@@ -80,6 +91,9 @@ fn declared_builtin_registry_marks_only_pre_dispatched_adapters_without_direct_h
 }
 
 /// Limits runtime-backed adapters to reviewed signature gaps; other bindings use shared dispatch.
+///
+/// `headers_sent()` joined `intval()` and `round()`: its two by-reference outputs are bound by the
+/// direct adapter, while the flag itself still comes from the runtime.
 #[test]
 fn runtime_builtin_bindings_keep_only_reviewed_signature_adapters() {
     for runtime_id in elephc_builtin_contract::RuntimeBuiltinId::ALL {
@@ -100,6 +114,7 @@ fn runtime_builtin_bindings_keep_only_reviewed_signature_adapters() {
                 | elephc_builtin_contract::RuntimeBuiltinId::Round
                 | elephc_builtin_contract::RuntimeBuiltinId::MemoryGetUsage
                 | elephc_builtin_contract::RuntimeBuiltinId::MemoryGetPeakUsage
+                | elephc_builtin_contract::RuntimeBuiltinId::HeadersSent
         ) {
             assert!(spec.direct.is_some(), "{} needs a direct adapter", spec.name);
             assert!(spec.values.is_some(), "{} needs a values adapter", spec.name);

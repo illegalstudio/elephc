@@ -19,6 +19,46 @@ pub(crate) fn emit_push_call_operand_owner(emitter: &mut Emitter, owner_address:
     emit_link_call_operand_owner_at_stack(emitter, owner_address, callable, 0);
 }
 
+/// Links a caller-owned slot through `__rt_call_operand_link_*` instead of inline stores.
+///
+/// For the standalone `push_call_operand_owner` EIR op only: it is a register-allocation clobber
+/// point, so nothing lives in a caller-saved register across it and an ordinary call is free to
+/// use them. Mid-sequence callers whose argument registers are already loaded keep the inline
+/// [`emit_push_call_operand_owner`].
+pub(crate) fn emit_push_call_operand_owner_call(emitter: &mut Emitter, owner_address: &str, callable: bool) {
+    emitter.comment("publish temporary call operand owner");
+    let (record, owner) = match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => ("x0", "x1"),
+        crate::codegen_support::platform::Arch::X86_64 => ("rdi", "rsi"),
+    };
+    if owner_address != owner {
+        emitter.instruction(&format!("mov {}, {}", owner, owner_address));      // pass the owner slot address
+    }
+    if emitter.target.arch == crate::codegen_support::platform::Arch::AArch64 {
+        // The entry reserves the record itself (see `emit_stack_record_entries`).
+        let helper = if callable { "__rt_call_operand_push_descriptor" } else { "__rt_call_operand_push_owner" };
+        emit_call_label(emitter, helper);
+        return;
+    }
+    emit_reserve_temporary_stack(emitter, CALL_OPERAND_OWNER_RECORD_BYTES);
+    emit_temporary_stack_address(emitter, record, 0);
+    let helper = if callable { "__rt_call_operand_link_descriptor" } else { "__rt_call_operand_link_owner" };
+    emit_call_label(emitter, helper);
+}
+
+/// Detaches the innermost record through `__rt_call_operand_unlink`; the EIR-op counterpart of
+/// [`emit_push_call_operand_owner_call`].
+pub(crate) fn emit_pop_call_operand_owner_call(emitter: &mut Emitter) {
+    emitter.comment("detach temporary call operand owner");
+    if emitter.target.arch == crate::codegen_support::platform::Arch::AArch64 {
+        emit_call_label(emitter, "__rt_call_operand_pop");                      // unlink the record and release its stack
+        return;
+    }
+    emit_temporary_stack_address(emitter, "rdi", 0);
+    emit_call_label(emitter, "__rt_call_operand_unlink");
+    emit_release_temporary_stack(emitter, CALL_OPERAND_OWNER_RECORD_BYTES);
+}
+
 /// Links an owner record in preallocated temporary storage without moving the caller's stack base.
 pub(crate) fn emit_link_call_operand_owner_at_stack(
     emitter: &mut Emitter,

@@ -27,13 +27,16 @@ fn identity(bytes: &[u8]) -> u64 {
     identity
 }
 
-/// Preserves aliases made before INI access without keeping their first native allocation alive.
+/// Origins are lazy: copies made before INI resolves anything are separate logical values (each
+/// resolves to its own identity), while copies of a resolved value share it, and replacing an
+/// allocation's bytes never reuses the identity it had.
 #[test]
 fn ini_native_lazy_origins_survive_prebinding_aliases_and_pointer_reuse() {
     assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
     let source = b"ASCII".to_vec();
     let copy = source.clone();
     let third = copy.clone();
+    let fourth = copy.clone();
     let pointer = |bytes: &[u8]| bytes.as_ptr() as u64;
     assert_eq!(elephc_mbstring_native_string_fresh_v1(pointer(&source), 5), 0);
     assert_eq!(elephc_mbstring_native_string_persist_v1(pointer(&copy), pointer(&source), 5), 0);
@@ -43,16 +46,18 @@ fn ini_native_lazy_origins_survive_prebinding_aliases_and_pointer_reuse() {
     drop(source);
     let id = unsafe { elephc_mbstring_native_string_resolve_v1(pointer(&copy), 5) };
     assert_ne!(id, 0);
-    assert_eq!(elephc_mbstring_native_string_lookup_v1(pointer(&third), 5), id);
-    assert_eq!(unsafe { elephc_mbstring_native_string_resolve_v1(pointer(&third), 5) }, id);
+    let other = unsafe { elephc_mbstring_native_string_resolve_v1(pointer(&third), 5) };
+    assert_ne!(other, 0);
+    assert_ne!(other, id, "a copy made before resolution is its own logical value");
+    assert_eq!(elephc_mbstring_native_string_persist_v1(pointer(&fourth), pointer(&copy), 5), 0);
+    assert_eq!(elephc_mbstring_native_string_lookup_v1(pointer(&fourth), 5), id, "a copy of a resolved value shares it");
     assert_eq!(elephc_mbstring_native_string_fresh_v1(pointer(&copy), 5), 0);
     let replacement = unsafe { elephc_mbstring_native_string_resolve_v1(pointer(&copy), 5) };
     assert_ne!(replacement, id, "equal bytes after replacement must not reuse the previous identity");
-    assert_eq!(elephc_mbstring_native_string_lookup_v1(pointer(&third), 5), id);
-    assert_eq!(unsafe { elephc_mbstring_native_string_resolve_v1(pointer(&third), 4) }, 0);
+    assert_eq!(elephc_mbstring_native_string_lookup_v1(pointer(&fourth), 5), id);
+    assert_eq!(unsafe { elephc_mbstring_native_string_resolve_v1(pointer(&fourth), 4) }, 0);
     assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
-    assert_eq!(elephc_mbstring_ini_string_retain_v1(id), 1);
-    assert_eq!(elephc_mbstring_ini_string_retain_v1(replacement), 1);
+    for identity in [id, other, replacement] { assert_eq!(elephc_mbstring_ini_string_retain_v1(identity), 1); }
 }
 
 /// Distinguishes interned literals from fresh equal bytes, including zero-byte and one-byte strings.
@@ -249,4 +254,24 @@ fn ini_native_unknown_copy_and_persist_retire_previous_destination() {
     assert_eq!(unsafe { elephc_mbstring_native_string_resolve_v1(a, 5) }, 0);
     assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
     assert_eq!(elephc_mbstring_ini_string_retain_v1(replacement), 1);
+}
+
+/// The host records no origin before the first INI input, so INI resolution meets strings the
+/// registry never saw: each untracked allocation gets its own fresh identity, while one tracked
+/// under another length is still refused.
+#[test]
+fn ini_native_resolution_gives_untracked_strings_a_fresh_origin() {
+    assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    let first = b"ASCII".to_vec();
+    let second = first.clone();
+    let pointer = |bytes: &[u8]| bytes.as_ptr() as u64;
+    let one = unsafe { elephc_mbstring_native_string_resolve_v1(pointer(&first), 5) };
+    let two = unsafe { elephc_mbstring_native_string_resolve_v1(pointer(&second), 5) };
+    assert_ne!(one, 0);
+    assert_ne!(two, 0);
+    assert_ne!(one, two, "separate untracked allocations are separate logical values");
+    assert_eq!(unsafe { elephc_mbstring_native_string_resolve_v1(pointer(&first), 5) }, one);
+    assert_eq!(unsafe { elephc_mbstring_native_string_resolve_v1(pointer(&first), 4) }, 0);
+    assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    for id in [one, two] { assert_eq!(elephc_mbstring_ini_string_retain_v1(id), 1); }
 }

@@ -273,7 +273,7 @@ expect_builtin_arity_error!(
 expect_builtin_arity_error!(
     test_error_html_entity_decode_wrong_args,
     "<?php html_entity_decode();",
-    "html_entity_decode() takes exactly 1 argument"
+    "html_entity_decode() takes 1 to 3 arguments"
 );
 
 // Tests urldecode() arity error when called with no arguments.
@@ -339,11 +339,27 @@ expect_builtin_arity_error!(
     "is_countable() takes exactly 1 argument"
 );
 
-// Tests is_callable() arity error when called with no arguments.
+// Tests is_callable() arity error when called with no arguments. php's signature is
+// `is_callable(mixed $value, bool $syntax_only = false, string &$callable_name = null)`, so the
+// accepted range is 1 to 3 -- `symfony/http-kernel` calls the two-argument form.
 expect_builtin_arity_error!(
     test_error_is_callable_wrong_args,
     "<?php is_callable();",
-    "is_callable() takes exactly 1 argument"
+    "is_callable() takes 1 to 3 arguments"
+);
+
+// Tests preg_quote() arity error when called with no arguments (accepts 1 to 2).
+expect_builtin_arity_error!(
+    test_error_preg_quote_no_args,
+    "<?php preg_quote();",
+    "preg_quote() takes 1 or 2 arguments"
+);
+
+// Tests preg_quote() arity error when called with too many arguments (accepts 1 to 2).
+expect_builtin_arity_error!(
+    test_error_preg_quote_too_many_args,
+    "<?php preg_quote(\"a\", \"b\", \"c\");",
+    "preg_quote() takes 1 or 2 arguments"
 );
 
 // Tests quotemeta() arity error when called with no arguments.
@@ -411,14 +427,8 @@ expect_builtin_arity_error!(
     "count_chars() mode argument must be an integer literal in AOT mode"
 );
 
-// Tests str_replace() refusing an array subject instead of compiling a silent wrong answer:
-// php-src accepts `array|string` here, elephc's contract implements the string form only, and
-// the array used to be coerced as if it were one.
-expect_builtin_arity_error!(
-    test_error_str_replace_array_subject,
-    "<?php $words = [\"ab\", \"cb\"]; echo str_replace(\"b\", \"x\", $words);",
-    "str_replace(): Argument #3 ($subject) must be of type string, array given"
-);
+// str_replace() implements php's array subject (`tests/codegen/strings/transform.rs`,
+// `test_str_replace_array_subject_answers_an_array`), so it is no longer refused here.
 
 // Tests that a named argument reaches the same refusal, numbered by the parameter it names.
 expect_builtin_arity_error!(

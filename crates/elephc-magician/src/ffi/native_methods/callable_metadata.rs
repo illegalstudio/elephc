@@ -176,6 +176,22 @@ pub(in crate::ffi) fn native_callable_type_from_abi(
     native_callable_type_from_spec(&type_spec, position)
 }
 
+/// Decodes one generated PARAMETER type-spec string, for readers outside the FFI layer.
+///
+/// A callable descriptor's signature record carries the same spec per declared parameter, so the
+/// reflection of a compiled closure or first-class callable reports the declared type -- a union,
+/// an intersection, a class -- instead of the representation tag its ABI slot needs.
+pub(crate) fn native_callable_param_type_from_abi(
+    type_spec_ptr: *const u8,
+    type_spec_len: u64,
+) -> Option<EvalParameterType> {
+    native_callable_type_from_abi(
+        type_spec_ptr,
+        type_spec_len,
+        NativeCallableTypePosition::Parameter,
+    )
+}
+
 /// Parses the compact generated type syntax used by native signature registration.
 fn native_callable_type_from_spec(
     type_spec: &str,
@@ -191,18 +207,41 @@ fn native_callable_type_from_spec(
         None => (type_spec, false),
     };
     if type_spec.contains('&') {
-        if allows_null || type_spec.contains('|') {
+        // PHP 8.2's DNF `(A&B)|null` -- the one DNF shape eval metadata represents, through
+        // `intersection_allowing_null`. The compiler spells it `A&B|null`; the parenthesized
+        // forms are accepted too. Refusing it failed the registration, and ONE failed
+        // registration keeps the whole catalog from being published: every eval context then
+        // replayed the complete native inventory. Symfony's `NodeBuilder::setParent(
+        // (NodeDefinition&ParentNodeDefinitionInterface)|null $parent)` made a `--web` build
+        // with preload spin for minutes at startup. `?A&B` is not PHP and stays refused, as does
+        // a DNF with another non-null member, which this metadata cannot represent.
+        if allows_null {
             return None;
         }
-        let variants = type_spec
+        let mut intersection = None;
+        for member in type_spec.split('|').map(str::trim) {
+            if member.eq_ignore_ascii_case("null") {
+                allows_null = true;
+                continue;
+            }
+            let member = member
+                .strip_prefix('(')
+                .and_then(|inner| inner.strip_suffix(')'))
+                .unwrap_or(member);
+            if !member.contains('&') || intersection.replace(member).is_some() {
+                return None;
+            }
+        }
+        let variants = intersection?
             .split('&')
             .map(|member| native_callable_type_variant(member, position))
             .collect::<Option<Vec<_>>>()?;
         if variants.iter().any(Option::is_none) {
             return None;
         }
-        return Some(EvalParameterType::intersection(
+        return Some(EvalParameterType::intersection_allowing_null(
             variants.into_iter().flatten().collect(),
+            allows_null,
         ));
     }
     let mut variants = Vec::new();
@@ -232,8 +271,14 @@ fn native_callable_type_variant(
         "array" => EvalParameterTypeVariant::Array,
         "bool" => EvalParameterTypeVariant::Bool,
         "callable" => EvalParameterTypeVariant::Callable,
+        // PHP 8.2 value types, mapped exactly as the eval parser maps them
+        // (`parser::statements::parameters_types::type_variant_from_name`: `false` is a generic
+        // atom, `true` its own variant). The two sides compare variants directly when an eval
+        // class implements an AOT interface, so a name spelled one way here and another way there
+        // makes an identical signature look incompatible — which is what stopped
+        // `ControllerResolver::getController(): callable|false` from declaring.
         "false" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("false")),
-        "true" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("true")),
+        "true" => EvalParameterTypeVariant::True,
         "float" => EvalParameterTypeVariant::Float,
         "int" => EvalParameterTypeVariant::Int,
         "iterable" => EvalParameterTypeVariant::Iterable,
@@ -300,5 +345,43 @@ mod tests {
             EvalParameterTypeVariant::Generic(atom)
                 if atom == &elephc_generics::Type::atom("false")
         ));
+    }
+}
+
+#[cfg(test)]
+mod dnf_tests {
+    use super::*;
+
+    /// Decodes one generated parameter spec.
+    fn decode(spec: &str) -> Option<EvalParameterType> {
+        native_callable_type_from_spec(spec, NativeCallableTypePosition::Parameter)
+    }
+
+    /// `(A&B)|null` decodes as a nullable intersection in every spelling the compiler or a reader
+    /// can produce. It used to fail, and one failed registration keeps the whole native catalog
+    /// from being published (Symfony's `NodeBuilder::setParent()` made every eval context replay
+    /// the full inventory, and a `--web` build with preload spun for minutes at startup).
+    #[test]
+    fn dnf_nullable_intersection_decodes_in_every_spelling() {
+        for spec in ["A&B|null", "(A&B)|null", "null|(A&B)", "NULL | A & B"] {
+            let ty = decode(spec).unwrap_or_else(|| panic!("{spec} must decode"));
+            assert!(ty.is_intersection(), "{spec}");
+            assert!(ty.allows_null(), "{spec}");
+            assert_eq!(
+                ty.variants(),
+                &[EvalParameterTypeVariant::Class("A".into()), EvalParameterTypeVariant::Class("B".into())],
+                "{spec}"
+            );
+        }
+        let plain = decode("A&B").unwrap();
+        assert!(plain.is_intersection() && !plain.allows_null());
+    }
+
+    /// Shapes the metadata cannot represent, or that are not PHP, stay refused.
+    #[test]
+    fn dnf_shapes_beyond_nullable_intersection_stay_refused() {
+        for spec in ["?A&B", "(A&B)|C", "(A&B)|(C&D)", "A&B|int", "(A&B)|null|C"] {
+            assert!(decode(spec).is_none(), "{spec}");
+        }
     }
 }

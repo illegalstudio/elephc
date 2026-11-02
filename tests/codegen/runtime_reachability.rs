@@ -171,7 +171,13 @@ function pick(int $i): mixed { return $i === 0 ? new Stamp() : $i; }
 "#;
 
     let dir = make_cli_test_dir("elephc_shared_mixed_string_many");
-    let many = format!("{CLASSES}$a = pick(0); $b = pick(1); $c = pick(2);\necho $a; echo $b; echo $c;\n");
+    // The two `(string)` casts are the second half of the same threshold: the RESULT ladder
+    // (`_eir_shared_mixed_to_string`) is shared on exactly the same rule as the echo one, and
+    // nothing else in the suite pins it.
+    let many = format!(
+        "{CLASSES}$a = pick(0); $b = pick(1); $c = pick(2); \
+         $d = (string) pick(0); $e = (string) pick(1); echo $a; echo $b; echo $c, $d, $e;\n"
+    );
     let (many_asm, _runtime_asm, _libraries) =
         compile_source_to_asm_with_options(&many, &dir, 8_388_608, false, false);
     assert_eq!(
@@ -182,6 +188,15 @@ function pick(int $i): mixed { return $i === 0 ? new Stamp() : $i; }
     assert!(
         many_asm.matches("_eir_shared_mixed_echo").count() >= 4,
         "each of the three sites must call the helper it shares"
+    );
+    assert_eq!(
+        many_asm.matches("_eir_shared_mixed_to_string:").count(),
+        1,
+        "the repeated result ladder must have exactly one helper definition"
+    );
+    assert!(
+        many_asm.matches("_eir_shared_mixed_to_string").count() >= 3,
+        "both result sites must call the shared helper"
     );
     let _ = fs::remove_dir_all(&dir);
 
@@ -194,6 +209,133 @@ function pick(int $i): mixed { return $i === 0 ? new Stamp() : $i; }
         "a single string context must stay inline rather than pay for a helper body"
     );
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies repeated open Mixed callback sites share one complete runtime dispatch ladder.
+#[test]
+fn test_open_mixed_callable_dispatch_is_shared_across_sites() {
+    const DECLARATIONS: &str = r#"<?php
+function advance(mixed $value): mixed { return (int)$value + 1; }
+class Runner {
+    public mixed $callback;
+    public function __construct(mixed $callback) { $this->callback = $callback; }
+    public function first(int $value): int {
+        return (int)call_user_func($this->callback, $value);
+    }
+    public function second(int $value): int {
+        return (int)call_user_func($this->callback, $value);
+    }
+}
+"#;
+    let dir = make_cli_test_dir("elephc_shared_mixed_callable_many");
+    let many = format!(
+        r#"{DECLARATIONS}$runner = new Runner("advance");
+echo $runner->first(1), ":", $runner->second(4);
+"#
+    );
+    let (many_asm, _runtime_asm, _libraries) =
+        compile_source_to_asm_with_options(&many, &dir, 8_388_608, false, false);
+    assert_eq!(
+        many_asm
+            .matches("_eir_shared_mixed_callable_invoke:")
+            .count(),
+        1,
+        "repeated open Mixed callback sites must emit one shared helper"
+    );
+    assert!(
+        many_asm
+            .matches("_eir_shared_mixed_callable_invoke")
+            .count()
+            >= 3,
+        "both call sites must invoke the shared helper"
+    );
+    let _ = fs::remove_dir_all(&dir);
+
+    let dir = make_cli_test_dir("elephc_shared_mixed_callable_one");
+    let one = r#"<?php
+function advance_one(mixed $value): mixed { return (int)$value + 1; }
+class OneRunner {
+    public mixed $callback;
+    public function __construct(mixed $callback) { $this->callback = $callback; }
+    public function run(int $value): int {
+        return (int)call_user_func($this->callback, $value);
+    }
+}
+$runner = new OneRunner("advance_one");
+echo $runner->run(1);
+"#;
+    let (one_asm, _runtime_asm, _libraries) =
+        compile_source_to_asm_with_options(one, &dir, 8_388_608, false, false);
+    assert!(
+        !one_asm.contains("_eir_shared_mixed_callable_invoke"),
+        "one reachable open Mixed callback site must stay inline"
+    );
+    assert!(
+        one_asm
+            .lines()
+            .filter(|line| {
+                line.contains("runtime_descriptor_release_done")
+                    && line.trim_end().ends_with(':')
+            })
+            .count()
+            <= 1,
+        "the inline resolver must not duplicate its ownership-aware descriptor release tail \
+         (a statically resolved callback needs none at all)"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the shared Mixed callable frame returns values and unwinds throws to its caller.
+#[test]
+fn test_shared_mixed_callable_dispatch_preserves_results_and_exceptions() {
+    let out = compile_and_run(
+        r#"<?php
+function fail_now(mixed $value): mixed { throw new RuntimeException("boom:" . (string)$value); }
+function keep_value(mixed $value): mixed { return $value; }
+function invoke_nested(mixed $value): mixed {
+    $inner = "keep_value";
+    return call_user_func($inner, $value);
+}
+class CallableTarget {
+    public function add(int $value): int { return $value + 10; }
+    public static function triple(int $value): int { return $value * 3; }
+    public function __invoke(int $value): int { return $value + 20; }
+}
+class Runner {
+    public mixed $callback;
+    public function __construct(mixed $callback) { $this->callback = $callback; }
+    public function first(int $value): int {
+        return (int)call_user_func($this->callback, $value);
+    }
+    public function second(int $value): int {
+        return (int)call_user_func($this->callback, $value);
+    }
+}
+$runner = new Runner("fail_now");
+try {
+    $runner->first(3);
+    echo "not-reached";
+} catch (RuntimeException $error) {
+    echo "caught:", $error->getMessage();
+}
+$runner->callback = "keep_value";
+echo "|", $runner->second(7);
+$target = new CallableTarget();
+$runner->callback = [$target, "add"];
+echo "|", $runner->first(2);
+$runner->callback = ["CallableTarget", "triple"];
+echo "|", $runner->second(3);
+$runner->callback = $target;
+echo "|", $runner->first(4);
+$runner->callback = keep_value(...);
+echo "|", $runner->second(8);
+$runner->callback = keep_value(...);
+echo "|", $runner->first(9), ":", $runner->second(10);
+$runner->callback = "invoke_nested";
+echo "|", $runner->first(11);
+"#,
+    );
+    assert_eq!(out, "caught:boom:3|7|12|9|24|8|9:10|11");
 }
 
 /// Verifies the `count()` countable guard is emitted once for a program with several boxed
@@ -391,4 +533,94 @@ fn test_resource_destructors_follow_the_builtin_that_produces_them() {
 
         let _ = fs::remove_dir_all(&dir);
     }
+}
+
+/// `ReflectionProperty::getRawValue()` delegates to `getValue()` instead of carrying its own copy
+/// of the by-name property load, which the backend expands over every class that declares the
+/// property: with the copy the program emitted a second `getR_mixed_dyn_prop_get_*` ladder per name.
+#[test]
+fn test_reflection_get_raw_value_shares_the_get_value_property_ladder() {
+    let dir = make_cli_test_dir("elephc_get_raw_value_shares_ladder");
+    let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+class Holder { public int $priority = 7; public string $label = 'x'; }
+$p = new ReflectionProperty(Holder::class, 'priority');
+$h = new Holder;
+echo $p->getValue($h), $p->getRawValue($h), "\n";
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    assert!(
+        user_asm.contains("ReflectionProperty__getV_mixed_dyn_prop_get_"),
+        "getValue() lost its by-name property ladder"
+    );
+    assert!(
+        !user_asm.contains("ReflectionProperty__getR_mixed_dyn_prop_get_"),
+        "getRawValue() carries its own by-name property ladder again"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Reads the frame size a compiled function reserves in its prologue (`sub sp, sp, #N` on
+/// AArch64, `sub rsp, N` on x86_64).
+fn prologue_frame_bytes(user_asm: &str, function_marker: &str) -> usize {
+    let start = user_asm
+        .find(function_marker)
+        .unwrap_or_else(|| panic!("no `{function_marker}` in the emitted assembly"));
+    for line in user_asm[start..].lines().take(24) {
+        let line = line.trim();
+        if let Some(bytes) = line.strip_prefix("sub sp, sp, #") {
+            return bytes.parse().expect("frame size immediate");
+        }
+        if let Some(bytes) = line.strip_prefix("sub rsp, ") {
+            return bytes.parse().expect("frame size immediate");
+        }
+    }
+    panic!("no frame reservation after `{function_marker}`");
+}
+
+/// SSA values whose live ranges do not overlap share one stack slot, so a function of many
+/// short-lived temporaries keeps a small frame. Every value used to own a slot (2688 bytes for the
+/// function below, 496 now), which pushed hot locals past the 256-byte reach of the one-instruction
+/// AArch64 `ldur`/`stur` and cost a separate `sub` for each access. Fails when the sharing in
+/// `value_placement::allocate_with` is switched off (`ELEPHC_NO_SLOT_SHARING=1`) or removed.
+#[test]
+fn test_dying_temporaries_share_frame_slots() {
+    let dir = make_cli_test_dir("elephc_slot_sharing");
+    let terms = (1..=40)
+        .map(|n| format!("strlen($a . \"{n}\")"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let source = format!(
+        "<?php\nfunction many(string $a, int $n): int {{\n    return {terms} + $n;\n}}\necho many(\"ab\", 1), \"\\n\";\n"
+    );
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(&source, &dir, 8_388_608, false, false);
+
+    let frame = prologue_frame_bytes(&user_asm, "@fn name=many ");
+    assert!(
+        frame <= 1024,
+        "40 dying string temporaries reserved a {frame}-byte frame; their slots are not shared"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Sharing must not change what the function computes: the same chain, run.
+#[test]
+fn test_dying_temporaries_sharing_slots_keep_the_result() {
+    let terms = (1..=40)
+        .map(|n| format!("strlen($a . \"{n}\")"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let source = format!(
+        "<?php\nfunction many(string $a, int $n): int {{\n    return {terms} + $n;\n}}\necho many(\"ab\", 1), \"\\n\";\n"
+    );
+    // 9 one-digit suffixes: 3 bytes each; 31 two-digit suffixes: 4 bytes each; plus $n = 1.
+    assert_eq!(compile_and_run(&source), "152\n");
 }

@@ -18,6 +18,7 @@ use crate::codegen::platform::Arch;
 const EVAL_STATUS_OK: i64 = 0;
 const EVAL_STATUS_RUNTIME_FATAL: i64 = 2;
 const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
+const EVAL_SCOPE_FLAG_UNSET: i64 = 1 << 1;
 const EVAL_SCOPE_FLAG_DIRTY: i64 = 1 << 2;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 
@@ -25,6 +26,12 @@ const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 pub(crate) fn emit_eval_scope_runtime(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: eval scope core helpers ---");
+    label_c_global(emitter, "__elephc_eval_scope_bind_native");
+    let setter = emitter.target.extern_symbol("__elephc_eval_scope_set");
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("b {setter}")), // tail-dispatch with the original scope setter ABI
+        Arch::X86_64 => emitter.instruction(&format!("jmp {setter}")), // tail-dispatch with the original scope setter ABI
+    }
     match emitter.target.arch {
         Arch::AArch64 => emit_aarch64_eval_scope_runtime(emitter),
         Arch::X86_64 => emit_x86_64_eval_scope_runtime(emitter),
@@ -38,6 +45,7 @@ fn emit_aarch64_eval_scope_runtime(emitter: &mut Emitter) {
     emit_aarch64_eval_scope_free(emitter);
     emit_aarch64_eval_scope_set(emitter);
     emit_aarch64_eval_scope_get(emitter);
+    emit_aarch64_eval_scope_unset(emitter);
 }
 
 /// Emits the ARM64 scope allocator.
@@ -92,6 +100,9 @@ fn emit_aarch64_eval_scope_free(emitter: &mut Emitter) {
 fn emit_aarch64_eval_scope_set(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_scope_set");
     emitter.instruction("cbz x0, __elephc_eval_scope_set_fatal");               // reject null scope handles
+    emitter.instruction("and x9, x4, #96");                                   // isolate mutually exclusive native binding flags
+    emitter.instruction("cmp x9, #96");                                      // an entry cannot be both a reference and a global name
+    emitter.instruction("b.eq __elephc_eval_scope_set_fatal");                // reject invalid binding metadata like the Rust scope ABI
     emitter.instruction("cbz x2, __elephc_eval_scope_set_frame");               // empty names do not need a readable pointer
     emitter.instruction("cbz x1, __elephc_eval_scope_set_fatal");               // non-empty names must provide bytes
     emitter.label("__elephc_eval_scope_set_frame");
@@ -135,7 +146,10 @@ fn emit_aarch64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction("b.eq __elephc_eval_scope_set_store");                  // borrowed old cells do not need release
     emitter.instruction("ldr x0, [x25, #24]");                                  // load the old Mixed cell pointer
     emitter.instruction("cmp x0, x22");                                         // compare old and replacement cells
-    emitter.instruction("b.eq __elephc_eval_scope_set_store");                  // retaining the same cell must not decref it
+    emitter.instruction("b.ne __elephc_eval_scope_set_release");               // a different cell releases the prior owner
+    emitter.instruction(&format!("tst x23, #{}", EVAL_SCOPE_FLAG_OWNED));       // a same-cell borrowed replacement still drops the scope owner
+    emitter.instruction("b.ne __elephc_eval_scope_set_store");                 // unchanged owned storage keeps its existing ownership share
+    emitter.label("__elephc_eval_scope_set_release");
     emitter.instruction("cbz x0, __elephc_eval_scope_set_store");               // tolerate null old cells defensively
     emitter.instruction("bl __rt_decref_mixed");                                // release the overwritten owned Mixed cell
     emitter.label("__elephc_eval_scope_set_store");
@@ -221,6 +235,80 @@ fn emit_aarch64_eval_scope_get(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the fatal eval status
 }
 
+/// Emits the ARM64 scope unset marker update.
+fn emit_aarch64_eval_scope_unset(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_scope_unset");
+    emitter.instruction("cbz x0, __elephc_eval_scope_unset_fatal");             // reject null scope handles
+    emitter.instruction("cbz x2, __elephc_eval_scope_unset_frame");             // empty names do not need a readable pointer
+    emitter.instruction("cbz x1, __elephc_eval_scope_unset_fatal");             // non-empty names must provide bytes
+    emitter.label("__elephc_eval_scope_unset_frame");
+    emitter.instruction("sub sp, sp, #80");                                     // reserve saved inputs and callee-saved scan registers
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // preserve the caller frame across release and allocation calls
+    emitter.instruction("stp x19, x20, [sp, #16]");                             // preserve the scope and requested name pointer
+    emitter.instruction("stp x21, x22, [sp, #32]");                             // preserve the name length and previous-next pointer
+    emitter.instruction("stp x23, x24, [sp, #48]");                             // preserve the current entry and scratch state
+    emitter.instruction("mov x29, sp");                                         // establish a stable frame for nested runtime calls
+    emitter.instruction("mov x19, x0");                                         // save the scope header pointer
+    emitter.instruction("mov x20, x1");                                         // save the requested name pointer
+    emitter.instruction("mov x21, x2");                                         // save the requested name length
+    emitter.instruction("mov x22, x19");                                        // previous-next initially addresses scope->head
+    emitter.instruction("ldr x23, [x19]");                                      // load the first scope entry
+    emitter.label("__elephc_eval_scope_unset_probe");
+    emitter.instruction("cbz x23, __elephc_eval_scope_unset_insert");           // insert an unset marker when the name is absent
+    emitter.instruction("ldr x9, [x23, #16]");                                  // load the candidate name length
+    emitter.instruction("cmp x9, x21");                                         // compare candidate and requested lengths
+    emitter.instruction("b.ne __elephc_eval_scope_unset_next");                 // different lengths cannot match
+    emitter.instruction("ldr x10, [x23, #8]");                                  // load the candidate name bytes
+    emitter.instruction("mov x11, #0");                                         // initialize the byte comparison index
+    emitter.label("__elephc_eval_scope_unset_cmp");
+    emitter.instruction("cmp x11, x21");                                        // have all requested name bytes matched?
+    emitter.instruction("b.eq __elephc_eval_scope_unset_found");                // equal length and bytes select this entry
+    emitter.instruction("ldrb w12, [x10, x11]");                                // load one candidate name byte
+    emitter.instruction("ldrb w13, [x20, x11]");                                // load the corresponding requested name byte
+    emitter.instruction("cmp w12, w13");                                        // compare the two bytes
+    emitter.instruction("b.ne __elephc_eval_scope_unset_next");                 // continue scanning after a byte mismatch
+    emitter.instruction("add x11, x11, #1");                                    // advance to the next name byte
+    emitter.instruction("b __elephc_eval_scope_unset_cmp");                     // continue comparing this candidate
+    emitter.label("__elephc_eval_scope_unset_next");
+    emitter.instruction("mov x22, x23");                                        // previous-next now addresses current->next
+    emitter.instruction("ldr x23, [x23]");                                      // advance to the next scope entry
+    emitter.instruction("b __elephc_eval_scope_unset_probe");                   // continue scanning the entry list
+    emitter.label("__elephc_eval_scope_unset_found");
+    emitter.instruction("ldr x9, [x23, #32]");                                  // load the existing ownership flags
+    emitter.instruction(&format!("tst x9, #{}", EVAL_SCOPE_FLAG_OWNED));        // check whether the scope owns the old Mixed cell
+    emitter.instruction("b.eq __elephc_eval_scope_unset_store");                // borrowed cells do not need release
+    emitter.instruction("ldr x0, [x23, #24]");                                  // load the owned Mixed cell pointer
+    emitter.instruction("cbz x0, __elephc_eval_scope_unset_store");             // tolerate a null owned cell defensively
+    emitter.instruction("bl __rt_decref_mixed");                                // release the cell hidden by the unset marker
+    emitter.label("__elephc_eval_scope_unset_store");
+    emitter.instruction("str xzr, [x23, #24]");                                 // clear the runtime cell pointer
+    emitter.instruction(&format!("mov x9, #{}", EVAL_SCOPE_FLAG_UNSET | EVAL_SCOPE_FLAG_DIRTY)); // mark the entry unset and dirty
+    emitter.instruction("str x9, [x23, #32]");                                  // publish the unset marker without present or ownership bits
+    emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_OK));               // report successful scope mutation
+    emitter.instruction("b __elephc_eval_scope_unset_done");                    // restore the frame and return
+    emitter.label("__elephc_eval_scope_unset_insert");
+    emitter.instruction("mov x0, #40");                                         // entry records store next, name, length, cell, and flags
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate an absent-name unset marker
+    emitter.instruction("str x23, [x0]");                                       // link the old successor, normally null
+    emitter.instruction("str x20, [x0, #8]");                                   // store the borrowed static name pointer
+    emitter.instruction("str x21, [x0, #16]");                                  // store the requested name length
+    emitter.instruction("str xzr, [x0, #24]");                                  // unset markers have no runtime cell
+    emitter.instruction(&format!("mov x9, #{}", EVAL_SCOPE_FLAG_UNSET | EVAL_SCOPE_FLAG_DIRTY)); // materialize unset and dirty flags
+    emitter.instruction("str x9, [x0, #32]");                                   // store the marker flags
+    emitter.instruction("str x0, [x22]");                                       // link the new marker through previous-next
+    emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_OK));               // report successful marker insertion
+    emitter.label("__elephc_eval_scope_unset_done");
+    emitter.instruction("ldp x23, x24, [sp, #48]");                             // restore callee-saved scan registers
+    emitter.instruction("ldp x21, x22, [sp, #32]");                             // restore the requested length and link register
+    emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore the scope and name registers
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the unset helper frame
+    emitter.instruction("ret");                                                 // return the eval status in x0
+    emitter.label("__elephc_eval_scope_unset_fatal");
+    emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_RUNTIME_FATAL));    // report invalid scope or name inputs
+    emitter.instruction("ret");                                                 // return without mutating the scope
+}
+
 /// Emits x86_64 eval-scope helpers. `__elephc_eval_value_null` comes from the
 /// eval bridge value wrappers, which scope-only programs also emit.
 fn emit_x86_64_eval_scope_runtime(emitter: &mut Emitter) {
@@ -228,6 +316,7 @@ fn emit_x86_64_eval_scope_runtime(emitter: &mut Emitter) {
     emit_x86_64_eval_scope_free(emitter);
     emit_x86_64_eval_scope_set(emitter);
     emit_x86_64_eval_scope_get(emitter);
+    emit_x86_64_eval_scope_unset(emitter);
 }
 
 /// Emits the x86_64 scope allocator.
@@ -286,6 +375,10 @@ fn emit_x86_64_eval_scope_set(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_scope_set");
     emitter.instruction("test rdi, rdi");                                       // reject null scope handles
     emitter.instruction("jz __elephc_eval_scope_set_fatal");                    // return a runtime-fatal status for null scope
+    emitter.instruction("mov r10, r8");                                      // copy caller flags without disturbing the ABI input
+    emitter.instruction("and r10, 96");                                      // isolate mutually exclusive native binding flags
+    emitter.instruction("cmp r10, 96");                                      // an entry cannot be both a reference and a global name
+    emitter.instruction("je __elephc_eval_scope_set_fatal");                  // reject invalid binding metadata like the Rust scope ABI
     emitter.instruction("test rdx, rdx");                                       // empty names do not need a readable pointer
     emitter.instruction("jz __elephc_eval_scope_set_frame");                    // skip the pointer check for empty names
     emitter.instruction("test rsi, rsi");                                       // non-empty names must provide bytes
@@ -331,7 +424,10 @@ fn emit_x86_64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction("jz __elephc_eval_scope_set_store");                    // borrowed old cells do not need release
     emitter.instruction("mov rax, QWORD PTR [r9 + 24]");                        // load the old Mixed cell pointer
     emitter.instruction("cmp rax, QWORD PTR [rbp - 32]");                       // compare old and replacement cells
-    emitter.instruction("je __elephc_eval_scope_set_store");                    // retaining the same cell must not decref it
+    emitter.instruction("jne __elephc_eval_scope_set_release");                // a different cell releases the prior owner
+    emitter.instruction(&format!("test QWORD PTR [rbp - 40], {}", EVAL_SCOPE_FLAG_OWNED)); // same-cell borrowed replacement drops the scope owner
+    emitter.instruction("jnz __elephc_eval_scope_set_store");                   // unchanged owned storage keeps its existing ownership share
+    emitter.label("__elephc_eval_scope_set_release");
     emitter.instruction("test rax, rax");                                       // tolerate null old cells defensively
     emitter.instruction("jz __elephc_eval_scope_set_store");                    // skip release when the old cell is null
     emitter.instruction("call __rt_decref_mixed");                              // release the overwritten owned Mixed cell
@@ -427,8 +523,116 @@ fn emit_x86_64_eval_scope_get(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the fatal eval status
 }
 
+/// Emits the x86_64 scope unset marker update.
+fn emit_x86_64_eval_scope_unset(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_scope_unset");
+    emitter.instruction("test rdi, rdi");                                       // reject null scope handles
+    emitter.instruction("jz __elephc_eval_scope_unset_fatal");                  // return a runtime-fatal status for null scope
+    emitter.instruction("test rdx, rdx");                                       // empty names do not need a readable pointer
+    emitter.instruction("jz __elephc_eval_scope_unset_frame");                  // skip the pointer check for empty names
+    emitter.instruction("test rsi, rsi");                                       // non-empty names must provide bytes
+    emitter.instruction("jz __elephc_eval_scope_unset_fatal");                  // reject invalid name storage
+    emitter.label("__elephc_eval_scope_unset_frame");
+    emitter.instruction("push rbp");                                            // preserve the caller frame before scope mutation
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for nested runtime calls
+    emitter.instruction("sub rsp, 48");                                         // reserve scope, name, length, previous-next, and current slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the scope header pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested name length
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // previous-next initially addresses scope->head
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the first scope entry
+    emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save the current candidate entry
+    emitter.label("__elephc_eval_scope_unset_probe");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the current candidate entry
+    emitter.instruction("test r9, r9");                                         // has the scan reached the end?
+    emitter.instruction("jz __elephc_eval_scope_unset_insert");                 // insert an unset marker when the name is absent
+    emitter.instruction("mov r10, QWORD PTR [r9 + 16]");                        // load the candidate name length
+    emitter.instruction("cmp r10, QWORD PTR [rbp - 24]");                       // compare candidate and requested lengths
+    emitter.instruction("jne __elephc_eval_scope_unset_next");                  // different lengths cannot match
+    emitter.instruction("mov r10, QWORD PTR [r9 + 8]");                         // load the candidate name bytes
+    emitter.instruction("xor r11, r11");                                        // initialize the byte comparison index
+    emitter.label("__elephc_eval_scope_unset_cmp");
+    emitter.instruction("cmp r11, QWORD PTR [rbp - 24]");                       // have all requested name bytes matched?
+    emitter.instruction("je __elephc_eval_scope_unset_found");                  // equal length and bytes select this entry
+    emitter.instruction("mov al, BYTE PTR [r10 + r11]");                        // load one candidate name byte
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the requested name pointer
+    emitter.instruction("cmp al, BYTE PTR [r8 + r11]");                         // compare the two name bytes
+    emitter.instruction("jne __elephc_eval_scope_unset_next");                  // continue scanning after a byte mismatch
+    emitter.instruction("add r11, 1");                                          // advance to the next name byte
+    emitter.instruction("jmp __elephc_eval_scope_unset_cmp");                   // continue comparing this candidate
+    emitter.label("__elephc_eval_scope_unset_next");
+    emitter.instruction("mov QWORD PTR [rbp - 32], r9");                        // previous-next now addresses current->next
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // advance to the next scope entry
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the next candidate as current
+    emitter.instruction("jmp __elephc_eval_scope_unset_probe");                 // continue scanning the entry list
+    emitter.label("__elephc_eval_scope_unset_found");
+    emitter.instruction("mov r10, QWORD PTR [r9 + 32]");                        // load the existing ownership flags
+    emitter.instruction(&format!("test r10, {}", EVAL_SCOPE_FLAG_OWNED));       // check whether the scope owns the old Mixed cell
+    emitter.instruction("jz __elephc_eval_scope_unset_store");                  // borrowed cells do not need release
+    emitter.instruction("mov rax, QWORD PTR [r9 + 24]");                        // load the owned Mixed cell pointer
+    emitter.instruction("test rax, rax");                                       // tolerate a null owned cell defensively
+    emitter.instruction("jz __elephc_eval_scope_unset_store");                  // skip release when the old cell is null
+    emitter.instruction("call __rt_decref_mixed");                              // release the cell hidden by the unset marker
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the current entry after the runtime call
+    emitter.label("__elephc_eval_scope_unset_store");
+    emitter.instruction("mov QWORD PTR [r9 + 24], 0");                          // clear the runtime cell pointer
+    emitter.instruction(&format!("mov r10, {}", EVAL_SCOPE_FLAG_UNSET | EVAL_SCOPE_FLAG_DIRTY)); // materialize unset and dirty flags
+    emitter.instruction("mov QWORD PTR [r9 + 32], r10");                        // publish the unset marker without present or ownership bits
+    emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_OK));               // report successful scope mutation
+    emitter.instruction("jmp __elephc_eval_scope_unset_done");                  // restore the frame and return
+    emitter.label("__elephc_eval_scope_unset_insert");
+    emitter.instruction("mov rax, 40");                                         // entry records store next, name, length, cell, and flags
+    emitter.instruction("call __rt_heap_alloc");                                // allocate an absent-name unset marker
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the old successor, normally null
+    emitter.instruction("mov QWORD PTR [rax], r9");                             // link the old successor from the new marker
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the borrowed static name pointer
+    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the requested name pointer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the requested name length
+    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // store the name length
+    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // unset markers have no runtime cell
+    emitter.instruction(&format!("mov r10, {}", EVAL_SCOPE_FLAG_UNSET | EVAL_SCOPE_FLAG_DIRTY)); // materialize unset and dirty flags
+    emitter.instruction("mov QWORD PTR [rax + 32], r10");                       // store the marker flags
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the previous-next pointer
+    emitter.instruction("mov QWORD PTR [r11], rax");                            // link the new marker into the scope
+    emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_OK));               // report successful marker insertion
+    emitter.label("__elephc_eval_scope_unset_done");
+    emitter.instruction("add rsp, 48");                                         // release saved input and scan slots
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the eval status in rax
+    emitter.label("__elephc_eval_scope_unset_fatal");
+    emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_RUNTIME_FATAL));    // report invalid scope or name inputs
+    emitter.instruction("ret");                                                 // return without mutating the scope
+}
+
 /// Emits a global label with platform C-symbol mangling.
 fn label_c_global(emitter: &mut Emitter, name: &str) {
     let symbol = emitter.target.extern_symbol(name);
     emitter.label_global(&symbol);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{AppleVariant, Platform, Target};
+
+    #[test]
+    fn native_scope_binding_capability_on_all_targets() {
+        let targets = [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target { platform: Platform::MacOS, arch: Arch::AArch64, apple_variant: AppleVariant::IOS },
+            Target { platform: Platform::MacOS, arch: Arch::AArch64, apple_variant: AppleVariant::IOSSimulator },
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ];
+        for target in targets {
+            let mut emitter = Emitter::new(target);
+            emit_eval_scope_runtime(&mut emitter);
+            let assembly = emitter.output();
+            let entry = target.extern_symbol("__elephc_eval_scope_bind_native");
+            let setter = target.extern_symbol("__elephc_eval_scope_set");
+            let jump = if target.arch == Arch::AArch64 { "b" } else { "jmp" };
+            assert!(assembly.contains(&format!("{entry}:")), "{target:?}");
+            assert!(assembly.contains(&format!("{jump} {setter}")), "{target:?}");
+        }
+    }
 }

@@ -223,6 +223,30 @@ fn test_parse_typed_properties() {
     }
 }
 
+#[test]
+/// Verifies that a DNF property type beginning with `(` is recognized as a type declaration and
+/// retains its parenthesized intersection as a member of the union.
+fn test_parse_dnf_typed_property() {
+    let stmts = parse_source(
+        "<?php class Holder { protected (Node&ParentNode)|null $parent = null; }",
+    );
+    match &stmts[0].kind {
+        StmtKind::ClassDecl { properties, .. } => {
+            assert_eq!(
+                properties[0].type_expr,
+                Some(TypeExpr::Union(vec![
+                    TypeExpr::Intersection(vec![
+                        TypeExpr::Named(Name::unqualified("Node")),
+                        TypeExpr::Named(Name::unqualified("ParentNode")),
+                    ]),
+                    TypeExpr::Void,
+                ]))
+            );
+        }
+        other => panic!("Expected ClassDecl, got {:?}", other),
+    }
+}
+
 /// Parses a constructor with promoted parameters covering all visibility levels,
 /// nullable and non-nullable types, default values, `readonly` promoted params,
 /// and by-reference (`&`) promoted params. Verifies the promoted properties are

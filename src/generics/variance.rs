@@ -77,7 +77,10 @@ pub fn verify(templates: &Templates) -> Result<(), CompileError> {
     }
     for template in templates.declarations() {
         for param in &template.type_params {
-            if param.variance == Variance::Invariant {
+            // An annotation only php's static analysers read cannot refuse a program: a PHPDoc
+            // `@template-covariant` the body does not honour is php-valid code (Symfony's
+            // `NodeDefinition`). Written `+T`/`-T` syntax is still verified.
+            if param.variance == Variance::Invariant || param.doc_annotated {
                 continue;
             }
             verify_parameter(

@@ -49,6 +49,16 @@ fn name_is_eval_fn(name: &Name) -> bool {
         .is_some_and(|segment| segment.eq_ignore_ascii_case("eval"))
 }
 
+/// Returns whether an `eval()` with these arguments may reach the introspection surface.
+///
+/// A transparent literal fragment is read like the rest of the program; any other is assumed to.
+fn eval_may_reach_tz(args: &[Expr]) -> bool {
+    match crate::prelude_prune::usage::transparent_literal_eval(args) {
+        Some(program) => program_uses_tz_introspection(&program),
+        None => true,
+    }
+}
+
 /// Returns whether a method name is one of the three introspection methods,
 /// compared case-insensitively as PHP method names are.
 fn method_is_tz(method: &str) -> bool {
@@ -142,7 +152,9 @@ fn expr_refs_tz(expr: &Expr) -> bool {
         | ExprKind::MagicConstant(_) => false,
 
         ExprKind::FunctionCall { name, args } => {
-            name_is_eval_fn(name) || name_is_tz_fn(name) || args.iter().any(expr_refs_tz)
+            (name_is_eval_fn(name) && eval_may_reach_tz(args))
+                || name_is_tz_fn(name)
+                || args.iter().any(expr_refs_tz)
         }
         ExprKind::MethodCall {
             object,
@@ -169,6 +181,7 @@ fn expr_refs_tz(expr: &Expr) -> bool {
             expr_refs_tz(value) || instanceof_target_refs_tz(target)
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -244,9 +257,11 @@ fn expr_refs_tz(expr: &Expr) -> bool {
             expr_refs_tz(object) || expr_refs_tz(property)
         }
         ExprKind::StaticPropertyAccess { .. } => false,
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_refs_tz(property),
         ExprKind::BufferNew { len, .. } => expr_refs_tz(len),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => false,
         ExprKind::ObjectClassName { object } => expr_refs_tz(object),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_refs_tz(receiver),
         ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_refs_tz),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_refs_tz)
@@ -272,6 +287,7 @@ fn stmt_refs_tz(stmt: &Stmt) -> bool {
         | StmtKind::UseDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => false,
 
         StmtKind::Echo(expr) | StmtKind::Throw(expr) | StmtKind::ExprStmt(expr) => {
@@ -400,10 +416,26 @@ fn stmt_refs_tz(stmt: &Stmt) -> bool {
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_refs_tz(object) || expr_refs_tz(value)
         }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            expr_refs_tz(object) || expr_refs_tz(source)
+        }
         StmtKind::StaticPropertyAssign { value, .. }
         | StmtKind::StaticPropertyArrayPush { value, .. } => expr_refs_tz(value),
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_refs_tz(index) || expr_refs_tz(value)
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_refs_tz(index) || expr_refs_tz(source)
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_refs_tz(property)
+                || index.as_ref().is_some_and(expr_refs_tz)
+                || expr_refs_tz(value)
         }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_tz(object) || expr_refs_tz(value)

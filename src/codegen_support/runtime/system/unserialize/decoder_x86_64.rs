@@ -83,6 +83,25 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_throw_current");                              // resume propagation at the caller's exception handler
 }
 
+/// Records a scalar value's wire position in its reserved `_unser_values` slot as `(pos << 1) | 1`.
+///
+/// A later `R:N` that names the scalar re-decodes it from that position, because scalars are not
+/// kept alive after parsing and a published pointer would dangle. Real pointers are 8-byte aligned,
+/// so the low bit tells the two apart. This yields value semantics: php makes both slots one PHP
+/// reference, elephc gives the `R:` slot an equal copy. Overflow slots stay unregistered.
+fn emit_tag_scalar_position(emitter: &mut Emitter, kind: &str) {
+    let skip = format!("__rt_unser_at_{kind}_untagged");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // this scalar's reserved zero-based registry index
+    emitter.instruction("cmp r10, 65536");                                      // is the reserved slot inside the fixed registry?
+    emitter.instruction(&format!("jae {skip}"));                                // overflow values remain deliberately unregistered
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // wire position of the scalar's type byte
+    emitter.instruction("shl r11, 1");                                          // make room for the scalar marker bit
+    emitter.instruction("or r11, 1");                                           // tag the slot as a wire position, not a box pointer
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_unser_values");
+    emitter.instruction("mov QWORD PTR [r8 + r10 * 8], r11");                   // publish the position for later R: back-references
+    emitter.label(&skip);
+}
+
 /// Emits the x86_64 recursive decoder for one prevalidated serialized value.
 pub(super) fn emit_parser(emitter: &mut Emitter) {
     // -- __rt_unser_at(base=rdi, pos=rsi, end=rdx) -> rax=box (0 fail), rdx=newpos --
@@ -107,8 +126,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("cmp rsi, rdx");                                        // is the cursor already at/past the end?
     emitter.instruction("jge __rt_unser_at_fail");                              // nothing left to parse
     emitter.instruction("movzx r9d, BYTE PTR [rdi + rsi]");                     // load the leading type byte
-    // -- back-reference? r:N; / R:N; resolves to a previously parsed value and
-    //    consumes no new index --
+    // -- back-reference? r:N; / R:N; resolves to a previously parsed value. Only R
+    //    consumes no new index: php pushes every value but a PHP reference --
     emitter.instruction("cmp r9d, 114");                                        // ASCII 'r'?
     emitter.instruction("je __rt_unser_at_ref");                                // resolve an object back-reference
     emitter.instruction("cmp r9d, 82");                                         // ASCII 'R'?
@@ -145,6 +164,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- null: "N;" --
     emitter.label("__rt_unser_at_null");
+    emit_tag_scalar_position(emitter, "null");
     emitter.instruction("mov rax, 8");                                          // value tag = null
     emitter.instruction("mov rdi, 0");                                          // null payload low word
     emitter.instruction("mov rsi, 0");                                          // null payload high word
@@ -155,6 +175,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- bool: "b:0;" / "b:1;" --
     emitter.label("__rt_unser_at_bool");
+    emit_tag_scalar_position(emitter, "bool");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload base
     emitter.instruction("add r10, QWORD PTR [rbp - 16]");                       // pointer to the type byte
     emitter.instruction("movzx r9d, BYTE PTR [r10 + 2]");                       // load the bool digit at offset 2
@@ -170,6 +191,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- int: "i:" + optional '-' + digits + ";" --
     emitter.label("__rt_unser_at_int");
+    emit_tag_scalar_position(emitter, "int");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload base
     emitter.instruction("add r10, QWORD PTR [rbp - 16]");                       // pointer to the type byte
     emitter.instruction("add r10, 2");                                          // skip "i:" to the first digit
@@ -209,6 +231,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- float: "d:" + (INF/-INF/NAN | digits) + ";" --
     emitter.label("__rt_unser_at_float");
+    emit_tag_scalar_position(emitter, "float");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload base
     emitter.instruction("add rdi, QWORD PTR [rbp - 16]");                       // pointer to the type byte
     emitter.instruction("add rdi, 2");                                          // strtod source = first byte after "d:"
@@ -239,6 +262,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
 
     // -- string: "s:" + bytelen + ":\"" + raw + "\";" --
     emitter.label("__rt_unser_at_str");
+    emit_tag_scalar_position(emitter, "str");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload base
     emitter.instruction("add r10, QWORD PTR [rbp - 16]");                       // pointer to the type byte
     emitter.instruction("add r10, 2");                                          // skip "s:" to the length digits
@@ -398,6 +422,25 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("call __rt_new_by_name");                               // instantiate the class by name (0 on unknown class)
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jnz __rt_unser_obj_allocated_x");                      // known classes use their declared layout
+    // PHP does not degrade an unknown class on sight: `unserialize_callback_func` gets a turn
+    // first, and its whole purpose is to let the AUTOLOADER declare the class. Symfony points
+    // that ini at its own autoloader, which is what makes its `.meta` files deserialize into
+    // real resources instead of class-less stand-ins. Ask the bridge once, then retry.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_elephc_eval_class_autoload_fn");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // r10 = optional eval class-autoload callback
+    emitter.instruction("test r10, r10");                                       // is the interpreter linked into this program?
+    emitter.instruction("jz __rt_unser_obj_unknown_x");                         // no interpreter linked → no autoloader to ask
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // class-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // class-name length
+    emitter.instruction("call r10");                                            // run the registered autoloaders for this name
+    emitter.instruction("test rax, rax");                                       // did the class become declared?
+    emitter.instruction("jz __rt_unser_obj_unknown_x");                         // still undeclared → the incomplete fallback
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // class-name pointer (new_by_name arg)
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // class-name length (new_by_name arg)
+    emitter.instruction("call __rt_new_by_name");                               // retry now that the class is declared
+    emitter.instruction("test rax, rax");                                       // did the retry produce an instance?
+    emitter.instruction("jnz __rt_unser_obj_allocated_x");                      // the autoloader supplied a declared layout
+    emitter.label("__rt_unser_obj_unknown_x");
     emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // unknown classes suppress hooks and use opaque properties
     emitter.instruction("jmp __rt_unser_obj_incomplete_x");                     // match PHP's __PHP_Incomplete_Class fallback
     emitter.label("__rt_unser_obj_incomplete_x");
@@ -556,9 +599,54 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // persist the property index
     emitter.instruction("jmp __rt_unser_at_obj_loop");                          // continue with the next property
     emitter.label("__rt_unser_at_obj_close");
+    // -- eval-declared classes: hand the parsed payload to the interpreter --
+    // See the AArch64 decoder for why this exists: `__rt_new_by_name` resolves against the AOT
+    // class table, and Symfony's DI container is interpreted, so every class it names is
+    // eval-declared and has no layout here. The property list is already parsed into the
+    // stand-in's hash by now, which is exactly what the interpreter needs.
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // did this object get a declared layout?
+    emitter.instruction("jne __rt_unser_obj_wakeup_x");                         // a hydrated object keeps the ordinary path
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_elephc_eval_unserialize_object_fn");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // r10 = optional eval hydration callback
+    emitter.instruction("test r10, r10");                                       // is the interpreter linked?
+    emitter.instruction("jz __rt_unser_at_obj_box");                            // no interpreter → keep the stand-in
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // stand-in object payload
+    emitter.instruction("mov rax, QWORD PTR [r11]");                            // its class id
+    emitter.instruction("cmp rax, -2");                                         // is it the __PHP_Incomplete_Class sentinel?
+    emitter.instruction("jne __rt_unser_at_obj_box");                           // anything else is not ours to replace
+    // The policy is re-asked rather than remembered: `[rbp - 80]` is cleared both for a BLOCKED
+    // class and for one with no layout, and a blocked class must stay incomplete.
+    emitter.instruction("mov rax, QWORD PTR [r11 + 8]");                        // persisted original class-name pointer
+    emitter.instruction("mov rdx, QWORD PTR [r11 + 16]");                       // persisted original class-name length
+    emitter.instruction("call __rt_unserialize_class_allowed");                 // allowed_classes still permits this name?
+    emitter.instruction("test rax, rax");                                       // blocked?
+    emitter.instruction("jz __rt_unser_at_obj_box");                            // blocked classes keep the stand-in
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the stand-in after the call
+    emitter.instruction("mov rdi, QWORD PTR [r11 + 8]");                        // class-name pointer
+    emitter.instruction("mov rsi, QWORD PTR [r11 + 16]");                       // class-name length
+    emitter.instruction("mov rdx, QWORD PTR [r11 + 24]");                       // parsed opaque property hash (borrowed)
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_elephc_eval_unserialize_object_fn");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // reload the callback after the policy call
+    emitter.instruction("call r10");                                            // rax = boxed Mixed object, or 0 when undeclared
+    emitter.instruction("test rax, rax");                                       // did the interpreter build one?
+    emitter.instruction("jz __rt_unser_at_obj_box");                            // declined → keep the stand-in
+    // The donor box owns the new object. Move the object into the result box this decoder
+    // already published, then neutralise the donor so releasing it frees only its own shell.
+    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // hydrated object payload
+    emitter.instruction("mov QWORD PTR [rax], 8");                              // runtime tag 8 = null, retagging the donor
+    emitter.instruction("mov QWORD PTR [rax + 8], 0");                          // drop the donor's claim on the object
+    emitter.instruction("mov r9, QWORD PTR [rbp - 96]");                        // this object's stable result box
+    emitter.instruction("mov r8, QWORD PTR [r9 + 8]");                          // the stand-in it currently holds
+    emitter.instruction("mov QWORD PTR [r9 + 8], r11");                         // publish the hydrated object instead
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // and make it the current object payload
+    emitter.instruction("push r8");                                             // park the stand-in across the donor release
+    emitter.instruction("push r8");                                             // keep the stack 16-byte aligned for the call
+    emitter.instruction("call __rt_decref_mixed");                              // free the donor shell only (rax = donor)
+    emitter.instruction("pop rax");                                             // discard the alignment copy
+    emitter.instruction("pop rax");                                             // reclaim the stand-in pointer
+    emitter.instruction("call __rt_object_free_deep");                          // free its name and its now-copied property hash
+    emitter.instruction("jmp __rt_unser_at_obj_box");                           // the interpreter already ran the class hooks
     // -- __wakeup magic: after default property injection, call __wakeup($this) --
-    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // blocked classes cannot run __wakeup
-    emitter.instruction("je __rt_unser_at_obj_box");                            // incomplete objects never run class hooks
     emitter.label("__rt_unser_obj_wakeup_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // object pointer
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // class id from the object header
@@ -656,6 +744,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r9 + r11*8]");                      // the registered value box (0 if none)
     emitter.instruction("test r9, r9");                                         // was this reserved registry slot left unpublished?
     emitter.instruction("jz __rt_unser_at_ref_fail");                           // → null
+    emitter.instruction("test r9, 1");                                          // a tagged slot holds a scalar's wire position
+    emitter.instruction("jnz __rt_unser_at_ref_scalar");                        // re-decode the scalar instead of cloning a box
     emitter.label("__rt_unser_at_ref_deref_x");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // inspect the registry cell's boxed tag
     emitter.instruction("cmp r10, 7");                                          // does the slot hold a nested Mixed wrapper?
@@ -669,11 +759,38 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_unser_at_ref_clone");                         // uppercase R accepts any published value shape
     emitter.instruction("cmp QWORD PTR [r9], 6");                               // require an object for lowercase r
     emitter.instruction("jne __rt_unser_at_ref_fail");                          // reject a non-object identity target
+    // An object back-reference takes the next index itself and publishes the SAME object box
+    // there (see the AArch64 decoder).
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_count");
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // zero-based slot this reference takes
+    emitter.instruction("add QWORD PTR [r10], 1");                              // advance the registry counter past it
+    emitter.instruction("cmp r11, 65536");                                      // is the reserved slot inside the fixed registry?
+    emitter.instruction("jae __rt_unser_at_ref_clone");                         // overflow values remain deliberately unregistered
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_values");
+    emitter.instruction("mov QWORD PTR [r10 + r11*8], r9");                     // alias the target's borrowed box, which outlives this parse
     emitter.label("__rt_unser_at_ref_clone");
     emitter.instruction("mov rax, r9");                                         // supply the borrowed registry cell to the shared clone helper
     emitter.instruction("call __rt_mixed_clone");                               // detach a result box and retain its object or array payload
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // newpos past the ';'
     emitter.instruction("jmp __rt_unser_at_ret");                               // return the aliasing box
+    // R: onto a scalar: decode it again from its recorded wire position. The nested decode
+    // reserves one registry index, which is handed back so the R: itself consumes none.
+    emitter.label("__rt_unser_at_ref_scalar");
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 114");                       // lowercase r denotes object identity only
+    emitter.instruction("je __rt_unser_at_ref_fail");                           // a scalar is never an object target
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_count");
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // registry count before the nested decode
+    emitter.instruction("mov QWORD PTR [rbp - 80], r11");                       // keep it to hand the index back
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // base
+    emitter.instruction("mov rsi, r9");                                         // tagged wire position
+    emitter.instruction("shr rsi, 1");                                          // recover the scalar's wire position
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // end
+    emitter.instruction("call __rt_unser_at");                                  // decode the scalar into a fresh owned box
+    emitter.instruction("mov r11, QWORD PTR [rbp - 80]");                       // registry count before the nested decode
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_unser_count");
+    emitter.instruction("mov QWORD PTR [r10], r11");                            // the R: does not take an index of its own
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // newpos past the ';'
+    emitter.instruction("jmp __rt_unser_at_ret");                               // return the copied scalar box
     emitter.label("__rt_unser_at_ref_fail");
     emitter.instruction("xor eax, eax");                                        // unresolved reference → null
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // newpos past the ';'

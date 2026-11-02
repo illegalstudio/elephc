@@ -42,10 +42,24 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
             expr_has_includes(index) || expr_has_includes(value)
         }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_has_includes(index) || expr_has_includes(source)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_includes(target) || expr_has_includes(value)
         }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_has_includes(property)
+                || index.as_ref().is_some_and(expr_has_includes)
+                || expr_has_includes(value)
+        }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_has_includes(object) || expr_has_includes(value)
         }
@@ -114,6 +128,7 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => false,
     }
 }
@@ -141,6 +156,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
             expr_has_includes(value) || instanceof_target_has_includes(target)
         }
         ExprKind::Negate(value)
+        | ExprKind::ArrayReference(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
@@ -262,6 +278,8 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::Yield { .. }
         | ExprKind::YieldFrom(_)
         | ExprKind::MagicConstant(_) => false,
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_has_includes(property),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_has_includes(receiver),
     }
 }
 

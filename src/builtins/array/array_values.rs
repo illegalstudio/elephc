@@ -44,6 +44,9 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     match ty {
         PhpType::Array(elem_ty) => Ok(PhpType::Array(elem_ty)),
         PhpType::AssocArray { value, .. } => Ok(PhpType::Array(value)),
+        t if crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&t) => {
+            Ok(PhpType::Array(Box::new(PhpType::Mixed)))
+        }
         _ => Err(CompileError::new(
             cx.span,
             "array_values() argument must be array",

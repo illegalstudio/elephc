@@ -38,6 +38,10 @@ pub(super) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let elem_ty = array_shift_element_type(ctx.value_php_type(array)?)?;
     require_array_shift_result_type(&inst.result_php_type.codegen_repr())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
+    // Same as `array_pop()`: retire the Mixed box a widened local still holds before the split.
+    if matches!(receiver, ReceiverPlace::Local(_)) {
+        receiver.prepare_consuming_storeback(ctx, array)?;
+    }
     ensure_unique_array_shift_source(ctx, array)?;
     receiver.store_back_after_consuming_split(ctx, array)?;
     match ctx.emitter.target.arch {

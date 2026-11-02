@@ -61,13 +61,13 @@ pub(in crate::interpreter) fn eval_get_declared_symbols_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match name {
         "get_declared_classes" => {
-            eval_dynamic_string_array_result(context.declared_class_names(), values)
+            eval_dynamic_string_array_result(&context.declared_class_names(), values)
         }
         "get_declared_interfaces" => {
-            eval_dynamic_string_array_result(context.declared_interface_names(), values)
+            eval_dynamic_string_array_result(&context.declared_interface_names(), values)
         }
         "get_declared_traits" => {
-            eval_dynamic_string_array_result(context.declared_trait_names(), values)
+            eval_dynamic_string_array_result(&context.declared_trait_names(), values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }

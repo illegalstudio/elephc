@@ -2,7 +2,7 @@
 title: "mysqli_stmt_bind_param()"
 description: "Binds variables to a prepared statement's placeholders."
 sidebar:
-  order: 164
+  order: 175
 ---
 
 ## mysqli_stmt_bind_param()

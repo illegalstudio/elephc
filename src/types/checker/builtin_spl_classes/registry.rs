@@ -37,6 +37,7 @@ pub(super) const SPL_CLASS_NAMES: &[&str] = &[
     "RecursiveFilterIterator",
     "RecursiveCallbackFilterIterator",
     "RecursiveIteratorIterator",
+    "RecursiveTreeIterator",
     "ParentIterator",
     "RegexIterator",
     "RecursiveRegexIterator",
@@ -57,7 +58,7 @@ pub(super) const SPL_CLASS_NAMES: &[&str] = &[
     "SplObjectStorage",
 ];
 
-const PHAR_CLASS_NAMES: &[&str] = &["Phar", "PharData", "PharFileInfo"];
+const PHAR_CLASS_NAMES: &[&str] = &["Phar", "PharData", "PharFileInfo", "PharException"];
 
 /// Returns whether `program` can reach any of the builtin SPL or Phar classes.
 ///
@@ -89,8 +90,19 @@ const PHAR_CLASS_NAMES: &[&str] = &["Phar", "PharData", "PharFileInfo"];
 /// The set is `SPL_CLASS_NAMES` plus `PHAR_CLASS_NAMES`; they are not split because
 /// `PharFileInfo extends SplFileInfo`, so gating Phar separately would imply the SPL gate anyway.
 pub(crate) fn program_may_reference_spl(program: &[crate::parser::ast::Stmt]) -> bool {
-    let usage = crate::prelude_prune::usage::collect(program);
-    if usage.introspects {
+    let usage = crate::prelude_prune::usage::collect_shared(program);
+    // WIDENED for `usage.includes_runtime_php`, because a runtime include can write
+    // `new ArrayObject(…)` and the interpreter has no SPL implementation of its own to fall back
+    // on — unlike Reflection, whose bodies the magician owns outright. Registering the family is
+    // only the FIRST of three halves, and opening it alone was measured to change nothing: the
+    // include then died one layer deeper, at
+    // `Fatal error: eval() runtime failed: could not construct class "ArrayObject"`. The other
+    // two are `ir_lower::program::spl_discovery::lower_eval_spl_methods_if_needed`, which forces
+    // the constructors into EIR so `eval_constructor_helpers` can build a dispatch slot for them,
+    // and `codegen::runtime_metadata::classes::seed_runtime_eval_constructible_class_names`,
+    // which puts the names in `_classes_by_name` so `__rt_new_by_name` can allocate one. All
+    // three move together; any one of them alone is a fatal at a different depth.
+    if usage.introspects || usage.includes_runtime_php {
         return true;
     }
     // `unserialize` names its class inside the DATA, where no static walk can read it, exactly as

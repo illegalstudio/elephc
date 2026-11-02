@@ -147,6 +147,140 @@ pub(super) fn try_append_indexed_array_local_value(
     true
 }
 
+/// Promotes an indexed-array local to hash storage before a sort that KEEPS its keys.
+///
+/// `asort([3, 1, 2])` answers keys `1|2|0` in PHP: the key travels with the value, which is the
+/// entire difference from `sort()`. An indexed array has no key storage to carry, so the slot
+/// permuter the backend uses for a list renumbered them — the values came out ordered and the keys
+/// came out `0|1|2`, a silent wrong answer. The result is only representable as a hash.
+///
+/// This is the same promotion `unset($list[$k])` performs at its own site
+/// (`lower_unset_indexed_element`), and the codegen already routes a hash receiver to
+/// `__rt_hash_asort` / `__rt_hash_arsort`, so nothing downstream changes.
+///
+/// `uasort` and `uksort` have the same fault and promote through
+/// [`promote_indexed_local_to_hash`] from `compat_preludes`, which then routes the hash to their
+/// key-preserving prelude helpers (no `__rt_hash_uasort` exists).
+fn promote_indexed_receiver_for_key_preserving_sort(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    args: &[Expr],
+) {
+    if !matches!(canonical, "asort" | "arsort") {
+        return;
+    }
+    if let Some(receiver) = args.first() {
+        promote_indexed_local_to_hash(ctx, receiver);
+    }
+}
+
+/// Stores the hash form of an indexed-array local back into it, so a sort that keeps its keys
+/// has key storage to carry them in. Returns whether the local was promoted (it is a plain
+/// variable holding a list).
+pub(super) fn promote_indexed_local_to_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &Expr,
+) -> bool {
+    let ExprKind::Variable(name) = &receiver.kind else {
+        return false;
+    };
+    let PhpType::Array(element) = ctx.local_type(name).codegen_repr() else {
+        return false;
+    };
+    let array_value = ctx.load_local(name, Some(receiver.span));
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(promoted_hash_key_type(&element)),
+        value: Box::new(element.codegen_repr()),
+    };
+    let hash = ctx.emit_value(
+        Op::ArrayToHash,
+        vec![array_value.value],
+        None,
+        assoc_ty.clone(),
+        Op::ArrayToHash.default_effects(),
+        Some(receiver.span),
+    );
+    ctx.store_mutated_local(name, hash, assoc_ty, Some(receiver.span));
+    true
+}
+
+/// Key type for a hash promoted from an `Array(element)` local or place.
+///
+/// A list promotes with `int` keys. A bare `array<mixed>` is a gradual contract rather than a
+/// list -- `array_combine()` hands back a string-keyed hash under it -- so its keys stay `mixed`;
+/// typing them `int` made a later `array_keys()` read each string key's pointer as an integer.
+pub(in crate::ir_lower) fn promoted_hash_key_type(element: &PhpType) -> PhpType {
+    if matches!(element.codegen_repr(), PhpType::Mixed) {
+        PhpType::Mixed
+    } else {
+        PhpType::Int
+    }
+}
+
+/// Runs the assignments of `$name = <literal>` arguments and answers the arguments with the
+/// literals in their place, or `None` when there is none to take.
+///
+/// php passes the assigned value, so the call is the same; the builtin's checker hook reads such
+/// an argument as the literal (`array_slice($a, $o, $l, $preserveKeys = true)` in
+/// nunomaduro/collision's `Highlighter`), and the backend has to see that literal as well, or the
+/// two disagree on the result shape. A variable another argument also reads keeps its order.
+fn hoist_literal_assignment_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Vec<Expr>> {
+    let literal_assignment = |arg: &Expr| match &arg.kind {
+        ExprKind::Assignment { target, value, .. }
+            if matches!(target.kind, ExprKind::Variable(_))
+                && matches!(
+                    value.kind,
+                    ExprKind::BoolLiteral(_)
+                        | ExprKind::IntLiteral(_)
+                        | ExprKind::FloatLiteral(_)
+                        | ExprKind::StringLiteral(_)
+                        | ExprKind::Null
+                ) =>
+        {
+            let ExprKind::Variable(name) = &target.kind else { unreachable!() };
+            Some((name.clone(), (**value).clone()))
+        }
+        _ => None,
+    };
+    if !args.iter().any(|arg| literal_assignment(arg).is_some()) {
+        return None;
+    }
+    let reads = |name: &str, skip: usize| {
+        args.iter().enumerate().any(|(index, arg)| {
+            index != skip && {
+                let mut found = false;
+                let wrapped = [crate::parser::ast::Stmt::new(
+                    crate::parser::ast::StmtKind::ExprStmt(arg.clone()),
+                    arg.span,
+                )];
+                crate::parser::ast::visit::walk_nodes(&wrapped, &mut |node| {
+                    if let crate::parser::ast::visit::Node::Expr(expr) = node {
+                        found |= matches!(&expr.kind, ExprKind::Variable(v) if v == name);
+                    }
+                });
+                found
+            }
+        })
+    };
+    let mut rewritten = Vec::with_capacity(args.len());
+    let mut changed = false;
+    for (index, arg) in args.iter().enumerate() {
+        match literal_assignment(arg) {
+            Some((name, literal)) if !reads(&name, index) => {
+                let assigned = super::lower_expr(ctx, arg);
+                crate::ir_lower::ownership::release_if_owned(ctx, assigned, Some(arg.span));
+                rewritten.push(Expr::new(literal.kind, arg.span));
+                changed = true;
+            }
+            _ => rewritten.push(arg.clone()),
+        }
+    }
+    changed.then_some(rewritten)
+}
+
 /// Lowers builtin call operands, applying builtin-specific preservation where source order matters.
 pub(super) fn lower_builtin_call_args(
     ctx: &mut LoweringContext<'_, '_>,
@@ -322,6 +456,10 @@ fn lower_planned_builtin_call_args(
     if canonical == "eval" {
         return lower_eval_args(ctx, sig, args);
     }
+    if let Some(literal_args) = hoist_literal_assignment_args(ctx, args) {
+        return lower_builtin_call_args(ctx, name, sig, &literal_args);
+    }
+    promote_indexed_receiver_for_key_preserving_sort(ctx, &canonical, args);
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
@@ -388,6 +526,9 @@ fn lower_planned_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::Getenv => {
             lower_getenv_args(ctx, sig, args)
         }
+        crate::builtins::semantics::BuiltinArgumentLowering::NullableStringOperands => {
+            lower_nullable_string_operand_args(ctx, &canonical, sig, args)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted => {
             let writeback_sig = pcntl_writeback_signature(&canonical, sig);
             lower_args_with_signature_trimming_trailing_defaults(
@@ -408,30 +549,16 @@ fn lower_planned_builtin_call_args(
             // Publish an owner at the output's source-order evaluation point, not
             // while preparing storage before earlier arguments have run.
             lower_args_with_signature_options_for_capture(
-                ctx, sig, args, true, false, Some((2, if canonical == "preg_match" {
-                    PhpType::Array(Box::new(PhpType::Str))
-                } else { PhpType::Array(Box::new(PhpType::Mixed)) })),
+                ctx, sig, args, true, false,
+                Some((2, crate::types::checker::regex_matches_destination_type(&canonical, args))),
+                false,
             )
         }
         crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex
             if !crate::types::call_args::has_named_args(args)
                 && !args.iter().any(is_spread_arg) =>
         {
-            args.iter()
-                .enumerate()
-                .map(|(index, arg)| {
-                    let value = lower_expr(ctx, arg);
-                    if index + 1 < args.len()
-                        && !sig.is_some_and(|sig| {
-                            sig.ref_params.get(index).copied().unwrap_or(false)
-                        })
-                    {
-                        root_evaluated_call_argument(ctx, value, arg.span).value
-                    } else {
-                        value.value
-                    }
-                })
-                .collect()
+            lower_positional_builtin_args_with_signature(ctx, sig, args)
         }
         crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
             if !crate::types::call_args::has_named_args(args)
@@ -460,6 +587,35 @@ fn lower_planned_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::XmlHandlerSetter => {
             lower_xml_handler_setter_call(ctx, &canonical, sig, args)
         }
+        _ if canonical == "krsort" && !args.iter().any(is_spread_arg) => {
+            lower_key_sort_args(ctx, sig, args)
+        }
+        _ if canonical == "array_unshift"
+            && !crate::types::call_args::has_named_args(args)
+            && !args.iter().any(is_spread_arg) =>
+        {
+            lower_array_unshift_args(ctx, sig, args)
+        }
+        _ if matches!(canonical.as_str(), "array_keys" | "array_values")
+            && !crate::types::call_args::has_named_args(args)
+            && !args.iter().any(is_spread_arg) =>
+        {
+            let mut operands = lower_args_with_signature(ctx, sig, args);
+            if let Some(&array) = operands.first() {
+                if matches!(
+                    ctx.builder.value_php_type(array).codegen_repr(),
+                    PhpType::Mixed | PhpType::Union(_)
+                ) {
+                    // php names the builtin in the TypeError for a non-array: the boundary
+                    // carries its `name(): Argument #1 ($array)` prefix as an immediate.
+                    let context = format!("{canonical}(): Argument #1 ($array)");
+                    operands[0] = convert_mixed_array_to_assoc_hash_with_context(
+                        ctx, array, args[0].span, Some(&context),
+                    );
+                }
+            }
+            operands
+        }
         _ if !crate::types::call_args::has_named_args(args)
             && !args.iter().any(is_spread_arg) =>
         {
@@ -470,6 +626,23 @@ fn lower_planned_builtin_call_args(
         }
         _ => lower_args_with_signature(ctx, sig, args),
     };
+    // A tagged scalar reaching `array_filter` is a value the checker could not see become an
+    // array (DeepClone's `$topMask[0]`, filled through a by-reference parameter, is typed
+    // `int|null` and holds an array). Box it, so the gradual path checks the payload at run
+    // time -- filtering an array, or throwing php's TypeError for a scalar.
+    let mut lowered = lowered;
+    if canonical == "array_filter" {
+        if let Some(&array) = lowered.first() {
+            if ctx.builder.value_php_type(array).codegen_repr() == PhpType::TaggedScalar {
+                let span = args.first().map_or_else(crate::span::Span::dummy, |arg| arg.span);
+                let value = LoweredValue {
+                    value: array,
+                    ir_type: ctx.builder.value_type(array),
+                };
+                lowered[0] = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)).value;
+            }
+        }
+    }
     for (name, ty) in output_locals {
         let ty = if capture_regex_output {
             if ctx.local_type(&name).codegen_repr() == ty.codegen_repr() {
@@ -491,7 +664,7 @@ fn prepare_write_only_output_locals(
     let mut outputs = Vec::new();
     if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
         for (index, arg) in args.iter().enumerate() {
-            if let Some(output) = prepare_write_only_output_local(ctx, canonical, index, arg) {
+            if let Some(output) = prepare_write_only_output_local(ctx, canonical, args, index, arg) {
                 outputs.push(output);
             }
         }
@@ -520,7 +693,7 @@ fn prepare_write_only_output_locals(
         let crate::types::call_args::PlannedRegularArg::Source { expr, .. } = arg else {
             continue;
         };
-        if let Some(output) = prepare_write_only_output_local(ctx, canonical, index, expr) {
+        if let Some(output) = prepare_write_only_output_local(ctx, canonical, args, index, expr) {
             outputs.push(output);
         }
     }
@@ -531,12 +704,16 @@ fn prepare_write_only_output_locals(
 fn prepare_write_only_output_local(
     ctx: &mut LoweringContext<'_, '_>,
     canonical: &str,
+    args: &[Expr],
     parameter_index: usize,
     value: &Expr,
 ) -> Option<(String, PhpType)> {
     let ty = match (canonical, parameter_index) {
-        ("preg_match", 2) => PhpType::Array(Box::new(PhpType::Str)),
-        ("preg_match_all", 2) => PhpType::Array(Box::new(PhpType::Mixed)),
+        // One authority for the `$matches` shape, shared with the checker: a literal pattern with
+        // named groups receives a hash, and an indexed destination must not be stamped with one.
+        ("preg_match" | "preg_match_all", 2) => {
+            crate::types::checker::regex_matches_destination_type(canonical, args)
+        }
         _ => pcntl_output_type(canonical, parameter_index)?,
     };
     let ExprKind::Variable(name) = &value.kind else {
@@ -613,6 +790,177 @@ fn pcntl_output_type(canonical: &str, parameter_index: usize) -> Option<PhpType>
         },
         _ => return None,
     })
+}
+
+/// Lowers `array_unshift()` operands and widens an incompatible local payload to boxed Mixed.
+///
+/// Empty arrays carry a `Void`/`Never` placeholder element type. Prepending a gradual value into
+/// that raw scalar layout would store a boxed-cell pointer while the array header still describes
+/// null slots. Convert the caller-visible local first so both the header and subsequent reads use
+/// `Array(Mixed)`. Concrete values that already fit the payload keep the compact typed path.
+fn lower_array_unshift_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let mut operands = lower_positional_builtin_args_with_signature(ctx, sig, args);
+    let Some(sig) = sig else {
+        return operands;
+    };
+    let Some((name, span)) = first_parameter_plain_local(ctx, sig, args) else {
+        return operands;
+    };
+    // An `iterable` parameter that a guard narrowed to an array at run time
+    // (`if (!is_array($p)) { $p = iterator_to_array($p, false); } array_unshift($p, $x);`) still
+    // carries the `iterable` type at the join: it may hold a keyed array, a list or an object, so
+    // no indexed layout can be assumed. Re-store it boxed and let the gradual unshift path, which
+    // reads the real shape at run time, take it. Boxing retains the old payload, so the store
+    // that releases the previous occupant is the normal one.
+    if ctx.local_type(&name).codegen_repr() == PhpType::Iterable {
+        let local = ctx.load_local(&name, Some(span));
+        let boxed = ctx.box_value_as_mixed(local, PhpType::Mixed, Some(span));
+        ctx.store_call_argument_local(&name, boxed, PhpType::Mixed, Some(span));
+        if let Some(receiver) = operands.first_mut() {
+            *receiver = ctx.load_local(&name, Some(span)).value;
+        }
+        return operands;
+    }
+    let PhpType::Array(element) = ctx.local_type(&name).codegen_repr() else {
+        return operands;
+    };
+    let element = element.codegen_repr();
+    let values_already_fit = operands.iter().skip(1).all(|value| {
+            let value = ctx.builder.value_php_type(*value).codegen_repr();
+            value == element
+                || (matches!(element, PhpType::Void | PhpType::Never)
+                    && matches!(value, PhpType::Int | PhpType::Bool))
+        });
+    // `array<mixed>` is a semantic label, not proof that an empty property/default array has
+    // already been stamped with boxed-Mixed slots at runtime. Normalize it before prepending so a
+    // gradual value cannot be stored as a raw pointer in the empty array's scalar layout. The
+    // runtime helper checks tag 7 and is a no-op for arrays that are already normalized.
+    if element != PhpType::Mixed && values_already_fit {
+        return operands;
+    }
+    let target = PhpType::Array(Box::new(PhpType::Mixed));
+    let local = ctx.load_local(&name, Some(span));
+    let converted = ctx.emit_value(
+        Op::ArrayToMixed,
+        vec![local.value],
+        None,
+        target.clone(),
+        Op::ArrayToMixed.default_effects(),
+        Some(span),
+    );
+    ctx.store_call_normalized_local(&name, converted, target, Some(span));
+    if let Some(receiver) = operands.first_mut() {
+        *receiver = ctx.load_local(&name, Some(span)).value;
+    }
+    operands
+}
+
+/// Lowers key-sort operands and promotes a plain indexed receiver to integer-keyed hash storage.
+fn lower_key_sort_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let mut operands = if crate::types::call_args::has_named_args(args) {
+        lower_args_with_signature(ctx, sig, args)
+    } else {
+        lower_positional_builtin_args_with_signature(ctx, sig, args)
+    };
+    let Some((name, span)) = key_sort_receiver_local(ctx, sig, args) else {
+        return operands;
+    };
+    let local_type = ctx.local_type(&name).codegen_repr();
+    let PhpType::Array(value_type) = local_type else {
+        return operands;
+    };
+    if matches!(value_type.codegen_repr(), PhpType::Never | PhpType::Void) {
+        return operands;
+    }
+
+    let hash_type = PhpType::AssocArray {
+        key: Box::new(promoted_hash_key_type(&value_type)),
+        value: value_type,
+    };
+    let local = ctx.load_local(&name, Some(span));
+    let converted = ctx.emit_value(
+        Op::ArrayToHash,
+        vec![local.value],
+        None,
+        hash_type.clone(),
+        Op::ArrayToHash.default_effects(),
+        Some(span),
+    );
+    ctx.store_mutated_local(&name, converted, hash_type, Some(span));
+    if let Some(receiver) = operands.first_mut() {
+        *receiver = ctx.load_local(&name, Some(span)).value;
+    }
+    operands
+}
+
+/// Returns the local mutated by a key sort, including aliases and write-back temporaries.
+///
+/// General argument normalization excludes reference-bound and `__eir_place*` locals from
+/// representation changes. Key sorting is different: descending packed keys have no valid
+/// in-place representation, so every local receiver must publish the promoted hash. A reference
+/// cell propagates that new pointer directly; a ref-place plan writes it back to its container.
+fn key_sort_receiver_local(
+    ctx: &LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Option<(String, Span)> {
+    let receiver = args.iter().enumerate().find_map(|(index, arg)| {
+        let (param_index, place) = match &arg.kind {
+            ExprKind::NamedArg { name, value } => (
+                sig?.params.iter().position(|(param, _)| param == name)?,
+                value.as_ref(),
+            ),
+            _ => (index, arg),
+        };
+        (param_index == 0).then_some(place)
+    })?;
+    let ExprKind::Variable(name) = &receiver.kind else {
+        return None;
+    };
+    ctx.has_local_slot(name)
+        .then(|| (name.clone(), receiver.span))
+}
+
+/// Converts a boxed gradual array operand into an independently owned Mixed-valued hash.
+///
+/// A non-array raises php's TypeError naming `context` (`array_values(): Argument #1 ($array)`),
+/// or the anonymous `Value` without one.
+fn convert_mixed_array_to_assoc_hash_with_context(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: crate::ir::ValueId,
+    span: Span,
+    context: Option<&str>,
+) -> crate::ir::ValueId {
+    let immediate = context.map(|context| crate::ir::Immediate::Data(ctx.intern_string(context)));
+    let source = LoweredValue {
+        value,
+        ir_type: value_ir_type(&ctx.builder.value_php_type(value)),
+    };
+    let converted = ctx
+        .emit_value(
+            Op::MixedToHash,
+            vec![value],
+            immediate,
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            },
+            Op::MixedToHash.default_effects(),
+            Some(span),
+        )
+        .value;
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+    converted
 }
 
 /// Promotes the OpenSSL encrypt tag target to string-capable storage before lowering its load.
@@ -711,7 +1059,7 @@ fn lower_builtin_args_preserving_values(
     ctx.begin_argument_guard_scope();
     let operands = lower_args_with_signature_options_for_capture(
         ctx, Some(&storage), args, true, true,
-        capture_output_index.map(|index| (index, PhpType::Mixed)),
+        capture_output_index.map(|index| (index, PhpType::Mixed)), false,
     );
     ctx.end_argument_guard_scope();
     operands
@@ -772,6 +1120,35 @@ fn lower_getenv_args(
     let mut sig = sig.cloned();
     if let Some(sig) = sig.as_mut() {
         crate::ir::RuntimeFnId::Getenv.refine_first_class_callable_sig(sig);
+    }
+    if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
+        lower_positional_builtin_args_with_signature(ctx, sig.as_ref(), args)
+    } else {
+        lower_args_with_signature(ctx, sig.as_ref(), args)
+    }
+}
+
+/// Lowers a builtin's declared `?string` parameters as `string|null` so a runtime `null`
+/// is not cast to `""` before the backend can tell the two apart.
+fn lower_nullable_string_operand_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let mut sig = sig.cloned();
+    if let (Some(sig), Some(def)) = (sig.as_mut(), crate::builtins::registry::lookup(canonical)) {
+        for (index, param) in def.spec.params.iter().enumerate() {
+            let elephc_builtin_contract::TypeSpec::Nullable(inner) = param.ty else {
+                continue;
+            };
+            if !matches!(inner, elephc_builtin_contract::TypeSpec::Str) {
+                continue;
+            }
+            if let Some((_, ty)) = sig.params.get_mut(index) {
+                *ty = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
+            }
+        }
     }
     if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
         lower_positional_builtin_args_with_signature(ctx, sig.as_ref(), args)
@@ -911,7 +1288,7 @@ fn lower_indexed_array_ref_arg_to_hash(
         return None;
     };
     let assoc_ty = PhpType::AssocArray {
-        key: Box::new(PhpType::Int),
+        key: Box::new(promoted_hash_key_type(&elem_ty)),
         value: elem_ty,
     };
     let array = ctx.load_local(name, Some(arg.span));

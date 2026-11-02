@@ -2,7 +2,7 @@
 title: "imagestringup()"
 description: "Draws a string vertically with a built-in font."
 sidebar:
-  order: 541
+  order: 554
 ---
 
 ## imagestringup()

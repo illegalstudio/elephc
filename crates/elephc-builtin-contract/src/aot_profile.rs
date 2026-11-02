@@ -87,7 +87,7 @@ const RANDOM_BYTES_PARAMS: &[ParamSpec] = &[ParamSpec {
 }];
 
 /// Name of the random prelude shim's variadic tail.
-const RANDOM_BYTES_VARIADIC: &str = "extra";
+const RANDOM_BYTES_VARIADIC: crate::VariadicSpec = crate::VariadicSpec::value("extra");
 
 #[cfg(test)]
 mod tests {
@@ -149,7 +149,7 @@ mod tests {
             profile.signature.params[0].default,
             Some(DefaultSpec::Int(0))
         );
-        assert_eq!(profile.signature.variadic, Some("extra"));
+        assert_eq!(profile.signature.variadic.map(|variadic| variadic.name), Some("extra"));
         assert_eq!(profile.signature.required_param_count(), 0);
         assert_eq!(
             profile.override_reason,

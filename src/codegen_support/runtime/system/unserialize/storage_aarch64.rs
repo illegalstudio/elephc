@@ -19,21 +19,64 @@ use crate::codegen_support::sentinels::{
 /// Emits AArch64 object-property storage and parsed-hash conversion helpers.
 pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // -- __rt_obj_store_prop(x0=obj, x1=key_ptr, x2=key_len, x3=valbox): inject a property --
-    // Matches the (mangled) key against the class's serialize property-info table and
-    // stores the parsed value into the matching object slot per the property's tag.
+    // Matches the key against the class's serialize property-info table and stores the parsed
+    // value into the matching object slot per the property's tag.
+    //
+    // TWO PASSES, because a serialized key is not always mangled. `serialize()` writes a
+    // private property as "\0Class\0name" and a protected one as "\0*\0name", but a class with
+    // a `__serialize()` chooses its own keys, and the natural spelling there is the DECLARED
+    // name: Symfony's `FileResource::__serialize()` returns `['resource' => …]` for a
+    // `private string $resource`. PHP resolves such a key against the class's declared
+    // properties, so it lands in the private slot; matching only the mangled row left the
+    // typed property uninitialized and every later read raised "must not be accessed before
+    // initialization". Exact keys are matched FIRST across all rows so an explicit mangled key
+    // still wins over an unmangled alias when a class has both spellings.
     emitter.label_global("__rt_obj_store_prop");
     emitter.instruction("ldr x9, [x0]");                                        // class id from the object header
+    // stdClass has no declared slots: its dynamic properties live in the hash at obj+8, so a
+    // serialized property is inserted there (x0..x3 already match `__rt_stdclass_set`).
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
+    emitter.instruction("ldr x10, [x10]");                                      // compile-time stdClass class id
+    emitter.instruction("cmp x9, x10");                                         // is the receiver a stdClass instance?
+    emitter.instruction("b.ne __rt_obj_store_prop_declared");                   // declared-layout classes keep the slot matcher
+    emitter.instruction("b __rt_stdclass_set");                                 // tail-call the hash-backed property store
+    emitter.label("__rt_obj_store_prop_declared");
+    emitter.instruction("ldr x9, [x0]");                                        // reload the class id for the declared-slot matcher
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_class_serprop_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // property-info table for this class
     emitter.instruction("ldr x11, [x10]");                                      // property count
     emitter.instruction("add x12, x10, #8");                                    // rows start (skip the count word)
+    emitter.instruction("mov x15, #0");                                         // pass 0 = key as stored, pass 1 = unmangled tail
+    emitter.label("__rt_obj_store_prop_pass");
     emitter.instruction("mov x13, #0");                                         // row index
     emitter.label("__rt_obj_store_prop_loop");
     emitter.instruction("cmp x13, x11");                                        // scanned every row?
-    emitter.instruction("b.ge __rt_obj_store_prop_done");                       // unknown key is ignored
+    emitter.instruction("b.ge __rt_obj_store_prop_pass_end");                   // this pass found nothing
     emitter.instruction("add x14, x12, x13, lsl #5");                           // row = rows + index*32
     emitter.instruction("ldr x4, [x14]");                                       // row mangled key pointer
     emitter.instruction("ldr x5, [x14, #8]");                                   // row mangled key length
+    emitter.instruction("cbz x15, __rt_obj_store_prop_have_key");               // pass 0 compares the row key verbatim
+    // Narrow the row key to whatever follows its LAST NUL, which is the declared property
+    // name. A row with no NUL is a public property whose key is already the declared name and
+    // was compared verbatim in pass 0, so it is skipped rather than compared twice.
+    emitter.instruction("mov x6, #0");                                          // scan cursor
+    emitter.instruction("mov x7, #-1");                                         // index of the last NUL seen
+    emitter.label("__rt_obj_store_prop_tail_scan");
+    emitter.instruction("cmp x6, x5");                                          // scanned the whole row key?
+    emitter.instruction("b.ge __rt_obj_store_prop_tail_done");                  // stop at the end of the key
+    emitter.instruction("ldrb w8, [x4, x6]");                                   // row key byte
+    emitter.instruction("cbnz w8, __rt_obj_store_prop_tail_next");              // only NUL separators matter
+    emitter.instruction("mov x7, x6");                                          // remember this separator
+    emitter.label("__rt_obj_store_prop_tail_next");
+    emitter.instruction("add x6, x6, #1");                                      // next byte
+    emitter.instruction("b __rt_obj_store_prop_tail_scan");                     // continue scanning
+    emitter.label("__rt_obj_store_prop_tail_done");
+    emitter.instruction("cmn x7, #1");                                          // was any separator found?
+    emitter.instruction("b.eq __rt_obj_store_prop_next");                       // an unmangled row has no alias to try
+    emitter.instruction("add x7, x7, #1");                                      // the name starts after the separator
+    emitter.instruction("add x4, x4, x7");                                      // declared-name pointer
+    emitter.instruction("sub x5, x5, x7");                                      // declared-name length
+    emitter.label("__rt_obj_store_prop_have_key");
     emitter.instruction("cmp x5, x2");                                          // same length as the parsed key?
     emitter.instruction("b.ne __rt_obj_store_prop_next");                       // lengths differ, skip
     emitter.instruction("mov x6, #0");                                          // byte compare cursor
@@ -81,6 +124,7 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("ldr x6, [x14, #16]");                                  // property byte offset
     emitter.instruction("ldr x7, [x14, #24]");                                  // property value tag
     emitter.instruction("add x8, x0, x6");                                      // address of the property slot
+    emitter.instruction("tbnz x7, #8, __rt_obj_store_prop_reference");          // a reference-bound slot holds a cell pointer, not a value: nothing to release or overwrite
     emitter.instruction("stp x3, x7, [sp, #-32]!");                             // preserve box and tag across the previous-value release
     emitter.instruction("stp x8, x30, [sp, #16]");                              // preserve slot and return address across the release
     emitter.instruction("mov x0, x8");                                          // pass the property slot to the previous-value release
@@ -121,12 +165,41 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x8, #8]");                                    // tag word of the tagged slot
     emitter.instruction("mov x0, x3");                                          // hand the parsed box to the post-store finisher
     emitter.instruction("b __rt_unser_finish_stored_prop");                     // tail-call the finisher so the decoder return address stays intact
+    // An `array`-typed slot carries the INDEXED descriptor tag whatever it ends up holding, so
+    // the parsed hash may only be flattened into an indexed array when its keys really are the
+    // list 0..n-1. Converting unconditionally renumbered every string key: Symfony's
+    // `['kernel.debug' => true]` came back as `[0 => true]`. A non-list keeps hash storage, the
+    // same thing `$obj->arr['k'] = v` leaves in the slot.
     emitter.label("__rt_obj_store_prop_arr");
+    // The interpreter's `unserialize()` hydrates from values it already built: a list arrives as
+    // an INDEXED array (tag 4), not as the decoder's parsed hash (tag 5). Classifying an indexed
+    // array as a hash walks its element storage as hash entries and crashes. Only a tag-5 hash
+    // needs the conversion; everything else is already the container to store.
+    emitter.instruction("ldr x10, [x3]");                                       // boxed value tag
+    emitter.instruction("cmp x10, #5");                                         // is this the decoder's parsed hash?
+    emitter.instruction("b.eq __rt_obj_store_prop_arr_hash");                   // a parsed hash may need flattening
+    emitter.label("__rt_obj_store_prop_arr_direct");
+    emitter.instruction("ldr x9, [x3, #8]");                                    // container payload to store as it is (an already-built array, or a keyed hash)
+    emitter.instruction("str x9, [x8]");                                        // store the container pointer
+    emitter.instruction("str xzr, [x8, #8]");                                   // the high word marks the typed property initialized
+    emitter.instruction("mov x0, x3");                                          // hand the parsed box to the post-store finisher
+    emitter.instruction("b __rt_unser_finish_stored_prop");                     // the finisher gives the slot its own owner of the payload
+    emitter.label("__rt_obj_store_prop_arr_hash");
+    emitter.instruction("ldr x9, [x3, #8]");                                    // parsed hash pointer (box low word)
+    emitter.instruction("sub sp, sp, #32");                                     // reserve slot, box, and return-address spills
+    emitter.instruction("stp x8, x30, [sp, #16]");                              // save the slot address and return address
+    emitter.instruction("str x3, [sp, #8]");                                    // preserve the parsed box across the classification
+    emitter.instruction("mov x0, x9");                                          // classify the parsed hash
+    emitter.instruction("bl __rt_array_is_list");                               // are its keys exactly 0..n-1 in order?
+    emitter.instruction("ldr x3, [sp, #8]");                                    // recover the parsed box after the classification
+    emitter.instruction("ldp x8, x30, [sp, #16]");                              // restore the slot address and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the classification spills
+    emitter.instruction("cbz x0, __rt_obj_store_prop_arr_direct");              // a keyed array stays hash-backed, stored exactly as it was decoded
     emitter.instruction("sub sp, sp, #32");                                     // reserve slot, box, and return-address spills
     emitter.instruction("stp x8, x30, [sp, #16]");                              // save the slot address and return address
     emitter.instruction("str x3, [sp, #8]");                                    // preserve the parsed box across the conversion
     emitter.instruction("ldr x0, [x3, #8]");                                    // parsed hash pointer (box low word)
-    emitter.instruction("bl __rt_hash_to_indexed_array");                       // materialize a native indexed array
+    emitter.instruction("bl __rt_hash_to_indexed_array");                       // a list is flattened for indexed property access
     emitter.instruction("ldr x3, [sp, #8]");                                    // recover the parsed box after the conversion
     emitter.instruction("ldp x8, x30, [sp, #16]");                              // restore the slot address and return address
     emitter.instruction("add sp, sp, #32");                                     // release the conversion spills
@@ -144,6 +217,9 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     // A parsed null keeps its boxed tag-8 cell like every other value: the in-band
     // NULL_SENTINEL is not a Mixed cell pointer, and every reader of the slot
     // (`=== null`, var_dump, json_encode) dereferenced it.
+    emitter.label("__rt_obj_store_prop_reference");
+    emitter.instruction("mov x0, x3");                                          // the slot keeps its reference cell, so the parsed box is not stored anywhere
+    emitter.instruction("b __rt_unserialize_defer_data");                       // leave the cell alone (overwriting its pointer would corrupt the reference) and retire the box with its parse context
     emitter.label("__rt_obj_store_prop_mixed");
     emitter.instruction("ldr x9, [x8, #8]");                                    // current property metadata word
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x10", crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
@@ -184,6 +260,10 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.label("__rt_obj_store_prop_next");
     emitter.instruction("add x13, x13, #1");                                    // advance to the next row
     emitter.instruction("b __rt_obj_store_prop_loop");                          // continue scanning
+    emitter.label("__rt_obj_store_prop_pass_end");
+    emitter.instruction("cbnz x15, __rt_obj_store_prop_done");                  // both passes are spent
+    emitter.instruction("mov x15, #1");                                         // retry against declared names
+    emitter.instruction("b __rt_obj_store_prop_pass");                          // rescan the rows unmangled
     emitter.label("__rt_obj_store_prop_done");
     emitter.instruction("mov x0, x3");                                          // hand the ignored value box to the context owner
     emitter.instruction("b __rt_unserialize_defer_data");                       // keep the unclaimed value alive until the decode completes

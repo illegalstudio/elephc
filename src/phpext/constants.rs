@@ -52,7 +52,7 @@ use super::constant_types::coercion_type;
 
 /// Resolves hosted constant values before EIR storage inference and native reads.
 pub fn materialize_native_constants(
-    program: &mut Program, classes: &mut HashMap<String, crate::types::ClassInfo>,
+    program: &mut Program, classes: &mut crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
     interfaces: &mut HashMap<String, crate::types::InterfaceInfo>, target: Target,
 ) {
     let mut constants = context(program, target);
@@ -102,7 +102,7 @@ fn native_schema(
 
 /// Rejects unresolved widening only after unused declarations have been pruned.
 pub fn validate_native_widening(
-    classes: &HashMap<String, crate::types::ClassInfo>, interfaces: &HashMap<String, crate::types::InterfaceInfo>,
+    classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>, interfaces: &HashMap<String, crate::types::InterfaceInfo>,
 ) -> Result<(), CompileError> {
     let schemas = classes.iter().map(|(owner, info)| (owner, &info.constants, &info.constant_types))
         .chain(interfaces.iter().map(|(owner, info)| (owner, &info.constants, &info.constant_types)));

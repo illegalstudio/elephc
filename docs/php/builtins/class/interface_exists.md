@@ -2,7 +2,7 @@
 title: "interface_exists()"
 description: "Checks if the interface has been defined."
 sidebar:
-  order: 96
+  order: 107
 ---
 
 ## interface_exists()

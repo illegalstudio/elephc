@@ -41,6 +41,10 @@ pub(super) fn parse_declare(
         "Expected ')' after declare directives",
     )?;
 
+    // A doc comment is not a statement: `/** License */ declare(strict_types=1);` is how many
+    // libraries open a file, and php accepts it. The lexer keeps doc comments as tokens so a
+    // declaration can carry one; the parser's top-level driver skips those when it grants the
+    // placement allowance (`declare_context::parse_top_level_stmt`).
     if strict_types.is_some() && !crate::parser::declare_context::allows_strict_types(declare_pos) {
         return Err(CompileError::new(
             span,

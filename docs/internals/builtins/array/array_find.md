@@ -2,7 +2,7 @@
 title: "array_find() - internals"
 description: "Compiler internals for array_find(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 13
+  order: 16
 ---
 
 ## `array_find()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_find.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_find.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,7 +48,10 @@ function array_find(mixed $array, mixed $callback): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_find.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_find.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

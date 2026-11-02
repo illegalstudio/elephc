@@ -8,6 +8,16 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use crate::termination::{block_terminal_effect, TerminalEffect};
+use crate::types::TypeEnv;
+
+/// Flow-sensitive state carried by one reachable switch edge.
+struct SwitchFlowState {
+    /// Logical local types observed on the edge.
+    types: TypeEnv,
+    /// Local slots definitely initialized on the edge.
+    initialized: HashSet<LocalSlotId>,
+}
 
 /// Lowers a `switch` with source-ordered pattern evaluation and PHP fallthrough.
 pub(super) fn lower_switch(
@@ -19,8 +29,7 @@ pub(super) fn lower_switch(
     let span = subject.span;
     let mut subject = lower_expr(ctx, subject);
     let preserve_subject = matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object | crate::ir::IrHeapKind::Mixed))
-        && ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name)
-            .is_some_and(|class| class.operators.is_some()));
+        && ctx.program_has_operator_classes();
     if preserve_subject {
         if matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Mixed)) {
             subject = crate::ir_lower::ownership::copy_assignment_value(ctx, subject, Some(span));
@@ -282,6 +291,12 @@ pub(super) fn lower_switch_bodies(
     default_block: BlockId,
     exit: BlockId,
 ) {
+    let direct_entry = SwitchFlowState {
+        types: ctx.local_types_snapshot(),
+        initialized: ctx.initialized_slots_snapshot(),
+    };
+    let mut fallthrough = None;
+    let mut exits = Vec::new();
     let default_index = default
         .and_then(|default| switch_default_source_index(cases, default))
         .unwrap_or(cases.len());
@@ -296,12 +311,16 @@ pub(super) fn lower_switch_bodies(
         iterator_cleanup: None,
         receiver_pin: None,
     });
+    let switch_try_handler_stack = ctx.try_handler_stack.clone();
     for index in 0..=cases.len() {
         if default.is_some() && default_index == index {
             ctx.builder.position_at_end(default_block);
+            restore_switch_body_entry(ctx, &direct_entry, fallthrough.take());
+            ctx.try_handler_stack = switch_try_handler_stack.clone();
             if let Some(default) = default {
                 lower_block(ctx, default);
             }
+            record_switch_body_flow(ctx, default.unwrap_or_default(), &mut fallthrough, &mut exits);
             if !ctx.builder.insertion_block_is_terminated() {
                 branch_to(ctx, blocks.get(index).copied().unwrap_or(exit));
             }
@@ -309,7 +328,10 @@ pub(super) fn lower_switch_bodies(
         }
         if let Some((_, body)) = cases.get(index) {
             ctx.builder.position_at_end(blocks[index]);
+            restore_switch_body_entry(ctx, &direct_entry, fallthrough.take());
+            ctx.try_handler_stack = switch_try_handler_stack.clone();
             lower_block(ctx, body);
+            record_switch_body_flow(ctx, body, &mut fallthrough, &mut exits);
             if !ctx.builder.insertion_block_is_terminated() {
                 branch_to(
                     ctx,
@@ -322,10 +344,124 @@ pub(super) fn lower_switch_bodies(
     if default.is_none() {
         ctx.builder.position_at_end(default_block);
         branch_to(ctx, exit);
+        exits.push(SwitchFlowState {
+            types: direct_entry.types.clone(),
+            initialized: direct_entry.initialized.clone(),
+        });
+    }
+    if let Some(fallthrough) = fallthrough {
+        exits.push(fallthrough);
     }
     ctx.loop_stack.pop();
+    ctx.try_handler_stack = switch_try_handler_stack;
     ctx.builder.position_at_end(exit);
+    restore_switch_exit_state(ctx, &exits, &direct_entry);
+    // A `break` out of a nested `if` inside a case records no exit state; see the loop exits.
+    ctx.reassert_widened_local_storage_types();
     ctx.clear_static_callable_locals();
+}
+
+/// Restores the logical entry state shared by direct dispatch and optional fallthrough.
+fn restore_switch_body_entry(
+    ctx: &mut LoweringContext<'_, '_>,
+    direct: &SwitchFlowState,
+    fallthrough: Option<SwitchFlowState>,
+) {
+    let Some(fallthrough) = fallthrough else {
+        ctx.restore_local_types(direct.types.clone());
+        ctx.restore_initialized_slots(direct.initialized.clone());
+        return;
+    };
+    ctx.restore_local_types(join_switch_type_envs(
+        ctx,
+        [&direct.types, &fallthrough.types],
+    ));
+    ctx.restore_initialized_slots(
+        direct
+            .initialized
+            .intersection(&fallthrough.initialized)
+            .copied()
+            .collect(),
+    );
+}
+
+/// Records whether a lowered body reaches the next body, exits via `break`, or leaves the scope.
+fn record_switch_body_flow(
+    ctx: &LoweringContext<'_, '_>,
+    body: &[Stmt],
+    fallthrough: &mut Option<SwitchFlowState>,
+    exits: &mut Vec<SwitchFlowState>,
+) {
+    let state = SwitchFlowState {
+        types: ctx.local_types_snapshot(),
+        initialized: ctx.initialized_slots_snapshot(),
+    };
+    match block_terminal_effect(body) {
+        TerminalEffect::FallsThrough => *fallthrough = Some(state),
+        TerminalEffect::Breaks | TerminalEffect::TerminatesMixed => exits.push(state),
+        TerminalEffect::ExitsCurrentBlock => {}
+    }
+}
+
+/// Restores conservative logical facts shared by every reachable switch exit.
+fn restore_switch_exit_state(
+    ctx: &mut LoweringContext<'_, '_>,
+    exits: &[SwitchFlowState],
+    fallback: &SwitchFlowState,
+) {
+    if exits.is_empty() {
+        ctx.restore_local_types(fallback.types.clone());
+        ctx.restore_initialized_slots(fallback.initialized.clone());
+        return;
+    }
+    ctx.restore_local_types(join_switch_type_envs(
+        ctx,
+        exits.iter().map(|state| &state.types),
+    ));
+    let initialized = exits
+        .iter()
+        .skip(1)
+        .fold(exits[0].initialized.clone(), |common, state| {
+            common
+                .intersection(&state.initialized)
+                .copied()
+                .collect()
+        });
+    ctx.restore_initialized_slots(initialized);
+}
+
+/// Joins switch-edge logical types through the already-widened frame storage contract.
+fn join_switch_type_envs<'a>(
+    ctx: &LoweringContext<'_, '_>,
+    envs: impl IntoIterator<Item = &'a TypeEnv>,
+) -> TypeEnv {
+    let envs = envs.into_iter().collect::<Vec<_>>();
+    let mut names = envs
+        .iter()
+        .flat_map(|env| env.keys().cloned())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    let mut joined = TypeEnv::default();
+    for name in names {
+        let observed = envs
+            .iter()
+            .filter_map(|env| env.get(&name))
+            .collect::<Vec<_>>();
+        let common = observed.len() == envs.len()
+            && observed
+                .windows(2)
+                .all(|pair| pair[0].codegen_repr() == pair[1].codegen_repr());
+        let ty = if common {
+            observed[0].clone()
+        } else if let Some(slot) = ctx.local_slots.get(&name) {
+            ctx.builder.local_php_type(*slot)
+        } else {
+            PhpType::Mixed
+        };
+        joined.insert(name, ty);
+    }
+    joined
 }
 
 /// Returns the source-order insertion point for a non-empty switch default body.

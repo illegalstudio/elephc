@@ -134,13 +134,17 @@ fn prune_statement_children(statement: &mut Stmt, reachability: &Reachability) {
         | StmtKind::StaticVar { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::PropertyAssign { .. }
+        | StmtKind::PropertyRefAssign { .. }
         | StmtKind::StaticPropertyAssign { .. }
         | StmtKind::StaticPropertyArrayPush { .. }
         | StmtKind::StaticPropertyArrayAssign { .. }
+        | StmtKind::StaticPropertyElementRefAssign { .. }
+        | StmtKind::DynamicStaticPropertyWrite { .. }
         | StmtKind::PropertyArrayPush { .. }
         | StmtKind::PropertyArrayAssign { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => {}
     }
 }

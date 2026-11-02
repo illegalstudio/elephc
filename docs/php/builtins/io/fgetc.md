@@ -2,7 +2,7 @@
 title: "fgetc()"
 description: "Gets a character from the given file pointer."
 sidebar:
-  order: 317
+  order: 328
 ---
 
 ## fgetc()

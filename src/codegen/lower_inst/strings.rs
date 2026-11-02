@@ -38,6 +38,21 @@ pub(super) fn lower_const_str(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
+/// Writes one constant PHP diagnostic (`Notice: …\n`) through the runtime diagnostic channel,
+/// which honours `@`, the reporting mask and a user error handler.
+pub(super) fn lower_warn(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let data_id = expect_data(inst)?;
+    let (label, len) = ctx.intern_string_data(data_id)?;
+    let (ptr_reg, len_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    Ok(())
+}
+
 /// Lowers a `::class` constant by materializing the interned class-name string.
 pub(super) fn lower_const_class_name(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data_id = expect_data(inst)?;
@@ -59,6 +74,24 @@ pub(super) fn lower_const_class_name(ctx: &mut FunctionContext<'_>, inst: &Instr
     store_if_result(ctx, inst)
 }
 
+/// Lowers `self::class` of a closure that may be rebound: the scope `Closure::bind()` stamped
+/// into the hidden scope capture, else the lexical class the immediate names.
+pub(super) fn lower_closure_scope_class_name(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let data_id = expect_data(inst)?;
+    let lexical = ctx
+        .module
+        .data
+        .class_names
+        .get(data_id.as_raw() as usize)
+        .ok_or_else(|| CodegenIrError::missing_entry("class data", data_id.as_raw()))?
+        .clone();
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    crate::codegen::lower_inst::builtins::eval::emit_effective_scope_name(
+        ctx, &lexical, ptr_reg, len_reg,
+    )?;
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `static::class` by resolving the forwarded called-class id at runtime.
 fn lower_late_static_class_name(ctx: &mut FunctionContext<'_>) -> Result<()> {
     match ctx.emitter.target.arch {
@@ -72,6 +105,7 @@ fn lower_late_static_class_name_arm64(ctx: &mut FunctionContext<'_>) -> Result<(
     let missing = ctx.next_label("static_class_missing");
     let done = ctx.next_label("static_class_done");
     emit_eval_native_frame_called_class_override_probe(ctx, &done);
+    emit_eval_this_dynamic_class_name_probe(ctx, &done)?;
     emit_late_static_class_id_to_reg(ctx, "x12")?;
     abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_name_count", 0);
     ctx.emitter.instruction("cmp x12, x10");                                    // reject called-class ids outside the emitted class-name table
@@ -94,6 +128,7 @@ fn lower_late_static_class_name_x86_64(ctx: &mut FunctionContext<'_>) -> Result<
     let missing = ctx.next_label("static_class_missing");
     let done = ctx.next_label("static_class_done");
     emit_eval_native_frame_called_class_override_probe(ctx, &done);
+    emit_eval_this_dynamic_class_name_probe(ctx, &done)?;
     emit_late_static_class_id_to_reg(ctx, "r8")?;
     abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_class_name_count", 0);
     ctx.emitter.instruction("cmp r8, r9");                                      // reject called-class ids outside the emitted class-name table
@@ -108,6 +143,45 @@ fn lower_late_static_class_name_x86_64(ctx: &mut FunctionContext<'_>) -> Result<
     abi::emit_symbol_address(ctx.emitter, "rax", "_class_name_missing");
     ctx.emitter.instruction("mov rdx, 0");                                      // missing metadata stringifies to an empty class name
     ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Answers `static::class` inside an instance method from `$this`'s interpreter-declared class.
+///
+/// In an instance method the called class IS the class of `$this`. An object of a class the
+/// interpreter declared lives in its nearest compiled ancestor's storage, so the class id names
+/// that ancestor. The frame override only covers the method the bridge entered: a method it
+/// calls from a class further up (`AbstractBundle::getName()` reached from `Bundle`) found no
+/// override, read the class id, and a Twig bundle called itself `Bundle`, which lost its
+/// container extension. A zero length back means `$this` is not the interpreter's.
+fn emit_eval_this_dynamic_class_name_probe(ctx: &mut FunctionContext<'_>, done_label: &str) -> Result<()> {
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return Ok(());
+    }
+    let Some(slot) = ctx.local_slot_by_name("this") else {
+        return Ok(());
+    };
+    let offset = ctx.local_offset(slot)?;
+    let native = ctx.next_label("static_class_this_native");
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_dynamic_object_class_name");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(ctx.emitter, "x0", offset);
+            ctx.emitter.instruction(&format!("bl {}", symbol));                 // x0/x1 = $this's eval class name, or length 0
+            ctx.emitter.instruction(&format!("cbz x1, {}", native));            // not an interpreter-declared instance
+            ctx.emitter.instruction("mov x2, x1");                              // class-name length into the string result pair
+            ctx.emitter.instruction("mov x1, x0");                              // class-name pointer into the string result pair
+            ctx.emitter.instruction(&format!("b {}", done_label));              // the eval class is the called class
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(ctx.emitter, "rdi", offset);
+            ctx.emitter.instruction(&format!("call {}", symbol));               // rax/rdx = $this's eval class name, or length 0
+            ctx.emitter.instruction("test rdx, rdx");                           // did the bridge name an interpreter-declared class?
+            ctx.emitter.instruction(&format!("jz {}", native));                 // no: fall back to the class id
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // rax/rdx already hold the called class name
+        }
+    }
+    ctx.emitter.label(&native);
     Ok(())
 }
 
@@ -188,17 +262,95 @@ fn emit_eval_native_frame_called_class_override_probe_x86_64(
     abi::emit_release_temporary_stack(ctx.emitter, 32);
 }
 
-/// Returns the generated/AOT class encoded in the current method frame name.
+/// Returns the generated/AOT lexical class retained by a closure or encoded in a method name.
 fn current_late_static_frame_class<'a>(ctx: &'a FunctionContext<'_>) -> Option<&'a str> {
-    ctx.function
-        .flags
-        .is_method
-        .then(|| ctx.function.name.rsplit_once("::").map(|(class_name, _)| class_name))
-        .flatten()
+    ctx.function.lexical_class.as_deref().or_else(|| {
+        ctx.function
+            .flags
+            .is_method
+            .then(|| {
+                ctx.function
+                    .name
+                    .rsplit_once("::")
+                    .map(|(class_name, _)| class_name)
+            })
+            .flatten()
+    })
 }
 
 /// Loads the late-static class id from the hidden static frame slot or `$this`.
 fn emit_late_static_class_id_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) -> Result<()> {
+    // A closure that may be rebound at run time takes `static` from what it is bound to: the
+    // class of its `$this`, else the scope `Closure::bind()` stamped. The called-class id it
+    // captured when it was created names the class it was WRITTEN for, which a rebind replaces.
+    let Some(scope_slot) = ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL) else {
+        return emit_lexical_late_static_class_id_to_reg(ctx, reg);
+    };
+    let done = ctx.next_label("late_static_scope_done");
+    let no_this = ctx.next_label("late_static_scope_no_this");
+    let lexical = ctx.next_label("late_static_scope_lexical");
+    if let Some(this_slot) = ctx.local_slot_by_name("this") {
+        let offset = ctx.local_offset(this_slot)?;
+        if matches!(
+            ctx.local_php_type(this_slot)?.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ) {
+            // A method-defined closure captures `$this` boxed, and an unbound one holds null.
+            abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #6");                       // runtime tag 6 = object; anything else means no bound object
+                    ctx.emitter.instruction(&format!("b.ne {no_this}"));         // fall back to the stamped scope
+                    ctx.emitter.instruction("mov x0, x1");                       // the unboxed object pointer
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 6");                       // runtime tag 6 = object; anything else means no bound object
+                    ctx.emitter.instruction(&format!("jne {no_this}"));          // fall back to the stamped scope
+                    ctx.emitter.instruction("mov rax, rdi");                     // the unboxed object pointer
+                }
+            }
+            abi::emit_load_from_address(ctx.emitter, reg, abi::int_result_reg(ctx.emitter), 0);
+        } else {
+            abi::load_at_offset(ctx.emitter, reg, offset);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("cbz {reg}, {no_this}"));   // no bound object: fall back to the stamped scope
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("test {reg}, {reg}"));      // is an object bound?
+                    ctx.emitter.instruction(&format!("jz {no_this}"));           // no bound object: fall back to the stamped scope
+                }
+            }
+            abi::emit_load_from_address(ctx.emitter, reg, reg, 0);
+        }
+        abi::emit_jump(ctx.emitter, &done);
+    }
+    ctx.emitter.label(&no_this);
+    let scope_offset = ctx.local_offset(scope_slot)?;
+    abi::load_at_offset(ctx.emitter, reg, scope_offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {reg}, #0"));                  // 0 = never rebound, negative = interpreter-declared scope
+            ctx.emitter.instruction(&format!("b.le {lexical}"));                 // keep the captured called class
+            ctx.emitter.instruction(&format!("sub {reg}, {reg}, #1"));           // undo the +1 encoding: the bound class id
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {reg}, {reg}"));              // 0 = never rebound, negative = interpreter-declared scope
+            ctx.emitter.instruction(&format!("jle {lexical}"));                  // keep the captured called class
+            ctx.emitter.instruction(&format!("sub {reg}, 1"));                   // undo the +1 encoding: the bound class id
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&lexical);
+    emit_lexical_late_static_class_id_to_reg(ctx, reg)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Loads the late-static class id a body was entered with: the forwarded called-class id, else
+/// the class of `$this`.
+fn emit_lexical_late_static_class_id_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) -> Result<()> {
     if let Some(slot) = ctx.local_slot_by_name(crate::names::CALLED_CLASS_ID_LOCAL) {
         let offset = ctx.local_offset(slot)?;
         abi::load_at_offset(ctx.emitter, reg, offset);
@@ -240,6 +392,65 @@ pub(super) fn lower_str_concat(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     let helper = if inst.op == Op::StrAppend { "__rt_str_append" } else { "__rt_concat" };
     abi::emit_call_label(ctx.emitter, helper);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers PHP byte-string `&`, `|`, and `^` through the shared string-bitwise runtime helper.
+pub(super) fn lower_str_bitwise(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    require_string(ctx.value_php_type(lhs)?, inst)?;
+    require_string(ctx.value_php_type(rhs)?, inst)?;
+    let operation = match inst.op {
+        Op::StrBitAnd => 0,
+        Op::StrBitOr => 1,
+        Op::StrBitXor => 2,
+        _ => {
+            return Err(CodegenIrError::invalid_module(format!(
+                "{} is not a string bitwise opcode",
+                inst.op.name()
+            )))
+        }
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(lhs, "x1", "x2")?;
+            ctx.load_string_value_to_regs(rhs, "x3", "x4")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x5", operation);
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(lhs, "rax", "rdx")?;
+            ctx.load_string_value_to_regs(rhs, "rdi", "rsi")?;
+            abi::emit_load_int_immediate(ctx.emitter, "r8", operation);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_bitwise");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers PHP byte-string offset assignment through the shared copy-on-write helper.
+pub(super) fn lower_str_set_offset(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let source = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let replacement = expect_operand(inst, 2)?;
+    require_string(ctx.value_php_type(source)?, inst)?;
+    require_string(ctx.value_php_type(replacement)?, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(source, "x1", "x2")?;
+            require_integer_like(ctx.load_value_to_reg(index, "x0")?, inst)?;
+            ctx.load_string_value_to_regs(replacement, "x3", "x4")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(source, "rax", "rdx")?;
+            require_integer_like(ctx.load_value_to_reg(index, "r8")?, inst)?;
+            ctx.load_string_value_to_regs(replacement, "rdi", "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_set_offset");
     store_if_result(ctx, inst)
 }
 
@@ -329,6 +540,10 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.emitter.label(&end);
         }
     }
+    // The result is a VIEW of the selected byte, not a copy: `ir_lower::expr::array_access` marks
+    // it `Borrowed` and the shared stabilization copies it (`StrPersist`) before an owning
+    // receiver can be retired. Persisting here as well allocated a second block that the
+    // borrowed-view `release` never freed (one leaked block per `$s[$i]` read).
     store_if_result(ctx, inst)
 }
 
@@ -456,6 +671,18 @@ pub(super) fn lower_int_like_to_string(
             emit_canonical_empty_string(ctx);
             store_if_result(ctx, inst)
         }
+        // A callable reaches a string conversion as a descriptor; its PHP name is the string the
+        // callable was built from. Same conversion the builtin string-argument path performs, and
+        // the same refusal for shapes PHP cannot stringify either. Symfony's
+        // `LazyString::getPrettyName(callable $callback)` returns `$callback` directly when it is
+        // a string, which is this op.
+        PhpType::Callable => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            super::builtins::strings::common::load_callable_as_borrowed_string_to_regs(
+                ctx, value, ptr_reg, len_reg,
+            )?;
+            store_if_result(ctx, inst)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             inst.op.name(),
@@ -490,7 +717,10 @@ pub(super) fn emit_canonical_empty_string(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Converts the loaded boolean result to PHP string ABI registers.
-fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+///
+/// Kept visible to sibling lowerers so `filter_var(FILTER_DEFAULT)` reuses the exact PHP
+/// boolean-to-string conversion instead of maintaining a second target-specific implementation.
+pub(super) fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let false_label = ctx.next_label("bool_to_str_false");

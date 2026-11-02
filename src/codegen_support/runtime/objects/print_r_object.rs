@@ -41,6 +41,7 @@
 //!   appends the instance's dynamic-property hash (`__rt_obj_dump_dyn_props`) through
 //!   `__rt_print_r_hash_entries`, in insertion order, at the same entry indent.
 
+use crate::codegen_support::sentinels::emit_deref_reference_property_slot;
 use crate::codegen_support::abi;
 use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
@@ -231,6 +232,7 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
+    emit_deref_reference_property_slot(emitter, "x0", "x1", "x2", "x9");
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("cmp x0, #4");                                          // only pointer-shaped tags (4-7) can carry a null payload
     emitter.instruction("b.lt __rt_pr_obj_value");                              // scalar payloads keep their exact bit pattern
@@ -432,6 +434,7 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
+    emit_deref_reference_property_slot(emitter, "rdi", "rsi", "rdx", "r8");
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("cmp rdi, 4");                                          // only pointer-shaped tags (4-7) can carry a null payload
     emitter.instruction("jl __rt_pr_obj_value_x86");                            // scalar payloads keep their exact bit pattern

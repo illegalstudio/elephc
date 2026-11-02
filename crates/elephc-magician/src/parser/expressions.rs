@@ -20,7 +20,10 @@ use crate::eval_ir::{
 use crate::lexer::TokenKind;
 
 mod callables_arrays;
+
+/// Re-exported so the STATEMENT parser can ask the same question about a mutation target.
+pub(in crate::parser) use precedence::is_assignment_target;
 mod postfix;
-mod precedence;
+pub(in crate::parser) mod precedence;
 mod primary;
 mod static_names;

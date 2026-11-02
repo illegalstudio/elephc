@@ -30,6 +30,8 @@
 mod algos;
 mod cipher;
 mod hmac;
+pub mod password;
+pub mod sodium;
 
 pub use algos::HashState;
 pub use cipher::{
@@ -52,9 +54,49 @@ unsafe fn slice<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
 }
 
 /// Reads a UTF-8 algorithm name from a C pointer pair (lossy on invalid UTF-8,
-/// which simply fails to match any known algorithm).
+/// which simply fails to match any known algorithm), lowercased: php looks every
+/// hash algorithm up case-insensitively, so `hash('SHA256', ...)` is `sha256`.
 unsafe fn name_str<'a>(ptr: *const u8, len: usize) -> std::borrow::Cow<'a, str> {
-    String::from_utf8_lossy(slice(ptr, len))
+    std::borrow::Cow::Owned(String::from_utf8_lossy(slice(ptr, len)).to_ascii_lowercase())
+}
+
+/// Returns the digest size of a cryptographic hash algorithm usable for HMAC, or
+/// None for an unknown algorithm or a non-crypto checksum. The name is matched
+/// case-insensitively, as php does.
+pub fn hmac_digest_size(algo: &str) -> Option<usize> {
+    hmac::hmac(&algo.to_ascii_lowercase(), b"", b"").map(|digest| digest.len())
+}
+
+/// PBKDF2 (RFC 8018) over HMAC, as php's `hash_pbkdf2()` derives it: `length`
+/// raw bytes of key, or the digest size when `length` is 0. Returns None for an
+/// unknown algorithm or a non-crypto checksum; `iterations` must be positive.
+pub fn pbkdf2(
+    algo: &str,
+    password: &[u8],
+    salt: &[u8],
+    iterations: u64,
+    length: usize,
+) -> Option<Vec<u8>> {
+    let algo = algo.to_ascii_lowercase();
+    let digest_size = hmac_digest_size(&algo)?;
+    let length = if length == 0 { digest_size } else { length };
+    let blocks = length.div_ceil(digest_size);
+    let mut derived = Vec::with_capacity(blocks * digest_size);
+    for block in 1..=blocks {
+        let mut first = salt.to_vec();
+        first.extend_from_slice(&(block as u32).to_be_bytes());
+        let mut round = hmac::hmac(&algo, password, &first)?;
+        let mut sum = round.clone();
+        for _ in 1..iterations {
+            round = hmac::hmac(&algo, password, &round)?;
+            for (acc, byte) in sum.iter_mut().zip(&round) {
+                *acc ^= byte;
+            }
+        }
+        derived.extend_from_slice(&sum);
+    }
+    derived.truncate(length);
+    Some(derived)
 }
 
 /// Computes a one-shot raw HMAC of `data` keyed by `key` under `name`, writing

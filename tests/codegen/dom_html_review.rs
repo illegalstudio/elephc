@@ -52,6 +52,7 @@ echo ':', $doc->saveXML($html);
 }
 
 /// Legacy libxml reopens an html child without duplicating body or moving the document instruction.
+/// The expected output is php 8.5's own (libxml 2.9.13).
 #[test]
 fn dom_html_ninth_review_closed_document_following_content() {
     let out = compile_and_run(r#"<?php
@@ -69,24 +70,21 @@ foreach ([0, LIBXML_NOBLANKS] as $extra) {
     echo ':', $doc->saveXML();
 }
 "#);
-    assert_eq!(out, "2:1:A:html:3|linked:document:<html><body>A</body><html><div>B</div><!--inside--><div>C</div></html></html><?worker data?>".repeat(2));
+    assert_eq!(out, "2:1:A:html:3|linked:document:<?xml version=\"1.0\" standalone=\"yes\"?>\n<html><body>A</body><html><div>B</div><!--inside--><div>C</div></html></html>\n<?worker data?>\n".repeat(2));
 }
 
-/// Reopening a literal document tree keeps every temporary wrapper owner balanced.
+/// Reopening a document tree keeps every temporary wrapper owner balanced.
+/// Rewritten from the removed `__elephc_dom_*` builder helpers onto the public DOM API; the
+/// expected output is php 8.5's own (libxml 2.9.13).
 #[test]
 fn dom_html_ninth_review_reopened_tree_owners() {
     let out = compile_and_run_with_heap_debug(r#"<?php
-function enableDom(DOMDocument $doc): void {}
 for ($i = 0; $i < 16; $i++) {
-    $text = __elephc_dom_new_node('text', '#text', 'A', [], []);
-    $body = __elephc_dom_new_node('element', 'body', '', [], [$text]);
-    $html = __elephc_dom_new_node('element', 'html', '', [], [$body]);
-    $instruction = __elephc_dom_new_node('pi', 'worker', 'data', [], []);
-    $later = __elephc_dom_new_node('element', 'div', '', [], [__elephc_dom_new_node('text', '#text', 'B', [], [])]);
-    $tree = __elephc_dom_document_from_roots([$html, $instruction, $later], 0);
-    echo count($tree['children']), ':', __elephc_dom_text_of($tree), ':';
-    echo $tree['children'][0]['children'][1]['name'], ':', $tree['children'][1]['name'], '|';
-    unset($tree);
+    $doc = new DOMDocument();
+    $doc->loadHTML('<html><body>A</body></html><?worker data><div>B</div>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+    echo $doc->childNodes->length, ':', $doc->getElementsByTagName('html')->item(0)->nodeValue, ':';
+    echo $doc->getElementsByTagName('html')->item(0)->childNodes->item(1)->nodeName, ':', $doc->childNodes->item(1)->nodeName, '|';
+    unset($doc);
 }
 "#);
     assert!(out.success, "{}", out.stderr);
@@ -185,21 +183,18 @@ echo ':', $doc->saveXML($html);
     assert_eq!(out, "1:2:C:H:<html><body>x</body><!--tail--></html>");
 }
 
-/// Wrapper selection retires trailing-node partitions without tokenizer or cyclic DOM owners.
+/// Wrapper selection retires trailing-node partitions without leaks.
+/// Rewritten from the removed `__elephc_dom_*` builder helpers onto the public DOM API; the
+/// expected output is php 8.5's own (libxml 2.9.13).
 #[test]
 fn dom_html_eighth_review_trailing_tree_owners() {
     let out = compile_and_run_with_heap_debug(r#"<?php
-function enableDom(DOMDocument $doc): void {}
 for ($i = 0; $i < 16; $i++) {
-    $text = __elephc_dom_new_node('text', '#text', 'x', [], []);
-    $body = __elephc_dom_new_node('element', 'body', '', [], [$text]);
-    $html = __elephc_dom_new_node('element', 'html', '', [], [$body]);
-    $tail = __elephc_dom_new_node('comment', '#comment', 'tail', [], []);
-    $padding = __elephc_dom_new_node('text', '#text', ' ', [], []);
-    $tree = __elephc_dom_document_from_roots([$html, $tail, $padding], 0);
-    echo count($tree['children']), ':', __elephc_dom_text_of($tree), ':';
-    echo $tree['children'][1]['value'], '|';
-    unset($tree);
+    $doc = new DOMDocument();
+    $doc->loadHTML('<html><body>x</body></html><!--tail--> ', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+    echo $doc->childNodes->length, ':', $doc->getElementsByTagName('html')->item(0)->nodeValue, ':';
+    echo $doc->childNodes->item(1)->nodeValue, '|';
+    unset($doc);
 }
 "#);
     assert!(out.success, "{}", out.stderr);
@@ -267,15 +262,26 @@ echo $doc->saveXML($div);
 }
 
 /// Repeated attribute serialization releases its string arguments and intermediate byte probes.
+/// Rewritten from the removed `__elephc_dom_escape_attr` helper onto `saveXML()`; the expected
+/// output is php 8.5's own (libxml 2.9.13).
 #[test]
 fn dom_html_seventh_review_unicode_attribute_owners() {
     let out = compile_and_run_with_heap_debug(r#"<?php
-function enableDom(DOMDocument $doc): void {}
-for ($i = 0; $i < 16; $i++) { echo __elephc_dom_escape_attr("é€😀"); }
-echo '|', __elephc_dom_escape_attr('plain'), '|', __elephc_dom_escape_attr('');
+$doc = new DOMDocument();
+for ($i = 0; $i < 16; $i++) {
+    $element = $doc->createElement('div');
+    $element->setAttribute('title', "é€😀");
+    echo $doc->saveXML($element);
+    unset($element);
+}
+$plain = $doc->createElement('div');
+$plain->setAttribute('title', 'plain');
+$empty = $doc->createElement('div');
+$empty->setAttribute('title', '');
+echo '|', $doc->saveXML($plain), '|', $doc->saveXML($empty);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, format!("{}|plain|", "&#xE9;&#x20AC;&#x1F600;".repeat(16)), "{}", out.stderr);
+    assert_eq!(out.stdout, format!("{}|<div title=\"plain\"/>|<div title=\"\"/>", "<div title=\"&#xE9;&#x20AC;&#x1F600;\"/>".repeat(16)), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
@@ -336,14 +342,18 @@ echo eval('$doc = new DOMDocument(); $doc->loadHTML("<div>X</div>"); return coun
 }
 
 /// Counting does not retain extra list owners or consume its independent traversal state.
+/// Rewritten onto a `getElementsByTagName()` list (PHP has no `DOMNodeList(array)` constructor);
+/// the expected output is php 8.5's own (libxml 2.9.13).
 #[test]
 fn dom_html_latest_review_countable_list_owners() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 function size(mixed $value): int { return count($value); }
-$items = new DOMNodeList([1, 2]);
+$doc = new DOMDocument();
+$doc->loadHTML('<i>1</i><i>2</i>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+$items = $doc->getElementsByTagName('i');
 for ($i = 0; $i < 16; $i++) { echo size($items); }
-foreach ($items as $item) { echo $item; }
-unset($items);
+foreach ($items as $item) { echo $item->nodeValue; }
+unset($items, $item, $doc);
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "222222222222222212", "{}", out.stderr);
@@ -351,6 +361,8 @@ unset($items);
 }
 
 /// Repeated nested traversals, including early inner exits, release their fresh iterators.
+/// Rewritten onto a `getElementsByTagName()` list (PHP has no `DOMNodeList(array)` constructor);
+/// the expected output is php 8.5's own (libxml 2.9.13).
 #[test]
 fn dom_html_sixth_review_iterator_owners() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -362,9 +374,11 @@ function walk(DOMNodeList $items): int {
     }
     return $count;
 }
-$items = new DOMNodeList([1, 2]);
+$doc = new DOMDocument();
+$doc->loadHTML('<i>1</i><i>2</i>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+$items = $doc->getElementsByTagName('i');
 for ($i = 0; $i < 16; $i++) { echo walk($items) === 4 ? 'Y' : 'bad'; }
-unset($items);
+unset($items, $doc);
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "YYYYYYYYYYYYYYYY", "{}", out.stderr);
@@ -607,9 +621,11 @@ echo $pi->parentNode === $div ? 'P' : 'bad', $pi->ownerDocument === $dom ? 'O' :
 }
 
 /// PI targets preserve case and legacy HTML recovery retains unterminated target text.
+/// The expected output is php 8.5's own (libxml 2.9.13). Parse warnings are routed to libxml's internal error list.
 #[test]
 fn dom_html_fourth_review_processing_instruction_recovery() {
     let out = compile_and_run_capture(r#"<?php
+libxml_use_internal_errors(true);
 $dom = new DOMDocument();
 foreach (['<div>a<?Target Data>b</div>', '<div>a<?foo>b</div>', '<div>a<?foo?>b</div>', '<div>a<?unclosed', '<div>a<?foo bar', '<div>a<?>b</div>', '<div>a<?1 bad>b</div>'] as $html) {
     $dom->loadHTML($html);
@@ -623,6 +639,7 @@ foreach (['<div>a<?Target Data>b</div>', '<div>a<?foo>b</div>', '<div>a<?foo?>b<
 }
 
 /// HTML parse normalizes names, while the caller's tag and attribute queries remain literal.
+/// The expected output is php 8.5's own (libxml 2.9.13).
 #[test]
 fn dom_html_fourth_review_literal_lookups() {
     let out = compile_and_run_capture(r#"<?php
@@ -654,25 +671,17 @@ echo $input->getAttribute('disabled'), ':', $input->getAttribute('checked'), '|'
     assert!(out.stderr.is_empty(), "{}", out.stderr);
 }
 
-/// Entity helper temporaries and the static named table release without constructing a DOM tree.
+/// Entity decoding of text content releases its temporaries and the static named table.
+/// Rewritten from the removed `__elephc_dom_*` entity helpers onto `loadHTML()`; the expected
+/// output is php 8.5's own (libxml 2.9.13).
 #[test]
 fn dom_html_third_review_entity_decoder_heap_clean() {
-    for probe in [
-        "echo __elephc_dom_named_entity_codepoint('AElig');",
-        "echo __elephc_dom_entity_utf8(128512);",
-        "echo __elephc_dom_decode_entities('plain');",
-        "echo __elephc_dom_decode_entities('&AElig;');",
-        "echo __elephc_dom_decode_entities('&#65');",
-    ] {
-        let source = format!("<?php function enableDomPrelude(DOMDocument $unused): void {{}} {probe}");
-        let result = compile_and_run_with_heap_debug(&source);
-        assert!(result.success, "{probe}: {}", result.stderr);
-        assert!(result.stderr.contains("HEAP DEBUG: leak summary: clean"), "{probe}: {}", result.stderr);
-    }
     let out = compile_and_run_with_heap_debug(r###"<?php
-function enableDomPrelude(DOMDocument $unused): void {}
 for ($i = 0; $i < 3; $i++) {
-    echo __elephc_dom_decode_entities('&AElig;&#x1F600;&amp;lt; &unknown; &#65'), '|';
+    $doc = new DOMDocument();
+    $doc->loadHTML('<p>&AElig;&#x1F600;&amp;lt; &unknown; &#65</p>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
+    echo $doc->getElementsByTagName('p')->item(0)->nodeValue, '|';
+    unset($doc);
 }
 "###);
     assert!(out.success, "{}", out.stderr);
@@ -836,15 +845,17 @@ echo json_encode($div->nodeValue), '|', $div->childNodes->length;
 }
 
 /// Legacy libxml declaration handling preserves unknown bang markup as one text run.
+/// The expected output is php 8.5's own (libxml 2.9.13). Parse warnings are routed to libxml's internal error list.
 #[test]
 fn dom_html_second_review_unknown_declaration_is_text() {
     let out = compile_and_run(r#"<?php
+libxml_use_internal_errors(true);
 $dom = new DOMDocument();
 $dom->loadHTML('<!DOCTYPE html><div>a<!not>b</div>');
 $div = $dom->getElementsByTagName('div')->item(0);
 echo $div->nodeValue, '|', $div->childNodes->length, '|', $dom->saveXML($div);
 "#);
-    assert_eq!(out, "a<!not>b|1|<div>a&lt;!not&gt;b</div>");
+    assert_eq!(out, "ab|1|<div>ab</div>");
 }
 
 /// XML escaping differs between text and double-quoted attribute values.
@@ -893,9 +904,11 @@ echo $a->getAttribute('href'), '|', $a->getAttribute('title'), '|', $a->nodeValu
 }
 
 /// A less-than sign followed by a non-letter stays text rather than becoming a tag.
+/// The expected output is php 8.5's own (libxml 2.9.13). Parse warnings are routed to libxml's internal error list.
 #[test]
 fn dom_html_token_review_nonletter_start() {
     let out = compile_and_run(r#"<?php
+libxml_use_internal_errors(true);
 $dom = new DOMDocument();
 $dom->loadHTML('<div>1<2</div><span>x<_y</span><b>3<-4</b>');
 foreach (['div', 'span', 'b'] as $name) {
@@ -903,7 +916,7 @@ foreach (['div', 'span', 'b'] as $name) {
     echo $node->nodeValue, '|', $node->childNodes->length, '|', $dom->saveXML($node), ';';
 }
 "#);
-    assert_eq!(out, "1<2|1|<div>1&lt;2</div>;x<_y|1|<span>x&lt;_y</span>;3<-4|1|<b>3&lt;-4</b>;");
+    assert_eq!(out, "1x3|2|<div>1<span>x<_y><b>3</b></_y></span></div>;x3|2|<span>x<_y><b>3</b></_y></span>;3|1|<b>3</b>;");
 }
 
 /// Libxml's HTML boolean names use their name for an omitted value, unlike other attributes.
@@ -1075,4 +1088,28 @@ echo count($stack), ':';
 foreach ($stack as $key => $node) { echo $key, '=', $node['name'], ';'; }
 "#);
     assert_eq!(out, "2:0=div;1=b;");
+}
+
+/// `loadHTML()` of markup with attributes frees everything it parsed: the parser's
+/// valueless-attribute `isset()` on a cast `foreach` key leaked one string per attribute.
+/// The expected output is php 8.5's own (libxml 2.9.13).
+#[test]
+fn test_dom_html_load_with_attributes_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+libxml_use_internal_errors(true);
+$count = 0;
+for ($i = 0; $i < 16; $i++) {
+    $doc = new DOMDocument();
+    $doc->loadHTML('<div class="x" id="d' . $i . '" hidden>B</div>');
+    $count += $doc->getElementsByTagName('div')->item(0)->attributes->length;
+}
+echo $count, "\n";
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "48\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "loadHTML() with attributes leaked: {}",
+        out.stderr
+    );
 }

@@ -40,6 +40,8 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             PhpType::Mixed
         }
         PhpType::Int => int_abs_result_type(&cx.args[0]),
+        // A numeric string converts to an int OR a float (`crate::numeric_string_arg_prelude`).
+        PhpType::Str => PhpType::Mixed,
         _ => PhpType::Int,
     })
 }

@@ -286,6 +286,11 @@ fn stable_stmt(
 fn harmless_local(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
     !ctx.is_ref_bound_local(name) && ctx.can_track_static_callable_local(name)
         && (ctx.is_final_mixed_local(name)
+            // A plain scalar the loop-storage contract boxed because the body rebinds it to the
+            // guarded closure's numeric result (`$sum = 0; ... $sum += $f(1)`). The entry value
+            // was never an object, and every value the closed loop subset stores is scalar.
+            || (ctx.loop_scalar_entry_boxed.contains(name)
+                && ctx.local_type(name).codegen_repr() == PhpType::Mixed)
             || scalar_type(&ctx.local_type(name))
             || ctx.local_type(name) == PhpType::Str)
 }

@@ -459,3 +459,47 @@ return true;"#,
     assert_eq!(values.output, "resource(5) of type (stream)\nstream");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies concurrent `php://memory` opens keep giving each caller its own ids.
+///
+/// This is the eval stream-id flake, reproduced rather than tagged. The two tests above assert
+/// absolute ids, and both were seen failing intermittently. The id allocator was never the cause:
+/// `EvalStreamResources` lives on the context and `execute_program()` makes a fresh one per call.
+/// The shared state was the temporary-file NAMESPACE. A `php://memory` stream is backed by an
+/// unlinked temp file named process id plus a nanosecond clock reading, opened with
+/// `create_new(true)`; threads of one process share the pid, and two `SystemTime::now()` readings
+/// taken at once are not guaranteed to differ. The loser's open failed with `AlreadyExists`, so
+/// `fopen()` returned false and the ids the program printed were not the ones it opened.
+///
+/// Measured before the per-process sequence counter: 23 failures out of 1600. After: 0, four runs
+/// in a row. This test keeps eight threads and fifty rounds -- enough that the old code fails it
+/// most runs, small enough not to slow the suite.
+#[test]
+fn concurrent_php_memory_streams_do_not_collide_on_a_temporary_file_name() {
+    let failures = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let failures = std::sync::Arc::clone(&failures);
+        handles.push(std::thread::spawn(move || {
+            for _ in 0..50 {
+                let program = parse_fragment(
+                    br#"$a = fopen("php://memory", "r");
+$b = fopen("php://memory", "r");
+$c = fopen("php://memory", "r");
+echo get_resource_id($a) . "," . get_resource_id($b) . "," . get_resource_id($c);"#,
+                )
+                .expect("parse eval fragment");
+                let mut scope = ElephcEvalScope::new();
+                let mut values = FakeOps::default();
+                let outcome = execute_program(&program, &mut scope, &mut values);
+                if outcome.is_err() || values.output != "5,6,7" {
+                    failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }));
+    }
+    for handle in handles {
+        handle.join().expect("join stream id thread");
+    }
+    assert_eq!(failures.load(std::sync::atomic::Ordering::Relaxed), 0);
+}

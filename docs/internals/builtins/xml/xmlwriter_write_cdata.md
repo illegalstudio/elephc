@@ -2,7 +2,7 @@
 title: "xmlwriter_write_cdata() - internals"
 description: "Compiler internals for xmlwriter_write_cdata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1137
+  order: 1197
 ---
 
 ## `xmlwriter_write_cdata()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1228](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1228) (`xmlwriter_write_cdata`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:1238](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1238) (`xmlwriter_write_cdata`)
 - **Function symbol**: `xmlwriter_write_cdata()`
 
 

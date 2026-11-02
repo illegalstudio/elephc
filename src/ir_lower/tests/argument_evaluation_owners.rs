@@ -553,7 +553,8 @@ function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $co
             assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(),
                 crate::types::PhpType::Mixed, "{target}: guard must not erase widened storage");
         }
-        Op::MixedUnbox => {
+        // Boxed callable storage is normalized (and validated) rather than bare-unboxed.
+        Op::MixedUnbox | Op::NormalizeCallable => {
             let source = function.value(producer.operands[0]).unwrap();
             assert_eq!(source.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
         }

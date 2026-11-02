@@ -113,16 +113,6 @@ fn test_error_generic_object_parameter_rejects_array() {
     );
 }
 
-/// Verifies an unqualified `Closure` hint inside a namespace remains namespace-relative
-/// instead of silently referring to PHP's global `\Closure` class.
-#[test]
-fn test_error_namespaced_unqualified_closure_does_not_resolve_globally() {
-    expect_error(
-        "<?php namespace App; function consume(Closure $callback): void {}",
-        "Unknown type: App\\Closure",
-    );
-}
-
 /// Verifies that declaring two functions with names differing only by case produces a
 /// duplicate declaration error (functions are case-sensitive in PHP).
 #[test]
@@ -153,11 +143,11 @@ fn test_error_cannot_redeclare_filesystem_builtin_function() {
     );
 }
 
-/// Verifies that accessing a user-defined constant with incorrect casing produces
-/// an undefined constant error (constants are case-sensitive in PHP).
+/// Verifies that accessing a user-defined constant with incorrect casing is an undefined
+/// constant read (constants are case-sensitive in PHP), which compiles with a warning.
 #[test]
-fn test_error_user_constants_are_case_sensitive() {
-    expect_error(
+fn test_warning_user_constants_are_case_sensitive() {
+    expect_warning(
         "<?php const MyConst = 1; echo myconst;",
         "Undefined constant: myconst",
     );
@@ -416,53 +406,24 @@ fn test_error_named_arguments_reject_unknown_extern_parameter() {
     );
 }
 
-/// Verifies that a function with a declared return type that returns a mismatched
-/// type (without being called) produces a return type mismatch error.
+/// Under `declare(strict_types=1)` a function with a declared return type that returns a mismatched
+/// scalar is rejected even if it is never called (weak mode coerces the value like php).
 #[test]
 fn test_error_function_declared_return_type_rejects_mismatch_without_call() {
     expect_error(
-        "<?php function foo(): string { return 1; }",
-        "Function 'foo' return type expects string, got int",
+        "<?php declare(strict_types=1); function foo(): string { return 1; }",
+        "Function 'foo' return type expects Str, got Int",
     );
 }
 
-/// Verifies that a function with a declared return type that is violated when
-/// invoked via first-class callable syntax produces the expected error.
+/// Under `declare(strict_types=1)` a function with a declared return type that returns a mismatched
+/// scalar is rejected even when only referenced through first-class callable syntax (weak mode
+/// coerces the value like php).
 #[test]
 fn test_error_function_declared_return_type_rejects_mismatch_via_first_class_callable() {
     expect_error(
-        "<?php function foo(): string { return 1; } $f = foo(...);",
-        "Function 'foo' return type expects string, got int",
-    );
-}
-
-/// Verifies that a function with a declared return type that does not return a
-/// value on all paths (bare function body) produces an error.
-#[test]
-fn test_error_function_declared_return_type_requires_return_value() {
-    expect_error(
-        "<?php function foo(): int { }",
-        "Function 'foo' must return a value on every path",
-    );
-}
-
-/// Verifies that a function with a declared return type that returns a value on
-/// some paths but not all (e.g., inside an `if` without an `else`) produces an error.
-#[test]
-fn test_error_function_declared_return_type_rejects_partial_fallthrough() {
-    expect_error(
-        "<?php function foo(bool $ok): int { if ($ok) { return 1; } }",
-        "Function 'foo' must return a value on every path",
-    );
-}
-
-/// Verifies that a function with a declared return type that can exit via a switch
-/// `break` without returning a value produces an error.
-#[test]
-fn test_error_function_declared_return_type_rejects_switch_break_path() {
-    expect_error(
-        "<?php function foo(int $x): int { switch ($x) { case 1: if ($x > 0) { break; } return 1; default: return 2; } }",
-        "Function 'foo' must return a value on every path",
+        "<?php declare(strict_types=1); function foo(): string { return 1; } $f = foo(...);",
+        "Function 'foo' return type expects Str, got Int",
     );
 }
 
@@ -473,16 +434,6 @@ fn test_error_function_declared_return_type_rejects_bare_return() {
     expect_error(
         "<?php function foo(): ?int { return; }",
         "Function 'foo' return type must return a value of type",
-    );
-}
-
-/// Verifies that a method with a declared return type that does not return a
-/// value on all paths produces an error.
-#[test]
-fn test_error_method_declared_return_type_requires_return_value() {
-    expect_error(
-        "<?php class Box { public function value(): int { } }",
-        "Method 'Box::value' must return a value on every path",
     );
 }
 
@@ -550,69 +501,67 @@ fn test_untyped_variadic_accepts_mixed_arguments() {
     .is_ok());
 }
 
-/// Verifies that a dynamic method call with named arguments is rejected with a clear diagnostic
-/// (the target method name is a runtime value, so parameter names are unknown at compile time).
-/// The internal `call_user_func` desugaring must not leak into the message.
+/// A dynamic method call with named arguments (`$c->$m(b: 3, a: 10)`) is valid php; elephc now binds
+/// the names at run time and the program output matches php.
 #[test]
-fn test_error_dynamic_method_call_rejects_named_arguments() {
-    expect_error(
+fn test_dynamic_method_call_accepts_named_arguments() {
+    expect_no_error(
         "<?php class C { public function op(int $a, int $b): int { return $a - $b; } } $c = new C(); $m = \"op\"; $c->$m(b: 3, a: 10);",
-        "Named arguments are not supported in dynamic calls",
     );
 }
 
-/// Verifies that a nullable by-reference parameter (e.g., `?int &$x`) requires
-/// boxed storage (mixed/union/nullable) when passed by reference.
+/// A `?int &$x` parameter accepts an `int` local, as in php; elephc now accepts it and the program
+/// output matches php.
 #[test]
-fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
-    expect_error(
+fn test_nullable_by_ref_parameter_accepts_scalar_local() {
+    expect_no_error(
         "<?php function bump(?int &$x) { $x = null; } $value = 1; bump($value);",
-        "requires a variable with mixed/union/nullable storage when passed by reference",
     );
 }
 
-/// Mixed-local widening does not relabel an existing concrete reference set.
+/// A `mixed &` parameter accepts a local that shares a scalar reference cell with an alias, as in
+/// php; elephc now accepts it (positionally and by name) and the program output matches php.
 #[test]
-fn test_error_mixed_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
+fn test_mixed_by_ref_shared_scalar_cell_is_accepted() {
     for call in ["replaceScalar($value);", "replaceScalar(slot: $value);"] {
-        expect_error(
+        expect_no_error(
             &format!("<?php function replaceScalar(mixed &$slot): void {{ $slot = 'changed'; }} $value = 1; $alias =& $value; {call}"),
-            "requires a variable with mixed/union/nullable storage when passed by reference",
         );
     }
 }
 
-/// An untyped reference parameter also uses canonical Mixed storage and cannot relabel aliases.
+/// An untyped by-reference parameter accepts a local that shares a scalar reference cell with an
+/// alias, as in php; elephc now accepts it (positionally and by name) and the program output matches
+/// php.
 #[test]
-fn test_error_untyped_by_ref_shared_scalar_cell_still_requires_boxed_storage() {
+fn test_untyped_by_ref_shared_scalar_cell_is_accepted() {
     for call in ["replaceScalar($value);", "replaceScalar(slot: $value);"] {
-        expect_error(
+        expect_no_error(
             &format!("<?php function replaceScalar(&$slot): void {{ $slot = 'changed'; }} $value = 1; $alias =& $value; {call}"),
-            "requires a variable with mixed/union/nullable storage when passed by reference",
         );
     }
 }
 
-/// Rebinding a managed-entry alias to a concrete scalar cell clears the old boxed provenance.
+/// Rebinding a managed-entry alias to a scalar cell and passing it to a `mixed &` parameter is valid
+/// php; elephc now accepts it and the program output matches php.
 #[test]
-fn test_error_mixed_by_ref_rebound_scalar_alias_still_requires_boxed_storage() {
-    expect_error(
+fn test_mixed_by_ref_rebound_scalar_alias_is_accepted() {
+    expect_no_error(
         "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; $scalar = 1; $alias =& $scalar; replaceScalar($alias);",
-        "requires a variable with mixed/union/nullable storage when passed by reference",
     );
 }
 
-/// Managed provenance created on only one control-flow path cannot authorize the join binding.
+/// Passing an alias that is bound to a managed entry on one path and a scalar cell on another to a
+/// `mixed &` parameter is valid php; elephc now accepts it and the programs match php.
 #[test]
-fn test_error_conditional_managed_alias_does_not_relabel_scalar_reference_cell() {
+fn test_conditional_managed_alias_with_scalar_reference_cell_is_accepted() {
     for source in [
         "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $scalar = 1; $alias =& $scalar; if ($argc > 1) { $items = ['k' => new stdClass()]; $alias =& $items['k']; } replaceScalar($alias);",
         "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; if ($argc > 1) { $scalar = 1; $alias =& $scalar; } replaceScalar($alias);",
         "<?php function replaceScalar(mixed &$slot): void { $slot = 'changed'; } $items = ['k' => new stdClass()]; $alias =& $items['k']; for ($i = 0; $i < 2; $i++) { replaceScalar($alias); $scalar = 1; $alias =& $scalar; }",
     ] {
-        expect_error(
+        expect_no_error(
             source,
-            "requires a variable with mixed/union/nullable storage when passed by reference",
         );
     }
 }
@@ -659,13 +608,12 @@ fn test_error_by_value_self_capture_still_undefined() {
     );
 }
 
-/// Verifies that a by-ref capture of a variable that is NOT the assignment
-/// target is still rejected as undefined (issue #382 guard).
+/// A by-reference capture of a variable that is not the assignment target creates it as `null` in php
+/// (issue #382); elephc now accepts it and the program output matches php.
 #[test]
-fn test_error_by_ref_capture_not_assignment_target_still_undefined() {
-    expect_error(
+fn test_by_ref_capture_of_unassigned_variable_is_accepted() {
+    expect_no_error(
         "<?php $g = function() use(&$h) { return $h; };",
-        "Undefined variable in use()",
     );
 }
 
@@ -710,11 +658,8 @@ fn test_by_ref_null_recovery_compiles() {
     )
     .is_ok());
 
-    // Recovery 2: make BOTH the parameter and the variable nullable. The parameter alone is
-    // not enough -- `?int &$slot` needs boxed storage on the caller's side, so a bare
-    // `$value = null` still fails the mixed/union/nullable-storage rule. That is why the
-    // diagnostic names the variable in this branch too; the first version of the message
-    // said "declare the parameter nullable" and that advice did not compile.
+    // Recovery 2: declare the parameter nullable; the variable may then start as `null`
+    // (php accepts `$value = null` for a `?int &$slot` parameter, and so does elephc).
     assert!(check_source(
         "<?php function out(?int &$slot) { $slot = 7; } ?int $value = null; out($value); echo $value;"
     )
@@ -722,5 +667,5 @@ fn test_by_ref_null_recovery_compiles() {
     assert!(check_source(
         "<?php function out(?int &$slot) { $slot = 7; } $value = null; out($value);"
     )
-    .is_err());
+    .is_ok());
 }

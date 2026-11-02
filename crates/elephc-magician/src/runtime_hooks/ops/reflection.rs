@@ -25,6 +25,7 @@ macro_rules! impl_reflection_ops {
         args: RuntimeCellHandle,
         target: u64,
         repeated: bool,
+        rendered: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe {
             __elephc_eval_reflection_attribute_new(
@@ -33,6 +34,8 @@ macro_rules! impl_reflection_ops {
                 args.as_ptr(),
                 target,
                 if repeated { 1 } else { 0 },
+                rendered.as_ptr(),
+                rendered.len() as u64,
             )
         })
     }
@@ -86,15 +89,22 @@ macro_rules! impl_reflection_ops {
         class_name: &str,
         method_name: &str,
     ) -> Result<Option<u64>, EvalStatus> {
-        let flags = unsafe {
-            __elephc_eval_reflection_method_flags(
-                class_name.as_ptr(),
-                class_name.len() as u64,
-                method_name.as_ptr(),
-                method_name.len() as u64,
-            )
-        };
-        Ok((flags != 0).then_some(flags))
+        aot_memo::memoized(
+            &aot_memo::METHOD_FLAGS,
+            class_name,
+            method_name,
+            || -> Result<Option<u64>, EvalStatus> {
+                let flags = unsafe {
+                    __elephc_eval_reflection_method_flags(
+                        class_name.as_ptr(),
+                        class_name.len() as u64,
+                        method_name.as_ptr(),
+                        method_name.len() as u64,
+                    )
+                };
+                Ok((flags != 0).then_some(flags))
+            },
+        )
     }
 
     /// Returns generated AOT ReflectionMethod declaring class metadata.
@@ -103,23 +113,30 @@ macro_rules! impl_reflection_ops {
         class_name: &str,
         method_name: &str,
     ) -> Result<Option<String>, EvalStatus> {
+        aot_memo::memoized(
+            &aot_memo::METHOD_DECLARING_CLASS,
+            class_name,
+            method_name,
+            || -> Result<Option<String>, EvalStatus> {
         let ptr = unsafe {
-            __elephc_eval_reflection_method_declaring_class(
-                class_name.as_ptr(),
-                class_name.len() as u64,
-                method_name.as_ptr(),
-                method_name.len() as u64,
-            )
-        };
-        if ptr.is_null() {
-            return Ok(None);
-        }
-        let handle = RuntimeCellHandle::from_raw(ptr);
-        let bytes = self.string_bytes(handle)?;
-        self.release(handle)?;
-        String::from_utf8(bytes)
-            .map(Some)
-            .map_err(|_| EvalStatus::RuntimeFatal)
+                __elephc_eval_reflection_method_declaring_class(
+                    class_name.as_ptr(),
+                    class_name.len() as u64,
+                    method_name.as_ptr(),
+                    method_name.len() as u64,
+                )
+            };
+            if ptr.is_null() {
+                return Ok(None);
+            }
+            let handle = RuntimeCellHandle::from_raw(ptr);
+            let bytes = self.string_bytes(handle)?;
+            self.release(handle)?;
+            String::from_utf8(bytes)
+                .map(Some)
+                .map_err(|_| EvalStatus::RuntimeFatal)
+            },
+        )
     }
 
     /// Returns generated AOT ReflectionMethod names visible for one class.
@@ -127,9 +144,31 @@ macro_rules! impl_reflection_ops {
         &mut self,
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe {
-            __elephc_eval_reflection_method_names(class_name.as_ptr(), class_name.len() as u64)
+        aot_memo::memoized_name_array(self, "#method", class_name, || {
+            Self::handle(unsafe {
+                __elephc_eval_reflection_method_names(class_name.as_ptr(), class_name.len() as u64)
+            })
         })
+    }
+
+    /// Answers an AOT member-name list from the memo, scanning the generated table at most once.
+    ///
+    /// The scan behind it is O(every method the binary carries) with a `__rt_strcasecmp` per row,
+    /// and a `--web` worker re-runs it for the same handful of classes on every request, because
+    /// the class declarations that drive it are replayed once the request boundary resets the
+    /// eval context. The table itself is read-only generated data, so the list is a constant of
+    /// the program rather than request state.
+    fn aot_member_names(
+        &mut self,
+        kind: crate::interpreter::AotMemberNameKind,
+        class_name: &str,
+    ) -> Result<Vec<String>, EvalStatus> {
+        aot_memo::memoized(
+            &aot_memo::MEMBER_NAMES,
+            class_name,
+            kind.memo_tag(),
+            || crate::interpreter::aot_member_names_uncached(self, kind, class_name),
+        )
     }
 
     /// Returns generated AOT source-file metadata for reflection source-location calls.
@@ -146,43 +185,62 @@ macro_rules! impl_reflection_ops {
             .map_err(|_| EvalStatus::RuntimeFatal)
     }
 
+    /// Returns the declaration source file for one AOT class-like, when it has a user source.
+    fn reflection_class_source_file(
+        &mut self,
+        class_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        aot_memo::memoized(
+            &aot_memo::CLASS_SOURCE_FILE,
+            class_name,
+            "",
+            || {
+                let ptr = unsafe {
+                    __elephc_eval_reflection_class_source_file(
+                        class_name.as_ptr(),
+                        class_name.len() as u64,
+                    )
+                };
+                if ptr.is_null() {
+                    return Ok(None);
+                }
+                let handle = RuntimeCellHandle::from_raw(ptr);
+                let bytes = self.string_bytes(handle)?;
+                self.release(handle)?;
+                String::from_utf8(bytes)
+                    .map(Some)
+                    .map_err(|_| EvalStatus::RuntimeFatal)
+            },
+        )
+    }
+
     /// Returns generated AOT ReflectionClass modifier flags, or `None` when no row matches.
     fn reflection_class_flags(&mut self, class_name: &str) -> Result<Option<u64>, EvalStatus> {
-        let flags = unsafe {
-            __elephc_eval_reflection_class_flags(class_name.as_ptr(), class_name.len() as u64)
-        };
-        Ok((flags != 0).then_some(flags))
+        aot_memo::memoized(
+            &aot_memo::CLASS_FLAGS,
+            class_name,
+            "",
+            || -> Result<Option<u64>, EvalStatus> {
+                let flags = unsafe {
+                    __elephc_eval_reflection_class_flags(
+                        class_name.as_ptr(),
+                        class_name.len() as u64,
+                    )
+                };
+                Ok((flags != 0).then_some(flags))
+            },
+        )
     }
 
-    /// Returns generated AOT ReflectionProperty flags, or `None` when no row matches.
-    fn reflection_property_flags(
+    /// Returns an AOT class doc comment retained by the generated reflection bridge.
+    fn reflection_class_doc_comment(
         &mut self,
         class_name: &str,
-        property_name: &str,
-    ) -> Result<Option<u64>, EvalStatus> {
-        let flags = unsafe {
-            __elephc_eval_reflection_property_flags(
-                class_name.as_ptr(),
-                class_name.len() as u64,
-                property_name.as_ptr(),
-                property_name.len() as u64,
-            )
-        };
-        Ok((flags != 0).then_some(flags))
-    }
-
-    /// Returns generated AOT ReflectionProperty declaring class metadata.
-    fn reflection_property_declaring_class(
-        &mut self,
-        class_name: &str,
-        property_name: &str,
     ) -> Result<Option<String>, EvalStatus> {
         let ptr = unsafe {
-            __elephc_eval_reflection_property_declaring_class(
+            __elephc_eval_reflection_class_doc_comment(
                 class_name.as_ptr(),
                 class_name.len() as u64,
-                property_name.as_ptr(),
-                property_name.len() as u64,
             )
         };
         if ptr.is_null() {
@@ -196,13 +254,97 @@ macro_rules! impl_reflection_ops {
             .map_err(|_| EvalStatus::RuntimeFatal)
     }
 
+    /// Returns the canonical generated AOT class-like name for a case-insensitive lookup.
+    fn reflection_canonical_class_name(
+        &mut self,
+        class_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        aot_memo::memoized(
+            &aot_memo::CANONICAL_CLASS_NAME,
+            class_name,
+            "",
+            || -> Result<Option<String>, EvalStatus> {
+        let ptr = unsafe {
+                __elephc_eval_reflection_class_name(class_name.as_ptr(), class_name.len() as u64)
+            };
+            if ptr.is_null() {
+                return Ok(None);
+            }
+            let handle = RuntimeCellHandle::from_raw(ptr);
+            let bytes = self.string_bytes(handle)?;
+            self.release(handle)?;
+            String::from_utf8(bytes)
+                .map(Some)
+                .map_err(|_| EvalStatus::RuntimeFatal)
+            },
+        )
+    }
+
+    /// Returns generated AOT ReflectionProperty flags, or `None` when no row matches.
+    fn reflection_property_flags(
+        &mut self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Result<Option<u64>, EvalStatus> {
+        aot_memo::memoized_property(
+            &aot_memo::PROPERTY_FLAGS,
+            class_name,
+            property_name,
+            || -> Result<Option<u64>, EvalStatus> {
+                let flags = unsafe {
+                    __elephc_eval_reflection_property_flags(
+                        class_name.as_ptr(),
+                        class_name.len() as u64,
+                        property_name.as_ptr(),
+                        property_name.len() as u64,
+                    )
+                };
+                Ok((flags != 0).then_some(flags))
+            },
+        )
+    }
+
+    /// Returns generated AOT ReflectionProperty declaring class metadata.
+    fn reflection_property_declaring_class(
+        &mut self,
+        class_name: &str,
+        property_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        aot_memo::memoized_property(
+            &aot_memo::PROPERTY_DECLARING_CLASS,
+            class_name,
+            property_name,
+            || -> Result<Option<String>, EvalStatus> {
+        let ptr = unsafe {
+                __elephc_eval_reflection_property_declaring_class(
+                    class_name.as_ptr(),
+                    class_name.len() as u64,
+                    property_name.as_ptr(),
+                    property_name.len() as u64,
+                )
+            };
+            if ptr.is_null() {
+                return Ok(None);
+            }
+            let handle = RuntimeCellHandle::from_raw(ptr);
+            let bytes = self.string_bytes(handle)?;
+            self.release(handle)?;
+            String::from_utf8(bytes)
+                .map(Some)
+                .map_err(|_| EvalStatus::RuntimeFatal)
+            },
+        )
+    }
+
     /// Returns generated AOT ReflectionProperty names visible for one class.
     fn reflection_property_names(
         &mut self,
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe {
-            __elephc_eval_reflection_property_names(class_name.as_ptr(), class_name.len() as u64)
+        aot_memo::memoized_name_array(self, "#property", class_name, || {
+            Self::handle(unsafe {
+                __elephc_eval_reflection_property_names(class_name.as_ptr(), class_name.len() as u64)
+            })
         })
     }
 
@@ -284,11 +426,13 @@ macro_rules! impl_reflection_ops {
         &mut self,
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe {
-            __elephc_eval_reflection_class_interface_names(
-                class_name.as_ptr(),
-                class_name.len() as u64,
-            )
+        aot_memo::memoized_name_array(self, "#interface", class_name, || {
+            Self::handle(unsafe {
+                __elephc_eval_reflection_class_interface_names(
+                    class_name.as_ptr(),
+                    class_name.len() as u64,
+                )
+            })
         })
     }
 
@@ -297,11 +441,13 @@ macro_rules! impl_reflection_ops {
         &mut self,
         class_name: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe {
-            __elephc_eval_reflection_class_trait_names(
-                class_name.as_ptr(),
-                class_name.len() as u64,
-            )
+        aot_memo::memoized_name_array(self, "#trait", class_name, || {
+            Self::handle(unsafe {
+                __elephc_eval_reflection_class_trait_names(
+                    class_name.as_ptr(),
+                    class_name.len() as u64,
+                )
+            })
         })
     }
 

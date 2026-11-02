@@ -261,15 +261,21 @@ pub(super) fn ini_keys_are_sorted_but_directive_table_is_not() {
     }
 
     /// `render_ini_module_known` renders the known-module predicate from
-    /// `CORE_LOADED_EXTENSIONS`, LOWERCASED so the comparison is verbatim against php-src's
-    /// lowercase registry keys, and adds `'session'` only for the web SAPI. Every core
-    /// extension must appear, and the canonical mixed-case spellings must NOT.
+    /// `INI_KNOWN_MODULES`, LOWERCASED so the comparison is verbatim against php-src's
+    /// lowercase registry keys, `'session'` included in both SAPIs. Every recognized
+    /// module must appear, and the canonical mixed-case spellings must NOT.
+    ///
+    /// `ctype` and `mbstring` are the load-bearing members here: they are NOT in the
+    /// `extension_loaded()` set (elephc declares 4 of php's 11 `ctype_*` and 2 of its 65 `mb_*`),
+    /// and reference PHP 8.5 still answers `[]` rather than a warning for `ini_get_all('ctype')`.
+    /// A future change that re-derives this list from the loaded set would drop them and is what
+    /// this assertion exists to stop.
     #[test]
 pub(super) fn module_known_list_is_lowercased_core_extensions() {
         let cli = rendered(ini_module_known_declaration(false));
         let web = rendered(ini_module_known_declaration(true));
 
-        for name in crate::codegen::lower_inst::builtins::CORE_LOADED_EXTENSIONS {
+        for name in crate::opcache_prelude::cli_ini::INI_KNOWN_MODULES {
             let lowered = name.to_ascii_lowercase();
             assert!(
                 cli.contains(&format!("$m === '{lowered}'")),
@@ -284,9 +290,12 @@ pub(super) fn module_known_list_is_lowercased_core_extensions() {
         assert!(!cli.contains("'Zend OPcache'"));
         assert!(!cli.contains("'Core'"));
         assert!(!cli.contains("'SPL'"));
-        // 'session' is a --web-only module.
-        assert!(!cli.contains("$m === 'session'"));
+        assert!(cli.contains("$m === 'ctype'"), "ctype stays a RECOGNIZED module");
+        assert!(cli.contains("$m === 'mbstring'"), "mbstring stays a RECOGNIZED module");
+        // php ships ext/session in the CLI SAPI as well as the built-in server.
+        assert!(cli.contains("$m === 'session'"));
         assert!(web.contains("$m === 'session'"));
+        assert_eq!(web.matches("$m === 'session'").count(), 1, "session is listed once");
         // The parameter is nullable so `$extension !== null` need not narrow ?string to Str.
         assert!(cli.contains("function __elephc_ini_module_known(?string $m): bool"));
         let _ = parse(&format!("<?php {cli}"));

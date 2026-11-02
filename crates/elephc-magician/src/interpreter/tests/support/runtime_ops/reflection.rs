@@ -18,8 +18,9 @@ macro_rules! impl_fake_reflection_ops {
         args: RuntimeCellHandle,
         target: u64,
         repeated: bool,
+        rendered: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        self.runtime_reflection_attribute_new(name, args, target, repeated)
+        self.runtime_reflection_attribute_new(name, args, target, repeated, rendered)
     }
     /// Materializes one fake Reflection owner object for eval metadata tests.
     fn reflection_owner_new(

@@ -2,7 +2,7 @@
 title: "array_udiff() - internals"
 description: "Compiler internals for array_udiff(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 43
+  order: 49
 ---
 
 ## `array_udiff()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_udiff.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_udiff.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,7 +48,10 @@ function array_udiff(array $array1, array $array2, callable $callback): array
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_ucompare.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

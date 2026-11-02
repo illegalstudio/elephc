@@ -135,6 +135,25 @@ pub(crate) fn begin_callable_use(
     })
 }
 
+/// Pins the eval context that created a closure object while another context invokes it.
+///
+/// Each compiled frame that evaluates code gets its own context, and a closure object's target is
+/// registered only in the context that built it. The owner is found through the dynamic-object
+/// registry; the lease keeps it alive for the call, as it does for a detached PCNTL handler.
+pub(crate) fn begin_foreign_context_use(
+    context: *mut ElephcEvalContext,
+) -> Option<EvalPcntlContextLease> {
+    if context.is_null() {
+        return None;
+    }
+    let mut state = pcntl_runtime().lock().ok()?;
+    *state.active_contexts.entry(context as usize).or_default() += 1;
+    Some(EvalPcntlContextLease {
+        context,
+        counted: true,
+    })
+}
+
 /// Returns whether one runtime cell is retained as an eval PCNTL handler callable.
 pub(crate) fn is_handler_callable(callback: RuntimeCellHandle) -> bool {
     let callback = callback.as_ptr() as usize;

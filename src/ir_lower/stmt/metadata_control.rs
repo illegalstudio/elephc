@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// Preserves physical declaration identity for later native binding activation.
+pub(super) fn lower_class_like_activation(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    kind: crate::parser::ast::ClassLikeKind,
+    source_path: &std::path::Path,
+    span: Span,
+) {
+    let source = ctx.source_catalog.as_ref().and_then(|catalog| catalog.id_for_path(source_path));
+    let immediate = match source {
+        Some(source) => {
+            Immediate::class_like_activation(source, span, kind, ctx.intern_string(name))
+        }
+        None => Immediate::UnresolvedSource(Box::new(source_path.to_path_buf())),
+    };
+    ctx.emit_void(Op::ClassLikeActivate, Vec::new(), Some(immediate),
+        Op::ClassLikeActivate.default_effects(), Some(span));
+}
+
 /// Emits a no-op marker for declaration-only or frontend-only statements.
 pub(super) fn lower_noop(ctx: &mut LoweringContext<'_, '_>, span: Span) {
     ctx.emit_void(
@@ -66,13 +85,16 @@ pub(super) fn branch_to(ctx: &mut LoweringContext<'_, '_>, target: BlockId) {
     }
 }
 
-/// Finds the active loop target for a one-based break/continue level.
-pub(super) fn loop_target(ctx: &LoweringContext<'_, '_>, level: usize) -> Option<LoopFrame> {
+/// Finds the active loop target and its lexical index for a one-based control level.
+pub(super) fn loop_target(
+    ctx: &LoweringContext<'_, '_>,
+    level: usize,
+) -> Option<(usize, LoopFrame)> {
     let level = level.max(1);
     ctx.loop_stack
         .len()
         .checked_sub(level)
-        .and_then(|index| ctx.loop_stack.get(index).copied())
+        .and_then(|index| ctx.loop_stack.get(index).copied().map(|frame| (index, frame)))
 }
 
 /// Selects the strongest array write opcode valid for a lowered array value.
@@ -163,4 +185,3 @@ pub(super) fn emit_null_value(ctx: &mut LoweringContext<'_, '_>, span: Option<Sp
         ir_type: IrType::I64,
     }
 }
-

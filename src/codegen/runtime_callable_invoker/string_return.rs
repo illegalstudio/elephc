@@ -18,12 +18,9 @@ pub(in crate::codegen) fn method_returns_owned_string(
     method_key: &str,
     is_static: bool,
 ) -> bool {
-    module.class_methods.iter().find(|function| {
-        function.flags.is_static == is_static
-            && function.name.rsplit_once("::").is_some_and(|(class, method)| {
-                class == impl_class && crate::names::php_symbol_key(method) == method_key
-            })
-    }).is_some_and(function_returns_owned_string)
+    module
+        .class_method(impl_class, method_key, is_static)
+        .is_some_and(function_returns_owned_string)
 }
 
 /// Recognizes functions whose returning paths all explicitly persist or acquire their string.

@@ -40,7 +40,10 @@ foreach ($callbacks as $callback) { echo $callback("arg"); }
         assert!(!selectors.is_empty(), "{target}: the late-bound factory must normalize string results");
         for selector in selectors {
             assert!(selector.contains(&expected_owner), "{target}: retain the heap-returning implementation");
-            assert!(!selector.contains(&unexpected_borrower), "{target}: borrowed overrides still need persistence");
+            // `StaticStringBorrower::render` returns its parameter, which now `acquire`s on return
+            // and therefore transfers an owner like the heap-returning implementation; it joins
+            // the owned ladder, and only an unknown override still takes the persistence path.
+            assert!(selector.contains(&unexpected_borrower), "{target}: the acquiring override is owned too");
             assert!(selector.contains(comparison), "{target}: preserve string-result registers");
             assert_eq!(selector.matches("__rt_str_persist").count(), 1, "{target}: one borrowed-result copy");
         }

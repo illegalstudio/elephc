@@ -97,8 +97,9 @@ fn lower_interface_adapter(
     function.flags.is_internal = true;
     function.flags.by_ref_return = signature.by_ref_return;
     let closures = lower_body_into_function(
+        module.shared_source_catalog(), module.runtime_bound_functions.clone(),
         &mut function, None, &mut module.data, &body,
-        env_from_signature(&signature, module.web), TypeEnv::new(),
+        env_from_signature(&signature, module.web), TypeEnv::default(),
         &Default::default(), &Default::default(), &module.extern_globals,
         &module.callable_param_sigs, &Default::default(), &Default::default(),
         &module.class_infos, &module.enum_infos, &module.interface_infos,
@@ -110,11 +111,14 @@ fn lower_interface_adapter(
         &Default::default(), // source generator closure spans
         &Default::default(), // array_push property plans
         &Default::default(), // checked member receiver types
+        &Default::default(), // flow-typed property accesses
         &Default::default(), // boxed reference promotions
         &Default::default(), // first-class builtin call types
         &Default::default(), // synthesized calls have no written generic arguments
         &Default::default(), // loop storage types
         &Default::default(), // string increment/decrement locals
+        &Default::default(), // by-reference local storage types
+        &Default::default(), // dynamic reference local types
         &Default::default(), // killed binding sites
         &Default::default(), // detached reference sites
         &Default::default(), // retyped binding sites

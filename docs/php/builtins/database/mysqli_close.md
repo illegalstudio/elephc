@@ -2,7 +2,7 @@
 title: "mysqli_close()"
 description: "Closes a connection."
 sidebar:
-  order: 106
+  order: 117
 ---
 
 ## mysqli_close()

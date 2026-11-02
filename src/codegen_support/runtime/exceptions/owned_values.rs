@@ -98,7 +98,7 @@ fn release_callable_body(emitter: &mut Emitter) {
 /// Suppresses `__destruct` before releasing a raw object whose constructor did not complete.
 fn release_unconstructed_object_body(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::AArch64 {
-        emitter.instruction("ldr x9, [sp, #224]");                              // recover the cleanup record passed as the first C argument
+        emitter.instruction(&format!("ldr x9, [sp, #{}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET));                              // recover the cleanup record passed as the first C argument
         emitter.instruction(&format!("ldr x0, [x9, #{EXCEPTION_GUARD_OWNER_OFFSET}]")); // transfer the guarded raw object to the native GC convention
         emitter.instruction(&format!("str xzr, [x9, #{EXCEPTION_GUARD_OWNER_OFFSET}]")); // clear ownership before object cleanup can reenter PHP
         emitter.instruction("cbz x0, __rt_exception_release_unconstructed_object_drop"); // skip header access for an already-cleared guard
@@ -107,7 +107,7 @@ fn release_unconstructed_object_body(emitter: &mut Emitter) {
         emitter.instruction("str x10, [x0, #-8]");                              // preserve suppression if the constructor escaped another owner
         emitter.label("__rt_exception_release_unconstructed_object_drop");
     } else {
-        emitter.instruction("mov r10, QWORD PTR [rsp + 224]");                  // recover the cleanup record passed as the first C argument
+        emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET));                  // recover the cleanup record passed as the first C argument
         emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {EXCEPTION_GUARD_OWNER_OFFSET}]")); // transfer the guarded raw object to the native GC convention
         emitter.instruction(&format!("mov QWORD PTR [r10 + {EXCEPTION_GUARD_OWNER_OFFSET}], 0")); // clear ownership before object cleanup can reenter PHP
         emitter.instruction("test rax, rax");                                   // avoid reading a header from an already-cleared guard
@@ -121,11 +121,11 @@ fn release_unconstructed_object_body(emitter: &mut Emitter) {
 /// Clears transferred guard ownership before calling its type-specific native release helper.
 fn emit_release_body(emitter: &mut Emitter, symbol: &str) {
     if emitter.target.arch == Arch::AArch64 {
-        emitter.instruction("ldr x9, [sp, #224]");                              // recover the cleanup record passed as the first C argument
+        emitter.instruction(&format!("ldr x9, [sp, #{}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET));                              // recover the cleanup record passed as the first C argument
         emitter.instruction(&format!("ldr x0, [x9, #{EXCEPTION_GUARD_OWNER_OFFSET}]")); // transfer the guarded owner to the native GC convention
         emitter.instruction(&format!("str xzr, [x9, #{EXCEPTION_GUARD_OWNER_OFFSET}]")); // clear ownership before a destructor reenters PHP
     } else {
-        emitter.instruction("mov r10, QWORD PTR [rsp + 224]");                  // recover the callback's guard-record argument
+        emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET));                  // recover the callback's guard-record argument
         emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {EXCEPTION_GUARD_OWNER_OFFSET}]")); // pass the owned heap value through the native GC convention
         emitter.instruction(&format!("mov QWORD PTR [r10 + {EXCEPTION_GUARD_OWNER_OFFSET}], 0")); // prevent duplicate release during nested exception propagation
     }

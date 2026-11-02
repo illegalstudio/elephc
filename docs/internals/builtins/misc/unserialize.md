@@ -2,7 +2,7 @@
 title: "unserialize() - internals"
 description: "Compiler internals for unserialize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 761
+  order: 795
 ---
 
 ## `unserialize()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/unserialize.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/unserialize.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,8 +49,9 @@ function unserialize(string $data, mixed $options = []): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/unserialize.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/unserialize.rs) (`eval_builtin!`)
-- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(95)`).
-- **Dispatch hooks**: _none_ (shared runtime dispatch)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `dynamic-object-coercion`.
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -2,7 +2,7 @@
 title: "reset()"
 description: "Rewinds the array's internal pointer to the first element and returns it."
 sidebar:
-  order: 66
+  order: 77
 ---
 
 ## reset()

@@ -86,6 +86,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10d, DWORD PTR [r8 + 4]");                        // load this block refcount so free-list blocks can be skipped during metadata clearing
     emitter.instruction("test r10d, r10d");                                     // is this heap block currently live?
     emitter.instruction("jz __rt_gc_collect_cycles_clear_next");                // free-list blocks already keep transient GC metadata cleared
+    emitter.instruction(&format!("cmp r10d, {:#x}", crate::codegen_support::sentinels::HEAP_FREE_REFCOUNT_MARK)); // is this block parked on the free list?
+    emitter.instruction("je __rt_gc_collect_cycles_clear_next");                // parked blocks are not live collector nodes
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the full kind word with any stale x86_64 reachable metadata
     emitter.instruction("mov rcx, 0xffffffff8006ffff");                         // preserve heap marker, storage, completed destructors, and pins while clearing marks
     emitter.instruction("and r11, rcx");                                        // clear the x86_64 transient reachable metadata while preserving kind and value_type bits
@@ -119,6 +121,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10d, DWORD PTR [r8 + 4]");                        // load this candidate block refcount from the heap header
     emitter.instruction("test r10d, r10d");                                     // is this candidate block live?
     emitter.instruction("jz __rt_gc_collect_cycles_root_next");                 // free-list blocks cannot be GC roots
+    emitter.instruction(&format!("cmp r10d, {:#x}", crate::codegen_support::sentinels::HEAP_FREE_REFCOUNT_MARK)); // is this block parked on the free list?
+    emitter.instruction("je __rt_gc_collect_cycles_root_next");                // parked blocks are not live collector nodes
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the candidate kind word before deciding whether it participates in cycle collection
     emitter.instruction("mov rcx, r11");                                        // copy the packed incoming count before clearing it
     emitter.instruction(&format!("shr rcx, {X86_INCOMING_SHIFT}"));             // move the incoming field below the heap marker
@@ -176,6 +180,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8d, DWORD PTR [rdx + 4]");                        // load the source block refcount so free-list blocks can be skipped
     emitter.instruction("test r8d, r8d");                                       // is this source block live?
     emitter.instruction("jz __rt_gc_collect_cycles_count_next");                // free blocks contribute no outgoing graph edges
+    emitter.instruction(&format!("cmp r8d, {:#x}", crate::codegen_support::sentinels::HEAP_FREE_REFCOUNT_MARK)); // is this block parked on the free list?
+    emitter.instruction("je __rt_gc_collect_cycles_count_next");                // parked blocks are not live collector nodes
     emitter.instruction("mov r9, QWORD PTR [rdx + 8]");                         // load the source kind word before dispatching on its outgoing edge layout
     emitter.instruction("mov r10, r9");                                         // preserve the full source kind word while isolating the low-byte heap kind tag
     emitter.instruction("and r10, 0xff");                                       // isolate the source heap kind tag for outgoing-edge dispatch
@@ -420,6 +426,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10d, DWORD PTR [r8 + 4]");                        // load this block refcount to skip already-free nodes during the free pass
     emitter.instruction("test r10d, r10d");                                     // is this block still live?
     emitter.instruction("jz __rt_gc_collect_cycles_free_next");                 // free-list blocks are already reclaimed and need no collector action
+    emitter.instruction(&format!("cmp r10d, {:#x}", crate::codegen_support::sentinels::HEAP_FREE_REFCOUNT_MARK)); // is this block parked on the free list?
+    emitter.instruction("je __rt_gc_collect_cycles_free_next");                // parked blocks are not live collector nodes
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the current kind word before deciding whether this block is a collector candidate
     emitter.instruction("mov rcx, r11");                                        // preserve the full kind word while isolating the low-byte heap kind tag
     emitter.instruction("and rcx, 0xff");                                       // isolate the low-byte heap kind tag for free-pass dispatch

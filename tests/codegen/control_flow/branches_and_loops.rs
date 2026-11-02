@@ -9,6 +9,73 @@
 
 use super::*;
 
+/// Verifies boolean negation evaluates a type-changing assignment expression only once during
+/// checking, so the RHS receiver keeps its pre-assignment class contract.
+#[test]
+fn test_not_assignment_expression_uses_pre_assignment_receiver_type() {
+    let out = compile_and_run(
+        r#"<?php
+class NextValue {}
+class ValueSource {
+    public function next(): ?NextValue { return null; }
+}
+
+$value = new ValueSource();
+if (!$value = $value->next()) {
+    echo "none";
+}
+"#,
+    );
+    assert_eq!(out, "none");
+}
+
+/// Verifies branch joins widen heterogeneous array elements inside one array container, allowing
+/// a later element reference to remain writable on either path.
+#[test]
+fn test_branch_join_preserves_array_container_for_element_reference() {
+    let out = compile_and_run(
+        r#"<?php
+class BranchValue {}
+
+function replaceBranchValue(bool $objectBranch): string {
+    $values = [];
+    if ($objectBranch) {
+        $values[] = new BranchValue();
+    } else {
+        $values[] = "initial";
+    }
+    $slot = &$values[0];
+    $slot = "replaced";
+    return $values[0];
+}
+
+echo replaceBranchValue(true).":".replaceBranchValue(false);
+"#,
+    );
+    assert_eq!(out, "replaced:replaced");
+}
+
+/// Verifies a null final branch does not erase the concrete storage type at the join load.
+#[test]
+fn test_branch_join_load_uses_concrete_storage_after_null_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+function selectCallback(bool $enabled): callable|null {
+    if ($enabled) {
+        $callback = static fn (): string => "selected";
+    } else {
+        $callback = null;
+    }
+    return $callback;
+}
+
+$callback = selectCallback(true);
+echo $callback(), ":", selectCallback(false) === null ? "null" : "wrong";
+"#,
+    );
+    assert_eq!(out, "selected:null");
+}
+
 /// Verifies that if (true) executes the branch.
 #[test]
 fn test_if_true() {
@@ -171,6 +238,42 @@ fn test_for_loop() {
     assert_eq!(out, "01234");
 }
 
+/// Verifies comma-separated `for` clauses execute left-to-right, including after `continue`.
+#[test]
+fn test_for_multiple_init_and_update_expressions() {
+    let out = compile_and_run(
+        r#"<?php
+for ($i = 0, $j = 3; $i < 3; ++$i, --$j) {
+    if ($i === 1) { continue; }
+    echo $i . ":" . $j . ";";
+}
+echo $i . ":" . $j;
+"#,
+    );
+    assert_eq!(out, "0:3;2:1;3:0");
+}
+
+/// Verifies that call expressions in `for` clauses execute for their side effects.
+#[test]
+fn test_for_call_expression_init_and_update() {
+    let out = compile_and_run(
+        r#"<?php
+$paths = ['a', 'b', 'c'];
+for (next($paths); null !== key($paths); next($paths)) {
+    echo current($paths);
+}
+"#,
+    );
+    assert_eq!(out, "bc");
+}
+
+/// Verifies a literal-led short-circuit assignment statement preserves its RHS side effect.
+#[test]
+fn test_literal_led_short_circuit_assignment_statement() {
+    let out = compile_and_run("<?php $value = -1; 0 > $value && $value += 0x40; echo $value;");
+    assert_eq!(out, "63");
+}
+
 /// Verifies break exits the for loop when $i reaches 3, producing 012.
 #[test]
 fn test_for_break() {
@@ -247,6 +350,183 @@ if ($x) {
 fn test_while_null_no_loop() {
     let out = compile_and_run("<?php $x = null; while ($x) { echo \"bad\"; } echo \"ok\";");
     assert_eq!(out, "ok");
+}
+
+/// Makes an assignment on the right of `||` visible when the false outcome selects `else`.
+#[test]
+fn test_false_or_outcome_exposes_rhs_assignment_in_else() {
+    let out = compile_and_run(
+        "<?php
+        function render(bool $lead): void {
+            if ($lead || !($value = 'ready')) {
+                echo 'then';
+            } else {
+                echo $value;
+            }
+        }
+        render(false);",
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Preserves the value assigned as the left operand of an `instanceof` condition.
+#[test]
+fn test_instanceof_condition_preserves_assignment_effect() {
+    let out = compile_and_run(
+        "<?php
+        class Marker {}
+        function render(object $input): void {
+            if (($value = $input) instanceof Marker) {
+                echo $value::class;
+            }
+        }
+        render(new Marker());",
+    );
+    assert_eq!(out, "Marker");
+}
+
+/// Makes assignments from a successful `&&` chain visible to the true ternary arm.
+#[test]
+fn test_ternary_true_arm_sees_short_circuit_assignment() {
+    let out = compile_and_run(
+        "<?php
+        $result = true
+            && (($value = 'ready') === 'ready')
+            && strlen($value) > 0
+                ? $value
+                : 'missing';
+        echo $result;",
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Makes an assignment in a false equality condition visible to the false ternary arm.
+#[test]
+fn test_ternary_false_arm_sees_condition_assignment() {
+    let out = compile_and_run(
+        "<?php
+        function prefix(string $value): string {
+            return false === ($position = strrpos($value, '\\\\'))
+                ? ''
+                : substr($value, 0, $position);
+        }
+        echo prefix('Alpha\\\\Beta');",
+    );
+    assert_eq!(out, "Alpha");
+}
+
+/// Preserves a ternary's branch-local assignment inside a property `??=` initializer.
+#[test]
+fn test_property_null_coalesce_ternary_sees_condition_assignment() {
+    let out = compile_and_run(
+        "<?php
+        final class PrefixCache {
+            private ?string $cached = null;
+            public function resolve(string $value): string {
+                return $this->cached ??= false === ($position = strrpos($value, '\\\\'))
+                    ? ''
+                    : substr($value, 0, $position);
+            }
+        }
+        echo (new PrefixCache())->resolve('Alpha\\\\Beta');",
+    );
+    assert_eq!(out, "Alpha");
+}
+
+/// Boxes a local whose value changes from null to an indexable object across a loop back-edge.
+#[test]
+fn test_loop_carried_local_widens_runtime_representation() {
+    let out = compile_and_run(
+        r#"<?php
+class LoopStorageSource {
+    public $value;
+}
+$source = new LoopStorageSource();
+$source->value = new ArrayObject(['ready']);
+$slot = null;
+foreach ([0, 1] as $iteration) {
+    if ($slot) {
+        echo $slot[0];
+    }
+    $slot = $source->value;
+}
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies a `break`-terminated switch case cannot leak its local type into a sibling case.
+#[test]
+fn test_switch_break_restores_direct_entry_local_types() {
+    let out = compile_and_run(
+        r#"<?php
+function select_choice(bool $takeFirst, mixed $key): string {
+    $choices = ["chosen" => "ok"];
+    switch (true) {
+        case $takeFirst:
+            $key = ["not", "a", "key"];
+            break;
+        case true:
+            return $choices[$key] ?? "missing";
+    }
+    return "first";
+}
+echo select_choice(false, "chosen");
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies assignments in a while condition define the logical type on its ordinary exit.
+#[test]
+fn test_while_exit_uses_condition_assignment_type() {
+    let out = compile_and_run(
+        r#"<?php
+final class LoopKey {
+    public function __construct(public string $value) {}
+    public function __toString(): string { return $this->value; }
+}
+$definitions = ["chosen" => "ok"];
+$target = new LoopKey("chosen");
+$iteration = 0;
+while (($target = (string) $target) && $iteration++ < 1) {
+    $target = new LoopKey("chosen");
+}
+echo $definitions[$target];
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies an `if` whose arms leave a by-reference array indexed on one edge and hash-promoted
+/// on the other joins at hash storage, so the nested write below the branch reaches the caller.
+/// Joined as boxed `Mixed`, the raw hash pointer went down the Mixed write path and every
+/// `++$calls[$id][0]` was lost (Symfony's `PhpDumper::getDefinitionsFromArguments`).
+#[test]
+fn test_if_join_of_indexed_and_hash_ref_param_keeps_nested_writes() {
+    let out = compile_and_run(
+        r#"<?php
+final class Ref {
+    public function __construct(public string $id, public int $b = 1) {}
+    public function __toString(): string { return $this->id; }
+}
+final class Walker {
+    public function walk(array $arguments, array &$calls = []): void {
+        foreach ($arguments as $argument) {
+            $id = (string) $argument;
+            if (!isset($calls[$id])) {
+                $calls[$id] = [0, $argument->b];
+            }
+            ++$calls[$id][0];
+        }
+    }
+}
+$calls = [];
+(new Walker())->walk([new Ref("a"), new Ref("s", 0), new Ref("a")], $calls);
+echo json_encode($calls);
+"#,
+    );
+    assert_eq!(out, r#"{"a":[2,1],"s":[1,0]}"#);
 }
 
 /// Issue #476: a `for` update clause accepts an array push, and the pushed element is the
@@ -558,4 +838,51 @@ echo s_string("0"), "|", s_nonempty_array([1]), "|", s_float(0.5), "\n";
 "#,
     );
     assert_eq!(out, "anull|null|nullone|nullone|nullone|nulltwo\nother|other|other\n");
+}
+
+/// A by-value `foreach` over a boxed `mixed` local iterates a snapshot: unsetting the element
+/// being visited does not end the loop (Laravel's `data_get($data, 'tags.0')`).
+/// Expected output verified against php 8.5.
+#[test]
+fn test_foreach_by_value_over_mixed_local_survives_unset_in_body() {
+    let out = compile_and_run(
+        r#"<?php
+function snapshot($key) {
+    $key = is_array($key) ? $key : explode('.', $key);
+    foreach ($key as $i => $segment) {
+        unset($key[$i]);
+        echo $i, ':', $segment, ' rest=', count($key), ';';
+    }
+    echo "\n";
+}
+snapshot('a.b.c');
+snapshot(['x', 'y']);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"0:a rest=2;1:b rest=1;2:c rest=0;
+0:x rest=1;1:y rest=0;
+"#
+    );
+}
+
+/// `$d instanceof BackedEnum && !is_string($d = $d->value)` compiles when the parameter also
+/// receives a string elsewhere (Laravel's `Route::domain()`, `UrlGenerator::route()`).
+/// Expected output verified against php 8.5.
+#[test]
+fn test_enum_value_reassignment_inside_instanceof_guard_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+enum Suit: string { case H = 'h'; }
+function name($domain = null) {
+    if ($domain instanceof BackedEnum && ! is_string($domain = $domain->value)) {
+        throw new InvalidArgumentException('Enum must be string backed.');
+    }
+    return $domain;
+}
+echo name(Suit::H), name('x'), "\n";
+"#,
+    );
+    assert_eq!(out, "hx\n");
 }

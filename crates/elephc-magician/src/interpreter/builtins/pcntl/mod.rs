@@ -46,6 +46,7 @@ mod pcntl_wifsignaled;
 mod pcntl_wifstopped;
 mod pcntl_wstopsig;
 mod pcntl_wtermsig;
+mod posix_kill;
 mod posix_setpgid;
 mod posix_setsid;
 mod qos;

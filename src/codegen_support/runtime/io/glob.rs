@@ -8,7 +8,7 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 
 /// Emits the `__rt_glob` runtime helper for ARM64 targets.
 /// Receives a pattern string pointer/length in x1/x2, calls libc `glob()` to find matching
@@ -16,7 +16,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// On success the array contains one entry per match; on failure (no matches, error) returns
 /// an empty array. Calls `globfree()` before returning to release libc resources.
 /// Preserves all callee-saved registers and restores the stack frame before returning.
-/// Input:  x1=pattern string pointer, x2=pattern string length
+/// Input:  x1=pattern string pointer, x2=pattern string length, x3=portable PHP flags
 /// Output: x0=array pointer (PhpArray of matching path strings as PhpString entries)
 pub fn emit_glob(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -34,15 +34,16 @@ pub fn emit_glob(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #176");                                    // allocate 176 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #160]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #160");                                   // establish new frame pointer
+    emitter.instruction("str x3, [sp, #128]");                                  // preserve the portable PHP flag mask across helper calls
 
     // -- null-terminate pattern --
     emitter.instruction("bl __rt_cstr");                                        // convert pattern to C string, x0=cstr
 
-    // -- call glob(pattern, 0, NULL, &glob_result) --
+    // -- call glob(pattern, mapped_flags, NULL, &glob_result) --
     // Stack layout: sp+0=cstr, sp+8=retcode, sp+16=glob_t, sp+104=array, sp+112=count, sp+120=index
     // `gl_pathc` stays at offset 0 on both supported libcs; `gl_pathv` is platform-specific.
     emitter.instruction("add x3, sp, #16");                                     // pointer to glob_t struct on stack
-    emitter.instruction("mov x1, #0");                                          // flags = 0
+    emit_glob_flags_aarch64(emitter);
     emitter.instruction("mov x2, #0");                                          // errfunc = NULL
     emitter.bl_c("glob");                                            // call glob(pattern=x0, flags, errfunc, glob_t)
     emitter.instruction("str x0, [sp, #8]");                                    // save return code
@@ -83,12 +84,24 @@ pub fn emit_glob(emitter: &mut Emitter) {
 
     // -- copy string and push to array --
     emitter.label("__rt_glob_push");
+    emitter.instruction("ldr x9, [sp, #128]");                                  // reload the portable PHP flag mask
+    emitter.instruction("mov x10, #0x40000000");                                // materialize GLOB_ONLYDIR for portable filtering
+    emitter.instruction("tst x9, x10");                                         // test whether only directories may be returned
+    emitter.instruction("b.eq __rt_glob_persist");                              // ordinary glob calls append every matched path
+    emitter.instruction("str x1, [sp, #136]");                                  // preserve the current matched-path pointer across is_dir
+    emitter.instruction("str x2, [sp, #144]");                                  // preserve the current matched-path length across is_dir
+    emitter.instruction("bl __rt_is_dir");                                      // apply GLOB_ONLYDIR portably on every supported libc
+    emitter.instruction("cbz x0, __rt_glob_next");                              // skip non-directory matches
+    emitter.instruction("ldr x1, [sp, #136]");                                  // restore the accepted matched-path pointer
+    emitter.instruction("ldr x2, [sp, #144]");                                  // restore the accepted matched-path length
+    emitter.label("__rt_glob_persist");
     emitter.instruction("bl __rt_str_persist");                                 // copy to heap for persistence
     emitter.instruction("ldr x0, [sp, #104]");                                  // reload array pointer
     emitter.instruction("bl __rt_array_push_str");                              // push path to array
     emitter.instruction("str x0, [sp, #104]");                                  // update array pointer after possible realloc
 
     // -- advance to next entry --
+    emitter.label("__rt_glob_next");
     emitter.instruction("ldr x11, [sp, #120]");                                 // reload current index
     emitter.instruction("add x11, x11, #1");                                    // increment index
     emitter.instruction("b __rt_glob_loop");                                    // continue loop
@@ -114,7 +127,7 @@ pub fn emit_glob(emitter: &mut Emitter) {
 /// On success the array holds one entry per matched path; on failure returns an empty array.
 /// The stack frame holds the Linux glob_t at [rsp] and bookkeeping slots at rbp-8/16/24/32.
 /// Cleans up with `globfree()` before returning the result array.
-/// Input:  rax/rdx=pattern string pointer/length (cstr converted by `__rt_cstr`)
+/// Input:  rax/rdx=pattern string pointer/length, rdi=portable PHP flags
 /// Output: rax=array pointer (PhpArray of matching path strings as PhpString entries)
 fn emit_glob_linux_x86_64(emitter: &mut Emitter) {
     let pathv_off = emitter.platform.glob_pathv_offset();
@@ -127,9 +140,10 @@ fn emit_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while glob() uses a stack glob_t and array bookkeeping slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the result array, glob() status, and iteration index locals
     emitter.instruction(&format!("sub rsp, {}", frame_size));                   // reserve an aligned stack frame large enough for the Linux glob_t plus local bookkeeping
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // preserve the portable PHP flag mask across C-string conversion and libc calls
     emitter.instruction("call __rt_cstr");                                      // convert the elephc glob pattern in rax/rdx into a null-terminated C pattern in rax
     emitter.instruction("mov rdi, rax");                                        // pass the C pattern pointer as the first libc glob() argument
-    emitter.instruction("xor esi, esi");                                        // use glob() flags = 0 for PHP-compatible default matching
+    emit_glob_flags_x86_64(emitter);
     emitter.instruction("xor edx, edx");                                        // pass errfunc = NULL to the libc glob() helper
     emitter.instruction("lea rcx, [rsp]");                                      // pass the stack-resident glob_t storage as the final libc glob() argument
     emitter.instruction("call glob");                                           // expand the pattern through libc glob() into the temporary stack glob_t
@@ -159,9 +173,21 @@ fn emit_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_glob_strlen");                                // continue scanning until the current matched path is fully measured
 
     emitter.label("__rt_glob_push");
+    emitter.instruction("test QWORD PTR [rbp - 40], 0x40000000");               // test the portable GLOB_ONLYDIR bit
+    emitter.instruction("jz __rt_glob_x86_persist");                            // ordinary glob calls append every matched path
+    emitter.instruction("mov QWORD PTR [rbp - 48], rsi");                       // preserve the current matched-path pointer across is_dir
+    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // preserve the current matched-path length across is_dir
+    emitter.instruction("mov rax, rsi");                                        // pass the matched path pointer in the native path-helper register
+    emitter.instruction("call __rt_is_dir");                                    // apply GLOB_ONLYDIR portably on every supported libc
+    emitter.instruction("test rax, rax");                                       // test whether the current match is a directory
+    emitter.instruction("jz __rt_glob_x86_next");                               // skip non-directory matches
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // restore the accepted matched-path pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // restore the accepted matched-path length
+    emitter.label("__rt_glob_x86_persist");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the destination string array pointer into the x86_64 append-helper receiver register
     emitter.instruction("call __rt_array_push_str");                            // persist and append the current matched path into the destination string array
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the possibly-grown destination string array pointer after appending one match
+    emitter.label("__rt_glob_x86_next");
     emitter.instruction("add QWORD PTR [rbp - 32], 1");                         // advance the glob() match iteration index after consuming one matched path entry
     emitter.instruction("jmp __rt_glob_loop");                                  // continue iterating until every matched path has been appended
 
@@ -174,4 +200,45 @@ fn emit_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the temporary glob_t frame and local bookkeeping slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the matched-path array
     emitter.instruction("ret");                                                 // return the array of matched paths to the caller
+}
+
+/// Maps portable PHP glob flags to the active ARM64 libc bit layout in `x1`.
+fn emit_glob_flags_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("ldr x9, [sp, #128]");                                  // load the portable PHP flag mask
+    emitter.instruction("mov x1, #0");                                          // start the host libc flag mask empty
+    if emitter.platform == Platform::MacOS {
+        for bit in [4, 8, 16, 32, 128] {
+            emitter.instruction(&format!("and x10, x9, #{}", bit));             // retain a flag whose PHP and Darwin libc values match
+            emitter.instruction("orr x1, x1, x10");                             // merge the retained flag into the host mask
+        }
+        emitter.instruction("and x10, x9, #4096");                              // isolate portable GLOB_NOESCAPE
+        emitter.instruction("lsl x10, x10, #1");                                // map GLOB_NOESCAPE to Darwin libc bit 0x2000
+        emitter.instruction("orr x1, x1, x10");                                 // merge the remapped no-escape flag
+        return;
+    }
+    for (portable, shift) in [(4, -2), (8, -2), (16, 0), (32, -3), (128, 3), (4096, -6), (0x40000000, -17)] {
+        emitter.instruction(&format!("and x10, x9, #{}", portable));            // isolate one portable PHP flag bit
+        if shift > 0 {
+            emitter.instruction(&format!("lsl x10, x10, #{}", shift));          // shift the flag into its Linux libc position
+        } else if shift < 0 {
+            emitter.instruction(&format!("lsr x10, x10, #{}", -shift));         // shift the flag into its Linux libc position
+        }
+        emitter.instruction("orr x1, x1, x10");                                 // merge the mapped flag into the host mask
+    }
+}
+
+/// Maps portable PHP glob flags to Linux x86_64 libc bits in `esi`.
+fn emit_glob_flags_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // load the portable PHP flag mask
+    emitter.instruction("xor esi, esi");                                        // start the Linux libc flag mask empty
+    for (portable, shift) in [(4, -2), (8, -2), (16, 0), (32, -3), (128, 3), (4096, -6), (0x40000000, -17)] {
+        emitter.instruction("mov r11, r10");                                    // copy the portable mask for one flag extraction
+        emitter.instruction(&format!("and r11, {}", portable));                 // isolate one portable PHP flag bit
+        if shift > 0 {
+            emitter.instruction(&format!("shl r11, {}", shift));                // shift the flag into its Linux libc position
+        } else if shift < 0 {
+            emitter.instruction(&format!("shr r11, {}", -shift));               // shift the flag into its Linux libc position
+        }
+        emitter.instruction("or rsi, r11");                                     // merge the mapped flag into the host mask
+    }
 }

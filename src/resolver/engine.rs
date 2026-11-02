@@ -12,19 +12,41 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
-use crate::names::canonical_name_for_decl;
-use crate::parser::ast::{CatchClause, ClassMethod, ExprKind, Stmt, StmtKind};
+use crate::names::{canonical_name_for_decl, Name, NameKind, DYNAMIC_INCLUDE_FUNCTION};
+use crate::parser::ast::{BinOp, CatchClause, ClassMethod, Expr, ExprKind, Stmt, StmtKind};
 
 use super::discovery::FunctionVariantRegistry;
 use super::engine_includes::{
     discard_first_include_return, expand_value_include, resolve_include_stmt,
     IncludeValueCapture,
 };
-use super::include_path::fold_include_path;
+use super::include_path::{
+    fold_include_path, is_runtime_dynamic_include_path, stays_runtime_include,
+};
 use super::state::{
     is_define_call_name, namespace_string, normalize_defined_constant_name,
     register_const_imports, ResolveState,
 };
+
+/// Builds the internal runtime include call used when an include must remain expression-valued.
+pub(super) fn dynamic_include_call_kind(
+    path: Expr,
+    once: bool,
+    required: bool,
+    span: crate::span::Span,
+) -> ExprKind {
+    ExprKind::FunctionCall {
+        name: Name::from_parts(
+            NameKind::FullyQualified,
+            vec![DYNAMIC_INCLUDE_FUNCTION.to_string()],
+        ),
+        args: vec![
+            path,
+            Expr::new(ExprKind::BoolLiteral(once), span),
+            Expr::new(ExprKind::BoolLiteral(required), span),
+        ],
+    }
+}
 use super::stmt_exprs::resolve_stmt_exprs;
 
 /// Resolves a list of statements, expanding include/require effects and tracking
@@ -63,6 +85,19 @@ fn try_expand_value_include(
         StmtKind::Assign { name, .. } => IncludeValueCapture::Assign(name.clone()),
         _ => IncludeValueCapture::Return,
     };
+    if stays_runtime_include(path, state) {
+        let value = Expr::new(
+            dynamic_include_call_kind((**path).clone(), *once, *required, stmt.span),
+            stmt.span,
+        );
+        let rewritten = match capture {
+            IncludeValueCapture::Assign(name) => {
+                Stmt::new(StmtKind::Assign { name, value }, stmt.span)
+            }
+            IncludeValueCapture::Return => Stmt::new(StmtKind::Return(Some(value)), stmt.span),
+        };
+        return Ok(Some(vec![rewritten]));
+    }
     let expanded = expand_value_include(
         stmt.span,
         path,
@@ -76,6 +111,130 @@ fn try_expand_value_include(
         function_variants,
     )?;
     Ok(Some(expanded))
+}
+
+/// Splits a statically resolvable include out of the statement that evaluates it FIRST.
+///
+/// `try_expand_value_include` compiles an include written as `$x = require X;` or
+/// `return require X;`; in any other position the include stayed a runtime call and the file ran
+/// in the interpreter on every execution. Composer's generated `autoload_runtime.php` opens with
+/// `if (true === (require_once __DIR__.'/autoload.php') || …)`, so the whole Composer bootstrap
+/// (`autoload.php`, `ComposerAutoloaderInit…::getLoader()`) was interpreted on every Symfony
+/// request: about 11% of `/`.
+///
+/// When nothing the statement evaluates before the include can have an effect, running the
+/// include first as `$tmp = require X;` and then the statement with `$tmp` in its place is the
+/// same program, and the assignment form is the one `try_expand_value_include` compiles. What
+/// may be passed on the way to the include is therefore limited to literals, and the walk never
+/// enters an operand that might not be evaluated (the right side of `&&`, `||`, `??`), nor a
+/// loop condition, nor an `elseif`, which only run conditionally or repeatedly.
+fn hoist_leading_value_include(stmt: &Stmt) -> Option<Vec<Stmt>> {
+    let mut rewritten = stmt.clone();
+    let tmp = format!(
+        "__elephc_inc_hoist_{}",
+        HOISTED_INCLUDE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let include = match &mut rewritten.kind {
+        StmtKind::If { condition, .. } => take_leading_include(condition, &tmp)?,
+        StmtKind::ExprStmt(expr) | StmtKind::Echo(expr) => take_leading_include(expr, &tmp)?,
+        // A direct `$x = require X;` / `return require X;` is already compiled as it stands.
+        StmtKind::Assign { value, .. } | StmtKind::Return(Some(value))
+            if !matches!(value.kind, ExprKind::IncludeValue { .. }) =>
+        {
+            take_leading_include(value, &tmp)?
+        }
+        _ => return None,
+    };
+    let hoisted = Stmt::new(
+        StmtKind::Assign {
+            name: tmp,
+            value: include,
+        },
+        stmt.span,
+    );
+    Some(vec![hoisted, rewritten])
+}
+
+/// Rewrites the statement `require COND ? 'a.php' : 'b.php';` into
+/// `if (COND) { require 'a.php'; } else { require 'b.php'; }` when every selectable path is
+/// static, so both files join the closed world like any include under an `if`. Carbon picks its
+/// period and translator base classes this way on `PHP_VERSION`; constant folding later drops
+/// the branch the target never takes. Returns `None` for any other include.
+fn ternary_include_as_if(stmt: &Stmt, path: &Expr, once: bool, required: bool) -> Option<Stmt> {
+    let ExprKind::Ternary { condition, then_expr, else_expr } = &path.kind else {
+        return None;
+    };
+    if !include_branch_is_static(then_expr) || !include_branch_is_static(else_expr) {
+        return None;
+    }
+    let branch = |path: &Expr| {
+        vec![Stmt::new(
+            StmtKind::Include { path: path.clone(), once, required },
+            stmt.span,
+        )]
+    };
+    Some(Stmt::new(
+        StmtKind::If {
+            condition: (**condition).clone(),
+            then_body: branch(then_expr),
+            elseif_clauses: Vec::new(),
+            else_body: Some(branch(else_expr)),
+        },
+        stmt.span,
+    ))
+}
+
+/// Whether a ternary include branch selects only compile-time paths, nested ternaries included.
+fn include_branch_is_static(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Ternary { then_expr, else_expr, .. } => {
+            include_branch_is_static(then_expr) && include_branch_is_static(else_expr)
+        }
+        _ => !super::include_path::is_runtime_dynamic_include_path(expr),
+    }
+}
+
+/// Numbers the temporaries `hoist_leading_value_include` introduces.
+static HOISTED_INCLUDE_COUNTER: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Replaces the include `expr` evaluates first with `$tmp` and returns it, or leaves `expr`
+/// untouched when an effect could precede the include (see `hoist_leading_value_include`).
+fn take_leading_include(expr: &mut Expr, tmp: &str) -> Option<Expr> {
+    match &mut expr.kind {
+        ExprKind::IncludeValue { path, .. } if !is_runtime_dynamic_include_path(path) => {
+            let variable = Expr::new(ExprKind::Variable(tmp.to_string()), expr.span);
+            Some(std::mem::replace(expr, variable))
+        }
+        ExprKind::BinaryOp { left, op, right } => {
+            if let Some(include) = take_leading_include(left, tmp) {
+                return Some(include);
+            }
+            let right_always_runs = !matches!(op, BinOp::And | BinOp::Or | BinOp::NullCoalesce);
+            if right_always_runs && is_effect_free_literal(left) {
+                take_leading_include(right, tmp)
+            } else {
+                None
+            }
+        }
+        ExprKind::Not(inner)
+        | ExprKind::Negate(inner)
+        | ExprKind::BitNot(inner)
+        | ExprKind::Cast { expr: inner, .. } => take_leading_include(inner, tmp),
+        _ => None,
+    }
+}
+
+/// Whether evaluating `expr` can have no effect at all, so an include after it may run first.
+fn is_effect_free_literal(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::BoolLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::Null
+    )
 }
 
 /// Resolves a statement list by expanding includes, resolving expression-position
@@ -92,6 +251,17 @@ pub(super) fn resolve_stmts(
 
     for stmt in stmts {
         let _source_mode = crate::source::scoped_parse_mode(stmt.profile());
+        if let Some(split) = hoist_leading_value_include(&stmt) {
+            result.extend(resolve_stmts(
+                split,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?);
+            continue;
+        }
         // Expression-position includes (`$x = require X;` / `return require X;`) are expanded
         // before generic expression resolution so the included file's statements are inlined into
         // the caller's scope rather than resolved as an opaque sub-expression.
@@ -117,6 +287,21 @@ pub(super) fn resolve_stmts(
         )?;
         match &stmt.kind {
             StmtKind::Include { path, once, required } => {
+                if let Some(branches) = ternary_include_as_if(&stmt, path, *once, *required) {
+                    result.extend(resolve_stmts(
+                        vec![branches],
+                        base_dir,
+                        declared_once,
+                        include_chain,
+                        state,
+                        function_variants,
+                    )?);
+                    continue;
+                }
+                if stays_runtime_include(path, state) {
+                    result.push(stmt);
+                    continue;
+                }
                 if let Some(mut resolved) = resolve_include_stmt(
                     &stmt,
                     path,
@@ -127,6 +312,7 @@ pub(super) fn resolve_stmts(
                     include_chain,
                     state,
                     function_variants,
+                    false,
                 )? {
                     // A top-level `return` in the included file ends the FILE, not the caller.
                     discard_first_include_return(&mut resolved);
@@ -445,6 +631,7 @@ pub(super) fn resolve_stmts(
             StmtKind::ClassDecl {
                 generics,
                 name,
+                doc_comment,
                 extends,
                 implements,
                 is_abstract,
@@ -467,6 +654,7 @@ pub(super) fn resolve_stmts(
                     StmtKind::ClassDecl {
                         generics: generics.clone(),
                         name: name.clone(),
+                        doc_comment: doc_comment.clone(),
                         extends: extends.clone(),
                         implements: implements.clone(),
                         is_abstract: *is_abstract,

@@ -2,7 +2,7 @@
 title: "mb_internal_encoding() - internals"
 description: "Compiler internals for mb_internal_encoding(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 932
+  order: 971
 ---
 
 ## `mb_internal_encoding()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_internal_encoding.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_internal_encoding.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

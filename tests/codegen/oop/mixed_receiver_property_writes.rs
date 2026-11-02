@@ -116,6 +116,30 @@ function write(mixed $o): void { $o->u = "z"; }
     );
 }
 
+/// Refined untyped slots fail closed when their runtime storage representation is ambiguous:
+/// a string written into the slot the compiler refined to `int` has no home in it. (php keeps the
+/// string; an int written into the same slot is stored, see the test below.)
+#[test]
+fn test_mixed_receiver_write_refuses_a_string_into_an_int_refined_untyped_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class T { public $u = 1; }
+function write(mixed $o): void { $o->u = "nine"; }
+        write(new T());
+"#,
+    );
+    let diagnostic = format!("{}{}", out.stdout, out.stderr);
+    assert!(
+        !out.success,
+        "mismatched refined untyped property write unexpectedly succeeded"
+    );
+    assert!(
+        diagnostic.contains("Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property T::$u"),
+        "output: {}",
+        diagnostic
+    );
+}
+
 /// A runtime value of an UNRELATED class must be refused, not stored and then read back through
 /// the refined class's offsets (#1319 review). The slot's layout belongs to the refined class
 /// alone, so a foreign object would read the wrong words.
@@ -162,6 +186,24 @@ var_dump($h->o->n, $h->o->x);
 "#,
     );
     assert_eq!(out, "int(3)\nint(3)\nint(10)\n");
+}
+
+/// A value of the refined slot's own type is stored: `$o->u = 9` into `public $u = 1` (refined to
+/// `int`) is ordinary php, and reaches the slot through a `use (&$o)` capture as well.
+#[test]
+fn test_mixed_receiver_write_stores_a_matching_value_into_an_untyped_refined_property() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public $u = 1; }
+function write(mixed $o): void { $o->u = 9; }
+$t = new T();
+write($t);
+$make = function () use (&$t) { $t = new T(); $t->u = 7; };
+$make();
+var_dump($t->u);
+"#,
+    );
+    assert_eq!(out, "int(7)\n");
 }
 
 /// Two classes declaring the same property name is what makes this a runtime dispatch rather than

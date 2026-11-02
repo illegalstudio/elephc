@@ -102,6 +102,42 @@ pub(super) fn register_eval_native_function_bridge_support(
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 
+/// Emits the call that ties a registered native function's existence to its active-variant slot.
+///
+/// The slot is a module-global `.comm` word the variant's declaration fills (see
+/// `codegen::function_variants::emit_variant_mark`); declaring it here too keeps the symbol
+/// defined even when no reachable statement marks it.
+pub(super) fn register_eval_native_function_active_slot(
+    ctx: &mut FunctionContext<'_>,
+    context_source: EvalContextSource,
+    function_name_label: &str,
+    function_name_len: usize,
+    active_slot_symbol: &str,
+) {
+    ctx.data.add_comm(active_slot_symbol.to_string(), 8);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        function_name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        function_name_len as i64,
+    );
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        active_slot_symbol,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_function_active_slot");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
 /// Emits one native-function parameter-flags registration call.
 pub(super) fn register_eval_native_function_param_flags(
     ctx: &mut FunctionContext<'_>,

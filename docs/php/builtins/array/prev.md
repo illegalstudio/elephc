@@ -2,7 +2,7 @@
 title: "prev()"
 description: "Rewinds the array's internal pointer and returns the new element."
 sidebar:
-  order: 64
+  order: 75
 ---
 
 ## prev()

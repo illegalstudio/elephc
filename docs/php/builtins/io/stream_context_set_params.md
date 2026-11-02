@@ -2,7 +2,7 @@
 title: "stream_context_set_params()"
 description: "Sets parameters on the specified context."
 sidebar:
-  order: 375
+  order: 387
 ---
 
 ## stream_context_set_params()

@@ -281,6 +281,21 @@ fn version_constants_follow_the_compile_target_profile() {
     }
 }
 
+/// `--php-version major.minor.patch` selects the `major.minor` profile and reports the patch to
+/// the program, every constant agreeing with the others, so a build pinned to the host's exact
+/// php answers what that php answers (`bin/console about` printed `8.5.0` beside php's `8.5.10`).
+#[test]
+fn version_constants_report_a_pinned_patch_release() {
+    let out = run_for_profile("elephc_version_patch", CONSTANTS_PROBE, "8.5.10");
+    assert_eq!(out, "8.5.10|80510|8|5|10||cli\n");
+    let out = run_for_profile(
+        "elephc_version_patch_fn",
+        "<?php echo phpversion(), '|', version_compare(PHP_VERSION, '8.5.3', '>=') ? 'y' : 'n';",
+        "8.5.10",
+    );
+    assert_eq!(out, "8.5.10|y");
+}
+
 /// The default profile is 8.5, so a flagless compile answers exactly like `--php-version 8.5`.
 #[test]
 fn version_constants_default_to_the_newest_profile() {

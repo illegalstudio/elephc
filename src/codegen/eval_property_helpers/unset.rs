@@ -17,7 +17,12 @@ pub(super) fn emit_property_unset_helper(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
+    scope_sets: &BTreeMap<Vec<String>, usize>,
 ) {
+    // `scope_sets` is the numbering of the FULL slot list, the one the scope subroutines were
+    // emitted from. Renumbering the filtered list below shifted every index after the first
+    // dropped slot, so a protected slot called another class's scope check and refused its own
+    // declaring class: an eval `unset($this->label)` left the compiled parent's slot set.
     super::unset_boundary::emit(module, emitter);
     let slots = slots
         .iter()
@@ -43,7 +48,7 @@ pub(super) fn emit_property_unset_helper(
             emitter.instruction(&format!("b.ne {fail}"));                       // reject non-object receivers
             emitter.instruction("str x1, [sp, #16]");                           // root the raw receiver in the shared property-dispatch spill
             emitter.instruction("ldr x9, [x1]");                                // select slots using the physical native class id
-            emit_aarch64_property_dispatch(module, emitter, data, &slots, "unset", fail);
+            emit_aarch64_property_dispatch_scoped(module, emitter, data, &slots, scope_sets, "unset", fail);
         }
         Arch::X86_64 => {
             emitter.instruction("push rbp");                                    // preserve the Rust caller frame
@@ -61,7 +66,7 @@ pub(super) fn emit_property_unset_helper(
             emitter.instruction(&format!("jne {fail}"));                        // reject non-object receivers
             emitter.instruction("mov QWORD PTR [rbp - 24], rdi");               // preserve the receiver in the shared property-dispatch spill
             emitter.instruction("mov r11, QWORD PTR [rdi]");                    // select slots using the physical native class id
-            emit_x86_64_property_dispatch(module, emitter, data, &slots, "unset", fail);
+            emit_x86_64_property_dispatch_scoped(module, emitter, data, &slots, scope_sets, "unset", fail);
         }
     }
     abi::emit_jump(emitter, fail);
@@ -127,7 +132,8 @@ mod tests {
             module.class_infos.insert("UnsetStorage".into(), checked.classes["UnsetStorage"].clone());
             let slots = collect_eval_property_slots(&module);
             let mut emitter = Emitter::new(target);
-            emit_property_unset_helper(&module, &mut emitter, &mut DataSection::new(), &slots);
+            let scope_sets = super::super::index_scope_sets(&slots);
+            emit_property_unset_helper(&module, &mut emitter, &mut DataSection::new(), &slots, &scope_sets);
             let asm = emitter.output();
             assert!(asm.contains(&target.extern_symbol("__elephc_eval_value_typed_property_unset_v2")), "{name}");
             let release = asm.find("__rt_decref_object").unwrap();

@@ -41,10 +41,11 @@ mod is_subclass_of;
 mod isset;
 mod method_exists;
 mod property_exists;
-mod spl_autoload;
+pub(crate) mod spl_autoload;
 mod spl_autoload_call;
 mod spl_autoload_extensions;
 mod spl_autoload_functions;
+pub(crate) use spl_autoload_functions::eval_registered_spl_autoload_functions_result;
 mod spl_autoload_register;
 mod spl_autoload_unregister;
 mod spl_classes;
@@ -57,13 +58,18 @@ pub(in crate::interpreter) use dispatch::{eval_builtin_symbols_call, eval_symbol
 pub(in crate::interpreter) use class_attribute_names::{
     eval_class_attribute_args_result, eval_reflection_attribute_array_result,
 };
-pub(in crate::interpreter) use class_implements::eval_class_relation_result;
+pub(in crate::interpreter) use class_implements::{
+    eval_class_relation_eval_class_interface_names, eval_class_relation_result,
+};
 pub(in crate::interpreter) use function_exists::{
     eval_date_procedural_alias_names, eval_function_probe_exists,
 };
+pub(in crate::interpreter) use class_exists::eval_class_is_declared;
 pub(in crate::interpreter) use get_class::eval_get_class_result;
+pub(in crate::interpreter) use isset::eval_isset_arg;
+pub(in crate::interpreter) use get_object_vars::eval_get_object_vars_result;
 pub(in crate::interpreter) use get_parent_class::eval_get_parent_class_result;
-pub(in crate::interpreter) use is_a::dynamic_object_is_a;
+pub(in crate::interpreter) use is_a::{dynamic_object_is_a, eval_class_like_name_is_instance_of};
 /// Gated with its only consumer: `curl_setopt()`'s KIND 8 options are the sole caller
 /// outside `is_callable()` itself, and this whole crate compiles curl-free by default.
 #[cfg(feature = "curl")]
@@ -73,3 +79,11 @@ pub(in crate::interpreter) use is_callable::{
     eval_is_callable_value,
 };
 pub(in crate::interpreter) use method_exists::eval_member_exists_result;
+pub(crate) use is_a::eval_class_name_is_a_bridge;
+pub(crate) use spl_autoload::eval_spl_autoload_class;
+pub(crate) use spl_autoload::eval_spl_autoload_classlike_definition;
+pub(crate) use spl_autoload_register::register_spl_autoload_callback_unchecked;
+#[cfg(not(test))]
+pub(crate) use spl_autoload_register::runtime_spl_autoload_callback_is_registered;
+#[cfg(not(test))]
+pub(crate) use spl_autoload_register::unregister_runtime_spl_autoload_callback;

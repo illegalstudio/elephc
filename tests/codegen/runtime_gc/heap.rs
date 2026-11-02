@@ -9,6 +9,84 @@
 
 use crate::support::*;
 
+/// Verifies every heap allocation starts on a 16-byte boundary on each supported target.
+#[test]
+fn test_gc_heap_alloc_aligns_odd_sized_payloads() {
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    str xzr, [x9]
+    adrp x9, _heap_free_list@PAGE
+    add x9, x9, _heap_free_list@PAGEOFF
+    str xzr, [x9]
+    adrp x9, _heap_small_bins@PAGE
+    add x9, x9, _heap_small_bins@PAGEOFF
+    stp xzr, xzr, [x9]
+    stp xzr, xzr, [x9, #16]
+    mov x0, #9
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #9
+    bl __rt_heap_alloc
+    ldr x9, [sp]
+    and x10, x9, #15
+    and x11, x0, #15
+    orr x10, x10, x11
+    sub x11, x0, x9
+    cmp x11, #32
+    cset x11, eq
+    cmp x10, #0
+    cset x10, eq
+    and x0, x10, x11
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#
+        }
+        Arch::X86_64 => {
+            r#"    lea r9, [rip + _heap_off]
+    mov QWORD PTR [r9], 0
+    lea r9, [rip + _heap_free_list]
+    mov QWORD PTR [r9], 0
+    lea r9, [rip + _heap_small_bins]
+    mov QWORD PTR [r9], 0
+    mov QWORD PTR [r9 + 8], 0
+    mov QWORD PTR [r9 + 16], 0
+    mov QWORD PTR [r9 + 24], 0
+    mov eax, 9
+    call __rt_heap_alloc
+    push rax
+    mov eax, 9
+    call __rt_heap_alloc
+    mov r9, QWORD PTR [rsp]
+    mov r10, r9
+    and r10, 15
+    mov r11, rax
+    and r11, 15
+    or r10, r11
+    sub rax, r9
+    cmp rax, 32
+    sete al
+    movzx eax, al
+    cmp r10, 0
+    sete r10b
+    movzx r10, r10b
+    and rax, r10
+    call __rt_itoa
+    mov rsi, rax
+    mov edi, 1
+    mov eax, 1
+    syscall"#
+        }
+    };
+
+    // The harness resets the allocator before its two allocations, so the size only has to cover
+    // the runtime's own startup allocations, which outgrew 256 bytes.
+    let out = compile_harness_and_run("<?php", 65_536, harness);
+    assert_eq!(out, "1");
+}
+
 /// Verifies GC heap free coalesces adjacent freed blocks into a single larger block.
 /// Allocates two 2000-element arrays, frees them with unset, then allocates a 3000-element array
 /// to confirm the freed adjacent blocks are merged and reused.
@@ -241,6 +319,146 @@ fn test_gc_heap_alloc_reuses_small_bin_before_bump() {
         }
     };
     let out = compile_harness_and_run("<?php", 256, harness);
+    assert_eq!(out, "1");
+}
+
+/// Verifies a heap full of size-class blocks still satisfies a request larger than any class.
+///
+/// Freed in allocation order, every string is parked in its exact size class instead of being
+/// trimmed off the bump tail, and parked blocks do not coalesce. The final array needs their
+/// combined space, so the allocator must merge them in its defragment pass before it would
+/// report "heap memory exhausted".
+#[test]
+fn test_gc_heap_defragments_size_class_blocks_before_exhausting() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+$n = (int) ($argc > 0 ? 300 : 0);
+$keep = [];
+for ($i = 0; $i < $n; $i++) {
+    $keep[] = str_repeat(chr(65 + $i % 26), 480 + $i % 3);
+}
+$sum = 0;
+foreach ($keep as $s) {
+    $sum += strlen($s);
+}
+for ($i = 0; $i < $n; $i++) {
+    unset($keep[$i]);
+}
+$big = array_fill(0, 12000, 7);
+echo $sum, "|", count($big), "|", $big[11999];
+"#,
+        262_144,
+    );
+    assert_eq!(out, "144300|12000|7");
+}
+
+/// Verifies a freed block above the old 64-byte bins is parked in its exact size class.
+/// Inline assembly harness: allocates two 512-byte blocks, frees the first (not the bump tail),
+/// then requests 500 bytes. The freed block must sit at the head of class 31 (payload 512) with
+/// the ordered free list still empty, the request must pop it, and the bump pointer must not move.
+#[test]
+fn test_gc_heap_parks_a_mid_sized_block_in_its_size_class() {
+    let harness = match target().arch {
+        Arch::AArch64 => {
+            r#"    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    str xzr, [x9]
+    adrp x9, _heap_free_list@PAGE
+    add x9, x9, _heap_free_list@PAGEOFF
+    str xzr, [x9]
+    mov x0, #512
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    mov x0, #512
+    bl __rt_heap_alloc
+    str x0, [sp, #-16]!
+    ldr x0, [sp, #16]
+    bl __rt_heap_free
+    adrp x9, _heap_free_list@PAGE
+    add x9, x9, _heap_free_list@PAGEOFF
+    ldr x9, [x9]
+    cmp x9, #0
+    cset x13, eq
+    adrp x9, _heap_small_bins@PAGE
+    add x9, x9, _heap_small_bins@PAGEOFF
+    ldr x9, [x9, #248]
+    ldr x10, [sp, #16]
+    sub x10, x10, #16
+    cmp x9, x10
+    cset x15, eq
+    and x13, x13, x15
+    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    ldr x10, [x9]
+    stp x10, x13, [sp, #-16]!
+    mov x0, #500
+    bl __rt_heap_alloc
+    ldr x9, [sp, #32]
+    cmp x0, x9
+    cset x11, eq
+    adrp x9, _heap_off@PAGE
+    add x9, x9, _heap_off@PAGEOFF
+    ldr x9, [x9]
+    ldp x10, x13, [sp]
+    cmp x9, x10
+    cset x12, eq
+    and x0, x11, x12
+    and x0, x0, x13
+    bl __rt_itoa
+    mov x0, #1
+    mov x16, #4
+    svc #0x80"#
+        }
+        Arch::X86_64 => {
+            r#"    lea r9, [rip + _heap_off]
+    mov QWORD PTR [r9], 0
+    lea r9, [rip + _heap_free_list]
+    mov QWORD PTR [r9], 0
+    mov eax, 512
+    call __rt_heap_alloc
+    push rax
+    mov eax, 512
+    call __rt_heap_alloc
+    push rax
+    mov rax, QWORD PTR [rsp + 8]
+    call __rt_heap_free
+    lea r9, [rip + _heap_free_list]
+    mov r9, QWORD PTR [r9]
+    test r9, r9
+    sete r13b
+    lea r9, [rip + _heap_small_bins]
+    mov r9, QWORD PTR [r9 + 248]
+    mov r10, QWORD PTR [rsp + 8]
+    sub r10, 16
+    cmp r9, r10
+    sete r14b
+    and r13b, r14b
+    lea r9, [rip + _heap_off]
+    mov r10, QWORD PTR [r9]
+    push r10
+    push r13
+    mov eax, 500
+    call __rt_heap_alloc
+    mov r9, QWORD PTR [rsp + 24]
+    cmp rax, r9
+    sete r11b
+    lea r9, [rip + _heap_off]
+    mov r9, QWORD PTR [r9]
+    mov r10, QWORD PTR [rsp + 8]
+    cmp r9, r10
+    sete r12b
+    and r11b, r12b
+    mov r13, QWORD PTR [rsp]
+    and r11b, r13b
+    movzx eax, r11b
+    call __rt_itoa
+    mov rsi, rax
+    mov edi, 1
+    mov eax, 1
+    syscall"#
+        }
+    };
+    let out = compile_harness_and_run("<?php", 4096, harness);
     assert_eq!(out, "1");
 }
 

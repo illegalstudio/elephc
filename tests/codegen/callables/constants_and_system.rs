@@ -9,6 +9,21 @@
 
 use crate::support::*;
 
+/// Verifies unresolved direct calls compile and fail only when reached, before argument effects.
+#[test]
+fn test_unresolved_direct_function_is_late_bound_generically() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    Vendor\Package\missing_function(print 'evaluated');
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "Call to undefined function Vendor\\Package\\missing_function()");
+}
+
 // Compiles PHP `source` to a native binary, expects it to fail at runtime,
 // and returns the captured stderr. The temporary directory is cleaned up regardless
 // of success or failure.
@@ -176,6 +191,26 @@ fn test_define_in_function() {
 fn test_const_concat() {
     let out = compile_and_run("<?php\nconst PREFIX = \"hello\";\necho PREFIX . \" world\";\n");
     assert_eq!(out, "hello world");
+}
+
+/// Predefined core and extension constants resolve through the global fallback in a namespace.
+#[test]
+fn test_predefined_standard_constants_in_namespace() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Example;
+echo UPLOAD_ERR_NO_FILE, '|';
+echo PHP_QUERY_RFC3986, '|';
+echo PHP_OUTPUT_HANDLER_REMOVABLE, '|';
+echo LIBXML_COMPACT, '|';
+echo LIBXML_ERR_WARNING, '|';
+echo T_START_HEREDOC, '|';
+echo T_WHITESPACE, '|';
+echo T_COMMENT, '|';
+echo DATE_RFC2822;
+"#,
+    );
+    assert_eq!(out, "4|2|64|65536|1|398|397|392|D, d M Y H:i:s O");
 }
 
 /// Verifies a file-scope `const` declarator list declares every name, in order (issue #1142).
@@ -1854,6 +1889,29 @@ echo $out[0];
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies callable returns inspect runtime array slots when flow inference retained an older
+/// indexed element type from a prior assignment.
+#[test]
+fn test_callable_return_normalizes_stale_indexed_array_element_type() {
+    let source = r#"<?php
+class StaleArrayCallableTarget {
+    public static function run(): string {
+        return "ok";
+    }
+}
+
+function make_stale_array_callable(): callable {
+    $callback = [1, 2];
+    $callback = [StaleArrayCallableTarget::class, "run"];
+    return $callback;
+}
+
+echo (make_stale_array_callable())();
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "ok");
+}
+
 /// Verifies callable-array variables use descriptor callback environments in array_map.
 #[test]
 fn test_array_map_callable_array_variable_uses_descriptor_receiver() {
@@ -2221,6 +2279,25 @@ echo $args[0];
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Verifies an array-shaped callable retains PHP's indexed receiver and method elements after it
+/// crosses a generic `callable` parameter boundary.
+#[test]
+fn test_callable_parameter_array_guard_exposes_receiver_for_method_exists() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableArrayLoader {
+    public function findFile(string $class): string { return $class; }
+}
+function inspect(callable $loader): void {
+    echo is_array($loader) && method_exists($loader[0], 'findFile') ? 'yes' : 'no';
+}
+function makeLoader(): callable { return [new CallableArrayLoader(), 'findFile']; }
+inspect(makeLoader());
+"#,
+    );
+    assert_eq!(out, "yes");
+}
+
 // -- v0.8 constants --
 
 // Tests `echo "a" . PHP_EOL . "b";` outputs "a\nb" (platform newline).
@@ -2240,12 +2317,26 @@ fn test_php_os() {
     assert_eq!(out, target().platform.php_os_name());
 }
 
+/// Verifies `PHP_OS_FAMILY` reports the target operating-system family.
+#[test]
+fn test_php_os_family() {
+    let out = compile_and_run("<?php echo PHP_OS_FAMILY;");
+    assert_eq!(out, target().platform.php_os_family_name());
+}
+
 // Tests `echo DIRECTORY_SEPARATOR;` outputs "/" (Unix path separator). PHP on Unix
 // uses "/" as the directory separator; Windows uses "\\".
 /// Verifies that directory separator.
 #[test]
 fn test_directory_separator() {
     let out = compile_and_run("<?php echo DIRECTORY_SEPARATOR;");
+    assert_eq!(out, "/");
+}
+
+/// Verifies that predefined constants remain valid with an explicit global namespace prefix.
+#[test]
+fn test_fully_qualified_predefined_constants() {
+    let out = compile_and_run("<?php echo \\DIRECTORY_SEPARATOR;");
     assert_eq!(out, "/");
 }
 
@@ -2343,6 +2434,26 @@ fn test_getenv_nonexistent() {
         "<?php $missing = getenv(\"ELEPHC_NONEXISTENT_VAR_XYZ\"); echo strlen($missing);",
     );
     assert_eq!(out, "0");
+}
+
+/// Verifies unnamed, explicitly null, local-only, and dynamically nullable environment lookups.
+#[test]
+fn test_getenv_all_and_optional_forms() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("ELEPHC_GETENV_ALL_TEST=visible");
+$all = getenv();
+echo $all["ELEPHC_GETENV_ALL_TEST"], ":";
+$again = getenv(null, true);
+echo $again["ELEPHC_GETENV_ALL_TEST"], ":";
+echo getenv("ELEPHC_GETENV_ALL_TEST", true), ":";
+$names = [null, "ELEPHC_GETENV_ALL_TEST"];
+$dynamic = getenv($names[$argc]);
+echo is_array($dynamic) ? "array" : $dynamic;
+putenv("ELEPHC_GETENV_ALL_TEST");
+"#,
+    );
+    assert_eq!(out, "visible:visible:visible:visible");
 }
 
 // Tests that a variable which is NOT SET and one set to the empty string give
@@ -2762,4 +2873,49 @@ fn test_system() {
 fn test_passthru() {
     let out = compile_and_run("<?php passthru(\"echo bye\");");
     assert_eq!(out, "bye\n");
+}
+
+/// Verifies `error_log()` applies PHP string coercion to a gradual message operand.
+#[test]
+fn test_error_log_coerces_mixed_message() {
+    let out = compile_and_run(
+        r#"<?php
+function logMixed(mixed $message): bool {
+    return error_log($message);
+}
+echo logMixed("mixed-message") ? "ok" : "failed";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies `header_remove()` accepts a gradual name and applies weak string coercion.
+#[test]
+fn test_header_remove_coerces_mixed_name() {
+    let out = compile_and_run(
+        r#"<?php
+function removeHeader(mixed $name): void {
+    header_remove($name);
+}
+removeHeader("X-Elephc-Test");
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a null-coalesced nullable status code reaches `header()` as an integer.
+#[test]
+fn test_header_accepts_narrowed_nullable_response_code() {
+    let out = compile_and_run(
+        r#"<?php
+function sendStatus(?int $code = null): void {
+    $code ??= 201;
+    header('X-Test: value', true, $code);
+    echo $code;
+}
+sendStatus();
+"#,
+    );
+    assert_eq!(out, "201");
 }

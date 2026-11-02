@@ -25,13 +25,34 @@ builtin! {
 
 /// Validates the source and computes the precise array return type based on `preserve_keys`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let source_ty = checker_spl::check_iterator_source(
-        cx.checker,
-        &cx.args[0],
-        cx.span,
-        cx.env,
-        "iterator_to_array()",
-    )?;
+    let inferred_source_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // A scalar is never iterable, and php finds out when the call runs: the branch that holds it
+    // may be unreachable (`$value instanceof Traversable` over a parameter every caller passes a
+    // string), which Laravel's `Str::replace()` is. The call answers a declared PHP array and
+    // lowers to a helper that raises the `TypeError`.
+    if matches!(
+        inferred_source_ty,
+        PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False | PhpType::Void
+    ) {
+        if let Some(arg) = cx.args.get(1) {
+            checker_spl::check_iterator_to_array_preserve_keys(cx.checker, arg, cx.env)?;
+        }
+        return Ok(PhpType::php_array());
+    }
+    // A union (`array|Traversable`, `?iterable`, a `@return` of several shapes) holds a value only
+    // known at run time, like `mixed`: the Mixed source path walks whatever it carries and raises
+    // php's `TypeError` for a member that is not iterable.
+    let source_ty = if matches!(inferred_source_ty, PhpType::Mixed | PhpType::Union(_)) {
+        PhpType::Mixed
+    } else {
+        checker_spl::check_iterator_source(
+            cx.checker,
+            &cx.args[0],
+            cx.span,
+            cx.env,
+            "iterator_to_array()",
+        )?
+    };
     let preserve_keys = if let Some(arg) = cx.args.get(1) {
         checker_spl::check_iterator_to_array_preserve_keys(cx.checker, arg, cx.env)?
     } else {

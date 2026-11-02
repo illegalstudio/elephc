@@ -2,7 +2,7 @@
 title: "str_replace() - internals"
 description: "Compiler internals for str_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 991
+  order: 1041
 ---
 
 ## `str_replace()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_replace.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -24,9 +24,9 @@ sidebar:
 
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
-- **Result type source**: `declared`
+- **Result type source**: `shared`
 - **Result ownership**: `independent`
-- **Effects**: `static (0 declared effects)`
+- **Effects**: `shared`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
@@ -45,13 +45,16 @@ function str_replace(string $search, string $replace, string $subject, int $coun
 ## What the type checker enforces
 
 - **Arity**: takes 3–4 arguments (1 optional).
+- **By-reference parameters**: `$count`.
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/str_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_replace.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Adapter reason**: `by-reference-or-lvalue`.
+- **Eval signature compatibility**: `additional-by-reference-output`.
 - **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$count`.
 
 ## Cross-references
 

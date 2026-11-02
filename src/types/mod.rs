@@ -29,6 +29,12 @@ pub(crate) mod call_args;
 pub(crate) mod deferred_defaults;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
+/// `ext/filter` validation identifiers, flags, and static option parsing.
+///
+/// The identifiers themselves are catalogued; this module is the compiler's own lookup table
+/// for folding a `FILTER_*` literal and for parsing the static `options` array, which the
+/// catalog has no shape for.
+pub(crate) mod filter_constants;
 /// C FFI type mapping utilities.
 mod ffi;
 /// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
@@ -37,6 +43,8 @@ pub(crate) mod param_binding;
 pub(crate) mod diagnostic_names;
 /// Target-aware `ext/pcntl` integer constants shared by checker and codegen.
 pub(crate) mod pcntl_constants;
+/// Late-static `static::method()` targets that only descendants declare.
+pub(crate) mod late_static_dispatch;
 /// PHP type model and type environment for tracking variable types.
 mod model;
 pub(crate) mod object_operators;
@@ -48,6 +56,13 @@ mod result;
 pub(crate) mod reflection_properties;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
+
+pub(crate) mod instanceof_intersection;
+/// `assert($x instanceof C)` statements, which narrow `$x` for the code after them.
+mod asserted_instanceof;
+pub(crate) use asserted_instanceof::asserted_instanceof_condition;
+
+pub(crate) mod private_scope;
 /// Function signature representation and builtin signature helpers.
 ///
 /// Crate-visible because the descriptor variadic storage contract
@@ -57,6 +72,8 @@ mod schema;
 pub(crate) mod signatures;
 /// Target-dependent values of `ICONV_IMPL` / `ICONV_VERSION`.
 pub(crate) mod iconv_constants;
+/// Version-sensitive integer constants exposed by PHP's tokenizer surface.
+pub(crate) mod token_constants;
 /// The compiler's view over the shared builtin class catalog.
 pub(crate) mod builtin_classes;
 /// The compiler's view over the shared global-constant catalog.
@@ -87,8 +104,8 @@ pub(crate) use model::{
     nullable_pointer_union_member, pointer_element_read_type, pointer_param_display,
 };
 pub(crate) use return_alias::{
-    collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
-    ReturnArgAlias,
+    collect_return_alias_summaries, summarize_callable_return_alias, DispatchFoldKey,
+    ReturnAliasSummaries, ReturnArgAlias,
 };
 pub(crate) use result::LoopStorageTypes;
 pub use checker::CheckOptions;
@@ -98,8 +115,9 @@ pub use checker::CheckOptions;
 pub use result::{check_with_options_and_bounds, check_with_target, check_with_target_and_bounds};
 pub use result::{check_with_target_and_options, ArrayPushPropertyPlan, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::constructor_owner;
+pub use schema::private_property_init_thunk_classes;
 pub use schema::{
-    class_declares_private_property, class_inherits_from,
+    class_declares_private_property, class_inherits_from, object_payload_size,
     property_name_shadows_ancestor_private_slot, resolve_property_name,
     scope_shares_class_hierarchy, PropertyNameResolution,
 };
@@ -136,6 +154,36 @@ pub fn check_with_options(
     options: CheckOptions,
 ) -> Result<CheckResult, crate::errors::CompileError> {
     result::check_with_options(program, options)
+}
+
+/// Whether `class_name` can be a userspace stream filter: it or an ancestor is a class
+/// `stream_filter_register()` names, or extends `php_user_filter`. With a registration that names
+/// its class at run time (`registered` is `None`), any class can. The checker and the EIR metadata
+/// keep the filter contract's raw-argument ABI for such a class only.
+pub(crate) fn is_user_filter_class(
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
+    registered: Option<&std::collections::HashSet<String>>,
+    class_name: &str,
+) -> bool {
+    let Some(registered) = registered else {
+        return true;
+    };
+    let mut current = Some(class_name);
+    let mut depth = 0;
+    while let Some(name) = current {
+        let name = name.trim_start_matches('\\');
+        if name.eq_ignore_ascii_case("php_user_filter")
+            || registered.contains(&crate::names::php_symbol_key(name))
+        {
+            return true;
+        }
+        depth += 1;
+        if depth > 64 {
+            return false;
+        }
+        current = classes.get(name).and_then(|info| info.parent.as_deref());
+    }
+    false
 }
 
 /// Returns the stable checker/EIR scope key for a closure nested at `span`.

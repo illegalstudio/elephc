@@ -69,6 +69,9 @@ struct TestBridgeStaticlib {
     lib_name: &'static str,
     /// Cargo package that produces `lib<lib_name>.a` for tests.
     package: &'static str,
+    /// System libraries linked by name on Apple targets, mirroring `apple_libraries` in the
+    /// production bridge table.
+    apple_libraries: &'static [&'static str],
     /// PHP extension names this bridge identifies, mirroring `php_extensions` in the
     /// production bridge table. Empty for bridges with no distinct extension surface.
     php_extensions: &'static [&'static str],
@@ -79,16 +82,19 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_tokenizer",
         package: "elephc-tokenizer",
+        apple_libraries: &[],
         php_extensions: &["tokenizer"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_tls",
         package: "elephc-tls",
+        apple_libraries: &[],
         php_extensions: &["openssl"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_pdo",
         package: "elephc-pdo",
+        apple_libraries: &[],
         // This archive backs both PDO and mysqli; the injected surface reports which
         // extension is actually present, matching the production bridge table.
         php_extensions: &[],
@@ -96,71 +102,98 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_crypto",
         package: "elephc-crypto",
+        apple_libraries: &[],
         php_extensions: &["hash"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_bcmath",
         package: "elephc-bcmath",
+        apple_libraries: &[],
         php_extensions: &["bcmath"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_gmp",
         package: "elephc-gmp",
+        apple_libraries: &[],
         php_extensions: &["gmp"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_random",
         package: "elephc-random",
+        apple_libraries: &[],
         php_extensions: &["random"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_mbstring",
         package: "elephc-mbstring",
+        apple_libraries: &[],
         php_extensions: &["mbstring"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_iconv",
         package: "elephc-iconv",
+        apple_libraries: &[],
         php_extensions: &["iconv"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_pcntl",
         package: "elephc-pcntl",
+        apple_libraries: &[],
         php_extensions: &["pcntl", "posix"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_proc",
+        package: "elephc-proc",
+        apple_libraries: &[],
+        php_extensions: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_phar",
         package: "elephc-phar",
+        apple_libraries: &[],
         php_extensions: &["Phar"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_highlight",
+        package: "elephc-highlight",
+        apple_libraries: &[],
+        php_extensions: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_tz",
         package: "elephc-tz",
+        apple_libraries: &[],
         php_extensions: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_image",
         package: "elephc-image",
+        apple_libraries: &[],
         php_extensions: &["gd"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_magician",
         package: "elephc-magician",
+        apple_libraries: &["iconv"],
         php_extensions: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_curl",
         package: "elephc-curl",
+        apple_libraries: &[],
         php_extensions: &["curl"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_fileinfo",
         package: "elephc-fileinfo",
+        apple_libraries: &[],
         php_extensions: &["fileinfo"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_xml",
         package: "elephc-xml",
+        // libxml2's encoding handlers call iconv, separate on every Apple SDK.
+        apple_libraries: &["iconv"],
         php_extensions: &["xml", "xmlwriter"],
     },
 ];
@@ -306,7 +339,9 @@ pub(crate) fn get_runtime_obj() -> &'static Path {
 pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
     let hash = runtime_asm_hash(runtime_asm);
     let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
-    let mut cache = cache.lock().expect("runtime asm cache poisoned");
+    // A test that panics while assembling one runtime variant must not take every later test
+    // down with it: the map only ever holds finished objects, so it is safe to keep using.
+    let mut cache = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(path) = cache.get(&hash) {
         return path.clone();
     }
@@ -1165,6 +1200,11 @@ pub(crate) fn link_binary(
             append_test_link_inputs(&mut ld_cmd, &final_plan, Platform::MacOS);
             if needs_libpq {
                 ld_cmd.arg("-lpq");
+            }
+            for bridge in requested_bridge_staticlibs(&actual_link_libs) {
+                for library in bridge.apple_libraries {
+                    ld_cmd.arg(format!("-l{library}"));
+                }
             }
             append_test_frameworks(&mut ld_cmd, &final_plan);
             // The PostgreSQL driver in the PDO bridge pulls in `whoami`, which

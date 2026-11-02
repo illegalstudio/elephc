@@ -12,13 +12,15 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::{abi, platform::Arch};
 use crate::types::PhpType;
 
-/// Writes the runtime value_type tag into the array header's packed kind word.
-pub(crate) fn emit_array_value_type_stamp(
-    emitter: &mut Emitter,
-    array_reg: &str,
-    elem_ty: &PhpType,
-) {
-    let value_type_tag = match elem_ty {
+/// The value_type tags an array header can carry, one `__rt_array_stamp_<tag>` entry each.
+const STAMP_TAGS: [u8; 10] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 10,
+    crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE as u8,
+];
+
+/// The value_type tag for an element type, or `None` when the type leaves the header untouched.
+fn array_value_type_tag(elem_ty: &PhpType) -> Option<u8> {
+    Some(match elem_ty {
         PhpType::Float => 2,
         PhpType::Bool => 3,
         PhpType::Str => 1,
@@ -28,11 +30,37 @@ pub(crate) fn emit_array_value_type_stamp(
         PhpType::Mixed => 7,
         PhpType::Union(_) => 7,
         PhpType::Void => 8,
+        // Without this arm an array of closures kept tag 0 and every `mixed` reader boxed each
+        // closure as an INT: `foreach ($pipes as $pipe)` behind a `mixed` parameter handed back
+        // values that fatal "mixed value is not callable". Tag 10 is the one `array_values()`,
+        // the hash buckets and `__rt_array_free_deep` already use for callable descriptors.
         PhpType::Callable => 10,
         // A `?ptr<T>` word: dynamic readers show 0 as PHP null and any other word as an integer.
-        PhpType::Pointer(_) => crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE,
-        _ => return,
+        PhpType::Pointer(_) => crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE as u8,
+        _ => return None,
+    })
+}
+
+/// Writes the runtime value_type tag into the array header's packed kind word.
+///
+/// An array in the result register is stamped by ONE `bl __rt_array_stamp_<tag>`: the inline
+/// read-modify-write was seven AArch64 instructions (nine on x86_64) at each of the ~130 000
+/// array-creation sites of the compiled Symfony app, about 3 MB of text for a constant sequence.
+/// The routines clobber the registers the inline sequence did (x10-x12 on AArch64; nothing but
+/// the flags on x86_64) and make no call of their own. Any other register keeps the inline
+/// sequence.
+pub(crate) fn emit_array_value_type_stamp(
+    emitter: &mut Emitter,
+    array_reg: &str,
+    elem_ty: &PhpType,
+) {
+    let Some(value_type_tag) = array_value_type_tag(elem_ty) else {
+        return;
     };
+    if array_reg == abi::int_result_reg(emitter) {
+        abi::emit_call_label(emitter, &format!("__rt_array_stamp_{value_type_tag}"));
+        return;
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg));     // load the packed array kind word from the heap header
@@ -57,6 +85,35 @@ pub(crate) fn emit_array_value_type_stamp(
     }
 }
 
+/// Emits the `__rt_array_stamp_<tag>` routines: stamp the array in the result register with one
+/// value_type tag, preserving the heap kind, the indexed-array kind and the persistent COW flag.
+pub(crate) fn emit_array_stamp_runtime(emitter: &mut Emitter) {
+    for tag in STAMP_TAGS {
+        emitter.blank();
+        emitter.comment(&format!("--- runtime: array_stamp_{tag} ---"));
+        emitter.label_global(&format!("__rt_array_stamp_{tag}"));
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("ldr x10, [x0, #-8]");                      // load the packed array kind word from the heap header
+                emitter.instruction("mov x12, #0x80ff");                        // preserve the indexed-array kind and persistent COW flag
+                emitter.instruction("and x10, x10, x12");                       // keep only the persistent indexed-array metadata bits
+                emitter.instruction(&format!("mov x11, #{}", tag));             // materialize the runtime array value_type tag
+                emitter.instruction("lsl x11, x11, #8");                        // move the value_type tag into the packed kind-word byte lane
+                emitter.instruction("orr x10, x10, x11");                       // combine the heap kind with the array value_type tag
+                emitter.instruction("str x10, [x0, #-8]");                      // persist the packed array kind word in the heap header
+                emitter.instruction("ret");                                     // return to the stamping site
+            }
+            Arch::X86_64 => {
+                // The kind word's upper half (the heap magic marker) is left alone: only the low
+                // dword is rewritten in place, so no scratch register is needed.
+                emitter.instruction("and DWORD PTR [rax - 8], 0x80ff");         // keep the indexed-array kind and persistent COW flag
+                emitter.instruction(&format!("or DWORD PTR [rax - 8], {}", u32::from(tag) << 8)); // combine them with the value_type tag
+                emitter.instruction("ret");                                     // return to the stamping site
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,7 +127,31 @@ mod tests {
             let result = abi::int_result_reg(&emitter);
             emit_array_value_type_stamp(&mut emitter, result, &PhpType::Callable);
             let assembly = emitter.output();
-            let expected = if name == "linux-x86_64" { "mov r12, 10" } else { "mov x11, #10" };
+            assert!(assembly.contains("__rt_array_stamp_10"), "{name}: {assembly}");
+            assert!(!assembly.contains("0x80ff"), "{name}: the stamp site must stay one call: {assembly}");
+
+            let mut routines = Emitter::new(Target::parse(name).unwrap());
+            emit_array_stamp_runtime(&mut routines);
+            let routines = routines.output();
+            let expected = if name == "linux-x86_64" {
+                "or DWORD PTR [rax - 8], 2560"
+            } else {
+                "mov x11, #10"
+            };
+            assert!(routines.contains(expected), "{name}: {routines}");
+        }
+    }
+
+    /// A register other than the result register keeps the inline read-modify-write, with the
+    /// same tag, so a caller that stamps through a callee-saved register is unaffected.
+    #[test]
+    fn stamping_through_another_register_stays_inline() {
+        for (name, other) in [("macos-aarch64", "x22"), ("linux-x86_64", "r15")] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_array_value_type_stamp(&mut emitter, other, &PhpType::Mixed);
+            let assembly = emitter.output();
+            assert!(!assembly.contains("__rt_array_stamp_"), "{name}: {assembly}");
+            let expected = if name == "linux-x86_64" { "mov r12, 7" } else { "mov x11, #7" };
             assert!(assembly.contains(expected), "{name}: {assembly}");
         }
     }

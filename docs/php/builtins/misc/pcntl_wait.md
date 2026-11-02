@@ -2,7 +2,7 @@
 title: "pcntl_wait()"
 description: "Waits for any child process and writes its target-native status."
 sidebar:
-  order: 739
+  order: 758
 ---
 
 ## pcntl_wait()

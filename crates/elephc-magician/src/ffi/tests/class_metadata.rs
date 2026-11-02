@@ -61,6 +61,17 @@ fn register_native_class_parent_records_metadata() {
     assert_eq!(ctx.native_class_parent("knownchild"), Some("KnownParent"));
 }
 
+/// Verifies matching parent metadata can be registered repeatedly without changing the hierarchy.
+#[test]
+fn register_native_class_parent_is_idempotent_and_rejects_conflicts() {
+    let mut ctx = ElephcEvalContext::new();
+
+    assert!(ctx.define_native_class_parent("KnownChild", "KnownParent"));
+    assert!(ctx.define_native_class_parent("knownchild", "knownparent"));
+    assert!(!ctx.define_native_class_parent("KnownChild", "OtherParent"));
+    assert_eq!(ctx.native_class_parent("KNOWNCHILD"), Some("KnownParent"));
+}
+
 /// Verifies native AOT property type metadata is available to eval reflection.
 #[test]
 fn register_native_property_type_records_metadata() {

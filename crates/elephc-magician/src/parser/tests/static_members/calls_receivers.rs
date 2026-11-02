@@ -22,7 +22,7 @@ fn parse_fragment_accepts_static_class_members() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::new(
+        &[EvalStmt::class_decl(EvalClass::new(
             "EvalStaticBox",
             vec![EvalClassProperty::with_visibility_and_static(
                 "count",
@@ -252,40 +252,43 @@ fn parse_fragment_accepts_expression_static_receiver_property_writes() {
     assert_eq!(
         program.statements(),
         &[
-            EvalStmt::DynamicStaticPropertySet {
-                class_name: factory_call(),
-                property: "count".to_string(),
-                value: EvalExpr::Const(EvalConst::Int(2)),
-            },
-            EvalStmt::DynamicStaticPropertySet {
-                class_name: factory_call(),
-                property: "count".to_string(),
-                value: EvalExpr::Binary {
-                    op: EvalBinOp::Add,
-                    left: Box::new(EvalExpr::DynamicStaticPropertyGet {
-                        class_name: Box::new(factory_call()),
-                        property: "count".to_string(),
-                    }),
-                    right: Box::new(EvalExpr::Const(EvalConst::Int(3))),
-                },
-            },
+            EvalStmt::Expr(EvalExpr::Assign {
+                target: Box::new(EvalExpr::DynamicStaticPropertyGet {
+                    class_name: Box::new(factory_call()),
+                    property: "count".to_string(),
+                }),
+                value: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+            }),
+            EvalStmt::Expr(EvalExpr::CompoundAssign {
+                target: Box::new(EvalExpr::DynamicStaticPropertyGet {
+                    class_name: Box::new(factory_call()),
+                    property: "count".to_string(),
+                }),
+                op: EvalBinOp::Add,
+                value: Box::new(EvalExpr::Const(EvalConst::Int(3))),
+            }),
             EvalStmt::DynamicStaticPropertyArrayAppend {
                 class_name: factory_call(),
                 property: "items".to_string(),
                 value: EvalExpr::Const(EvalConst::Int(4)),
             },
-            EvalStmt::DynamicStaticPropertyArraySet {
-                class_name: factory_call(),
-                property: "items".to_string(),
-                index: EvalExpr::Const(EvalConst::Int(0)),
-                op: None,
-                value: EvalExpr::Const(EvalConst::Int(5)),
-            },
-            EvalStmt::DynamicStaticPropertyIncDec {
-                class_name: factory_call(),
-                property: "count".to_string(),
+            EvalStmt::Expr(EvalExpr::Assign {
+                target: Box::new(EvalExpr::ArrayGet {
+                    array: Box::new(EvalExpr::DynamicStaticPropertyGet {
+                        class_name: Box::new(factory_call()),
+                        property: "items".to_string(),
+                    }),
+                    index: Box::new(EvalExpr::Const(EvalConst::Int(0))),
+                }),
+                value: Box::new(EvalExpr::Const(EvalConst::Int(5))),
+            }),
+            EvalStmt::Expr(EvalExpr::PostfixIncDec {
+                target: Box::new(EvalExpr::DynamicStaticPropertyGet {
+                    class_name: Box::new(factory_call()),
+                    property: "count".to_string(),
+                }),
                 increment: true,
-            },
+            }),
             EvalStmt::DynamicStaticPropertyIncDec {
                 class_name: factory_call(),
                 property: "count".to_string(),

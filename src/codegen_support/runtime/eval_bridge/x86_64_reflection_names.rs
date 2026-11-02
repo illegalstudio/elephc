@@ -131,7 +131,7 @@ pub(super) fn emit_x86_64_eval_reflection_member_names(
     abi::emit_symbol_address(emitter, "r10", count_symbol);
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the AOT reflection member row count
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the table count across helper calls
-    emitter.instruction("mov rdi, r10");                                        // use the full table count as a safe result-array capacity
+    emitter.instruction("mov rdi, 4");                                          // start from the wrapper's small minimum and grow only for matching members
     emitter.instruction(&format!("call {string_array_new_symbol}"));            // allocate the boxed result string array
     emitter.instruction(&format!("test rax, rax"));                             // did allocation return a usable boxed array?
     emitter.instruction(&format!("jz {miss_label}"));                           // allocation failure reports a null pointer to Rust

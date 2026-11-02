@@ -7,8 +7,8 @@
 //! that `is_object`, `get_class`, `instanceof`, and `var_dump` all agree about.
 //!
 //! Called from:
-//! - `crate::pipeline::compile()` and the codegen test harness via `inject_if_used`,
-//!   after include resolution and before name resolution.
+//! - `crate::pipeline::compile()` and focused test harnesses via `inject_if_used`, and again
+//!   after autoload expansion via `inject_late_if_used`.
 //!
 //! Key details:
 //! - WHY A PRELUDE AND NOT A NATIVE CLASS. Every hash-context `RuntimeFnId` declares
@@ -217,6 +217,23 @@ fn inject_if_used_on_compiler_stack(
     inventory.record_program("hash", &combined);
     combined.extend(program);
     combined
+}
+
+/// Injects the hash prelude after autoload expansion when only an autoloaded file uses it.
+///
+/// The early gate in the pipeline scans the program before Composer/PSR-4 class files are
+/// spliced in, so a `hash_init()` that only an autoloaded class calls saw no declarations: the
+/// call compiled as a runtime lookup and died with `Call to undefined function hash_init()`.
+/// This second gate reads the complete program and is a no-op whenever the early one fired.
+/// The declarations carry only global names, so no name resolution is needed this late.
+pub fn inject_late_if_used(
+    program: crate::parser::ast::Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> crate::parser::ast::Program {
+    if inventory.groups.contains_key("hash") {
+        return program;
+    }
+    inject_if_used(program, false, inventory)
 }
 
 #[cfg(test)]

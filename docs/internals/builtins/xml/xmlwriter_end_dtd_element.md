@@ -2,7 +2,7 @@
 title: "xmlwriter_end_dtd_element() - internals"
 description: "Compiler internals for xmlwriter_end_dtd_element(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1111
+  order: 1171
 ---
 
 ## `xmlwriter_end_dtd_element()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1353](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1353) (`xmlwriter_end_dtd_element`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:1363](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1363) (`xmlwriter_end_dtd_element`)
 - **Function symbol**: `xmlwriter_end_dtd_element()`
 
 

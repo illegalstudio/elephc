@@ -10,6 +10,35 @@
 use super::*;
 use crate::codegen::emit::Emitter;
 
+/// Returns whether a class's flattened method table declares the requested instance method.
+pub(super) fn class_declares_method(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method_name);
+    ctx.module
+        .class_infos
+        .get(normalized)
+        .is_some_and(|class_info| class_info.methods.contains_key(&method_key))
+}
+
+/// Returns the class whose private declaration answers this call, when the receiver's own class
+/// has none. See [`crate::types::private_scope`] for the rule and its measurement.
+pub(super) fn lexical_private_method_scope(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_name: &str,
+) -> Option<String> {
+    crate::types::private_scope::lexical_private_method_scope(
+        &ctx.module.class_infos,
+        ctx.function.name.rsplit_once("::").map(|(scope, _)| scope),
+        class_name,
+        &php_symbol_key(method_name),
+    )
+}
+
 /// Resolves method implementation class, canonical key, return type, and ABI arity.
 pub(super) fn resolve_method_call_target(
     ctx: &FunctionContext<'_>,
@@ -17,7 +46,9 @@ pub(super) fn resolve_method_call_target(
     method_name: &str,
     operand_count: usize,
 ) -> Result<MethodCallTarget> {
-    let normalized = class_name.trim_start_matches('\\');
+    let normalized = lexical_private_method_scope(ctx, class_name, method_name)
+        .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
+    let normalized = normalized.as_str();
     let class_info = ctx.module.class_infos.get(normalized).ok_or_else(|| {
         CodegenIrError::unsupported(format!("method call on unknown class {}", normalized))
     })?;
@@ -29,6 +60,16 @@ pub(super) fn resolve_method_call_target(
         ))
     })?;
     let physical_args = callee_sig.params.len() + 1;
+    // php IGNORES arguments a userland function does not declare, and an override further down the
+    // family may declare them. Each implementation is emitted with its own frame, so a surplus
+    // operand simply occupies an argument register the base's body never reads and the override's
+    // body does. Only a surplus that still fits the register-passed prefix is accepted; beyond that
+    // the physical ABI spills, and a callee reading a slot the caller did not write is not the same
+    // thing as ignoring an argument.
+    const REGISTER_PASSED_ARGS: usize = 8;
+    let tolerated_surplus = |count: usize, expected: usize| {
+        count > expected && count <= REGISTER_PASSED_ARGS
+    };
     let (call_sig, source_abi) = if operand_count == physical_args {
         (
             callee_sig.clone(),
@@ -41,7 +82,16 @@ pub(super) fn resolve_method_call_target(
             callee_sig,
         )
         .map_err(CodegenIrError::unsupported)?;
-        if operand_count != source.params.len() + 1 {
+        if operand_count == source.params.len() + 1 {
+            (source, true)
+        } else if tolerated_surplus(operand_count, physical_args) {
+            (
+                callee_sig.clone(),
+                !crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(
+                    callee_sig,
+                ),
+            )
+        } else {
             return Err(CodegenIrError::unsupported(format!(
                 "method call to {}::{} with {} operands for {} physical or {} source ABI params",
                 normalized,
@@ -51,14 +101,16 @@ pub(super) fn resolve_method_call_target(
                 source.params.len() + 1
             )));
         }
-        (source, true)
     };
     if source_abi {
         let actual = class_info.methods.get(&method_key).expect("method signature exists");
         crate::codegen_support::source_method_adapters::plan_method_abi(&call_sig, actual)
             .map_err(CodegenIrError::unsupported)?;
     }
-    if operand_count != call_sig.params.len() + 1 {
+    let expected_args = call_sig.params.len() + 1;
+    if operand_count < expected_args
+        || (operand_count > expected_args && operand_count > REGISTER_PASSED_ARGS)
+    {
         return Err(CodegenIrError::unsupported(format!(
             "method call to {}::{} has an unresolved ABI shape",
             normalized, method_name
@@ -90,6 +142,17 @@ pub(super) fn resolve_method_call_target(
     } else {
         dynamic_slot
     };
+    // The RESULT is read the way the emitted body returns it. An inherited method's copy in the
+    // receiver class can carry a narrower checker type than the body its ancestor emitted: a
+    // `parent::__construct(fopen(...))` retypes the untyped property in the child's copy to a
+    // resource (raw `int` storage) while `B::get()` still returns the boxed Mixed it was compiled
+    // with, and re-boxing that pointer as an int printed `int(4316502720)`.
+    let return_ty = ctx
+        .module
+        .class_infos
+        .get(&impl_class)
+        .and_then(|info| info.methods.get(&method_key))
+        .map_or_else(|| callee_sig.return_type.clone(), |sig| sig.return_type.clone());
     Ok(MethodCallTarget {
         impl_class,
         method_key,
@@ -100,7 +163,7 @@ pub(super) fn resolve_method_call_target(
             .map(|(_, ty)| ty.codegen_repr())
             .collect(),
         ref_params: call_sig.ref_params.clone(),
-        return_ty: callee_sig.return_type.clone(),
+        return_ty,
         by_ref_return: callee_sig.by_ref_return,
         source_abi,
     })
@@ -239,15 +302,8 @@ pub(super) fn class_method_already_emitted(
     method_key: &str,
     is_static: bool,
 ) -> bool {
-    ctx.module.class_methods.iter().any(|function| {
-        function.flags.is_static == is_static
-            && function
-                .name
-                .rsplit_once("::")
-                .is_some_and(|(candidate_class, candidate_method)| {
-                    candidate_class == class_name && php_symbol_key(candidate_method) == method_key
-                })
-    })
+    ctx.shared
+        .emitted_method_contains(class_name, method_key, is_static)
 }
 
 /// Stores a call result, boxing concrete returns for generic EIR result slots.
@@ -316,7 +372,97 @@ pub(super) fn store_method_call_result(
         }
         return Ok(());
     }
+    // A PHP method returns its value OWNED. Boxing a container or object for a `mixed` call site
+    // (every call on an untyped receiver dispatches this way) retained it for the box and kept the
+    // call's own reference too: `$m->make()` on an untyped `$m` leaked what it returned, and that
+    // object's destructor never ran. The box takes the call's reference instead. Strings keep the
+    // ordinary path: a call's string result may live in the concat scratch buffer.
+    if let Some(result) = inst.result {
+        let result_ty = ctx.value_php_type(result)?;
+        let return_ty = target.return_ty.codegen_repr();
+        if matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
+            && matches!(
+                return_ty,
+                PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+                    | PhpType::Iterable
+                    | PhpType::Object(_)
+                    | PhpType::Callable
+            )
+        {
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &return_ty,
+            );
+            return ctx.store_result_value(result);
+        }
+        // The box COPIES a string, so the call's own string stayed owned by nobody: every
+        // string-returning method called on an untyped receiver leaked its result. Release it
+        // after boxing, as the typed path's acquire-then-release does; the validating free skips
+        // a scratch or static pointer, so a result that never left them is not freed.
+        if matches!(result_ty, PhpType::Mixed | PhpType::Union(_)) && return_ty == PhpType::Str {
+            emit_box_call_string_releasing_original(ctx);
+            return ctx.store_result_value(result);
+        }
+    }
     store_call_result(ctx, inst, &target.return_ty)
+}
+
+/// Turns a direct method call's result into the owned boxed Mixed cell a `Mixed` ladder arm
+/// publishes, whatever the callee's declared return representation.
+///
+/// This is the by-value half of `store_method_call_result` for a site whose consumer is a
+/// `Mixed` slot: a method returns its value OWNED, so an object or container is moved into the
+/// box, a string is boxed and the call's own copy dropped, and a scalar is simply boxed. A callee
+/// that already returns a boxed `Mixed` needs nothing.
+pub(super) fn box_method_result_as_mixed(ctx: &mut FunctionContext<'_>, return_ty: &PhpType) {
+    let return_ty = return_ty.codegen_repr();
+    match return_ty {
+        PhpType::Mixed | PhpType::Union(_) => {}
+        PhpType::Void => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                0x7fff_ffff_ffff_fffe,
+            );
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
+        }
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Object(_)
+        | PhpType::Callable => {
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &return_ty);
+        }
+        PhpType::Str => emit_box_call_string_releasing_original(ctx),
+        other => emit_box_current_value_as_mixed(ctx.emitter, &other),
+    }
+}
+
+/// Boxes the string call result in the result registers and releases the call's own copy.
+fn emit_box_call_string_releasing_original(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x1, [sp, #-16]!");                     // keep the call's string pointer across boxing
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            ctx.emitter.instruction("ldr x9, [sp]");                            // recover the call's string pointer
+            ctx.emitter.instruction("str x0, [sp]");                            // keep the box across the release
+            ctx.emitter.instruction("mov x0, x9");                              // pass the call's string to the validating free
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // the box is the call's Mixed result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // keep the call's string pointer across boxing
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // the string pointer is the first result word
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // recover the call's string pointer
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // keep the box across the release
+            ctx.emitter.instruction("mov rax, r10");                            // pass the call's string to the validating free
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // the box is the call's Mixed result
+            ctx.emitter.instruction("add rsp, 16");                             // discard the spill slot
+        }
+    }
 }
 
 /// Resolves an instruction data immediate as a method name.
@@ -329,4 +475,3 @@ pub(super) fn method_name_data<'a>(ctx: &'a FunctionContext<'_>, inst: &Instruct
         .map(String::as_str)
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }
-

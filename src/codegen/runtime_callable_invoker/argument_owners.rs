@@ -33,6 +33,20 @@ impl InvokerArgumentOwners {
         }
     }
 
+    /// Number of argument owner slots (the boxed-return and pending slots follow them).
+    pub(super) fn count(&self) -> usize {
+        self.count
+    }
+
+    /// Bit `i` set when owner `i` is a raw callable descriptor (released through its own entry).
+    pub(super) fn descriptor_mask(&self) -> u64 {
+        self.descriptor_slots
+            .iter()
+            .enumerate()
+            .filter(|(index, descriptor)| **descriptor && *index < 64)
+            .fold(0u64, |mask, (index, _)| mask | (1u64 << index))
+    }
+
     /// Returns the aligned frame size including every argument and the boxed return slot.
     pub(super) fn frame_size(&self) -> usize {
         self.frame_size
@@ -69,6 +83,13 @@ impl InvokerArgumentOwners {
         let scratch = abi::secondary_scratch_reg(emitter);
         abi::emit_load_temporary_stack_slot(emitter, scratch, 0);
         abi::store_at_offset(emitter, scratch, self.offset(index));
+    }
+
+    /// Adopts the owned container a named-argument normalization produced, held in the integer
+    /// result register, in the extra slot past the parameters'.
+    pub(super) fn record_normalized_container(&self, index: usize, emitter: &mut Emitter) {
+        assert!(index < self.count, "normalized container owner exceeds its frame layout");
+        abi::store_at_offset(emitter, abi::int_result_reg(emitter), self.offset(index));
     }
 
     /// Roots an owned conversion input in the boxed-result slot before the native call starts.

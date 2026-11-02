@@ -91,7 +91,15 @@ fn lower_instance_method_callable_call(
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.return_ty)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks(ctx, &call_args)?;
+    // The method is called directly, so the callable operand itself is never consumed. One read
+    // out of a boxed (promoted) local holds its own reference to the descriptor, which leaked it
+    // and its receiver: `$f = $o->m(...); echo $f(); $f = null;` never destroyed `$o`'s object.
+    if ctx.value_can_own_mixed_box_source(callable)? {
+        ctx.load_value_to_reg(callable, abi::int_result_reg(ctx.emitter))?;
+        abi::emit_call_label(ctx.emitter, "__rt_callable_descriptor_release");
+    }
+    Ok(())
 }
 
 /// Resolves a callable operand back to the receiver-bound method descriptor that produced it.

@@ -205,6 +205,10 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
             visit_expr(object, st);
             visit_expr(value, st);
         }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            visit_expr(object, st);
+            visit_expr(source, st);
+        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             visit_expr(object, st);
             visit_expr(value, st);
@@ -220,6 +224,22 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
             visit_expr(index, st);
             visit_expr(value, st);
         }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            visit_expr(index, st);
+            visit_expr(source, st);
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            visit_expr(property, st);
+            if let Some(index) = index {
+                visit_expr(index, st);
+            }
+            visit_expr(value, st);
+        }
         // Statements that don't carry expressions or sub-bodies for yield checks.
         StmtKind::Break(_)
         | StmtKind::Continue(_)
@@ -231,6 +251,7 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
         | StmtKind::Global { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::IncludeOnceGuard { .. }
@@ -281,6 +302,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         }
         ExprKind::InstanceOf { value, .. } => visit_expr(value, st),
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -424,6 +446,8 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::ClassConstant { .. }
         | ExprKind::MagicConstant(_) => {}
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => visit_expr(property, st),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => visit_expr(receiver, st),
         ExprKind::Print(inner) => visit_expr(inner, st),
         ExprKind::Assignment { target, value, .. } => {
             visit_expr(target, st);

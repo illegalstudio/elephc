@@ -46,6 +46,55 @@ pub(super) fn builtin_reflection_class_array_method(
     }
 }
 
+/// Returns a `ReflectionClass` method that builds one reflector per name held in `names_property`.
+///
+/// php hands back fresh reflector objects on every call, keyed by name, so building them here is
+/// the documented behavior rather than a workaround. It also removes a dependency on the object
+/// slot (`__interfaces` / `__traits`) being populated: a reflector built from a RUNTIME class name
+/// goes through the eval bridge's `reflection_owner_layout`, which fills the name arrays and never
+/// the object arrays. Symfony's `AutowirePass::populateAvailableType()` iterates
+/// `getInterfaces()` on exactly such reflectors, got null, and warned for every service.
+pub(super) fn builtin_reflection_class_objects_from_names_method(
+    method_name: &str,
+    names_property: &str,
+    return_type: TypeExpr,
+) -> ClassMethod {
+    use crate::synthetic_class::{e_array, e_new, e_var, s_array_assign, s_assign, s_foreach, s_return};
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        type_params: Vec::new(),
+        name: method_name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(return_type),
+        by_ref_return: false,
+        body: vec![
+            s_assign("__elephc_reflectors", e_array(Vec::new())),
+            s_foreach(
+                reflection_this_property(names_property, dummy_span),
+                None,
+                "__elephc_reflector_name",
+                vec![s_array_assign(
+                    "__elephc_reflectors",
+                    e_var("__elephc_reflector_name"),
+                    e_new("ReflectionClass", vec![e_var("__elephc_reflector_name")]),
+                )],
+            ),
+            s_return(e_var("__elephc_reflectors")),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
 /// Returns a public `ReflectionClass` array method with an optional modifier filter.
 pub(super) fn builtin_reflection_class_filtered_array_method(
     method_name: &str,
@@ -357,6 +406,95 @@ pub(super) fn builtin_reflection_class_object_method(
 }
 
 /// Returns a public mixed `ReflectionClass` method backed by one private slot.
+/// `ReflectionClass::getConstants(?int $filter = null)`: the full name => value map, or only the
+/// constants whose modifiers match `$filter` (league/uri's `Idna\Option` asks for
+/// `ReflectionClassConstant::IS_PUBLIC`). The filtered form reuses `getReflectionConstants()`.
+pub(super) fn builtin_reflection_class_get_constants_method() -> ClassMethod {
+    use crate::synthetic_class::{e_method_call, e_null, e_this, e_var, s_array_assign, s_assign, s_foreach, s_if, s_return};
+    let mut method = builtin_reflection_class_mixed_method("getConstants", "__constants");
+    method.params = vec![(
+        "filter".to_string(),
+        Some(TypeExpr::Nullable(Box::new(TypeExpr::Int))),
+        null_expr(),
+        false,
+    )];
+    let all = method.body.clone();
+    // A closed-world reflector is always table-built: its constants' modifiers are a plain list,
+    // so the filtered form needs no ReflectionClassConstant at all.
+    if crate::closed_world::is_enabled() {
+        use crate::synthetic_class::{e_binop, e_cast, e_int, e_this_prop, s_prop_assign};
+        let _ = s_prop_assign;
+        method.body = vec![
+            s_if(
+                binary_expr(e_var("filter"), BinOp::StrictEq, e_null(), crate::span::Span::dummy()),
+                all,
+                Vec::new(),
+                None,
+            ),
+            s_assign("result", Expr::new(ExprKind::ArrayLiteral(Vec::new()), crate::span::Span::dummy())),
+            s_assign("position", e_int(0)),
+            s_foreach(
+                e_this_prop("__constant_names"),
+                None,
+                "constant_name",
+                vec![
+                    s_if(
+                        e_binop(
+                            e_binop(
+                                e_cast(
+                                    crate::parser::ast::CastType::Int,
+                                    crate::synthetic_class::e_index(
+                                        e_this_prop("__constant_modifiers"),
+                                        e_var("position"),
+                                    ),
+                                ),
+                                BinOp::BitAnd,
+                                e_var("filter"),
+                            ),
+                            BinOp::StrictNotEq,
+                            e_int(0),
+                        ),
+                        vec![s_array_assign(
+                            "result",
+                            e_var("constant_name"),
+                            crate::synthetic_class::e_index(
+                                e_this_prop("__constants"),
+                                e_var("constant_name"),
+                            ),
+                        )],
+                        Vec::new(),
+                        None,
+                    ),
+                    s_assign("position", e_binop(e_var("position"), BinOp::Add, e_int(1))),
+                ],
+            ),
+            s_return(e_var("result")),
+        ];
+        return method;
+    }
+    method.body = vec![
+        s_if(
+            binary_expr(e_var("filter"), BinOp::StrictEq, e_null(), crate::span::Span::dummy()),
+            all,
+            Vec::new(),
+            None,
+        ),
+        s_assign("result", Expr::new(ExprKind::ArrayLiteral(Vec::new()), crate::span::Span::dummy())),
+        s_foreach(
+            e_method_call(e_this(), "getReflectionConstants", vec![e_var("filter")]),
+            None,
+            "constant",
+            vec![s_array_assign(
+                "result",
+                e_method_call(e_var("constant"), "getName", Vec::new()),
+                e_method_call(e_var("constant"), "getValue", Vec::new()),
+            )],
+        ),
+        s_return(e_var("result")),
+    ];
+    method
+}
+
 pub(super) fn builtin_reflection_class_mixed_method(method_name: &str, property: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {

@@ -2,7 +2,7 @@
 //! Emits textual EIR for the compiler's `--emit-ir` terminal path.
 //!
 //! Called from:
-//! - `crate::pipeline::compile()` after AST optimization and type checking.
+//! - `crate::pipeline::compile()` after shared lowering and source metadata binding.
 //!
 //! Key details:
 //! - The requested EIR optimization setting is applied before printing.
@@ -12,50 +12,16 @@ use std::collections::HashMap;
 
 use super::*;
 
-/// Lowers, optionally optimizes, and prints one checked program as textual EIR.
+/// Optionally optimizes and prints the same prepared module used by native output.
 pub(super) fn emit(
-    ast: &parser::ast::Program,
-    check_result: &types::CheckResult,
-    target: Target,
+    mut module: ir::Module,
     emit_kind: Emit,
     filename: &str,
-    web: bool,
     ir_opt: bool,
     exported_functions: &HashMap<String, exports::ExportedFunction>,
-    exported_classes: &[crate::phpext::classes::ExportedClass],
-    included_files: &[opcache_prelude::ScriptEntry],
     timings: &mut CompileTimings,
 ) {
-    crate::progress::phase("ir-lower");
-    let phase_started = Instant::now();
-    let mut module = match ir_lower::lower_program_with_source_path_and_web(
-        &ast,
-        &check_result,
-        target,
-        Path::new(filename),
-        web,
-    ) {
-        Ok(module) => module,
-        Err(ir_lower::LoweringError::Unsupported(error)) => {
-            // `--emit-ir` refuses the same shapes final emission refuses, with the same
-            // source-level diagnostic, so the textual dump never shows placeholder EIR.
-            crate::progress::clear();
-            errors::report(&error.with_file(filename.to_string()));
-            process::exit(1);
-        }
-        Err(err) => {
-            crate::progress::clear();
-            eprintln!("EIR lowering error: {}", err);
-            process::exit(1);
-        }
-    };
-    module.included_files = included_files
-        .iter()
-        .map(|entry| entry.path.clone())
-        .collect();
-    crate::phpext::class_helpers::lower(&mut module, exported_classes);
-    timings.record_since("ir-lower", phase_started);
-
+    debug_assert!(module.source_catalog().is_some(), "textual EIR requires the prepared source catalog");
     if !exported_functions.is_empty() {
         let validate = if emit_kind == Emit::Phpext {
             exports::validate_phpext_call_graph

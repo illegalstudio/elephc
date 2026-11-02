@@ -2,7 +2,7 @@
 title: "setcookie() - internals"
 description: "Compiler internals for setcookie(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1081
+  order: 1141
 ---
 
 ## `setcookie()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:1281](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1281) (`setcookie`)
+- **Lowering**: [`src/web_prelude/build.rs`:1315](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L1315) (`setcookie`)
 - **Function symbol**: `setcookie()`
 
 

@@ -281,6 +281,7 @@ Classes: `Pcntl\QosClass`.
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
+| [`posix_kill()`](./builtins/misc/posix_kill.md) | `(int $process_id, int $signal): bool` | `bool` | ✓ | ✓ |
 | [`posix_setpgid()`](./builtins/misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
 | [`posix_setsid()`](./builtins/misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |
 

@@ -51,6 +51,7 @@ fn emit_scan_aarch64(emitter: &mut Emitter, fill: bool) {
     emitter.instruction("ldr w11, [x9]");                                       // keep the payload size for the next header
     emitter.instruction("ldr w14, [x9, #4]");                                   // inspect the live owner count
     emitter.instruction(&format!("cbz w14, {next}"));                           // free-list blocks cannot be pinned
+    crate::codegen_support::runtime::arrays::gc_collect_cycles::emit_skip_parked_block(emitter, "w14", &next);
     emitter.instruction("ldr x12, [x9, #8]");                                   // inspect kind, reachability, and existing pins together
     emitter.instruction(&format!("tbnz x12, #16, {next}"));                     // externally reachable nodes need no destructor snapshot
     emitter.instruction(&format!("tbnz x12, #18, {next}"));                     // earlier snapshots already own this candidate
@@ -236,6 +237,7 @@ fn emit_scan_x86_64(emitter: &mut Emitter, fill: bool) {
     emitter.instruction("mov r10d, DWORD PTR [r8]");                            // preserve the payload size for advancement
     emitter.instruction("cmp DWORD PTR [r8 + 4], 0");                           // distinguish live graph nodes from free-list entries
     emitter.instruction(&format!("je {next}"));                                 // free storage owns no destructor data
+    crate::codegen_support::runtime::arrays::gc_collect_cycles::emit_skip_parked_block_x86(emitter, "DWORD PTR [r8 + 4]", &next);
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // retain the full kind word including collector flags
     emitter.instruction("test r11, 0x50000");                                   // inspect reachability and an existing snapshot pin
     emitter.instruction(&format!("jnz {next}"));                                // root-reachable and already pinned nodes need no new pin

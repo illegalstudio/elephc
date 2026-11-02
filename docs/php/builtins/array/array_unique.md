@@ -2,19 +2,20 @@
 title: "array_unique()"
 description: "Removes duplicate values from an array."
 sidebar:
-  order: 45
+  order: 55
 ---
 
 ## array_unique()
 
 ```php
-function array_unique(array $array): array
+function array_unique(array $array, int $flags = 2): array
 ```
 
 Removes duplicate values from an array.
 
 **Parameters**:
 - `$array` (`array`)
+- `$flags` (`int`), default `2`, optional
 
 **Returns**: `array`
 

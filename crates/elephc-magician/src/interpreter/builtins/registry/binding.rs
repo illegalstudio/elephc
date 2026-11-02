@@ -48,8 +48,14 @@ fn eval_bound_builtin_call_from_scope(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     for argument in &mut arguments { argument.value = argument.value.borrowed(); }
     let bound = bind_evaluated_builtin_args(name, arguments, values)?;
-    let result = eval_builtin_with_values_from_scope(name, &bound, lexical_scope, context, values)
-        .and_then(|result| result.ok_or(EvalStatus::UnsupportedConstruct));
+    let result = match eval_builtin_with_values_from_scope(name, &bound, lexical_scope, context, values) {
+        Ok(Some(result)) => Ok(result),
+        Ok(None) => {
+            note_eval_runtime_failure(format!("call to unsupported function {name}()"), context);
+            Err(EvalStatus::UnsupportedConstruct)
+        }
+        Err(status) => Err(status),
+    };
     finish_eval_argument_values(result, bound, context, values)
 }
 

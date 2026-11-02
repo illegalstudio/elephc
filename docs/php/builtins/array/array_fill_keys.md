@@ -2,7 +2,7 @@
 title: "array_fill_keys()"
 description: "Fill an array with values, specifying keys."
 sidebar:
-  order: 11
+  order: 14
 ---
 
 ## array_fill_keys()

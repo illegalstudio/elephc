@@ -262,8 +262,8 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.is_generator = *is_generator;
             metadata.returns_reference = *returns_reference;
             metadata.rendered_to_string = reflection_declaring_function_dump(ctx, None, name);
-            emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_declaring_function_object(ctx, name, &metadata)?;
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionFunction".to_string()),
             );
@@ -297,8 +297,13 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
                 declaring_class_name.as_deref(),
                 name,
             );
-            emit_reflection_owner_object(ctx, "ReflectionMethod", &metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_declaring_method_object(
+                ctx,
+                declaring_class_name.as_deref(),
+                name,
+                &metadata,
+            )?;
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionMethod".to_string()),
             );
@@ -334,10 +339,8 @@ pub(super) fn emit_reflection_parameter_declaring_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(declaring_class_name) = parameter.declaring_class_name.as_deref() {
-        let declaring_metadata =
-            reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_shallow_reflection_class_object(ctx, declaring_class_name)?;
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -380,9 +383,8 @@ pub(super) fn emit_reflection_parameter_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(class_name) = reflection_parameter_class_name(parameter) {
-        let class_metadata = reflection_shallow_class_metadata_for_name(ctx, class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &class_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_shallow_reflection_class_object(ctx, class_name)?;
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -436,21 +438,21 @@ pub(super) fn emit_reflection_owner_type_property_by_name(
     match type_metadata {
         Some(ReflectionParameterTypeMetadata::Named(type_metadata)) => {
             emit_reflection_named_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionNamedType".to_string()),
             );
         }
         Some(ReflectionParameterTypeMetadata::Union(type_metadata)) => {
             emit_reflection_union_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionUnionType".to_string()),
             );
         }
         Some(ReflectionParameterTypeMetadata::Intersection(type_metadata)) => {
             emit_reflection_intersection_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionIntersectionType".to_string()),
             );
@@ -458,6 +460,7 @@ pub(super) fn emit_reflection_owner_type_property_by_name(
         None => emit_boxed_null_literal_to_result(ctx),
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
+    super::member_properties_emit::release_previous_mixed_slot(ctx, type_offset);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, type_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, type_offset + 8);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);

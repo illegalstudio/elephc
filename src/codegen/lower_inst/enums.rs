@@ -431,8 +431,7 @@ fn emit_throw_value_error_from_string_result(ctx: &mut FunctionContext<'_>) {
 
 /// Emits the AArch64 `ValueError` allocation and unwinder handoff.
 fn emit_throw_value_error_from_string_result_aarch64(ctx: &mut FunctionContext<'_>) {
-    abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     ctx.emitter.instruction("mov x9, #6");                                      // heap kind 6 = throwable object instance
     ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp allocation as a runtime object
     ctx.emitter.instruction("bl __rt_object_handle_acquire");                   // bind the new object to its PHP object handle
@@ -444,7 +443,7 @@ fn emit_throw_value_error_from_string_result_aarch64(ctx: &mut FunctionContext<'
     ctx.emitter.instruction("str x9, [x0, #16]");                               // store dynamic exception message length
     ctx.emitter.instruction("str xzr, [x0, #24]");                              // exception code defaults to zero
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-    ctx.emitter.instruction("str xzr, [x0, #40]");                              // previous defaults to null
+    ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
     abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
@@ -452,8 +451,7 @@ fn emit_throw_value_error_from_string_result_aarch64(ctx: &mut FunctionContext<'
 
 /// Emits the x86_64 `ValueError` allocation and unwinder handoff.
 fn emit_throw_value_error_from_string_result_x86_64(ctx: &mut FunctionContext<'_>) {
-    abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     ctx.emitter.instruction(
         &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
     );                                                                          // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
@@ -467,7 +465,7 @@ fn emit_throw_value_error_from_string_result_x86_64(ctx: &mut FunctionContext<'_
     ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");                   // store dynamic exception message length
     ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // exception code defaults to zero
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-    ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");                     // previous defaults to null
+    ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
     abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
@@ -501,6 +499,73 @@ pub(super) fn lower_enum_backing_string_to_int(
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&type_error_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_throw_enum_from_type_error_aarch64(ctx, &message_label, message_len),
+        Arch::X86_64 => emit_throw_enum_from_type_error_x86_64(ctx, &message_label, message_len),
+    }
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Converts the float in the float-result register for a weak-mode `int` parameter: an integral
+/// value binds as it stands, a fractional one prints php's "loses precision" deprecation and is
+/// truncated, and NaN, the infinities or an out-of-range value branch to `invalid_label` with
+/// nothing left on the stack. The integer is left in the int-result register.
+fn emit_float_result_into_int_argument_or_jump(ctx: &mut FunctionContext<'_>, invalid_label: &str) {
+    let unrepresentable = ctx.next_label("int_arg_float_unrepresentable");
+    let converted = ctx.next_label("int_arg_float_converted");
+    // The diagnostics call the deprecation handler, which does not keep the float registers.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("str d0, [sp]"),               // keep the float argument across the coercion diagnostics
+        Arch::X86_64 => ctx.emitter.instruction("movsd QWORD PTR [rsp], xmm0"), // keep the float argument across the coercion diagnostics
+    }
+    super::builtins::strings::emit_float_result_int_coercion_diagnostics(ctx, &unrepresentable);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr d0, [sp]");                            // reload the diagnosed float argument
+            ctx.emitter.instruction("fcvtzs x0, d0");                           // truncate it toward zero as php's int coercion does
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("movsd xmm0, QWORD PTR [rsp]");             // reload the diagnosed float argument
+            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // truncate it toward zero as php's int coercion does
+        }
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, &converted);
+    ctx.emitter.label(&unrepresentable);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_jump(ctx.emitter, invalid_label);
+    ctx.emitter.label(&converted);
+}
+
+/// Lowers `Op::ArgumentStringToInt`: php's weak-mode conversion of a string (or float) argument
+/// bound to a declared `int` parameter, throwing the call site's `TypeError` when it does not
+/// convert.
+pub(super) fn lower_argument_string_to_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let input = *inst.operands.first().ok_or_else(|| {
+        CodegenIrError::unsupported("argument_string_to_int without operand".to_string())
+    })?;
+    let Some(crate::ir::Immediate::Data(data_id)) = inst.immediate else {
+        return Err(CodegenIrError::unsupported(
+            "argument_string_to_int without a TypeError message immediate".to_string(),
+        ));
+    };
+    let (message_label, message_len) = ctx.intern_string_data(data_id)?;
+    let float_input = ctx.value_php_type(input)?.codegen_repr() == PhpType::Float;
+    ctx.load_value_to_result(input)?;
+    let type_error_label = ctx.next_label("int_arg_type_error");
+    let done_label = ctx.next_label("int_arg_coerce_done");
+    if float_input {
+        emit_float_result_into_int_argument_or_jump(ctx, &type_error_label);
+    } else {
+        super::objects::emit_string_result_into_int_or_jump(ctx, &type_error_label);
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&type_error_label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => emit_throw_enum_from_type_error_aarch64(ctx, &message_label, message_len),
         Arch::X86_64 => emit_throw_enum_from_type_error_x86_64(ctx, &message_label, message_len),
@@ -692,8 +757,7 @@ fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp allocation as a runtime object
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
@@ -705,14 +769,13 @@ fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store dynamic exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction(
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
             );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
@@ -726,7 +789,7 @@ fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store dynamic exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
@@ -740,8 +803,7 @@ fn emit_throw_enum_from_type_error_aarch64(
     message_label: &str,
     message_len: usize,
 ) {
-    abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     ctx.emitter.instruction("mov x9, #6");                                      // heap kind 6 = throwable object instance
     ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp allocation as a runtime object
     ctx.emitter.instruction("bl __rt_object_handle_acquire");                   // bind the new object to its PHP object handle
@@ -753,7 +815,7 @@ fn emit_throw_enum_from_type_error_aarch64(
     ctx.emitter.instruction("str x9, [x0, #16]");                               // store static exception message length
     ctx.emitter.instruction("str xzr, [x0, #24]");                              // exception code defaults to zero
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-    ctx.emitter.instruction("str xzr, [x0, #40]");                              // previous defaults to null
+    ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
     abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
 }
@@ -764,8 +826,7 @@ fn emit_throw_enum_from_type_error_x86_64(
     message_label: &str,
     message_len: usize,
 ) {
-    abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     ctx.emitter.instruction(
         &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
     );                                                                          // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
@@ -779,7 +840,7 @@ fn emit_throw_enum_from_type_error_x86_64(
     ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");                   // store static exception message length
     ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // exception code defaults to zero
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-    ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");                     // previous defaults to null
+    ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
     abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
 }

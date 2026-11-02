@@ -13,9 +13,8 @@
 //! - Every terminator lowers to explicit jumps except a jump to the block laid out next,
 //!   which is what makes any order semantically safe.
 
-use std::collections::HashMap;
 
-use crate::ir::{BasicBlock, CmpPredicate, Function, Immediate, InstId, Op, Terminator, ValueId};
+use crate::ir::{BasicBlock, CmpPredicate, Function, Immediate, InstId, Op, Terminator};
 use crate::ir_passes::{successors, terminator_uses};
 
 /// Returns block-table indices in emission order: hot blocks first, cold blocks last.
@@ -57,8 +56,8 @@ pub(super) fn has_retreating_edge(function: &Function) -> bool {
 }
 
 /// Counts every use of each value across instruction operands and terminators, once per function.
-pub(super) fn value_use_counts(function: &Function) -> HashMap<ValueId, usize> {
-    let mut counts: HashMap<ValueId, usize> = HashMap::new();
+pub(super) fn value_use_counts(function: &Function) -> crate::ir::ValueUseCounts {
+    let mut counts = crate::ir::ValueUseCounts::default();
     for operand in function.instructions.iter().flat_map(|inst| inst.operands.iter()) {
         *counts.entry(*operand).or_insert(0) += 1;
     }
@@ -80,7 +79,7 @@ pub(super) fn value_use_counts(function: &Function) -> HashMap<ValueId, usize> {
 pub(super) fn fusible_compare(
     function: &Function,
     block: &BasicBlock,
-    use_counts: &HashMap<ValueId, usize>,
+    use_counts: &crate::ir::ValueUseCounts,
 ) -> Option<InstId> {
     let Some(Terminator::CondBr { cond, .. }) = &block.terminator else {
         return None;

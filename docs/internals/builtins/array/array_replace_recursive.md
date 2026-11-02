@@ -2,7 +2,7 @@
 title: "array_replace_recursive() - internals"
 description: "Compiler internals for array_replace_recursive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 36
+  order: 42
 ---
 
 ## `array_replace_recursive()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_replace_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_replace_recursive.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,16 +39,21 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_replace_recursive(array $array, array $replacements): mixed
+function array_replace_recursive(array $array, ...$replacements): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes exactly 1 argument.
+- **Variadic**: collects excess arguments into `$replacements`.
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Dispatch hooks**: `direct`, `values`
+- **Variadic**: collects excess arguments into `$replacements`.
 
 ## Cross-references
 

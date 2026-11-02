@@ -2,7 +2,7 @@
 title: "gmp_binomial()"
 description: "Computes a binomial coefficient."
 sidebar:
-  order: 592
+  order: 605
 ---
 
 ## gmp_binomial()

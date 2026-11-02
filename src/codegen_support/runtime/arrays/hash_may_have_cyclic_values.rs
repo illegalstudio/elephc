@@ -44,6 +44,8 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
         emitter.instruction("je __rt_hash_may_have_cyclic_values_yes");         // associative arrays can participate in reference cycles
         emitter.instruction("cmp r14, 6");                                      // does the entry hold an object directly?
         emitter.instruction("je __rt_hash_may_have_cyclic_values_yes");         // objects can participate in reference cycles
+        emitter.instruction("cmp r14, 11");                                     // does the entry hold a managed reference cell?
+        emitter.instruction("je __rt_hash_may_have_cyclic_values_yes");         // reference cells can carry cyclic inner values
         emitter.instruction("cmp r14, 7");                                      // does the entry hold a boxed mixed value?
         emitter.instruction("jne __rt_hash_may_have_cyclic_values_next");       // scalars and strings cannot form cycles through this helper
         emitter.instruction("mov r15, QWORD PTR [r12 + 24]");                   // load the boxed mixed pointer from the entry value_lo field
@@ -117,6 +119,8 @@ pub fn emit_hash_may_have_cyclic_values(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_may_have_cyclic_values_yes");           // hashes can participate in reference cycles
     emitter.instruction("cmp x14, #6");                                         // is the entry an object?
     emitter.instruction("b.eq __rt_hash_may_have_cyclic_values_yes");           // objects can participate in reference cycles
+    emitter.instruction("cmp x14, #11");                                        // is the entry a managed reference cell?
+    emitter.instruction("b.eq __rt_hash_may_have_cyclic_values_yes");           // reference cells can carry cyclic inner values
     emitter.instruction("cmp x14, #7");                                         // is the entry a boxed mixed value?
     emitter.instruction("b.ne __rt_hash_may_have_cyclic_values_next");          // plain scalars and strings cannot form cycles
 

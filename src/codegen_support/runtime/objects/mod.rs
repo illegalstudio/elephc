@@ -9,6 +9,7 @@
 //! - Helper names are consumed directly by codegen paths for `stdClass` and JSON-decoded `Mixed` values.
 
 mod call_destructor;
+mod class_alias;
 mod dump_dynamic_props;
 mod enum_debug;
 mod export_props;
@@ -22,16 +23,21 @@ mod object_not_array;
 mod mixed_array_set;
 mod mixed_cell_autovivify;
 mod new_by_name;
+mod class_id_by_name;
 mod debug_info;
+mod object_to_array;
 mod object_vars;
 mod print_r_object;
+mod prop_scope_denied;
 mod stdclass;
+mod stdclass_prop_ref_cell;
 mod weak_reference;
 mod weak_map;
 pub(crate) use weak_map::emit_weak_map;
 pub(crate) use weak_reference::emit_weak_reference;
 
 pub(crate) use call_destructor::emit_call_object_destructor;
+pub(crate) use class_alias::{emit_class_alias, CLASS_ALIAS_CAPACITY};
 pub(crate) use dump_dynamic_props::{
     emit_load_dump_dyn_hash, emit_obj_dump_dyn_props, emit_obj_dyn_prop_at,
 };
@@ -39,7 +45,9 @@ pub(crate) use enum_debug::{
     emit_obj_enum_case_name, emit_obj_enum_kind, emit_obj_enum_name_offset,
     emit_var_dump_emit_enum_line,
 };
-pub(crate) use export_props::{emit_obj_prop_count, emit_obj_prop_name, emit_obj_prop_value};
+pub(crate) use export_props::{
+    emit_obj_prop_cast_name, emit_obj_prop_count, emit_obj_prop_name, emit_obj_prop_value,
+};
 pub(crate) use debug_info::{
     emit_obj_debuginfo_fetch, emit_pr_debuginfo_object, emit_vd_debuginfo_object,
 };
@@ -59,7 +67,11 @@ pub(crate) use object_not_array::{
 pub(crate) use mixed_array_set::emit_mixed_array_set;
 pub(crate) use mixed_cell_autovivify::emit_mixed_cell_autovivify_array;
 pub(crate) use new_by_name::emit_new_by_name;
+pub(crate) use class_id_by_name::emit_class_id_by_name;
+pub(crate) use prop_scope_denied::emit_prop_scope_denied;
+pub(crate) use object_to_array::emit_object_to_array;
 pub(crate) use object_vars::emit_object_to_hash;
+pub(crate) use stdclass_prop_ref_cell::emit_stdclass_prop_ref_cell;
 pub(crate) use stdclass::{
     emit_json_encode_stdclass, emit_mixed_property_get, emit_mixed_property_set,
     emit_stdclass_from_hash, emit_stdclass_get, emit_stdclass_new, emit_stdclass_set,

@@ -81,6 +81,9 @@ fn eval_array_map_result_from_scope(
             values,
         )?)
     };
+    // A callable array's receiver read (`[$object, 'method']`) is an owner the dispatch
+    // borrows for the whole walk; `with_optional_evaluated_callable` releases it once, after the
+    // last callback.
     with_optional_evaluated_callable(callback, context, values, |callback, context, values| {
         let len = values.array_len(*array)?;
         let mut result = values.assoc_new(len)?;
@@ -88,11 +91,19 @@ fn eval_array_map_result_from_scope(
             let key = values.array_iter_key(*array, position)?;
             let value = values.array_get(*array, key)?;
             let mapped = if let Some(callback) = callback.as_ref() {
-                eval_evaluated_callable_with_values(callback, vec![value], context, values)?
+                let mapped =
+                    eval_evaluated_callable_with_values(callback, vec![value], context, values)?;
+                // The callback borrows its arguments; the element read is still this frame's.
+                values.release(value)?;
+                mapped
             } else {
                 value
             };
             result = values.array_set(result, key, mapped)?;
+            // `array_set` retains what it stores, so this iteration's key and mapped value are
+            // still owned here: keeping them leaked three cells per element.
+            values.release(key)?;
+            values.release(mapped)?;
         }
         Ok(result)
     })
@@ -119,6 +130,9 @@ fn eval_array_map_variadic_result_from_scope(
             values,
         )?)
     };
+    // A callable array's receiver read (`[$object, 'method']`) is an owner the dispatch
+    // borrows for the whole walk; `with_optional_evaluated_callable` releases it once, after the
+    // last callback.
     with_optional_evaluated_callable(callback, context, values, |callback, context, values| {
         let mut lengths = Vec::with_capacity(arrays.len());
         let mut max_len = 0;
@@ -134,19 +148,32 @@ fn eval_array_map_variadic_result_from_scope(
             for (array, len) in arrays.iter().zip(lengths.iter()) {
                 let value = if position < *len {
                     let key = values.array_iter_key(*array, position)?;
-                    values.array_get(*array, key)?
+                    let value = values.array_get(*array, key)?;
+                    values.release(key)?;
+                    value
                 } else {
                     values.null()?
                 };
                 callback_args.push(value);
             }
             let mapped = if let Some(callback) = callback.as_ref() {
-                eval_evaluated_callable_with_values(callback, callback_args, context, values)?
+                let mapped = eval_evaluated_callable_with_values(
+                    callback,
+                    callback_args.clone(),
+                    context,
+                    values,
+                )?;
+                for arg in callback_args {
+                    values.release(arg)?;
+                }
+                mapped
             } else {
                 eval_array_map_zipped_row(callback_args, values)?
             };
             let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
             result = values.array_set(result, key, mapped)?;
+            values.release(key)?;
+            values.release(mapped)?;
         }
         Ok(result)
     })
@@ -161,6 +188,9 @@ pub(in crate::interpreter) fn eval_array_map_zipped_row(
     for (index, value) in values_row.into_iter().enumerate() {
         let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
         row = values.array_set(row, key, value)?;
+        // The row retains what it stores; the key and the element owner are released.
+        values.release(key)?;
+        values.release(value)?;
     }
     Ok(row)
 }

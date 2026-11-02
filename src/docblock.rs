@@ -7,16 +7,20 @@
 //! - `crate::source::finalize_physical_program`, per physical file, after the strict audit.
 //!
 //! Key details:
-//! - This is the portable surface. `@template T`, `@param array<T> $a` and `@return T` mean
-//!   exactly what `function f<T>(array<T> $a): T` means, and lower to the same monomorphic
-//!   instantiations — the difference is that the annotated file still parses on php-src and
-//!   still passes `--strict-php`.
-//! - A class says the same four things: `@template` its parameters, `@var`/`@param`/`@return`
-//!   its members' types, and `@extends`/`@implements` the instantiation it inherits. Inside one,
-//!   an ordinary member annotation must mention a class type parameter to be honoured.
-//! - A method may declare its own `@template` parameters even in a non-generic class or trait.
-//!   Its annotations then form a generic declaration, just as on a free function. Method-local
-//!   type parameters do not enter the scope of other members, and native method syntax wins.
+//! - This is the portable surface, and it is FUNCTION-level only. `@template T`,
+//!   `@param array<T> $a` and `@return T` above a free function mean what
+//!   `function f<T>(array<T> $a): T` means and lower to the same monomorphic instantiations.
+//! - A PHPDoc template must NEVER remove or rename a php symbol. The function therefore stays in
+//!   the program, untouched, under its written name with its written types (the reading php
+//!   itself has), so `function_exists`, string callables and reflection see it. The annotated
+//!   reading is a hidden TWIN declaration (`<name>` + [`crate::generics::DOC_TWIN_SUFFIX`]) that
+//!   the checker consults only at a direct call, to instantiate per call.
+//! - METHOD-level, CLASS-level (`@template`, `@extends X<T>`, `@implements I<T>`, interfaces and
+//!   traits too) and constructor-level templates are NOT adopted. A method is overridable and
+//!   reachable by name, reflection, interface contracts and vtable slots, none of which can see
+//!   an instantiation; a class template renamed `X` to `X<int>`, so `class_exists('X')`,
+//!   `new $class` and `get_class()` diverged from php. Written syntax (`class Box<T>`,
+//!   `function f<T>()`, `public function m<T>()`) still declares a template.
 //! - The lexer discards comments, so the doc comments are recovered from the SOURCE TEXT and
 //!   matched to declaration tokens by line and column. This runs per physical file before
 //!   include resolution combines source files, so the original coordinates remain authoritative.
@@ -25,15 +29,12 @@
 //!   type form gains it in both.
 
 mod bindings;
+pub mod erasure;
 mod members;
 
 use std::collections::HashMap;
 
-use crate::names::Name;
-use crate::parser::ast::{
-    GenericDecl, Program, Stmt, StmtKind, TypeExpr, TypeParam,
-    Variance,
-};
+use crate::parser::ast::{Program, Stmt, StmtKind, TypeExpr, TypeParam, Variance};
 
 /// The generic annotations one doc comment carries.
 #[derive(Debug, Default, Clone)]
@@ -44,13 +45,6 @@ struct DocBlock {
     params: HashMap<String, TypeExpr>,
     /// `@return <type>`.
     return_type: Option<TypeExpr>,
-    /// `@var <type>`, the annotation a property carries. Only a class member reads it.
-    var_type: Option<TypeExpr>,
-    /// `@extends Base<T>` — an inherited name and the type arguments written on it. A class has
-    /// at most one parent, but an interface may extend several, so this is a list.
-    extends: Vec<(Name, Vec<TypeExpr>)>,
-    /// `@implements Iface<T>`, matched to the declaration's `implements` list by name.
-    implements: Vec<(Name, Vec<TypeExpr>)>,
 }
 
 impl DocBlock {
@@ -63,15 +57,6 @@ impl DocBlock {
         !self.type_params.is_empty()
     }
 
-    /// Returns whether this doc comment says anything about a declaration's generic half.
-    ///
-    /// `@extends`/`@implements` count on their own: `class UserList implements IteratorAggregate`
-    /// annotated `@implements IteratorAggregate<User>` declares no type parameter of its own and
-    /// is still a class that instantiates someone else's template.
-    fn declares_class_generics(&self) -> bool {
-        self.declares_generics() || !self.extends.is_empty() || !self.implements.is_empty()
-    }
-
     /// Returns whether this doc comment carries nothing this pass could ever act on.
     ///
     /// Properties and ordinary methods can refer to a class template without declaring their
@@ -80,9 +65,6 @@ impl DocBlock {
         self.type_params.is_empty()
             && self.params.is_empty()
             && self.return_type.is_none()
-            && self.var_type.is_none()
-            && self.extends.is_empty()
-            && self.implements.is_empty()
     }
 }
 
@@ -97,164 +79,84 @@ pub fn apply(program: Program, source: &str) -> Program {
     }
     program
         .into_iter()
-        .map(|stmt| apply_to_stmt(stmt, &blocks))
+        .flat_map(|stmt| apply_to_stmt(stmt, &blocks))
         .collect()
 }
 
 /// Applies the doc comment that ends just above `stmt`, if any.
-fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt {
-    let block = blocks.get(&(stmt.span.line, stmt.span.col));
+///
+/// A function with an adopted `@template` comes back as TWO statements: itself, untouched, and
+/// its annotated twin (see [`doc_twin`]). Everything else comes back as itself.
+fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Vec<Stmt> {
     match &mut stmt.kind {
-        StmtKind::FunctionDecl {
-            type_params,
-            params,
-            variadic,
-            variadic_type,
-            return_type,
-            ..
-        } => {
-            let Some(block) = block else { return stmt };
-            if !block.declares_generics() || !type_params.is_empty() {
-                return stmt;
-            }
-            *type_params = block.type_params.clone();
-            for (name, declared, _, _) in params.iter_mut() {
-                if let Some(annotated) = block.params.get(name) {
-                    // The annotation REPLACES the written hint, which is the point: `array $a` with
-                    // `@param array<T> $a` is precisely the shape PHPStan-annotated code has, and
-                    // the annotation is the more precise of the two.
-                    *declared = Some(annotated.clone());
-                }
-            }
-            if let Some(annotated) = variadic.as_ref().and_then(|name| block.params.get(name)) {
-                *variadic_type = Some(annotated.clone());
-            }
-            if let Some(annotated) = &block.return_type {
-                *return_type = Some(annotated.clone());
-            }
-        }
-        StmtKind::ClassDecl {
-            generics,
-            extends,
-            implements,
-            properties,
-            methods,
-            ..
-        } => {
-            let extends_args = adopt_inherited(block, extends.as_ref());
-            let type_params = adopt_generics(block, generics, extends_args, implements);
-            members::apply(&type_params, properties, methods, blocks);
-        }
-        StmtKind::InterfaceDecl {
-            generics,
-            extends,
-            properties,
-            methods,
-            ..
-        } => {
-            // An interface has no single parent, so everything it inherits is an interface and
-            // everything annotated lands in `interface_args` — which is why `GenericDecl` says
-            // `extends_args` is always empty for one.
-            let type_params = adopt_generics(block, generics, Vec::new(), extends);
-            members::apply(&type_params, properties, methods, blocks);
-        }
-        StmtKind::TraitDecl {
-            generics, properties, methods, ..
-        } => {
-            let type_params = adopt_generics(block, generics, Vec::new(), &[]);
-            members::apply(&type_params, properties, methods, blocks);
-        }
-        // Enums carry no class templates, but their methods may declare their own templates.
-        StmtKind::EnumDecl { methods, .. } => {
-            members::apply(&[], &mut [], methods, blocks);
+        StmtKind::FunctionDecl { .. } => {
+            let twin = blocks
+                .get(&(stmt.span.line, stmt.span.col))
+                .and_then(|block| doc_twin(&stmt, block));
+            let mut out = vec![stmt];
+            out.extend(twin);
+            out
         }
         StmtKind::NamespaceBlock { body, .. } => {
             let nested = std::mem::take(body);
             *body = nested
                 .into_iter()
-                .map(|inner| apply_to_stmt(inner, blocks))
+                .flat_map(|inner| apply_to_stmt(inner, blocks))
                 .collect();
+            vec![stmt]
         }
-        _ => {}
+        _ => vec![stmt],
     }
-    stmt
 }
 
-/// Gives a declaration its generic half from `block`, and returns the type parameters now in
-/// scope for its members.
+/// Builds the annotated twin of a function whose doc comment declares `@template`.
 ///
-/// Written syntax wins over an annotation, so a file can migrate one declaration at a time — and
-/// the test is whether the parser built a `GenericDecl` at all, not whether it holds type
-/// parameters: `class Repo implements Repository<User>` already said what it inherits natively.
-fn adopt_generics(
-    block: Option<&DocBlock>,
-    generics: &mut Option<Box<GenericDecl>>,
-    extends_args: Vec<TypeExpr>,
-    inherited_interfaces: &[Name],
-) -> Vec<String> {
-    if let Some(written) = generics.as_ref() {
-        return written
-            .type_params
-            .iter()
-            .map(|param| param.name.clone())
-            .collect();
-    }
-    let Some(block) = block.filter(|block| block.declares_class_generics()) else {
-        return Vec::new();
+/// The twin is the template the checker instantiates at a direct call. The original declaration
+/// is left exactly as written: it is the php-visible symbol. Written type parameters win over an
+/// annotation, and a template no read annotation or written type mentions is not adopted.
+fn doc_twin(original: &Stmt, block: &DocBlock) -> Option<Stmt> {
+    let mut twin = original.clone();
+    let StmtKind::FunctionDecl {
+        name,
+        type_params,
+        params,
+        variadic,
+        variadic_type,
+        return_type,
+        ..
+    } = &mut twin.kind
+    else {
+        return None;
     };
-    let names = block
-        .type_params
-        .iter()
-        .map(|param| param.name.clone())
-        .collect();
-    let interface_args = align_inherited(inherited_interfaces, block);
-    *generics = GenericDecl::new(block.type_params.clone(), extends_args, interface_args);
-    names
-}
-
-/// Reads the type arguments annotated on a class's single parent.
-fn adopt_inherited(block: Option<&DocBlock>, parent: Option<&Name>) -> Vec<TypeExpr> {
-    block
-        .zip(parent)
-        .and_then(|(block, parent)| lookup_inherited(parent, block))
-        .cloned()
-        .unwrap_or_default()
-}
-
-/// Aligns annotated type arguments with a written inheritance list, index by index.
-///
-/// The alignment is the parser's own invariant: `parse_name_list` returns one entry per written
-/// name, empty where that name was bare, so `class Box<T> implements Countable` carries `[[]]`.
-/// Building the same shape here is what keeps an annotated declaration and the native one it
-/// stands for the SAME AST, which the printer round-trip compares directly.
-fn align_inherited(written: &[Name], block: &DocBlock) -> Vec<Vec<TypeExpr>> {
-    written
-        .iter()
-        .map(|name| lookup_inherited(name, block).cloned().unwrap_or_default())
-        .collect()
-}
-
-/// Finds the type arguments annotated for one inherited name, matching on the last segment.
-///
-/// PHPStan writes `@extends Collection<T>` above `extends \App\Collection`: the annotation uses
-/// whatever spelling is in scope, and this pass runs before name resolution, so neither side is
-/// canonical yet. The basename is the only part the two are guaranteed to share.
-///
-/// Both annotations are searched whichever kind of declaration asked. `@extends` is PHPStan's
-/// spelling for an interface extending a generic interface, and elephc stores that in the same
-/// `interface_args` as a class's `implements`; accepting either spelling costs nothing and
-/// refusing one would reject an annotation that says exactly what it means.
-fn lookup_inherited<'a>(written: &Name, block: &'a DocBlock) -> Option<&'a Vec<TypeExpr>> {
-    let written = written.last_segment()?;
-    block
-        .extends
-        .iter()
-        .chain(block.implements.iter())
-        .find(|(name, _)| {
-            name.last_segment()
-                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(written))
-        })
-        .map(|(_, args)| args)
+    if !block.declares_generics() || !type_params.is_empty() {
+        return None;
+    }
+    *type_params = members::mentioned_templates(
+        block,
+        params,
+        variadic.as_ref(),
+        variadic_type.as_ref(),
+        return_type.as_ref(),
+    );
+    if type_params.is_empty() {
+        return None;
+    }
+    let in_scope: Vec<String> = type_params.iter().map(|param| param.name.clone()).collect();
+    for (param_name, declared, _, _) in params.iter_mut() {
+        if let Some(annotated) = block.params.get(param_name) {
+            // The annotation REPLACES the written hint in the twin: `array $a` with
+            // `@param array<T> $a` is the more precise of the two.
+            members::apply_type(declared, annotated, &in_scope);
+        }
+    }
+    if let Some(annotated) = variadic.as_ref().and_then(|v| block.params.get(v)) {
+        members::apply_type(variadic_type, annotated, &in_scope);
+    }
+    if let Some(annotated) = &block.return_type {
+        members::apply_stored_type(return_type, annotated, &in_scope);
+    }
+    name.push_str(crate::generics::DOC_TWIN_SUFFIX);
+    Some(twin)
 }
 
 /// Extracts generic-bearing doc comments keyed by their declaration token positions.
@@ -291,14 +193,6 @@ fn parse_block(lines: &[&str]) -> DocBlock {
                 if block.return_type.is_none() {
                     block.return_type = parse_type(rest.trim());
                 }
-            } else if let Some(rest) = segment.strip_prefix("@var ") {
-                if block.var_type.is_none() {
-                    block.var_type = parse_var(rest);
-                }
-            } else if let Some(rest) = segment.strip_prefix("@extends ") {
-                block.extends.extend(parse_inherited(rest));
-            } else if let Some(rest) = segment.strip_prefix("@implements ") {
-                block.implements.extend(parse_inherited(rest));
             }
         }
     }
@@ -312,15 +206,13 @@ fn parse_block(lines: &[&str]) -> DocBlock {
 /// a tag returns nothing. An unread opener such as `@deprecated` still counts: it opens the line,
 /// so the rest of the line is not scanned for a tag this pass reads.
 fn tag_segments(line: &str) -> Vec<&str> {
-    const TAGS: [&str; 8] = [
+    const TAGS: [&str; 6] = [
         "@template-covariant ",
         "@template-contravariant ",
         "@template ",
         "@param ",
         "@return ",
         "@var ",
-        "@extends ",
-        "@implements ",
     ];
     // One segment per line: the tag that OPENS the line. A `@tag` that follows an annotation's
     // description is description — `@param T $v see @return mixed` must not retype the return,
@@ -381,17 +273,22 @@ fn parse_template(rest: &str, variance: Variance) -> Option<TypeParam> {
         let bound_end = after
             .find(['=', '@'])
             .unwrap_or(after.len());
-        bound = parse_type(after[..bound_end].trim());
+        // A bound this reader cannot parse (Symfony's `@template B of self::*_REFERENCE`) is not
+        // "no bound": dropping it would read `B` wider than it was written. The template is not
+        // adopted at all, and php — which never reads it — sees the same declaration.
+        bound = Some(parse_type(after[..bound_end].trim())?);
         rest = after[bound_end..].trim();
     }
-    let default = rest
-        .strip_prefix('=')
-        .and_then(|value| parse_type(value.trim()));
+    let default = match rest.strip_prefix('=') {
+        Some(value) => Some(parse_type(value.trim())?),
+        None => None,
+    };
     Some(TypeParam {
         name,
         bound,
         default,
         variance,
+        doc_annotated: true,
     })
 }
 
@@ -410,29 +307,6 @@ fn parse_param(rest: &str) -> Option<(String, TypeExpr)> {
         return None;
     }
     Some((name, ty))
-}
-
-/// Parses `@var <type>`, with or without the trailing variable a PHPStan inline `@var` names.
-fn parse_var(rest: &str) -> Option<TypeExpr> {
-    let rest = rest.trim();
-    let text = match rest.find('$') {
-        Some(dollar) => &rest[..dollar],
-        None => rest,
-    };
-    parse_type(text.trim())
-}
-
-/// Parses `@extends Base<T>` / `@implements Iface<T>` into the inherited name and its arguments.
-///
-/// The annotation goes through the ordinary type grammar, so `Base<T>` arrives as the very
-/// `TypeExpr::GenericClass` the native `extends Base<T>` would have produced. An annotation with
-/// no type arguments yields `None`: it names an inheritance the declaration already states, and
-/// carries nothing this pass could add.
-fn parse_inherited(rest: &str) -> Option<(Name, Vec<TypeExpr>)> {
-    match parse_type(rest.trim())? {
-        TypeExpr::GenericClass { name, args } => Some((name, args)),
-        _ => None,
-    }
 }
 
 /// Parses one annotation type through the ordinary type grammar.
@@ -478,6 +352,19 @@ mod tests {
         let tokens = crate::lexer::tokenize(source).expect("tokenizes");
         let program = crate::parser::parse(&tokens).expect("parses");
         apply(program, source)
+    }
+
+    /// The hidden annotated twin of the function named `name` (see [`doc_twin`]).
+    fn twin<'a>(program: &'a Program, name: &str) -> &'a Stmt {
+        let twin_name = format!("{name}{}", crate::generics::DOC_TWIN_SUFFIX);
+        program
+            .iter()
+            .flat_map(|stmt| match &stmt.kind {
+                StmtKind::NamespaceBlock { body, .. } => body.iter().collect::<Vec<_>>(),
+                _ => vec![stmt],
+            })
+            .find(|stmt| matches!(&stmt.kind, StmtKind::FunctionDecl { name, .. } if *name == twin_name))
+            .expect("the function has an annotated twin")
     }
 
     /// Collects the sole generic docblock in a source fixture.
@@ -641,15 +528,21 @@ mod tests {
         assert!(parse_type("int|").is_none());
     }
 
-    /// Applies generic function annotations as concrete AST type declarations.
+    /// Applies generic function annotations to the TWIN, and leaves the function as written.
     #[test]
     fn applies_the_annotation_to_the_declaration() {
         let source =
             "<?php\n/**\n * @template T\n * @param array<T> $a\n * @return T\n */\nfunction f(array $a) { return $a[0]; }\n";
-        let tokens = crate::lexer::tokenize(source).expect("tokenizes");
-        let program = crate::parser::parse(&tokens).expect("parses");
-        let program = apply(program, source);
+        let program = program_of(source);
         match &program[0].kind {
+            StmtKind::FunctionDecl { name, type_params, return_type, .. } => {
+                assert_eq!(name, "f", "the php symbol keeps its written name");
+                assert!(type_params.is_empty(), "and stays an ordinary function");
+                assert_eq!(*return_type, None);
+            }
+            other => panic!("expected function decl, got {:?}", other),
+        }
+        match &twin(&program, "f").kind {
             StmtKind::FunctionDecl {
                 type_params,
                 params,
@@ -703,38 +596,42 @@ mod tests {
     #[test]
     fn binds_a_declaration_on_the_docblock_closing_line() {
         for source in [
-            "<?php\n/** @template T */ class Box {}\n",
-            "<?php\n/**\n * @template T\n */ class Box {}\n",
+            "<?php\n/** @template T */ function id(T $v): T { return $v; }\n",
+            "<?php\n/**\n * @template T\n */ function id(T $v): T { return $v; }\n",
         ] {
             let program = program_of(source);
-            let StmtKind::ClassDecl { generics, .. } = &program[0].kind else {
-                panic!("expected a class");
+            let StmtKind::FunctionDecl { type_params, .. } = &twin(&program, "id").kind else {
+                panic!("expected a function");
             };
-            assert_eq!(generics.as_ref().expect("annotated class").type_params[0].name, "T");
+            assert_eq!(type_params.len(), 1);
+            assert_eq!(type_params[0].name, "T");
         }
     }
 
-    /// Sharing a class line does not give a method the class's template declaration.
+    /// A class-level `@template` is not adopted, so it gives neither the class nor a same-line
+    /// method a template declaration.
     #[test]
     fn does_not_copy_a_class_template_to_a_same_line_method() {
         let program = program_of("<?php\n/** @template T */\nclass Box { public function __construct(public T $value) {} public function id(T $v): T { return $v; } }\n");
         let StmtKind::ClassDecl { generics, methods, .. } = &program[0].kind else {
             panic!("expected a class");
         };
-        assert!(generics.is_some());
+        assert!(generics.is_none());
         assert!(methods.iter().all(|method| method.type_params.is_empty()));
     }
 
-    /// Each inline method gets its own block, even after Unicode comments or with attributes.
+    /// A method's own `@template` is NOT adopted, wherever its docblock sits: a method is
+    /// overridable and reachable by name, so no instantiation may stand in for it.
     #[test]
-    fn binds_inline_members_by_column() {
+    fn method_templates_are_not_adopted() {
         let program = program_of("<?php\n/* café */ class C { /** @template T */ #[Marker(\"]\")] public function id(T $v): T { return $v; } /** @template U */ public function other(U $v): U { return $v; } }\n");
         let StmtKind::ClassDecl { generics, methods, .. } = &program[0].kind else {
             panic!("expected a class");
         };
         assert!(generics.is_none());
-        assert_eq!(methods[0].type_params[0].name, "T");
-        assert_eq!(methods[1].type_params[0].name, "U");
+        assert!(methods[0].type_params.is_empty());
+        assert!(methods[1].type_params.is_empty());
+        assert_eq!(methods[0].name, "id");
     }
 
     /// Apparent annotations inside strings or line comments never become declaration metadata.
@@ -747,22 +644,22 @@ mod tests {
         assert!(generics.is_none());
     }
 
-    /// Enum methods adopt their own template parameters and annotated types.
+    /// Enum methods are not adopted either.
     #[test]
-    fn adopts_enum_method_templates() {
+    fn enum_method_templates_are_not_adopted() {
         let program = program_of("<?php\nenum Id {\n case A;\n /**\n  * @template T of int\n  * @param T $value\n  * @return T\n  */\n public function id($value) { return $value; }\n}\n");
         let StmtKind::EnumDecl { methods, .. } = &program[0].kind else {
             panic!("expected an enum");
         };
-        assert_eq!(methods[0].type_params.len(), 1);
-        assert_eq!(methods[0].type_params[0].bound, Some(TypeExpr::Int));
-        assert_eq!(methods[0].params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
+        assert!(methods[0].type_params.is_empty());
+        assert_eq!(methods[0].params[0].1, None);
     }
 
-    /// `@template` on a class makes it a template, and its members' annotations name the type
-    /// parameter it declared.
+    /// `@template` on a class is NOT adopted: php knows one class under its written name, so the
+    /// class stays non-generic and its members' annotations naming the class parameter are not
+    /// read.
     #[test]
-    fn a_class_adopts_its_template_and_member_annotations() {
+    fn a_class_does_not_adopt_its_template_or_member_annotations() {
         let program = program_of(concat!(
             "<?php\n",
             "/** @template T */\n",
@@ -784,13 +681,11 @@ mod tests {
         else {
             panic!("expected a class declaration");
         };
-        let generics = generics.as_ref().expect("class became a template");
-        assert_eq!(generics.type_params.len(), 1);
-        assert_eq!(generics.type_params[0].name, "T");
-        let t = TypeExpr::Named(Name::unqualified("T"));
-        assert_eq!(properties[0].type_expr, Some(t.clone()));
-        assert_eq!(methods[0].params[0].1, Some(t.clone()));
-        assert_eq!(methods[1].return_type, Some(t));
+        assert!(generics.is_none(), "a class-level @template makes no template");
+        assert_eq!(properties[0].type_expr, None);
+        assert_eq!(methods[0].params[0].1, None);
+        assert_eq!(methods[1].return_type, None);
+        assert!(methods.iter().all(|method| method.type_params.is_empty()));
     }
 
     /// `@template` on the class must not promote every annotation in the body into a type
@@ -811,34 +706,40 @@ mod tests {
         assert_eq!(methods[0].params[0].1, None);
     }
 
-    /// A promoted constructor parameter is also a property, built by the parser from the same
-    /// written type; retyping one and not the other leaves the class disagreeing with itself.
+    /// A constructor's `@template` is not adopted, so neither the parameter nor the promoted
+    /// property it declares is retyped and the class stays a plain class.
     #[test]
-    fn a_promoted_parameter_retypes_its_property_too() {
+    fn a_constructor_template_adopts_nothing() {
         let program = program_of(concat!(
             "<?php\n",
-            "/** @template T */\n",
             "class Box {\n",
-            "    /** @param T $value */\n",
+            "    /**\n",
+            "     * @template T\n",
+            "     * @param T $value\n",
+            "     */\n",
             "    public function __construct(private $value) {}\n",
             "}\n",
         ));
         let StmtKind::ClassDecl {
-            properties, methods, ..
+            generics,
+            properties,
+            methods,
+            ..
         } = &program[0].kind
         else {
             panic!("expected a class declaration");
         };
-        let t = Some(TypeExpr::Named(Name::unqualified("T")));
-        assert_eq!(methods[0].params[0].1, t);
+        assert!(generics.is_none());
+        assert!(methods[0].type_params.is_empty());
+        assert_eq!(methods[0].params[0].1, None);
         assert!(properties[0].is_promoted);
-        assert_eq!(properties[0].type_expr, t);
+        assert_eq!(properties[0].type_expr, None);
     }
 
-    /// `@implements` aligns with the written list index by index, the way `parse_name_list` does,
-    /// so an annotated declaration and the native one it stands for are the same AST.
+    /// Class-level `@implements` / `@template` are not adopted: the class keeps exactly what was
+    /// written, with no `GenericDecl`.
     #[test]
-    fn implements_annotations_align_with_the_written_list() {
+    fn implements_annotations_are_not_adopted() {
         let program = program_of(concat!(
             "<?php\n",
             "/**\n",
@@ -850,20 +751,12 @@ mod tests {
         let StmtKind::ClassDecl { generics, .. } = &program[0].kind else {
             panic!("expected a class declaration");
         };
-        let generics = generics.as_ref().expect("class became a template");
-        assert_eq!(
-            generics.interface_args,
-            vec![
-                Vec::new(),
-                vec![TypeExpr::Named(Name::unqualified("T"))],
-            ]
-        );
+        assert!(generics.is_none());
     }
 
-    /// `@extends Base<int>` is what a class with no type parameters of its own uses to name the
-    /// instantiation of someone else's template.
+    /// `@extends Base<int>` is not adopted: the class stays a plain class under its written name.
     #[test]
-    fn extends_annotation_fills_the_parent_type_arguments() {
+    fn extends_annotation_is_not_adopted() {
         let program = program_of(concat!(
             "<?php\n",
             "/** @extends Holder<int> */\n",
@@ -872,14 +765,13 @@ mod tests {
         let StmtKind::ClassDecl { generics, .. } = &program[0].kind else {
             panic!("expected a class declaration");
         };
-        let generics = generics.as_ref().expect("class names what it inherits");
-        assert!(generics.type_params.is_empty());
-        assert_eq!(generics.extends_args, vec![TypeExpr::Int]);
+        assert!(generics.is_none());
     }
 
-    /// An interface has no single parent, so everything it inherits lands in `interface_args`.
+    /// An interface's `@template` / `@extends` are not adopted either, nor are its members'
+    /// annotations naming the interface parameter.
     #[test]
-    fn an_interface_adopts_its_template_and_inherited_arguments() {
+    fn an_interface_does_not_adopt_its_template_or_inherited_arguments() {
         let program = program_of(concat!(
             "<?php\n",
             "/**\n",
@@ -897,17 +789,8 @@ mod tests {
         else {
             panic!("expected an interface declaration");
         };
-        let generics = generics.as_ref().expect("interface became a template");
-        assert_eq!(generics.type_params.len(), 1);
-        assert!(generics.extends_args.is_empty());
-        assert_eq!(
-            generics.interface_args,
-            vec![vec![TypeExpr::Named(Name::unqualified("T"))]]
-        );
-        assert_eq!(
-            methods[0].return_type,
-            Some(TypeExpr::Named(Name::unqualified("T")))
-        );
+        assert!(generics.is_none());
+        assert_eq!(methods[0].return_type, None);
     }
 
     /// Written syntax wins over an annotation, so a file can migrate one class at a time — and
@@ -944,23 +827,13 @@ mod tests {
             "<?php\n",
             "namespace App {\n",
             "    /** @template T */\n",
-            "    class Box {}\n",
+            "    function id(T $v): T { return $v; }\n",
             "}\n",
         ));
-        let StmtKind::NamespaceBlock { body, .. } = &program[0].kind else {
-            panic!("expected a namespace block");
+        let StmtKind::FunctionDecl { type_params, .. } = &twin(&program, "id").kind else {
+            panic!("expected a function declaration");
         };
-        let StmtKind::ClassDecl { generics, .. } = &body[0].kind else {
-            panic!("expected a class declaration");
-        };
-        assert_eq!(
-            generics
-                .as_ref()
-                .expect("class became a template")
-                .type_params[0]
-                .name,
-            "T"
-        );
+        assert_eq!(type_params[0].name, "T");
     }
 
     /// `@param T ...$xs` annotates the variadic, whose type is `T`: the `...` is the parameter's
@@ -975,7 +848,7 @@ mod tests {
             " */\n",
             "function f(...$xs) {}\n",
         ));
-        let StmtKind::FunctionDecl { variadic_type, .. } = &program[0].kind else {
+        let StmtKind::FunctionDecl { variadic_type, .. } = &twin(&program, "f").kind else {
             panic!("expected a function declaration");
         };
         assert_eq!(*variadic_type, Some(TypeExpr::Named(Name::unqualified("T"))));
@@ -984,22 +857,20 @@ mod tests {
     /// Tagless files retain generic annotations across attributes with nonstructural brackets.
     #[test]
     fn applies_generic_docblocks_after_attributes_in_lfc_sources() {
-        let source = "/** @template T */\n#[Marker(\n    ']'\n)]\nclass Box {}";
+        let source = "/** @template T */\n#[Marker(\n    ']'\n)]\nfunction id(T $v): T { return $v; }";
         let tokens = crate::lexer::tokenize_with_mode(source, crate::source::SourceMode::Lfc)
             .expect("tokenizes");
         let program = apply(crate::parser::parse(&tokens).expect("parses"), source);
-        let StmtKind::ClassDecl { generics, .. } = &program[0].kind else {
-            panic!("expected a class declaration");
+        let StmtKind::FunctionDecl { type_params, .. } = &twin(&program, "id").kind else {
+            panic!("expected a function declaration");
         };
-        assert_eq!(
-            generics.as_ref().expect("class became a template").type_params[0].name,
-            "T"
-        );
+        assert_eq!(type_params[0].name, "T");
     }
 
-    /// A method's template carries bounds, defaults, fixed parameters and a variadic element type.
+    /// A method's own template is not adopted, with or without a class template: annotations
+    /// stay what php reads, and the class stays non-generic.
     #[test]
-    fn adopts_a_methods_own_template_without_a_class_template() {
+    fn a_methods_own_template_is_not_adopted() {
         let program = program_of(concat!(
             "<?php\nclass C {\n",
             "/**\n * @template T of Entity\n * @template U = string\n",
@@ -1009,15 +880,49 @@ mod tests {
         let StmtKind::ClassDecl { generics, methods, .. } = &program[0].kind else {
             panic!("expected a class declaration");
         };
-        assert!(generics.is_none(), "a method template must not make the class generic");
+        assert!(generics.is_none());
         let method = &methods[0];
-        assert_eq!(method.type_params.len(), 2);
-        assert_eq!(method.type_params[0].name, "T");
-        assert_eq!(method.type_params[0].bound, Some(TypeExpr::Named(Name::unqualified("Entity"))));
-        assert_eq!(method.type_params[1].default, Some(TypeExpr::Str));
-        assert_eq!(method.params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
-        assert_eq!(method.variadic_type, Some(TypeExpr::Named(Name::unqualified("U"))));
-        assert_eq!(method.return_type, Some(TypeExpr::Int));
+        assert!(method.type_params.is_empty());
+        assert_eq!(method.params[0].1, None);
+        assert_eq!(method.variadic_type, None);
+        assert_eq!(method.return_type, None);
+    }
+
+    /// A method `@template` only an unread tag names (Symfony's `setParent()` and its
+    /// `@psalm-this-out static<TNewParent>`) is not adopted: it would bind nothing at a call.
+    #[test]
+    fn a_method_template_no_read_annotation_mentions_is_not_adopted() {
+        let program = program_of(concat!(
+            "<?php\nclass C {\n",
+            "/**\n * @template TNewParent of object\n * @psalm-this-out static<TNewParent>\n",
+            " * @return $this\n */\n",
+            "public function setParent(object $parent): static { return $this; }\n}\n",
+        ));
+        let StmtKind::ClassDecl { methods, .. } = &program[0].kind else {
+            panic!("expected a class declaration");
+        };
+        assert!(methods[0].type_params.is_empty(), "an unmentioned template binds nothing");
+    }
+
+    /// A template whose bound this reader cannot parse is not adopted, and neither is the
+    /// `@param` naming it: Symfony's `ContainerInterface::get` declares
+    /// `@template B of self::*_REFERENCE` over a native `int $invalidBehavior`.
+    #[test]
+    fn an_unparseable_template_bound_adopts_nothing() {
+        let program = program_of(concat!(
+            "<?php\ninterface C {\n",
+            "/**\n * @template O of object\n * @template B of self::*_REFERENCE\n",
+            " * @param class-string<O> $id\n * @param B $mode\n */\n",
+            "public function get(string $id, int $mode = 1): ?object;\n}\n",
+        ));
+        let StmtKind::InterfaceDecl { methods, .. } = &program[0].kind else {
+            panic!("expected an interface declaration");
+        };
+        let method = &methods[0];
+        // `O` survives the bound check but only `class-string<O>` names it, which this reader
+        // does not parse, so nothing read mentions it and the method stays non-generic.
+        assert!(method.type_params.is_empty());
+        assert_eq!(method.params[1].1, Some(TypeExpr::Int));
     }
 
     /// Native method declarations retain their written types even when PHPDoc disagrees.
@@ -1037,13 +942,13 @@ mod tests {
         assert_eq!(methods[0].return_type, Some(u));
     }
 
-    /// A method template does not introduce its names into properties or sibling methods.
+    /// No method annotation is adopted, so no template name reaches a property or a sibling.
     #[test]
     fn method_template_names_do_not_leak_to_other_members() {
         let program = program_of(concat!(
-            "<?php\n/** @template T */\nclass C {\n",
+            "<?php\nclass C {\n",
             "/** @var U */\nprivate $other;\n",
-            "/**\n * @template U\n * @param T $left\n * @param U $right\n * @return U\n */\n",
+            "/**\n * @template U\n * @param int $left\n * @param U $right\n * @return U\n */\n",
             "public function choose($left, $right) { return $right; }\n",
             "/**\n * @param U $value\n * @return U\n */\n",
             "public function unrelated($value) { return $value; }\n}\n",
@@ -1052,12 +957,11 @@ mod tests {
             panic!("expected a class declaration");
         };
         assert_eq!(properties[0].type_expr, None);
-        assert_eq!(methods[0].type_params[0].name, "U");
-        assert_eq!(methods[0].params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
-        assert_eq!(methods[0].params[1].1, Some(TypeExpr::Named(Name::unqualified("U"))));
-        assert!(methods[1].type_params.is_empty());
-        assert_eq!(methods[1].params[0].1, None);
-        assert_eq!(methods[1].return_type, None);
+        for method in methods {
+            assert!(method.type_params.is_empty());
+            assert!(method.params.iter().all(|param| param.1.is_none()));
+            assert_eq!(method.return_type, None);
+        }
     }
 
 }

@@ -35,23 +35,30 @@ impl Parser {
         let mut constants = Vec::new();
         let mut properties = Vec::new();
         let mut methods = Vec::new();
-        let source_end_line = loop {
-            if matches!(self.current(), TokenKind::RBrace) {
-                let source_end_line = self.current_line();
-                self.advance();
-                break source_end_line;
-            }
-            if matches!(self.current(), TokenKind::Eof) {
-                return Err(EvalParseError::UnexpectedEof);
-            }
-            self.parse_trait_member(
-                &mut constants,
-                &mut properties,
-                &mut methods,
-                &mut traits,
-                &mut trait_adaptations,
-            )?;
-        };
+        let source_end_line = self.in_class_scope(|parser| {
+            let source_end_line = loop {
+                if matches!(parser.current(), TokenKind::DocComment(_)) {
+                    parser.advance();
+                    continue;
+                }
+                if matches!(parser.current(), TokenKind::RBrace) {
+                    let source_end_line = parser.current_line();
+                    parser.advance();
+                    break source_end_line;
+                }
+                if matches!(parser.current(), TokenKind::Eof) {
+                    return Err(EvalParseError::UnexpectedEof);
+                }
+                parser.parse_trait_member(
+                    &mut constants,
+                    &mut properties,
+                    &mut methods,
+                    &mut traits,
+                    &mut trait_adaptations,
+                )?;
+            };
+            Ok(source_end_line)
+        })?;
         self.consume_semicolon();
         let declaration = EvalStmt::TraitDecl(
             EvalTrait::with_constants_traits_adaptations(

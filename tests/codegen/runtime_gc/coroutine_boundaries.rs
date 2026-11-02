@@ -156,3 +156,47 @@ long boundary_unpark_count(void) { return count; }
 "#);
     assert_eq!(out, "caught|2");
 }
+
+/// A suspended generator or fiber is the only holder of self-referencing objects, through an
+/// object local, an array local and a by-reference alias: a collection while they are suspended
+/// must free none of them, and the cycles are freed once the coroutines are gone. The expected
+/// output is php 8.5's own.
+#[test]
+fn test_gc_suspended_frame_owner_tables_keep_live_cycles() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Node { public $next; public $tag; function __construct($tag) { $this->tag = $tag; } }
+function holder() {
+    $a = new Node('a');
+    $a->next = $a;
+    $list = [new Node('l')];
+    $list[0]->next = $list[0];
+    $r = new Node('r');
+    $r->next = $r;
+    $alias = &$r;
+    $box = $argc ?? null;
+    yield 1;
+    echo $a->next->tag, $list[0]->next->tag, $alias->next->tag, "\n";
+    yield 2;
+}
+$g = holder();
+$g->current();
+echo gc_collect_cycles() >= 0 ? "collected\n" : "?\n";
+$g->next();
+echo $g->current(), "\n";
+$f = new Fiber(function () {
+    $n = new Node('f');
+    $n->next = $n;
+    $ref = &$n;
+    Fiber::suspend();
+    echo $ref->next->tag, "\n";
+});
+$f->start();
+gc_collect_cycles();
+$f->resume();
+unset($g, $f);
+echo gc_collect_cycles() > 0 ? "freed\n" : "none\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "collected\nalr\n2\nf\nfreed\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

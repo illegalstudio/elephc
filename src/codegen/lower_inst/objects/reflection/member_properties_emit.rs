@@ -103,7 +103,7 @@ pub(super) fn emit_reflection_constructor_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(member) = member {
         emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionMethod".to_string()),
         );
@@ -111,6 +111,7 @@ pub(super) fn emit_reflection_constructor_property(
         super::super::emit_boxed_null(ctx);
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
+    release_previous_mixed_slot(ctx, low_offset);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
@@ -134,7 +135,7 @@ pub(super) fn emit_reflection_method_prototype_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(member) = member {
         emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionMethod".to_string()),
         );
@@ -165,9 +166,8 @@ pub(super) fn emit_reflection_parent_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(parent_class_name) = parent_class_name {
-        let parent_metadata = reflection_class_metadata_for_name(ctx, parent_class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &parent_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_full_reflection_class_object(ctx, parent_class_name)?;
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -176,6 +176,7 @@ pub(super) fn emit_reflection_parent_class_property(
         emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
     }
     abi::emit_pop_reg(ctx.emitter, object_reg);
+    release_previous_mixed_slot(ctx, low_offset);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
     abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
@@ -183,6 +184,13 @@ pub(super) fn emit_reflection_parent_class_property(
 }
 
 /// Replaces a member reflector's private declaring-class slot with `ReflectionClass|false`.
+///
+/// A reflector whose class declares `__declaring_class_thunk` (`ReflectionMethod`,
+/// `ReflectionProperty`) records the address of its declaring class's shared shallow
+/// materializer there instead, and `getDeclaringClass()` builds the object when asked. Building
+/// it here made every reflector a graph that a `--web` request then tore down: Symfony's
+/// `Request::setProperty()` keeps seven reflectors in a static and never asks one for its class,
+/// and the eager objects cost 2.15M of its 16.89M instructions per request.
 pub(super) fn emit_reflection_declaring_class_property(
     ctx: &mut FunctionContext<'_>,
     member_class_name: &str,
@@ -201,15 +209,37 @@ pub(super) fn emit_reflection_declaring_class_property(
     let Some(low_offset) = declaring_class_offset else {
         return Ok(());
     };
+    let thunk_offset = class_info
+        .property_offsets
+        .get("__declaring_class_thunk")
+        .copied();
     let high_offset = low_offset + 8;
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let materializer = match (thunk_offset, declaring_class_name) {
+        (Some(thunk_offset), Some(declaring_class_name)) => Some((
+            thunk_offset,
+            shallow_reflection_class_materializer_label(ctx, declaring_class_name)?,
+        )),
+        _ => None,
+    };
     abi::emit_push_reg(ctx.emitter, result_reg);
+    if let Some((thunk_offset, label)) = materializer {
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+        abi::emit_pop_reg(ctx.emitter, object_reg);
+        abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
+        abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
+        let address_reg = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_symbol_address(ctx.emitter, address_reg, &label);
+        abi::emit_store_to_address(ctx.emitter, address_reg, object_reg, thunk_offset);
+        abi::emit_store_zero_to_address(ctx.emitter, object_reg, thunk_offset + 8);
+        abi::emit_reg_move(ctx.emitter, result_reg, object_reg);
+        return Ok(());
+    }
     if let Some(declaring_class_name) = declaring_class_name {
-        let declaring_metadata =
-            reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_shallow_reflection_class_object(ctx, declaring_class_name)?;
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -243,9 +273,8 @@ pub(super) fn emit_reflection_enum_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(enum_name) = enum_name {
-        let enum_metadata = reflection_enum_metadata_for_name(ctx, enum_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionEnum", &enum_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_shallow_reflection_enum_object(ctx, enum_name)?;
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionEnum".to_string()),
         );
@@ -295,3 +324,16 @@ pub(super) fn emit_reflection_parameter_array_property_by_name(
     Ok(())
 }
 
+/// Releases the boxed value the slot at `low_offset` of the object in the scratch register still
+/// holds (the constructor's default), keeping the new value in the result register and the object
+/// in the scratch register.
+pub(super) fn release_previous_mixed_slot(ctx: &mut FunctionContext<'_>, low_offset: usize) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+}

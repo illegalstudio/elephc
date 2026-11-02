@@ -2,7 +2,7 @@
 title: "xmlwriter_end_attribute() - internals"
 description: "Compiler internals for xmlwriter_end_attribute(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1105
+  order: 1165
 ---
 
 ## `xmlwriter_end_attribute()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1041](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1041) (`xmlwriter_end_attribute`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:1051](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1051) (`xmlwriter_end_attribute`)
 - **Function symbol**: `xmlwriter_end_attribute()`
 
 

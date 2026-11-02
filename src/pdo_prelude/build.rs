@@ -149,8 +149,10 @@ fn pdoexception_construct() -> MethodBuilder {
         .param_default("code", TypeExpr::Int, e_int(0))
         .param_default("previous", t_nullable(t_class("Throwable")), e_null())
         .body(vec![
-            s_prop_assign(e_this(), "message", e_var("message")),
-            s_prop_assign(e_this(), "code", e_var("code")),
+            s_expr(e_parent_call(
+                "__construct",
+                vec![e_var("message"), e_var("code"), e_var("previous")],
+            )),
             s_prop_assign(e_this(), "previous", e_var("previous")),
         ])
 }

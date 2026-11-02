@@ -107,6 +107,12 @@ pub(super) fn lower(
         RuntimeFnId::HashUpdate => Some({
             crate::codegen::lower_inst::builtins::strings::lower_hash_update(ctx, inst)
         }),
+        RuntimeFnId::SodiumBox => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_sodium_box(ctx, inst)
+        }),
+        RuntimeFnId::SodiumStatus => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_sodium_status(ctx, inst)
+        }),
         RuntimeFnId::OpensslCipherIvLength => Some({
             crate::codegen::lower_inst::builtins::openssl::lower_openssl_cipher_iv_length(ctx, inst)
         }),
@@ -118,6 +124,12 @@ pub(super) fn lower(
         }),
         RuntimeFnId::OpensslGetCipherMethods => Some({
             crate::codegen::lower_inst::builtins::openssl::lower_openssl_get_cipher_methods(ctx, inst)
+        }),
+        RuntimeFnId::HighlightFile => Some({
+            crate::codegen::lower_inst::builtins::eval::lower_eval_highlight(ctx, inst, "highlight_file")
+        }),
+        RuntimeFnId::HighlightString => Some({
+            crate::codegen::lower_inst::builtins::eval::lower_eval_highlight(ctx, inst, "highlight_string")
         }),
         RuntimeFnId::Htmlentities => Some({
             crate::codegen::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlentities")

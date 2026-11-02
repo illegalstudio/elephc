@@ -233,6 +233,7 @@ fn expr_refs_testing(expr: &Expr) -> bool {
         | ExprKind::Clone(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Spread(inner)
         | ExprKind::YieldFrom(inner) => expr_refs_testing(inner),
         ExprKind::NullCoalesce { value, default }
@@ -343,6 +344,8 @@ fn expr_refs_testing(expr: &Expr) -> bool {
         }
         ExprKind::ClassConstant { receiver }
         | ExprKind::ScopedConstantAccess { receiver, .. } => receiver_refs_testing(receiver),
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => receiver_refs_testing(receiver) || expr_refs_testing(property),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_refs_testing(receiver),
         ExprKind::ObjectClassName { object } => expr_refs_testing(object),
         ExprKind::NewScopedObject { receiver, args } => {
             receiver_refs_testing(receiver) || args.iter().any(expr_refs_testing)
@@ -559,6 +562,25 @@ fn stmt_refs_testing(stmt: &Stmt) -> bool {
                 || methods.iter().any(class_method_refs_testing)
                 || constants.iter().any(class_const_refs_testing)
         }
+        // Compiler-generated activation event: names a class by string, never in a class-name position.
+        StmtKind::ClassLikeActivate { .. } => false,
+        StmtKind::PropertyRefAssign { object, source, .. } => expr_refs_testing(object) || expr_refs_testing(source),
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            index,
+            source,
+            ..
+        } => receiver_refs_testing(receiver) || expr_refs_testing(index) || expr_refs_testing(source),
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            value,
+            ..
+        } => receiver_refs_testing(receiver)
+            || expr_refs_testing(property)
+            || index.as_ref().is_some_and(expr_refs_testing)
+            || expr_refs_testing(value),
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_refs_testing(object) || expr_refs_testing(value)
         }

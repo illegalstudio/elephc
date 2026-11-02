@@ -70,5 +70,7 @@ pub(in crate::interpreter) fn eval_unlink_result(
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return values.bool_value(false);
     };
-    values.bool_value(std::fs::remove_file(path).is_ok())
+    let removed = std::fs::remove_file(path).is_ok();
+    values.filesystem_paths_changed();
+    values.bool_value(removed)
 }

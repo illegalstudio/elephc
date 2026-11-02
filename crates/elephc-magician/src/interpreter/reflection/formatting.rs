@@ -14,7 +14,7 @@ use super::*;
 /// Formats one reflected class-like symbol similarly to PHP's `__toString()` output.
 pub(super) fn eval_reflection_class_to_string(
     reflected_name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     let metadata = eval_reflection_class_to_string_metadata(reflected_name, context, values)?
@@ -73,6 +73,7 @@ pub(super) fn eval_reflection_class_to_string_metadata(
         resolved_name: runtime_class_name.to_string(),
         source_location: None,
         attributes: context.native_class_attributes(runtime_class_name),
+        doc_comment: None,
         flags,
         modifiers,
         interface_names,
@@ -140,7 +141,7 @@ pub(super) fn eval_reflection_class_to_string_kind(flags: u64) -> &'static str {
 /// Formats all constants visible to `ReflectionClass::__toString()`.
 pub(super) fn eval_reflection_class_constant_string_lines(
     reflected_name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {
     let constant_names = eval_reflection_constant_names(reflected_name, context, values)?;
@@ -417,7 +418,7 @@ pub(super) fn eval_reflection_class_constant_to_string(
     declaring_class: &str,
     constant_name: &str,
     owner_kind: u64,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     let (_, _, visibility, is_final, is_enum_case) =
@@ -534,6 +535,10 @@ pub(super) fn eval_reflection_default_expr_to_string(default: &EvalExpr) -> Opti
             op: EvalUnaryOp::Negate,
             expr,
         } => eval_reflection_default_expr_to_string(expr).map(|value| format!("-{value}")),
+        EvalExpr::Unary {
+            op: EvalUnaryOp::ErrorSuppress,
+            expr,
+        } => eval_reflection_default_expr_to_string(expr).map(|value| format!("@{value}")),
         EvalExpr::ConstFetch(name) => Some(name.clone()),
         EvalExpr::NamespacedConstFetch { name, .. } => Some(name.clone()),
         EvalExpr::ClassConstantFetch {

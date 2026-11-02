@@ -11,7 +11,7 @@
 //! - Local receiver facts union known classes and remain poisoned after any opaque write.
 //! - Reachable global aliases and by-reference call arguments invalidate cross-scope facts.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{
@@ -19,6 +19,7 @@ use crate::parser::ast::{
     TraitUse, TypeExpr,
 };
 use crate::types::{CheckResult, FunctionSig};
+use std::sync::Arc;
 
 mod expressions;
 
@@ -35,6 +36,7 @@ pub struct Usage {
     pub(crate) instantiated_classes: HashSet<String>,
     pub(crate) instantiated_subclass_roots: HashSet<String>,
     pub(crate) required_libraries: HashSet<String>,
+    pub(crate) class_alias_targets: HashSet<String>,
     pub(crate) global_aliases: HashSet<String>,
     pub(crate) dynamic_global_alias: bool,
     pub(crate) variable_methods: HashMap<String, HashSet<(String, bool)>>,
@@ -71,6 +73,7 @@ impl Usage {
         self.instantiated_subclass_roots
             .extend(other.instantiated_subclass_roots);
         self.required_libraries.extend(other.required_libraries);
+        self.class_alias_targets.extend(other.class_alias_targets);
         self.global_aliases.extend(other.global_aliases);
         self.dynamic_global_alias |= other.dynamic_global_alias;
         self.fragment_classes.extend(other.fragment_classes);
@@ -269,8 +272,12 @@ struct Scanner<'a> {
 /// Checker-validated signatures used to recognize callable and by-reference arguments.
 #[derive(Debug, Default)]
 pub(super) struct CallSignatureIndex {
-    functions: HashMap<String, FunctionSig>,
-    methods: HashMap<(String, String, bool), FunctionSig>,
+    functions: HashMap<String, Arc<FunctionSig>>,
+    methods: HashMap<(String, String, bool), Arc<FunctionSig>>,
+    /// Every class's signature for one `(method key, is static)`, in class-key order: a call
+    /// whose receiver class is unknown asks for all of them, which used to scan and deep-clone
+    /// the whole method table per call site.
+    methods_by_name: HashMap<(String, bool), Vec<Arc<FunctionSig>>>,
     class_parents: HashMap<String, Option<String>>,
 }
 
@@ -280,10 +287,10 @@ impl CallSignatureIndex {
         let mut functions: HashMap<_, _> = check_result
             .functions
             .iter()
-            .map(|(name, signature)| (php_symbol_key(name), signature.clone()))
+            .map(|(name, signature)| (php_symbol_key(name), Arc::new(signature.clone())))
             .collect();
         for (name, signature) in &check_result.extern_functions {
-            functions.entry(php_symbol_key(name)).or_insert_with(|| FunctionSig {
+            functions.entry(php_symbol_key(name)).or_insert_with(|| Arc::new(FunctionSig {
                 params: signature.params.clone(),
                 param_type_exprs: vec![None; signature.params.len()],
                 param_attributes: vec![Vec::new(); signature.params.len()],
@@ -296,9 +303,9 @@ impl CallSignatureIndex {
                 deprecation: None,
                 is_generator: false,
                 declared_return: true,
-            });
+            }));
         }
-        let methods = check_result
+        let methods: HashMap<_, _> = check_result
             .classes
             .iter()
             .flat_map(|(class, info)| {
@@ -310,7 +317,7 @@ impl CallSignatureIndex {
                         move |(method, signature)| {
                             (
                                 (class.clone(), php_symbol_key(method), false),
-                                signature.clone(),
+                                Arc::new(signature.clone()),
                             )
                         }
                     })
@@ -319,10 +326,24 @@ impl CallSignatureIndex {
                         move |(method, signature)| {
                             (
                                 (class.clone(), php_symbol_key(method), true),
-                                signature.clone(),
+                                Arc::new(signature.clone()),
                             )
                         }
                     }))
+            })
+            .collect();
+        let mut by_name: HashMap<(String, bool), Vec<(&str, Arc<FunctionSig>)>> = HashMap::default();
+        for ((class, method, is_static), signature) in &methods {
+            by_name
+                .entry((method.clone(), *is_static))
+                .or_default()
+                .push((class.as_str(), Arc::clone(signature)));
+        }
+        let methods_by_name = by_name
+            .into_iter()
+            .map(|(key, mut owners)| {
+                owners.sort_unstable_by(|left, right| left.0.cmp(right.0));
+                (key, owners.into_iter().map(|(_, signature)| signature).collect())
             })
             .collect();
         let class_parents = check_result
@@ -338,28 +359,31 @@ impl CallSignatureIndex {
         Self {
             functions,
             methods,
+            methods_by_name,
             class_parents,
         }
     }
 
     /// Returns the signature of one direct free-function call.
-    fn function(&self, name: &str) -> Option<FunctionSig> {
+    fn function(&self, name: &str) -> Option<Arc<FunctionSig>> {
         self.functions
             .get(name)
             .cloned()
-            .or_else(|| crate::builtins::registry::function_sig(name))
+            .or_else(|| crate::builtins::registry::function_sig(name).map(Arc::new))
     }
 
     /// Returns every possible signature for a method call over the known receiver set.
-    fn method(&self, classes: &HashSet<String>, method: &str, is_static: bool) -> Vec<FunctionSig> {
+    pub(super) fn method(
+        &self,
+        classes: &HashSet<String>,
+        method: &str,
+        is_static: bool,
+    ) -> Vec<Arc<FunctionSig>> {
         if classes.is_empty() {
-            self.methods
-                .iter()
-                .filter_map(|((_, candidate, candidate_static), signature)| {
-                    (candidate == method && *candidate_static == is_static)
-                        .then(|| signature.clone())
-                })
-                .collect()
+            self.methods_by_name
+                .get(&(method.to_string(), is_static))
+                .cloned()
+                .unwrap_or_default()
         } else {
             classes
                 .iter()
@@ -379,7 +403,7 @@ impl CallSignatureIndex {
             .keys()
             .filter(|class| {
                 let mut current = Some((*class).clone());
-                let mut seen = HashSet::new();
+                let mut seen = HashSet::default();
                 while let Some(candidate) = current {
                     if !seen.insert(candidate.clone()) {
                         return false;
@@ -413,14 +437,13 @@ impl Scanner<'_> {
         match &stmt.kind {
             StmtKind::Echo(e) | StmtKind::Throw(e) | StmtKind::ExprStmt(e)
             | StmtKind::ConstDecl { value: e, .. } | StmtKind::Return(Some(e)) => self.scan_expr(e),
-            StmtKind::Include { path: e, .. } => {
-                // The resolver inlines every include it can read before this walk runs, so one
-                // that is still here resolves at runtime. Inside a literal eval fragment that is
-                // the normal case, and the included file can name anything.
-                if self.in_eval_fragment {
-                    self.widen_dynamic_hazards();
-                }
-                self.scan_expr(e)
+            // Static includes have been expanded by the resolver. A remaining include/require
+            // therefore runs opaque source through the eval bridge, which can invoke every AOT
+            // declaration exactly like `eval()` can. Inside a literal eval fragment that is the
+            // normal case, and the included file can name anything.
+            StmtKind::Include { path, .. } => {
+                self.widen_dynamic_hazards();
+                self.scan_expr(path)
             }
             StmtKind::StaticPropertyArrayPush { receiver, property, value } => {
                 let source = Expr::new(ExprKind::StaticPropertyAccess {
@@ -503,6 +526,18 @@ impl Scanner<'_> {
                 self.scan_expr(object);
                 self.scan_expr(value);
             }
+            StmtKind::PropertyRefAssign {
+                object,
+                property,
+                source,
+            } => {
+                self.record_instance_method(object, &property_hook_set_method(property));
+                self.scan_expr(object);
+                self.scan_expr(source);
+                if let ExprKind::Variable(name) = &source.kind {
+                    self.forget_variable(name);
+                }
+            }
             StmtKind::PropertyArrayPush {
                 object,
                 property,
@@ -535,6 +570,33 @@ impl Scanner<'_> {
             }
             StmtKind::StaticPropertyAssign { receiver, value, .. } => {
                 self.scan_receiver(receiver);
+                self.scan_expr(value);
+            }
+            StmtKind::StaticPropertyElementRefAssign {
+                receiver,
+                index,
+                source,
+                ..
+            } => {
+                self.scan_receiver(receiver);
+                self.scan_expr(index);
+                self.scan_expr(source);
+                if let ExprKind::Variable(name) = &source.kind {
+                    self.forget_variable(name);
+                }
+            }
+            StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property,
+                index,
+                value,
+                ..
+            } => {
+                self.scan_receiver(receiver);
+                self.scan_expr(property);
+                if let Some(index) = index {
+                    self.scan_expr(index);
+                }
                 self.scan_expr(value);
             }
             StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
@@ -647,6 +709,9 @@ impl Scanner<'_> {
             StmtKind::ExternClassDecl { name, .. } if declarations => {
                 self.record_class(name);
             }
+            // Activation consumes an existing implementation; it does not define
+            // metadata here, but that implementation must survive reachability.
+            StmtKind::ClassLikeActivate { name, .. } => { self.record_class(name); }
             StmtKind::ExternFunctionDecl { name, .. } if declarations => {
                 self.record_callable(name);
             }
@@ -684,7 +749,7 @@ impl Scanner<'_> {
         body: &[Stmt],
         declarations: bool,
     ) {
-        let mut guarded = HashSet::new();
+        let mut guarded = HashSet::default();
         collect_is_array_guards(condition, &mut guarded);
         let added: Vec<_> = guarded
             .into_iter()

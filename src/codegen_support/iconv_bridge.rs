@@ -4,7 +4,7 @@
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::iconv`, immediately before each
-//!   `__rt_iconv_call` / `__rt_iconv_call_bool` call.
+//!   `__rt_iconv_call` / `__rt_iconv_call_bool` / `__rt_iconv_call_str` call.
 //!
 //! Key details:
 //! - Publishing at the call site (rather than inside the shared runtime) is what makes a

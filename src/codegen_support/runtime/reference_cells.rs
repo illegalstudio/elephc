@@ -12,8 +12,9 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::sentinels::{
-    emit_throwable_creation_line_unknown, x86_64_heap_kind_word, REFERENCE_CELL_HEAP_KIND,
-    UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    emit_store_reference_cell_canary, emit_throwable_creation_line_unknown, x86_64_heap_kind_word,
+    REFERENCE_CELL_HEAP_KIND,
+    REFERENCE_CELL_PAYLOAD_BYTES, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
 };
 use crate::types::PhpType;
 
@@ -48,7 +49,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     emit_borrowed_reference_return_error(emitter);
 }
 
-/// Allocates a zeroed two-word cell; C argument zero supplies its payload descriptor tag.
+/// Allocates a zeroed two-word cell plus its canary; C argument zero supplies its payload descriptor tag.
 fn emit_new(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
@@ -56,8 +57,9 @@ fn emit_new(emitter: &mut Emitter) {
     emitter.label_global("__rt_reference_cell_new");
     abi::emit_frame_prologue(emitter, 32);
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
-    abi::emit_load_int_immediate(emitter, result, 16);
+    abi::emit_load_int_immediate(emitter, result, REFERENCE_CELL_PAYLOAD_BYTES);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
+    emit_store_reference_cell_canary(emitter, result, scratch);
     abi::load_at_offset(emitter, scratch, 8);
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -265,7 +267,6 @@ fn emit_singleton_mixed_clone_branch(emitter: &mut Emitter) {
     emitter.label("__rt_reference_cell_clone_dispatch");
 }
 
-
 /// Finds an exact live cell in constant time, rejecting borrowed and interior addresses.
 fn emit_owner_lookup(emitter: &mut Emitter) {
     emitter.blank();
@@ -362,8 +363,7 @@ fn emit_reference_escape_error(emitter: &mut Emitter, entry: &str, message: &str
     emitter.blank();
     emitter.label_global(&format!("{entry}_new"));
     abi::emit_frame_prologue(emitter, 32);
-    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 56);
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
@@ -377,7 +377,7 @@ fn emit_reference_escape_error(emitter: &mut Emitter, entry: &str, message: &str
             emitter.instruction("str x9, [x0, #16]");                           // publish the complete message pair
             emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
             emit_throwable_creation_line_unknown(emitter, "x0");
-            emitter.instruction("str xzr, [x0, #40]");                          // previous defaults to null
+            emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET));                          // previous defaults to null
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(emitter, "r10", x86_64_heap_kind_word(6) as i64);
@@ -390,7 +390,7 @@ fn emit_reference_escape_error(emitter: &mut Emitter, entry: &str, message: &str
             emitter.instruction(&format!("mov QWORD PTR [rax + 16], {length}")); // publish the message byte length
             emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
             emit_throwable_creation_line_unknown(emitter, "rax");
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous defaults to null
+            emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET));                 // previous defaults to null
         }
     }
     abi::emit_frame_restore(emitter, 32);
@@ -414,6 +414,50 @@ fn emit_reference_escape_error(emitter: &mut Emitter, entry: &str, message: &str
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+    use crate::codegen_support::sentinels::REFERENCE_CELL_CANARY_OFFSET;
+
+    /// The owner check is O(1): it proves a cell start by the address canary, with no branch back
+    /// into its own body. It used to walk the heap from its start to the address (a fifth of a
+    /// compiled Symfony request); a backward branch here brings that walk back.
+    #[test]
+    fn reference_cell_owner_check_is_constant_time() {
+        for name in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_owner_lookup(&mut emitter);
+            let assembly = emitter.output();
+            let body = assembly
+                .split_once("__rt_reference_cell_owner:")
+                .and_then(|(_, rest)| rest.split_once("__rt_reference_cell_owner_done:"))
+                .map(|(body, _)| body)
+                .unwrap_or_else(|| panic!("{name}: owner check body"));
+            let labels: Vec<&str> = body
+                .lines()
+                .filter_map(|line| line.trim().strip_suffix(':'))
+                .collect();
+            // The only label is the trailing reject: every branch is forward, so there is no loop.
+            assert_eq!(labels, ["__rt_reference_cell_owner_none"], "{name}: no loop label in the owner check");
+            let offset = format!("{REFERENCE_CELL_CANARY_OFFSET}]");
+            assert!(body.contains(&offset), "{name}: the owner check reads the canary word");
+        }
+    }
+
+    /// Every cell allocation stamps the canary the owner check proves; a cell without it would be
+    /// refused as borrowed storage.
+    #[test]
+    fn reference_cell_new_stamps_the_address_canary() {
+        for name in ["macos-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let arch = emitter.target.arch;
+            emit_new(&mut emitter);
+            let assembly = emitter.output();
+            assert!(assembly.contains(&format!("{REFERENCE_CELL_CANARY_OFFSET}]")), "{name}: canary store");
+            let size = match arch {
+                Arch::AArch64 => format!("#{REFERENCE_CELL_PAYLOAD_BYTES}"),
+                Arch::X86_64 => format!(", {REFERENCE_CELL_PAYLOAD_BYTES}"),
+            };
+            assert!(assembly.contains(&size), "{name}: cells allocate room for the canary");
+        }
+    }
 
     /// The framed clone returns before the separate frameless null path on every supported ABI.
     #[test]

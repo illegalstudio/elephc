@@ -59,6 +59,12 @@ impl Allocation {
         }
     }
 
+    /// Builds an allocation from a bare value-to-register map for unit tests of the frame layout.
+    #[cfg(test)]
+    pub fn from_assignments_for_tests(registers: HashMap<ValueId, &'static str>) -> Self {
+        Self::from_assignments(registers, Vec::new())
+    }
+
     /// Returns the value's physical register, scalar recipe status, or backing stack home.
     pub fn location(&self, value: ValueId) -> Location {
         match self.registers.get(&value) {

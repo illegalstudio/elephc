@@ -11,6 +11,7 @@
 //! - Shared metadata types stay here so every Reflection owner uses one contract.
 //! - Generated/AOT targets use focused runtime hooks for supported point lookups.
 
+mod builtin_closure;
 mod callable_api;
 mod class_api;
 mod class_construction;
@@ -43,7 +44,12 @@ use crate::eval_ir::EvalSourceLocation;
 pub(in crate::interpreter) use callable_api::*;
 pub(in crate::interpreter) use class_api::*;
 pub(in crate::interpreter) use class_construction::*;
+use builtin_closure::*;
 use class_lookup::*;
+// Re-exported by NAME rather than by widening the glob above: object construction asks this one
+// predicate to tell a missing builtin (a gap in this build) from a genuinely undefined class
+// name (PHP's catchable `Error`), and nothing else in `class_lookup` belongs outside reflection.
+pub(in crate::interpreter) use class_lookup::eval_reflection_class_like_is_internal;
 pub(in crate::interpreter) use class_member_api::*;
 use constant_construction::*;
 use flags::*;
@@ -51,6 +57,7 @@ use formatting::*;
 pub(in crate::interpreter) use formatting::eval_parameter_type_error_label;
 use function_construction::*;
 use function_metadata::*;
+pub(in crate::interpreter) use invocation::eval_reflection_with_declaring_class_scope;
 use invocation::*;
 pub(in crate::interpreter) use member_api::*;
 pub(in crate::interpreter) use member_construction::*;
@@ -130,6 +137,7 @@ struct EvalReflectionClassMetadata {
     resolved_name: String,
     source_location: Option<EvalSourceLocation>,
     attributes: Vec<EvalAttribute>,
+    doc_comment: Option<String>,
     flags: u64,
     modifiers: u64,
     interface_names: Vec<String>,
@@ -163,6 +171,7 @@ struct EvalReflectionMemberMetadata {
 }
 
 /// Eval metadata needed to materialize one `ReflectionParameter` object.
+#[derive(Clone)]
 struct EvalReflectionParameterMetadata {
     native_default_factory: Option<usize>,
     name: String,
@@ -270,6 +279,8 @@ enum EvalReflectionFunctionMethodTarget {
         static_variables: Vec<EvalStaticVarInitializer>,
         closure_captures: Vec<EvalClosureCaptureBinding>,
         parameters: Vec<EvalReflectionParameterMetadata>,
+        /// File of a closure literal; `None` falls back to the current eval file.
+        source_file: Option<String>,
         source_location: Option<EvalSourceLocation>,
         closure_target: Option<EvalClosureObjectTarget>,
         is_variadic: bool,
@@ -311,6 +322,11 @@ struct EvalReflectionUnionTypeMetadata {
 #[derive(Clone)]
 struct EvalReflectionIntersectionTypeMetadata {
     types: Vec<EvalReflectionNamedTypeMetadata>,
+}
+
+/// Returns whether `class_name` is one of the Reflection owner classes the interpreter builds.
+pub(in crate::interpreter) fn eval_is_reflection_owner_class(class_name: &str) -> bool {
+    reflection_owner_kind(class_name).is_some()
 }
 
 /// Attempts to construct a ReflectionClass/Method/Property object for eval metadata.

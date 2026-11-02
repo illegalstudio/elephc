@@ -9,6 +9,16 @@
 
 use super::*;
 
+#[cfg(test)]
+#[path = "parameter_defaults_tests.rs"]
+mod parameter_defaults_tests;
+
+#[cfg(test)]
+std::thread_local! {
+    /// Functions and closures `reflection_parameter_default_value` examined as default helpers.
+    static DEFAULT_HELPER_CANDIDATES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Converts a supported parameter default expression into Reflection metadata.
 pub(super) fn reflection_parameter_default_value(
     ctx: &FunctionContext<'_>,
@@ -19,14 +29,18 @@ pub(super) fn reflection_parameter_default_value(
     if let Some(value) = reflection_deferred_default_value(default) {
         return Ok(Some(value));
     }
-    if let Some(helper) = ctx.module.functions.iter().chain(ctx.module.closures.iter())
-        .find(|function| (function.lexical_class.is_none() && current_class.is_empty()
+    if let Some(helper) = ctx.module.callable_default_helpers_at(default.span)
+        .find(|function| {
+            #[cfg(test)]
+            DEFAULT_HELPER_CANDIDATES.with(|count| count.set(count.get() + 1));
+            (function.lexical_class.is_none() && current_class.is_empty()
             || function.lexical_class.as_deref().is_some_and(|scope|
             scope == current_class || current_info.is_some_and(|info|
                 info.method_impl_classes.values().chain(info.static_method_impl_classes.values())
                     .any(|owner| owner == scope))))
             && function.callable_default.as_ref()
-                .is_some_and(|value| value == default && value.span == default.span))
+                .is_some_and(|value| value == default && value.span == default.span)
+        })
     {
         return Ok(Some(ReflectionParameterDefaultValue::EirHelper(helper.name.clone())));
     }
@@ -38,27 +52,7 @@ pub(super) fn reflection_parameter_default_value(
     if let Some(value) = reflection_literal_parameter_default_value(default) {
         return Ok(Some(value));
     }
-    let context = crate::codegen::const_default_values::ConstDefaultContext {
-        module: ctx.module,
-        current_class: (!current_class.is_empty()).then_some(current_class),
-    };
-    if let Some(kind) = crate::codegen::const_default_values::resolve_const_default(default, &context)
-        .and_then(crate::codegen::const_default_values::resolved_literal_default)
-    {
-        return Ok(reflection_literal_parameter_default_value(&Expr::new(kind, default.span)));
-    }
-    match &default.kind {
-        // Unsupported constant forms retain their source export without failing compilation.
-        // Representable scalar and array values share the recursive constant evaluator.
-        ExprKind::ConstRef(_)
-        | ExprKind::ClassConstant { .. }
-        | ExprKind::ScopedConstantAccess { .. } => Ok(
-            reflection_constant_value(ctx, current_class, current_info, default, 0)
-                .ok()
-                .and_then(reflection_parameter_default_from_constant_value),
-        ),
-        _ => Ok(None),
-    }
+    reflection_constant_parameter_default_value(ctx, current_class, current_info, default, false)
 }
 
 /// Retains the message from a compiler-generated lazy default Error without evaluating it.
@@ -82,6 +76,30 @@ pub(super) fn reflection_parameter_default_non_object_value(
     if let Some(value) = reflection_literal_parameter_default_non_object_value(default) {
         return Ok(Some(value));
     }
+    reflection_constant_parameter_default_value(ctx, current_class, current_info, default, true)
+}
+
+/// Resolves class-scoped constants and nested arrays for both default-metadata paths.
+///
+/// `non_object` is the constructor-argument path, which keeps a literal fold free of objects.
+fn reflection_constant_parameter_default_value(
+    ctx: &FunctionContext<'_>,
+    current_class: &str,
+    current_info: Option<&crate::types::ClassInfo>,
+    default: &Expr,
+    non_object: bool,
+) -> Result<Option<ReflectionParameterDefaultValue>> {
+    if let Some(class_name) = undefined_constant_receiver(ctx, default) {
+        // php evaluates the default only when asked, and a class nobody declares
+        // (`NumberFormatter::TYPE_DOUBLE` without ext/intl, Laravel's `Number::parse()`) throws
+        // `Class "NumberFormatter" not found` then. The object-default path retains the class
+        // name and resolves it with a dynamic `new` at that moment, which throws exactly that.
+        return Ok(Some(ReflectionParameterDefaultValue::Object {
+            class_name,
+            args: Vec::new(),
+            written_args: Vec::new(),
+        }));
+    }
     let context = crate::codegen::const_default_values::ConstDefaultContext {
         module: ctx.module,
         current_class: (!current_class.is_empty()).then_some(current_class),
@@ -89,19 +107,46 @@ pub(super) fn reflection_parameter_default_non_object_value(
     if let Some(kind) = crate::codegen::const_default_values::resolve_const_default(default, &context)
         .and_then(crate::codegen::const_default_values::resolved_literal_default)
     {
-        return Ok(reflection_literal_parameter_default_non_object_value(&Expr::new(kind, default.span)));
+        let folded = Expr::new(kind, default.span);
+        return Ok(if non_object {
+            reflection_literal_parameter_default_non_object_value(&folded)
+        } else {
+            reflection_literal_parameter_default_value(&folded)
+        });
     }
     match &default.kind {
-        // Object arguments share the supported constant-value fallback.
+        // Unsupported constant forms retain their source export without failing compilation.
+        // Representable scalar and array values share the recursive constant evaluator.
         ExprKind::ConstRef(_)
         | ExprKind::ClassConstant { .. }
-        | ExprKind::ScopedConstantAccess { .. } => Ok(
+        | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_) => Ok(
             reflection_constant_value(ctx, current_class, current_info, default, 0)
                 .ok()
                 .and_then(reflection_parameter_default_from_constant_value),
         ),
         _ => Ok(None),
     }
+}
+
+/// Returns the class a `Named::CONST` default reads when no class-like of that name exists in the
+/// program or the selected profile.
+fn undefined_constant_receiver(ctx: &FunctionContext<'_>, default: &Expr) -> Option<String> {
+    let ExprKind::ScopedConstantAccess {
+        receiver: StaticReceiver::Named(name),
+        ..
+    } = &default.kind
+    else {
+        return None;
+    };
+    let class_name = name.as_str().trim_start_matches('\\');
+    let known = resolve_reflection_class(ctx, class_name).is_some()
+        || resolve_reflection_interface(ctx, class_name).is_some()
+        || resolve_reflection_trait(ctx, class_name).is_some()
+        || ctx.module.enum_infos.contains_key(class_name)
+        || crate::types::builtin_classes::lookup_profile_class(class_name).is_some();
+    (!known).then(|| class_name.to_string())
 }
 
 /// Converts constructor arguments for object defaults, rejecting nested objects.
@@ -131,7 +176,8 @@ pub(super) fn reflection_default_value_contains_object(value: &ReflectionParamet
         | ReflectionParameterDefaultValue::Str(_)
         | ReflectionParameterDefaultValue::DeferredError(_)
         | ReflectionParameterDefaultValue::EirHelper(_)
-        | ReflectionParameterDefaultValue::Null => false,
+        | ReflectionParameterDefaultValue::Null
+        | ReflectionParameterDefaultValue::EnumCase { .. } => false,
     }
 }
 
@@ -237,7 +283,9 @@ pub(super) fn reflection_parameter_default_from_constant_value(
         }
         ReflectionConstantValue::Str(value) => Some(ReflectionParameterDefaultValue::Str(value)),
         ReflectionConstantValue::Null => Some(ReflectionParameterDefaultValue::Null),
-        ReflectionConstantValue::EnumCase { .. } => None,
+        ReflectionConstantValue::EnumCase { enum_name, case_name } => {
+            Some(ReflectionParameterDefaultValue::EnumCase { enum_name, case_name })
+        }
         ReflectionConstantValue::Array(elements) => elements
             .into_iter()
             .map(reflection_parameter_default_from_constant_value)
@@ -297,21 +345,12 @@ pub(super) fn reflection_declared_type_metadata(
         }
         TypeExpr::Union(members) => {
             let allows_null = members.iter().any(|member| matches!(member, TypeExpr::Void));
-            let mut types = members
+            let types = members
                 .iter()
                 .filter(|member| !matches!(member, TypeExpr::Void))
                 .map(reflection_named_type_metadata_from_type_expr)
                 .collect::<Option<Vec<_>>>()?;
-            sort_union_members_like_php(&mut types);
-            if types.len() == 1 {
-                let mut metadata = types.into_iter().next()?;
-                metadata.allows_null = allows_null;
-                Some(ReflectionParameterTypeMetadata::Named(metadata))
-            } else {
-                (!types.is_empty()).then_some(ReflectionParameterTypeMetadata::Union(
-                    ReflectionUnionTypeMetadata { types, allows_null },
-                ))
-            }
+            reflection_union_members_metadata(types, allows_null)
         }
         TypeExpr::Intersection(members) => reflection_intersection_type_metadata(members),
         _ => reflection_named_type_metadata_from_type_expr(type_expr)
@@ -343,20 +382,9 @@ pub(super) fn reflection_method_return_type_metadata(
 ) -> Option<ReflectionParameterTypeMetadata> {
     if sig.declared_return {
         if let Some(return_type) = late_static_return {
-            let mut metadata = reflection_declared_type_metadata(return_type)?;
-            if let ReflectionParameterTypeMetadata::Union(union) = &mut metadata {
-                // PHP reports named class/interface members before `static`, then builtins.
-                union.types.sort_by_key(|member| {
-                    if member.name.eq_ignore_ascii_case("static") {
-                        1
-                    } else if member.is_builtin {
-                        2
-                    } else {
-                        0
-                    }
-                });
-            }
-            return Some(metadata);
+            // The declared-type path already orders the members as php does: named
+            // class/interface members, then `static`, then builtins.
+            return reflection_declared_type_metadata(return_type);
         }
     }
     reflection_return_type_metadata(sig)
@@ -405,31 +433,65 @@ pub(super) fn reflection_union_or_nullable_type_metadata(
     members: &[PhpType],
 ) -> Option<ReflectionParameterTypeMetadata> {
     let allows_null = members.iter().any(|member| matches!(member, PhpType::Void));
-    let mut types = Vec::<ReflectionNamedTypeMetadata>::new();
-    for member in members
+    let types = members
         .iter()
         .filter(|member| !matches!(member, PhpType::Void))
-    {
-        let metadata = reflection_named_type_metadata(member)?;
-        // Packed and keyed storage are one PHP type, including inside nullable/wider unions.
-        if !types.iter().any(|existing| {
-            existing.name == metadata.name && existing.is_builtin == metadata.is_builtin
-        }) {
-            types.push(metadata);
+        .map(reflection_named_type_metadata)
+        .collect::<Option<Vec<_>>>()?;
+    reflection_union_members_metadata(types, allows_null)
+}
+
+/// Builds php's `ReflectionNamedType` or `ReflectionUnionType` view of a union's members.
+///
+/// php does not keep the declared order: `zend_type_to_string()` and `getTypes()` list class and
+/// interface members first (as declared), then `static`, then the builtins in one fixed order,
+/// and `null` last -- `int|string|null` reflects as `string|int|null`. Inside a union `iterable`
+/// is the alias `Traversable|array`. A nullable union lists `null` among `getTypes()`; a single
+/// member with `null` is the nullable named type `?T`. Duplicate members (packed and keyed array
+/// storage are one PHP `array`) collapse.
+pub(super) fn reflection_union_members_metadata(
+    members: Vec<ReflectionNamedTypeMetadata>,
+    allows_null: bool,
+) -> Option<ReflectionParameterTypeMetadata> {
+    let expand_iterable = members.len() > 1;
+    let mut types = Vec::<ReflectionNamedTypeMetadata>::new();
+    for member in members {
+        let expanded = if expand_iterable && member.is_builtin && member.name.eq_ignore_ascii_case("iterable") {
+            vec![
+                ReflectionNamedTypeMetadata {
+                    name: "Traversable".to_string(),
+                    allows_null: false,
+                    is_builtin: false,
+                },
+                reflection_builtin_named_type("array", false),
+            ]
+        } else {
+            vec![member]
+        };
+        for member in expanded {
+            if !types.iter().any(|existing| {
+                existing.is_builtin == member.is_builtin
+                    && existing.name.eq_ignore_ascii_case(&member.name)
+            }) {
+                types.push(member);
+            }
         }
     }
     if types.len() == 1 {
         let mut metadata = types.pop()?;
-        metadata.allows_null = allows_null;
+        metadata.allows_null = allows_null || metadata.allows_null;
         return Some(ReflectionParameterTypeMetadata::Named(metadata));
     }
-    // PHP prints union members in its own rank order, not the declared one. The list built
-    // above already collapses packed and keyed storage into one PHP type, so it only needs
-    // ordering -- rebuilding it here would undo that de-duplication.
+    if types.is_empty() {
+        return None;
+    }
+    // PHP prints union members in its own rank order, not the declared one; the stable sort keeps
+    // the declared order among class and interface members.
     sort_union_members_like_php(&mut types);
-    (!types.is_empty()).then_some(ReflectionParameterTypeMetadata::Union(
-        ReflectionUnionTypeMetadata { types, allows_null },
-    ))
+    if allows_null {
+        types.push(reflection_builtin_named_type("null", true));
+    }
+    Some(ReflectionParameterTypeMetadata::Union(ReflectionUnionTypeMetadata { types, allows_null }))
 }
 
 /// Converts a declared `A&B` type into `ReflectionIntersectionType` metadata.

@@ -2,7 +2,7 @@
 title: "json_validate()"
 description: "Checks if a string contains valid JSON."
 sidebar:
-  order: 554
+  order: 567
 ---
 
 ## json_validate()

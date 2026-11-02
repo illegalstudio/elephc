@@ -16,7 +16,7 @@ use super::*;
 enum Owner {
     Local(LocalSlotId, PhpType, usize),
     Reference(PhpType, usize),
-    EvalScope(usize),
+    EvalScope(LocalKind, usize),
     EvalContext(usize),
 }
 
@@ -47,9 +47,12 @@ pub(super) fn emit_callback(ctx: &mut FunctionContext<'_>, entry: &str) {
         .map(|(_, _, ty, offset)| Owner::Reference(ty, offset)).collect::<Vec<_>>();
     owners.extend(super::function_cleanup_locals(ctx, None).into_iter()
         .map(|(_, slot, ty, offset)| Owner::Local(slot, ty, offset)));
-    owners.extend(super::eval_scope_locals(ctx).into_iter().map(|(_, offset)| Owner::EvalScope(offset)));
+    owners.extend(super::eval_scope_locals(ctx).into_iter().map(|(_, kind, offset)| Owner::EvalScope(kind, offset)));
+    let eval_context_offset = super::eval_context_locals(ctx).first().map(|(_, offset)| *offset);
     owners.extend(super::eval_context_locals(ctx).into_iter().map(|(_, offset)| Owner::EvalContext(offset)));
     ctx.emitter.label_global(&callback);
+    // Every step borrows the abandoned frame's x29; x28 is not that frame's base.
+    let frame_slot_base = ctx.emitter.frame_slot_base.take();
     enter_borrowed_frame(ctx.emitter);
     super::emit_instr_exit(ctx);
     let arm = ctx.emitter.target.arch == Arch::AArch64;
@@ -71,7 +74,9 @@ pub(super) fn emit_callback(ctx: &mut FunctionContext<'_>, entry: &str) {
         match owner {
             Owner::Local(slot, ty, offset) => super::emit_owned_local_cleanup(ctx, *slot, *offset, ty),
             Owner::Reference(ty, offset) => emit_reference_cleanup(ctx, ty, *offset, &step),
-            Owner::EvalScope(offset) => super::emit_eval_scope_cleanup(ctx, *offset),
+            Owner::EvalScope(kind, offset) => {
+                super::emit_eval_scope_cleanup(ctx, *kind, *offset, eval_context_offset)
+            }
             Owner::EvalContext(offset) => super::emit_eval_context_cleanup(ctx, *offset),
         }
         leave_borrowed_frame(ctx.emitter);
@@ -81,6 +86,7 @@ pub(super) fn emit_callback(ctx: &mut FunctionContext<'_>, entry: &str) {
             }
         }
     }
+    ctx.emitter.frame_slot_base = frame_slot_base;
 }
 
 /// Preserves the caller's real stack while selecting a borrowed PHP frame for ordinary slot helpers.

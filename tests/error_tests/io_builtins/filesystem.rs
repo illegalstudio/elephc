@@ -23,16 +23,16 @@ fn test_error_file_get_contents_wrong_args() {
     );
 }
 
-/// Verifies `file_get_contents()` returning `false` is incompatible with declared `string` return type.
+/// Returning `file_get_contents()` (`string|false`) from a function declared `: string` is valid in php's
+/// weak mode (`false` coerces to `""`); elephc now accepts it and the program output matches php.
 #[test]
-fn test_error_file_get_contents_false_return_rejects_string_return_type() {
-    expect_error(
+fn test_file_get_contents_false_return_coerces_to_declared_string() {
+    expect_no_error(
         r#"<?php
 function read_file(): string {
     return file_get_contents("missing.txt");
 }
 "#,
-        "Function 'read_file' return type expects string, got string|false",
     );
 }
 
@@ -48,35 +48,32 @@ fn test_error_hash_file_wrong_args() {
 /// Verifies `readfile()` rejects zero arguments with arity error.
 #[test]
 fn test_error_readfile_wrong_args() {
-    expect_error("<?php readfile();", "readfile() takes exactly 1 argument");
+    expect_error("<?php readfile();", "readfile() takes 1 to 3 arguments");
 }
 
-/// Verifies `readfile()` returning `false` is incompatible with declared `int` return type.
+/// Returning `readfile()` (`int|false`) from a function declared `: int` is valid in php's weak mode
+/// (`false` coerces to `0`); elephc now accepts it and the program output matches php.
 #[test]
-fn test_error_readfile_false_return_rejects_int_return_type() {
-    expect_error(
+fn test_readfile_false_return_coerces_to_declared_int() {
+    expect_no_error(
         r#"<?php
 function dump_file(): int {
     return readfile("missing.txt");
 }
 "#,
-        "Function 'dump_file' return type expects int, got int|false",
     );
 }
 
-/// Verifies `file_put_contents()` rejects one argument (requires 2) with arity error.
-///
-/// The wording moved with the signature: `$flags` was added in issue #506, so the accepted
-/// count is a range now.
+/// Verifies `file_put_contents()` rejects calls outside its two-to-four argument signature.
 #[test]
 fn test_error_file_put_contents_wrong_args() {
     expect_error(
         r#"<?php file_put_contents("x");"#,
-        "file_put_contents() takes 2 or 3 arguments",
+        "file_put_contents() takes 2 to 4 arguments",
     );
     expect_error(
-        r#"<?php file_put_contents("x", "y", 0, null);"#,
-        "file_put_contents() takes 2 or 3 arguments",
+        r#"<?php file_put_contents("x", "y", 0, null, false);"#,
+        "file_put_contents() takes 2 to 4 arguments",
     );
 }
 
@@ -95,17 +92,18 @@ fn test_error_file_exists_wrong_args() {
 /// issue #506, so the accepted count is a range now.
 #[test]
 fn test_error_mkdir_wrong_args() {
-    expect_error("<?php mkdir();", "mkdir() takes 1 to 3 arguments");
+    expect_error("<?php mkdir();", "mkdir() takes 1 to 4 arguments");
     expect_error(
-        r#"<?php mkdir("a", 0777, true, null);"#,
-        "mkdir() takes 1 to 3 arguments",
+        "<?php mkdir('a', 0777, false, null, true);",
+        "mkdir() takes 1 to 4 arguments",
     );
 }
 
-/// Verifies `copy()` rejects one argument (requires 2) with arity error.
+/// Verifies `copy()` rejects one argument (requires 2, plus an optional stream context) with an
+/// arity error.
 #[test]
 fn test_error_copy_wrong_args() {
-    expect_error(r#"<?php copy("x");"#, "copy() takes exactly 2 arguments");
+    expect_error(r#"<?php copy("x");"#, "copy() takes 2 or 3 arguments");
 }
 
 /// Verifies `link()` rejects one argument (requires 2) with arity error.
@@ -140,7 +138,7 @@ fn test_error_linkinfo_wrong_args() {
 fn test_error_rename_wrong_args() {
     expect_error(
         r#"<?php rename("x");"#,
-        "rename() takes exactly 2 arguments",
+        "rename() takes 2 or 3 arguments",
     );
 }
 
@@ -150,10 +148,10 @@ fn test_error_getcwd_wrong_args() {
     expect_error("<?php getcwd(1);", "getcwd() takes no arguments");
 }
 
-/// Verifies `scandir()` rejects zero arguments with arity error.
+/// Verifies `scandir()` rejects zero arguments against its one-to-three-argument PHP signature.
 #[test]
 fn test_error_scandir_wrong_args() {
-    expect_error("<?php scandir();", "scandir() takes exactly 1 argument");
+    expect_error("<?php scandir();", "scandir() takes 1 to 3 arguments");
 }
 
 /// Verifies `tempnam()` rejects one argument (requires 2) with arity error.
@@ -238,13 +236,13 @@ fn test_error_extended_stat_builtins_wrong_args() {
 /// Verifies `unlink()` rejects zero arguments with arity error.
 #[test]
 fn test_error_unlink_wrong_args() {
-    expect_error("<?php unlink();", "unlink() takes exactly 1 argument");
+    expect_error("<?php unlink();", "unlink() takes 1 or 2 arguments");
 }
 
 /// Verifies `rmdir()` rejects zero arguments with arity error.
 #[test]
 fn test_error_rmdir_wrong_args() {
-    expect_error("<?php rmdir();", "rmdir() takes exactly 1 argument");
+    expect_error("<?php rmdir();", "rmdir() takes 1 or 2 arguments");
 }
 
 /// Verifies `chdir()` rejects zero arguments with arity error.
@@ -256,7 +254,11 @@ fn test_error_chdir_wrong_args() {
 /// Verifies `glob()` rejects zero arguments with arity error.
 #[test]
 fn test_error_glob_wrong_args() {
-    expect_error("<?php glob();", "glob() takes exactly 1 argument");
+    expect_error("<?php glob();", "glob() takes 1 or 2 arguments");
+    expect_error(
+        "<?php glob('*', 0, true);",
+        "glob() takes 1 or 2 arguments",
+    );
 }
 
 /// Verifies `sys_get_temp_dir()` rejects arguments with arity error.

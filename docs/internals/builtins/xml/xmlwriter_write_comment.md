@@ -2,7 +2,7 @@
 title: "xmlwriter_write_comment() - internals"
 description: "Compiler internals for xmlwriter_write_comment(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1138
+  order: 1198
 ---
 
 ## `xmlwriter_write_comment()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1289](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1289) (`xmlwriter_write_comment`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:1299](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1299) (`xmlwriter_write_comment`)
 - **Function symbol**: `xmlwriter_write_comment()`
 
 

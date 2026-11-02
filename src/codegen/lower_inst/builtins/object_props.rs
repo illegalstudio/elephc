@@ -29,6 +29,21 @@ use crate::types::PhpType;
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
 
+/// Lowers `__elephc_diag_suppressed()` to a load of the `@` suppression depth.
+///
+/// The error-handling prelude reads it so that `error_reporting()` answers what php 8 answers
+/// inside `@`: the mask narrowed to the fatal levels. Without it `@trigger_error(...,
+/// E_USER_DEPRECATED)` -- how every Symfony and Twig deprecation is raised -- printed.
+pub(crate) fn lower_diag_suppressed(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_diag_suppressed", 0)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_rt_diag_suppression", 0);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `__elephc_object_is_enum(value)` to a bounded per-class table probe.
 ///
 /// Returns PHP `true` only for an instance whose class is an enum; a non-object

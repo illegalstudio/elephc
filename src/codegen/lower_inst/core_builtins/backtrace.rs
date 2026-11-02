@@ -11,7 +11,7 @@
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{
-    abi, emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
+    abi, emit_array_value_type_stamp,
     emit_box_current_value_as_mixed, Result,
 };
 use crate::ir::Instruction;
@@ -33,8 +33,13 @@ const PRINT_TRACE_STATE_BYTES: usize = 32;
 const CALLBACK_LINE_OFFSET: usize = 0;
 const CALLBACK_OPTIONS_OFFSET: usize = 8;
 const CALLBACK_ARG_COUNT_OFFSET: usize = 16;
+/// Reuses the argument-count word once the argument list is trimmed: the boxed `$this`, or zero.
+const CALLBACK_THIS_OFFSET: usize = 16;
 const CALLBACK_PRINT_INDEX_OFFSET: usize = 24;
-const CALLBACK_PRINT_ARG_COUNT_OFFSET: usize = 32;
+/// The boxed-Mixed argument array the frame reader built for this frame, or zero.
+const CALLBACK_ARGS_OFFSET: usize = 32;
+/// The activation's caller-file descriptor (`{ptr, len}`, or zero for the entry file).
+const CALLBACK_FILE_OFFSET: usize = 40;
 
 /// Reads the nearest suspended source call site without materializing a PHP backtrace array.
 pub(super) fn lower_diagnostic_caller_line(ctx: &mut FunctionContext<'_>) {
@@ -80,27 +85,48 @@ pub(super) fn prepare_call_site(
     // scalar Mixed rebinds whose fast path cannot invoke PHP code.
     let warns_at_call_site = inst.effects.contains(crate::ir::Effects::MAY_WARN)
         && !matches!(inst.op, Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot);
-    // Injected prelude code is an internal function's body: php-src reports its notices at
-    // the user's call site, so publishing the prelude's synthetic span here would overwrite
-    // the location the entering call just published.
-    let compiler_generated = inst.span.is_some_and(|span| !span.is_from_source());
-    if (instruction_may_enter_php_frame(inst) || warns_at_call_site) && !compiler_generated {
+    // The file this instruction's code came from: an included or autoloaded file's spans carry
+    // its source identity. `None` is the entry file, `_script_source_file`.
+    let span_file = ctx.span_source_file(inst.span).map(str::to_string);
+    // A node with no place in the program (a prelude body, a compiler-built node) publishes
+    // nothing, so the site its caller published stays current: php's internal functions have no
+    // file or line of their own, and a warning raised inside one names the user call that reached
+    // it. Publishing line 0 here made `highlight_file()`'s warnings say "on line 0".
+    let from_source = inst.span.is_some_and(|span| span.is_from_source());
+    if from_source && (instruction_may_enter_php_frame(inst) || warns_at_call_site) {
+        // ONE pointer store names this site: a static `{file descriptor, line}` record, shared by
+        // every site with the same file and line. It is both the location a warning raised here
+        // names and the caller `file`/`line` a callee's prologue copies into its activation.
+        // Publishing the five words separately (file, length, line, next file, next line) cost
+        // about twenty instructions per call site, a few million in a Symfony build.
         let scratch = abi::int_result_reg(ctx.emitter);
-        abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
-        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
-        abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(inst.span.map_or(0, |span| span.line)));
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+        // Only source spans reach this point (see `from_source` above). A compiler-built node's
+        // synthetic line (1 000 000 and up) was also numbered in a run-dependent order, which
+        // made the records, and so two builds of one program, differ.
+        let line = u64::from(
+            inst.span
+                .filter(|span| span.is_from_source())
+                .map_or(0, |span| span.line),
+        );
+        let descriptor = match &span_file {
+            Some(path) => {
+                let (label, len) = ctx.data.add_string(path.as_bytes());
+                let descriptor = ctx.data.add_words(vec![
+                    crate::codegen_support::data_section::DataWord::Symbol(label),
+                    crate::codegen_support::data_section::DataWord::U64(len as u64),
+                ]);
+                crate::codegen_support::data_section::DataWord::Symbol(descriptor)
+            }
+            None => crate::codegen_support::data_section::DataWord::U64(0),
+        };
+        let record = ctx.data.add_words(vec![
+            descriptor,
+            crate::codegen_support::data_section::DataWord::U64(line),
+        ]);
+        abi::emit_symbol_address(ctx.emitter, scratch, &record);
+        let site = abi::php_site_symbol(&ctx.emitter.target);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &site, 0);
     }
-    if !ctx.backtrace_enabled || !instruction_may_enter_php_frame(inst) {
-        return Ok(());
-    }
-    let line = i64::from(inst.span.map_or(0, |span| span.line));
-    let scratch = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_int_immediate(ctx.emitter, scratch, line);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
-
     // The callee's prologue copies this line into its own activation (`[32]`) and installs its
     // function-level frame reader (`[24]`); a call site must never overwrite either word, or every
     // frame would report the line of its own next call instead of the line it was called from.
@@ -356,12 +382,21 @@ pub(in crate::codegen) fn emit_function_frame_reader(
 }
 
 /// Emits one callback body that reads the suspended PHP frame's live locals.
+///
+/// The reader only does what depends on THIS function: it reads its parameters from their frame
+/// slots into a boxed argument array. Printing (`debug_print_backtrace()`) is one call into
+/// `__rt_backtrace_print_frame` with the finished array, so no function carries its own copy of
+/// the "#n file(line): name(args)" renderer. Without `materialize` only that print mode exists.
 fn emit_frame_reader_callback(ctx: &mut FunctionContext<'_>, materialize: bool) -> Result<()> {
+    // The reader switches x29 to the suspended frame; x28 is not that frame's base.
+    let frame_slot_base = ctx.emitter.frame_slot_base.take();
     emit_frame_reader_prologue(ctx);
     capture_callback_argument_count(ctx)?;
+    emit_build_frame_arguments(ctx)?;
     if !materialize {
-        emit_printed_frame(ctx)?;
+        emit_print_frame_call(ctx);
         emit_frame_reader_epilogue(ctx);
+        ctx.emitter.frame_slot_base = frame_slot_base;
         return Ok(());
     }
     let materialize_label = ctx.next_label("backtrace_frame_materialize");
@@ -371,32 +406,139 @@ fn emit_frame_reader_callback(ctx: &mut FunctionContext<'_>, materialize: bool) 
         CALLBACK_PRINT_INDEX_OFFSET,
     );
     emit_branch_if_negative(ctx, &materialize_label);
-    emit_printed_frame(ctx)?;
+    emit_print_frame_call(ctx);
     emit_frame_reader_epilogue(ctx);
     ctx.emitter.label(&materialize_label);
-    allocate_mixed_hash(ctx, 8);
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    let file = ctx.module.source_path.clone().unwrap_or_else(|| "Unknown".to_string());
-    insert_boxed_string(ctx, "file", &file);
-    insert_callback_line(ctx);
-    let (class, function, call_type) = frame_function_parts(ctx);
-    insert_boxed_string(ctx, "function", &function);
-    if let Some(class) = class {
-        insert_boxed_string(ctx, "class", &class);
-        insert_boxed_string(ctx, "type", call_type);
-    }
-    insert_callback_object(ctx)?;
-    insert_callback_arguments(ctx)?;
-    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    emit_box_current_owned_value_as_mixed(
-        ctx.emitter,
-        &PhpType::AssocArray {
-            key: Box::new(PhpType::Str),
-            value: Box::new(PhpType::Mixed),
-        },
-    );
+    emit_frame_hash_call(ctx)?;
     emit_frame_reader_epilogue(ctx);
+    ctx.emitter.frame_slot_base = frame_slot_base;
     Ok(())
+}
+
+/// Loads the frame's `{ptr, len}` file record into `reg`: the descriptor the call site published
+/// in the activation, or the entry file's static record when it published none.
+fn load_frame_file_record(ctx: &mut FunctionContext<'_>, reg: &str) {
+    let file = ctx.module.source_path.clone().unwrap_or_else(|| "Unknown".to_string());
+    let (file_label, file_len) = ctx.data.add_string(file.as_bytes());
+    let entry_record = ctx.data.add_words(vec![
+        crate::codegen_support::data_section::DataWord::Symbol(file_label),
+        crate::codegen_support::data_section::DataWord::U64(file_len as u64),
+    ]);
+    let have_file = ctx.next_label("backtrace_file_record_loaded");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, reg, CALLBACK_FILE_OFFSET);
+    emit_branch_if_nonzero(ctx, reg, &have_file);
+    abi::emit_symbol_address(ctx.emitter, reg, &entry_record);
+    ctx.emitter.label(&have_file);
+}
+
+/// Builds this frame's `debug_backtrace()` entry with one call into
+/// `__rt_backtrace_frame_hash(file record, line, info record, this, args)`.
+///
+/// `this` is boxed here (it is a local of THIS function) and only when PROVIDE_OBJECT asks for
+/// it; the static info record names the function, and the class and call type for a method.
+fn emit_frame_hash_call(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    use crate::codegen_support::data_section::DataWord;
+    // The argument-count slot is free once the argument list is trimmed: it carries `this`.
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    abi::emit_store_to_sp(ctx.emitter, result, CALLBACK_THIS_OFFSET);
+    if let Some(slot) = ctx.local_slot_by_name("this") {
+        let skip = ctx.next_label("debug_backtrace_skip_object");
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, CALLBACK_OPTIONS_OFFSET);
+        let provide = ctx.next_label("debug_backtrace_provide_object");
+        emit_branch_if_bit_set(ctx, DEBUG_BACKTRACE_PROVIDE_OBJECT, &provide);
+        abi::emit_jump(ctx.emitter, &skip);
+        ctx.emitter.label(&provide);
+        ctx.load_local_to_result(slot)?;
+        let ty = ctx.local_php_type(slot)?;
+        // The trace's frame hash takes ownership of this box. An already-boxed Mixed `$this`
+        // (a closure bound to a receiver is stored as a Mixed capture) is a BORROWED cell, and
+        // `emit_box_current_value_as_mixed` deliberately does nothing for Mixed, so passing it
+        // through made the trace free the descriptor's own capture: the bound `$this` box lost a
+        // reference on every exception whose trace materialized this frame, and the next
+        // `$this` read in the closure used freed memory. Clone into a fresh owned cell.
+        if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+        } else {
+            emit_box_current_value_as_mixed(ctx.emitter, &ty);
+        }
+        abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), CALLBACK_THIS_OFFSET);
+        ctx.emitter.label(&skip);
+    }
+    let (class, function, call_type) = frame_function_parts(ctx);
+    let (function_label, function_len) = ctx.data.add_string(function.as_bytes());
+    let mut words = vec![DataWord::Symbol(function_label), DataWord::U64(function_len as u64)];
+    match class {
+        Some(class) => {
+            let (class_label, class_len) = ctx.data.add_string(class.as_bytes());
+            let (type_label, type_len) = ctx.data.add_string(call_type.as_bytes());
+            words.extend([
+                DataWord::Symbol(class_label),
+                DataWord::U64(class_len as u64),
+                DataWord::Symbol(type_label),
+                DataWord::U64(type_len as u64),
+            ]);
+        }
+        None => words.extend((0..4).map(|_| DataWord::U64(0))),
+    }
+    let info = ctx.data.add_words(words);
+    let (file_reg, line, info_reg, this, args) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1", "x2", "x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi", "rdx", "rcx", "r8"),
+    };
+    load_frame_file_record(ctx, file_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, line, CALLBACK_LINE_OFFSET);
+    abi::emit_symbol_address(ctx.emitter, info_reg, &info);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, this, CALLBACK_THIS_OFFSET);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, args, CALLBACK_ARGS_OFFSET);
+    abi::emit_call_label(ctx.emitter, "__rt_backtrace_frame_hash");
+    Ok(())
+}
+
+/// Builds the frame's argument array into `CALLBACK_ARGS_OFFSET` (zero when arguments are
+/// suppressed), before anything else is pushed on the reader's frame.
+fn emit_build_frame_arguments(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    abi::emit_store_to_sp(ctx.emitter, result, CALLBACK_ARGS_OFFSET);
+    let skip = ctx.next_label("debug_backtrace_skip_args");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, CALLBACK_OPTIONS_OFFSET);
+    emit_branch_if_bit_set(ctx, DEBUG_BACKTRACE_IGNORE_ARGS, &skip);
+    emit_argument_array_from_live_locals(ctx)?;
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), CALLBACK_ARGS_OFFSET);
+    ctx.emitter.label(&skip);
+    Ok(())
+}
+
+/// Prints this frame through the shared renderer and releases the argument array.
+///
+/// `__rt_backtrace_print_frame(index, file descriptor, line, name descriptor, args)`; the file
+/// descriptor is the activation's `{ptr, len}` record, or the entry file's static record when the
+/// activation carries none.
+fn emit_print_frame_call(ctx: &mut FunctionContext<'_>) {
+    let name = display_function_name(ctx);
+    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
+    let name_record = ctx.data.add_words(vec![
+        crate::codegen_support::data_section::DataWord::Symbol(name_label),
+        crate::codegen_support::data_section::DataWord::U64(name_len as u64),
+    ]);
+    let (index, file_reg, line, name_reg, args) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1", "x2", "x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi", "rdx", "rcx", "r8"),
+    };
+    abi::emit_load_temporary_stack_slot(ctx.emitter, index, CALLBACK_PRINT_INDEX_OFFSET);
+    load_frame_file_record(ctx, file_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, line, CALLBACK_LINE_OFFSET);
+    abi::emit_symbol_address(ctx.emitter, name_reg, &name_record);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, args, CALLBACK_ARGS_OFFSET);
+    abi::emit_call_label(ctx.emitter, "__rt_backtrace_print_frame");
+    let release = ctx.next_label("backtrace_print_args_released");
+    let array = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, array, CALLBACK_ARGS_OFFSET);
+    emit_branch_if_zero(ctx, array, &release);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    ctx.emitter.label(&release);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
 }
 
 /// Saves callback state and selects the suspended PHP frame pointer for local reads.
@@ -407,6 +549,8 @@ fn emit_frame_reader_prologue(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("stp x29, x30, [sp, #48]");                 // preserve the callback caller frame
             ctx.emitter.instruction("ldr x9, [x0, #32]");                       // load the source frame's caller line
             ctx.emitter.instruction("str x9, [sp]");                            // save the caller line for frame materialization
+            ctx.emitter.instruction("ldr x9, [x0, #40]");                       // load the source frame's caller-file descriptor
+            ctx.emitter.instruction("str x9, [sp, #40]");                       // save it for the frame's `file`
             ctx.emitter.instruction("str x1, [sp, #8]");                        // save the original debug options mask
             ctx.emitter.instruction("str x2, [sp, #24]");                       // save the materialize or print mode selector
             ctx.emitter.instruction("ldr x29, [x0, #16]");                      // switch local reads to the suspended PHP frame
@@ -416,6 +560,8 @@ fn emit_frame_reader_prologue(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("sub rsp, 48");                             // reserve callback state with SysV alignment
             ctx.emitter.instruction("mov rax, QWORD PTR [rdi + 32]");           // load the source frame's caller line
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the caller line for frame materialization
+            ctx.emitter.instruction("mov rax, QWORD PTR [rdi + 40]");           // load the source frame's caller-file descriptor
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 40], rax");           // save it for the frame's `file`
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rsi");            // save the original debug options mask
             ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rdx");           // save the materialize or print mode selector
             ctx.emitter.instruction("mov rbp, QWORD PTR [rdi + 16]");           // switch local reads to the suspended PHP frame
@@ -461,11 +607,7 @@ fn capture_callback_argument_count(ctx: &mut FunctionContext<'_>) -> Result<()> 
             .local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM)
             .expect("optional argument-count metadata requires a hidden collector");
         ctx.load_local_to_result(collector)?;
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.emitter.instruction("ldr x0, [x0, #24]"),      // load the hidden caller argument count
-            Arch::X86_64 => ctx.emitter.instruction("mov rax, QWORD PTR [rax + 24]"), // load the hidden caller argument count
-        }
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        emit_load_collector_leading_count(ctx);
         match ctx.emitter.target.arch {
             Arch::AArch64 => abi::emit_store_to_sp(ctx.emitter, "x1", CALLBACK_ARG_COUNT_OFFSET),
             Arch::X86_64 => {
@@ -484,57 +626,152 @@ fn capture_callback_argument_count(ctx: &mut FunctionContext<'_>) -> Result<()> 
     Ok(())
 }
 
-/// Inserts the dynamic call-site line saved in the activation record.
-fn insert_callback_line(ctx: &mut FunctionContext<'_>) {
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        CALLBACK_LINE_OFFSET + 16,
-    );
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
-    insert_current_boxed_hash_value(ctx, "line");
+/// Appends a boxed parameter slot, or a boxed `null` when the slot holds no box yet.
+///
+/// An omitted optional parameter of a frame entered without an argument count -- Symfony's
+/// `Kernel::handle($request)`, called from the runtime runner -- can still hold a null pointer
+/// when an exception's trace reads it. Pushed as a cell, it left a hole the trace renderer
+/// dereferenced and the 404 page killed the worker.
+fn emit_append_boxed_parameter_or_null(ctx: &mut FunctionContext<'_>) {
+    let null_box = ctx.next_label("debug_backtrace_param_null_box");
+    let appended = ctx.next_label("debug_backtrace_param_appended");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x0, {null_box}")), // an empty slot has no box to borrow
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // inspect whether the slot holds a box
+            ctx.emitter.instruction(&format!("jz {null_box}"));                 // an empty slot has no box to borrow
+        }
+    }
+    append_box_to_saved_array(ctx, false);
+    abi::emit_jump(ctx.emitter, &appended);
+    ctx.emitter.label(&null_box);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #8");                              // runtime value tag 8 is null
+            ctx.emitter.instruction("mov x1, xzr");                             // null carries no payload
+            ctx.emitter.instruction("mov x2, xzr");                             // null carries no second word
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, 8");                              // runtime value tag 8 is null
+            ctx.emitter.instruction("xor edi, edi");                            // null carries no payload
+            ctx.emitter.instruction("xor esi, esi");                            // null carries no second word
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+    append_box_to_saved_array(ctx, true);
+    ctx.emitter.label(&appended);
 }
 
-/// Inserts `$this` only when PHP's provide-object option is enabled for an instance frame.
-fn insert_callback_object(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let Some(slot) = ctx.local_slot_by_name("this") else {
-        return Ok(());
+/// Reads the caller argument count a collector carries as its FIRST entry into `x1` / `rdi`.
+///
+/// Input: the collector pointer in the result register. A packed collector keeps the count in
+/// its first boxed slot. A spread call hands the callee a HASH collector (Symfony's lazy event
+/// listeners: `$listener(...$args)`), where `[collector + 24]` is hash metadata: the count read
+/// from it was nonsense, the frame's argument list was sliced to that length, and the trace held
+/// unfilled slots that `getTraceAsString()` dereferenced -- the 404 page killed the worker. The
+/// hash case reads its first entry by insertion order instead.
+fn emit_load_collector_leading_count(ctx: &mut FunctionContext<'_>) {
+    let hash = ctx.next_label("debug_backtrace_count_hash");
+    let native = ctx.next_label("debug_backtrace_count_native");
+    let done = ctx.next_label("debug_backtrace_count_done");
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_push_reg(ctx.emitter, &result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                              // is the collector hash storage?
+            ctx.emitter.instruction(&format!("b.eq {hash}"));                   // read the first hash entry by insertion order
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+            ctx.emitter.instruction("ldr x0, [x0, #24]");                       // load the hidden caller argument count box
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction(&format!("b {done}"));                      // the count is in x1
+            ctx.emitter.label(&hash);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+            ctx.emitter.instruction("mov x1, #0");                              // start a fresh insertion-order walk
+            abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+            ctx.emitter.instruction("cmp x5, #7");                              // is the count entry a boxed Mixed cell?
+            ctx.emitter.instruction(&format!("b.ne {native}"));                 // a native int is the count itself
+            ctx.emitter.instruction("mov x0, x3");                              // unbox the borrowed count cell
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction(&format!("b {done}"));                      // the count is in x1
+            ctx.emitter.label(&native);
+            ctx.emitter.instruction("mov x1, x3");                              // the entry's low word is the count
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp eax, 3");                              // is the collector hash storage?
+            ctx.emitter.instruction(&format!("je {hash}"));                     // read the first hash entry by insertion order
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax + 24]");           // load the hidden caller argument count box
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // the count is in rdi
+            ctx.emitter.label(&hash);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            ctx.emitter.instruction("xor esi, esi");                            // start a fresh insertion-order walk
+            abi::emit_call_label(ctx.emitter, "__rt_hash_iter_next");
+            ctx.emitter.instruction("cmp r9, 7");                               // is the count entry a boxed Mixed cell?
+            ctx.emitter.instruction(&format!("jne {native}"));                  // a native int is the count itself
+            ctx.emitter.instruction("mov rax, rcx");                            // unbox the borrowed count cell
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // the count is in rdi
+            ctx.emitter.label(&native);
+            ctx.emitter.instruction("mov rdi, rcx");                            // the entry's low word is the count
+        }
+    }
+    ctx.emitter.label(&done);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
+/// Appends the hidden argument collector in the result register, from index `start`, to the
+/// boxed-Mixed destination array on top of the stack.
+///
+/// A `mixed` collector -- every function with a hidden argument collector has one -- goes through
+/// the shared `__rt_backtrace_append_tail`; a typed one keeps its inline loop, whose element
+/// loads depend on the static element type.
+fn append_argument_tail(ctx: &mut FunctionContext<'_>, start: usize, element_ty: &PhpType) {
+    if matches!(element_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, x0");                          // pass the collector
+                ctx.emitter.instruction("ldr x0, [sp]");                        // pass the destination array saved on the stack top
+                abi::emit_load_int_immediate(ctx.emitter, "x2", start as i64);
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rsi, rax");                        // pass the collector
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");            // pass the destination array saved on the stack top
+                abi::emit_load_int_immediate(ctx.emitter, "rdx", start as i64);
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_backtrace_append_tail");
+        abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        return;
+    }
+    let base = ctx.next_label("debug_backtrace_tail");
+    let mut counter = 0usize;
+    let mut labels = |prefix: &str| {
+        counter += 1;
+        format!("{base}_{prefix}_{counter}")
     };
-    let provide = ctx.next_label("debug_backtrace_provide_object");
-    let skip = ctx.next_label("debug_backtrace_skip_object");
-    abi::emit_load_temporary_stack_slot(
+    crate::codegen_support::backtrace_tail::append_argument_array_range(
         ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        CALLBACK_OPTIONS_OFFSET + 16,
+        &mut labels,
+        crate::codegen_support::backtrace_tail::TailStart::Immediate(start),
+        element_ty,
     );
-    emit_branch_if_bit_set(ctx, DEBUG_BACKTRACE_PROVIDE_OBJECT, &provide);
-    abi::emit_jump(ctx.emitter, &skip);
-    ctx.emitter.label(&provide);
-    ctx.load_local_to_result(slot)?;
-    let ty = ctx.local_php_type(slot)?;
-    emit_box_current_value_as_mixed(ctx.emitter, &ty);
-    insert_current_boxed_hash_value(ctx, "object");
-    ctx.emitter.label(&skip);
-    Ok(())
 }
 
-/// Inserts a live copy of the source-visible parameters unless arguments were suppressed.
-fn insert_callback_arguments(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let skip = ctx.next_label("debug_backtrace_skip_args");
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        CALLBACK_OPTIONS_OFFSET + 16,
-    );
-    emit_branch_if_bit_set(ctx, DEBUG_BACKTRACE_IGNORE_ARGS, &skip);
-    emit_argument_array_from_live_locals(ctx)?;
-    emit_box_current_owned_value_as_mixed(
-        ctx.emitter,
-        &PhpType::Array(Box::new(PhpType::Mixed)),
-    );
-    insert_current_boxed_hash_value(ctx, "args");
-    ctx.emitter.label(&skip);
-    Ok(())
+/// Drops defaulted parameters beyond the caller-supplied argument count (see
+/// `__rt_backtrace_trim_args`); the array is in the result register.
+fn trim_frame_arguments(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", CALLBACK_ARG_COUNT_OFFSET);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the argument array
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", CALLBACK_ARG_COUNT_OFFSET);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_backtrace_trim_args");
 }
 
 /// Builds a fresh indexed Mixed array from the current values of source-visible parameters.
@@ -569,13 +806,42 @@ fn emit_argument_array_from_live_locals(ctx: &mut FunctionContext<'_>) -> Result
         let borrowed_box = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
         // A `?ptr<T>` parameter keeps its union, so address 0 is PHP null.
         let box_ty = ctx.local_mixed_box_type(slot)?;
-        let sensitive = super::backtrace_sensitive::is_sensitive(ctx, &name);
-        if sensitive {
-            super::backtrace_sensitive::wrap_value(ctx, &box_ty)?;
-        } else if !borrowed_box {
-            emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        if super::backtrace_sensitive::is_sensitive(ctx, &name) {
+            if super::backtrace_sensitive::wrapper_class_is_emitted(ctx) {
+                super::backtrace_sensitive::wrap_value(ctx, &box_ty)?;
+            } else {
+                // A program that never builds the wrapper class still must not list the value.
+                emit_sensitive_placeholder_box(ctx);
+            }
+            append_box_to_saved_array(ctx, true);
+            continue;
         }
-        append_box_to_saved_array(ctx, sensitive || !borrowed_box);
+        if !borrowed_box {
+            emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+            append_box_to_saved_array(ctx, true);
+            continue;
+        }
+        emit_append_boxed_parameter_or_null(ctx);
+    }
+    // php lists a variadic's surplus arguments as ordinary entries after the fixed ones, so a
+    // frame `f($a, ...$tail)` called `f(1, $x, $y)` reports `[1, $x, $y]`. Leaving them out also
+    // let the trace's retained copy go missing: the objects passed through `...$tail` were
+    // released before a same-frame catch, where php keeps them alive until the exception dies.
+    // A frame that also keeps the argument snapshot (`crate::func_args`, every frame once the
+    // program calls `debug_backtrace()`) already holds those positional values in it, read
+    // below; appending the variadic too listed each of them twice.
+    let variadic_sensitive = source_variadic
+        .as_deref()
+        .is_some_and(|name| super::backtrace_sensitive::is_sensitive(ctx, name));
+    if let Some(variadic_slot) = source_variadic
+        .as_deref()
+        .filter(|_| ctx.local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM).is_none())
+        .and_then(|name| ctx.local_slot_by_name(name))
+    {
+        if let PhpType::Array(element_ty) = ctx.local_php_type(variadic_slot)?.codegen_repr() {
+            ctx.load_local_to_result(variadic_slot)?;
+            append_argument_tail_checked(ctx, 0, &element_ty, variadic_sensitive)?;
+        }
     }
     if let Some(hidden_args) = ctx.local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM) {
         let hidden_ty = ctx.local_php_type(hidden_args)?;
@@ -594,21 +860,34 @@ fn emit_argument_array_from_live_locals(ctx: &mut FunctionContext<'_>) -> Result
             || signature
                 .as_ref()
                 .is_some_and(crate::func_args::sig_collects_optional_arg_count);
-        let sensitive = source_variadic.as_ref().is_some_and(|name| super::backtrace_sensitive::is_sensitive(ctx, name));
-        append_argument_array_range(ctx, usize::from(starts_with_count), &element_ty, sensitive)?;
+        append_argument_tail_checked(
+            ctx,
+            usize::from(starts_with_count),
+            &element_ty,
+            source_variadic.as_ref().is_some_and(|name| super::backtrace_sensitive::is_sensitive(ctx, name)),
+        )?;
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    trim_argument_array_to_actual_count(ctx);
+    trim_frame_arguments(ctx);
     Ok(())
 }
 
-/// Appends an indexed-array range into the boxed-Mixed destination saved on the stack.
-fn append_argument_array_range(
+/// Appends the hidden/variadic argument collector in the result register from index `start`,
+/// wrapping every element when the variadic parameter is `#[\SensitiveParameter]`.
+fn append_argument_tail_checked(
     ctx: &mut FunctionContext<'_>,
     start: usize,
     element_ty: &PhpType,
     sensitive: bool,
 ) -> Result<()> {
+    if !sensitive {
+        append_argument_tail(ctx, start, element_ty);
+        return Ok(());
+    }
+    if !super::backtrace_sensitive::wrapper_class_is_emitted(ctx) {
+        // Nothing may list the secret values: the collector is simply not appended.
+        return Ok(());
+    }
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_push_reg(ctx.emitter, &result_reg);
     abi::emit_reserve_temporary_stack(ctx.emitter, 32);
@@ -623,13 +902,9 @@ fn append_argument_array_range(
     let done = ctx.next_label("debug_backtrace_arg_tail_done");
     ctx.emitter.label(&loop_label);
     emit_argument_tail_done_guard(ctx, &done);
-    if sensitive {
-        emit_load_argument_tail_value(ctx, &element_ty.codegen_repr());
-        super::backtrace_sensitive::wrap_value(ctx, element_ty)?;
-        append_argument_tail_box(ctx, true);
-    } else {
-        emit_append_argument_tail_value(ctx, element_ty);
-    }
+    emit_load_argument_tail_value(ctx, &element_ty.codegen_repr());
+    super::backtrace_sensitive::wrap_value(ctx, element_ty)?;
+    append_argument_tail_box(ctx, true);
     increment_argument_tail_index(ctx);
     abi::emit_jump(ctx.emitter, &loop_label);
     ctx.emitter.label(&done);
@@ -637,6 +912,15 @@ fn append_argument_array_range(
     let discard = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, discard);
     Ok(())
+}
+
+/// Boxes a placeholder string standing for a sensitive argument when the wrapper class is absent.
+fn emit_sensitive_placeholder_box(ctx: &mut FunctionContext<'_>) {
+    let (label, len) = ctx.data.add_string(b"Object(SensitiveParameterValue)");
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
 }
 
 /// Branches after every requested hidden argument has been appended.
@@ -657,40 +941,6 @@ fn emit_argument_tail_done_guard(ctx: &mut FunctionContext<'_>, done: &str) {
             ctx.emitter.instruction(&format!("jge {done}"));                    // stop after every hidden argument is appended
         }
     }
-}
-
-/// Boxes and appends the current indexed hidden argument according to its slot type.
-fn emit_append_argument_tail_value(ctx: &mut FunctionContext<'_>, element_ty: &PhpType) {
-    let repr = element_ty.codegen_repr();
-    if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
-        emit_append_borrowed_argument_tail_box(ctx);
-        return;
-    }
-
-    emit_load_argument_tail_value(ctx, &repr);
-    emit_box_current_value_as_mixed(ctx.emitter, &repr);
-    append_argument_tail_box(ctx, true);
-}
-
-/// Appends one borrowed boxed-Mixed hidden argument without rebuilding its cell.
-fn emit_append_borrowed_argument_tail_box(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 32);
-            ctx.emitter.instruction("add x10, x10, #24");                       // advance from array metadata to Mixed slots
-            ctx.emitter.instruction("ldr x1, [x10, x9, lsl #3]");               // load the borrowed boxed argument cell
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 48);
-        }
-        Arch::X86_64 => {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 32);
-            ctx.emitter.instruction("mov rsi, QWORD PTR [r11 + r10 * 8 + 24]"); // load the borrowed boxed argument cell
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 48);
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
-    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 48);
 }
 
 /// Loads one typed hidden-argument array slot into the canonical result registers.
@@ -772,47 +1022,6 @@ fn increment_argument_tail_index(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => ctx.emitter.instruction("add rax, 1"),                  // advance the hidden-argument index
     }
     abi::emit_store_to_sp(ctx.emitter, index_reg, 0);
-}
-
-/// Drops defaulted parameters beyond the actual caller-supplied argument count.
-fn trim_argument_array_to_actual_count(ctx: &mut FunctionContext<'_>) {
-    let no_trim = ctx.next_label("debug_backtrace_args_not_trimmed");
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::secondary_scratch_reg(ctx.emitter),
-        CALLBACK_ARG_COUNT_OFFSET + 16,
-    );
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x10, #0");                             // test whether caller-count metadata is available
-            ctx.emitter.instruction(&format!("b.lt {no_trim}"));                // keep every argument when the count is unknown
-            ctx.emitter.instruction("mov x2, x10");                             // pass the caller-visible slice length
-            ctx.emitter.instruction("mov x1, #0");                              // slice from the first argument
-            ctx.emitter.instruction("mov x3, #1");                              // retain refcounted Mixed elements in the slice
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("cmp r10, 0");                              // test whether caller-count metadata is available
-            ctx.emitter.instruction(&format!("jl {no_trim}"));                  // keep every argument when the count is unknown
-            ctx.emitter.instruction("mov rdx, r10");                            // pass the caller-visible slice length
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the original argument array
-            ctx.emitter.instruction("xor esi, esi");                            // slice from the first argument
-            ctx.emitter.instruction("mov ecx, 1");                              // retain refcounted Mixed elements in the slice
-        }
-    }
-    let original = abi::int_result_reg(ctx.emitter).to_string();
-    abi::emit_push_reg(ctx.emitter, &original);
-    if ctx.emitter.target.arch == Arch::AArch64 {
-        abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_slice_refcounted");
-    let sliced = abi::int_result_reg(ctx.emitter).to_string();
-    emit_array_value_type_stamp(ctx.emitter, &sliced, &PhpType::Mixed);
-    abi::emit_push_reg(ctx.emitter, &sliced);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, &original, 16);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
-    abi::emit_pop_reg(ctx.emitter, &sliced);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
-    ctx.emitter.label(&no_trim);
 }
 
 /// Prints every selected AOT activation in PHP's numbered compact backtrace form.
@@ -900,313 +1109,10 @@ fn emit_frame_printer_call(ctx: &mut FunctionContext<'_>, callback_reg: &str) {
     abi::emit_call_reg(ctx.emitter, callback_reg);
 }
 
-/// Prints one suspended frame's metadata and live arguments from its reader callback.
-fn emit_printed_frame(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    write_static_trace_bytes(ctx, "#");
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        CALLBACK_PRINT_INDEX_OFFSET,
-    );
-    abi::emit_write_stdout(ctx.emitter, &PhpType::Int);
-    let file = ctx.module.source_path.as_deref().unwrap_or("Unknown");
-    write_static_trace_bytes(ctx, &format!(" {file}("));
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        CALLBACK_LINE_OFFSET,
-    );
-    abi::emit_write_stdout(ctx.emitter, &PhpType::Int);
-    write_static_trace_bytes(ctx, &format!("): {}(", display_function_name(ctx)));
-    emit_printed_live_arguments(ctx)?;
-    write_static_trace_bytes(ctx, ")\n");
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-    Ok(())
-}
-
-/// Writes one compile-time byte string through the capture-aware stdout funnel.
-fn write_static_trace_bytes(ctx: &mut FunctionContext<'_>, bytes: &str) {
-    let (label, len) = ctx.data.add_string(bytes.as_bytes());
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
-    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
-    abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
-}
-
-/// Prints current source-visible parameters and collected surplus arguments.
-fn emit_printed_live_arguments(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let skip = ctx.next_label("debug_print_backtrace_skip_args");
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        CALLBACK_OPTIONS_OFFSET,
-    );
-    emit_branch_if_bit_set(ctx, DEBUG_BACKTRACE_IGNORE_ARGS, &skip);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-    abi::emit_store_to_sp(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        CALLBACK_PRINT_ARG_COUNT_OFFSET,
-    );
-
-    let done = ctx.next_label("debug_print_backtrace_args_done");
-    let signature = ctx.function.signature.clone();
-    let source_variadic = signature
-        .as_ref()
-        .and_then(|signature| signature.variadic.clone())
-        .filter(|name| name != crate::func_args::HIDDEN_ARGS_PARAM);
-    let parameters = signature
-        .as_ref()
-        .map(|signature| {
-            signature
-                .params
-                .iter()
-                .filter(|(name, _)| {
-                    name != crate::func_args::HIDDEN_ARGS_PARAM
-                        && name != crate::func_args::HIDDEN_ARGC_PARAM
-                        && source_variadic.as_deref() != Some(name.as_str())
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    for (name, _) in parameters {
-        emit_printed_actual_count_guard(ctx, 0, &done);
-        emit_printed_argument_separator(ctx, 0);
-        let Some(slot) = ctx.local_slot_by_name(&name) else {
-            continue;
-        };
-        ctx.load_local_to_result(slot)?;
-        // A `?ptr<T>` parameter keeps its union, so address 0 prints as PHP null.
-        let ty = ctx.local_mixed_box_type(slot)?;
-        if super::backtrace_sensitive::is_sensitive(ctx, &name)
-            && !super::backtrace_sensitive::wrapper_class_is_emitted(ctx)
-        {
-            // An uncaught-exception trace reaches every function's reader, including ones in
-            // programs that never build the wrapper class: print PHP's rendering of it, never
-            // the value itself.
-            super::backtrace_sensitive::emit_printed_placeholder(ctx);
-        } else if super::backtrace_sensitive::is_sensitive(ctx, &name) {
-            super::backtrace_sensitive::wrap_value(ctx, &ty)?;
-            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-            abi::emit_call_label(ctx.emitter, "__rt_backtrace_print_arg");
-            abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-        } else {
-            print_current_argument_value(ctx, &ty);
-        }
-        increment_printed_argument_count(ctx, 0);
-    }
-    if ctx.local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM).is_none() {
-        if let Some(variadic_slot) = source_variadic
-            .as_deref()
-            .and_then(|name| ctx.local_slot_by_name(name))
-        {
-            // Without a hidden collector the declared `...$rest` array still holds every surplus
-            // argument, and PHP lists them one by one after the fixed parameters.
-            if let PhpType::Array(element_ty) = ctx.local_php_type(variadic_slot)? {
-                let sensitive = source_variadic
-                    .as_ref()
-                    .is_some_and(|name| super::backtrace_sensitive::is_sensitive(ctx, name));
-                ctx.load_local_to_result(variadic_slot)?;
-                emit_printed_argument_array_range(ctx, 0, &element_ty, &done, sensitive)?;
-            }
-        }
-    }
-    if let Some(hidden_args) = ctx.local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM) {
-        let hidden_ty = ctx.local_php_type(hidden_args)?;
-        let element_ty = match hidden_ty {
-            PhpType::Array(element_ty) => *element_ty,
-            other => {
-                return Err(crate::codegen::CodegenIrError::unsupported(format!(
-                    "backtrace hidden argument collector PHP type {other:?}"
-                )));
-            }
-        };
-        ctx.load_local_to_result(hidden_args)?;
-        let starts_with_count = ctx
-            .local_slot_by_name(crate::func_args::HIDDEN_ARGC_PARAM)
-            .is_some()
-            || signature
-                .as_ref()
-                .is_some_and(crate::func_args::sig_collects_optional_arg_count);
-        emit_printed_argument_array_range(
-            ctx,
-            usize::from(starts_with_count),
-            &element_ty,
-            &done,
-            source_variadic.as_ref().is_some_and(|name| super::backtrace_sensitive::is_sensitive(ctx, name)),
-        )?;
-    }
-    ctx.emitter.label(&done);
-    ctx.emitter.label(&skip);
-    Ok(())
-}
-
-/// Stops argument printing after the number of values actually supplied by the caller.
-fn emit_printed_actual_count_guard(
-    ctx: &mut FunctionContext<'_>,
-    stack_shift: usize,
-    done: &str,
-) {
-    let unlimited = ctx.next_label("debug_print_backtrace_all_args");
-    let actual_reg = abi::int_result_reg(ctx.emitter);
-    let printed_reg = abi::secondary_scratch_reg(ctx.emitter);
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        actual_reg,
-        CALLBACK_ARG_COUNT_OFFSET + stack_shift,
-    );
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #0");                              // test whether caller-count metadata is available
-            ctx.emitter.instruction(&format!("b.lt {unlimited}"));              // print all arguments when the count is unknown
-            abi::emit_load_temporary_stack_slot(
-                ctx.emitter,
-                printed_reg,
-                CALLBACK_PRINT_ARG_COUNT_OFFSET + stack_shift,
-            );
-            ctx.emitter.instruction("cmp x10, x0");                             // compare printed arguments with the actual count
-            ctx.emitter.instruction(&format!("b.ge {done}"));                   // stop before defaulted parameters
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                           // test whether caller-count metadata is available
-            ctx.emitter.instruction(&format!("js {unlimited}"));                // print all arguments when the count is unknown
-            abi::emit_load_temporary_stack_slot(
-                ctx.emitter,
-                printed_reg,
-                CALLBACK_PRINT_ARG_COUNT_OFFSET + stack_shift,
-            );
-            ctx.emitter.instruction("cmp r10, rax");                            // compare printed arguments with the actual count
-            ctx.emitter.instruction(&format!("jge {done}"));                    // stop before defaulted parameters
-        }
-    }
-    ctx.emitter.label(&unlimited);
-}
-
-/// Writes the comma separator before every argument except the first.
-fn emit_printed_argument_separator(ctx: &mut FunctionContext<'_>, stack_shift: usize) {
-    let first = ctx.next_label("debug_print_backtrace_first_arg");
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        CALLBACK_PRINT_ARG_COUNT_OFFSET + stack_shift,
-    );
-    emit_branch_if_zero(ctx, abi::int_result_reg(ctx.emitter), &first);
-    write_static_trace_bytes(ctx, ", ");
-    ctx.emitter.label(&first);
-}
-
-/// Boxes and prints the current typed value while preserving borrowed ownership.
-fn print_current_argument_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
-    let repr = ty.codegen_repr();
-    let borrowed_box = matches!(repr, PhpType::Mixed | PhpType::Union(_));
-    if !borrowed_box {
-        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(ty));
-    }
-    let box_reg = abi::int_result_reg(ctx.emitter).to_string();
-    if !borrowed_box {
-        abi::emit_push_reg(ctx.emitter, &box_reg);
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_backtrace_print_arg");
-    if !borrowed_box {
-        abi::emit_load_temporary_stack_slot(ctx.emitter, &box_reg, 0);
-        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-        abi::emit_release_temporary_stack(ctx.emitter, 16);
-    }
-}
-
-/// Increments the number of arguments already rendered for the active frame.
-fn increment_printed_argument_count(ctx: &mut FunctionContext<'_>, stack_shift: usize) {
-    let count_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        count_reg,
-        CALLBACK_PRINT_ARG_COUNT_OFFSET + stack_shift,
-    );
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction("add x0, x0, #1"),             // count one rendered argument
-        Arch::X86_64 => ctx.emitter.instruction("add rax, 1"),                  // count one rendered argument
-    }
-    abi::emit_store_to_sp(
-        ctx.emitter,
-        count_reg,
-        CALLBACK_PRINT_ARG_COUNT_OFFSET + stack_shift,
-    );
-}
-
-/// Prints a typed range from the hidden array that stores variadic and surplus arguments.
-fn emit_printed_argument_array_range(
-    ctx: &mut FunctionContext<'_>,
-    start: usize,
-    element_ty: &PhpType,
-    all_done: &str,
-    sensitive: bool,
-) -> Result<()> {
-    let source_reg = abi::int_result_reg(ctx.emitter).to_string();
-    abi::emit_push_reg(ctx.emitter, &source_reg);
-    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
-    abi::emit_load_int_immediate(ctx.emitter, &source_reg, start as i64);
-    abi::emit_store_to_sp(ctx.emitter, &source_reg, 0);
-    let length_reg = abi::secondary_scratch_reg(ctx.emitter);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, length_reg, 32);
-    abi::emit_load_from_address(ctx.emitter, length_reg, length_reg, 0);
-    abi::emit_store_to_sp(ctx.emitter, length_reg, 8);
-
-    let loop_label = ctx.next_label("debug_print_backtrace_arg_tail");
-    let range_done = ctx.next_label("debug_print_backtrace_arg_tail_done");
-    ctx.emitter.label(&loop_label);
-    emit_argument_tail_done_guard(ctx, &range_done);
-    emit_printed_actual_count_guard(ctx, 48, &range_done);
-    emit_printed_argument_separator(ctx, 48);
-    let repr = element_ty.codegen_repr();
-    if sensitive && !super::backtrace_sensitive::wrapper_class_is_emitted(ctx) {
-        // See `emit_printed_live_arguments`: never the value, PHP's rendering of the wrapper.
-        super::backtrace_sensitive::emit_printed_placeholder(ctx);
-    } else if sensitive {
-        emit_load_argument_tail_value(ctx, &repr);
-        super::backtrace_sensitive::wrap_value(ctx, &repr)?;
-        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        abi::emit_call_label(ctx.emitter, "__rt_backtrace_print_arg");
-        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    } else if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
-        load_borrowed_argument_tail_box(ctx);
-        abi::emit_call_label(ctx.emitter, "__rt_backtrace_print_arg");
-    } else {
-        emit_load_argument_tail_value(ctx, &repr);
-        print_current_argument_value(ctx, &repr);
-    }
-    increment_printed_argument_count(ctx, 48);
-    increment_argument_tail_index(ctx);
-    abi::emit_jump(ctx.emitter, &loop_label);
-    ctx.emitter.label(&range_done);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
-    let discard = abi::secondary_scratch_reg(ctx.emitter);
-    abi::emit_pop_reg(ctx.emitter, discard);
-    emit_printed_actual_count_guard(ctx, 0, all_done);
-    Ok(())
-}
-
-/// Loads one borrowed boxed-Mixed value from the current hidden-argument array slot.
-fn load_borrowed_argument_tail_box(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 32);
-            ctx.emitter.instruction("add x10, x10, #24");                       // advance from array metadata to Mixed slots
-            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the borrowed boxed argument for printing
-        }
-        Arch::X86_64 => {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 32);
-            ctx.emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8 + 24]"); // load the borrowed boxed argument for printing
-        }
-    }
-}
-
 /// Returns class, function, and call-type strings for the current frame.
 fn frame_function_parts(ctx: &FunctionContext<'_>) -> (Option<String>, String, &'static str) {
+    // A closure carries the label PHP prints for it (`{closure:<context>:<line>}`), recorded when
+    // it was lowered.
     if let Some(label) = &ctx.function.display_name {
         // A closure declared in a class keeps that class and the call type PHP prints for it:
         // `Class->{closure:...}()` when `$this` is bound, `Class::{closure:...}()` otherwise.
@@ -1224,18 +1130,52 @@ fn frame_function_parts(ctx: &FunctionContext<'_>) -> (Option<String>, String, &
         };
         return (class, label.clone(), call_type);
     }
+    // A compiled closure body is named after the compiler's internal symbol, but php names the
+    // frame `{closure:SCOPE:LINE}` and keeps the enclosing class and call type when the closure
+    // was declared inside a method. Reflection already resolves that name for the descriptor, so
+    // the trace reuses the same resolver instead of leaking `__eir_closure_*` into a page.
+    if let Some(source) = crate::codegen::lower_inst::core_closures_php_source(ctx, ctx.function) {
+        let class = ctx
+            .function
+            .lexical_class
+            .as_ref()
+            .map(|class| class.trim_start_matches('\\').to_string());
+        let call_type = if class.is_some() {
+            if ctx.function.flags.is_static { "::" } else { "->" }
+        } else {
+            ""
+        };
+        return (class, source.name, call_type);
+    }
     match ctx.function.display_name().rsplit_once("::") {
         Some((class, function)) => (
             Some(class.trim_start_matches('\\').to_string()),
             function.to_string(),
             if ctx.function.flags.is_static { "::" } else { "->" },
         ),
-        None => (
-            None,
-            ctx.function.display_name().trim_start_matches('\\').to_string(),
-            "",
-        ),
+        None => (None, public_function_name(ctx), ""),
     }
+}
+
+/// Returns the PHP name a frame shows for this free function.
+///
+/// A function declared in an included file is compiled under an include-variant symbol
+/// (`__elephc_include_variant_<hash>_<name>`), which a trace used to print verbatim. The public
+/// name comes from the recorded dispatch groups, never from the symbol's spelling; the prefix
+/// test only spares every other function the group scan. A conditionally declared function
+/// (`if (!function_exists('f')) { function f() {} }`) is compiled under
+/// `[Ns\]__elephc_conditional_fn_<hash>_<name>` and resolves the same way.
+fn public_function_name(ctx: &FunctionContext<'_>) -> String {
+    let name = ctx.function.display_name().trim_start_matches('\\');
+    if name.starts_with("__elephc_include_variant_") || name.contains("__elephc_conditional_fn_") {
+        if let Some(group) = crate::ir::function_variants::collect_dispatch_groups(ctx.module)
+            .into_iter()
+            .find(|group| group.variants.iter().any(|variant| variant.trim_start_matches('\\') == name))
+        {
+            return group.name.trim_start_matches('\\').to_string();
+        }
+    }
+    name.to_string()
 }
 
 /// Returns the compact callable spelling used by `debug_print_backtrace()`.
@@ -1259,56 +1199,6 @@ fn allocate_mixed_array(ctx: &mut FunctionContext<'_>, capacity: usize) {
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
     emit_array_value_type_stamp(ctx.emitter, &result_reg, &PhpType::Mixed);
-}
-
-/// Allocates an empty string-keyed hash holding boxed Mixed cells.
-fn allocate_mixed_hash(ctx: &mut FunctionContext<'_>, capacity: usize) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", capacity.max(1) as i64);
-            abi::emit_load_int_immediate(ctx.emitter, "x1", 7);
-        }
-        Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rdi", capacity.max(1) as i64);
-            abi::emit_load_int_immediate(ctx.emitter, "rsi", 7);
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_hash_new");
-}
-
-/// Inserts one static string as a boxed value into the saved frame hash.
-fn insert_boxed_string(ctx: &mut FunctionContext<'_>, key: &str, value: &str) {
-    let (label, len) = ctx.data.add_string(value.as_bytes());
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
-    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
-    insert_current_boxed_hash_value(ctx, key);
-}
-
-/// Transfers the current boxed value into the hash pointer saved at the stack top.
-fn insert_current_boxed_hash_value(ctx: &mut FunctionContext<'_>, key: &str) {
-    let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x3, x0");                              // pass the boxed hash value
-            ctx.emitter.instruction("mov x4, xzr");                             // string keys have no high payload word
-            abi::emit_pop_reg(ctx.emitter, "x0");
-            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
-            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
-            abi::emit_load_int_immediate(ctx.emitter, "x5", 7);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed hash value
-            ctx.emitter.instruction("xor r8, r8");                              // string keys have no high payload word
-            abi::emit_pop_reg(ctx.emitter, "rdi");
-            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
-            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
-            abi::emit_load_int_immediate(ctx.emitter, "r9", 7);
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
 }
 
 /// Appends the current boxed cell to the saved array and optionally drops its temporary owner.
@@ -1353,6 +1243,17 @@ fn emit_branch_if_negative(ctx: &mut FunctionContext<'_>, label: &str) {
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // set flags from the signed result
             ctx.emitter.instruction(&format!("js {label}"));                    // branch when the result is negative
+        }
+    }
+}
+
+/// Branches to `label` when the requested register contains a nonzero value.
+fn emit_branch_if_nonzero(ctx: &mut FunctionContext<'_>, reg: &str, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz {reg}, {label}")), // branch when the selected register is set
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {reg}, {reg}"));             // set flags from the selected register
+            ctx.emitter.instruction(&format!("jnz {label}"));                   // branch when the selected register is set
         }
     }
 }

@@ -269,10 +269,10 @@ impl Checker {
                     _ if self.packed_classes.contains_key(name_str) => {
                         Ok(PhpType::Packed(name_str.to_string()))
                     }
-                    _ => Err(CompileError::new(
-                        span,
-                        &format!("Unknown type: {}", name_str),
-                    )),
+                    // PHP accepts unresolved class names in declarations. Preserve the nominal
+                    // name and defer existence requirements until an operation actually needs
+                    // class metadata, such as construction, static access, or member dispatch.
+                    _ => Ok(PhpType::Object(name_str.to_string())),
                 }
             },
         }

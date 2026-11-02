@@ -2,7 +2,7 @@
 title: "session_get_cookie_params() - internals"
 description: "Compiler internals for session_get_cookie_params(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1067
+  order: 1127
 ---
 
 ## `session_get_cookie_params()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3551](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3551) (`session_get_cookie_params`)
+- **Lowering**: [`src/web_prelude/build.rs`:3622](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3622) (`session_get_cookie_params`)
 - **Function symbol**: `session_get_cookie_params()`
 
 

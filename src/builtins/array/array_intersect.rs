@@ -9,9 +9,9 @@
 //!   param plus a variadic `arrays`). The legacy CHECK arm required exactly 2 arguments,
 //!   so `min_args: 2, max_args: 2` reproduce that enforcement in `check_arity` only;
 //!   `function_sig` and the parity gate keep the variadic shape from the golden.
-//! - `check` reproduces the legacy rule: the first argument must be an indexed or
-//!   associative array, and the result preserves that first-operand type. A check hook
-//!   is required because the return type depends on the inferred first-argument type.
+//! - `check` rejects known non-arrays while allowing gradual array boundaries. Results stay
+//!   gradual because key preservation can select indexed or hash storage at runtime and the
+//!   compatibility helper stores boxed payloads independent of the operand's static shape.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -25,18 +25,25 @@ builtin! {
     ),
 }
 
-/// Validates the first argument is an array and returns its (preserved) type.
+/// Validates every argument as a concrete or gradual array and returns gradual storage.
 ///
-/// Arity (exactly 2 args) is pre-validated by `check_arity`. The first argument is
-/// re-inferred here to drive the return type; the registry already inferred every
-/// argument once for side effects. The result preserves the first-operand array shape.
+/// Arity is pre-validated by `check_arity`. Gradual values remain accepted because the
+/// lowering path binds them to array-typed helper parameters with runtime tag checks.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-        return Err(CompileError::new(
-            cx.span,
-            &format!("{}() first argument must be array", cx.name),
-        ));
+    for (index, arg) in cx.args.iter().enumerate() {
+        let ty = if index == 0 {
+            ty1.clone()
+        } else {
+            cx.checker.infer_type(arg, cx.env)?
+        };
+        if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) {
+            let position = if index == 0 { "first" } else { "second" };
+            return Err(CompileError::new(
+                arg.span,
+                &format!("{}() {} argument must be array", cx.name, position),
+            ));
+        }
     }
-    Ok(ty1)
+    Ok(PhpType::Mixed)
 }

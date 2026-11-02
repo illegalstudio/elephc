@@ -2,7 +2,7 @@
 title: "gmp_scan1() - internals"
 description: "Compiler internals for gmp_scan1(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 631
+  order: 644
 ---
 
 ## `gmp_scan1()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_scan1.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_scan1.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

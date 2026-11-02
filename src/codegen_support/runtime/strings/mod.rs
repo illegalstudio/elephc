@@ -11,6 +11,8 @@
 pub(crate) mod itoa;
 mod offset_warning;
 mod concat;
+mod bitwise;
+mod set_offset;
 mod str_append;
 pub(crate) mod concat_scratch;
 mod strbuf;
@@ -29,6 +31,7 @@ mod grapheme_strrev;
 mod strcopy;
 mod str_inc_dec;
 mod str_persist;
+mod str_persist_owned;
 mod strtolower;
 mod ascii_case;
 mod strtoupper;
@@ -39,6 +42,7 @@ mod strpos;
 mod strrpos;
 mod stripos;
 mod strripos;
+mod span;
 mod str_repeat;
 mod strrev;
 mod chr;
@@ -50,6 +54,7 @@ mod strncasecmp;
 mod str_starts_with;
 mod str_ends_with;
 mod str_replace;
+mod str_replace_array;
 mod explode;
 mod implode;
 mod implode_cast;
@@ -58,6 +63,7 @@ mod implode_float;
 mod implode_int;
 mod ucwords;
 mod str_ireplace;
+mod substr_compare;
 mod substr_count;
 mod substr_replace;
 mod str_offset_set;
@@ -71,6 +77,7 @@ mod base_convert;
 mod chunk_split;
 mod count_chars;
 mod strtr;
+mod preg_quote;
 mod quotemeta;
 mod quoted_printable_encode;
 mod wordwrap;
@@ -107,12 +114,14 @@ mod hash_equals;
 mod hash_hmac;
 mod openssl_methods;
 mod openssl;
+mod sodium;
 mod digest_to_string;
 mod sscanf;
 mod rtrim_mask;
 mod ltrim_mask;
 mod trim_mask;
 mod resource_to_string;
+mod resource_debug_type_name;
 mod resource_type_name;
 mod resource_write_stdout;
 mod parse_url;
@@ -123,6 +132,10 @@ pub use offset_warning::emit_string_offset_warning;
 pub use concat::emit_concat;
 pub use str_append::emit_str_append;
 /// Emit string concatenation helper.
+pub use bitwise::emit_str_bitwise;
+/// Emit byte-string bitwise operators.
+pub use set_offset::emit_str_set_offset;
+/// Emit copy-on-write byte-string offset assignment.
 pub use ftoa::{emit_ftoa, emit_ftoa_repr};
 pub use php_num_scan::emit_php_num_scan;
 /// Emit float-to-string conversion helper.
@@ -153,6 +166,7 @@ pub use strbuf::emit_strbuf;
 /// Emit the growable output buffer used by `json_encode()` and `serialize()`.
 pub(crate) use strbuf::{STRBUF_SIZE, STRBUF_WRITE};
 pub use str_persist::emit_str_persist;
+pub use str_persist_owned::emit_str_persist_owned;
 /// Emit string persistence helper.
 pub use str_inc_dec::{emit_mixed_inc_dec, emit_str_inc_dec};
 /// Emit PHP's `++`/`--` on a string value and its boxed dispatch entry point.
@@ -174,6 +188,8 @@ pub use stripos::emit_stripos;
 /// Emit case-insensitive string position lookup (first occurrence).
 pub use strripos::emit_strripos;
 /// Emit case-insensitive string position lookup (last occurrence).
+pub use span::{emit_strcspn, emit_strspn};
+/// Emit byte-oriented initial segment scanners.
 pub use str_repeat::emit_str_repeat;
 /// Emit string repeat helper.
 pub use strrev::emit_strrev;
@@ -184,7 +200,7 @@ pub use chr::emit_chr;
 /// Emit character code to string helper.
 pub use strcmp::emit_strcmp;
 /// Emit case-sensitive string comparison.
-pub use strcasecmp::emit_strcasecmp;
+pub use strcasecmp::{emit_name_list_entry, emit_name_list_find_ci, emit_strcasecmp};
 /// Emit PHP natural-order string comparison.
 pub use strnatcmp::emit_strnatcmp;
 /// Emit length-limited case-sensitive string comparison.
@@ -198,6 +214,8 @@ pub use str_ends_with::emit_str_ends_with;
 /// Emit check for string suffix match.
 pub use str_replace::emit_str_replace;
 /// Emit string replace helper.
+pub use str_replace_array::emit_str_replace_array;
+/// Emit array-search and array-subject string replace helpers.
 pub use explode::emit_explode;
 /// Emit explode (split by delimiter) helper.
 pub use implode::emit_implode;
@@ -212,6 +230,8 @@ pub use ucwords::emit_ucwords;
 /// Emit uppercase-words helper.
 pub use str_ireplace::emit_str_ireplace;
 /// Emit case-insensitive string replace.
+pub use substr_compare::emit_substr_compare;
+/// Emit the offset-anchored substring comparison helper.
 pub use substr_count::emit_substr_count;
 /// Emit the non-overlapping substring occurrence counter.
 pub use substr_replace::emit_substr_replace;
@@ -235,6 +255,8 @@ pub use chunk_split::emit_chunk_split;
 pub use count_chars::emit_count_chars;
 /// Emit the strtr pairwise and replacement-pair translators.
 pub use strtr::emit_strtr;
+/// Emit the preg_quote PCRE metacharacter and delimiter escaper.
+pub use preg_quote::emit_preg_quote;
 /// Emit the quotemeta regular-expression metacharacter escaper.
 pub use quotemeta::emit_quotemeta;
 /// Emit the quoted_printable_encode MIME transfer encoder.
@@ -298,6 +320,7 @@ pub use hash::emit_hash;
 pub use hash_hmac::emit_hash_hmac;
 pub use openssl_methods::emit_openssl_methods;
 pub use openssl::emit_openssl_cipher;
+pub use sodium::emit_sodium_box;
 /// Emit keyed-hash HMAC helper.
 pub use hash_algos::emit_hash_algos_list;
 pub use hash_context::emit_hash_context;
@@ -319,6 +342,8 @@ pub use resource_to_string::emit_resource_to_string;
 /// Emit resource-to-string conversion.
 pub use resource_type_name::emit_resource_type_name;
 /// Emit the resource type-name resolver (`stream` when open, `Unknown` once closed).
+pub use resource_debug_type_name::emit_resource_debug_type_name;
+/// Emit the `get_debug_type()` resource-name resolver (`resource (stream)` / `resource (closed)`).
 pub use resource_write_stdout::emit_resource_write_stdout;
 /// Emit the PHP-compatible URL component scanner.
 pub use parse_url::emit_parse_url;

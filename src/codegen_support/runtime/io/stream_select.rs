@@ -12,6 +12,11 @@
 //! - Descriptor sets are word-0-only bitmaps: descriptors must be below 64.
 //! - A set passed as `null` arrives as a zero array pointer and is skipped on both passes.
 //!   The three resource arrays are compacted in place to the ready subset.
+//! - The helper only accepts three NON-NULL PACKED arrays (raw descriptors or Mixed cells).
+//!   PHP-visible `stream_select()` calls reach it through `crate::stream_select_prelude`, which
+//!   flattens null/hash/boxed inputs into such lists and restores the original keys afterwards.
+//! - A Mixed cell dropped by the compaction is released here (`__rt_decref_mixed`): the shrunken
+//!   array no longer owns it.
 
 use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 
@@ -153,6 +158,7 @@ fn emit_compact_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     let next_l = format!("__rt_stream_select_keep_{}_next", suffix);
     let unbox_l = format!("__rt_stream_select_keep_{}_unbox", suffix);
     let after_unbox_l = format!("__rt_stream_select_keep_{}_after_unbox", suffix);
+    let drop_l = format!("__rt_stream_select_keep_{}_drop", suffix);
     let done_l = format!("__rt_stream_select_keep_{}_done", suffix);
     let absent_l = format!("__rt_stream_select_keep_{}_absent", suffix);
 
@@ -204,14 +210,36 @@ fn emit_compact_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     emitter.instruction("ldr x15, [sp, #128]");                                 // reload the original slot value
     emitter.label(&cast_skip_l);
     emitter.instruction("cmp x16, #0");                                         // is the descriptor negative?
-    emitter.instruction(&format!("b.lt {}", next_l));                           // drop descriptors that were never set
+    emitter.instruction(&format!("b.lt {}", drop_l));                           // drop descriptors that were never set
     emitter.instruction("cmp x16, #64");                                        // is the descriptor outside the word-0 range?
-    emitter.instruction(&format!("b.ge {}", next_l));                           // drop out-of-range descriptors
+    emitter.instruction(&format!("b.ge {}", drop_l));                           // drop out-of-range descriptors
     emitter.instruction("lsr x6, x14, x16");                                    // shift the descriptor bit to position 0
     emitter.instruction("and x6, x6, #1");                                      // isolate the descriptor's ready bit
-    emitter.instruction(&format!("cbz x6, {}", next_l));                        // drop descriptors that are not ready
+    emitter.instruction(&format!("cbz x6, {}", drop_l));                        // drop descriptors that are not ready
     emitter.instruction("str x15, [x12, x13, lsl #3]");                         // keep the original slot value (raw fd or Mixed*) at the front
     emitter.instruction("add x13, x13, #1");                                    // advance the kept-descriptor index
+    emitter.instruction(&format!("b {}", next_l));                              // the slot moved to the kept prefix: nothing to release
+    // -- a dropped Mixed cell is no longer reachable from the shrunken array: release its box --
+    emitter.label(&drop_l);
+    emitter.instruction("cmp x4, #7");                                          // is this a Mixed-boxed indexed array?
+    emitter.instruction(&format!("b.ne {}", next_l));                           // raw descriptors own no heap storage
+    emitter.instruction(&format!("cbz x15, {}", next_l));                       // a null Mixed cell owns nothing
+    emitter.instruction("str x9, [sp, #96]");                                   // spill the array pointer across the release call
+    emitter.instruction("str x10, [sp, #104]");                                 // spill the array length
+    emitter.instruction("str x11, [sp, #112]");                                 // spill the source index
+    emitter.instruction("str x13, [sp, #120]");                                 // spill the destination (kept) index
+    emitter.instruction("str x14, [sp, #136]");                                 // spill the post-select bitmap word
+    emitter.instruction("str x4, [sp, #144]");                                  // spill the value_type tag
+    emitter.instruction("str x12, [sp, #152]");                                 // spill the data-region pointer
+    emitter.instruction("mov x0, x15");                                         // the dropped Mixed cell
+    emitter.instruction("bl __rt_decref_mixed");                                // release the array's ownership of the dropped cell
+    emitter.instruction("ldr x9, [sp, #96]");                                   // reload the array pointer
+    emitter.instruction("ldr x10, [sp, #104]");                                 // reload the array length
+    emitter.instruction("ldr x11, [sp, #112]");                                 // reload the source index
+    emitter.instruction("ldr x13, [sp, #120]");                                 // reload the destination index
+    emitter.instruction("ldr x14, [sp, #136]");                                 // reload the post-select bitmap word
+    emitter.instruction("ldr x4, [sp, #144]");                                  // reload the value_type tag
+    emitter.instruction("ldr x12, [sp, #152]");                                 // reload the data-region pointer
     emitter.label(&next_l);
     emitter.instruction("add x11, x11, #1");                                    // advance to the next source descriptor
     emitter.instruction(&format!("b {}", loop_l));                              // continue compacting the array
@@ -335,6 +363,7 @@ fn emit_compact_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffix: &
     let next_l = format!("__rt_stream_select_keep_{}_next_x86", suffix);
     let unbox_l = format!("__rt_stream_select_keep_{}_unbox_x86", suffix);
     let after_unbox_l = format!("__rt_stream_select_keep_{}_after_unbox_x86", suffix);
+    let drop_l = format!("__rt_stream_select_keep_{}_drop_x86", suffix);
     let done_l = format!("__rt_stream_select_keep_{}_done_x86", suffix);
     let absent_l = format!("__rt_stream_select_keep_{}_absent_x86", suffix);
 
@@ -381,16 +410,35 @@ fn emit_compact_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffix: &
     emitter.instruction("mov r9, QWORD PTR [rbp - 120]");                       // reload the destination index
     emitter.label(&cast_skip_l);
     emitter.instruction("cmp rdx, 0");                                          // is the descriptor negative?
-    emitter.instruction(&format!("jl {}", next_l));                             // drop descriptors that were never set
+    emitter.instruction(&format!("jl {}", drop_l));                             // drop descriptors that were never set
     emitter.instruction("cmp rdx, 64");                                         // is the descriptor outside the word-0 range?
-    emitter.instruction(&format!("jae {}", next_l));                            // drop out-of-range descriptors
+    emitter.instruction(&format!("jae {}", drop_l));                            // drop out-of-range descriptors
     emitter.instruction("mov rcx, rdx");                                        // descriptor position for the shift count
     emitter.instruction("mov rax, r8");                                         // copy the bitmap word for testing
     emitter.instruction("shr rax, cl");                                         // shift the descriptor bit to position 0
     emitter.instruction("and rax, 1");                                          // isolate the descriptor's ready bit
-    emitter.instruction(&format!("jz {}", next_l));                             // drop descriptors that are not ready
+    emitter.instruction(&format!("jz {}", drop_l));                             // drop descriptors that are not ready
     emitter.instruction("mov QWORD PTR [r11 + 24 + r9 * 8], r13");              // keep the original slot value (raw fd or Mixed*) at the front
     emitter.instruction("add r9, 1");                                           // advance the kept-descriptor index
+    emitter.instruction(&format!("jmp {}", next_l));                            // the slot moved to the kept prefix: nothing to release
+    // -- a dropped Mixed cell is no longer reachable from the shrunken array: release its box --
+    emitter.label(&drop_l);
+    emitter.instruction("cmp r12, 7");                                          // is this a Mixed-boxed indexed array?
+    emitter.instruction(&format!("jne {}", next_l));                            // raw descriptors own no heap storage
+    emitter.instruction("test r13, r13");                                       // null Mixed cell?
+    emitter.instruction(&format!("jz {}", next_l));                             // a null Mixed cell owns nothing
+    emitter.instruction("mov QWORD PTR [rbp - 88], r11");                       // spill the array pointer across the release call
+    emitter.instruction("mov QWORD PTR [rbp - 96], rdi");                       // spill the array length
+    emitter.instruction("mov QWORD PTR [rbp - 104], rsi");                      // spill the source index
+    emitter.instruction("mov QWORD PTR [rbp - 112], r8");                       // spill the post-select bitmap word
+    emitter.instruction("mov QWORD PTR [rbp - 120], r9");                       // spill the destination (kept) index
+    emitter.instruction("mov rax, r13");                                        // the dropped Mixed cell
+    emitter.instruction("call __rt_decref_mixed");                              // release the array's ownership of the dropped cell
+    emitter.instruction("mov r11, QWORD PTR [rbp - 88]");                       // reload the array pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 96]");                       // reload the array length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 104]");                      // reload the source index
+    emitter.instruction("mov r8, QWORD PTR [rbp - 112]");                       // reload the post-select bitmap word
+    emitter.instruction("mov r9, QWORD PTR [rbp - 120]");                       // reload the destination index
     emitter.label(&next_l);
     emitter.instruction("add rsi, 1");                                          // advance to the next source descriptor
     emitter.instruction(&format!("jmp {}", loop_l));                            // continue compacting the array

@@ -34,14 +34,21 @@ foreach (ParserOutcome::cases() as $outcome) {
 }
 echo PHP_EOL;
 
-function sql_sort_keyword(SortDirection $direction): string {
+// A pure enum drives `match` exhaustively. (PHP 8.6 ships a built-in `SortDirection`
+// with these two cases; this example declares its own so it runs on every profile.)
+enum SortOrder {
+    case Ascending;
+    case Descending;
+}
+
+function sql_sort_keyword(SortOrder $direction): string {
     return match ($direction) {
-        SortDirection::Ascending => "ASC",
-        SortDirection::Descending => "DESC",
+        SortOrder::Ascending => "ASC",
+        SortOrder::Descending => "DESC",
     };
 }
 
-echo sql_sort_keyword(SortDirection::Descending);
+echo sql_sort_keyword(SortOrder::Descending);
 echo PHP_EOL;
 
 // An enum case is a constant expression, so it can be the default of a declared

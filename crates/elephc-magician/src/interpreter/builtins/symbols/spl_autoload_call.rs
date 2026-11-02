@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::symbols`.
 //!
 //! Key details:
-//! - No-op stub behavior is shared with `spl_autoload()`.
+//! - Registered callbacks execute through the shared SPL autoload dispatcher.
 
 eval_builtin! {
     contract: "spl_autoload_call",
@@ -35,8 +35,13 @@ pub(in crate::interpreter) fn eval_spl_autoload_call_declared_call(
 /// Evaluates materialized `spl_autoload_call(...)` arguments through the `spl_autoload` owner.
 pub(in crate::interpreter) fn eval_spl_autoload_call_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::spl_autoload::eval_spl_autoload_void_result("spl_autoload_call", evaluated_args, values)
+    super::spl_autoload::eval_spl_autoload_void_result(
+        "spl_autoload_call",
+        evaluated_args,
+        context,
+        values,
+    )
 }

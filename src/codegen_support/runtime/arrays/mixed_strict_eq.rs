@@ -64,8 +64,10 @@ pub fn emit_mixed_strict_eq(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_strict_eq_true");                      // null identity depends only on the matching runtime tag
     emitter.instruction("cmp x0, #1");                                          // do both payloads hold strings?
     emitter.instruction("b.eq __rt_mixed_strict_eq_string");                    // strings need byte-by-byte comparison
-    emitter.instruction("cmp x0, #2");                                          // matching float tags require numerical rather than bitwise identity
-    emitter.instruction("b.eq __rt_mixed_strict_eq_float");                     // signed zero is equal and NaN is never equal
+    emitter.instruction("cmp x0, #2");                                          // do both payloads hold floats?
+    emitter.instruction("b.eq __rt_mixed_strict_eq_float");                     // floats compare numerically rather than by bit identity
+    emitter.instruction("cmp x0, #4");                                          // do both payloads hold indexed arrays?
+    emitter.instruction("b.eq __rt_mixed_strict_eq_array");                     // indexed arrays compare recursively by ordered values
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the left payload low word
     emitter.instruction("cmp x10, x1");                                         // compare low payload words for scalar/pointer tags
     emitter.instruction("b.ne __rt_mixed_strict_eq_false");                     // mismatched payload low words are not equal
@@ -86,11 +88,16 @@ pub fn emit_mixed_strict_eq(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_strict_eq_done");                         // return the string comparison result
 
     emitter.label("__rt_mixed_strict_eq_float");
-    emitter.instruction("ldr d0, [sp, #24]");                                   // restore the left IEEE double payload
-    emitter.instruction("fmov d1, x1");                                         // reinterpret the right IEEE payload without conversion
-    emitter.instruction("fcmp d0, d1");                                         // unordered NaN comparisons leave equality clear
-    emitter.instruction("cset x0, eq");                                         // both signed zeros compare equal
-    emitter.instruction("b __rt_mixed_strict_eq_done");                         // return the numerical equality result
+    emitter.instruction("ldr d0, [sp, #24]");                                   // load the left IEEE-754 payload
+    emitter.instruction("fmov d1, x1");                                         // move the right IEEE-754 payload into the FP register file
+    emitter.instruction("fcmp d0, d1");                                         // signed zero compares equal while NaN remains unequal
+    emitter.instruction("cset x0, eq");                                         // materialize PHP float strict equality
+    emitter.instruction("b __rt_mixed_strict_eq_done");                         // return the float comparison result
+
+    emitter.label("__rt_mixed_strict_eq_array");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // pass the left indexed-array pointer; x1 still carries the right pointer
+    emitter.instruction("bl __rt_array_strict_eq");                             // recursively compare ordered array entries
+    emitter.instruction("b __rt_mixed_strict_eq_done");                         // return the recursive array comparison result
 
     emitter.label("__rt_mixed_strict_eq_false");
     emitter.instruction("mov x0, #0");                                          // report that the mixed payloads are not strictly equal
@@ -149,8 +156,10 @@ fn emit_mixed_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_strict_eq_true");                        // null identity depends only on the matching runtime tag
     emitter.instruction("cmp rax, 1");                                          // do both payloads hold strings?
     emitter.instruction("je __rt_mixed_strict_eq_string");                      // strings need byte-by-byte comparison
-    emitter.instruction("cmp rax, 2");                                          // matching float tags require numerical rather than bitwise identity
-    emitter.instruction("je __rt_mixed_strict_eq_float");                       // signed zero is equal and NaN is never equal
+    emitter.instruction("cmp rax, 2");                                          // do both payloads hold floats?
+    emitter.instruction("je __rt_mixed_strict_eq_float");                       // floats compare numerically rather than by bit identity
+    emitter.instruction("cmp rax, 4");                                          // do both payloads hold indexed arrays?
+    emitter.instruction("je __rt_mixed_strict_eq_array");                       // indexed arrays compare recursively by ordered values
     emitter.instruction("cmp QWORD PTR [rsp + 24], rdi");                       // compare low payload words for scalar or pointer tags
     emitter.instruction("jne __rt_mixed_strict_eq_false");                      // mismatched payload low words are not equal
     emitter.instruction("cmp QWORD PTR [rsp + 32], rdx");                       // compare high payload words for string/null padding
@@ -169,13 +178,20 @@ fn emit_mixed_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_strict_eq_done");                       // return the string comparison result
 
     emitter.label("__rt_mixed_strict_eq_float");
-    emitter.instruction("movq xmm0, QWORD PTR [rsp + 24]");                     // restore the left IEEE double payload
-    emitter.instruction("movq xmm1, rdi");                                      // reinterpret the right IEEE payload without conversion
-    emitter.instruction("ucomisd xmm0, xmm1");                                  // compare numerically, including signed zero
-    emitter.instruction("jp __rt_mixed_strict_eq_false");                       // unordered NaN comparisons must not appear equal
-    emitter.instruction("sete al");                                             // materialize ordered numerical equality
-    emitter.instruction("movzx rax, al");                                       // normalize the boolean before returning
-    emitter.instruction("jmp __rt_mixed_strict_eq_done");                       // return the numerical equality result
+    emitter.instruction("movq xmm0, QWORD PTR [rsp + 24]");                     // load the left IEEE-754 payload
+    emitter.instruction("movq xmm1, rdi");                                      // load the right IEEE-754 payload
+    emitter.instruction("ucomisd xmm0, xmm1");                                  // compare numerically under PHP strict-float semantics
+    emitter.instruction("setnp al");                                            // require an ordered comparison
+    emitter.instruction("sete dl");                                             // require numerical equality
+    emitter.instruction("and al, dl");                                          // unordered NaN is never equal
+    emitter.instruction("movzx rax, al");                                       // widen the boolean result
+    emitter.instruction("jmp __rt_mixed_strict_eq_done");                       // return the float comparison result
+
+    emitter.label("__rt_mixed_strict_eq_array");
+    emitter.instruction("mov rsi, rdi");                                        // pass the right indexed-array pointer as argument two
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 24]");                       // pass the left indexed-array pointer as argument one
+    abi::emit_call_label(emitter, "__rt_array_strict_eq");                      // recursively compare ordered array entries
+    emitter.instruction("jmp __rt_mixed_strict_eq_done");                       // return the recursive array comparison result
 
     emitter.label("__rt_mixed_strict_eq_false");
     emitter.instruction("xor rax, rax");                                        // report that the mixed payloads are not strictly equal

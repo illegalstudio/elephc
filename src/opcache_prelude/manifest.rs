@@ -56,7 +56,7 @@ pub(super) const JIT_BLACKLIST_FN: &str = "opcache_jit_blacklist";
 /// 1. the canonicalized main entry file,
 /// 2. every statically-resolved `include`/`require`/`include_once`/`require_once` target
 ///    (`resolver::resolve_collecting_includes`),
-/// 3. every autoloaded file — Composer `autoload.files`, PSR-4 / SPL-rule class files, and
+/// 3. every autoloaded file — eager files, PSR-4 / SPL-rule class files, and
 ///    the includes those files themselves pull in (`autoload::run_collecting_included`).
 ///
 /// Together that is exactly the set of PHP/LFC source files compiled into the binary, which is
@@ -93,7 +93,7 @@ pub struct ScriptEntry {
 ///   the canonicalization `__FILE__` bakes (`crate::magic_constants::file_pass`).
 /// - `included_files` are the statically-resolved include/require targets
 ///   (`resolver::resolve_collecting_includes`), already canonical.
-/// - `autoloaded_files` are the files the autoload pass loaded — Composer `autoload.files`,
+/// - `autoloaded_files` are the files the autoload pass loaded — eager files,
 ///   PSR-4 / SPL-rule class files, and their own include targets
 ///   (`autoload::run_collecting_included`), already canonical.
 ///

@@ -12,6 +12,14 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+#[cfg(test)]
+mod tests;
+
+/// Runtime slot holding the address of the bridge's `elephc_pcntl_aot_signal_pending` word, or
+/// zero until `pcntl_signal()` installs the bridge. The async safe point dispatches only while
+/// that word is non-zero.
+pub(crate) const PENDING_FLAG_SLOT: &str = "__rt_pcntl_pending_ptr";
+
 /// PHP resource-usage key plus its byte offset in the stable bridge record.
 const RUSAGE_FIELDS: &[(&str, usize, usize)] = &[
     ("_pcntl_rusage_oublock", 10, 0),
@@ -72,6 +80,7 @@ pub(crate) fn emit_pcntl_signal_dispatch(emitter: &mut Emitter) {
             emit_pcntl_dispatch_pending_aarch64(emitter);
             emit_pcntl_abort_dispatch_aarch64(emitter);
             emit_pcntl_async_dispatch_preserving_aarch64(emitter);
+            emit_pcntl_safe_point_aarch64(emitter);
             emit_pcntl_release_handlers_aarch64(emitter);
         }
         Arch::X86_64 => {
@@ -385,7 +394,7 @@ fn emit_pcntl_dispatch_pending_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x9]");                                        // load the bridge queue-pop callback
     emitter.instruction("cbz x9, __rt_pcntl_dispatch_failed_masked");           // missing callback is a dispatch failure
     emitter.instruction("blr x9");                                              // pop one record while delivery remains blocked
-    emitter.instruction("cmp x0, #0");                                          // zero means the masked snapshot is exhausted
+    emitter.instruction("cmp w0, #0");                                          // classify the signed C int queue status without reading undefined upper bits
     emitter.instruction("b.eq __rt_pcntl_dispatch_finish");                     // finish after consuming the masked snapshot
     emitter.instruction("b.lt __rt_pcntl_dispatch_failed_masked");              // a bridge read error returns false
     emitter.instruction("ldr x1, [sp]");                                        // x1 = signal number from the stable record
@@ -458,7 +467,7 @@ fn emit_pcntl_dispatch_pending_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r9, r9");                                         // reject an uninitialized bridge slot
     emitter.instruction("jz __rt_pcntl_dispatch_failed_masked_x86");            // missing callback is a dispatch failure
     emitter.instruction("call r9");                                             // pop one record while delivery remains blocked
-    emitter.instruction("test rax, rax");                                       // zero means the snapshot is exhausted
+    emitter.instruction("test eax, eax");                                       // classify the signed C int queue status without reading undefined upper bits
     emitter.instruction("jz __rt_pcntl_dispatch_finish_x86");                   // finish after consuming the masked snapshot
     emitter.instruction("js __rt_pcntl_dispatch_failed_masked_x86");            // a bridge read error returns false
     emitter.instruction("mov rsi, QWORD PTR [rsp]");                            // rsi = signal number from the stable record
@@ -579,29 +588,53 @@ fn emit_pcntl_abort_dispatch_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // resume the exception unwinder
 }
 
+/// Emits the AArch64 safe point every block start and call site of an async-signal program calls.
+///
+/// One `bl` per site instead of the five-instruction inline flag test: the Symfony console has
+/// 817,520 safe points, and the inline form was 2.5% of its code. The fast path touches `x16`
+/// alone -- the intra-procedure scratch register branch relaxation already clobbers, so no value
+/// lives in it at a safe point -- and no flags; `x30` is the caller's own return address, which
+/// the site's `bl` was always going to take. With dispatch on it TAIL-branches into
+/// `__rt_pcntl_async_dispatch_preserving`, which returns straight to the site.
+fn emit_pcntl_safe_point_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.raw("    .p2align 2");
+    emitter.comment("--- runtime: pcntl async safe point ---");
+    emitter.label_global("__rt_pcntl_safe_point");
+    abi::emit_symbol_address(emitter, "x16", "__rt_pcntl_async_enabled");
+    emitter.instruction("ldr x16, [x16]");                                      // read whether asynchronous dispatch is on
+    // Mach-O refuses a conditional branch to an external symbol, so the dispatch is an
+    // unconditional tail branch behind an assembler-temporary label (no new atom for dead-strip).
+    emitter.instruction("cbz x16, 1f");                                         // off: nothing to dispatch
+    // Like php's interrupt flag: dispatch only once a handler queued a record. Every safe point
+    // used to pay the full dispatch (spill, two sigprocmask, a pipe read) while async was on.
+    abi::emit_symbol_address(emitter, "x16", PENDING_FLAG_SLOT);
+    emitter.instruction("ldr x16, [x16]");                                      // the bridge's pending-flag address, once a handler is installed
+    emitter.instruction("cbz x16, 1f");                                         // no queued handler installed: nothing can be pending
+    emitter.instruction("ldr x16, [x16]");                                      // did a handler queue a record since the last drain?
+    emitter.instruction("cbz x16, 1f");                                         // no: nothing to dispatch
+    emitter.instruction("b __rt_pcntl_async_dispatch_preserving");              // on: dispatch, returning straight to the site
+    emitter.raw("1:");
+    emitter.instruction("ret");                                                 // return to the safe point
+}
+
 /// Emits an AArch64 safe-point wrapper that preserves every allocatable register and FP state.
 fn emit_pcntl_async_dispatch_preserving_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.raw("    .p2align 2");
     emitter.comment("--- runtime: pcntl async dispatch preserving registers ---");
     emitter.label_global("__rt_pcntl_async_dispatch_preserving");
-    emitter.instruction("sub sp, sp, #32");                                     // reserve a minimal flag-test frame
-    emitter.instruction("stp x9, x10, [sp]");                                   // preserve both scratch registers used by the fast path
-    emitter.instruction("mrs x9, nzcv");                                        // preserve condition flags before testing async state
-    emitter.instruction("str x9, [sp, #16]");                                   // park the original condition flags
+    // The fast path runs at every safe point, so it must be cheap: none of stp/adrp/add/ldr/cbnz
+    // touches NZCV, so the caller's flags survive it without the mrs/msr pair it used to spend
+    // (3.2% of a Symfony request went to this helper). The slow path saves the flags itself.
+    emitter.instruction("stp x9, x10, [sp, #-16]!");                            // preserve both scratch registers used by the fast path
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_async_enabled");
     emitter.instruction("ldr x10, [x9]");                                       // read async state before spilling the full register file
     emitter.instruction("cbnz x10, __rt_pcntl_async_slow");                     // enter the expensive path only while async dispatch is enabled
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the caller's condition flags
-    emitter.instruction("msr nzcv, x9");                                        // restore flags on the disabled fast path
-    emitter.instruction("ldp x9, x10, [sp]");                                   // restore scratch registers on the disabled fast path
-    emitter.instruction("add sp, sp, #32");                                     // release the minimal flag-test frame
+    emitter.instruction("ldp x9, x10, [sp], #16");                              // restore scratch registers on the disabled fast path
     emitter.instruction("ret");                                                 // return without the 800-byte spill when async mode is off
     emitter.label("__rt_pcntl_async_slow");
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload flags before the complete preserving wrapper
-    emitter.instruction("msr nzcv, x9");                                        // restore the caller's condition flags
-    emitter.instruction("ldp x9, x10, [sp]");                                   // restore scratch registers before the complete spill
-    emitter.instruction("add sp, sp, #32");                                     // release the fast-path frame before the regular frame
+    emitter.instruction("ldp x9, x10, [sp], #16");                              // restore scratch registers before the complete spill
     emitter.instruction("sub sp, sp, #800");                                    // reserve the complete register and FP-state spill
     for register in (0..32).step_by(2) {
         emitter.instruction(&format!(                                           // preserve one pair of SIMD registers
@@ -670,13 +703,22 @@ fn emit_pcntl_async_dispatch_preserving_x86_64(emitter: &mut Emitter) {
     emitter.raw("    .p2align 4");
     emitter.comment("--- runtime: pcntl async dispatch preserving registers ---");
     emitter.label_global("__rt_pcntl_async_dispatch_preserving");
-    emitter.instruction("pushfq");                                              // preserve caller flags around the direct state comparison
-    emitter.instruction("cmp QWORD PTR [rip + __rt_pcntl_async_enabled], 0");   // test async state before spilling registers and vectors
-    emitter.instruction("jne __rt_pcntl_async_slow_x86");                       // enter the expensive path only while async dispatch is enabled
-    emitter.instruction("popfq");                                               // restore flags on the disabled fast path
+    // Flag-free fast path (see the AArch64 arm): mov, push/pop and jrcxz leave RFLAGS alone,
+    // where the pushfq/popfq pair it replaced was the costly part of every safe point.
+    emitter.instruction("push rcx");                                            // preserve the one scratch register the fast path needs
+    emitter.instruction("mov rcx, QWORD PTR [rip + __rt_pcntl_async_enabled]"); // read async state without touching the caller's flags
+    emitter.instruction("jrcxz __rt_pcntl_async_off_x86");                      // disabled: return without the complete spill
+    // Dispatch only once a handler queued a record (see the AArch64 safe point).
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rip + {PENDING_FLAG_SLOT}]")); // the bridge's pending-flag address, once a handler is installed
+    emitter.instruction("jrcxz __rt_pcntl_async_off_x86");                      // no queued handler installed: nothing can be pending
+    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // did a handler queue a record since the last drain?
+    emitter.instruction("jrcxz __rt_pcntl_async_off_x86");                      // no: return without the complete spill
+    emitter.instruction("pop rcx");                                             // restore the scratch register before the complete spill
+    emitter.instruction("jmp __rt_pcntl_async_slow_x86");                       // enabled: take the preserving dispatch path
+    emitter.label("__rt_pcntl_async_off_x86");
+    emitter.instruction("pop rcx");                                             // restore the scratch register on the disabled fast path
     emitter.instruction("ret");                                                 // return without the complete spill when async mode is off
     emitter.label("__rt_pcntl_async_slow_x86");
-    emitter.instruction("popfq");                                               // restore flags before the complete preserving wrapper
     emitter.instruction("pushfq");                                              // preserve caller flags across asynchronous dispatch
     for register in REGISTERS {
         emitter.instruction(&format!("push {register}"));                       // preserve one general register

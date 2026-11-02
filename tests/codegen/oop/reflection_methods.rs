@@ -300,6 +300,161 @@ echo (new ReflectionMethod(ReflectInvokeInferredTarget::class, "join"))->invoke(
     assert_eq!(out, "AB");
 }
 
+/// Verifies reflected method names keep the case they were declared with.
+///
+/// Method tables are keyed case-insensitively, so a lookup by any spelling still finds the
+/// method, but `php -n` reports the declared spelling from every name-returning entry point:
+/// `getMethods()`, `getMethod()->getName()` and `ReflectionMethod::getName()` alike.
+#[test]
+fn test_reflection_method_names_keep_declared_case() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectCasePreservedTarget {
+    public function CamelCaseOne(): string { return "one"; }
+    public static function StaticTwo(): string { return "two"; }
+    public function lower(): string { return "l"; }
+}
+
+$class = new ReflectionClass(ReflectCasePreservedTarget::class);
+$names = [];
+foreach ($class->getMethods() as $method) {
+    $names[] = $method->getName();
+}
+sort($names);
+echo implode(",", $names) . ":";
+echo $class->getMethod("camelcaseone")->getName() . ":";
+echo $class->getMethod("CamelCaseOne")->getName() . ":";
+echo $class->getMethod("statictwo")->getName() . ":";
+echo (new ReflectionMethod(ReflectCasePreservedTarget::class, "camelcaseone"))->getName() . ":";
+echo (new ReflectionMethod(ReflectCasePreservedTarget::class, "CamelCaseOne"))->getName() . ":";
+echo $class->hasMethod("CAMELCASEONE") ? "H" : "h";
+"#,
+    );
+    assert_eq!(
+        out,
+        "CamelCaseOne,StaticTwo,lower:CamelCaseOne:CamelCaseOne:StaticTwo:CamelCaseOne:CamelCaseOne:H"
+    );
+}
+
+/// Verifies an inherited method reports the case its declaring class wrote it with.
+#[test]
+fn test_reflection_inherited_method_name_keeps_declaring_case() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectCaseParent {
+    public function InheritedOne(): string { return "p"; }
+}
+class ReflectCaseChild extends ReflectCaseParent {
+    public function OwnTwo(): string { return "c"; }
+}
+
+$class = new ReflectionClass(ReflectCaseChild::class);
+$names = [];
+foreach ($class->getMethods() as $method) {
+    $names[] = $method->getName();
+}
+sort($names);
+echo implode(",", $names) . ":";
+echo $class->getMethod("inheritedone")->getName() . ":";
+echo (new ReflectionMethod(ReflectCaseChild::class, "inheritedone"))->getDeclaringClass()->getName();
+"#,
+    );
+    assert_eq!(out, "InheritedOne,OwnTwo:InheritedOne:ReflectCaseParent");
+}
+
+/// Verifies an interface's reflected method names keep their declared case.
+#[test]
+fn test_reflection_interface_method_names_keep_declared_case() {
+    let out = compile_and_run(
+        r#"<?php
+interface ReflectCaseContract {
+    public function DoTheThing(): string;
+}
+
+$names = [];
+foreach ((new ReflectionClass(ReflectCaseContract::class))->getMethods() as $method) {
+    $names[] = $method->getName();
+}
+echo implode(",", $names) . ":";
+echo (new ReflectionClass(ReflectCaseContract::class))->getMethod("dothething")->getName();
+"#,
+    );
+    assert_eq!(out, "DoTheThing:DoTheThing");
+}
+
+/// Verifies a method a class gained from a trait keeps the trait's declared case.
+#[test]
+fn test_reflection_trait_method_names_keep_declared_case() {
+    let out = compile_and_run(
+        r#"<?php
+trait ReflectCaseHelper {
+    public function HelpMe(): string { return "h"; }
+}
+class ReflectCaseHelperUser {
+    use ReflectCaseHelper;
+}
+
+$class = new ReflectionClass(ReflectCaseHelperUser::class);
+$names = [];
+foreach ($class->getMethods() as $method) {
+    $names[] = $method->getName();
+}
+sort($names);
+echo implode(",", $names) . ":";
+echo $class->getMethod("helpme")->getName() . ":";
+echo (new ReflectionMethod(ReflectCaseHelperUser::class, "HELPME"))->getName();
+"#,
+    );
+    assert_eq!(out, "HelpMe:HelpMe:HelpMe");
+}
+
+/// Verifies `hasMethod()` stays case-insensitive when the reflector reaches it as a union.
+///
+/// A receiver the checker cannot narrow to `ReflectionClass` — `ReflectionClass|false`, the shape
+/// `ContainerBuilder::getReflectionClass()` returns — is dispatched as a boxed `Mixed` value and
+/// therefore runs the synthesized method body instead of the eval bridge that a typed receiver
+/// reaches. That body compares against the private name index, whose two producers disagree on
+/// case: the compile-time materializer stores folded keys while the eval bridge stores the
+/// declared spelling. Folding only the argument answered `false` for every method not already
+/// written in lower case, so `php -n` said `true` and the binary said `false`.
+///
+/// `hasProperty()` sits beside it because PHP's property probe *is* case-sensitive: a fix that
+/// folded both probes would report `I` here instead of `i`, and a name nothing declares still
+/// answers `g`, so neither direction can be traded for the other.
+#[test]
+fn test_reflection_has_method_is_case_insensitive_through_a_union_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectMixedProbeBase {
+    public function InheritedMixedCase(): string { return "i"; }
+}
+class ReflectMixedProbeTarget extends ReflectMixedProbeBase {
+    public $CamelProp = 1;
+    public function CamelCaseOne(): string { return "one"; }
+    public static function StaticTwo(): string { return "two"; }
+    public function lower(): string { return "l"; }
+}
+
+function reflect_mixed_probe(string $class, bool $miss): ReflectionClass|false {
+    return $miss ? false : new ReflectionClass($class);
+}
+
+$r = reflect_mixed_probe(ReflectMixedProbeTarget::class, false);
+echo $r->hasMethod("CamelCaseOne") ? "A" : "a";
+echo $r->hasMethod("camelcaseone") ? "B" : "b";
+echo $r->hasMethod("CAMELCASEONE") ? "C" : "c";
+echo $r->hasMethod("StaticTwo") ? "D" : "d";
+echo $r->hasMethod("InheritedMixedCase") ? "E" : "e";
+echo $r->hasMethod("lower") ? "F" : "f";
+echo $r->hasMethod("NotDeclared") ? "G" : "g";
+echo ":";
+echo $r->hasProperty("CamelProp") ? "H" : "h";
+echo $r->hasProperty("camelprop") ? "I" : "i";
+"#,
+    );
+    assert_eq!(out, "ABCDEFg:Hi");
+}
+
 
 /// Regression for #571: reflected method names are the DECLARED spelling, not the lookup text.
 ///
@@ -412,4 +567,134 @@ echo (new ReflectionMethod("ReflectCasingEvalDeclared", "evalmatch"))->getName()
 "#,
     );
     assert_eq!(out, "Match|Match|Match,StaticOne|Match,StaticOne|EvalMatch");
+}
+
+/// A private method declared on an ancestor, reflected through that ancestor and invoked on a
+/// descendant receiver, runs the ancestor's body: php binds a reflected method by its declaring
+/// class. The lowering used to resolve `secret` on the receiver's own class and refused the
+/// program ("method call to unknown method AppK::secret").
+///
+/// Expected output is php 8.5's for the same fixture.
+#[test]
+fn test_reflection_method_invoke_private_ancestor_method_on_descendant_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class K {
+    private int $n = 5;
+    protected function build(): string { return "built" . $this->n; }
+    private function secret(int $x): int { return $x + $this->n; }
+}
+class AppK extends K {}
+$k = new AppK();
+$m = new \ReflectionMethod($k, 'build');
+echo $m->invoke($k), "\n";
+$s = new \ReflectionMethod(K::class, 'secret');
+echo $s->invoke($k, 2), "\n";
+echo $s->invokeArgs($k, [3]), "\n";
+$own = new K();
+echo $s->invoke($own, 10), "\n";
+"#,
+    );
+    assert_eq!(out, "built5\n7\n8\n15\n");
+}
+
+/// A protected method that comes from a trait used by an abstract parent, reflected from a
+/// receiver typed as an interface or as `mixed` and invoked on that same receiver, keeps its
+/// receiver (the shape of a console command reflecting a kernel's `buildContainer()`).
+///
+/// Expected output is php 8.5's for the same fixture.
+#[test]
+fn test_reflection_method_invoke_trait_method_on_interface_and_mixed_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+interface KernelInterface { public function boot(): void; }
+trait MicroKernelTrait {
+    protected function buildContainer(): string { return "container:" . $this->name; }
+    protected function withArg(int $a): string { return "arg" . $a . ":" . $this->name; }
+    public function boot(): void {}
+}
+abstract class BaseKernel implements KernelInterface {
+    use MicroKernelTrait;
+    protected string $name = "base";
+}
+class AppKernel extends BaseKernel {}
+class Holder {
+    public function __construct(private KernelInterface $k) {}
+    public function getKernel(): KernelInterface { return $this->k; }
+}
+function untyped(): mixed { return new AppKernel(); }
+$kernel = clone (new Holder(new AppKernel()))->getKernel();
+$kernel->boot();
+$method = new \ReflectionMethod($kernel, 'buildContainer');
+echo $method->invoke($kernel), "\n";
+echo $method->invokeArgs($kernel, []), "\n";
+$with = new \ReflectionMethod($kernel, 'withArg');
+echo $with->invoke($kernel, 4), "\n";
+$loose = untyped();
+$m2 = new ReflectionMethod($loose, 'buildContainer');
+echo $m2->invoke($loose), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "container:base\ncontainer:base\narg4:base\ncontainer:base\n"
+    );
+}
+
+/// `ReflectionMethod::invoke()` runs the REFLECTED class's method, not the receiver's override:
+/// `(new ReflectionMethod(P::class, 'get'))->invoke(new C())` is `P::get`. The call was a virtual
+/// `MethodCall`, so `C::get` ran. Verified against php 8.5.
+#[test]
+fn test_reflection_method_invoke_runs_the_reflected_class_not_the_override() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public function get(string $n): string { return "P:$n"; } }
+class C extends P { public function get(string $n): string { return "C:$n"; } }
+class D extends C {}
+$m = new \ReflectionMethod(P::class, 'get');
+echo $m->invoke(new C(), 'r'), "\n";
+echo $m->invoke(new D(), 'd'), "\n";
+echo $m->invoke(new P(), 'p'), "\n";
+echo $m->invokeArgs(new C(), ['q']), "\n";
+$c = new \ReflectionMethod(C::class, 'get');
+echo $c->invoke(new D(), 's'), "\n";
+echo (new C())->get('v'), "\n";
+"#,
+    );
+    assert_eq!(out, "P:r\nP:d\nP:p\nP:q\nC:s\nC:v\n");
+}
+
+/// `ReflectionMethod::getClosure()` and `invoke()` reach a PRIVATE method by design (php ignores
+/// visibility for reflection since 8.1). Built from `$this` inside a trait -- Symfony's
+/// `MicroKernelTrait::loadRoutes()` calling the kernel's private `configureRoutes()` -- the target
+/// is not tracked at compile time and the synthetic body calls through `call_user_func_array()`
+/// with `ReflectionMethod` as lexical scope; the per-scope callable table left the private method
+/// unreachable from there and every console command that builds the router failed.
+#[test]
+fn test_reflection_method_closure_reaches_a_private_method_from_a_trait() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+trait MicroKernel {
+    public function loadRoutes(): string {
+        $configureRoutes = new \ReflectionMethod($this, 'configureRoutes');
+        return $configureRoutes->getClosure($this)('routes');
+    }
+    public function loadViaInvoke(): string {
+        return (new \ReflectionMethod($this, 'configureRoutes'))->invoke($this, 'invoke');
+    }
+}
+class Kernel {
+    use MicroKernel;
+    private function configureRoutes(string $what): string { return "configured $what"; }
+}
+$k = new Kernel();
+echo $k->loadRoutes(), "|", $k->loadViaInvoke(), "|";
+$name = $argc > 5 ? 'x' : 'configureRoutes';
+echo (new ReflectionMethod($k, $name))->getClosure($k)('dynamic');
+if ($argc > 5) { eval('echo 1;'); }
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "configured routes|configured invoke|configured dynamic");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

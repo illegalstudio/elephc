@@ -29,15 +29,31 @@ pub fn emit_str_eq(emitter: &mut Emitter) {
     emitter.instruction("cmp x2, x4");                                          // compare lengths of both strings
     emitter.instruction("b.ne __rt_str_eq_false");                              // if lengths differ, strings can't be equal
 
-    // -- byte-by-byte comparison --
-    emitter.instruction("cbz x2, __rt_str_eq_true");                            // if both empty (len=0), they're equal
+    // -- the same buffer is equal to itself: a hash probe often compares a key with its own copy --
+    emitter.instruction("cmp x1, x3");                                          // same start address?
+    emitter.instruction("b.eq __rt_str_eq_true");                               // equal lengths over one buffer are equal
+
+    // -- eight bytes at a time, then the at most seven trailing bytes --
+    // A hash lookup compares every probed key this way, and the byte loop it replaces spent six
+    // instructions per byte: a third of a string-keyed lookup loop went here. Clobbers only what
+    // the byte loop did (x1/x2/x3/x5/x6).
+    emitter.label("__rt_str_eq_word");
+    emitter.instruction("cmp x2, #8");                                          // a whole word left?
+    emitter.instruction("b.lo __rt_str_eq_loop");
+    emitter.instruction("ldr x5, [x1], #8");                                    // eight bytes of string A
+    emitter.instruction("ldr x6, [x3], #8");                                    // eight bytes of string B
+    emitter.instruction("cmp x5, x6");
+    emitter.instruction("b.ne __rt_str_eq_false");                              // a byte differs
+    emitter.instruction("sub x2, x2, #8");
+    emitter.instruction("b __rt_str_eq_word");
     emitter.label("__rt_str_eq_loop");
+    emitter.instruction("cbz x2, __rt_str_eq_true");                            // every byte matched
     emitter.instruction("ldrb w5, [x1], #1");                                   // load byte from string A, advance pointer
     emitter.instruction("ldrb w6, [x3], #1");                                   // load byte from string B, advance pointer
     emitter.instruction("cmp w5, w6");                                          // compare the two bytes
     emitter.instruction("b.ne __rt_str_eq_false");                              // mismatch found, strings not equal
     emitter.instruction("sub x2, x2, #1");                                      // decrement remaining byte count
-    emitter.instruction("cbnz x2, __rt_str_eq_loop");                           // if bytes remain, continue comparing
+    emitter.instruction("b __rt_str_eq_loop");                                  // next trailing byte
 
     // -- strings are equal --
     emitter.label("__rt_str_eq_true");
@@ -60,10 +76,24 @@ fn emit_str_eq_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("cmp rsi, rcx");                                        // compare both string lengths before touching the byte payloads
     emitter.instruction("jne __rt_str_eq_false");                               // unequal lengths cannot represent equal strings
-    emitter.instruction("test rsi, rsi");                                       // are both strings empty after the length comparison?
-    emitter.instruction("je __rt_str_eq_true");                                 // zero-length strings are equal without entering the byte loop
+    emitter.instruction("cmp rdi, rdx");                                        // the same buffer is equal to itself
+    emitter.instruction("je __rt_str_eq_true");
+
+    // Eight bytes at a time, then the trailing bytes; clobbers only what the byte loop did.
+    emitter.label("__rt_str_eq_word");
+    emitter.instruction("cmp rsi, 8");                                          // a whole word left?
+    emitter.instruction("jb __rt_str_eq_loop");
+    emitter.instruction("mov r8, QWORD PTR [rdi]");                             // eight bytes of the left-hand string
+    emitter.instruction("cmp r8, QWORD PTR [rdx]");                             // against eight bytes of the right-hand one
+    emitter.instruction("jne __rt_str_eq_false");                               // a byte differs
+    emitter.instruction("add rdi, 8");
+    emitter.instruction("add rdx, 8");
+    emitter.instruction("sub rsi, 8");
+    emitter.instruction("jmp __rt_str_eq_word");
 
     emitter.label("__rt_str_eq_loop");
+    emitter.instruction("test rsi, rsi");                                       // every byte matched?
+    emitter.instruction("je __rt_str_eq_true");
     emitter.instruction("movzx r8d, BYTE PTR [rdi]");                           // load the next byte from the left-hand string
     emitter.instruction("movzx r9d, BYTE PTR [rdx]");                           // load the next byte from the right-hand string
     emitter.instruction("cmp r8b, r9b");                                        // compare the current byte pair
@@ -71,7 +101,7 @@ fn emit_str_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rdi, 1");                                          // advance the left-hand string pointer to the next byte
     emitter.instruction("add rdx, 1");                                          // advance the right-hand string pointer to the next byte
     emitter.instruction("sub rsi, 1");                                          // decrement the remaining byte count after one successful comparison
-    emitter.instruction("jne __rt_str_eq_loop");                                // continue until every byte has matched
+    emitter.instruction("jmp __rt_str_eq_loop");                                // next trailing byte
 
     emitter.label("__rt_str_eq_true");
     emitter.instruction("mov rax, 1");                                          // return 1 to signal that both strings are equal

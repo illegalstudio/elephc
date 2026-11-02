@@ -12,7 +12,7 @@
 
 use super::*;
 use std::collections::VecDeque;
-use std::rc::Rc;
+use std::sync::Arc;
 
 mod shared;
 pub(crate) use shared::SharedNative;
@@ -29,26 +29,27 @@ thread_local! {
 /// Frozen generated metadata; cloning shares allocations without cloning descriptors.
 #[derive(Clone)]
 struct NativeCatalog {
-    declared_class_names: Rc<Vec<String>>,
-    declared_interface_names: Rc<Vec<String>>,
-    declared_trait_names: Rc<Vec<String>>,
-    native_global_constants: Rc<HashMap<String, EvalNativeGlobalConstant>>,
-    native_user_constants: Rc<HashMap<String, EvalNativeUserConstant>>,
-    native_functions: Rc<HashMap<String, NativeFunction>>,
-    native_methods: Rc<HashMap<(String, String), NativeCallableSignature>>,
-    native_static_methods: Rc<HashMap<(String, String), NativeCallableSignature>>,
-    native_constructors: Rc<HashMap<String, NativeCallableSignature>>,
-    native_class_parents: Rc<HashMap<String, String>>,
-    native_class_attributes: Rc<HashMap<String, Vec<EvalAttribute>>>,
-    native_method_attributes: Rc<HashMap<(String, String), Vec<EvalAttribute>>>,
-    native_constant_attributes: Rc<HashMap<(String, String), Vec<EvalAttribute>>>,
-    native_interface_properties: Rc<HashMap<String, Vec<(String, EvalInterfaceProperty)>>>,
-    native_abstract_properties: Rc<HashMap<String, Vec<(String, EvalInterfaceProperty)>>>,
-    native_property_types: Rc<HashMap<(String, String), EvalParameterType>>,
-    native_property_defaults: Rc<HashMap<(String, String), NativeCallableDefault>>,
-    native_property_default_errors: Rc<HashMap<(String, String), String>>,
-    native_class_default_errors: Rc<HashMap<String, String>>,
-    native_property_attributes: Rc<HashMap<(String, String), Vec<EvalAttribute>>>,
+    declared_class_names: Arc<Vec<String>>,
+    declared_interface_names: Arc<Vec<String>>,
+    declared_trait_names: Arc<Vec<String>>,
+    native_global_constants: Arc<HashMap<String, EvalNativeGlobalConstant>>,
+    native_user_constants: Arc<HashMap<String, EvalNativeUserConstant>>,
+    native_functions: Arc<HashMap<String, NativeFunction>>,
+    native_methods: Arc<HashMap<(String, String), NativeCallableSignature>>,
+    native_static_methods: Arc<HashMap<(String, String), NativeCallableSignature>>,
+    native_constructors: Arc<HashMap<String, NativeCallableSignature>>,
+    native_class_parents: Arc<HashMap<String, String>>,
+    native_class_attributes: Arc<HashMap<String, Vec<EvalAttribute>>>,
+    native_method_attributes: Arc<HashMap<(String, String), Vec<EvalAttribute>>>,
+    native_constant_attributes: Arc<HashMap<(String, String), Vec<EvalAttribute>>>,
+    native_interface_properties: Arc<HashMap<String, Vec<(String, EvalInterfaceProperty)>>>,
+    native_abstract_properties: Arc<HashMap<String, Vec<(String, EvalInterfaceProperty)>>>,
+    native_property_types: Arc<HashMap<(String, String), EvalParameterType>>,
+    native_property_defaults: Arc<HashMap<(String, String), NativeCallableDefault>>,
+    native_property_default_errors: Arc<HashMap<(String, String), String>>,
+    native_class_default_errors: Arc<HashMap<String, String>>,
+    native_property_attributes: Arc<HashMap<(String, String), Vec<EvalAttribute>>>,
+    native_class_constant_defaults: Arc<HashMap<(String, String), NativeClassConstantDefault>>,
 }
 
 impl ElephcEvalContext {
@@ -84,6 +85,7 @@ impl ElephcEvalContext {
             self.native_property_default_errors = SharedNative::from_shared(catalog.native_property_default_errors);
             self.native_class_default_errors = SharedNative::from_shared(catalog.native_class_default_errors);
             self.native_property_attributes = SharedNative::from_shared(catalog.native_property_attributes);
+            self.native_class_constant_defaults = SharedNative::from_shared(catalog.native_class_constant_defaults);
             self.native_catalog_ready = true;
         }
     }
@@ -139,6 +141,7 @@ impl ElephcEvalContext {
             native_property_default_errors: self.native_property_default_errors.share(),
             native_class_default_errors: self.native_class_default_errors.share(),
             native_property_attributes: self.native_property_attributes.share(),
+            native_class_constant_defaults: self.native_class_constant_defaults.share(),
         };
         NATIVE_CATALOGS.with(|cache| {
             let mut cache = cache.borrow_mut();

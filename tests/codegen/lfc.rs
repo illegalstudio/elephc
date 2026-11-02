@@ -86,6 +86,10 @@ fn compile_lfc_eval_project_and_run(
         mbstring_mime: false,
         phar_archive: false,
         descriptor_invoker: true,
+        const_introspection: false,
+        class_introspection: false,
+        class_relation_introspection: false,
+        class_methods_introspection: false,
         eval_bridge: true,
         eval_scope: true,
         web: false,
@@ -98,6 +102,13 @@ fn compile_lfc_eval_project_and_run(
         // neither kind-specific destructor arm.
         popen_resource: false,
         directory_resource: false,
+        // The fixture names no error function, so the error-handling prelude is never injected
+        // and `__elephc_diag_render` is not among the surviving functions — which is exactly the
+        // condition `runtime_features::diag_user_handler` is derived from. `false` is also the
+        // only safe direction to guess here: the runtime emitted for `true` REFERS to that
+        // compiled symbol by name, so a runtime built ahead of a program that does not declare it
+        // fails to link, while the reverse merely leaves a declaration unused.
+        diag_user_handler: false,
         ..elephc::codegen::RuntimeFeatures::none()
     };
     let runtime_asm =
@@ -221,9 +232,9 @@ require "part.lfc";
     assert_eq!(output, "7:p:i:7:7:7:L:I:1:1:1");
 }
 
-/// Verifies Composer files and PSR-4 discovery both load tagless LFC source in strict builds.
+/// Verifies manifest entries and PSR-4 discovery both load tagless LFC source in strict builds.
 #[test]
-fn lfc_composer_autoload_files_and_psr4_use_physical_source_modes() {
+fn lfc_manifest_autoload_files_and_psr4_use_physical_source_modes() {
     let output = compile_lfc_project_and_run(
         &[
             (

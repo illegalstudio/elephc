@@ -90,14 +90,26 @@ fn eval_array_reduce_result_from_scope(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
+    // A callable array's receiver read (`[$object, 'method']`) is an owner the dispatch
+    // borrows for the whole walk; `with_values` releases it once, after the last callback.
     callback.with_values(context, values, |callback, context, values| {
         let len = values.array_len(array)?;
         let mut carry = initial;
+        let mut carry_owned = false;
         for position in 0..len {
             let key = values.array_iter_key(array, position)?;
             let value = values.array_get(array, key)?;
-            carry =
+            values.release(key)?;
+            let next =
                 eval_evaluated_callable_with_values(&callback, vec![carry, value], context, values)?;
+            values.release(value)?;
+            // Each callback result is owned here, even when it is the very cell it was handed; the
+            // previous one is replaced. `initial` is the caller's argument and stays the caller's.
+            if carry_owned {
+                values.release(carry)?;
+            }
+            carry = next;
+            carry_owned = true;
         }
         Ok(carry)
     })

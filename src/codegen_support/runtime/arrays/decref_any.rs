@@ -12,7 +12,9 @@
 
 use crate::codegen_support::{abi, emit::Emitter};
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::{REFERENCE_CELL_HEAP_KIND, CALLABLE_HEAP_KIND};
+use crate::codegen_support::sentinels::{
+    CALLABLE_HEAP_KIND, GLOBAL_REF_CELL_HEAP_KIND, REFERENCE_CELL_HEAP_KIND,
+};
 
 
 /// Uniform release dispatcher for mixed heap-backed values.
@@ -96,6 +98,8 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_decref_any_callable");                       // select callable traversal or ownership dispatch
     emitter.instruction(&format!("cmp x11, #{REFERENCE_CELL_HEAP_KIND}"));      // recognize independently owned reference cells
     emitter.instruction("b.eq __rt_decref_any_reference");                      // select a local dispatch stub for final-owner cell cleanup
+    emitter.instruction(&format!("cmp x11, #{GLOBAL_REF_CELL_HEAP_KIND}"));     // a request-global cell shared with a property or element
+    emitter.instruction("b.eq __rt_decref_any_global_cell");                    // drop that alias's share through the global cell helper
     emitter.instruction("cmp x11, #6");                                         // is this a throwable object?
     emitter.instruction("b.eq __rt_decref_any_object");                         // release throwables through the object decref helper
     emitter.instruction("ret");                                                 // unknown/raw kinds need no release
@@ -124,6 +128,9 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_any_reference");
     abi::emit_jump(emitter, "__rt_reference_cell_release");
+
+    emitter.label("__rt_decref_any_global_cell");
+    emitter.instruction("b __rt_global_ref_cell_decref");                       // tail-call: the last share releases the payload by its tag
 
     emitter.label("__rt_decref_any_done");
     emitter.instruction("ret");                                                 // nothing to release
@@ -204,6 +211,8 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_decref_any_callable");                         // select callable traversal or ownership dispatch
     emitter.instruction(&format!("cmp r10, {REFERENCE_CELL_HEAP_KIND}"));       // recognize independently owned reference cells
     emitter.instruction("je __rt_decref_any_reference");                        // select a local dispatch stub for final-owner cell cleanup
+    emitter.instruction(&format!("cmp r10, {GLOBAL_REF_CELL_HEAP_KIND}"));      // a request-global cell shared with a property or element
+    emitter.instruction("je __rt_decref_any_global_cell");                      // drop that alias's share through the global cell helper
     emitter.instruction("cmp r10, 6");                                          // does this heap-backed payload point at a throwable object (issue #448)?
     emitter.instruction("je __rt_decref_any_object");                           // throwables release through the x86_64 object decref helper like plain objects
     emitter.instruction("jmp __rt_decref_any_done");                            // unknown/raw heap kinds need no release work in the current x86_64 bootstrap runtime
@@ -232,6 +241,9 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_any_reference");
     abi::emit_jump(emitter, "__rt_reference_cell_release");
+
+    emitter.label("__rt_decref_any_global_cell");
+    emitter.instruction("jmp __rt_global_ref_cell_decref");                     // tail-call: the last share releases the payload by its tag
 
     emitter.label("__rt_decref_any_done");
     emitter.instruction("ret");                                                 // nothing to release for null, foreign, or unsupported heap kinds

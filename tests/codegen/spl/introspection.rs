@@ -30,6 +30,21 @@ foreach (class_implements("ImplMarker") as $name => $value) {
     assert_eq!(out, "ChildMarker=ChildMarker;BaseMarker=BaseMarker;");
 }
 
+/// Verifies that a boxed class-relation result can be consumed by an array builtin.
+#[test]
+fn test_class_implements_result_can_be_imploded() {
+    let out = compile_and_run(
+        r#"<?php
+interface FirstMarker {}
+interface SecondMarker {}
+class ImplodedMarkers implements FirstMarker, SecondMarker {}
+
+echo implode(",", class_implements("ImplodedMarkers"));
+"#,
+    );
+    assert_eq!(out, "FirstMarker,SecondMarker");
+}
+
 /// Verifies that class implements accepts object static type.
 #[test]
 fn test_class_implements_accepts_object_static_type() {
@@ -145,4 +160,53 @@ var_dump(class_uses("MissingClass"));
 "#,
     );
     assert_eq!(out, "bool(false)\nbool(false)\nbool(false)\n");
+}
+
+/// Verifies runtime class-like strings use the compact relation registry for every relation kind.
+#[test]
+fn test_class_relation_helpers_accept_runtime_strings() {
+    let out = compile_and_run(
+        r#"<?php
+trait RuntimeBaseTrait {}
+trait RuntimeChildTrait { use RuntimeBaseTrait; }
+interface RuntimeBaseMarker {}
+interface RuntimeChildMarker extends RuntimeBaseMarker {}
+class RuntimeRelationRoot {}
+class RuntimeRelationLeaf extends RuntimeRelationRoot implements RuntimeChildMarker {
+    use RuntimeChildTrait;
+}
+
+function runtime_relation_name(string $name): string {
+    return $name;
+}
+
+echo implode(',', class_parents(runtime_relation_name('RuntimeRelationLeaf'))) . '|';
+echo implode(',', class_implements(runtime_relation_name('RuntimeRelationLeaf'))) . '|';
+echo implode(',', class_uses(runtime_relation_name('RuntimeRelationLeaf'))) . '|';
+var_dump(class_parents(runtime_relation_name('RuntimeRelationMissing')));
+"#,
+    );
+    assert_eq!(
+        out,
+        "RuntimeRelationRoot|RuntimeChildMarker,RuntimeBaseMarker|RuntimeChildTrait|bool(false)\n"
+    );
+}
+
+/// Verifies gradual object|string targets share runtime class-relation lookup semantics.
+#[test]
+fn test_class_relation_helpers_accept_gradual_object_or_string_targets() {
+    let out = compile_and_run(
+        r#"<?php
+interface GradualRelationMarker {}
+class GradualRelationBox implements GradualRelationMarker {}
+
+function gradual_relation_target(bool $object): mixed {
+    return $object ? new GradualRelationBox() : 'GradualRelationBox';
+}
+
+echo implode(',', class_implements(gradual_relation_target(true))) . '|';
+echo implode(',', class_implements(gradual_relation_target(false)));
+"#,
+    );
+    assert_eq!(out, "GradualRelationMarker|GradualRelationMarker");
 }

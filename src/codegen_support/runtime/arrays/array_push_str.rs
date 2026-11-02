@@ -11,6 +11,27 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+/// Recounts existing backing bytes as sixteen-byte slots before changing stride.
+/// The array must be empty and uniquely owned; its pointer stays in x0/rax.
+pub(super) fn emit_empty_string_capacity(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x10, [x0, #16]");                          // load the old element width before specializing storage
+            emitter.instruction("ldr x11, [x0, #8]");                           // load capacity expressed in old-width slots
+            emitter.instruction("mul x11, x11, x10");                           // recover the number of allocated backing bytes
+            emitter.instruction("lsr x11, x11, #4");                            // count only complete sixteen-byte string slots
+            emitter.instruction("str x11, [x0, #8]");                           // force growth before a string write exceeds the original allocation
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r10, QWORD PTR [rax + 16]");               // load the old element width before specializing storage
+            emitter.instruction("mov r11, QWORD PTR [rax + 8]");                // load capacity expressed in old-width slots
+            emitter.instruction("imul r11, r10");                               // recover the number of allocated backing bytes
+            emitter.instruction("shr r11, 4");                                  // count only complete sixteen-byte string slots
+            emitter.instruction("mov QWORD PTR [rax + 8], r11");                // force growth before a string write exceeds the original allocation
+        }
+    }
+}
+
 /// Emits the `__rt_array_push_str` runtime helper for appending a string element to a PHP array.
 /// Input:  x0 = array pointer, x1 = string ptr, x2 = string len (ARM64 convention).
 /// Output: x0 = array pointer (may differ if the array was reallocated during growth).
@@ -37,6 +58,13 @@ pub fn emit_array_push_str(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_push_str ---");
     emitter.label_global("__rt_array_push_str");
 
+    // -- a destination already promoted to hash storage (an earlier sparse/negative keyed
+    //    write converted it) appends at PHP's next integer key, not the packed length --
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed heap-kind/value_type word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low byte holding the storage kind
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = an earlier write already promoted this destination to a hash
+    emitter.instruction("b.eq __rt_array_push_str_already_hash");               // delegate to __rt_hash_append instead of walking packed storage
+
     // -- set up stack frame (needed for str_persist and potential growth) --
     emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
@@ -48,11 +76,7 @@ pub fn emit_array_push_str(emitter: &mut Emitter) {
     // -- specialize freshly empty arrays to 16-byte string slots --
     emitter.instruction("ldr x9, [x0]");                                        // x9 = current array length before first-write specialization
     emitter.instruction("cbnz x9, __rt_array_push_str_shape_ready");            // existing arrays already have their element shape fixed
-    emitter.instruction("ldr x10, [x0, #16]");                                  // x10 = old elem_size (8 for empty array<never> buffers, 16 for string buffers)
-    emitter.instruction("ldr x11, [x0, #8]");                                   // x11 = old capacity counted in old-elem_size slots
-    emitter.instruction("mul x11, x11, x10");                                   // x11 = backing-store data bytes already reserved by __rt_array_new
-    emitter.instruction("lsr x11, x11, #4");                                    // reinterpret the same bytes as 16-byte string slots so capacity matches the buffer
-    emitter.instruction("str x11, [x0, #8]");                                   // publish slot-accurate capacity so an 8-byte-sized buffer grows before a 16-byte slot overflows it
+    emit_empty_string_capacity(emitter);
     emitter.instruction("mov x10, #16");                                        // string append slots carry pointer and length
     emitter.instruction("str x10, [x0, #16]");                                  // elem_size = 16 before any future grow copies live string slots
     emitter.instruction("ldr x10, [x0, #-8]");                                  // load packed array metadata for value_type stamping
@@ -99,6 +123,20 @@ pub fn emit_array_push_str(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_array_grow");                                  // double array capacity → x0 = new array
     emitter.instruction("str x0, [sp, #0]");                                    // update saved array pointer
     emitter.instruction("b __rt_array_push_str_push");                          // go push into the grown array
+
+    // -- destination already promoted to hash: append at PHP's next integer key --
+    emitter.label("__rt_array_push_str_already_hash");
+    emitter.instruction("sub sp, sp, #48");                                     // reserve a frame across the persist and hash_append calls
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish a frame pointer for the nested helper calls
+    emitter.instruction("str x0, [sp, #0]");                                    // save the hash pointer across string persistence
+    emitter.instruction("bl __rt_str_persist");                                 // duplicate the appended string into owned heap storage
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash pointer as the hash_append target
+    emitter.instruction("mov x3, #1");                                          // runtime value tag 1 = string payload
+    emitter.instruction("bl __rt_hash_append");                                 // insert at max(int keys) + 1, matching PHP's append rule
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return with x0 holding the current hash pointer
 }
 
 /// Emits the x86_64 Linux variant of the array push string runtime helper.
@@ -111,6 +149,13 @@ fn emit_array_push_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_push_str ---");
     emitter.label_global("__rt_array_push_str");
 
+    // -- a destination already promoted to hash storage (an earlier sparse/negative keyed
+    //    write converted it) appends at PHP's next integer key, not the packed length --
+    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the packed heap-kind/value_type word
+    emitter.instruction("and r10, 0xff");                                       // isolate the low byte holding the storage kind
+    emitter.instruction("cmp r10, 3");                                          // kind 3 = an earlier write already promoted this destination to a hash
+    emitter.instruction("je __rt_array_push_str_already_hash");                 // delegate to __rt_hash_append instead of walking packed storage
+
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving string-append spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved array pointer and string payload
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the array pointer plus the incoming string ptr/len pair
@@ -121,11 +166,7 @@ fn emit_array_push_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load length before first-write string shape specialization
     emitter.instruction("test r10, r10");                                       // is this the first append into a freshly empty indexed array?
     emitter.instruction("jnz __rt_array_push_str_shape_ready");                 // existing arrays already have their element shape fixed
-    emitter.instruction("mov r10, QWORD PTR [rax + 16]");                       // r10 = old elem_size (8 for empty array<never> buffers, 16 for string buffers)
-    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // r11 = old capacity counted in old-elem_size slots
-    emitter.instruction("imul r11, r10");                                       // r11 = backing-store data bytes already reserved by __rt_array_new
-    emitter.instruction("shr r11, 4");                                          // reinterpret the same bytes as 16-byte string slots so capacity matches the buffer
-    emitter.instruction("mov QWORD PTR [rax + 8], r11");                        // publish slot-accurate capacity so an 8-byte-sized buffer grows before a 16-byte slot overflows it
+    emit_empty_string_capacity(emitter);
     emitter.instruction("mov QWORD PTR [rax + 16], 16");                        // elem_size = 16 before any future growth copies live string slots
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load packed indexed-array metadata for value_type stamping
     emitter.instruction("mov r11, 0xffffffff000080ff");                         // preserve heap marker, indexed-array kind, and persistent COW metadata
@@ -164,4 +205,20 @@ fn emit_array_push_str_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_grow");                                // allocate a larger indexed-array backing store so the string append can proceed
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the grown indexed-array pointer before storing the owned string slot
     emitter.instruction("jmp __rt_array_push_str_store");                       // append the owned string payload into the grown indexed-array storage
+
+    // -- destination already promoted to hash: append at PHP's next integer key --
+    emitter.label("__rt_array_push_str_already_hash");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base across the persist and hash_append calls
+    emitter.instruction("sub rsp, 16");                                         // reserve one aligned slot for the hash pointer
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash pointer across string persistence
+    emitter.instruction("mov rax, rsi");                                        // move the incoming string pointer into the persist helper argument register
+    emitter.instruction("call __rt_str_persist");                               // duplicate the appended string into owned heap storage
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash pointer as the hash_append target
+    emitter.instruction("mov rsi, rax");                                        // pass the persisted string pointer as the hash value low word
+    emitter.instruction("mov rcx, 1");                                          // runtime value tag 1 = string payload
+    emitter.instruction("call __rt_hash_append");                               // insert at max(int keys) + 1, matching PHP's append rule
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return with rax holding the current hash pointer
 }

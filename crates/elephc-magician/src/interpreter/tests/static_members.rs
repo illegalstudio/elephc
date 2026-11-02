@@ -14,10 +14,10 @@ use super::support::*;
 #[test]
 fn native_class_default_error_static_access_preserves_owners_and_visibility() {
     let mut context = ElephcEvalContext::new();
-    assert!(context.define_class(EvalClass::new("Probe", vec![
+    assert!(context.define_class(std::sync::Arc::new(EvalClass::new("Probe", vec![
         EvalClassProperty::with_visibility_and_static("good", EvalVisibility::Public, true, None),
         EvalClassProperty::with_visibility_and_static("secret", EvalVisibility::Private, true, None),
-    ], Vec::new())));
+    ], Vec::new()))));
     assert!(context.define_native_class_default_error("Probe", "class initialization".into()));
     assert!(context.define_native_property_default("Probe", "good", NativeCallableDefault::Int(7)));
     let mut values = FakeOps::default();

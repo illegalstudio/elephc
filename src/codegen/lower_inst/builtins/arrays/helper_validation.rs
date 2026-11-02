@@ -92,6 +92,10 @@ pub(super) fn require_set_op_result_type(
 pub(super) fn assoc_array_key_set_operand_type(ty: PhpType, name: &str, position: &str) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::AssocArray { key, value } => Ok(PhpType::AssocArray { key, value }),
+        PhpType::Array(value) => Ok(PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value,
+        }),
         other => Err(CodegenIrError::unsupported(format!(
             "{} {} argument PHP type {:?}",
             name, position, other
@@ -120,7 +124,7 @@ pub(super) fn require_assoc_array_key_set_result_type(
 /// (via `resolve_int_operand_to_result`); the `__rt_range` helper only consumes integer endpoints.
 pub(super) fn require_range_endpoint(ty: PhpType, name: &str) -> Result<()> {
     match ty.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::Mixed | PhpType::Union(_) => Ok(()),
+        PhpType::Int | PhpType::Bool | PhpType::Mixed | PhpType::Union(_) | PhpType::Str => Ok(()),
         other => Err(CodegenIrError::unsupported(format!(
             "range {} PHP type {:?}",
             name, other
@@ -140,6 +144,16 @@ pub(super) fn require_range_result_type(result_ty: &PhpType) -> Result<()> {
 }
 
 /// Returns the shared element type for two compatible 8-byte indexed arrays.
+///
+/// Two element types that are not IDENTICAL can still share one merge. All the element type
+/// decides here is which runtime helper copies the slots and which `value_type` byte gets
+/// stamped into the result header, and every object slot is one refcounted pointer stamped
+/// `object` whatever class it names. Demanding equality refused `array_merge([$this],
+/// $this->getAllPrevious())` — `Object("")` for the `$this` literal against `Object("Foo")` for
+/// the declared `array` return — even though the two produce byte-for-byte the same code.
+/// Object elements are therefore unified to the unspecified-class object, which is what a merged
+/// array of two different classes actually holds; no other pair is widened, because a class name
+/// is the only element distinction this gate can discard without changing the emitted slots.
 pub(super) fn compatible_eight_byte_indexed_array_element_type(
     first: PhpType,
     second: PhpType,
@@ -155,6 +169,9 @@ pub(super) fn compatible_eight_byte_indexed_array_element_type(
             return Ok(second);
         }
         return Ok(first);
+    }
+    if matches!(first, PhpType::Object(_)) && matches!(second, PhpType::Object(_)) {
+        return Ok(PhpType::Object(String::new()));
     }
     Err(CodegenIrError::unsupported(format!(
         "{} for incompatible indexed-array element PHP types {:?} and {:?}",
@@ -358,9 +375,16 @@ pub(super) fn require_array_combine_result_type(value_elem_ty: &PhpType, result_
 }
 
 /// Verifies `array_flip()` produces a hash with normalized keys and integer source indexes.
+/// Empty `Void`/`Never` sources accept a widened key type because no key payload can be emitted.
 pub(super) fn require_array_flip_result_type(value_elem_ty: &PhpType, result_ty: &PhpType) -> Result<()> {
     let expected_key_ty = array_key_type_from_value_type(value_elem_ty.clone()).codegen_repr();
     match result_ty {
+        PhpType::AssocArray { value, .. }
+            if matches!(value_elem_ty.codegen_repr(), PhpType::Void | PhpType::Never)
+                && value.codegen_repr() == PhpType::Int =>
+        {
+            Ok(())
+        }
         PhpType::AssocArray { key, value }
             if key.codegen_repr() == expected_key_ty && value.codegen_repr() == PhpType::Int =>
         {
@@ -403,4 +427,3 @@ pub(super) fn require_array_fill_assoc_result_type(result_ty: &PhpType) -> Resul
         ))),
     }
 }
-

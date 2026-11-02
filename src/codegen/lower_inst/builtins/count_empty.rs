@@ -151,8 +151,8 @@ fn emit_count_countable_guard(ctx: &mut FunctionContext<'_>, value: ValueId) -> 
 ///
 /// Called from `crate::builtins::array::count` (the registry home) via a thin wrapper.
 /// Handles Array/AssocArray (reads length directly from the runtime header), Mixed/Union
-/// (delegates to `__rt_mixed_count`), and Countable Object (calls the object's `count`
-/// method via intrinsic or dynamic dispatch).
+/// (delegates to `__rt_mixed_count`), a guard-narrowed Iterable (runtime array/object dispatch),
+/// and Countable Object (calls the object's `count` method via intrinsic or dynamic dispatch).
 pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "count", 1, 2)?;
     let value = expect_operand(inst, 0)?;
@@ -186,19 +186,77 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         }
         PhpType::Mixed | PhpType::Union(_) => {
             emit_count_countable_guard(ctx, value)?;
+            if ctx.module.required_runtime_features.eval_bridge && inst.operands.len() == 1 {
+                // A `Countable` the interpreter declared (a Doctrine `PersistentCollection`
+                // reached through Twig's `|length`) has no compiled class id, so the runtime's
+                // `_class_count_ptrs` table cannot find its `count()` and the call ended in the
+                // TypeError for an object that is countable. Probe for an eval owner first, as a
+                // method call on a boxed receiver does, and fall back to the native count.
+                let native_label = ctx.next_label("count_native");
+                let done_label = ctx.next_label("count_eval_done");
+                super::eval_facade::lower_eval_owned_method_call(
+                    ctx, inst, value, "count", &native_label, &done_label,
+                )?;
+                ctx.emitter.label(&native_label);
+                ctx.load_value_to_result(value)?;
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+                emit_non_countable_object_type_error(ctx, value)?;
+                store_if_result(ctx, inst)?;
+                ctx.emitter.label(&done_label);
+                return Ok(());
+            }
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             emit_non_countable_object_type_error(ctx, value)?;
             store_if_result(ctx, inst)
         }
+        PhpType::Iterable => lower_iterable_count(ctx, inst, value),
         PhpType::Object(class_name)
-            if super::class_implements_interface(ctx, &class_name, "Countable") =>
+            if class_name.trim_start_matches('\\').eq_ignore_ascii_case("Countable")
+                || super::class_implements_interface(ctx, &class_name, "Countable") =>
         {
-            if let Some(intrinsic) = super::runtime_backed_instance_intrinsic(&class_name, "count") {
-                super::lower_instance_runtime_intrinsic(ctx, inst, &class_name, "count", intrinsic)
-            } else {
-                super::lower_runtime_object_method_call(ctx, inst, &class_name, "count")
+            // A receiver narrowed to `Countable` (`$x instanceof Countable ? count($x) : ...`) can
+            // hold an object the interpreter declared, which has no compiled class id for the
+            // vtable to dispatch on: probe for an eval owner first, as a method call does.
+            let probe_eval = ctx.module.required_runtime_features.eval_bridge
+                && inst.operands.len() == 1;
+            let native_label = ctx.next_label("count_native");
+            let done_label = ctx.next_label("count_eval_done");
+            if probe_eval {
+                super::eval_facade::lower_eval_owned_method_call(
+                    ctx, inst, value, "count", &native_label, &done_label,
+                )?;
+                ctx.emitter.label(&native_label);
             }
+            if ctx
+                .module
+                .interface_infos
+                .contains_key(class_name.trim_start_matches('\\'))
+            {
+                // `function f(Countable $c) { return count($c); }`: an interface-typed receiver
+                // dispatches through the interface tables like `$c->count()` does.
+                super::super::lower_interface_method_call(ctx, inst, &class_name, "count")?;
+            } else if let Some(intrinsic) =
+                super::runtime_backed_instance_intrinsic(&class_name, "count")
+            {
+                super::lower_instance_runtime_intrinsic(ctx, inst, &class_name, "count", intrinsic)?;
+            } else {
+                super::lower_runtime_object_method_call(ctx, inst, &class_name, "count")?;
+            }
+            if probe_eval {
+                ctx.emitter.label(&done_label);
+            }
+            Ok(())
+        }
+        // A `callable` that `is_array()` accepted is a callable ARRAY -- `[$object, 'method']` or
+        // `['Class', 'method']` -- which always holds exactly two elements
+        // (`!is_array($controller) || 2 !== count($controller)`, symfony/ux-live-component). The
+        // value is a descriptor here, not an array, so the length is the constant it must have;
+        // a closure or a function-name string cannot get past that `is_array()` guard.
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 2);
+            store_if_result(ctx, inst)
         }
         // Any other object: PHP raises, naming the class. It is known statically on this path,
         // so the message is a constant — the `Mixed` path has to resolve the name at run time.
@@ -214,6 +272,85 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             other
         ))),
     }
+}
+
+/// Lowers `count()` for a type-erased `iterable` storage value.
+///
+/// The raw pointer may denote an indexed array, an associative hash, or an object. Arrays expose
+/// their length in the shared header; objects dispatch the `Countable::count` method through the
+/// existing interface-vtable path. Any other heap kind preserves PHP's runtime TypeError boundary.
+fn lower_iterable_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+) -> Result<()> {
+    let indexed_case = ctx.next_label("count_iterable_indexed");
+    let hash_case = ctx.next_label("count_iterable_hash");
+    let object_case = ctx.next_label("count_iterable_object");
+    let invalid_case = ctx.next_label("count_iterable_invalid");
+    let invalid_loaded_case = ctx.next_label("count_iterable_invalid_loaded");
+    let done = ctx.next_label("count_iterable_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+
+    ctx.load_value_to_result(value)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #2");                              // is the iterable an indexed array?
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_case));         // read its shared container header
+            ctx.emitter.instruction("cmp x0, #3");                              // is the iterable an associative hash?
+            ctx.emitter.instruction(&format!("b.eq {}", hash_case));            // read its shared container header
+            ctx.emitter.instruction("cmp x0, #4");                              // is the iterable an object?
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // dispatch Countable::count dynamically
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 2");                              // is the iterable an indexed array?
+            ctx.emitter.instruction(&format!("je {}", indexed_case));           // read its shared container header
+            ctx.emitter.instruction("cmp rax, 3");                              // is the iterable an associative hash?
+            ctx.emitter.instruction(&format!("je {}", hash_case));              // read its shared container header
+            ctx.emitter.instruction("cmp rax, 4");                              // is the iterable an object?
+            ctx.emitter.instruction(&format!("je {}", object_case));            // dispatch Countable::count dynamically
+        }
+    }
+    abi::emit_jump(ctx.emitter, &invalid_case);
+
+    ctx.emitter.label(&object_case);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    super::lower_narrowed_interface_method_call_or_type_error(
+        ctx,
+        inst,
+        "Countable",
+        "count",
+        "count(): Argument #1 ($value) must be of type Countable|array, Traversable given",
+    )?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&hash_case);
+    abi::emit_jump(ctx.emitter, &indexed_case);
+    ctx.emitter.label(&indexed_case);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &invalid_loaded_case,
+    );
+    abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&invalid_case);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    ctx.emitter.label(&invalid_loaded_case);
+    super::exceptions::emit_type_error(
+        ctx,
+        "count(): Argument #1 ($value) must be of type Countable|array",
+    );
+
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Lowers `empty()` for concrete scalar and array-like operands.
@@ -249,7 +386,10 @@ pub(in crate::codegen::lower_inst) fn lower_empty(ctx: &mut FunctionContext<'_>,
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_is_empty");
         }
-        PhpType::Callable | PhpType::Object(_) | PhpType::Resource(_) => {
+        PhpType::Object(_) => {
+            predicates::emit_is_null_result(ctx, value)?;
+        }
+        PhpType::Callable | PhpType::Resource(_) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
         other => {

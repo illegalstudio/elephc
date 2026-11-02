@@ -9,6 +9,102 @@
 
 use super::*;
 
+/// Verifies an UNTYPED parameter on a bodyless declaration stays `mixed`. The compiler starts an
+/// untyped parameter at `int` and lets a concrete body refine it from its own call sites, but an
+/// interface method has no body to refine from, so the starting point froze and became the
+/// contract: a program that logged an int first then rejected the string call with
+/// "parameter $level expects Int, got Str". PSR-3 declares `log($level, …)` exactly this way and
+/// Symfony's `ErrorListener` calls it with a string level. PHP outputs "int:a|string:b|".
+#[test]
+fn test_untyped_interface_parameter_stays_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+interface Log {
+    public function log($level, string $message): void;
+}
+
+abstract class BaseLog implements Log {
+    abstract public function describe($level): string;
+}
+
+class Plain extends BaseLog {
+    public function log($level, string $message): void {
+        echo get_debug_type($level), ':', $message, '|';
+    }
+
+    public function describe($level): string { return get_debug_type($level); }
+}
+
+function emit(Log $logger, string $level): void {
+    $logger->log($level, 'b');
+}
+
+$l = new Plain();
+$l->log(3, 'a');
+emit($l, 'critical');
+echo $l->describe(1), ',', $l->describe('x');
+"#,
+    );
+    assert_eq!(out, "int:a|string:b|int,string");
+}
+
+/// Verifies virtual/interface calls forward the hidden argc operand used by an overriding method.
+#[test]
+fn test_interface_dispatch_forwards_hidden_func_get_args_count() {
+    let out = compile_and_run(
+        r#"<?php
+interface ArityLoader { public function load(mixed $resource, ?string $type = null): mixed; }
+abstract class ArityLoaderBase implements ArityLoader {
+    public function proxy(): int { return $this->load('base', null); }
+}
+final class ArityLoaderImpl extends ArityLoaderBase {
+    public function load(mixed $resource, ?string $type = null): mixed {
+        return func_num_args();
+    }
+}
+function invokeArityLoader(ArityLoader $loader): int { return $loader->load('iface', null); }
+$loader = new ArityLoaderImpl();
+echo $loader->proxy(), '|', invokeArityLoader($loader);
+"#,
+    );
+    assert_eq!(out, "2|2");
+}
+
+/// Verifies a generic `object` receiver dispatches a method over closed-world class candidates.
+#[test]
+fn test_generic_object_receiver_dispatches_known_method_candidate() {
+    let out = compile_and_run(
+        r#"<?php
+final class GenericObjectStack {
+    private array $values = [];
+    public function push(int $value): void { $this->values[] = $value; }
+    public function count(): int { return count($this->values); }
+}
+function eraseStackType(GenericObjectStack $stack): object { return $stack; }
+$stack = eraseStackType(new GenericObjectStack());
+$stack->push(4);
+echo $stack->count();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies an impossible narrowed-method branch compiles and remains unexecuted.
+#[test]
+fn test_impossible_instanceof_narrowed_method_branch_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+interface OptionalWarmer { public function warmUp(string $directory): array; }
+class NonWarmableKernel {}
+function optionallyWarm(NonWarmableKernel $kernel): array {
+    return $kernel instanceof OptionalWarmer ? $kernel->warmUp('/tmp') : [];
+}
+echo 'cold';
+"#,
+    );
+    assert_eq!(out, "cold");
+}
+
 /// An explicit mixed implementation keeps the boxed ABI of an untyped interface parameter.
 #[test]
 fn test_untyped_interface_parameter_accepts_explicit_mixed() {
@@ -110,7 +206,9 @@ try { relay(new Box(), $user); } catch (TypeError $error) { echo "caught"; }
     assert_eq!(out, "caught");
 }
 
-/// Direct interface dispatch also enforces the declared object type after a reference retypes it.
+/// Direct interface dispatch checks the IMPLEMENTATION's parameter type, not the interface's: the
+/// second `take()` reaches `Box::take(mixed &$user)` with the string the first one wrote, which
+/// php accepts without a TypeError (host PHP 8.5 prints nothing). It used to expect "caught".
 #[test]
 fn test_interface_widened_reference_direct_dispatch_rechecks_entry_type() {
     let out = compile_and_run(
@@ -129,7 +227,7 @@ function dispatch(Named $box) {
 dispatch($box);
 "#,
     );
-    assert_eq!(out, "caught");
+    assert_eq!(out, "");
 }
 
 /// A concrete method checks its declared object type after a reference changes type.
@@ -433,6 +531,50 @@ echo (new ReflectionClass(StaticWidget::class))->implementsInterface(StaticMaker
     assert_eq!(out, "W:box:H:make:S:1:S:make:Y");
 }
 
+/// Verifies object syntax dispatches a static interface method to the concrete receiver class.
+#[test]
+fn test_static_interface_method_dispatch_through_object_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+interface RuntimeStaticLabel {
+    public static function label(string $suffix = "!"): string;
+}
+final class RuntimeStaticA implements RuntimeStaticLabel {
+    public static function label(string $suffix = "!"): string { return "A" . $suffix; }
+}
+final class RuntimeStaticB implements RuntimeStaticLabel {
+    public static function label(string $suffix = "!"): string { return "B" . $suffix; }
+}
+function runtimeStaticLabel(RuntimeStaticLabel $value): string {
+    return $value->label("?");
+}
+echo runtimeStaticLabel(new RuntimeStaticA()), "|", runtimeStaticLabel(new RuntimeStaticB());
+"#,
+    );
+    assert_eq!(out, "A?|B?");
+}
+
+/// Verifies static-syntax calls through an object invoke a static-only method.
+///
+/// PHP accepts `$object::method()` as well as `Class::method()`. The lowering
+/// must not send this shape through the instance-only runtime callable-array
+/// lookup when the receiver's class and its static method are known.
+#[test]
+fn test_static_method_dispatch_through_object_static_syntax() {
+    let out = compile_and_run(
+        r#"<?php
+final class ObjectStaticSyntax {
+    public static function label(string $suffix): string { return "static" . $suffix; }
+}
+function objectStaticSyntax(ObjectStaticSyntax $value): string {
+    return $value::label("!");
+}
+echo objectStaticSyntax(new ObjectStaticSyntax());
+"#,
+    );
+    assert_eq!(out, "static!");
+}
+
 /// Verifies an abstract class may defer a static interface method to a concrete child.
 ///
 /// Fixture: `AbstractStaticLabel` implements `StaticLabel` but leaves the
@@ -688,6 +830,32 @@ fn test_class_covariant_self_return_override() {
     assert_eq!(out, "ok");
 }
 
+/// Verifies covariant object returns do not depend on class metadata construction order.
+#[test]
+fn test_class_covariant_sibling_return_before_result_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+interface ResultContract {}
+class ConcreteResult implements ResultContract {}
+class BaseResult {}
+class NarrowResult extends BaseResult {}
+class ParentFactory {
+    public function create(): BaseResult { return new BaseResult(); }
+    public function createContract(): ResultContract { return new ConcreteResult(); }
+}
+class ChildFactory extends ParentFactory {
+    public function create(): NarrowResult { return new NarrowResult(); }
+    public function createContract(): ConcreteResult { return new ConcreteResult(); }
+}
+$factory = new ChildFactory();
+echo ($factory->create() instanceof NarrowResult ? 'class' : 'bad');
+echo '|';
+echo ($factory->createContract() instanceof ConcreteResult ? 'interface' : 'bad');
+"#,
+    );
+    assert_eq!(out, "class|interface");
+}
+
 /// Verifies an inherited interface method returning `static` stays typed as the child interface.
 #[test]
 fn test_interface_late_static_return_stays_receiver() {
@@ -731,6 +899,66 @@ echo (new AlwaysCopyable())->copy()->label();
 "#,
     );
     assert_eq!(out, "copy");
+}
+
+/// Narrowed interface dispatch excludes unrelated same-name methods with incompatible ABIs.
+#[test]
+fn test_narrowed_interface_method_filters_unrelated_candidates() {
+    let out = compile_and_run(
+        r#"<?php
+interface Runner {}
+class StringRunner implements Runner {
+    public function run(string $value): string { return $value; }
+}
+class Unrelated {
+    public function run(?int $value): string { return 'wrong'; }
+}
+function invoke(Runner $runner): string {
+    if ($runner instanceof StringRunner) {
+        return $runner->run('ok');
+    }
+    return 'miss';
+}
+echo invoke(new StringRunner());
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+
+/// A class implements PHP's `Serializable`, which elephc never declared.
+///
+/// `TENTATIVE_RETURN_TYPE_METHODS` already named the interface, but it was absent from
+/// `BUILTIN_INTERFACE_NAMES`, so a class implementing it sent the interpreter to `spl_autoload` —
+/// and Composer cannot autoload a PHP built-in. `Twig\Profiler\Profile` is
+/// `final class Profile implements \IteratorAggregate, \Serializable`, so the whole declaration
+/// was refused with `class Twig\Profiler\Profile could not be declared`, killing the `--web`
+/// worker while Symfony rendered its error page.
+///
+/// Deprecated since PHP 8.1 and still declared by the engine, which is what matters: userland code
+/// implements it. Both its methods carry tentative return types, so the implementer below declares
+/// a narrower `string` for `serialize()` and no type at all for `unserialize()`'s parameter.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_class_implements_the_serializable_builtin_interface() {
+    let out = compile_and_run(
+        r#"<?php
+final class Profile implements \IteratorAggregate, \Serializable {
+    private array $items = ['a', 'b'];
+    public function getIterator(): \Traversable { return new \ArrayIterator($this->items); }
+    public function serialize(): string { return \serialize($this->__serialize()); }
+    public function unserialize($data): void { $this->__unserialize(\unserialize($data)); }
+    public function __serialize(): array { return [$this->items]; }
+    public function __unserialize(array $data): void { [$this->items] = $data; }
+}
+$p = new Profile();
+echo ($p instanceof Serializable ? 'yes' : 'no'), '|';
+foreach ($p as $v) { echo $v; }
+echo '|', $p->serialize();
+"#,
+    );
+    assert_eq!(out, "yes|ab|a:1:{i:0;a:2:{i:0;s:1:\"a\";i:1;s:1:\"b\";}}");
 }
 
 /// `??` over object operands keeps an object type: `?Contract ?? new Implementation()` is a
@@ -848,4 +1076,79 @@ echo label(null), " ", label(5), " ", label(new Other()), "\n";
 "#,
     );
     assert_eq!(out, "impl int 4 other\nnone int 5 other\n");
+}
+
+/// Verifies an interface call reaches an implementation that inserts defaulted parameters while
+/// every frame carries the generated `func_get_args()` collector.
+///
+/// Doctrine's `EntityManager::find($className, $id, LockMode|int|null $lockMode = null,
+/// ?int $lockVersion = null)` implements `ObjectManager::find(string $className, mixed $id)`.
+/// The interface-slot adapter has to box the differing prefix (`string` into an untyped
+/// parameter), materialize each inserted default (a boxed null and a tagged-scalar null), and
+/// forward the caller's own collector; the planner refused the shape and symfony/demo did not
+/// build. A decorator forwarding through the interface and a direct call with every argument
+/// are checked too. Expected output from php 8.5; the heap stays clean.
+#[test]
+fn test_interface_call_reaches_an_implementation_with_inserted_defaults() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class LockMode { public string $n = "pessimistic"; }
+interface ObjectManager {
+    public function find(string $className, mixed $id): object|null;
+}
+class EntityManager implements ObjectManager {
+    public function find($className, mixed $id, LockMode|int|null $lockMode = null, int|null $lockVersion = null): object|null {
+        $o = new stdClass();
+        $o->desc = $className . ":" . $id . ":" . var_export($lockMode, true) . ":" . var_export($lockVersion, true) . ":" . count(func_get_args());
+        return $o;
+    }
+}
+class Decorator implements ObjectManager {
+    public function __construct(private ObjectManager $inner) {}
+    public function find(string $className, mixed $id): object|null { return $this->inner->find($className, $id); }
+}
+function lookup(ObjectManager $om, string $class, int $id): string {
+    return $om->find($class, $id)->desc;
+}
+echo lookup(new EntityManager(), "App\\Post", 7), "|";
+echo lookup(new Decorator(new EntityManager()), "App\\Tag", 3), "|";
+$direct = new EntityManager();
+echo $direct->find("App\\User", 1, 2, 5)->desc, "|";
+eval('echo "eval";');
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "App\\Post:7:NULL:NULL:2|App\\Tag:3:NULL:NULL:2|App\\User:1:2:5:4|eval"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An interface declaring `__get($key)` / `__isset($key)` (Laravel's `Enumerable`) and a trait
+/// implementing them. The implementation's first parameter is typed `string`, as php's magic
+/// contract says; the interface entry kept `mixed`, and with the frame collector every method
+/// carries once the program contains an `eval()`, the method-table adapter had to UNBOX the name
+/// -- which it cannot -- so the build failed on `Collection::__get`. Expected output from php 8.5.
+#[test]
+fn test_interface_magic_get_reaches_a_trait_implementation_through_the_contract() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+interface Enum { public function __get($key); public function __isset($key); }
+trait Proxies {
+    public function __get($key) { return $key === 'sum' ? array_sum($this->items) : 'no ' . $key; }
+    public function __isset($key) { return $key === 'sum'; }
+}
+class Coll implements Enum {
+    use Proxies;
+    public function __construct(public array $items) {}
+}
+function via(Enum $e): string { return $e->__get("sum") . "," . $e->__get("other") . "," . ($e->__isset("sum") ? "y" : "n"); }
+echo via(new Coll([1, 2, 3]));
+if ($argc > 5) { eval('echo 1;'); }
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "6,no other,y");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

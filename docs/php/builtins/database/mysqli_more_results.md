@@ -2,7 +2,7 @@
 title: "mysqli_more_results()"
 description: "Reports whether a multi-query has more results waiting."
 sidebar:
-  order: 142
+  order: 153
 ---
 
 ## mysqli_more_results()

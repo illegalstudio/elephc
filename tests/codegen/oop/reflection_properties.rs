@@ -394,6 +394,49 @@ echo ":" . $target->label;
     assert_eq!(out, "4:8:label:old:new");
 }
 
+/// Verifies public ReflectionProperty metadata and raw accessors share the reflected backing slot.
+#[test]
+fn test_reflection_property_public_metadata_and_raw_value_accessors() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectRawValueAccessTarget {
+    private int $count = 4;
+
+    public function count(): int { return $this->count; }
+}
+
+class ReflectRawHookAccessTarget {
+    public int $value {
+        get => $this->value * 10;
+        set { $this->value = $value + 1; }
+    }
+
+    public function __construct() { $this->value = 1; }
+}
+
+$target = new ReflectRawValueAccessTarget();
+$property = new ReflectionProperty(ReflectRawValueAccessTarget::class, "count");
+echo $property->class . ":" . $property->name . ":" . $property->getRawValue($target);
+$property->setRawValue($target, 8);
+echo ":" . $target->count();
+$property->setRawValueWithoutLazyInitialization($target, 12);
+echo ":" . $target->count();
+
+$hookedTarget = new ReflectRawHookAccessTarget();
+$hookedProperty = new ReflectionProperty(ReflectRawHookAccessTarget::class, "value");
+echo ":" . $hookedTarget->value . ":" . $hookedProperty->getRawValue($hookedTarget);
+$hookedProperty->setRawValue($hookedTarget, 4);
+echo ":" . $hookedTarget->value . ":" . $hookedProperty->getRawValue($hookedTarget);
+$hookedProperty->setRawValueWithoutLazyInitialization($hookedTarget, 5);
+echo ":" . $hookedTarget->value . ":" . $hookedProperty->getRawValue($hookedTarget);
+"#,
+    );
+    assert_eq!(
+        out,
+        "ReflectRawValueAccessTarget:count:4:8:12:20:2:40:4:50:5"
+    );
+}
+
 /// A known reflector with a runtime-shaped receiver must use ReflectionProperty's runtime method
 /// path instead of attaching a physical slot to a boxed Mixed operand.
 #[test]
@@ -559,4 +602,34 @@ echo ($plain->hasHooks() ? "bad" : "plain") . ":" . count($plain->getHooks());
         out,
         "2:get:Set:T:H:2:$doubled::get:$doubled::set:ReflectPropertyHookMetadataTarget:0:1:value:G:S:$doubled::get:$doubled::set:R:1:$readonlyHook::get:RG:RS:N:plain:0"
     );
+}
+
+/// `ReflectionProperty::getValue()`/`setValue()` reach private and protected properties, as php
+/// 8.1+ does without `setAccessible()`, when the reflector was built from a runtime name.
+///
+/// Those bodies read `$object->{$this->name}` with `ReflectionProperty` as their lexical class,
+/// which raised "Cannot access private property". Expected output is `php -n` 8.5's.
+#[test]
+fn test_reflection_property_runtime_name_reaches_non_public_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class RpBase { private int $hidden = 1; protected string $prot = 'p'; }
+class RpKid extends RpBase { private string $secret = 's'; }
+function rp(string $c, string $p): ReflectionProperty { return new ReflectionProperty($c, $p); }
+$k = new RpKid();
+$r = rp('RpKid', 'secret');
+echo $r->getValue($k);
+$r->setValue($k, 'changed');
+echo $r->getValue($k);
+$p = rp('RpKid', 'prot');
+echo $p->getValue($k);
+$p->setValue($k, 'q');
+echo $p->getValue($k);
+$h = new ReflectionProperty('RpBase', 'hidden');
+echo $h->getValue($k);
+$h->setValue($k, 5);
+echo $h->getValue($k), "\n";
+"#,
+    );
+    assert_eq!(out, "schangedpq15\n");
 }

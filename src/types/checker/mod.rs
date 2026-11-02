@@ -35,16 +35,34 @@ mod generic_method;
 mod generic_new;
 mod generic_variance;
 mod inference;
-mod loop_storage;
+#[cfg(test)]
+pub(crate) use inference::INTERFACE_IMPLEMENTATION_SIG_COPIES;
+pub(crate) mod loop_storage;
 mod method_pass;
 mod member_receivers;
 mod mixed_storage_scan;
 mod numeric_regions;
 mod packed_counter;
+
+#[cfg(test)]
+thread_local! {
+    /// Classes `propagate_constructor_arg_type` visited, so a test can pin its cost to the program
+    /// size: scanning every class per constructor argument is quadratic in the class count.
+    pub(crate) static SHARED_PROPERTY_CLASSES_VISITED: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    /// Owner classes `subtype_dispatch_owners` examined, so a test can pin its cost to the program
+    /// size: re-walking every declarer's parent chain per call site is quadratic.
+    pub(crate) static SUBTYPE_DISPATCH_OWNERS_EXAMINED: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+mod ref_param_widening;
 pub(crate) mod null_probe;
 mod schema;
 mod stmt_check;
 mod type_compat;
+#[cfg(test)]
+pub(crate) use type_compat::SUBCLASS_QUERIES;
 /// yield_validation
 pub(crate) mod yield_validation;
 
@@ -53,7 +71,7 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::Target;
 use crate::errors::CompileError;
 use crate::parser::ast::{
-    CallableTarget, Expr, ExprKind, Program, TypeExpr,
+    CallableTarget, Expr, ExprKind, Program, StmtKind, TypeExpr,
 };
 use crate::span::Span;
 use crate::types::{
@@ -64,17 +82,30 @@ use crate::types::{
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use loop_storage::loop_carried_storage_types;
+pub(crate) use functions::call_validation::is_call_result_argument;
 pub(crate) use inference::closure_body_uses_this;
+pub(crate) use type_compat::set_program_evaluates_code;
+pub(crate) use inference::php_declared_type_spelling;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 pub(crate) use schema::normalize_signature_default_receivers;
 pub(crate) use schema::normalize_lexical_callable_default;
 pub(crate) use builtin_types::REFLECTION_CLASS_NAMES;
+pub(crate) use builtin_types::{
+    reflection_virtual_property_backing_in, reflection_virtual_property_type_in,
+};
 use builtin_types::validate_magic_method_contracts;
 use schema::propagate_abstract_return_types;
 
 /// Checker carries program-wide type-checking state including function signatures,
 /// class/interface/enum definitions, variable environments, and warnings collected
 /// during type checking.
+/// Classes declaring each instance method name, for calls whose receiver is not a known class.
+pub(crate) struct MethodOwnerIndex {
+    /// `classes.len()` when the index was built; a different length means classes were added.
+    pub(crate) class_count: usize,
+    pub(crate) owners: crate::fast_hash::FastMap<String, std::sync::Arc<[String]>>,
+}
+
 pub(crate) struct Checker {
     /// Target platform for codegen (affects ABI, sizes, and platform checks).
     /// Full compilation target. `platform` drives OS constants; `apple_variant`
@@ -90,6 +121,17 @@ pub(crate) struct Checker {
     pub failed_variant_contracts: HashMap<String, CompileError>,
     /// Signatures whose body and return validation completed, rather than mere placeholders.
     pub completed_function_signatures: HashSet<String>,
+    /// Folded names of `fn_decls`, `function_variant_groups` and `extern_functions`, tagged with
+    /// the three table sizes they were folded from (the tables only grow). See
+    /// `has_function_decl_folded`.
+    pub(crate) folded_function_names:
+        std::cell::RefCell<((usize, usize, usize), crate::fast_hash::FastSet<String>)>,
+    /// Folded name -> canonical key of `functions`, `function_variant_groups` and `fn_decls`,
+    /// tagged with their sizes. Insertions change a size; the one removal (`functions`, in
+    /// `callables::first_class`) clears it. See `canonical_function_name_folded`.
+    pub(crate) canonical_function_names: std::cell::RefCell<
+        Option<((usize, usize, usize), [crate::fast_hash::FastMap<String, String>; 3])>,
+    >,
     /// Canonical function signatures indexed by fully-qualified name.
     pub functions: HashMap<String, FunctionSig>,
     /// Functions whose body is currently being checked.
@@ -97,6 +139,14 @@ pub(crate) struct Checker {
     /// Recursive calls may use their provisional signature, but must not re-specialize the same
     /// declaration while it is in flight.
     pub resolving_functions: HashSet<String>,
+    /// Parameter types a recursive self-call asked for while its function was in flight.
+    ///
+    /// `resolving_functions` stops such a call from re-specializing the declaration it is inside,
+    /// so without this the body was checked, and lowered, with the FIRST call's parameter types:
+    /// `function f($key) { $s = is_array($key) ? $key : explode('.', $key); ... f($s); }` kept
+    /// `$key` a string, and the recursive call converted its array to "Array" (Laravel's
+    /// `data_get()`/`data_forget()`). `resolve_function_signature` re-runs the body with them.
+    pub recursive_param_widenings: HashMap<String, Vec<(String, PhpType)>>,
     /// Functions a real call site invoked with an argument list.
     ///
     /// Membership in `functions` cannot answer this: a first-class callable reference (`h(...)`)
@@ -112,11 +162,21 @@ pub(crate) struct Checker {
     /// Tracks known callable signatures for variables holding first-class callables,
     /// keyed by variable name.
     pub callable_sigs: HashMap<String, FunctionSig>,
+    /// Callable signatures for closures stored in static properties, keyed `Class::$prop`.
+    ///
+    /// This map is program-wide rather than part of the per-body callable state: a static
+    /// property is one shared slot whose signature must remain visible across method bodies.
+    pub static_property_callable_sigs: HashMap<String, FunctionSig>,
     /// Tracks source-declared callable parameters in the active function body.
     pub callable_param_names: HashSet<String>,
     /// Tracks callable signatures inferred for user-function callable parameters,
     /// keyed by (function_name, param_name).
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// The signature each call site's argument gives a callable parameter, keyed like
+    /// `callable_param_sigs` and then by the argument's span. `callable_param_sigs` holds their
+    /// join, so one parameter reached by closures of different shapes is typed for all of them
+    /// instead of for whichever site was checked last.
+    pub callable_param_site_sigs: HashMap<(String, String), HashMap<crate::span::Span, FunctionSig>>,
     /// Whether the statement currently being checked was written in a file that opened with
     /// `declare(strict_types=1)`.
     ///
@@ -148,7 +208,8 @@ pub(crate) struct Checker {
     /// checked. That used to scan the whole class table once per method body (methods ×
     /// classes per pass). Implementation maps are only written while classes are registered,
     /// which also changes the table's size, so the length is a sound staleness check.
-    pub method_impl_users_index: Option<(usize, HashMap<(String, String, bool), Vec<String>>)>,
+    pub method_impl_users_index:
+        Option<(usize, crate::fast_hash::FastMap<(String, String, bool), Vec<String>>)>,
     /// The classes sharing each `(property, declaring class)` slot, plus the `classes.len()` it
     /// was built for; the same staleness rule as `method_impl_users_index`. A constructor
     /// argument retypes that slot in every class sharing it, which used to scan the whole class
@@ -231,6 +292,18 @@ pub(crate) struct Checker {
     /// file identity, so two same-named functions in two included files collide. That residue
     /// is a compile error naming both classes, not a choice between them.
     pub generic_new_sites: HashMap<(String, Span), std::collections::BTreeSet<String>>,
+    /// `(class, method key, is_static, parameter index)` for every undeclared parameter the LAST
+    /// method pass bound as `mixed` because no call site refined its `int` inference seed.
+    pub unspecialized_seed_params: HashSet<(String, String, bool, usize)>,
+    /// `(class, method key, is_static)` of undeclared-return methods whose own body was refused
+    /// while a call to THEMSELVES was still typed by the `int` return seed (`array_merge($r,
+    /// $this->walk(...))` inside `walk()`). Their self-recursive calls are typed `mixed`: the
+    /// return type is only inferred from a body that checks, and the body cannot check until the
+    /// recursive call has a type -- php resolves it at run time.
+    pub recursive_mixed_methods: HashSet<(String, String, bool)>,
+    /// Untyped method parameters the body tests with `instanceof`, keyed by (class, method key,
+    /// index): they stay `mixed` instead of taking the type of their call sites.
+    pub instanceof_tested_params: HashSet<(String, String, usize)>,
     /// Tracks callable signatures inferred for user-function callable returns.
     pub callable_return_sigs: HashMap<String, FunctionSig>,
     /// Tracks callable element signatures inferred for user-function array returns.
@@ -250,11 +323,31 @@ pub(crate) struct Checker {
     pub reflection_class_targets: HashMap<String, String>,
     /// Interface definitions collected during the first pass, keyed by canonical name.
     pub interfaces: HashMap<String, InterfaceInfo>,
+    /// Doc comments of user interface declarations, by declared name, for `InterfaceInfo`.
+    pub interface_doc_comments: HashMap<String, String>,
     /// Class definitions collected during the first pass, keyed by canonical name.
-    pub classes: HashMap<String, ClassInfo>,
+    pub classes: crate::fast_hash::FastMap<String, ClassInfo>,
+    /// `names_an_operator_class` over `classes`, with the table size it was computed for. Exact:
+    /// the checker only ever adds class names, so an unchanged size is an unchanged key set.
+    operator_classes: std::cell::Cell<Option<(usize, bool)>>,
+    /// Instance method name -> the classes declaring it, in `classes` iteration order, with the
+    /// `classes.len()` it was built at. See `method_owners_of`.
+    pub(crate) method_owners: std::cell::RefCell<Option<MethodOwnerIndex>>,
+    /// Instance-method owners compatible with a receiver type, keyed `(receiver, method)`, with the
+    /// `classes.len()` they were computed at. Which classes extend or implement a receiver is fixed
+    /// once the class table is built; asking again for every call site walked each owner's parent
+    /// chain. See `subtype_dispatch_owners`.
+    pub(crate) subtype_dispatch_cache: std::cell::RefCell<(usize, crate::fast_hash::FastMap<(String, String), std::sync::Arc<[String]>>)>,
     /// Canonical class names declared in the program, available for forward references
     /// before the full class definitions are available.
     pub declared_classes: HashSet<String>,
+    /// Declared parent classes, available before full `ClassInfo` construction.
+    ///
+    /// Override covariance may mention a sibling class whose metadata has not been built yet, so
+    /// nominal subtype checks must not depend on lexicographic class-processing order.
+    pub declared_class_parents: HashMap<String, Option<String>>,
+    /// Directly declared interfaces for each class, available before full metadata construction.
+    pub declared_class_interfaces: HashMap<String, Vec<String>>,
     /// Canonical names of the classes declared by compiler-generated statements (an injected
     /// prelude, `SourceMode::Internal`). Together with the builtins that have no source span,
     /// these are the classes `ClassInfo::is_internal` marks as elephc's own.
@@ -267,6 +360,11 @@ pub(crate) struct Checker {
     /// Canonical trait names declared in the program, available for reflection
     /// and class-like metadata probes that accept traits.
     pub declared_traits: HashSet<String>,
+    /// Nominal types introduced only by unresolved catch clauses.
+    ///
+    /// PHP guarantees that a value reaching such a clause implements `Throwable`, even though
+    /// the absent declaration must not be installed in the runtime class registry.
+    pub unresolved_catch_types: HashSet<String>,
     /// Reflection-visible method signatures declared directly on each trait.
     pub declared_trait_methods: HashMap<String, HashMap<String, FunctionSig>>,
     /// Reflection-visible class constant names declared directly on each trait.
@@ -295,6 +393,16 @@ pub(crate) struct Checker {
     /// depth means `$this` is allowed even outside a class method: such a
     /// closure can be bound to an object later via `Closure::bind` / `bindTo`.
     pub closure_depth: usize,
+    /// The single class a closure literal is being bound to by `Closure::bind($closure, $object)`
+    /// while that literal is type-checked, when the object's class is statically known.
+    ///
+    /// A by-reference closure returning `$this->prop` promotes the property it names. With no
+    /// receiver known it must promote it on EVERY class declaring that name, and each of those
+    /// classes then stores the property in an owned reference cell the runtime object walkers
+    /// (`(array)`, `var_export`, `get_object_vars`, the polyfill DeepClone) do not read through.
+    /// Symfony's `KernelTrait` binds `fn &() => $this->instanceof` to a `PhpFileLoader` and
+    /// thereby turned `Definition::$instanceof` into such a cell for every container definition.
+    pub closure_bound_this_class: Option<String>,
     /// Extern function declarations (e.g. `extern "C" { function foo(): void; }`).
     pub extern_functions: HashMap<String, ExternFunctionSig>,
     /// Extern class (C struct) declarations keyed by canonical name.
@@ -316,6 +424,12 @@ pub(crate) struct Checker {
     pub top_level_env: TypeEnv,
     /// Names that are by-ref parameters in the current function/closure scope.
     pub active_ref_params: HashSet<String>,
+    /// The by-reference PARAMETERS of the current body that carry no type declaration.
+    ///
+    /// Unlike `active_ref_params`, which `$x = &$y` also joins, this names parameters only. Such a
+    /// parameter's cell is `mixed`: its declared type is `mixed`, and the caller boxes its
+    /// argument from the callee's effective parameter type. See `merge_local_assignment_type`.
+    pub untyped_ref_params: HashSet<String>,
     /// Active incoming by-reference parameters and captures whose storage is owned outside this frame.
     ///
     /// `active_ref_params` additionally accumulates local `=&` targets while checking the body,
@@ -334,6 +448,9 @@ pub(crate) struct Checker {
     pub program_global_names: HashSet<String>,
     /// Names introduced via `static` declarations in the current local scope.
     pub active_statics: HashSet<String>,
+    /// The `active_statics` whose declaration left them `Mixed` (`static $x = null;`): their cell
+    /// is boxed for the whole body, so every store keeps the name `Mixed`.
+    pub mixed_static_locals: HashSet<String>,
     /// Names bound as `foreach` loop keys in the current function/closure scope.
     /// A foreach key is a boxed `Mixed` cell at runtime (`Op::IterCurrentKey`)
     /// even when the checker types it as `Int`/`Str` from the source array, so an
@@ -363,6 +480,38 @@ pub(crate) struct Checker {
     /// Once set, unknown local reads are treated as dynamic `Mixed` values because
     /// eval fragments can create caller-scope variables at runtime.
     pub eval_barrier_active: bool,
+    /// Whether this PROGRAM can bring a class into existence at run time, so a name the walk
+    /// cannot resolve must be deferred to runtime resolution instead of refused.
+    ///
+    /// PROGRAM-WIDE AND POINT-IN-TIME-FREE, which is the whole reason it is not
+    /// `eval_barrier_active`. That flag is set only once the walk has PASSED a literal `eval()`
+    /// call (`inference::expr::effects` is its sole writer), and neither of the two routes this
+    /// records is an `eval` call at all: an `include`/`require` whose path is not a literal, and
+    /// a registered autoloader. Both make classes appear that no static walk can see, and both
+    /// can sit textually BELOW the `new` that needs them — `spl_autoload_register` at the top of
+    /// a bootstrap and the `new` in a function called later is the ordinary Symfony shape.
+    ///
+    /// Filled once in `check_types_impl`, before the first walk, from the same
+    /// `prelude_prune::usage` scan the builtin-class gates read.
+    ///
+    /// THE FAILURE THIS FIXES IS A REFUSED COMPILE, not a miscompile. `php -n` 8.5.6 exits 0 on
+    /// both reducers; elephc reported `Undefined class: MadeByLoader` and
+    /// `ReflectionClass::__construct(): undefined class 'S1Plain'` at TYPE CHECK. Lowering was
+    /// always ready for this: `ir_lower::stmt::includes::lower_include` calls
+    /// `ctx.apply_eval_barrier()`, so `ir_lower::expr::object_construction` already lowers a
+    /// `new` of an unknown class to `Op::EvalObjectNew`, which resolves the name at run time
+    /// through the bridge. Only the checker stood in the way.
+    ///
+    /// DEFERRING IS NOT ACCEPTING. A name nothing supplies still has to fail, and it fails where
+    /// PHP fails it — at run time, with the catchable `Error` reading `Class "X" not found`,
+    /// which `interpreter::expressions::evaluation::eval_new_object_result` raises after the
+    /// autoload chain comes back empty.
+    pub program_defers_unknown_classes: bool,
+    /// Whether interpreted code can call into this program: it runs `eval()`, includes a file
+    /// chosen at run time, or registers an autoloader. Code the compiler never sees may then call
+    /// any public method with any argument, so facts drawn from the compiled call sites alone do
+    /// not describe every caller.
+    pub program_has_interpreted_callers: bool,
     /// Whether any checked `eval()` can select an AOT callable through the runtime registry.
     ///
     /// Function resolution can encounter eval while the selected function itself is still in
@@ -378,7 +527,16 @@ pub(crate) struct Checker {
     /// would be applied to returns that execute before it, silently accepting a nullable
     /// return. The address key is exact because both passes borrow the same immutable AST; the
     /// span is carried alongside so a recycled address can never be mistaken for a hit.
-    pub flow_typed_returns: HashMap<usize, (Span, PhpType)>,
+    pub flow_typed_returns: HashMap<(String, usize), (Span, PhpType)>,
+    /// Return types widened so every untyped member of an override family returns in one
+    /// storage, keyed by (class, method key, is static). See
+    /// `Checker::unify_override_family_return_types`.
+    pub(crate) family_return_widenings: HashMap<(String, String, bool), PhpType>,
+    /// Checker-proven result types for property reads whose receiver was flow-narrowed.
+    ///
+    /// EIR lowering cannot reconstruct synthetic property facts from statement-local checker
+    /// environments, so these scoped source sites preserve the required storage representation.
+    pub flow_typed_property_accesses: HashMap<(String, Span), PhpType>,
     /// Whether the statements being checked belong to the top-level (global) scope rather than a
     /// function, method, or closure body. `with_local_storage_context` clears it for every local
     /// scope, so `null_probe` only records deferred roots for the scope whose environment
@@ -403,20 +561,51 @@ pub(crate) struct Checker {
     pub null_probe_depth: usize,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
+    /// One frame per enclosing `break` target (loop or `switch`), innermost last, holding the
+    /// environment every `break` that leaves THAT construct carried out of it.
+    ///
+    /// A `break` is an exit edge of its target, and the environment after the construct has to
+    /// join it: `$n = count($m); foreach ($m as $v) { if ($v) { $n = $m; break; } }` leaves
+    /// `$n` an `int` OR an `array`, but the `if` join drops the arm that breaks (it does not fall
+    /// through) and the loop resumed from the fallthrough environment alone -- `int`. Every
+    /// caller was then compiled against a return type that claimed `int` for what was a boxed
+    /// array; Symfony's DeepClone polyfill does exactly this, and each container rebuild read a
+    /// pointer as `array_fill()`'s count.
+    pub loop_break_envs: Vec<Vec<TypeEnv>>,
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,
     /// used to restore correct depth when branching through `finally`.
     pub finally_break_continue_bases: Vec<usize>,
     /// Stable function-like scope key used to disambiguate identical loop spans.
     pub current_loop_storage_scope: String,
+    /// `(scope, receiver key, method key)` triples a `method_exists()` call has tested in a body.
+    ///
+    /// A body that asks whether a method is there has declared that it does not know, so a call
+    /// the closed world cannot resolve is admitted and left to fault at run time the way PHP does
+    /// — see `infer_lenient_subtype_method_call`. Keyed by scope so one body's uncertainty never
+    /// admits another's typo.
+    pub method_exists_guards: std::collections::HashSet<(String, String, String)>,
+    /// Explicit local type declarations keyed by function-like scope and variable name.
+    /// Ordinary PHP locals may change type after any assignment; only this extension syntax
+    /// keeps a declaration contract across later writes.
+    pub declared_local_types: HashMap<(String, String), PhpType>,
     /// Warnings raised during type checking (e.g. `#[\Deprecated]` call sites).
     /// Merged with AST-only warnings from `collect_warnings` before being returned
     /// in `CheckResult`.
     pub warnings: Vec<crate::errors::CompileWarning>,
+    /// Latest foreach diagnostic per body/site. Method return seeds can look scalar on an
+    /// early walk, so a later walk of the same site must replace that provisional answer.
+    /// The optional function owner also identifies loops inside its nested closures.
+    pub foreach_warnings: HashMap<(String, Span), (Option<String>, crate::errors::CompileWarning)>,
     /// `(class, property)` pairs for regular properties that had a reference taken
     /// (`$x = &$obj->prop`, by-reference return of `$obj->prop`). Recorded while
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
+    /// `(target class, target property, source class, source property, span)` for every
+    /// `$a->p =& $b->q` between declared properties. Both slots then share ONE cell, so their
+    /// payload representations have to agree; `validate_reference_property_bindings` checks that
+    /// once the class table has settled.
+    pub reference_property_bindings: Vec<(String, String, String, String, crate::span::Span)>,
     /// Classes a two-argument `clone()` in this program can hand an override array to.
     ///
     /// Recorded by the `clone` builtin's check hook, and applied to `classes` after checking by
@@ -436,17 +625,22 @@ pub(crate) struct Checker {
     /// every declared slot, while a strict ancestor's private name becomes a distinct dynamic
     /// property outside its declaring scope. Both need per-instance hash storage.
     pub scope_dynamic_mutation_targets: scope_dynamic_storage::ScopeDynamicMutationTargets,
-    /// Statically-decided access violations that must lower to a catchable
-    /// `Error` throw instead of a compile-time error, keyed by source span.
+    /// Statically-decided access violations that must lower to a catchable `Error` throw instead
+    /// of a compile-time error, keyed by function-like scope and source span.
     ///
-    /// Record through `record_throw_access_site`, which refuses a span that cannot identify
-    /// one: lowering looks entries up by the span of the node it is lowering, so a key shared
-    /// by many nodes makes all of them throw. See that method for why the preludes make this
-    /// reachable rather than theoretical.
-    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
-    /// Authoritative result type of each checked builtin call, keyed by call span.
+    /// Record through `record_throw_access_site`, which refuses a span that cannot identify one:
+    /// lowering looks entries up by the scope and span of the node it is lowering, so a span
+    /// shared by many nodes makes all of them throw. See that function for why the preludes make
+    /// this reachable rather than theoretical.
+    pub throw_access_sites: HashMap<(String, Span), ThrowAccessInfo>,
+    /// One-based position of the regular parameter the argument being bound fills, or zero when
+    /// unknown. Set by the call validators around each bind so a definite mismatch can name
+    /// `Argument #N` when it is deferred to a run-time `TypeError`.
+    pub(crate) binding_position: usize,
+    /// Authoritative result type of each checked builtin call, keyed by function-like scope and
+    /// call span so separately loaded sources may reuse the same line and column safely.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
-    pub builtin_call_types: HashMap<Span, PhpType>,
+    pub builtin_call_types: HashMap<(String, Span), PhpType>,
     /// Closure literals whose checked source bodies contain yield, keyed by source identity.
     pub closure_generator_spans: HashSet<Span>,
     /// Native property reference plans retain checker facts across opaque argument effects.
@@ -482,8 +676,68 @@ pub(crate) struct Checker {
     /// lowering must give those locals boxed `Mixed` frame storage from their FIRST store
     /// instead of widening the slot at the increment. Recorded here because the checker
     /// already visits every expression with a typed environment, so no second AST walk is
-    /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
+    /// needed. See `crate::ir_lower::context::LoweringContext::required_local_storage_type`.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// Checker-selected boxed storage contracts for caller locals passed through
+    /// source-declared by-reference parameters whose writable type is represented as `Mixed`.
+    pub by_ref_local_storage_types: HashMap<(String, String), PhpType>,
+    /// Lowercase bare names of functions and methods with a by-reference parameter that a
+    /// closure binds by reference (directly or through forwarding), so the cell may outlive the
+    /// call. See `Checker::scan_widened_ref_params`.
+    pub ref_param_escaping_callees: HashSet<String>,
+    /// `(folded callee scope, parameter)` for by-reference parameters some body binds a property
+    /// to (`$this->p = &$param`), directly or by forwarding. See `binds_property_to_ref_param`.
+    pub property_bound_ref_params: HashSet<(String, String)>,
+    /// `(caller scope, argument span)` of every local passed to such a parameter: lowering gives
+    /// that local a managed cell the property can keep.
+    pub property_bound_promotion_sites: HashSet<(String, Span)>,
+    /// Spans of call results passed to a by-reference parameter (`f(g())`): php binds a
+    /// temporary and raises "Only variables should be passed by reference", which lowering
+    /// emits after evaluating the argument.
+    pub by_ref_call_result_sites: HashSet<Span>,
+    /// Binary and unary operations typed as a `BcMath\Number` operator overload; the lowering
+    /// rewrites exactly these into the prelude's helper calls (`bcmath_number_prelude`).
+    pub bcmath_operator_sites: HashSet<Span>,
+    /// By-reference `foreach` walks of a `stdClass` the checker checked as their property-name
+    /// loop; the lowering lowers exactly these the same way (`stdclass_by_ref_walk`).
+    pub stdclass_by_ref_walk_sites: HashSet<Span>,
+    /// Names some `define()` call creates, as the call spells them without a leading `\`.
+    ///
+    /// Whether such a constant exists is a RUNTIME fact -- the call may sit in a branch, a
+    /// function, or a file a request never reaches -- so `defined()` on one of these names reads
+    /// the define's own flag instead of folding, and a `--web` request clears the flags.
+    pub runtime_define_names: HashSet<String>,
+    /// Constant names the program reads that nothing declares or `define()`s, without a leading
+    /// `\`. php compiles such a read and throws `Error: Undefined constant "X"` when it runs, so
+    /// the checker types it `mixed`, warns, and lowering emits the runtime lookup that throws.
+    pub undefined_constant_reads: HashSet<String>,
+    /// DECLARED by-reference parameters whose own body stores a value the declaration cannot
+    /// represent, as `(body scope key, parameter name)`.
+    ///
+    /// PHP's reference cell is untyped — a declared `int &$i` gates what may be BOUND to it, not
+    /// what the body may later store through it — so such a parameter needs one boxed cell, and
+    /// the callee's cell IS the caller's slot. Computed once by
+    /// [`Checker::scan_widened_ref_params`] over EVERY body, because the walk order does not
+    /// guarantee a callee is checked before its callers, and read by the callee's environment
+    /// seeding and by every call site's argument storage.
+    pub widened_ref_params: HashSet<(String, String)>,
+    /// The same decisions under the DECLARATION's own spelling, in discovery order.
+    ///
+    /// `widened_ref_params` folds its keys so a call site's spelling of the callee matches; this
+    /// keeps the exact one, which is what
+    /// [`Checker::publish_widened_ref_param_signatures`] needs to find the signature to rewrite
+    /// and what EIR lowering builds when it declares the callee's own parameter slot.
+    pub widened_ref_param_decls: Vec<(String, String)>,
+    /// String suffixes known for locals in a function-like scope.
+    ///
+    /// A binding such as `$property = $type.'Passes'` records `"Passes"`. Dynamic property
+    /// reference checking uses that constraint to select only representation-compatible slots.
+    pub string_suffix_locals: HashMap<(String, String), String>,
+    /// Checker-proven types for locals introduced by dynamic property reference binds.
+    pub dynamic_ref_local_types: HashMap<(String, String), PhpType>,
+    /// Mirrors `CheckOptions::lint`: emit the PHP-divergent notices (unused variables,
+    /// unreachable code, permissive local retypes) while this check runs.
+    pub lint_warnings: bool,
     /// Mirrors `CheckOptions::strict_locals` for the duration of the check. When set, the
     /// permissive local-retype path in `merge_local_assignment_type` and the branch-divergent
     /// `Mixed`-storage marking in `mixed_storage_scan::run_mixed_storage_scan` both step aside
@@ -540,6 +794,36 @@ pub(crate) struct Checker {
     pub ref_assign_aliased_locals: HashSet<String>,
     /// Earlier by-reference captures whose native element layout a later push must preserve.
     pub array_push_capture_sites: HashMap<String, HashSet<Span>>,
+    /// The subset of [`Checker::ref_aliased_locals`] whose HOME stops being an ordinary frame
+    /// slot: EIR lowering binds these names to a shared reference cell
+    /// (`LoweringContext::mark_ref_bound_local`), so a store through the name writes the cell at
+    /// the CELL's representation and `store_local` deliberately refuses to widen the slot.
+    ///
+    /// That is the difference the widening eligibility turns on, and the full aliased set cannot
+    /// express it. A `=&` target or source, a `use (&$x)` capture, and both names a
+    /// `foreach ($arr as &$v)` touches all keep a lasting alias — the cell outlives the statement
+    /// that made it — while a variable merely handed to a by-reference PARAMETER lends its slot
+    /// address for the duration of one call and keeps its own frame storage afterwards
+    /// (`ir_lower::expr::ref_place_args` already adapts a boxed caller slot to a declared
+    /// parameter representation and writes the result back). `sort($c); … $c = 'x';` is that
+    /// shape, and it is `array_shift`, `array_pop`, `array_splice`, `preg_match_all`'s out
+    /// parameter and `uksort` in the stock fixture.
+    ///
+    /// The KILL keeps consulting the full set: abandoning a slot strands a reference that
+    /// escaped through the callee, which a lend cannot be proven not to do.
+    pub ref_bound_locals: HashSet<String>,
+    /// Names ref-bound by a `use (&$x)` capture whose closure body WRITES them.
+    ///
+    /// A subset of [`Checker::ref_bound_locals`], tracked separately because lowering treats it
+    /// differently: `expr::closures` sets such a capture's cell to `Mixed` on the spot, since a
+    /// PHP reference has no type and the cell must hold whatever the closure stores through it.
+    /// The slot is therefore already boxed, and a straight-line retype of the name has nothing
+    /// left to break — which is why [`Checker::local_binding_is_widenable`] admits it.
+    ///
+    /// Names this does NOT contain: the recursive self-binding `$f = function () use (&$f) {…}`,
+    /// whose capture lowering gives the backing cell's own representation instead of `Mixed`, and
+    /// any name a `=&` or a by-reference `foreach` also binds — those sites remove it.
+    pub by_ref_capture_boxed_locals: HashSet<String>,
     /// Current local bindings that alias a managed container entry whose physical cell payload
     /// is canonical boxed `Mixed`, even when the checker's logical value type is narrower.
     pub boxed_ref_aliased_locals: HashSet<String>,
@@ -632,6 +916,26 @@ pub(crate) struct Checker {
     /// be authoritative rather than merely initial. Per-body, like every other field in
     /// [`SavedLocalBindingScope`].
     pub mixed_storage_locals: HashSet<String>,
+    /// Names of the CURRENT body's locals whose frame slot became boxed `Mixed` because an
+    /// assignment RETYPED them, as opposed to the syntactic pre-scan's `mixed_storage_locals`.
+    ///
+    /// The two sets exist for the same reason and are consulted differently. A pre-scan mark makes
+    /// `Mixed` the only type the environment may hold for the name, so nothing can narrow it away.
+    /// A retype cannot do that: `$e = $this; while ($e = $e->getP())` binds `$e` to `N|null`, whose
+    /// `codegen_repr` is the boxed cell the slot really holds, and the environment must keep that
+    /// PHP type — it is what reports `$e->noSuchMethod()`. What flow narrowing then does to it is
+    /// correct as a PHP type and WRONG as a representation: the loop body narrows `$e` to `N`,
+    /// whose repr is a raw object pointer, while the slot still holds a cell.
+    ///
+    /// Nothing that only reads the value cares. What cares is a write that STORES the value into a
+    /// container, because the container's element type is a representation and the lowering reads
+    /// the slot: `$out[] = $e` typed the element `N` in the checker and stored a boxed cell,
+    /// leaving the callee returning `array<mixed>` while every CALLER was compiled against
+    /// `array<N>` (see `Checker::stored_element_type`).
+    ///
+    /// Per-body, like every other field in [`SavedLocalBindingScope`]: a name boxed in the caller
+    /// says nothing about a same-named local in the callee.
+    pub retyped_boxed_storage_locals: HashSet<String>,
     /// Union storage contracts retained while guards narrow reads of a local in the current body.
     pub guarded_union_types: HashMap<String, PhpType>,
     /// Every statement-form assignment to a mixed-storage local, as span -> the SET of local names
@@ -687,6 +991,15 @@ pub(crate) struct Checker {
     /// while the checker still types the local `Mixed`. That disagreement panicked the compiler
     /// (`strlen cannot lower checked operand type Int`) on valid PHP.
     pub retired_mixed_storage_store_sites: HashSet<(Span, String)>,
+    /// Whether any class can become a userspace stream filter: the program references
+    /// `stream_filter_register` (`program_may_register_user_filter`). Without it, a class method
+    /// named `filter`, `onCreate` or `onClose` is an ordinary method, not the runtime's raw-ABI
+    /// filter contract; `PhpOption\Some::filter($callable)` kept the contract's `int` seed and
+    /// refused `$callable(...)`.
+    pub user_filters_reachable: bool,
+    /// The classes `stream_filter_register()` names, case-folded; `None` when a call names one at
+    /// run time (`builtin_class_gate::user_filter_registered_classes`).
+    pub user_filter_registered: Option<HashSet<String>>,
 }
 
 /// The per-body local-binding eligibility state, saved while a nested body is checked.
@@ -702,6 +1015,8 @@ pub(crate) struct SavedLocalBindingScope {
     non_builtin_ref_aliased: HashSet<String>,
     ref_assign_aliased: HashSet<String>,
     array_push_capture_sites: HashMap<String, HashSet<Span>>,
+    ref_bound: HashSet<String>,
+    by_ref_capture_boxed: HashSet<String>,
     boxed_ref_aliased: HashSet<String>,
     boxed_ref_invalidations: Vec<HashSet<String>>,
     statics: HashSet<String>,
@@ -709,6 +1024,7 @@ pub(crate) struct SavedLocalBindingScope {
     boxed_parameters: HashSet<String>,
     typed: HashMap<String, PhpType>,
     mixed_storage: HashSet<String>,
+    retyped_boxed_storage: HashSet<String>,
     guarded_unions: HashMap<String, PhpType>,
     contains_eval: bool,
     numeric_regions: HashMap<Span, HashSet<String>>,
@@ -756,6 +1072,42 @@ pub(crate) struct SavedNarrowingOrigin {
 }
 
 impl Checker {
+    /// Returns whether the call at `span` was typed as a builtin call.
+    ///
+    /// `builtin_call_types` is keyed by the loop-storage scope as well, so the same span can be
+    /// recorded once per closure specialization; whether a call is a builtin does not depend on
+    /// which one. The current scope is the common hit.
+    pub(crate) fn is_recorded_builtin_call(&self, span: crate::span::Span) -> bool {
+        self.builtin_call_types
+            .contains_key(&(self.current_loop_storage_scope.clone(), span))
+            || self.builtin_call_types.keys().any(|(_, recorded)| *recorded == span)
+    }
+
+    /// Returns whether a reflected class name the checker cannot see may still exist at run time.
+    ///
+    /// [`Checker::program_defers_unknown_classes`] covers a runtime include or an autoloader,
+    /// wherever they sit; `eval_barrier_active` covers a literal `eval()` already passed, whose
+    /// text can declare the class (`eval('class Signer {...}'); new ReflectionClass('Signer')`
+    /// was a compile error where `php -n` runs it).
+    pub(crate) fn reflection_defers_unknown_classes(&self) -> bool {
+        self.program_defers_unknown_classes || self.eval_barrier_active
+    }
+
+    /// Returns whether unresolved class names may be deferred to PHP's runtime `Error` path.
+    ///
+    /// Function, method, and closure bodies can contain optional-extension code that is never
+    /// reached. Top-level fixed construction remains a compile-time diagnostic for compatibility.
+    ///
+    /// The third clause is the one that covers a class only a RUNTIME INCLUDE or a registered
+    /// autoloader can supply — see [`Checker::program_defers_unknown_classes`]. It is program-wide
+    /// rather than point-in-time because both of its routes can sit textually below the `new` that
+    /// needs them, which is exactly the case `eval_barrier_active` cannot express.
+    pub(crate) fn allows_absent_runtime_class(&self) -> bool {
+        !self.null_probe_scope_is_top_level
+            || self.eval_barrier_active
+            || self.program_defers_unknown_classes
+    }
+
     /// True when `name`'s current binding may be killed (by `unset`) or re-bound to an
     /// incompatible type (by assignment) at the current program point. See
     /// `docs/php/types.md`, Local retyping: the depth-0 and non-aliased rule.
@@ -805,6 +1157,88 @@ impl Checker {
             && !self.active_globals.contains(name)
             && !self.static_local_names.contains(name)
             && !self.typed_local_names.contains_key(name)
+    }
+
+    /// True when `name`'s binding may simply TAKE a type it cannot merge with, leaving its frame
+    /// slot in place for `store_local` to widen — the storage path every incompatible reassignment
+    /// used before precise re-binds existed.
+    ///
+    /// PHP has no illegal local reassignment. `function f(int $a) { $a = "s"; … }` — a write to a
+    /// TYPE-HINTED parameter — is ordinary code that `php -n` runs, and so is a write to a
+    /// `foreach`/`list()`/`catch` name the body never assigned through `check_assign`. Both are
+    /// refused by [`Checker::local_binding_is_killable`], which answers the strictly harder
+    /// question — may the old frame slot be ABANDONED, so the store mints a fresh one. Widening
+    /// does not abandon anything: the slot stays and `store_local` joins its storage type.
+    ///
+    /// THREE of the kill's conditions are dropped, and only those three:
+    ///
+    /// - the BINDING's conditional depth, which the kill reads as `Some(0)`. That test answers
+    ///   "bound unconditionally by this body" and rejects two different things at once: a binding
+    ///   created inside a branch, and a name with NO entry at all. A missing entry is deliberate
+    ///   for every name a conditional group INTRODUCES without an assignment — a `foreach` or
+    ///   `list()` target, a `catch` variable, a builtin out-parameter — because the kill cannot
+    ///   tell it apart from depth ≥ 1 and sweeping them in was measurably expensive. Widening CAN
+    ///   tell them apart, and asks the question it actually cares about instead:
+    ///   [`Checker::name_is_seeded_program_storage`], the enumerated set of names whose storage is
+    ///   not this frame's (superglobals everywhere, `$argc`/`$argv` and extern C globals at top
+    ///   level). A `catch` variable is an ordinary frame slot and widens; `$_SERVER` is not and
+    ///   does not;
+    /// - the typed-local set, which at this point holds type-hinted PARAMETERS (a declared LOCAL
+    ///   returns from the `declared_local_types` arm above before reaching here). A parameter's
+    ///   type hint is a call-boundary contract, not a storage contract for the rest of the body;
+    /// - the CURRENT conditional depth, which the kill needs because a kill must PROVE the store
+    ///   runs before it may abandon a slot, and a widening proves nothing: it keeps the slot and
+    ///   lets `store_local` widen it, which is sound whether or not the branch is taken.
+    ///   `if (\is_string($extensions)) { $extensions = [$extensions]; }` — Symfony's
+    ///   `Filesystem\Path::getExtension` — is the shape, and it is the single most common one in
+    ///   real code: on the stock fixture the depth condition alone accounted for 208 of the 234
+    ///   `cannot reassign` errors.
+    ///
+    ///   Dropping it was gated on lowering, not on the checker. A store inside a branch widens the
+    ///   local's FRAME slot, and until `join_arm_types` learned to join the merge through that
+    ///   widened slot, the code below the branch was lowered against the untaken arm's type:
+    ///   `$i = \strlen('ab'); if ($argc > 0) { $i = 'si'; } echo $i;` printed `0` (an `int` load of
+    ///   a boxed slot holding a string) instead of `si`. That is fixed in the `if` join itself,
+    ///   where a switch's edges have always been joined; measured against `php -n`, byte-identical.
+    ///
+    /// - the LENT half of the reference-aliased set. `ref_aliased_locals` answers "a reference
+    ///   reached this name", which is what the kill needs: abandoning a slot strands a reference
+    ///   that escaped through a callee. Widening asks a narrower question — is the name's HOME
+    ///   still an ordinary frame slot this frame may re-represent? — and the answer differs
+    ///   between the two halves of that set. A `=&` alias, a `use (&$x)` capture and a
+    ///   `foreach ($arr as &$v)` all leave a cell alive after the statement, and lowering
+    ///   ref-binds the name so `store_local` refuses to widen the slot at all; widening in the
+    ///   checker alone would degrade to a store through the cell at the CELL's representation,
+    ///   which is a miscompile rather than a diagnostic. A variable merely handed to a
+    ///   by-reference PARAMETER lends its slot address for one call and keeps its own frame
+    ///   storage afterwards, so it widens like any other local — `sort($c); … $c = 'x';` and the
+    ///   `array_shift` / `array_pop` / `array_splice` / `preg_match_all` / `uksort` shapes it
+    ///   stands for. [`Checker::ref_bound_locals`] is the narrower set this reads;
+    /// - the EVAL-body flag, for the reason [`Checker::local_binding_is_killable`]'s own doc
+    ///   already gives for exempting the `Mixed`-storage marking. The kill needs it because ending
+    ///   a binding DROPS the name's frame slot and mints a fresh one, while the eval scope
+    ///   addresses caller locals BY NAME — the fragment then reads or writes a slot the rest of
+    ///   the body no longer uses, which is why all three repros there printed nothing. A widening
+    ///   drops nothing: it keeps the slot and lets `store_local` box it, which is the
+    ///   representation the eval scope wants anyway. `ContainerBuilder::createService` is the
+    ///   shape — one `eval()` at its line 1129 made `$factory = fn (…) => …` 36 lines below it a
+    ///   hard error. Measured against `php -n` and byte-identical: the widening before the eval
+    ///   with and without a refused `unset` between them, the eval before the widening, a fragment
+    ///   that WRITES the name on either side of it, and a widening inside a branch.
+    ///
+    /// Everything else the kill demands is kept, plus the program-global veto the kill applies
+    /// separately: a by-reference parameter, a `=&` alias, a `global` write through a cell another
+    /// body owns and a `static` whose storage outlives the call all stay hard errors rather than
+    /// becoming a silent widening of storage this frame does not own. `--strict-locals` still
+    /// rejects every one of these shapes, at every depth.
+    pub(crate) fn local_binding_is_widenable(&self, name: &str) -> bool {
+        !self.name_is_seeded_program_storage(name)
+            && !self.top_level_binding_is_program_global(name)
+            && !self.active_ref_params.contains(name)
+            && (!self.ref_bound_locals.contains(name)
+                || self.by_ref_capture_boxed_locals.contains(name))
+            && !self.active_globals.contains(name)
+            && !self.static_local_names.contains(name)
     }
 
     /// Authorizes reference-binding detachment outside conditional flow and name-addressed storage.
@@ -906,6 +1340,8 @@ impl Checker {
             ),
             ref_assign_aliased: std::mem::take(&mut self.ref_assign_aliased_locals),
             array_push_capture_sites: std::mem::take(&mut self.array_push_capture_sites),
+            ref_bound: std::mem::take(&mut self.ref_bound_locals),
+            by_ref_capture_boxed: std::mem::take(&mut self.by_ref_capture_boxed_locals),
             boxed_ref_aliased: std::mem::take(&mut self.boxed_ref_aliased_locals),
             boxed_ref_invalidations: std::mem::take(
                 &mut self.conditional_boxed_ref_invalidations,
@@ -918,6 +1354,10 @@ impl Checker {
             // nothing about a same-named local in the callee, and leaking the set inward would
             // box a callee local the pre-scan never marked.
             mixed_storage: std::mem::take(&mut self.mixed_storage_locals),
+            // Boxed by a RETYPE in the enclosing body, which describes that frame's slot and no
+            // other — leaking it inward would type a callee's container element `Mixed` on the
+            // strength of a caller local that merely shares the name.
+            retyped_boxed_storage: std::mem::take(&mut self.retyped_boxed_storage_locals),
             guarded_unions: std::mem::take(&mut self.guarded_union_types),
             contains_eval: self.body_contains_eval,
             numeric_regions: std::mem::take(&mut self.numeric_region_sites),
@@ -946,6 +1386,8 @@ impl Checker {
         self.non_builtin_ref_aliased_locals = saved.non_builtin_ref_aliased;
         self.ref_assign_aliased_locals = saved.ref_assign_aliased;
         self.array_push_capture_sites = saved.array_push_capture_sites;
+        self.ref_bound_locals = saved.ref_bound;
+        self.by_ref_capture_boxed_locals = saved.by_ref_capture_boxed;
         self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
         self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;
         self.static_local_names = saved.statics;
@@ -953,11 +1395,46 @@ impl Checker {
         self.boxed_parameter_locals = saved.boxed_parameters;
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
+        self.retyped_boxed_storage_locals = saved.retyped_boxed_storage;
         self.guarded_union_types = saved.guarded_unions;
         self.body_contains_eval = saved.contains_eval;
         self.numeric_region_sites = saved.numeric_regions;
         self.numeric_region_retypes = saved.numeric_region_retypes;
         self.numeric_region_dependents = saved.numeric_region_dependents;
+    }
+
+    /// Returns the element type an array element WRITE contributes when it stores `value`.
+    ///
+    /// `inferred` is what the value's expression means as a PHP type; the answer is what its slot
+    /// HOLDS. The two differ for exactly one shape — a plain read of a local whose slot a retype
+    /// boxed (`retyped_boxed_storage_locals`) and which flow narrowing has since re-typed to
+    /// something with a concrete representation. `$out[] = $e` inside
+    /// `$e = $this; while ($e = $e->getP()) { … }` is that shape: `$e` is honestly `N` there, and
+    /// the value the store moves is honestly a boxed cell.
+    ///
+    /// The element type of an array is a REPRESENTATION — it decides the slot width, the header's
+    /// value-type stamp and which runtime helper reads the payload — so it has to be answered from
+    /// the storage. Answering it from the narrowed type left the checker's array type `array<N>`
+    /// while the EIR lowering, which reads the same slot and cannot see the narrowing, ran
+    /// `__rt_array_to_mixed` and returned `array<mixed>`. That disagreement does not stay inside
+    /// the body: the method's inferred return type is what every CALLER is compiled against, so a
+    /// caller read raw object pointers out of an array of cells. `foreach` faulted; `array_pop`,
+    /// `array_shift`, `array_map`, `array_filter`, `array_merge`, a by-reference `foreach` and an
+    /// append followed by a read all answered SILENTLY wrong (see the `locals_retype` fixtures).
+    ///
+    /// Only ever widens, and only to `Mixed` — the one representation that can hold anything —
+    /// which is why it cannot make a correct program wrong: an array whose elements really are
+    /// cells is typed as holding cells.
+    pub(crate) fn stored_element_type(&self, value: &Expr, inferred: PhpType) -> PhpType {
+        let ExprKind::Variable(name) = &value.kind else {
+            return inferred;
+        };
+        if inferred.codegen_repr() != PhpType::Mixed
+            && self.retyped_boxed_storage_locals.contains(name.as_str())
+        {
+            return PhpType::Mixed;
+        }
+        inferred
     }
 
     /// Opens a region in which `name` is viewed as `view` through a flow guard's narrowing,
@@ -1072,6 +1549,10 @@ impl Checker {
     pub(crate) fn clear_local_binding_metadata(&mut self, name: &str) {
         self.boxed_parameter_locals.remove(name);
         self.array_push_capture_sites.remove(name);
+        // A kill ABANDONS the slot, so whatever representation a retype had given it ends with the
+        // binding. Left standing, the mark would keep typing container writes from the name
+        // `Mixed` after `unset($e); $e = 5;` had put a raw integer back in a fresh slot.
+        self.retyped_boxed_storage_locals.remove(name);
         self.invalidate_boxed_ref_alias_binding(name);
         self.closure_return_types.remove(name);
         self.callable_sigs.remove(name);
@@ -1113,6 +1594,30 @@ impl Checker {
     /// the same question about the same expressions: `sort(...$args)`, `sort(@$a)` and
     /// `sort(array: $a)` all reach the local behind the wrapper, and a shape one walker sees
     /// through while the other stops at is exactly how the checker and the pre-scan drift apart.
+    /// Returns whether `property`, reached through `class_name`, is a slot of the compact
+    /// Throwable payload that the builtin `Exception`/`Error` constructor and accessors read and
+    /// write directly as a plain value.
+    ///
+    /// Such a slot can never become a reference cell: promotion is hierarchy-wide, so one
+    /// `new Holder($this->message)` in any subclass made every exception's `message` a cell the
+    /// builtin constructor then overwrote with a bare string, and the next write through the
+    /// "cell" released a string pointer (Twig's `Error::updateRepr` died on a bad refcount).
+    pub(crate) fn is_native_throwable_payload_property(
+        &self,
+        class_name: &str,
+        property: &str,
+    ) -> bool {
+        let Some(declaring) = self
+            .classes
+            .get(class_name.trim_start_matches('\\'))
+            .and_then(|info| info.property_declaring_classes.get(property))
+        else {
+            return false;
+        };
+        matches!(declaring.as_str(), "Exception" | "Error")
+            && self.classes.get(declaring).is_some_and(|info| info.is_internal)
+    }
+
     pub(crate) fn record_reference_alias_root(&mut self, expr: &Expr) {
         self.record_reference_alias_root_with_origin(expr, true);
     }
@@ -1174,15 +1679,37 @@ impl Checker {
 
     /// Records the local root of a reference-producing expression and its origin category.
     fn record_reference_alias_root_with_origin(&mut self, expr: &Expr, non_builtin: bool) {
+        if let Some(name) = Self::reference_alias_root_name(expr) {
+            self.ref_aliased_locals.insert(name.clone());
+            if non_builtin {
+                self.non_builtin_ref_aliased_locals.insert(name);
+            }
+        }
+    }
+
+    /// Records a reference alias whose CELL outlives the statement that made it, so lowering
+    /// ref-binds the name for the rest of the body.
+    ///
+    /// Aliases the whole of [`Checker::record_reference_alias_root`] and additionally files the
+    /// root in [`Checker::ref_bound_locals`]. The three shapes that need it are the ones whose
+    /// cell is reachable after the expression finishes: a `=&` target and its source, a
+    /// `use (&$x)` capture, and both names a `foreach ($arr as &$v)` touches. A by-reference
+    /// call ARGUMENT is deliberately not one of them -- see `ref_bound_locals`.
+    pub(crate) fn record_ref_bound_alias_root(&mut self, expr: &Expr) {
+        if let Some(name) = Self::reference_alias_root_name(expr) {
+            self.ref_aliased_locals.insert(name.clone());
+            self.non_builtin_ref_aliased_locals.insert(name.clone());
+            self.ref_bound_locals.insert(name);
+        }
+    }
+
+    /// Returns the local at the root of a reference's access chain, if the chain reaches one.
+    fn reference_alias_root_name(expr: &Expr) -> Option<String> {
         let mut current = expr;
         loop {
             match &current.kind {
                 ExprKind::Variable(name) => {
-                    self.ref_aliased_locals.insert(name.clone());
-                    if non_builtin {
-                        self.non_builtin_ref_aliased_locals.insert(name.clone());
-                    }
-                    return;
+                    return Some(name.clone());
                 }
                 ExprKind::ArrayAccess { array: base, .. }
                 | ExprKind::PropertyAccess { object: base, .. }
@@ -1192,7 +1719,7 @@ impl Checker {
                 | ExprKind::Spread(base)
                 | ExprKind::ErrorSuppress(base)
                 | ExprKind::NamedArg { value: base, .. } => current = base,
-                _ => return,
+                _ => return None,
             }
         }
     }
@@ -1249,6 +1776,28 @@ pub struct CheckOptions {
     /// Make an incompatible local retype (e.g. a variable assigned `int` then later
     /// `string`) a compile error instead of a warning.
     pub strict_locals: bool,
+    /// Enable elephc's PHP-divergent lints: unused variables, unreachable code, and the
+    /// permissive local-retype notice.
+    ///
+    /// php compiles every one of those silently, so the default build stays quiet: a framework
+    /// with ordinary dynamic locals (`$x = 0; $x = 'name';`) and unused assignments produced 303
+    /// of 303 warnings from these three families. Linting is a diagnostic mode, not a
+    /// compatibility mode, so callers opt in (`--lint`; the diagnostic test helpers do too).
+    pub lint: bool,
+    /// Whether the program registered an autoloader that `autoload::Registry::build` CONSUMED.
+    ///
+    /// THE CHECKER CANNOT SEE THIS FOR ITSELF, and that is the whole reason it is passed in.
+    /// `Registry::build` returns "the program with consumed register sites stripped", so by the
+    /// time the type checker walks the AST a successfully collected
+    /// `spl_autoload_register(function (string $c) { … })` IS NO LONGER THERE. A `usage` scan of
+    /// the checker's program therefore answers `false` for it — measured with a probe printing the
+    /// scan's own fields: a program whose only autoloader argument was a closure, or a named
+    /// function that actually exists, reported `spl_autoload_register=false introspects=false`,
+    /// while the one case the collector had to REJECT (a string naming a function that does not
+    /// exist) reported `true`. Reading the registry instead of re-scanning is the fix, and it is
+    /// the same lesson as `required_runtime_features.eval_bridge` in echelon 44: ask the pass that
+    /// owns the answer.
+    pub registers_autoloader: bool,
 }
 
 /// Returns whether a called name is PHP's `unset`, the only builtin that ends a local binding.
@@ -1268,9 +1817,9 @@ pub(crate) fn is_unset_call(name: &str) -> bool {
 /// Records an access violation that must lower to a catchable exception throw.
 ///
 /// Refuses a span that identifies no single node. `throw_access_sites` is read back by lowering
-/// as `get(&span)` for the node being lowered, so an entry filed under a span many nodes share
-/// turns ALL of them into throws — a `$this->prop = ...` in an unrelated class would start
-/// raising "Cannot modify readonly property".
+/// as `get(&(scope, span))` for the node being lowered, so an entry filed under a span many nodes
+/// of the same scope share turns ALL of them into throws — a `$this->prop = ...` in an unrelated
+/// class would start raising "Cannot modify readonly property".
 ///
 /// That is reachable, not theoretical. Every node the `synthetic_class` builders produce carries
 /// `Span::dummy()`, the PDO prelude declares `public readonly string $queryString` and writes it,
@@ -1283,7 +1832,8 @@ pub(crate) fn is_unset_call(name: &str) -> bool {
 /// Takes the map rather than the `Checker` so a caller already holding a borrow of another field
 /// — `self.classes`, at both current call sites — can still record.
 pub(crate) fn record_throw_access_site(
-    sites: &mut HashMap<Span, ThrowAccessInfo>,
+    sites: &mut HashMap<(String, Span), ThrowAccessInfo>,
+    scope: String,
     span: Span,
     info: ThrowAccessInfo,
 ) {
@@ -1296,7 +1846,7 @@ pub(crate) fn record_throw_access_site(
     if span.line == 0 {
         return;
     }
-    sites.insert(span, info);
+    sites.insert((scope, span), info);
 }
 
 #[derive(Clone)]
@@ -1384,22 +1934,32 @@ fn check_types_on_compiler_stack(
     // the bodies; this answers the ones it deferred, against the final interface lists.
     checker.verify_class_type_argument_bounds(&generics.class_type_argument_bounds)?;
 
+    attach_class_doc_comments(program, &mut checker.classes);
+
     propagate_abstract_return_types(&mut checker);
     apply_reference_property_promotions(&mut checker);
+    validate_reference_property_bindings(&checker)?;
     clone_override_storage::widen_clone_override_property_storage(&mut checker);
     clone_override_storage::widen_property_unset_storage(&mut checker);
     scope_dynamic_storage::reserve_scope_dynamic_property_storage(&mut checker);
     validate_magic_method_contracts(&checker)?;
     core_attributes::validate(&checker)?;
 
-    let mut warnings = crate::types::warnings::collect_warnings(program);
+    let mut warnings = if options.lint {
+        crate::types::warnings::collect_warnings(program)
+    } else {
+        Vec::new()
+    };
     warnings.extend(checker.warnings);
-    // The warnings that belong to a local-binding decision, appended once the last walk has
-    // settled which decisions actually survive. Sorted by position (then message) because they
+    // Binding and foreach warnings are appended once the last walk has settled which
+    // diagnostics survive. Sorted by position (then message) because they
     // come out of a hash map — the order has to be the same on every run.
     let mut decision_warnings: Vec<crate::errors::CompileWarning> =
         std::mem::take(&mut checker.binding_decision_warnings)
             .into_values()
+            .chain(
+                checker.foreach_warnings.into_values().map(|(_, warning)| warning),
+            )
             .collect();
     decision_warnings.sort_by(|left, right| {
         (left.span.line, left.span.col, &left.message).cmp(&(
@@ -1464,17 +2024,54 @@ fn check_types_on_compiler_stack(
         closure_generator_spans: checker.closure_generator_spans,
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
+        flow_typed_property_accesses: checker.flow_typed_property_accesses,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),
         first_class_builtin_call_types: checker.first_class_builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
+        by_ref_local_storage_types: checker.by_ref_local_storage_types,
+        ref_param_escaping_callees: checker.ref_param_escaping_callees,
+        property_bound_promotion_sites: checker.property_bound_promotion_sites,
+        by_ref_call_result_sites: checker.by_ref_call_result_sites,
+        bcmath_operator_sites: checker.bcmath_operator_sites,
+        stdclass_by_ref_walk_sites: checker.stdclass_by_ref_walk_sites,
+        runtime_define_names: checker.runtime_define_names,
+        undefined_constant_reads: checker.undefined_constant_reads,
+        dynamic_ref_local_types: checker.dynamic_ref_local_types,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_ref_detach_sites: checker.local_ref_detach_sites,
         local_retype_sites: checker.local_retype_sites,
         mixed_storage_store_sites: checker.mixed_storage_store_sites,
+        user_filters_reachable: checker.user_filters_reachable,
+        user_filter_registered: checker.user_filter_registered,
     })
+}
+
+/// Copies direct class declaration doc comments into the completed AOT class schema map.
+fn attach_class_doc_comments(program: &Program, classes: &mut crate::fast_hash::FastMap<String, ClassInfo>) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::ClassDecl {
+                name, doc_comment, ..
+            } => {
+                let canonical_name = classes
+                    .keys()
+                    .find(|class_name| {
+                        class_name
+                            .trim_start_matches('\\')
+                            .eq_ignore_ascii_case(name.trim_start_matches('\\'))
+                    })
+                    .cloned();
+                if let Some(class) = canonical_name.and_then(|name| classes.get_mut(&name)) {
+                    class.doc_comment = doc_comment.clone();
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => attach_class_doc_comments(body, classes),
+            _ => {}
+        }
+    }
 }
 
 /// Removes duplicate warnings emitted by repeated checker stabilization passes.
@@ -1520,6 +2117,45 @@ pub(crate) fn single_object_class_name(ty: &PhpType) -> Option<String> {
     }
 }
 
+/// Refuses a `$a->p =& $b->q` whose two declared slots store different payloads in the shared cell.
+///
+/// The cell is one block of storage that both properties read and write with THEIR declared
+/// representation: a `?string` slot keeps a boxed value where a `string` slot keeps a pointer and
+/// a length, so binding one to the other silently turned every later read and write of either
+/// into garbage (an empty string for the narrower slot, a corrupted box for the wider one). php
+/// keeps a typed-reference constraint set instead; this compiler has one representation per cell,
+/// so a disagreement is a diagnostic, not a miscompile.
+fn validate_reference_property_bindings(checker: &Checker) -> Result<(), CompileError> {
+    for (target_class, target, source_class, source, span) in &checker.reference_property_bindings
+    {
+        let payload = |class: &str, property: &str| {
+            checker.classes.get(class).and_then(|info| {
+                info.properties
+                    .iter()
+                    .find(|(name, _)| name == property)
+                    .map(|(_, ty)| ty.clone())
+            })
+        };
+        let (Some(target_ty), Some(source_ty)) =
+            (payload(target_class, target), payload(source_class, source))
+        else {
+            continue;
+        };
+        if !target_ty.reference_payload_compatible(&source_ty) {
+            return Err(CompileError::new(
+                *span,
+                &format!(
+                    "Cannot bind {}::${} ({}) by reference to {}::${} ({}): the two properties \
+                     would share one cell but store different representations; declare both with \
+                     the same type",
+                    target_class, target, target_ty, source_class, source, source_ty
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Applies recorded reference-property promotions to the class table after body checking.
 ///
 /// A regular property that had a reference taken (`$x = &$obj->prop`, or returned by
@@ -1529,6 +2165,10 @@ pub(crate) fn single_object_class_name(ty: &PhpType) -> Option<String> {
 /// hierarchy. Constructor-promoted `&$param` properties already are reference properties
 /// (borrowed cell) and are left untouched. Object-owned reference cells are also recorded
 /// in `owned_reference_properties` so the object allocates and frees them.
+///
+/// The promotion follows the SLOT, not the name: a private property keeps its own slot in a
+/// descendant that declares a same-named property, and the declaring class's methods reach
+/// that hidden slot through the cell, so it is promoted per slot there too.
 fn apply_reference_property_promotions(checker: &mut Checker) {
     let promotions = std::mem::take(&mut checker.reference_property_promotions);
     for (access_class, prop) in promotions {
@@ -1537,25 +2177,29 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
             .get(&access_class)
             .and_then(|info| info.property_declaring_classes.get(&prop).cloned())
             .unwrap_or_else(|| access_class.clone());
-        for info in checker.classes.values_mut() {
-            if !info.properties.iter().any(|(name, _)| name == &prop) {
-                continue;
-            }
-            let same_decl = info
-                .property_declaring_classes
-                .get(&prop)
-                .is_some_and(|decl| decl == &declaring);
-            if !same_decl {
-                continue;
-            }
-            if info.reference_properties.contains(&prop) {
-                continue;
-            }
-            info.reference_properties.insert(prop.clone());
-            info.owned_reference_properties.insert(prop.clone());
-            if let Some(slot) = info.visible_property_index(&prop) {
+        if checker.is_native_throwable_payload_property(&access_class, &prop) {
+            continue;
+        }
+        for (class_name, info) in checker.classes.iter_mut() {
+            for slot in 0..info.properties.len() {
+                if info.properties[slot].0 != prop {
+                    continue;
+                }
+                if info.property_slot_owner(slot, class_name).1 != declaring {
+                    continue;
+                }
+                if info.property_slot_is_reference(slot, &prop) {
+                    continue;
+                }
                 if let Some(slot_reference) = info.property_reference_slots.get_mut(slot) {
                     *slot_reference = true;
+                }
+                let slot_count = info.properties.len();
+                info.property_owned_reference_slots.resize(slot_count, false);
+                info.property_owned_reference_slots[slot] = true;
+                if !info.property_slot_is_hidden(slot) {
+                    info.reference_properties.insert(prop.clone());
+                    info.owned_reference_properties.insert(prop.clone());
                 }
             }
         }
@@ -1586,9 +2230,9 @@ mod throw_access_site_tests {
     fn a_located_violation_is_recorded() {
         let mut sites = HashMap::new();
         let span = Span::new(7, 3);
-        record_throw_access_site(&mut sites, span, readonly_violation(span));
+        record_throw_access_site(&mut sites, String::new(), span, readonly_violation(span));
         assert_eq!(sites.len(), 1);
-        assert!(sites.contains_key(&span));
+        assert!(sites.contains_key(&(String::new(), span)));
     }
 
     /// A violation the checker CANNOT locate never becomes a key.
@@ -1600,7 +2244,49 @@ mod throw_access_site_tests {
     #[test]
     fn an_unlocatable_violation_never_becomes_a_key() {
         let mut sites = HashMap::new();
-        record_throw_access_site(&mut sites, Span::dummy(), readonly_violation(Span::dummy()));
+        record_throw_access_site(
+            &mut sites,
+            String::new(),
+            Span::dummy(),
+            readonly_violation(Span::dummy()),
+        );
         assert!(sites.is_empty());
+    }
+}
+
+/// The type PHP's `$matches` destination receives, for `preg_match` and `preg_match_all`.
+///
+/// ONE authority for the shape, read by the checker (to type the destination in the environment)
+/// and by EIR lowering (to WIDEN the destination local's frame storage). Deciding it twice is how
+/// an indexed destination ends up holding a hash, which reads back renumbered.
+pub(crate) fn regex_matches_destination_type(
+    builtin_name: &str,
+    args: &[crate::parser::ast::Expr],
+) -> PhpType {
+    // `preg_match_all` fills its outer container with BOXED cells -- one per column in pattern
+    // order, one per row in set order -- so the element type is Mixed whatever the pattern looks
+    // like. Typing the no-flags form as `array<array<string>>` described a nesting the runtime
+    // never builds.
+    let capture_type = PhpType::Mixed;
+    let assoc = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    if !crate::types::checker::inference::expr::effects::pattern_declares_named_capture_group(
+        args.first(),
+    ) {
+        return PhpType::Array(Box::new(capture_type));
+    }
+    if builtin_name.eq_ignore_ascii_case("preg_match") {
+        return assoc;
+    }
+    match crate::types::checker::inference::expr::effects::preg_match_all_uses_pattern_order(
+        args.get(3),
+    ) {
+        Some(true) => assoc,
+        Some(false) => PhpType::Array(Box::new(capture_type)),
+        // Either storage can arrive, and stamping a hash into an indexed destination reads it
+        // back as a renumbered list, so stay gradual and let `store_matches_array` classify it.
+        None => PhpType::Mixed,
     }
 }

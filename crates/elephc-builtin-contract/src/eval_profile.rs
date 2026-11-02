@@ -61,6 +61,22 @@ fn eval_signature_override(id: BuiltinId) -> Option<EvalSignatureProfile> {
             ),
         });
     }
+    // php's `$count` is a by-reference output. The AOT backend caps both at three arguments
+    // (`max_args`), so the canonical contract keeps it by value — a by-ref parameter on a
+    // statically pure builtin would break `propagate_args` — while the interpreter, which runs
+    // Symfony's container passes and writes the count back, binds it by reference.
+    if id == BuiltinId::from_canonical_name("str_replace")
+        || id == BuiltinId::from_canonical_name("str_ireplace")
+    {
+        return Some(EvalSignatureProfile {
+            signature: BuiltinSignature {
+                params: STR_REPLACE_PARAMS,
+                variadic: None,
+                required_param_count: None,
+            },
+            override_reason: Some(EvalSignatureOverrideReason::AdditionalByReferenceOutput),
+        });
+    }
     if id == BuiltinId::from_canonical_name("is_callable") {
         return Some(EvalSignatureProfile {
             signature: BuiltinSignature {
@@ -91,16 +107,6 @@ fn eval_signature_override(id: BuiltinId) -> Option<EvalSignatureProfile> {
             override_reason: Some(EvalSignatureOverrideReason::AdditionalOptionalParameters),
         });
     }
-    if id == BuiltinId::from_canonical_name("preg_match") {
-        return Some(EvalSignatureProfile {
-            signature: BuiltinSignature {
-                params: PREG_MATCH_PARAMS,
-                variadic: None,
-                required_param_count: None,
-            },
-            override_reason: Some(EvalSignatureOverrideReason::AdditionalOptionalParameters),
-        });
-    }
     None
 }
 
@@ -116,6 +122,34 @@ const IMPLODE_PARAMS: &[ParamSpec] = &[
         ty: TypeSpec::Mixed,
         default: None,
         by_ref: false,
+    },
+];
+
+/// `str_replace` / `str_ireplace` with php's by-reference `$count` output.
+const STR_REPLACE_PARAMS: &[ParamSpec] = &[
+    ParamSpec {
+        name: "search",
+        ty: TypeSpec::Str,
+        default: None,
+        by_ref: false,
+    },
+    ParamSpec {
+        name: "replace",
+        ty: TypeSpec::Str,
+        default: None,
+        by_ref: false,
+    },
+    ParamSpec {
+        name: "subject",
+        ty: TypeSpec::Str,
+        default: None,
+        by_ref: false,
+    },
+    ParamSpec {
+        name: "count",
+        ty: TypeSpec::Mixed,
+        default: Some(DefaultSpec::Null),
+        by_ref: true,
     },
 ];
 
@@ -170,34 +204,6 @@ const NL2BR_PARAMS: &[ParamSpec] = &[
     },
 ];
 
-const PREG_MATCH_PARAMS: &[ParamSpec] = &[
-    ParamSpec {
-        name: "pattern",
-        ty: TypeSpec::Str,
-        default: None,
-        by_ref: false,
-    },
-    ParamSpec {
-        name: "subject",
-        ty: TypeSpec::Str,
-        default: None,
-        by_ref: false,
-    },
-    ParamSpec {
-        name: "matches",
-        ty: TypeSpec::Mixed,
-        default: Some(DefaultSpec::EmptyArray),
-        by_ref: true,
-    },
-    ParamSpec {
-        name: "flags",
-        ty: TypeSpec::Int,
-        default: Some(DefaultSpec::Int(0)),
-        by_ref: false,
-    },
-];
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,8 +244,12 @@ mod tests {
                     .map(|reason| (contract.name, reason))
             })
             .collect::<Vec<_>>();
-        assert_eq!(overridden.len(), 5);
-        assert_eq!(overridden[0].0, "implode");
-        assert_eq!(overridden[4].0, "preg_match");
+        // Named rather than counted: a new override must be added here on purpose.
+        let mut names = overridden.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["implode", "is_callable", "localtime", "nl2br", "str_ireplace", "str_replace"]
+        );
     }
 }

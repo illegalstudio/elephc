@@ -19,7 +19,9 @@ use super::stmts::discover_stmts;
 use super::super::declarations::extract_discoverable_declarations;
 use super::super::engine::resolve_stmts;
 use super::super::files::{parse_file, resolve_path};
-use super::super::include_path::fold_include_path;
+use super::super::include_path::{
+    fold_include_path, is_runtime_dynamic_include_path, is_stream_wrapper_path,
+};
 use super::super::state::ResolveState;
 
 /// Processes a statically resolvable `include`/`require` statement.
@@ -60,7 +62,17 @@ pub(super) fn discover_include(
             "maximum include depth exceeded",
         ));
     }
-    let path_str = fold_include_path(path, state).map_err(|msg| CompileError::new(span, &msg))?;
+    // A path only the RUNTIME can know (a variable, a call) is not a discovery failure:
+    // discovery skips it and the include stays dynamic, instead of failing the compile.
+    let path_str = match fold_include_path(path, state) {
+        Ok(path) => path,
+        Err(_) if is_runtime_dynamic_include_path(path) => return Ok(()),
+        Err(msg) => return Err(CompileError::new(span, &msg)),
+    };
+    // A stream-wrapper URL (`phar://…`) is opened by the runtime when the statement runs.
+    if is_stream_wrapper_path(&path_str) {
+        return Ok(());
+    }
     let resolved = resolve_path(&path_str, base_dir);
     let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
 
@@ -88,7 +100,12 @@ pub(super) fn discover_include(
         ));
     }
 
-    let included_stmts = parse_file(&resolved, span, &state.conditional_defines)?;
+    let included_stmts = match parse_file(&resolved, span, &state.conditional_defines) {
+        Ok(parsed) => parsed,
+        // Discovery reads ahead of resolution; the resolution pass reports the skip.
+        Err(_) if super::super::skipping_unparseable_includes() => return Ok(()),
+        Err(error) => return Err(error),
+    };
 
     let included_dir = resolved.parent().unwrap_or(base_dir);
     let mut declaration_state = state.clone();

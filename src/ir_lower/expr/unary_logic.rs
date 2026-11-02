@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use crate::types::TypeEnv;
 
 /// Lowers a numeric unary operation.
 pub(super) fn lower_numeric_unary(
@@ -17,6 +18,16 @@ pub(super) fn lower_numeric_unary(
     float_op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    // `-$n` on a `BcMath\Number` the checker recorded (see `numeric_binary::lower_binary`).
+    if matches!(expr.kind, ExprKind::Negate(_))
+        && crate::bcmath_number_prelude::is_operator_site(expr.span)
+        && ctx.classes.contains_key(crate::bcmath_number_prelude::NUMBER_CLASS)
+    {
+        return lower_expr(
+            ctx,
+            &crate::bcmath_number_prelude::negated_number_expr(inner, expr.span),
+        );
+    }
     let value = lower_expr(ctx, inner);
     if int_op == Op::INeg && crate::types::object_operators::operator_class(&ctx.builder.value_php_type(value.value)).is_some() {
         let zero = lower_int_literal(ctx, 0, expr);
@@ -67,11 +78,19 @@ pub(super) fn lower_numeric_unary(
 /// An `i64` or tagged scalar is `int`. A float or any other operand is the mixed runtime
 /// call, not an int: `~` does not coerce the way `%` and the bitwise binaries do.
 pub(super) fn int_unary_result_type(ir_type: IrType) -> PhpType {
-    if ir_type == IrType::I64 || ir_type == IrType::TaggedScalar {
+    if ir_type == IrType::I64 || ir_type == IrType::TaggedScalar || is_boxed_unary_operand(ir_type) {
         PhpType::Int
     } else {
         PhpType::Mixed
     }
+}
+
+/// Whether a `~` operand is a boxed `mixed`/union value, which coerces through PHP's integer
+/// path (`~$value` of a `mixed` holding `2` is `-3`) instead of reaching a runtime call that no
+/// backend implements. Symfony's `ErrorHandler::setLoggers()` computes `~$type` over a
+/// `foreach` key typed `mixed`.
+fn is_boxed_unary_operand(ir_type: IrType) -> bool {
+    matches!(ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
 }
 
 /// Lowers an integer unary operation.
@@ -88,6 +107,18 @@ pub(super) fn lower_int_unary(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, o
     } else if value.ir_type == IrType::TaggedScalar {
         let narrowed = lower_tagged_scalar_to_int(ctx, value, Some(expr.span));
         ctx.emit_value(op, vec![narrowed.value], None, result_ty, op.default_effects(), Some(expr.span))
+    } else if is_boxed_unary_operand(value.ir_type) {
+        let narrowed = ctx.emit_value(
+            Op::Cast,
+            vec![value.value],
+            Some(Immediate::CastTarget(IrType::I64)),
+            PhpType::Int,
+            Op::Cast.default_effects(),
+            Some(expr.span),
+        );
+        let result = ctx.emit_value(op, vec![narrowed.value], None, result_ty, op.default_effects(), Some(expr.span));
+        release_binary_operand_temporary(ctx, value, expr.span);
+        result
     } else {
         ctx.emit_value(Op::RuntimeCall, vec![value.value], None, result_ty, Effects::all(), Some(expr.span))
     }
@@ -112,6 +143,9 @@ pub(super) fn lower_tagged_scalar_to_int(
 /// Lowers logical negation.
 pub(super) fn lower_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    if ctx.builder.insertion_block_is_terminated() {
+        return value;
+    }
     let value = ctx.truthy_consuming(value, Some(expr.span));
     let zero = lower_int_literal(ctx, 0, expr);
     ctx.emit_value(
@@ -189,9 +223,24 @@ pub(super) fn lower_logical_binary(
     });
 
     ctx.builder.position_at_end(rhs_block);
+    // The right operand only runs once the left has decided the value's class: `$r instanceof
+    // StreamedResponse && $r->getCallback()` reaches the call having PROVED the receiver. The
+    // checker narrows there; without the same narrowing here the lowering still saw the declared
+    // class and refused the call as unknown — Symfony's `HttpKernel::handle` is that line.
+    //
+    // Sound because nothing is reinterpreted: the slot holds the same object pointer either way,
+    // and `instanceof` proved which class it is. `Or` reaches its right operand on the FALSE
+    // side, so it takes the complementary narrowing.
+    let saved_types = ctx.local_types_snapshot();
+    crate::ir_lower::stmt::conditionals::apply_instanceof_branch_narrowing(
+        ctx,
+        left,
+        matches!(op, BinOp::And),
+    );
     let rhs = lower_expr(ctx, right);
     let rhs = ctx.truthy_consuming(rhs, Some(right.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, rhs, expr.span);
+    join_short_circuit_operand_types(ctx, saved_types);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(const_block);
@@ -201,6 +250,32 @@ pub(super) fn lower_logical_binary(
 
     ctx.builder.position_at_end(merge);
     take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Reconciles the local-type facts a short-circuit operand left with the ones that reach the merge.
+///
+/// The operand is a real branch: `$f & 2 && $v = $c->m()` may skip the store entirely, so neither
+/// edge's fact is the merge's. A name the operand only NARROWED (`$r instanceof R && $r->m()`)
+/// goes back to what it was, and a name it ASSIGNED takes its frame slot's storage type — the join
+/// every store already widened the slot to, and the same contract `join_arm_types` gives an `if`.
+///
+/// Blanket-restoring both was a silent miscompile: the store below a `foreach ($c->items() as $v)`
+/// widened the slot, the restore put the LOOP's element type back as the logical fact, and the
+/// `foreach ($v as …)` that follows was lowered as an iteration of that class
+/// (`Symfony\Component\VarDumper\Caster\ReflectionCaster::castFunctionAbstract`).
+pub(super) fn join_short_circuit_operand_types(ctx: &mut LoweringContext<'_, '_>, saved_types: TypeEnv) {
+    let operand_types = ctx.local_types_snapshot();
+    ctx.restore_local_types(saved_types.clone());
+    for (name, operand_ty) in operand_types {
+        if saved_types.get(&name) == Some(&operand_ty) {
+            continue;
+        }
+        let Some(slot) = ctx.local_slots.get(&name).copied() else {
+            continue;
+        };
+        let storage = ctx.builder.local_php_type(slot);
+        ctx.set_local_type(&name, storage);
+    }
 }
 
 /// Lowers non-short-circuiting PHP logical `xor`.
@@ -271,4 +346,3 @@ pub(super) fn lower_truthy_bool(
     }
     result
 }
-

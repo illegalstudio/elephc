@@ -29,11 +29,18 @@ pub(in crate::interpreter) fn eval_builtin_array_declared_call(
         "array_fill" => super::array_fill::eval_array_fill_declared_call(args, context, scope, values),
         "array_fill_keys" => super::array_fill_keys::eval_array_fill_keys_declared_call(args, context, scope, values),
         "array_filter" => super::array_filter::eval_array_filter_declared_call(args, context, scope, values),
+        "array_replace_recursive" => super::array_recursive::eval_array_recursive_declared_call(super::array_recursive::ArrayRecursiveCombine::Replace, args, context, scope, values),
+        "array_merge_recursive" => super::array_recursive::eval_array_recursive_declared_call(super::array_recursive::ArrayRecursiveCombine::Merge, args, context, scope, values),
+        "array_find" => super::array_find::eval_array_predicate_walk_declared_call(super::array_find::ArrayPredicateWalk::FindValue, args, context, scope, values),
+        "array_find_key" => super::array_find::eval_array_predicate_walk_declared_call(super::array_find::ArrayPredicateWalk::FindKey, args, context, scope, values),
+        "array_any" => super::array_find::eval_array_predicate_walk_declared_call(super::array_find::ArrayPredicateWalk::Any, args, context, scope, values),
+        "array_all" => super::array_find::eval_array_predicate_walk_declared_call(super::array_find::ArrayPredicateWalk::All, args, context, scope, values),
         "array_intersect" => super::array_intersect::eval_array_intersect_declared_call(args, context, scope, values),
         "array_intersect_key" => super::array_intersect_key::eval_array_intersect_key_declared_call(args, context, scope, values),
         "array_map" => super::array_map::eval_array_map_declared_call(args, context, scope, values),
         "array_merge" => super::array_merge::eval_array_merge_declared_call(args, context, scope, values),
         "array_reduce" => super::array_reduce::eval_array_reduce_declared_call(args, context, scope, values),
+        "array_replace" => super::array_replace::eval_array_replace_declared_call(args, context, scope, values),
         "iterator_apply" => super::iterator_apply::eval_iterator_apply_declared_call(args, context, scope, values),
         "iterator_count" => super::iterator_count::eval_iterator_count_declared_call(args, context, scope, values),
         "iterator_to_array" => super::iterator_to_array::eval_iterator_to_array_declared_call(args, context, scope, values),
@@ -47,10 +54,18 @@ pub(in crate::interpreter) fn eval_builtin_array_declared_call(
         "array_slice" => super::array_slice::eval_array_slice_declared_call(args, context, scope, values),
         "array_unique" => super::array_unique::eval_array_unique_declared_call(args, context, scope, values),
         "array_values" => super::array_values::eval_array_values_declared_call(args, context, scope, values),
+        "array_is_list" => super::array_is_list::eval_array_is_list_declared_call(args, context, scope, values),
+        "array_key_first" => super::array_key_first::eval_array_key_first_declared_call(args, context, scope, values),
+        "array_first" => super::array_first::eval_array_edge_declared_call(super::array_first::ArrayEdge::First, args, context, scope, values),
+        "array_last" => super::array_first::eval_array_edge_declared_call(super::array_first::ArrayEdge::Last, args, context, scope, values),
+        "array_key_last" => super::array_key_last::eval_array_key_last_declared_call(args, context, scope, values),
         "count" | "sizeof" => super::count::eval_count_declared_call(args, context, scope, values),
         "current" => super::current::eval_current_declared_call(args, context, scope, values),
         "key" => super::key::eval_key_declared_call(args, context, scope, values),
         "range" => super::range::eval_range_declared_call(args, context, scope, values),
+        name if super::array_ucompare::is_array_ucompare_builtin(name) => {
+            super::array_ucompare::eval_array_ucompare_declared_call(name, args, context, scope, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

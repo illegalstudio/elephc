@@ -51,6 +51,28 @@ pub fn lookup_class(name: &str) -> Option<&'static ClassContract> {
     class_index().get(canonical.as_str()).copied()
 }
 
+/// Whether `name` names a catalogued class with internal operator handlers (`GMP`,
+/// `BcMath\Number`), the same answer as `lookup_class(name)` with `operators` set.
+///
+/// Without allocating or hashing: lowering and the checker ask it for every declared class on
+/// every binary operator, and the `lookup_class` form (a lowercased copy plus a SipHash probe per
+/// class name) was the top lowering frame on Symfony. Names of the wrong length are rejected on
+/// the length alone.
+pub fn is_operator_class_name(name: &str) -> bool {
+    let name = name.trim_start_matches('\\');
+    operator_class_names()
+        .iter()
+        .any(|candidate| candidate.len() == name.len() && candidate.eq_ignore_ascii_case(name))
+}
+
+/// The catalogued classes with internal operator handlers, built once.
+fn operator_class_names() -> &'static [&'static str] {
+    static NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
+    NAMES
+        .get_or_init(|| classes().iter().filter(|class| class.operators.is_some()).map(|class| class.name).collect())
+        .as_slice()
+}
+
 /// Finds a global constant, honoring PHP's case-insensitive true, false, and null names.
 pub fn lookup_constant(name: &str) -> Option<&'static ConstantContract> {
     constant_index().get(canonical_constant_name(name)).copied()
@@ -177,6 +199,21 @@ mod tests {
         assert_eq!(super::lookup_constant("nUlL").unwrap().value.php_type(), crate::ConstType::Null);
         assert_eq!(super::lookup_constant("tRuE").unwrap().value, crate::ConstValue::Bool(true));
         assert!(super::lookup_constant("php_int_size").is_none());
+    }
+
+    /// The allocation-free operator-class test answers what `lookup_class` answers, for every
+    /// catalogued class in every spelling the compiler hands it.
+    #[test]
+    fn operator_class_name_matches_lookup_class() {
+        assert!(!super::operator_class_names().is_empty(), "GMP carries operator handlers");
+        for class in super::classes() {
+            for spelling in [class.name.to_string(), class.name.to_ascii_uppercase(), format!("\\{}", class.name)] {
+                let expected = super::lookup_class(&spelling).is_some_and(|class| class.operators.is_some());
+                assert_eq!(super::is_operator_class_name(&spelling), expected, "{spelling}");
+            }
+        }
+        assert!(!super::is_operator_class_name("App\\Gmp"));
+        assert!(!super::is_operator_class_name(""));
     }
     use super::*;
 

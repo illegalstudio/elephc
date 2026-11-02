@@ -19,8 +19,12 @@ use super::super::Checker;
 /// annotations through the checker. Untyped by-reference parameters use canonical `Mixed`
 /// storage; other parameters without hints use a declared default's syntactic type when present,
 /// matching free-function signature construction, and otherwise default to `PhpType::Int`.
+/// Untyped by-value parameters of a method with no body (an interface or abstract declaration)
+/// are `mixed`: a bodyless declaration has no call sites to refine the `int` seed from.
 /// Validates that each declared parameter's default value is compatible with its resolved type.
-/// Infers return type from method body when no return annotation is present.
+/// Infers return type from a concrete method body when no return annotation is present. A
+/// bodyless untyped interface or abstract method returns gradual `Mixed` because its implementor
+/// may return any PHP value.
 pub(crate) fn build_method_sig(
     checker: &Checker,
     method: &ClassMethod,
@@ -39,16 +43,33 @@ pub(crate) fn build_method_sig(
                 return Ok((n.clone(), PhpType::php_array()));
             }
             let ty = match type_ann {
-                Some(type_ann) => checker.resolve_declared_param_type_hint(
-                    type_ann,
-                    method.span,
-                    &format!("Method parameter ${}", n),
-                )?,
+                Some(type_ann) => crate::types::checker::Checker::callable_param_storage(
+                    checker.resolve_declared_param_type_hint(
+                        type_ann,
+                        method.span,
+                        &format!("Method parameter ${}", n),
+                    )?,
+                    &method.body,
+                    n,
+                ),
                 None if *is_ref => PhpType::Mixed,
-                None => default
-                    .as_ref()
-                    .map(super::super::infer_expr_type_syntactic)
-                    .unwrap_or(PhpType::Int),
+                None if !method.has_body => PhpType::Mixed,
+                // An empty `[]` default says nothing about what callers pass: typed
+                // `array<never>`, Twig's `setPaths($paths = [])` could not narrow
+                // `if (!is_array($paths)) { $paths = [$paths]; }` and handed `array<never>` to
+                // `addPath(string)`.
+                None => match default.as_ref().map(super::super::infer_expr_type_syntactic) {
+                    Some(PhpType::Array(element)) if *element == PhpType::Never => PhpType::Mixed,
+                    // A `null` default says nothing about what callers pass either, and `Void`
+                    // is absorbed by every later union: a method no compiled code calls kept its
+                    // `$timezone = null` as `Void`, the forwarded `Void` argument was skipped,
+                    // and Twig's `convertDate($date, $timezone = null)`, refined only by
+                    // `modifyDate()`'s `false`, checked `new DateTimeZone($timezone)` against
+                    // `false`. The `Int` seed is the unrefined one: `mixed` unless a call refines it.
+                    Some(PhpType::Void) => PhpType::Int,
+                    Some(ty) => ty,
+                    None => PhpType::Int,
+                },
             };
             Ok((n.clone(), ty))
         })
@@ -74,6 +95,7 @@ pub(crate) fn build_method_sig(
             method.span,
             &format!("Method '{}'", method.name),
         )?,
+        None if !method.has_body => PhpType::Mixed,
         None => super::super::infer_return_type_syntactic(&method.body),
     };
     if method.variadic.is_some() {
@@ -323,7 +345,9 @@ impl SourceVisibleShape {
     }
 }
 
-/// Validates that `child_sig` is compatible with `parent_sig` for override purposes.
+/// Validates that `child_sig` accepts every argument shape accepted by `parent_sig`.
+/// Optional additions and variadic widening are allowed, while required parameters,
+/// by-reference positions, and a parent's unbounded variadic tail remain invariant.
 /// Checks parameter shape and rejects a declared type where the source parent accepts any value.
 /// Reports errors with `context` and `kind` (e.g., "overriding method") in the message.
 ///
@@ -357,7 +381,7 @@ pub(crate) fn validate_signature_compatibility(
         return Err(CompileError::new(
             span,
             &format!(
-                "func_num_args()/func_get_args()/func_get_arg() are not supported in {}::{} when {} {}: the inherited signature cannot be widened to collect surplus arguments",
+                "Runtime argument introspection is not supported in {}::{} when {} {}: the inherited signature cannot be widened to collect surplus arguments",
                 owner_name, method_name, context, kind
             ),
         ));
@@ -365,6 +389,10 @@ pub(crate) fn validate_signature_compatibility(
 
     let child = SourceVisibleShape::of(child_sig);
     let parent = SourceVisibleShape::of(parent_sig);
+    let child_source_variadic = child.variadic.is_some();
+    let parent_source_variadic = parent.variadic.is_some();
+    let child_fixed_count = child.param_count.saturating_sub(usize::from(child_source_variadic));
+    let parent_fixed_count = parent.param_count.saturating_sub(usize::from(parent_source_variadic));
 
     if allow_optional_widening {
         return if child.widens_parameter_shape(&parent) { Ok(()) } else {
@@ -374,7 +402,9 @@ pub(crate) fn validate_signature_compatibility(
         };
     }
 
-    if child.param_count != parent.param_count {
+    if (!child_source_variadic && child_fixed_count < parent_fixed_count)
+        || (parent_source_variadic && !child_source_variadic)
+    {
         return Err(CompileError::new(
             span,
             &format!(
@@ -384,14 +414,36 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if child.ref_params != parent.ref_params {
-        return Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot change pass-by-reference parameters when {} {}: {}::{}",
-                context, kind, owner_name, method_name
-            ),
-        ));
+    for parent_index in 0..parent_fixed_count {
+        let parent_ref = parent.ref_params.get(parent_index).copied().unwrap_or(false);
+        let child_ref_index = if parent_index < child_fixed_count {
+            parent_index
+        } else {
+            child_fixed_count
+        };
+        let child_ref = child.ref_params.get(child_ref_index).copied().unwrap_or(false);
+        if parent_ref != child_ref {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Cannot change pass-by-reference parameters when {} {}: {}::{}",
+                    context, kind, owner_name, method_name
+                ),
+            ));
+        }
+    }
+    if parent_source_variadic {
+        let parent_ref = parent.ref_params.get(parent_fixed_count).copied().unwrap_or(false);
+        let child_ref = child.ref_params.get(child_fixed_count).copied().unwrap_or(false);
+        if parent_ref != child_ref {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Cannot change pass-by-reference parameters when {} {}: {}::{}",
+                    context, kind, owner_name, method_name
+                ),
+            ));
+        }
     }
 
     if compare_generated_abi {
@@ -413,27 +465,9 @@ pub(crate) fn validate_signature_compatibility(
         }
     }
 
-    if child.has_defaults != parent.has_defaults {
-        return Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot change optional parameter layout when {} {}: {}::{}",
-                context, kind, owner_name, method_name
-            ),
-        ));
-    }
-
-    if child.variadic != parent.variadic {
-        return Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot change variadic parameter shape when {} {}: {}::{}",
-                context, kind, owner_name, method_name
-            ),
-        ));
-    }
-
-    if child.required_param_count() != parent.required_param_count() {
+    let child_required = required_param_count(child_sig);
+    let parent_required = required_param_count(parent_sig);
+    if child_required > parent_required {
         return Err(CompileError::new(
             span,
             &format!(
@@ -441,6 +475,22 @@ pub(crate) fn validate_signature_compatibility(
                 context, kind, owner_name, method_name
             ),
         ));
+    }
+
+    for child_index in parent_fixed_count..child_fixed_count {
+        if child_sig
+            .defaults
+            .get(child_index)
+            .map_or(true, |default| default.is_none())
+        {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Cannot add required parameters when {} {}: {}::{}",
+                    context, kind, owner_name, method_name
+                ),
+            ));
+        }
     }
 
     Ok(())
@@ -552,6 +602,54 @@ pub(super) fn declaration_is_source(checker: &Checker, owner: &str) -> bool {
         .unwrap_or(true)
 }
 
+/// Returns whether the contract `owner` records for `method_key` was written in PHP source.
+///
+/// An abstract class that leaves an interface method unimplemented records itself as the
+/// declaring class of a copy of the interface's signature. That copy is only as "source" as the
+/// interface it came from: `func_args` widens every source family member with the hidden
+/// collector, but never a compiler-injected interface such as `IteratorAggregate`, so comparing a
+/// subclass body against the copy would refuse an override PHP accepts.
+pub(super) fn method_contract_is_source(
+    checker: &Checker,
+    owner: &str,
+    method_key: &str,
+    is_static: bool,
+) -> bool {
+    if !declaration_is_source(checker, owner) {
+        return false;
+    }
+    let Some(info) = checker.classes.get(owner) else {
+        return true;
+    };
+    if info
+        .method_decls
+        .iter()
+        .any(|method| method.is_static == is_static && php_symbol_key(&method.name) == method_key)
+    {
+        return true;
+    }
+    let mut contract_found = false;
+    for interface_name in &info.interfaces {
+        let Some(interface) = checker.interfaces.get(interface_name) else {
+            continue;
+        };
+        let (methods, declaring) = if is_static {
+            (&interface.static_methods, &interface.static_method_declaring_interfaces)
+        } else {
+            (&interface.methods, &interface.method_declaring_interfaces)
+        };
+        if !methods.contains_key(method_key) {
+            continue;
+        }
+        contract_found = true;
+        let declaring = declaring.get(method_key).unwrap_or(interface_name);
+        if declaration_is_source(checker, declaring) {
+            return true;
+        }
+    }
+    !contract_found
+}
+
 /// Validates that `method` can override `parent_sig` in class `class_name`.
 /// Builds the child signature via `build_method_sig`, skips validation for `__construct`,
 /// checks signature compatibility, and ensures the child does not remove a declared
@@ -582,6 +680,14 @@ pub(crate) fn validate_override_signature(
         parent_declaration_is_source && method.span.line != 0,
         false,
     )?;
+    // A builtin parent's return type is TENTATIVE in php: overriding it with an incompatible one
+    // (or none) is a deprecation, silenced by `#[\ReturnTypeWillChange]`, never a compile error.
+    // Carbon's `createFromFormat(): ?static` over `DateTime::createFromFormat(): DateTime|false`
+    // was refused, and Carbon, CarbonImmutable and every class built on them went to the
+    // interpreter.
+    if !parent_declaration_is_source {
+        return Ok(());
+    }
     if parent_sig.declared_return && !child_sig.declared_return {
         return Err(CompileError::new(
             method.span,
@@ -664,4 +770,19 @@ fn covariant_self_return_compatible(
         }
         _ => false,
     }
+}
+
+/// Counts how many parameters in `sig` are required (have no default).
+/// The variadic parameter, if present, is never considered required even if it has no default.
+pub(crate) fn required_param_count(sig: &FunctionSig) -> usize {
+    sig.defaults
+        .iter()
+        .enumerate()
+        .filter(|(idx, default)| {
+            if sig.variadic.is_some() && *idx + 1 == sig.defaults.len() {
+                return false;
+            }
+            default.is_none()
+        })
+        .count()
 }

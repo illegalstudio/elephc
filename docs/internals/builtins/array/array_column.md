@@ -2,7 +2,7 @@
 title: "array_column() - internals"
 description: "Compiler internals for array_column(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 4
+  order: 5
 ---
 
 ## `array_column()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_column.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_column.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_column(array $array, string $column_key): array
+function array_column(array $array, string $column_key, mixed $index_key = null): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes 2–3 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

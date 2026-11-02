@@ -2,7 +2,7 @@
 title: "xmlwriter_start_dtd_attlist() - internals"
 description: "Compiler internals for xmlwriter_start_dtd_attlist(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1128
+  order: 1188
 ---
 
 ## `xmlwriter_start_dtd_attlist()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1377](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1377) (`xmlwriter_start_dtd_attlist`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:1387](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1387) (`xmlwriter_start_dtd_attlist`)
 - **Function symbol**: `xmlwriter_start_dtd_attlist()`
 
 

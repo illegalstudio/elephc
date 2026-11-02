@@ -100,6 +100,16 @@ pub(super) fn lower_binary(
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
+    // A `BcMath\Number` overload the checker recorded: lowered as the prelude's helper call.
+    if crate::bcmath_number_prelude::is_operator_site(expr.span)
+        && ctx.classes.contains_key(crate::bcmath_number_prelude::NUMBER_CLASS)
+    {
+        if let Some(rewritten) =
+            crate::bcmath_number_prelude::overloaded_binary_expr(left, op, right, expr.span)
+        {
+            return super::lower_expr(ctx, &rewritten);
+        }
+    }
     match op {
         BinOp::Concat => lower_concat(ctx, left, right, expr),
         BinOp::Eq | BinOp::NotEq | BinOp::StrictEq | BinOp::StrictNotEq
@@ -124,7 +134,12 @@ pub(super) fn lower_numeric_binary(
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let lhs = lower_expr(ctx, left);
+    let mut lhs = lower_expr(ctx, left);
+    if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+        && lhs.ir_type == IrType::Str
+    {
+        lhs = persist_concat_lhs_if_rhs_can_reset(ctx, lhs, right, expr.span);
+    }
     let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
     let rhs = lower_expr(ctx, right);
     unpin_in_flight_owners(ctx, left_pins, left.span);
@@ -140,10 +155,50 @@ pub(super) fn lower_numeric_binary(
 
 /// Lowers the scalar/array path after an internal object handler has been excluded.
 fn lower_numeric_binary_values(
-    ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, op: &BinOp, rhs: LoweredValue,
+    ctx: &mut LoweringContext<'_, '_>, mut lhs: LoweredValue, op: &BinOp, mut rhs: LoweredValue,
     left: &Expr, right: &Expr, expr: &Expr,
 ) -> LoweredValue {
+    if lhs.ir_type == IrType::Str
+        && rhs.ir_type == IrType::Str
+        && matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+    {
+        let string_op = match op {
+            BinOp::BitAnd => Op::StrBitAnd,
+            BinOp::BitOr => Op::StrBitOr,
+            BinOp::BitXor => Op::StrBitXor,
+            _ => unreachable!(),
+        };
+        let result = ctx.emit_value(
+            string_op,
+            vec![lhs.value, rhs.value],
+            None,
+            PhpType::Str,
+            string_op.default_effects(),
+            Some(expr.span),
+        );
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value {
+            release_binary_operand_temporary(ctx, rhs, expr.span);
+        }
+        return result;
+    }
     if matches!(op, BinOp::Add) {
+        let lhs_ty = ctx.builder.value_php_type(lhs.value).codegen_repr();
+        let rhs_ty = ctx.builder.value_php_type(rhs.value).codegen_repr();
+        if is_gradual_array_union_operand(&lhs_ty) && is_array_union_operand(&rhs_ty) {
+            lhs = convert_gradual_array_union_operand(ctx, lhs, expr.span);
+        } else if is_array_union_operand(&lhs_ty) && is_gradual_array_union_operand(&rhs_ty) {
+            rhs = convert_gradual_array_union_operand(ctx, rhs, expr.span);
+        } else if let (PhpType::Array(left_elem), PhpType::Array(right_elem)) = (&lhs_ty, &rhs_ty) {
+            if indexed_array_union_element_type(left_elem, right_elem).is_none() {
+                // Lists whose element storages differ have no common indexed representation.
+                // Both are copied into owned hash storage (the operands are left untouched: a
+                // class constant is one of them in Monolog's `Level::NAMES + Level::VALUES`)
+                // and unioned there, which is what php's key rule is written against anyway.
+                lhs = indexed_union_via_hash(ctx, lhs, expr.span);
+                rhs = indexed_union_via_hash(ctx, rhs, expr.span);
+            }
+        }
         if let Some((op, result_ty)) = array_union_plan(ctx, lhs.value, rhs.value) {
             // Union helpers borrow both inputs and return fresh storage. Retire expression
             // temporaries only after the helper has retained every payload needed by its result.
@@ -223,6 +278,17 @@ fn lower_numeric_binary_values(
             Some(expr.span),
         );
     }
+    if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+        && (is_gradual_bitwise_operand(ctx, lhs) || is_gradual_bitwise_operand(ctx, rhs))
+    {
+        let mixed_op = mixed_numeric_op(op).expect("bitwise operations have mixed dispatch");
+        let result = lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value {
+            release_binary_operand_temporary(ctx, rhs, expr.span);
+        }
+        return result;
+    }
     if matches!(
         op,
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight
@@ -299,6 +365,18 @@ fn lower_numeric_binary_values(
                 Some(expr.span),
             );
         }
+        // php's `int / int` keeps an exact quotient an `int` (`3600 / 60` is `int(60)`); the
+        // checker types it `Mixed`, as it does an overflow-capable `+`/`-`/`*`/`**`.
+        if matches!(op, BinOp::Div) && fallback_expr_type(expr) == PhpType::Mixed {
+            return ctx.emit_value(
+                Op::ICheckedDiv,
+                vec![lhs.value, rhs.value],
+                None,
+                PhpType::Mixed,
+                Op::ICheckedDiv.default_effects(),
+                Some(expr.span),
+            );
+        }
         let iop = match op {
             BinOp::Add => Op::IAdd,
             BinOp::Sub => Op::ISub,
@@ -341,6 +419,66 @@ fn lower_numeric_binary_values(
         effects_lookup::runtime_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns whether a bitwise operand needs runtime string-versus-integer dispatch.
+fn is_gradual_bitwise_operand(
+    ctx: &LoweringContext<'_, '_>,
+    value: LoweredValue,
+) -> bool {
+    matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    )
+}
+
+/// Returns whether a lowered PHP type already has concrete array storage.
+fn is_array_union_operand(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+}
+
+/// Returns whether a lowered operand needs runtime array-tag validation for `+`.
+fn is_gradual_array_union_operand(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Validates and clones a boxed gradual array into independently owned hash storage.
+fn convert_gradual_array_union_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let converted = ctx.emit_value(
+        Op::MixedToHash,
+        vec![source.value],
+        None,
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+        Op::MixedToHash.default_effects(),
+        Some(span),
+    );
+    release_binary_operand_temporary(ctx, source, span);
+    converted
+}
+
+/// Copies an indexed-array union operand into independently owned hash storage.
+fn indexed_union_via_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let boxed = ctx.emit_value(
+        Op::MixedBox,
+        vec![source.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(span),
+    );
+    release_binary_operand_temporary(ctx, source, span);
+    convert_gradual_array_union_operand(ctx, boxed, span)
 }
 
 /// Returns the EIR opcode and result type for PHP array union operands.
@@ -470,6 +608,10 @@ pub(super) fn mixed_numeric_op(op: &BinOp) -> Option<MixedNumericOp> {
         BinOp::Sub => Some(MixedNumericOp::Sub),
         BinOp::Mul => Some(MixedNumericOp::Mul),
         BinOp::Pow => Some(MixedNumericOp::Pow),
+        BinOp::Div => Some(MixedNumericOp::Div),
+        BinOp::BitAnd => Some(MixedNumericOp::BitAnd),
+        BinOp::BitOr => Some(MixedNumericOp::BitOr),
+        BinOp::BitXor => Some(MixedNumericOp::BitXor),
         _ => None,
     }
 }

@@ -201,3 +201,14 @@ echo $x;
 }
 
 // --- Missing type function tests ---
+
+/// Verifies a statically callable closure reports PHP's runtime class name.
+#[test]
+fn test_get_debug_type_callable_returns_closure() {
+    let out = compile_and_run(
+        r#"<?php
+echo get_debug_type(fn () => 1);
+"#,
+    );
+    assert_eq!(out, "Closure");
+}

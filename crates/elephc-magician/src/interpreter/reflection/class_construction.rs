@@ -18,12 +18,23 @@ pub(super) fn eval_reflection_class_new(
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("class_name")], evaluated_args)?;
     let class_name = eval_reflection_class_target_name(args[0], context, values)?;
+    if !eval_reflection_class_like_or_runtime_exists(&class_name, context, values)? {
+        let _ = crate::interpreter::eval_spl_autoload_class(&class_name, context, values)?;
+    }
     let reflected_name = context
         .resolve_class_like_name(&class_name)
         .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
-    eval_reflection_class_owner_object_result(
+    let result = eval_reflection_class_owner_object_result(
         EVAL_REFLECTION_OWNER_CLASS,
         &reflected_name,
+        context,
+        values,
+    )?;
+    if result.is_some() {
+        return Ok(result);
+    }
+    eval_throw_reflection_exception(
+        &format!("Class \"{}\" does not exist", reflected_name),
         context,
         values,
     )
@@ -84,23 +95,28 @@ pub(super) fn eval_reflection_class_owner_object_result(
         else {
             return Ok(None);
         };
+        let resolved_name = context.resolve_class_like_name(reflected_name);
+        let resolved_name = resolved_name.as_deref().unwrap_or(reflected_name);
+        let canonical_name = values
+            .reflection_canonical_class_name(resolved_name)?
+            .unwrap_or_else(|| resolved_name.trim_start_matches('\\').to_string());
         let method_names = eval_reflection_aot_member_names(
             EVAL_REFLECTION_OWNER_METHOD,
-            reflected_name,
+            &canonical_name,
             values,
         )?;
         let property_names = eval_reflection_aot_member_names(
             EVAL_REFLECTION_OWNER_PROPERTY,
-            reflected_name,
+            &canonical_name,
             values,
         )?;
-        let interface_names = eval_reflection_aot_class_interface_names(reflected_name, values)?;
-        let trait_names = eval_reflection_aot_class_trait_names(reflected_name, values)?;
-        let parent_class_name = eval_reflection_aot_parent_class_name(reflected_name, values)?;
-        let attributes = context.native_class_attributes(reflected_name);
-        return eval_reflection_owner_object(
+        let interface_names = eval_reflection_aot_class_interface_names(&canonical_name, values)?;
+        let trait_names = eval_reflection_aot_class_trait_names(&canonical_name, values)?;
+        let parent_class_name = eval_reflection_aot_parent_class_name(&canonical_name, values)?;
+        let attributes = context.native_class_attributes(&canonical_name);
+        let object = eval_reflection_owner_object(
             owner_kind,
-            reflected_name,
+            &canonical_name,
             &attributes,
             &interface_names,
             &trait_names,
@@ -119,13 +135,21 @@ pub(super) fn eval_reflection_class_owner_object_result(
             None,
             context,
             values,
+        )?;
+        let doc_comment = values.reflection_class_doc_comment(&canonical_name)?;
+        return eval_reflection_apply_class_doc_comment(
+            owner_kind,
+            object,
+            doc_comment.as_deref(),
+            context,
+            values,
         )
         .map(Some);
     };
     let interface_names =
         eval_reflection_eval_metadata_interface_names(&metadata, context, values)?;
     let flags = eval_reflection_eval_metadata_flags(&metadata, context, values)?;
-    eval_reflection_owner_object(
+    let object = eval_reflection_owner_object(
         owner_kind,
         &metadata.resolved_name,
         &metadata.attributes,
@@ -146,11 +170,44 @@ pub(super) fn eval_reflection_class_owner_object_result(
         None,
         context,
         values,
+    )?;
+    eval_reflection_apply_class_doc_comment(
+        owner_kind,
+        object,
+        metadata.doc_comment.as_deref(),
+        context,
+        values,
     )
     .map(Some)
 }
 
-/// Builds the minimal ReflectionClass metadata object for PHP's builtin Closure class.
+/// Stores a reflected class doc comment in native ReflectionClass-compatible slots.
+fn eval_reflection_apply_class_doc_comment(
+    owner_kind: u64,
+    object: RuntimeCellHandle,
+    doc_comment: Option<&str>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT
+    ) {
+        return Ok(object);
+    }
+    let Some(doc_comment) = doc_comment else {
+        return Ok(object);
+    };
+    let doc_comment = values.string(doc_comment)?;
+    let has_doc_comment = values.bool_value(true)?;
+    eval_reflection_with_declaring_class_scope("ReflectionClass", context, |_| {
+        values.property_set(object, "__doc_comment", doc_comment)?;
+        values.property_set(object, "__has_doc_comment", has_doc_comment)
+    })?;
+    Ok(object)
+}
+
+/// Builds the ReflectionClass metadata object for PHP's builtin Closure class.
 pub(super) fn eval_reflection_builtin_closure_class_object_result(
     owner_kind: u64,
     context: &mut ElephcEvalContext,
@@ -158,13 +215,14 @@ pub(super) fn eval_reflection_builtin_closure_class_object_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let flags = EVAL_REFLECTION_CLASS_FLAG_FINAL | EVAL_REFLECTION_CLASS_FLAG_INTERNAL;
     let modifiers = eval_reflection_class_modifiers(true, false, false, false);
+    let method_names = eval_reflection_builtin_closure_method_names();
     eval_reflection_owner_object(
         owner_kind,
         "Closure",
         &[],
         &[],
         &[],
-        &[],
+        &method_names,
         &[],
         None,
         &[],
@@ -265,8 +323,43 @@ pub(super) fn eval_reflection_class_target_name(
     eval_reflection_string_arg(target, values)
 }
 
+thread_local! {
+    /// Flags of generated classes already found to exist, keyed by the case-folded name.
+    static AOT_CLASS_FLAGS: std::cell::RefCell<
+        std::collections::HashMap<
+            String,
+            (u64, u64),
+            std::hash::BuildHasherDefault<rustc_hash::FxHasher>,
+        >,
+    > = std::cell::RefCell::new(std::collections::HashMap::default());
+}
+
 /// Returns generated/AOT class flags for synthetic ReflectionClass fallback objects.
+///
+/// Only a class that EXISTS is remembered: a class never stops existing, and everything the
+/// flags describe (kind, final/abstract/readonly, whether the constructor and `__clone` are
+/// public) is fixed when it is declared. A miss is not remembered, because a conditionally
+/// declared class can start existing later in the request. Each answer costs four existence
+/// probes and two lifecycle lookups, and a Symfony request asks for the same classes over and
+/// over.
 pub(super) fn eval_reflection_aot_class_flags(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(u64, u64)>, EvalStatus> {
+    let key = class_name.trim_start_matches('\\').to_ascii_lowercase();
+    if let Some(flags) = AOT_CLASS_FLAGS.with(|cache| cache.borrow().get(&key).copied()) {
+        return Ok(Some(flags));
+    }
+    let answer = eval_reflection_aot_class_flags_uncached(class_name, values)?;
+    if let Some(flags) = answer {
+        AOT_CLASS_FLAGS.with(|cache| {
+            cache.borrow_mut().insert(key, flags);
+        });
+    }
+    Ok(answer)
+}
+
+fn eval_reflection_aot_class_flags_uncached(
     class_name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<(u64, u64)>, EvalStatus> {
@@ -275,6 +368,11 @@ pub(super) fn eval_reflection_aot_class_flags(
     let is_interface = eval_runtime_interface_exists(runtime_class_name, values)?;
     let is_trait = values.trait_exists(runtime_class_name)?;
     let is_enum = values.enum_exists(runtime_class_name)?;
+    if crate::eval_trace::enabled() {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_aot_class_flags name={runtime_class_name:?} class={is_class} interface={is_interface} trait={is_trait} enum={is_enum}"
+        );
+    }
     if !(is_class || is_interface || is_trait || is_enum) {
         return Ok(None);
     }
@@ -288,10 +386,13 @@ pub(super) fn eval_reflection_aot_class_flags(
     if is_enum {
         class_flags &= !EVAL_REFLECTION_CLASS_FLAG_READONLY;
     }
+    // The compiled word also knows which compiled classes are iterable (a Traversable class
+    // that is not abstract); the builtin list below only covers the runtime's own classes.
     flags |= class_flags
         & (EVAL_REFLECTION_CLASS_FLAG_FINAL
             | EVAL_REFLECTION_CLASS_FLAG_ABSTRACT
-            | EVAL_REFLECTION_CLASS_FLAG_READONLY);
+            | EVAL_REFLECTION_CLASS_FLAG_READONLY
+            | EVAL_REFLECTION_CLASS_FLAG_ITERABLE);
     if is_interface {
         flags |= EVAL_REFLECTION_CLASS_FLAG_INTERFACE;
     }

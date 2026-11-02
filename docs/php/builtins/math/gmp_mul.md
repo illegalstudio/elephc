@@ -2,7 +2,7 @@
 title: "gmp_mul()"
 description: "Multiplies two GMP numbers."
 sidebar:
-  order: 615
+  order: 628
 ---
 
 ## gmp_mul()

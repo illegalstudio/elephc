@@ -2,7 +2,7 @@
 title: "atan2() - internals"
 description: "Compiler internals for atan2(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 559
+  order: 572
 ---
 
 ## `atan2()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/atan2.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/atan2.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

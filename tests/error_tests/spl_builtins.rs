@@ -130,24 +130,20 @@ fn test_error_spl_autoload_extensions_rejects_dynamic_string_setter() {
     );
 }
 
-// Tests that `spl_object_id()` argument must be an object.
-// Fixture: typed `mixed` parameter in a user function, passed a non-object.
-/// Verifies that error SPL object ID rejects mixed.
+/// Verifies that object identity still rejects a definite scalar statically.
 #[test]
-fn test_error_spl_object_id_rejects_mixed() {
+fn test_error_spl_object_id_rejects_string() {
     expect_error(
-        "<?php function id(mixed $value): int { return spl_object_id($value); }",
+        "<?php spl_object_id(\"value\");",
         "spl_object_id() argument must be an object",
     );
 }
 
-// Tests that `spl_object_hash()` argument must be an object.
-// Fixture: typed `mixed` parameter in a user function, passed a non-object.
-/// Verifies that error SPL object hash rejects mixed.
+/// Verifies that object hashing still rejects a definite scalar statically.
 #[test]
-fn test_error_spl_object_hash_rejects_mixed() {
+fn test_error_spl_object_hash_rejects_int() {
     expect_error(
-        "<?php function hash_value(mixed $value): string { return spl_object_hash($value); }",
+        "<?php spl_object_hash(42);",
         "spl_object_hash() argument must be an object",
     );
 }

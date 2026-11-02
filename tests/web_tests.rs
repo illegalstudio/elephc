@@ -89,9 +89,20 @@ fn free_port() -> u16 {
     l.local_addr().unwrap().port()
 }
 
-/// Blocks until `addr` accepts a TCP connection (server ready), or panics after 10s.
+/// Blocks until `addr` accepts a TCP connection (server ready), or panics at the deadline.
+///
+/// The deadline costs nothing when the server starts promptly — the loop returns on the first
+/// successful connect — so it is sized for the worst case rather than the common one. Ten
+/// seconds was not: a loaded machine (a parallel `--web` compile, or the security scanners
+/// walking a 250 MB binary) pushed startup past it and failed 76 of 83 tests at once, every one
+/// of them with this same panic and none of them a real defect. `ELEPHC_WEB_TEST_READY_SECS`
+/// overrides it.
 fn wait_until_ready(addr: &str) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let seconds = std::env::var("ELEPHC_WEB_TEST_READY_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(60);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
     while Instant::now() < deadline {
         if TcpStream::connect(addr).is_ok() {
             return;
@@ -502,6 +513,15 @@ fn web_compile_produces_binary() {
     assert!(bin.exists(), "expected binary at {}", bin.display());
 }
 
+/// Verifies a dynamically probed constant name does not create an undefined reset symbol.
+#[test]
+fn web_compile_skips_reset_for_constant_probe_without_global_storage() {
+    let dir = make_test_dir("web_constant_probe");
+    let source = "<?php eval('$x = 1;'); echo defined('NEVER_DEFINED') ? 'bad' : 'ok';";
+    let bin = compile_web(&dir, source, "app");
+    assert!(bin.exists(), "expected binary at {}", bin.display());
+}
+
 /// Verifies each compile-time model produces its intended idle process topology
 /// and removes every recorded worker, broker, and handler PID during shutdown.
 #[test]
@@ -853,6 +873,51 @@ fn web_reset_clears_globals_between_runs() {
     );
 }
 
+/// Returns a process's virtual size in KiB, as `ps` reports it on macOS and Linux alike.
+fn process_virtual_kib(pid: u32) -> u64 {
+    let output = Command::new("ps")
+        .args(["-o", "vsz=", "-p", &pid.to_string()])
+        .output()
+        .expect("failed to read the worker's virtual size");
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("unreadable ps vsz output: {output:?}"))
+}
+
+/// A generator no root releases -- here one caught in a reference cycle -- is dropped with the
+/// heap arena at the request boundary. Its 2 MB fiber stack used to go with it: mapped, never
+/// unmapped, one more per request, until the worker hit the kernel's mapping limit. Symfony's
+/// Twig pages left eight per request. The boundary now hands every such stack back.
+#[test]
+fn web_request_boundary_returns_unreleased_generator_stacks() {
+    let dir = make_test_dir("web_generator_stacks");
+    let src = r#"<?php
+class Holder { public $gen; }
+function cycle(Holder $h) { yield $h; yield 2; }
+$h = new Holder();
+$gen = cycle($h);
+$gen->current();
+$h->gen = $gen;
+unset($h, $gen);
+echo "ok";
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let server = spawn_server(&bin, &addr, "1");
+    let worker = wait_for_direct_child_count(server.id(), 1)[0];
+    for _ in 0..5 {
+        assert!(raw_response_body(&http_get(&addr, "/")).contains("ok"));
+    }
+    let before = process_virtual_kib(worker);
+    for _ in 0..100 {
+        assert!(raw_response_body(&http_get(&addr, "/")).contains("ok"));
+    }
+    let grown = process_virtual_kib(worker).saturating_sub(before);
+    // One leaked stack per request is 100 * 2 MiB here; allow a tenth of that for noise.
+    assert!(grown < 20 * 1024, "the worker's virtual size grew by {grown} KiB over 100 requests");
+}
+
 /// Verifies per-request reset of an ordinary global used through `global $g`.
 #[test]
 fn web_reset_clears_ordinary_global_alias_between_requests() {
@@ -1035,6 +1100,49 @@ if (($_SERVER["REQUEST_URI"] ?? "") === "/first") {
     );
 }
 
+/// Verifies a defaultless static property survives being assigned again on a later request.
+///
+/// `__rt_web_reset` releases what the property holds and leaves the pointer in the slot, and the
+/// next request's prologue marks the property uninitialized again. A store releases whatever the
+/// value word holds before overwriting it, so that leftover pointer used to be freed a second
+/// time -- by then the arena had handed the same address to this request's own strings, and the
+/// store quietly freed one of them. Symfony's `Container::get` is this exact shape and its
+/// worker died with a segmentation fault on the second request.
+#[test]
+fn web_reset_leaves_no_stale_pointer_behind_an_uninitialized_static_property() {
+    let dir = make_test_dir("web_reset_uninit_prop");
+    let src = concat!(
+        "<?php class Box { private static $make;",
+        " public static function make(string $id): string { return \"made:\" . $id; }",
+        " public static function get(string $id): string {",
+        "  return (self::$make ??= self::make(...))($id); } }",
+        " $pad = [];",
+        " for ($i = 0; $i < 8; $i++) { $pad[] = \"padding-\" . $i; }",
+        " echo Box::get($pad[3]), \"|\", implode(\",\", $pad);",
+    );
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses = [
+        http_get(&addr, "/"),
+        http_get(&addr, "/"),
+        http_get(&addr, "/"),
+    ];
+    let _ = child.kill();
+    let _ = child.wait();
+    let expected =
+        "made:padding-3|padding-0,padding-1,padding-2,padding-3,padding-4,padding-5,padding-6,padding-7";
+    for (index, response) in responses.iter().enumerate() {
+        assert!(
+            response.ends_with(expected),
+            "request {} body: {:?}",
+            index + 1,
+            response
+        );
+    }
+}
+
 /// Verifies that "Hello World" is served as the response body.
 #[test]
 fn web_server_serves_echo_body() {
@@ -1139,6 +1247,28 @@ fn web_superglobal_visible_in_function() {
     assert!(resp.ends_with("DELETE"), "body: {:?}", resp);
 }
 
+/// Verifies a returned array can retain a live alias to a request superglobal.
+#[test]
+fn web_array_reference_tracks_superglobal_reassignment() {
+    let dir = make_test_dir("web_superglobal_array_reference");
+    let src = r#"<?php
+function request_data(): array {
+    return ['session' => &$_SESSION];
+}
+$request = request_data();
+$_SESSION = ['token' => 'updated'];
+echo $request['session']['token'];
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("updated"), "body: {:?}", resp);
+}
+
 /// Verifies a router storing an interface-typed handler survives repeated web requests.
 #[test]
 fn web_router_interface_handler_survives_repeated_requests() {
@@ -1230,6 +1360,908 @@ fn web_server_superglobal_populated() {
     let resp = http_request(&addr, "GET", "/foo?a=1", &[], "");
     let _ = child.kill(); let _ = child.wait();
     assert!(resp.ends_with("GET /foo?a=1"), "body: {:?}", resp);
+}
+
+/// Verifies a request superglobal survives closure argument collection and runtime spreading.
+#[test]
+fn web_runtime_closure_spread_preserves_superglobal_string_values() {
+    let dir = make_test_dir("web_runtime_closure_superglobal");
+    let src = r#"<?php
+class Loader {
+    private array $values = [];
+    private string $data = '';
+
+    private function parse(): array {
+        $path = __DIR__.'/runtime-context.env';
+        file_put_contents($path, 'APP_ENV=dev');
+        $this->data = str_replace(["\r\n", "\r"], "\n", file_get_contents($path));
+        $this->values['APP_ENV'] = substr($this->data, 8);
+        try {
+            return $this->values;
+        } finally {
+            $this->values = [];
+            $this->data = '';
+        }
+    }
+
+    public function load(): void {
+        foreach ($this->parse() as $name => $value) {
+            $_ENV[$name] = $value;
+            $_SERVER[$name] = $value;
+        }
+    }
+}
+(new Loader())->load();
+$_SERVER += $_ENV;
+class Application {
+    public function __construct(string $environment) { echo $environment; }
+}
+$app = static function (array $context): void { new Application($context['APP_ENV']); };
+$arguments = static function (): array { return [$_SERVER]; };
+[$app, $args] = [$app, $arguments()];
+$app(...$args);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(response.ends_with("dev"), "unexpected response: {response:?}");
+}
+
+/// Verifies a captured runtime resolver closure preserves multiple environment strings.
+///
+/// A resolver-style closure returns a context array built from request globals after
+/// several writes and an array union. The downstream callable must receive every
+/// string intact when its spread arguments are materialized.
+#[test]
+fn web_runtime_resolver_closure_preserves_multiple_environment_strings() {
+    let dir = make_test_dir("web_runtime_resolver_environment_context");
+    let src = r#"<?php
+class EnvironmentLoader {
+    private array $values = [];
+    private string $data = '';
+
+    public function load(): void {
+        $path = __DIR__.'/environment-context.env';
+        file_put_contents($path, "APP_ENV=dev\nAPP_DEBUG=1\nAPP_SECRET=fixture-secret\nAPP_RUNTIME=runtime-class");
+        $this->data = str_replace(["\r\n", "\r"], "\n", file_get_contents($path));
+        foreach (explode("\n", $this->data) as $line) {
+            $parts = explode('=', $line, 2);
+            $this->values[$parts[0]] = $parts[1];
+        }
+        try {
+            foreach ($this->values as $name => $value) {
+                $_ENV[$name] = $value;
+                $_SERVER[$name] = $value;
+            }
+        } finally {
+            $this->values = [];
+            $this->data = '';
+        }
+        $_SERVER += $_ENV;
+    }
+}
+
+class Resolver {
+    public function __construct(private \Closure $application) {}
+
+    public function resolve(): array {
+        $parameters = [true];
+        $arguments = function () use ($parameters): array {
+            $resolved = [];
+            foreach ($parameters as $_) {
+                $resolved[] = $_SERVER;
+            }
+            return $resolved;
+        };
+
+        return [$this->application, $arguments()];
+    }
+}
+
+(new EnvironmentLoader())->load();
+$application = static function (array $context): void {
+    echo $context['APP_ENV'], ':', $context['APP_DEBUG'], ':', $context['APP_SECRET'], ':', $context['APP_RUNTIME'];
+};
+[$application, $arguments] = (new Resolver($application(...)))->resolve();
+$application(...$arguments);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        response.ends_with("dev:1:fixture-secret:runtime-class"),
+        "unexpected response: {response:?}"
+    );
+}
+
+/// Verifies entry-script server variables identify the compiled front controller.
+#[test]
+fn web_server_script_superglobals_match_compiled_entrypoint() {
+    let dir = make_test_dir("web_server_script_sg");
+    let src = "<?php echo $_SERVER['SCRIPT_FILENAME'] . '|' . $_SERVER['DOCUMENT_ROOT'] . '|' . $_SERVER['SCRIPT_NAME'] . '|' . $_SERVER['PHP_SELF'];";
+    let bin = compile_web(&dir, src, "app");
+    let entry = dir.join("app.php").canonicalize().unwrap();
+    let expected = format!(
+        "{}|{}|/app.php|/app.php",
+        entry.display(),
+        entry.parent().unwrap().display(),
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with(&expected), "body: {:?}", resp);
+}
+
+/// Verifies dynamic eval fragments inherit request superglobals through the bridge.
+#[test]
+fn web_dynamic_eval_sees_request_superglobals() {
+    let dir = make_test_dir("web_dynamic_eval_superglobal");
+    let src = "<?php eval($_GET['code']);";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let code = "echo%20empty%28%24_SERVER%5B%27SCRIPT_FILENAME%27%5D%29%20%3F%20%27empty%27%20%3A%20basename%28%24_SERVER%5B%27SCRIPT_FILENAME%27%5D%29%3B";
+    let resp = http_request(&addr, "GET", &format!("/?code={code}"), &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("app.php"), "body: {:?}", resp);
+}
+
+/// Verifies a web eval call can reflect a callable, return an interface object with two closures, and invoke it.
+#[test]
+fn web_eval_reflected_callable_method_returns_closure_pair() {
+    let dir = make_test_dir("web_eval_reflected_callable");
+    let src = r#"<?php
+interface WebEvalResolver {
+    public function resolve(): string;
+}
+
+class WebEvalClosureResolver implements WebEvalResolver {
+    public function __construct(
+        private readonly Closure $callable,
+        private readonly Closure $arguments,
+    ) {}
+
+    public function resolve(): string {
+        return ($this->callable)(...($this->arguments)());
+    }
+}
+
+class WebEvalRuntime {
+    public function getResolver(
+        callable $callable,
+        ?ReflectionFunction $reflector = null,
+    ): WebEvalResolver {
+        $callable = $callable(...);
+        $reflector ??= new ReflectionFunction($callable);
+        $parameters = [];
+        $arguments = function () use ($parameters): array { return $parameters; };
+
+        return new WebEvalClosureResolver($callable, $arguments);
+    }
+}
+
+echo eval('$runtime = new WebEvalRuntime();
+$callback = static function (): string { return "ok"; };
+echo $runtime->getResolver($callback)->resolve();');
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies an eval-declared grandchild invokes an inherited AOT constructor by its declaring class.
+#[test]
+fn web_eval_dynamic_grandchild_constructs_through_aot_ancestor() {
+    let dir = make_test_dir("web_eval_dynamic_grandchild_constructor");
+    let src = r#"<?php
+interface WebEvalConstructorParent {}
+
+abstract class WebEvalConstructorOwner {
+    public function __construct(
+        ?string $name,
+        ?WebEvalConstructorParent $parent = null,
+    ) {
+        echo $name;
+    }
+}
+
+class WebEvalConstructorAotParent extends WebEvalConstructorOwner {}
+
+echo eval('class WebEvalConstructorDynamicMiddle extends WebEvalConstructorAotParent {}
+class WebEvalConstructorDynamicLeaf extends WebEvalConstructorDynamicMiddle {}
+$node = new WebEvalConstructorDynamicLeaf("ok");
+');
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies a null-context runtime include inherits AOT constructor metadata from its seed context.
+#[test]
+fn web_runtime_include_fallback_inherits_aot_constructor_metadata() {
+    let dir = make_test_dir("web_runtime_include_fallback_metadata");
+    let included = dir.join("loaded.php");
+    fs::write(
+        &included,
+        r#"<?php
+class WebFallbackMetadataDynamic extends WebFallbackMetadataAotParent {}
+$node = new WebFallbackMetadataDynamic("ok");
+"#,
+    )
+    .expect("write runtime include fixture");
+    let src = r#"<?php
+interface WebFallbackMetadataParent {}
+
+abstract class WebFallbackMetadataOwner {
+    public function __construct(
+        ?string $name,
+        ?WebFallbackMetadataParent $parent = null,
+    ) {
+        echo $name;
+    }
+}
+
+class WebFallbackMetadataAotParent extends WebFallbackMetadataOwner {}
+
+function web_fallback_metadata_seed(): void {
+    eval('');
+}
+
+function web_fallback_metadata_include(string $path): void {
+    include $path;
+}
+
+web_fallback_metadata_seed();
+web_fallback_metadata_include($_GET['file']);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, &format!("/?file={}", included.display()));
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies a runtime include materializing an AOT-known class preserves its exact backing class.
+#[test]
+fn web_runtime_include_materializes_known_class_with_exact_aot_backing() {
+    let dir = make_test_dir("web_runtime_include_materialized_aot_class");
+    let included = dir.join("loaded.php");
+    fs::write(
+        &included,
+        r#"<?php
+class WebMaterializedBackingDynamic extends WebMaterializedBackingAotParent {}
+$node = new WebMaterializedBackingDynamic('ok');
+echo $node->fluent() instanceof WebMaterializedBackingDynamic ? '' : 'bad';
+"#,
+    )
+    .expect("write materialized runtime include fixture");
+    let src = r#"<?php
+interface WebMaterializedBackingParent {}
+
+abstract class WebMaterializedBackingOwner {
+    public function __construct(
+        ?string $name,
+        ?WebMaterializedBackingParent $parent = null,
+    ) {
+        echo $name;
+    }
+
+    public function fluent(): static {
+        return $this;
+    }
+}
+
+class WebMaterializedBackingAotParent extends WebMaterializedBackingOwner {}
+
+if (false) {
+    include __DIR__ . '/loaded.php';
+}
+
+function web_materialized_backing_seed(): void {
+    eval('');
+}
+
+function web_materialized_backing_include(string $path): void {
+    include $path;
+}
+
+web_materialized_backing_seed();
+web_materialized_backing_include($_GET['file']);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, &format!("/?file={}", included.display()));
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies an AOT dynamic class-string construction keeps a fluent static return in a property.
+#[test]
+fn web_aot_dynamic_class_string_construction_keeps_fluent_property_result() {
+    let dir = make_test_dir("web_aot_dynamic_class_string_fluent");
+    let src = r#"<?php
+class WebDynamicChainNode {
+    public function setParent(object $parent): static {
+        return $this;
+    }
+
+    public function getNode(): string {
+        return 'ok';
+    }
+}
+
+class WebDynamicChainBuilder {
+    private ?WebDynamicChainNode $root = null;
+
+    public function __construct(string $type) {
+        $classes = ['node' => WebDynamicChainNode::class];
+        $class = $classes[$type];
+        $this->root = (new $class())->setParent($this);
+    }
+
+    public function build(): string {
+        return $this->root->getNode();
+    }
+}
+
+echo (new WebDynamicChainBuilder('node'))->build();
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies a dense AOT class set uses the eval bridge instead of expanding every class string.
+#[test]
+fn web_dense_aot_dynamic_class_string_construction_uses_compact_bridge_dispatch() {
+    let dir = make_test_dir("web_dense_aot_dynamic_class_string");
+    let mut src = String::from(
+        r#"<?php
+interface WebDenseDynamicNewParent {}
+
+class WebDenseDynamicNewBase {
+    private string $value;
+    protected ?WebDenseDynamicNewParent $parent = null;
+
+    public function __construct(array $values, ?WebDenseDynamicNewParent $parent = null) {
+        $this->value = $values['value'];
+        $this->parent = $parent;
+    }
+
+    public function setParent(WebDenseDynamicNewParent $parent): static {
+        $this->parent = $parent;
+
+        return $this;
+    }
+
+    public function value(): string {
+        return $this->value;
+    }
+}
+
+class WebDenseDynamicNewCollection extends WebDenseDynamicNewBase implements WebDenseDynamicNewParent {
+    private array $children = [];
+
+    public function append(WebDenseDynamicNewBase $node): static {
+        $this->children['node'] = $node->setParent($this);
+
+        return $this;
+    }
+
+    public function createNode(): string {
+        foreach ($this->children as $child) {
+            $child->parent = $this;
+
+            return $child->value();
+        }
+
+        return 'missing';
+    }
+}
+"#,
+    );
+    for index in 0..48 {
+        src.push_str(&format!(
+            "class WebDenseDynamicNew{index} extends WebDenseDynamicNewBase {{}}\n"
+        ));
+    }
+    src.push_str("$classes = [\n");
+    for index in 0..48 {
+        src.push_str(&format!("    '{index}' => WebDenseDynamicNew{index}::class,\n"));
+    }
+    src.push_str(
+        r#"];
+$class = $classes[$_GET['class'] ?? '47'];
+$collection = new WebDenseDynamicNewCollection(['value' => 'collection']);
+$collection->append(new $class(['value' => 'ok']));
+echo $collection->createNode();
+"#,
+    );
+
+    let bin = compile_web(&dir, &src, "app");
+    let asm = fs::read_to_string(bin.with_extension("s")).expect("read generated assembly");
+    assert!(
+        !asm.contains("_eir_main_dynamic_new_mixed_case_"),
+        "dense dynamic construction must avoid per-class AOT dispatch"
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?class=47");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies a compact dynamic-new result survives a BuilderAware parent/clone flow into children.
+#[test]
+fn web_dense_dynamic_node_builder_flow_keeps_child_for_create_node() {
+    let dir = make_test_dir("web_dense_dynamic_node_builder");
+    let mut src = String::from(
+        r#"<?php
+interface WebDenseNodeParent {}
+
+interface WebDenseRuntimeNode {}
+
+interface WebDenseBuilderAware {
+    public function setBuilder(WebDenseNodeBuilder $builder): void;
+}
+
+class WebDenseNodeBase {
+    protected ?string $name = null;
+    protected object $normalization;
+    protected object $validation;
+    protected mixed $defaultValue;
+    protected bool $default = false;
+    protected bool $required = false;
+    protected array $deprecation = [];
+    protected object $merge;
+    protected bool $allowEmptyValue = true;
+    protected mixed $nullEquivalent = null;
+    protected mixed $trueEquivalent = true;
+    protected mixed $falseEquivalent = false;
+    protected string $pathSeparator = ".";
+    protected WebDenseNodeParent|WebDenseRuntimeNode|null $parent = null;
+    protected array $attributes = [];
+
+    public function __construct(?string $name, ?WebDenseNodeParent $parent = null) {
+        $this->name = $name;
+        $this->parent = $parent;
+    }
+
+    public function setParent(WebDenseNodeParent $parent): static {
+        $this->parent = $parent;
+
+        return $this;
+    }
+
+    public function getNode(): string {
+        return $this->name ?? 'missing';
+    }
+}
+
+class WebDenseNodeRuntime implements WebDenseRuntimeNode {}
+
+class WebDenseNodeCollection extends WebDenseNodeBase implements WebDenseNodeParent {
+    private array $children = [];
+    protected WebDenseNodeBase $prototype;
+
+    public function append(mixed $node): static {
+        $this->children[$node->name ?? ''] = $node->setParent($this);
+
+        return $this;
+    }
+
+    public function createNode(): string {
+        $result = 'missing';
+        $node = new WebDenseNodeRuntime();
+
+        foreach ($this->children as $child) {
+            $child->parent = $node;
+            $result = $child->getNode();
+        }
+
+        return $result;
+    }
+
+    public function prototype(WebDenseNodeBuilder $builder, string $type): WebDenseNodeBase {
+        return $this->prototype = $builder->node('prototype', $type)->setParent($this);
+    }
+
+    public function createPrototype(): string {
+        if (!isset($this->prototype)) {
+            return 'missing';
+        }
+
+        return $this->prototype->getNode();
+    }
+}
+
+class WebDenseNodeBuilder implements WebDenseNodeParent {
+    private ?WebDenseNodeCollection $parent;
+    private array $mapping;
+
+    public function __construct(WebDenseNodeCollection $parent) {
+        $this->parent = $parent;
+        $this->mapping = [
+"#,
+    );
+    for index in 0..48 {
+        src.push_str(&format!("            '{index}' => WebDenseNode{index}::class,\n"));
+    }
+    src.push_str(
+        r#"        ];
+    }
+
+    public function setParent(?WebDenseNodeCollection $parent): static {
+        $this->parent = $parent;
+
+        return $this;
+    }
+
+    public function append(WebDenseNodeBase $node): static {
+        if ($node instanceof WebDenseBuilderAware) {
+            $builder = clone $this;
+            $builder->setParent(null);
+            $node->setBuilder($builder);
+        }
+
+        if (null !== $this->parent) {
+            $this->parent->append($node);
+            $node->setParent($this);
+        }
+
+        return $this;
+    }
+
+    public function node(?string $name, string $type): WebDenseNodeBase {
+        $class = $this->mapping[$type];
+        $node = new $class($name);
+        $this->append($node);
+
+        return $node;
+    }
+}
+"#,
+    );
+    for index in 0..48 {
+        if index == 47 {
+            src.push_str(
+                r#"class WebDenseNode47 extends WebDenseNodeCollection implements WebDenseBuilderAware {
+    private WebDenseNodeBuilder $builder;
+
+    public function setBuilder(WebDenseNodeBuilder $builder): void {
+        $this->builder = $builder;
+    }
+}
+"#,
+            );
+        } else {
+            src.push_str(&format!("class WebDenseNode{index} extends WebDenseNodeBase {{}}\n"));
+        }
+    }
+    src.push_str(
+        r#"
+$root = new WebDenseNodeCollection('root');
+$builder = new WebDenseNodeBuilder($root);
+for ($i = 0; $i < 48; ++$i) {
+    $builder->node('n'.$i, (string) $i);
+}
+for ($i = 0; $i < 48; ++$i) {
+    $builder->node('duplicate', (string) $i);
+}
+$lastChild = $root->createNode();
+$root->prototype($builder, '47');
+echo $lastChild, ':', $root->createPrototype();
+"#,
+    );
+
+    let bin = compile_web(&dir, &src, "app");
+    let asm = fs::read_to_string(bin.with_extension("s")).expect("read generated assembly");
+    assert!(
+        !asm.contains("_eir_WebDenseNodeBuilder__node_dynamic_new_mixed_case_"),
+        "dense node-builder construction must avoid per-class AOT dispatch"
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        response.ends_with("duplicate:prototype"),
+        "response: {response:?}"
+    );
+}
+
+/// Verifies a retained fallback autoloader refreshes AOT metadata published after its creation.
+#[test]
+fn web_retained_fallback_autoloader_refreshes_aot_constructor_metadata() {
+    let dir = make_test_dir("web_retained_fallback_metadata");
+    let loader = dir.join("loader.php");
+    fs::write(
+        &loader,
+        r#"<?php
+spl_autoload_register(static function (string $class): void {
+    if ($class === 'WebDeferredMetadataDynamic') {
+        eval('class WebDeferredMetadataDynamic extends WebDeferredMetadataAotParent {}');
+    }
+});
+"#,
+    )
+    .expect("write deferred runtime autoloader fixture");
+    let src = r#"<?php
+interface WebDeferredMetadataParent {}
+
+abstract class WebDeferredMetadataOwner {
+    public function __construct(
+        ?string $name,
+        ?WebDeferredMetadataParent $parent = null,
+    ) {
+        echo $name;
+    }
+
+    public function fluent(): static {
+        return $this;
+    }
+}
+
+class WebDeferredMetadataAotParent extends WebDeferredMetadataOwner {}
+
+function web_deferred_metadata_include(string $path): void {
+    include $path;
+}
+
+function web_deferred_metadata_seed(): void {
+    eval('');
+}
+
+function web_deferred_metadata_construct(): void {
+    $node = new WebDeferredMetadataDynamic('ok');
+    echo $node->fluent() instanceof WebDeferredMetadataDynamic ? '' : 'bad';
+}
+
+web_deferred_metadata_include($_GET['file']);
+web_deferred_metadata_seed();
+web_deferred_metadata_construct();
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, &format!("/?file={}", loader.display()));
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(response.ends_with("ok"), "response: {response:?}");
+}
+
+/// Verifies a first-class method callable built by interpreted code is safe on the next request.
+///
+/// The closure's receiver edge is recorded in a process-wide registry keyed by the closure
+/// object's address. The object and its receiver form a cycle, so nothing releases the entry
+/// before the arena is wiped. The next request's closure lands at the same address, the stale
+/// entry is "replaced", and its children are released -- by then they are that request's live
+/// receiver. Laravel's `LoadConfiguration` does this with `$app->environment(...)`; its worker
+/// died on the second or third request with heap corruption, "Target class [app] does not
+/// exist" or "A facade root has not been set".
+#[test]
+fn web_interpreted_method_callable_survives_the_next_request() {
+    let dir = make_test_dir("web_method_callable_edge");
+    fs::write(
+        dir.join("boot.php"),
+        r#"<?php
+final class WebEdgeRepo
+{
+    public ?Closure $detector = null;
+
+    public function __construct(private array $items) {}
+
+    public function get(string $key, string $default): string
+    {
+        return $this->items[$key] ?? $default;
+    }
+}
+
+final class WebEdgeBoot
+{
+    public function bootstrap(array $items): string
+    {
+        $config = new WebEdgeRepo($items);
+        $config->detector = $config->get(...);
+        return ($config->detector)('env', 'production') . ':' . $config->get('name', 'none');
+    }
+}
+"#,
+    )
+    .expect("write runtime-loaded bootstrap fixture");
+    // The include path is only known at run time, so the classes are interpreted.
+    let src = r#"<?php
+function web_edge_load(string $path): void { include $path; }
+web_edge_load(__DIR__ . '/' . ($_GET['f'] ?? 'boot') . '.php');
+$out = [];
+for ($i = 0; $i < 4; $i++) {
+    $out[] = (new WebEdgeBoot())->bootstrap(['env' => 'local' . $i, 'name' => 'demo']);
+}
+echo implode(',', $out);
+"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--heap-debug"]);
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses: Vec<String> = (0..4).map(|_| http_get(&addr, "/")).collect();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let expected = "local0:demo,local1:demo,local2:demo,local3:demo";
+    for (index, response) in responses.iter().enumerate() {
+        assert!(
+            response.ends_with(expected),
+            "request {} body: {:?}",
+            index + 1,
+            response
+        );
+    }
+}
+
+/// Verifies a `putenv()` lasts one request, as php restores the environment at request end.
+///
+/// The compiled `putenv` also copied its `NAME=value` string into the request heap and gave libc
+/// that pointer, which libc keeps: once the next request reused the heap, the environment pointed
+/// at someone else's bytes. Laravel's Dotenv `putenv()`s every `.env` entry on every request.
+#[test]
+fn web_putenv_does_not_outlive_its_request() {
+    let dir = make_test_dir("web_putenv_request_scope");
+    let src = r#"<?php
+echo var_export(getenv('ELEPHC_WEB_PUTENV_PROBE'), true), '|';
+putenv('ELEPHC_WEB_PUTENV_PROBE=request-' . str_repeat('x', 40));
+$pad = [];
+for ($i = 0; $i < 32; $i++) { $pad[] = str_repeat('p', 40 + $i); }
+echo getenv('ELEPHC_WEB_PUTENV_PROBE'), '|', count($pad);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses: Vec<String> = (0..3).map(|_| http_get(&addr, "/")).collect();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let expected = format!("false|request-{}|32", "x".repeat(40));
+    for (index, response) in responses.iter().enumerate() {
+        assert!(
+            response.ends_with(&expected),
+            "request {} body: {:?}",
+            index + 1,
+            response
+        );
+    }
+}
+
+/// Verifies each request starts from php's default timezone, as `php -S` does.
+///
+/// Two request-boundary leaks met here. The environment restore removed the `TZ=UTC` the runtime
+/// had applied for the first request, so later requests parsed local wall-clock strings in the
+/// machine's own zone while still reporting UTC (symfony/demo's post dates showed an hour early
+/// after the first page). And a request's `date_default_timezone_set()` carried into the next one.
+/// The timestamps below are zone-dependent, so both leaks change the response.
+#[test]
+fn web_default_timezone_is_request_scoped() {
+    let dir = make_test_dir("web_timezone_request_scope");
+    let src = r#"<?php
+if (isset($_GET['set'])) {
+    date_default_timezone_set($_GET['set']);
+}
+$d = new DateTimeImmutable('2023-02-12 17:48:59');
+echo date_default_timezone_get(), '|', $d->getTimestamp(), '|', date('H:i T', 1676224139);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses: Vec<String> = ["/", "/", "/?set=Europe/Paris", "/"]
+        .iter()
+        .map(|path| http_get(&addr, path))
+        .collect();
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let expected = [
+        "UTC|1676224139|17:48 UTC",
+        "UTC|1676224139|17:48 UTC",
+        "Europe/Paris|1676220539|18:48 CET",
+        "UTC|1676224139|17:48 UTC",
+    ];
+    for (index, (response, expected)) in responses.iter().zip(expected).enumerate() {
+        assert!(
+            response.ends_with(expected),
+            "request {} body: {:?}",
+            index + 1,
+            response
+        );
+    }
+}
+
+/// An eval'd call into a compiled function runs the eval-to-native global sync, which stores the
+/// eval scope's `$argc`/`$argv` boxes in program global storage no PHP code names. The web reset
+/// never cleared that storage, so the second request's sync released the first request's box
+/// after the arena reset had reclaimed it, and the heap-debug worker died on every other request.
+#[test]
+fn web_eval_native_call_global_sync_is_request_scoped() {
+    let dir = make_test_dir("web_eval_native_global_sync");
+    let src = r#"<?php
+final class Holder {
+    public function __construct(private string $n) {}
+    public function name(): string { return $this->n; }
+}
+final class State {
+    public static $held = null;
+}
+function keep($h): bool
+{
+    State::$held = $h;
+    return true;
+}
+eval('return keep(new Holder("fresh"));');
+echo State::$held->name();
+"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--heap-debug"]);
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses: Vec<String> = (0..4).map(|_| http_get(&addr, "/")).collect();
+    let _ = child.kill();
+    let _ = child.wait();
+    for (index, response) in responses.iter().enumerate() {
+        assert!(
+            response.ends_with("fresh"),
+            "request {} body: {:?}",
+            index + 1,
+            response
+        );
+    }
 }
 
 /// Verifies $_GET is parsed from the query string, with percent-decoding.
@@ -1434,6 +2466,81 @@ fn web_get_does_not_leak_across_requests() {
     assert!(r2.ends_with("none"), "r2 leaked stale $_GET: {:?}", r2);
 }
 
+/// Verifies `headers_sent()` is false again for the SECOND request a worker serves.
+///
+/// `_headers_sent` is process storage that PHP scopes to a request: `__rt_stdout_write` raises it
+/// the first time bytes escape the output-buffering stack, and nothing used to put it back. A CLI
+/// build cannot see that (one process, one request), but a prefork worker can, and Symfony is the
+/// program that reads it -- `Response::sendHeaders()` returns early when `headers_sent()` is true,
+/// so from request 2 onward every response kept its body and silently lost its `Content-Type` and
+/// `Cache-Control`. The guard below is that check, written out.
+#[test]
+fn web_headers_sent_resets_between_requests() {
+    let dir = make_test_dir("web_headers_sent_reset");
+    let src = "<?php if (headers_sent()) { echo 'stale'; } else { header('X-Elephc-Probe: fresh'); echo 'fresh'; }";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_request(&addr, "GET", "/", &[], "");
+    let r2 = http_request(&addr, "GET", "/", &[], "");
+    let r3 = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r1.ends_with("fresh"), "r1: {:?}", r1);
+    assert!(r2.ends_with("fresh"), "r2 saw request 1's headers_sent(): {:?}", r2);
+    assert!(r3.ends_with("fresh"), "r3 saw an earlier request's headers_sent(): {:?}", r3);
+    for (n, resp) in [(2, &r2), (3, &r3)] {
+        assert!(
+            resp.to_ascii_lowercase().contains("x-elephc-probe: fresh"),
+            "r{n} lost the header it set: {:?}",
+            resp
+        );
+    }
+}
+
+/// Verifies eval-declared state does not cross a worker's request boundary.
+///
+/// The interpreter keeps its per-request tables in a context, and one context is deliberately
+/// leaked for the whole process so that a null-handle bridge call has somewhere to put hash
+/// resources. Everything in it is a raw pointer into the PHP arena, and `__rt_web_reset` hands
+/// that arena back to pure-bump allocation between requests, so a table that survives the
+/// boundary answers request N+1 with storage that now belongs to something else. What that looks
+/// like from outside is a static that reads back as a different type, a property that comes back
+/// null, and -- when the stale handle is RELEASED -- a live block on the free chain that faults
+/// the next allocator walk. The contract is simply that request 2 sees what request 1 saw.
+#[test]
+fn web_eval_declared_state_does_not_cross_requests() {
+    let dir = make_test_dir("web_eval_state_reset");
+    // Only a static property and a dynamic one: a COMPILED write to a DECLARED property of an
+    // eval-declared class is dropped today (the eval bridge exports a property get and no set),
+    // which is a separate defect and would mask what this test is about.
+    let src = concat!(
+        "<?php ",
+        "eval('class Counter { public static $n = 0; }'); ",
+        "Counter::$n++; ",
+        "$c = new Counter(); ",
+        "$c->extra = 'dynamic'; ",
+        "echo Counter::$n, ':', $c->extra;",
+    );
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let responses: Vec<String> = (0..5)
+        .map(|_| http_request(&addr, "GET", "/", &[], ""))
+        .collect();
+    let _ = child.kill();
+    let _ = child.wait();
+    for (index, response) in responses.iter().enumerate() {
+        assert!(
+            response.ends_with("1:dynamic"),
+            "request {index} saw another request's eval state: {:?}",
+            response
+        );
+    }
+}
+
 /// Verifies file_get_contents('php://input') returns the raw request body under --web.
 #[test]
 fn web_php_input_returns_body() {
@@ -1479,6 +2586,129 @@ fn web_header_sets_response_header() {
     assert!(resp.ends_with("ok"), "body: {:?}", resp);
 }
 
+/// Verifies PHP's default `Content-Type: text/html; charset=UTF-8` goes out when the script set
+/// none, and that any explicit Content-Type retires it for the request, as measured against
+/// `php -S` 8.5.10: an empty value is sent empty, a set-then-removed one sends no Content-Type at
+/// all, and removing one nobody set keeps the default.
+///
+/// Symfony renders its error pages outside `Response::prepare()`, so a 404 relied on this default
+/// and went out with no Content-Type.
+#[test]
+fn web_response_gets_php_default_content_type() {
+    let dir = make_test_dir("web_default_content_type");
+    let src = "<?php $m = $_GET['m'] ?? ''; \
+        if ($m === 'none') { header('Content-Type:'); } \
+        elseif ($m === 'json') { header('Content-Type: application/json'); } \
+        elseif ($m === 'removed') { header('Content-Type: text/plain'); header_remove('Content-Type'); } \
+        elseif ($m === 'rmonly') { header_remove('Content-Type'); } \
+        elseif ($m === 'rmall') { header('X-A: 1'); header_remove(); } \
+        echo 'ok';";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let content_types = |query: &str| -> Vec<String> {
+        http_request(&addr, "GET", &format!("/?m={}", query), &[], "")
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().starts_with("content-type:"))
+            .map(|line| line["content-type:".len()..].trim().to_string())
+            .collect()
+    };
+    let default = content_types("");
+    let json = content_types("json");
+    let none = content_types("none");
+    let removed = content_types("removed");
+    let rmonly = content_types("rmonly");
+    let rmall = content_types("rmall");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(default, vec!["text/html; charset=UTF-8".to_string()]);
+    assert_eq!(json, vec!["application/json".to_string()]);
+    assert_eq!(none, vec![String::new()]);
+    assert!(removed.is_empty(), "removed: {:?}", removed);
+    assert_eq!(rmonly, vec!["text/html; charset=UTF-8".to_string()]);
+    assert_eq!(rmall, vec!["text/html; charset=UTF-8".to_string()]);
+}
+
+/// Verifies `$_SESSION[$key] = ...` inside a function keeps the session array alive when the
+/// program also puts `&$_SESSION` in an array, which moves the superglobal into a shared reference
+/// cell.
+///
+/// The write-back after an in-place `__rt_hash_set` released the container the cell still held,
+/// so the next element write reused a freed hash and the worker died. Symfony's session storage
+/// takes `&$_SESSION`, and every request after a login crashed decoding the session.
+/// Expected body measured against `php -S` 8.5.10.
+#[test]
+fn web_superglobal_reference_cell_survives_element_writes_in_functions() {
+    let dir = make_test_dir("web_superglobal_ref_cell_writeback");
+    let src = "<?php\n\
+        function put(string $key, string $value): void { $_SESSION[$key] = $value; }\n\
+        function holder(): array { return [&$_SESSION]; }\n\
+        put('a', str_repeat('x', 20));\n\
+        put('b', 'y');\n\
+        $held = holder();\n\
+        put('c', 'z');\n\
+        for ($i = 0; $i < 20; $i++) { put('k' . $i, str_repeat('v', $i)); }\n\
+        echo count($_SESSION), ' ', $_SESSION['a'], ' ', $_SESSION['c'], ' ', $_SESSION['k19'], ' ', count($held);\n";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    let expected = "23 xxxxxxxxxxxxxxxxxxxx z vvvvvvvvvvvvvvvvvvv 1";
+    assert_eq!(raw_response_body(&first), expected, "first: {first:?}");
+    assert_eq!(raw_response_body(&second), expected, "second: {second:?}");
+}
+
+/// Verifies `headers_list()` reports the pending `Name: value` lines in send order, from compiled
+/// code and from `eval()`, and that `header_remove()` in `eval()` edits the same list.
+///
+/// The expected body is `php -d expose_php=0 -S` 8.5.10's (`expose_php` only adds its own
+/// `X-Powered-By` line, which elephc does not send). Symfony's `SessionUtils::popSessionCookie()`
+/// walks this list to find the session cookie, so every route that starts a session died on the
+/// undefined function.
+#[test]
+fn web_headers_list_reports_pending_lines_in_compiled_and_eval_code() {
+    let dir = make_test_dir("web_headers_list");
+    let src = "<?php\n\
+        $empty = headers_list();\n\
+        header('X-A: 1');\n\
+        header('Set-Cookie: s=1; path=/', false);\n\
+        header('Set-Cookie: t=2', false);\n\
+        header('x-b: two');\n\
+        $aot = headers_list();\n\
+        $fromEval = eval('return headers_list();');\n\
+        eval('header_remove(\"x-A\");');\n\
+        $afterEvalRemove = headers_list();\n\
+        eval('header_remove(null);');\n\
+        $afterEvalClear = headers_list();\n\
+        header('X-C: 3');\n\
+        header('X-D: 4');\n\
+        header_remove('x-c');\n\
+        $aotRemove = headers_list();\n\
+        echo json_encode([$empty, $aot, $fromEval, $afterEvalRemove, $afterEvalClear, $aotRemove]);\n";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(
+        raw_response_body(&resp),
+        "[[],[\"X-A: 1\",\"Set-Cookie: s=1; path=\\/\",\"Set-Cookie: t=2\",\"x-b: two\"],\
+         [\"X-A: 1\",\"Set-Cookie: s=1; path=\\/\",\"Set-Cookie: t=2\",\"x-b: two\"],\
+         [\"Set-Cookie: s=1; path=\\/\",\"Set-Cookie: t=2\",\"x-b: two\"],[],[\"X-D: 4\"]]",
+        "response: {resp:?}"
+    );
+    let head = resp.split_once("\r\n\r\n").map_or("", |(head, _)| head).to_lowercase();
+    assert!(head.contains("x-d: 4"), "headers: {resp:?}");
+    assert!(!head.contains("x-b: two"), "headers: {resp:?}");
+}
+
 /// Verifies header/status mutations after the first streamed byte are ignored
 /// with PHP's "headers already sent" diagnostics instead of failing silently.
 #[test]
@@ -1520,6 +2750,57 @@ fn web_late_header_and_status_emit_headers_already_sent_warnings() {
         diagnostics.contains("http_response_code()")
             && diagnostics.matches("headers already sent").count() >= 2,
         "missing late response-code warning: {diagnostics:?}"
+    );
+}
+
+/// Verifies each request starts with its `define()` constants undefined, as php does: a guarded
+/// define inside a function and an unconditional top-level define run again on every request
+/// without "Constant already defined", and `defined()` answers from this request alone.
+#[test]
+fn web_define_constants_do_not_survive_the_request() {
+    let dir = make_test_dir("web_define_per_request");
+    let bin = compile_web(
+        &dir,
+        r#"<?php
+define('WEB_TOP_LEVEL', 'top');
+function guard(): string {
+    $before = defined('WEB_GUARDED') ? 'y' : 'n';
+    if (!defined('WEB_GUARDED')) {
+        define('WEB_GUARDED', 7);
+    }
+    return $before . (defined('WEB_GUARDED') ? 'y' : 'n');
+}
+echo guard(), guard(), ' ', WEB_TOP_LEVEL, ' ', WEB_GUARDED;
+"#,
+        "app",
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let stderr_path = dir.join("server.stderr");
+    let stderr = fs::File::create(&stderr_path).expect("create define stderr capture");
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1"])
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .expect("spawn define server");
+    wait_until_ready(&addr);
+
+    let bodies = (0..3)
+        .map(|_| raw_response_body(&http_get(&addr, "/")).to_string())
+        .collect::<Vec<_>>();
+    let pid = child.id();
+    let _ = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status();
+    let _ = child.wait();
+    let diagnostics = fs::read_to_string(&stderr_path).expect("read define diagnostics");
+
+    for body in &bodies {
+        assert_eq!(body, "nyyy top 7", "every request must see fresh constants: {bodies:?}");
+    }
+    assert!(
+        !diagnostics.contains("already defined"),
+        "a later request re-ran define() against the previous request's flag: {diagnostics:?}"
     );
 }
 
@@ -2324,7 +3605,7 @@ fn web_setcookie_emits_header() {
 #[test]
 fn web_env_superglobal_populated() {
     let dir = make_test_dir("web_env");
-    let src = "<?php echo ($_ENV['ELEPHC_WEB_TEST_ENV'] ?? '?');";
+    let src = "<?php echo ($_ENV['ELEPHC_WEB_TEST_ENV'] ?? '?').'|'.($_SERVER['ELEPHC_WEB_TEST_ENV'] ?? '?');";
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
@@ -2337,7 +3618,11 @@ fn web_env_superglobal_populated() {
     let resp = http_request(&addr, "GET", "/", &[], "");
     let _ = child.kill();
     let _ = child.wait();
-    assert!(resp.ends_with("present"), "$_ENV not populated: {:?}", resp);
+    assert!(
+        resp.ends_with("present|present"),
+        "process environment not mirrored into $_ENV and $_SERVER: {:?}",
+        resp
+    );
 }
 
 /// Verifies the produced binary answers --help and --version (exit 0) (D4).
@@ -2689,6 +3974,39 @@ fn web_multipart_post_and_files() {
     assert!(resp.ends_with("hello|up.txt|text/plain|12"), "multipart parse: {:?}", resp);
 }
 
+/// php fills `$_POST` only for a POST request, and `request_parse_body()` (php 8.4) parses the
+/// body of PUT / PATCH / DELETE instead: urlencoded and multipart bodies parse, any other (or
+/// no) content type throws `RequestParseBodyException`. symfony/http-foundation's
+/// `Request::createFromGlobals()` calls it for every non-POST body method.
+/// Expected output verified against php 8.5 (`php -S`).
+#[test]
+fn web_request_parse_body_for_put_patch_delete() {
+    let dir = make_test_dir("web_request_parse_body");
+    let src = "<?php try { [$p, $f] = request_parse_body(); \
+        echo json_encode([$p, array_map(fn($x) => [$x['name'], $x['full_path'], $x['type'], $x['size']], $f), $_POST]); } \
+        catch (RequestParseBodyException $e) { echo get_class($e), ': ', $e->getMessage(); }";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let urlenc = [("Content-Type", "application/x-www-form-urlencoded")];
+    let put = http_request(&addr, "PUT", "/", &urlenc, "a=1&b%5B%5D=2");
+    let patch = http_request(&addr, "PATCH", "/", &[("Content-Type", "APPLICATION/X-WWW-FORM-URLENCODED; charset=utf-8")], "a=1");
+    let delete = http_request(&addr, "DELETE", "/", &[], "");
+    let json = http_request(&addr, "PUT", "/", &[("Content-Type", "application/json")], "{}");
+    let multipart_body = "--B\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nv\r\n\
+        --B\r\nContent-Disposition: form-data; name=\"f\"; filename=\"n.txt\"\r\n\
+        Content-Type: text/plain\r\n\r\nfile body\r\n--B--\r\n";
+    let multipart = http_request(&addr, "PUT", "/", &[("Content-Type", "multipart/form-data; boundary=B")], multipart_body);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(put.ends_with(r#"[{"a":"1","b":["2"]},[],[]]"#), "put: {:?}", put);
+    assert!(patch.ends_with(r#"[{"a":"1"},[],[]]"#), "patch: {:?}", patch);
+    assert!(delete.ends_with("RequestParseBodyException: Request does not provide a content type"), "delete: {:?}", delete);
+    assert!(json.ends_with(r#"RequestParseBodyException: Content-Type "application/json" is not supported"#), "json: {:?}", json);
+    assert!(multipart.ends_with(r#"[{"a":"v"},{"f":["n.txt","n.txt","text\/plain",9]},[]]"#), "multipart: {:?}", multipart);
+}
+
 /// Verifies an uploaded file can be READ back via file_get_contents on its
 /// tmp_name. This exercises both A5 and the multi-bridge link fix: a dynamic
 /// file_get_contents pulls in the TLS bridge, which must co-link with the web
@@ -2717,7 +4035,7 @@ fn web_multipart_file_contents_readable() {
 /// Verifies a namespaced --web program (classes under a namespace) compiles and
 /// serves. The B1 uncaught-exception wrap must not reorder top-level namespace
 /// declarations away from the classes they scope (it skips the wrap entirely when
-/// namespaces are present). Regression for the web-framework example.
+/// namespaces are present). Regression for namespaced web entry points.
 #[test]
 fn web_namespaced_program_serves() {
     let dir = make_test_dir("web_namespaced");
@@ -2895,6 +4213,268 @@ fn web_opcache_gate_ignores_enable_cli() {
 
         assert!(resp.ends_with(expected), "{why}; response was {resp:?}");
     }
+}
+
+/// Pins that a `--web` build still destructs an object whose method was reached through the
+/// eval bridge, in PHP's order.
+///
+/// THE BUG THIS PINS. A `--web` build declares an eval context in any function that calls a
+/// method on a receiver needing the Mixed fallback (`promote_eval_bridge_method_argument_locals`),
+/// and `has_eval_context()` then routes that function's `$this->prop` reads through
+/// `__elephc_eval_property_get`. That bridge boxes the statically typed receiver into
+/// `EVAL_TEMP_CELL_OFFSET` and owes the box a `__rt_decref_mixed` after the call — but
+/// `pop_eval_context_class_scope()` parked the bridge status in that same slot, overwriting the
+/// box's only pointer. The pending release then decref'd the status integer (always 0 on the
+/// path that reaches it, so never a crash), and the receiver kept a reference forever:
+///
+/// ```text
+/// php -n / plain build : d(a)|d(b)|d(c)|a,b,c
+/// --web build (before) : |d(b)||b
+/// ```
+///
+/// Only `b` survives: `a` and `c` are the two whose `set()` routed through `class()`, the method
+/// that reads `$this->definition` through the bridge. This is the shape that left Symfony's
+/// `secrets.local_vault` unregistered — `ServiceConfigurator::__destruct()` is what calls
+/// `setDefinition()`, and it never ran.
+///
+/// WHY A `--web` TEST. The identical program is correct in a plain CLI build, because nothing
+/// there declares the eval context that turns a direct property read into a bridged one. Every
+/// CLI-only destructor test stayed green through this bug.
+///
+/// Reference value captured from `php -n` (PHP 8.5).
+#[test]
+fn web_bridged_property_read_still_destructs_its_receiver() {
+    let src = r#"<?php
+class Registry {
+    public array $ids = [];
+    public function add(?string $id): void { $this->ids[] = $id; echo 'd(' . $id . ')'; }
+}
+class Definition {
+    public ?string $class = null;
+    public function setClass(?string $c): static { $this->class = $c; return $this; }
+}
+class Node {
+    private Registry $registry;
+    private ?Definition $definition = null;
+    private ?string $id = null;
+    public function __construct(Registry $registry, Definition $definition, ?string $id) {
+        $this->registry = $registry;
+        $this->definition = $definition;
+        $this->id = $id;
+    }
+    public function __destruct() { $this->registry->add($this->id); }
+    public function class(?string $c): static { $this->definition->setClass($c); return $this; }
+}
+class Builder {
+    private Registry $registry;
+    public function __construct(Registry $registry) { $this->registry = $registry; }
+    public function set(?string $id, ?string $class = null): Node {
+        $node = new Node($this->registry, new Definition(), $id);
+        return null !== $class ? $node->class($class) : $node;
+    }
+}
+$registry = new Registry();
+$builder = new Builder($registry);
+$builder->set('a', 'A');
+echo '|';
+$builder->set('b');
+echo '|';
+$builder->set('c', 'C');
+echo '|';
+echo implode(',', $registry->ids);
+"#;
+    let dir = make_test_dir("web_bridged_prop_destruct");
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let expected = "d(a)|d(b)|d(c)|a,b,c";
+    assert!(
+        first.ends_with(expected),
+        "a bridged property read stranded its receiver's reference, so the destructor never ran; \
+         expected a body ending {expected:?}, got {first:?}"
+    );
+    // A leak that only shows on a later request would still starve a long-running worker.
+    assert!(
+        second.ends_with(expected),
+        "second request diverged from the first; expected a body ending {expected:?}, got {second:?}"
+    );
+}
+
+/// A ReflectionMethod returned by an eval-backed ReflectionClass remains live while compiled
+/// code stores it in nested arrays, destructures it, and checks its abstract reflection parent.
+///
+/// This must run through `--web`: the worker enables the allocator's double-free guard, whereas
+/// the same source in a plain CLI binary can complete before the duplicate release is observed.
+#[test]
+fn web_eval_reflection_constructor_survives_array_roundtrip() {
+    let dir = make_test_dir("web_eval_reflection_constructor");
+    fs::write(
+        dir.join("runner.php"),
+        r#"<?php
+class RuntimeConstructorTarget
+{
+    public function __construct(string $value = 'x') {}
+}
+function makeRuntimeReflection(): mixed {
+    return new ReflectionClass('RuntimeConstructorTarget');
+}
+"#,
+    )
+    .unwrap();
+
+    let src = r#"<?php
+function getRuntimeConstructor(mixed $reflection): ?ReflectionFunctionAbstract {
+    if (!$reflection = $reflection->getConstructor()) {
+        return null;
+    }
+    if (!$reflection->isPublic()) {
+        return null;
+    }
+    return $reflection;
+}
+function inspectRuntimeConstructor(mixed $reflection): string {
+    $reflection->isInternal();
+    $reflection->getFileName();
+    $calls = [];
+    if ($constructor = getRuntimeConstructor($reflection)) {
+        $calls[] = [$constructor, []];
+    }
+
+    $seen = 'none';
+    foreach ($calls as $call) {
+        [$method, $arguments] = $call;
+        if ($method instanceof ReflectionFunctionAbstract) {
+            $seen = $method instanceof ReflectionMethod ? 'method' : 'function';
+            $names = [];
+            foreach ($method->getParameters() as $parameter) {
+                $names[] = $parameter->name;
+            }
+        }
+    }
+    return $seen;
+}
+$runnerFile = 'runner';
+if (!function_exists('makeRuntimeReflection')) {
+    include __DIR__ . '/' . $runnerFile . '.php';
+}
+echo inspectRuntimeConstructor(makeRuntimeReflection());
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        first.ends_with("method"),
+        "the first worker request lost or double-freed the ReflectionMethod: {first:?}"
+    );
+    assert!(
+        second.ends_with("method"),
+        "the ReflectionMethod ownership diverged on a later request: {second:?}"
+    );
+}
+
+/// Verifies `$_GET` and `$_POST` follow php's request-variable grammar, the one `parse_str()`
+/// shares: `a[]=1&a[]=2` nests into an array, `+` is a space, and a key's dot or space becomes an
+/// underscore. The hand-rolled split kept `c[]` as a literal key, so every array-shaped parameter
+/// reached the application as a different request than `php -S` served.
+#[test]
+fn web_superglobals_nest_bracketed_keys_like_php() {
+    let dir = make_test_dir("web_sg_nested");
+    let src = "<?php echo json_encode(['get' => $_GET, 'post' => $_POST]);";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(
+        &addr,
+        "POST",
+        "/?q[]=1&q[]=2&x+y=a+b&n[k][]=v",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        "a=1&c[]=x&c[]=y&d.e=f",
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        resp.ends_with(
+            r#"{"get":{"q":["1","2"],"x_y":"a b","n":{"k":["v"]}},"post":{"a":"1","c":["x","y"],"d_e":"f"}}"#
+        ),
+        "body: {:?}",
+        resp
+    );
+}
+
+/// Verifies a top-level `define()` is request state in a `--web` worker: every request defines its
+/// own value, the compiled program reads that value, and interpreted code sees it too. The
+/// "already defined" guard of `define()` was a BSS flag nothing cleared, so request two kept
+/// request one's value and never published it to the eval bridge (Laravel's `defined('LARAVEL_START')`
+/// timing line vanished from every response after the first).
+#[test]
+fn web_define_is_per_request_and_visible_to_eval() {
+    let dir = make_test_dir("web_define_per_request");
+    let src = "<?php define('REQ_STAMP', $_GET['n']); $code = 'echo REQ_STAMP, defined(\"REQ_STAMP\") ? \"y\" : \"n\";'; eval($code); echo '|', REQ_STAMP;";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_request(&addr, "GET", "/?n=a", &[], "");
+    let second = http_request(&addr, "GET", "/?n=b", &[], "");
+    let third = http_request(&addr, "GET", "/?n=c", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("ay|a"), "first: {:?}", first);
+    assert!(second.ends_with("by|b"), "second: {:?}", second);
+    assert!(third.ends_with("cy|c"), "third: {:?}", third);
+}
+
+/// Verifies a long C-string conversion in one request cannot free a live block of the next.
+///
+/// `__rt_cstr` keeps the buffer of its last conversion longer than 4 KiB in a static slot so the
+/// next long conversion can free it. A `--web` request ends by wiping the heap arena, which left
+/// that slot pointing at an address the next request reuses: the next request's own long
+/// conversion freed whatever block began there. Here request 1 converts a 5000-byte path (the
+/// path argument of `file_exists()`) as the first heap allocation of the request; request 2
+/// allocates a 5000-byte string at the same arena address, then converts a second long path,
+/// whose stale free released that string for the conversion buffer to overwrite. Laravel's
+/// `mb_ucfirst()` title-case regex pattern (6 KiB) hit the same stale free as an intermittent
+/// "heap debug detected double free" worker crash.
+#[test]
+fn web_long_cstr_buffer_does_not_outlive_the_request_arena() {
+    let dir = make_test_dir("web_cstr_stale_slot");
+    let src = r#"<?php
+if (($_GET['r'] ?? '1') === '1') {
+    $m = file_exists(str_repeat('a', 5000));
+    echo 'first:', var_export($m, true);
+} else {
+    $s = str_repeat('Z', 5000);
+    $m = file_exists(str_repeat('b', 5000));
+    echo $s[0], $s[4999], var_export($m, true);
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_request(&addr, "GET", "/?r=1", &[], "");
+    let second = http_request(&addr, "GET", "/?r=2", &[], "");
+    let third = http_request(&addr, "GET", "/?r=1", &[], "");
+    let fourth = http_request(&addr, "GET", "/?r=2", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("first:false"), "first: {:?}", first);
+    assert!(second.ends_with("ZZfalse"), "second: {:?}", second);
+    assert!(third.ends_with("first:false"), "third: {:?}", third);
+    assert!(fourth.ends_with("ZZfalse"), "fourth: {:?}", fourth);
 }
 
 /// Issue #887: a client that completes its headers and then STALLS on the declared body is
@@ -3131,3 +4711,7 @@ mod memory_metrics;
 
 #[path = "web/environment.rs"]
 mod environment;
+
+/// mbstring request settings and catalog identity across reused prefork workers.
+#[path = "web/mbstring.rs"]
+mod mbstring;

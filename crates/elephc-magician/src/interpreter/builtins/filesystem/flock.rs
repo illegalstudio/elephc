@@ -152,7 +152,7 @@ fn eval_flock_direct_args(
                 if would_block.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                let (_, target) = eval_call_arg_value(arg.value(), context, scope, values)?;
+                let (_, target) = eval_direct_ref_arg_value(arg.value(), context, scope, values)?;
                 would_block = Some(target.ok_or(EvalStatus::RuntimeFatal)?);
             }
             _ => return Err(EvalStatus::RuntimeFatal),

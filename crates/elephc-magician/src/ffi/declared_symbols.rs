@@ -32,6 +32,7 @@ pub unsafe extern "C" fn __elephc_eval_register_declared_class_name(
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_declared_class_name");
     let status = std::panic::catch_unwind(|| unsafe {
         register_declared_symbol_inner(ctx, name_ptr, name_len, DeclaredSymbolKind::Class)
     })
@@ -50,6 +51,7 @@ pub unsafe extern "C" fn __elephc_eval_register_declared_interface_name(
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_declared_interface_name");
     let status = std::panic::catch_unwind(|| unsafe {
         register_declared_symbol_inner(ctx, name_ptr, name_len, DeclaredSymbolKind::Interface)
     })
@@ -68,6 +70,7 @@ pub unsafe extern "C" fn __elephc_eval_register_declared_trait_name(
     name_ptr: *const u8,
     name_len: u64,
 ) -> i32 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_register_declared_trait_name");
     let status = std::panic::catch_unwind(|| unsafe {
         register_declared_symbol_inner(ctx, name_ptr, name_len, DeclaredSymbolKind::Trait)
     })

@@ -24,6 +24,9 @@ impl Parser {
         let type_scope = self.type_parameters.len();
         let source_start_line = self.current_line();
         self.advance();
+        // PHP's return-by-reference marker sits between the keyword and the name. It was never
+        // consumed here, so `function &f()` died on an `Ident` that was an `&`.
+        let returns_by_ref = self.consume(TokenKind::Ampersand);
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
@@ -60,6 +63,7 @@ impl Parser {
             parameter_is_by_ref,
             parameter_is_variadic,
             return_type,
+            returns_by_ref,
             body,
         };
         self.type_parameters.truncate(type_scope);

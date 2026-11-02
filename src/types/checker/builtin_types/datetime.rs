@@ -28,6 +28,8 @@ mod ast;
 mod basics;
 mod bodies;
 mod create_from_format;
+mod date_create;
+mod datetime_serialize;
 mod factories;
 mod gate;
 mod injection;
@@ -36,6 +38,7 @@ mod interval_constructor;
 mod interval_diff;
 mod interval_factory;
 mod interval_format;
+mod interval_serialize;
 mod parse_formats;
 mod parse_misc;
 mod procedural_methods;
@@ -53,6 +56,10 @@ use basics::*;
 #[allow(unused_imports)]
 use create_from_format::*;
 #[allow(unused_imports)]
+use date_create::*;
+#[allow(unused_imports)]
+use datetime_serialize::*;
+#[allow(unused_imports)]
 use factories::*;
 #[allow(unused_imports)]
 use interface::*;
@@ -64,6 +71,8 @@ use interval_diff::*;
 use interval_factory::*;
 #[allow(unused_imports)]
 use interval_format::*;
+#[allow(unused_imports)]
+use interval_serialize::*;
 #[allow(unused_imports)]
 use parse_formats::*;
 #[allow(unused_imports)]
@@ -124,6 +133,7 @@ mod bodies_oracle {
             ("STRFTIME_SRC", strftime::STRFTIME_SRC.to_string(), bodies::strftime()),
             ("EXTRACT_MICROS_SRC", strftime::EXTRACT_MICROS_SRC.to_string(), bodies::extract_micros()),
             ("STRIP_MICROS_SRC", strftime::STRIP_MICROS_SRC.to_string(), bodies::strip_micros()),
+            ("NOW_MICROS_SRC", strftime::NOW_MICROS_SRC.to_string(), bodies::now_micros()),
             ("EXTRACT_MODIFY_MICROS_SRC", strftime::EXTRACT_MODIFY_MICROS_SRC.to_string(), bodies::extract_modify_micros()),
             ("STRIP_MODIFY_MICROS_SRC", strftime::STRIP_MODIFY_MICROS_SRC.to_string(), bodies::strip_modify_micros()),
             ("STRPTIME_SRC", strptime::STRPTIME_SRC.to_string(), bodies::strptime()),

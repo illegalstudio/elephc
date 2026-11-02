@@ -130,7 +130,7 @@ pub(super) fn emit_aarch64_eval_reflection_member_names(
     abi::emit_symbol_address(emitter, "x9", count_symbol);
     emitter.instruction("ldr x9, [x9]");                                        // load the AOT reflection member row count
     emitter.instruction("str x9, [sp, #16]");                                   // save the table count across helper calls
-    emitter.instruction("mov x0, x9");                                          // use the full table count as a safe result-array capacity
+    emitter.instruction("mov x0, #4");                                          // start from the wrapper's small minimum and grow only for matching members
     emitter.instruction(&format!("bl {string_array_new_symbol}"));              // allocate the boxed result string array
     emitter.instruction(&format!("cbz x0, {miss_label}"));                      // allocation failure reports a null pointer to Rust
     emitter.instruction("str x0, [sp, #24]");                                   // save the boxed result string array

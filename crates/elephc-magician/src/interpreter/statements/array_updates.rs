@@ -10,7 +10,7 @@
 use super::*;
 
 /// Applies member increment/decrement to a runtime value using PHP numeric semantics.
-pub(super) fn eval_inc_dec_value(
+pub(in crate::interpreter) fn eval_inc_dec_value(
     current: RuntimeCellHandle,
     increment: bool,
     values: &mut impl RuntimeValueOps,
@@ -111,8 +111,25 @@ pub(super) fn eval_dynamic_destructor_for_release(
     eval_dynamic_destructor_for_object_cell(identity, object, context, values).map(|_| ())
 }
 
-/// Calls a dynamic eval `__destruct()` hook for an already-boxed object cell.
+/// Runs whatever a released eval object owes before the runtime frees it.
+///
+/// A Generator owes the `finally` blocks of every `try` it is still suspended inside, which is
+/// how PHP answers an abandoned `foreach`; an ordinary dynamic object owes its `__destruct()`.
 pub(crate) fn eval_dynamic_destructor_for_object_cell(
+    identity: u64,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if context.has_eval_generator(identity) {
+        eval_generator_finalize(identity, context, values)?;
+        return Ok(true);
+    }
+    eval_dynamic_destruct_method_for_object_cell(identity, object, context, values)
+}
+
+/// Calls a dynamic eval `__destruct()` hook for an already-boxed object cell.
+fn eval_dynamic_destruct_method_for_object_cell(
     identity: u64,
     object: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
@@ -158,6 +175,10 @@ pub(super) fn eval_array_unset_element_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if is_globals_array(array) {
+        let name = eval_global_name(index, context, scope, values)?;
+        return unset_global_value(&name, context, scope, values);
+    }
     match array {
         EvalExpr::LoadVar(name) => {
             let existing = scope_entry(context, scope, name)
@@ -227,6 +248,9 @@ pub(super) fn eval_array_unset_element_stmt(
             }
             return Ok(());
         }
+        EvalExpr::ArrayGet { .. } => {
+            return eval_nested_array_unset_element(array, index, context, scope, values);
+        }
         _ => {}
     }
     with_eval_void_operands(&[array], context, scope, values, |args, context, scope, values| {
@@ -252,6 +276,42 @@ fn eval_property_array_unset_result(
         }
         Ok(())
     })
+}
+
+/// Executes `unset($container[$a][$b])`: the element one level down is itself the container.
+///
+/// php reads the nested container, removes the key from it and writes the container back; an
+/// absent or null link anywhere in the chain makes the whole `unset` a silent no-op. Only the
+/// ArrayAccess form was supported, so Doctrine's
+/// `unset($this->initializedHashMapping[$event][$hash])` (`ContainerAwareEventManager`) failed as
+/// an unsupported construct and took every database-backed page down with it.
+fn eval_nested_array_unset_element(
+    container: &EvalExpr,
+    index: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !crate::interpreter::builtins::eval_isset_arg(container, context, scope, values)? {
+        return Ok(());
+    }
+    let element = eval_expr(container, context, scope, values)?;
+    let tag = values.type_tag(element)?;
+    if tag == EVAL_TAG_OBJECT {
+        let result = eval_array_access_unset_result(element, index, context, scope, values);
+        eval_release_value(context, values, element)?;
+        return result;
+    }
+    if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        eval_release_value(context, values, element)?;
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    let updated = eval_array_unset_target_result(element, index, context, scope, values);
+    eval_release_value(context, values, element)?;
+    if let Some(updated) = updated? {
+        eval_store_value_in_lvalue(container, updated, context, scope, values)?;
+    }
+    Ok(())
 }
 
 /// Unsets one offset from an already-resolved array-like target and returns a replacement array.
@@ -342,6 +402,132 @@ pub(super) fn eval_array_without_key_result(
     Ok(rebuilt)
 }
 
+/// Executes short array destructuring and stores each selected positional element.
+pub(in crate::interpreter) fn eval_array_destructure_stmt(
+    targets: &[Option<EvalDestructureTarget>],
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let array = eval_owned_expr(value, context, scope, values)?;
+    let result = eval_destructure_into(targets, array, context, scope, values);
+    let released = eval_release_value(context, values, array);
+    result.and(released)
+}
+
+/// Writes one destructuring pattern's slots from an already-evaluated right-hand side.
+///
+/// A non-array right-hand side is NOT fatal: `php -n` 8.5.6 gives every target null and takes
+/// the right-hand side as the expression's value, warning `Cannot use int as array` only for a
+/// non-null scalar. Refusing here broke `[, , , $x] = $scopes[$name] ?? null;`, which is
+/// `var-exporter`'s `LazyDecoratorTrait` and is written precisely so the null case is reachable.
+pub(in crate::interpreter) fn eval_destructure_into(
+    targets: &[Option<EvalDestructureTarget>],
+    array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let tag = values.type_tag(array)?;
+    // An `ArrayAccess` object destructures through `offsetGet()`: `[$a, $b] = $collection->partition(...)`
+    // is how Blade's component attribute bag splits its attributes.
+    let readable = matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
+        || (tag == EVAL_TAG_OBJECT && eval_array_access_object_matches(array, context, values)?);
+    if !readable && tag != EVAL_TAG_NULL {
+        values.warning(&format!(
+            "Cannot use {} as array",
+            eval_array_destructure_type_name(tag)
+        ))?;
+    }
+    for (position, target) in targets.iter().enumerate() {
+        let Some(target) = target else {
+            continue;
+        };
+        let element = if readable {
+            let key = match target.key.as_ref() {
+                Some(key) => eval_owned_expr(key, context, scope, values)?,
+                None => values.int(position as i64)?,
+            };
+            let element = eval_array_get_result(array, key, context, values);
+            let key_released = eval_release_value(context, values, key);
+            let element = element?;
+            key_released?;
+            // A storage read answers a borrowed handle; the slot below takes an owner of its own.
+            if element.is_borrowed() { values.retain(element)? } else { element }
+        } else {
+            values.null()?
+        };
+        match &target.slot {
+            EvalDestructureSlot::Nested(inner) => {
+                let result = eval_destructure_into(inner, element, context, scope, values);
+                eval_release_value(context, values, element)?;
+                result?;
+            }
+            EvalDestructureSlot::Lvalue(EvalExpr::LoadVar(name)) => {
+                // Array reads own a reference but may return the very cell already in the
+                // destination. Scope replacement treats identical cells as an in-place
+                // write, so detach that assignment result before transferring its owner.
+                let element = if visible_scope_cell(context, scope, name) == Some(element) {
+                    let copied = values.copy_value(element);
+                    eval_release_value(context, values, element)?;
+                    copied?
+                } else {
+                    element
+                };
+                for replaced in set_scope_cell(
+                    context,
+                    scope,
+                    name.clone(),
+                    element,
+                    ScopeCellOwnership::Owned,
+                    values,
+                )? {
+                    eval_release_value(context, values, replaced)?;
+                }
+            }
+            EvalDestructureSlot::Lvalue(lvalue) => {
+                eval_store_value_in_lvalue(lvalue, element, context, scope, values)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Evaluates a destructuring assignment used as an EXPRESSION and returns its RHS value.
+///
+/// PHP's value here is the right-hand side itself, which is what makes
+/// `if ([, , , $x] = $scopes[$name] ?? null)` a usable condition: the `if` tests the array, not
+/// the last slot.
+pub(in crate::interpreter) fn eval_array_destructure_assign(
+    targets: &[Option<EvalDestructureTarget>],
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let assigned = eval_owned_expr(value, context, scope, values)?;
+    if let Err(status) = eval_destructure_into(targets, assigned, context, scope, values) {
+        let _ = eval_release_value(context, values, assigned);
+        return Err(status);
+    }
+    Ok(assigned)
+}
+
+/// Maps runtime tags to PHP's array-destructuring warning spelling.
+fn eval_array_destructure_type_name(tag: u64) -> &'static str {
+    match tag {
+        EVAL_TAG_INT => "int",
+        EVAL_TAG_STRING => "string",
+        EVAL_TAG_FLOAT => "float",
+        EVAL_TAG_BOOL => "bool",
+        EVAL_TAG_OBJECT => "object",
+        EVAL_TAG_RESOURCE => "resource",
+        EVAL_TAG_CALLABLE => "callable",
+        _ => "unknown",
+    }
+}
+
 /// Propagates an array-element reference write without borrowing the array's value owner.
 pub(super) fn eval_array_element_reference_write(
     array: RuntimeCellHandle,
@@ -354,7 +540,12 @@ pub(super) fn eval_array_element_reference_write(
     let Some(target) = context.array_element_alias(array, &key).cloned() else { return Ok(()); };
     match target {
         EvalReferenceTarget::Variable { scope, name } => {
-            let scope = unsafe { scope.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
+            // The activation that bound the element has returned (a closure's `use (&$x)` from
+            // a by-reference `foreach` outliving its method): nothing is left to update, exactly
+            // as `write_back_method_ref_target` treats the same target.
+            let Some(scope) = (unsafe { scope.live_mut() }) else {
+                return Ok(());
+            };
             write_back_owned_variable_ref_target(scope, &name, value, context, values)
         }
         EvalReferenceTarget::Cell { cell } if !context.local_reference_types(cell).is_empty() || values.reference_is_shared(cell)? => {
@@ -381,7 +572,10 @@ pub(super) fn eval_property_array_write_result(
 ) -> Result<(), EvalStatus> {
     let mut operands = Vec::new();
     let mut result = (|| {
-        let current = eval_property_get_result(object, property, context, values)?;
+        // The write TARGET auto-initializes: `$o->p['k'] = 1` on an uninitialized typed property
+        // makes an array, where the same property READ raises. See
+        // `eval_property_array_target_get_result`.
+        let current = eval_property_array_target_get_result(object, property, context, values)?;
         let current = if current.is_borrowed() { values.retain(current)? } else { current };
         operands.push(current);
         if values.type_tag(current)? == EVAL_TAG_OBJECT {
@@ -441,7 +635,7 @@ pub(super) fn eval_property_array_set_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(op) = op else {
-        return eval_expr(value, context, scope, values);
+        return eval_expr_value_for_consuming_store(value, context, scope, values);
     };
     let current = eval_array_get_result(array, index, context, values)?;
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
@@ -580,7 +774,7 @@ fn eval_owned_array_set_index(
 }
 
 /// Converts indexed arrays to associative arrays before writing a non-numeric string key.
-pub(super) fn eval_array_set_target_for_index(
+pub(in crate::interpreter) fn eval_array_set_target_for_index(
     array: RuntimeCellHandle,
     index: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,

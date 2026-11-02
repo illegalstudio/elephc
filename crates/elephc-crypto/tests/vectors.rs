@@ -51,6 +51,8 @@ fn crypto_one_shot_known_vectors() {
         "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532"
     );
     assert_eq!(hash_hex("ripemd160", b"abc").unwrap(), "8eb208f7e05d987a9b044a8e98c6b087f15a0bfc");
+    assert_eq!(hash_hex("xxh128", b"").unwrap(), "99aa06d3014798d86001c324468d497f");
+    assert_eq!(hash_hex("xxh128", b"abc").unwrap(), "06b05ab6733a618578af5f94892f3950");
 }
 
 /// Verifies known-answer digests (PHP 8.4 golden values for "abc") for every
@@ -156,6 +158,7 @@ fn all_algorithms_produce_correct_digest_length() {
         ("whirlpool", 64),
         ("crc32", 4), ("crc32b", 4), ("crc32c", 4), ("adler32", 4),
         ("fnv132", 4), ("fnv1a32", 4), ("fnv164", 8), ("fnv1a64", 8), ("joaat", 4),
+        ("xxh128", 16),
     ];
     for (algo, len) in cases {
         let hex = hash_hex(algo, b"the quick brown fox")
@@ -367,4 +370,39 @@ fn checksum_incremental_matches_one_shot() {
         elephc_crypto_update(ctx, b"c".as_ptr(), 1);
     }
     assert_eq!(finalize_hex(ctx), hash_hex("crc32b", b"abc").unwrap());
+}
+
+/// Verifies algorithm names are case-insensitive, as php's `hash('SHA256', ...)` is.
+#[test]
+fn algorithm_names_are_case_insensitive() {
+    assert_eq!(hash_hex("SHA256", b"abc"), hash_hex("sha256", b"abc"));
+    assert_eq!(hash_hex("Sha3-256", b"abc"), hash_hex("sha3-256", b"abc"));
+}
+
+/// Verifies PBKDF2 against RFC 6070's HMAC-SHA1 vectors and rejects checksums.
+#[test]
+fn pbkdf2_matches_rfc6070() {
+    let hex = |bytes: Vec<u8>| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    assert_eq!(
+        hex(pbkdf2("sha1", b"password", b"salt", 1, 20).unwrap()),
+        "0c60c80f961f0e71f3a9b524af6012062fe037a6"
+    );
+    assert_eq!(
+        hex(pbkdf2("SHA1", b"password", b"salt", 2, 20).unwrap()),
+        "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957"
+    );
+    assert_eq!(
+        hex(pbkdf2(
+            "sha1",
+            b"passwordPASSWORDpassword",
+            b"saltSALTsaltSALTsaltSALTsaltSALTsalt",
+            4096,
+            25
+        )
+        .unwrap()),
+        "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038"
+    );
+    assert_eq!(pbkdf2("sha1", b"p", b"s", 1, 0).unwrap().len(), 20);
+    assert!(pbkdf2("crc32b", b"p", b"s", 1, 0).is_none());
+    assert!(pbkdf2("nope", b"p", b"s", 1, 0).is_none());
 }

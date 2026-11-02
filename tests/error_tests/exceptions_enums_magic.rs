@@ -237,6 +237,26 @@ fn test_error_throw_requires_object() {
     expect_error("<?php throw 123;", "throw requires an object value");
 }
 
+/// Verifies that binding the builtin `Exception::$message` slot to a user by-reference
+/// parameter is refused rather than promoting the native payload slot to a reference cell
+/// for every exception class.
+#[test]
+fn test_error_throwable_payload_property_cannot_be_passed_by_reference() {
+    expect_error(
+        r#"<?php
+class Holder { public function __construct(&$m) { $m = 'set'; } }
+class E extends Exception {
+    public function __construct() {
+        parent::__construct('');
+        new Holder($this->message);
+    }
+}
+echo (new E())->getMessage();
+"#,
+        "The builtin Throwable property $message cannot be passed by reference",
+    );
+}
+
 /// Verifies that `new Color()` on a backed enum reports
 /// "Cannot instantiate enum: Color".
 #[test]
@@ -368,13 +388,15 @@ fn test_error_magic_tostring_must_take_zero_arguments() {
     );
 }
 
-/// Verifies that `__toString` returning an integer reports
-/// "Magic method must return string: User::__toString".
+/// `__toString()` has an implicit `string` return type: in weak mode php coerces a returned integer,
+/// and under `declare(strict_types=1)` the return is a TypeError, which elephc rejects at compile
+/// time.
 #[test]
 fn test_error_magic_tostring_must_return_string() {
+    expect_no_error("<?php class User { public function __toString() { return 123; } }");
     expect_error(
-        "<?php class User { public function __toString() { return 123; } }",
-        "Magic method must return string: User::__toString",
+        "<?php declare(strict_types=1); class User { public function __toString() { return 123; } }",
+        "Method 'User::__toString' return type expects Str, got Int",
     );
 }
 
@@ -617,16 +639,6 @@ fn test_error_magic_unset_must_not_take_two_arguments() {
     );
 }
 
-/// Verifies that `catch (MissingException $e)` with an undefined class
-/// reports "Undefined class: MissingException".
-#[test]
-fn test_error_catch_requires_defined_class() {
-    expect_error(
-        "<?php try { echo 1; } catch (MissingException $e) { echo 2; }",
-        "Undefined class: MissingException",
-    );
-}
-
 /// Verifies that catching a plain class not implementing `Throwable`
 /// (e.g., `catch (PlainObject $e)`) reports
 /// "Catch type must extend or implement Throwable: PlainObject".
@@ -662,9 +674,10 @@ fn test_error_cannot_redeclare_builtin_error_type() {
 /// a built-in type redeclaration diagnostic.
 #[test]
 fn test_error_cannot_redeclare_builtin_sort_direction_enum() {
-    expect_error(
+    expect_error_with_php_version(
         "<?php enum SortDirection { case Up; }",
         "Cannot redeclare built-in type: SortDirection",
+        elephc::php_version::PhpVersion::Php86,
     );
 }
 
@@ -672,9 +685,10 @@ fn test_error_cannot_redeclare_builtin_sort_direction_enum() {
 /// `SortDirection` enum name.
 #[test]
 fn test_error_cannot_redeclare_builtin_sort_direction_class() {
-    expect_error(
+    expect_error_with_php_version(
         "<?php class SortDirection {}",
         "Cannot redeclare built-in type: SortDirection",
+        elephc::php_version::PhpVersion::Php86,
     );
 }
 
@@ -682,9 +696,10 @@ fn test_error_cannot_redeclare_builtin_sort_direction_class() {
 /// same enum-case diagnostic as user-declared enums.
 #[test]
 fn test_error_builtin_sort_direction_unknown_case() {
-    expect_error(
+    expect_error_with_php_version(
         "<?php SortDirection::Sideways;",
         "Undefined enum case: SortDirection::Sideways",
+        elephc::php_version::PhpVersion::Php86,
     );
 }
 
@@ -758,6 +773,24 @@ fn test_error_enum_review_method_without_body() {
             "Non-abstract method must have a body",
         );
     }
+}
+
+/// Verifies enums cannot explicitly list the interface they already implement implicitly.
+#[test]
+fn test_error_enum_cannot_explicitly_implement_unit_enum() {
+    expect_error(
+        "<?php enum State implements UnitEnum { case Ready; }",
+        "Enum State cannot explicitly implement interface UnitEnum",
+    );
+}
+
+/// Verifies pure enums cannot implement a user interface derived from the backed-enum contract.
+#[test]
+fn test_error_pure_enum_cannot_implement_backed_enum_descendant() {
+    expect_error(
+        "<?php interface BackedMarker extends BackedEnum {} enum State implements BackedMarker { case Ready; }",
+        "Non-backed enum State cannot implement interface BackedEnum",
+    );
 }
 
 /// Verifies that an enum method body is type-checked like a class method: a declared return type

@@ -98,7 +98,9 @@ pub(crate) fn ensure_optional_int(
 /// Returns true when a type is statically compatible with an `int` parameter.
 fn accepts_int(ty: &PhpType) -> bool {
     match ty {
-        PhpType::Int => true,
+        // A boxed value (`$this->readBytes[$type]`, an element of a declared `array`) is coerced
+        // to `int` at the call like any int parameter, raising php's TypeError for a non-number.
+        PhpType::Int | PhpType::Mixed => true,
         PhpType::Union(members) => members.iter().all(accepts_int),
         _ => false,
     }

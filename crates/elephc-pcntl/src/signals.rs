@@ -30,6 +30,30 @@ static OVERFLOW_QUEUES: [OverflowQueue; SIGNAL_OWNER_COUNT] =
     [const { OverflowQueue::new() }; SIGNAL_OWNER_COUNT];
 static SIGNAL_OWNERS: [AtomicI32; 128] = [const { AtomicI32::new(0) }; 128];
 
+/// Non-zero while an AOT-owned signal record may be waiting in the queue.
+///
+/// php checks one interrupt flag at its safe points and dispatches only when a handler raised it;
+/// the generated safe point reads this word for the same reason. Without it every block start of
+/// a program with `pcntl_async_signals(true)` (Symfony's console turns it on) paid an 800-byte
+/// register spill, two `sigprocmask` calls and a `read` of the self-pipe: `debug:config` ran 2.5 s
+/// instead of 0.3 s. The handler raises it before queueing the record; the drain lowers it when
+/// it finds the queue empty, while delivery is blocked, so no record can slip in unannounced.
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static elephc_pcntl_aot_signal_pending: AtomicU64 = AtomicU64::new(0);
+
+/// The same flag for Magician's eval-owned queue.
+static EVAL_SIGNAL_PENDING: AtomicU64 = AtomicU64::new(0);
+
+/// Returns the pending flag of one backend queue.
+fn signal_pending_flag(owner_index: usize) -> &'static AtomicU64 {
+    if owner_index == 0 {
+        &elephc_pcntl_aot_signal_pending
+    } else {
+        &EVAL_SIGNAL_PENDING
+    }
+}
+
 /// Backend-specific descriptor pairs used to keep AOT and eval drains independent.
 struct SignalPipes {
     queues: [SignalPipe; SIGNAL_OWNER_COUNT],
@@ -499,6 +523,7 @@ unsafe fn queued_signal_handler(
 ) {
     let saved_errno = *errno_location();
     if let Some(queues) = SIGNAL_PIPES.get() {
+        signal_pending_flag(owner_index).store(1, Ordering::Release);
         let pipe = &queues.queues[owner_index];
         let write_descriptor = pipe.write_descriptor.load(Ordering::Acquire);
         if write_descriptor < 0 {
@@ -638,6 +663,9 @@ pub unsafe extern "C" fn elephc_pcntl_signal_next(
                 *info = overflow;
                 return 1;
             }
+            // Drained. A dispatcher calls this with delivery blocked, so a signal raised after
+            // this store re-raises the flag once it is unblocked.
+            signal_pending_flag(owner_index).store(0, Ordering::Release);
             return 0;
         }
         if read >= 0 {

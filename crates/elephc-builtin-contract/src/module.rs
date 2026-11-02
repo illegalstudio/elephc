@@ -119,6 +119,8 @@ php_modules! {
     Cairo => "cairo",
     /// PECL `pdo_ibm` (not bundled with php-src); provided by the PDO prelude.
     PdoIbm => "pdo_ibm",
+    /// PECL `apcu` (not bundled with php-src); only its constants are declared.
+    Apcu => "apcu",
 }
 
 impl PhpModule {
@@ -157,12 +159,105 @@ impl PhpModule {
     }
 
     /// Returns whether php-src bundles this module. PECL modules elephc happens to provide
-    /// (`imagick`, `gmagick`, `cairo`, `pdo_ibm`) are real PHP modules but never appear in
-    /// the vendored php-src baseline, so coverage pages report them separately.
+    /// (`imagick`, `gmagick`, `cairo`, `pdo_ibm`, `apcu`) are real PHP modules but never appear
+    /// in the vendored php-src baseline, so coverage pages report them separately.
     pub const fn is_bundled(self) -> bool {
         !matches!(
             self,
-            Self::Elephc | Self::Imagick | Self::Gmagick | Self::Cairo | Self::PdoIbm
+            Self::Elephc
+                | Self::Imagick
+                | Self::Gmagick
+                | Self::Cairo
+                | Self::PdoIbm
+                | Self::Apcu
+        )
+    }
+
+    /// Returns the CASED spelling php reports for this module through `get_loaded_extensions()`
+    /// and `ReflectionExtension::getName()`.
+    ///
+    /// [`php_name`](Self::php_name) is the lowercase lookup key; this is the string a PHP program
+    /// sees. The two differ for exactly the handful of modules php spells with capitals, verified
+    /// against reference PHP 8.5's `get_loaded_extensions()` output. Everything else is already
+    /// lowercase in php, so it falls through to `php_name()` and the two cannot drift.
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Core => "Core",
+            Self::ZendOpcache => "Zend OPcache",
+            Self::Spl => "SPL",
+            Self::Pdo => "PDO",
+            Self::Reflection => "Reflection",
+            Self::Simplexml => "SimpleXML",
+            Self::Phar => "Phar",
+            _ => self.php_name(),
+        }
+    }
+
+    /// Returns whether this module is part of the PHP ENGINE rather than an optional extension a
+    /// program can meaningfully branch on.
+    ///
+    /// php-src has no `./configure` switch that removes `Core`, `standard`, `pcre` or `date`:
+    /// every PHP build has them, so no portable library gates on their absence and none ships a
+    /// replacement for one. These are therefore reported UNCONDITIONALLY, whatever elephc's
+    /// coverage of them is and whatever this compilation happens to inject.
+    ///
+    /// That is safe precisely because the failure mode
+    /// [`covers_php_function_surface`](Self::covers_php_function_surface) exists to prevent — a
+    /// polyfill told the extension is present, declining, and the first call fataling — cannot
+    /// arise for an extension nothing polyfills. Reporting one ABSENT, by contrast, describes a
+    /// state no PHP process is ever in, and code that reacts to it
+    /// (`if (!extension_loaded('pcre')) die(...)`) would break on a compiler that provides
+    /// `preg_match` perfectly well. Coverage where it is partial: `Core` 42 of php's 62 functions,
+    /// `standard` 404 of 545, `pcre` 7 of 11; `date` is 48 of 48 and is listed here so the eval
+    /// interpreter reports it too — its `date_*` surface reaches eval through the host bridge,
+    /// which the per-backend support tables cannot see.
+    ///
+    /// THE LINE IS PHP-SRC'S OWN, not a coverage threshold. `hash` and `random` are also always
+    /// built by php-src, and elephc deliberately does NOT claim them here: their reporting is
+    /// bridge-conditional and separately specified, so moving them belongs with that work rather
+    /// than with this rule. That divergence is known, not overlooked.
+    pub const fn is_engine_surface(self) -> bool {
+        matches!(self, Self::Core | Self::Standard | Self::Pcre | Self::Date)
+    }
+
+    /// Returns whether elephc's shared catalog declares EVERY function php-src's bundled
+    /// extension exports.
+    ///
+    /// THIS IS THE PREDICATE `extension_loaded()` IS BUILT ON, and the reason it exists is a
+    /// measured defect: elephc used to report `mbstring` as loaded while declaring 2 of php's 65
+    /// `mb_*` functions, so `symfony/polyfill-mbstring`-shaped code correctly declined to help and
+    /// every caller of a missing name died with `Call to undefined function`. `extension_loaded()`
+    /// is a PROMISE that all of an extension's functions are callable; elephc may only make that
+    /// promise where it is true, whatever else it provides. Partial coverage answers `false`, which
+    /// is recoverable: a caller either polyfills the family or degrades, and MEASURED on this
+    /// branch, a userland declaration of a name elephc does provide is accepted and the builtin
+    /// keeps serving the call, so answering `false` cannot produce a redeclaration fatal.
+    ///
+    /// Only the FUNCTION surface is compared. A module whose classes elephc covers only partly
+    /// (`SPL`, `Reflection`, `date`) still counts as complete here; that is a deliberate,
+    /// documented divergence, not an oversight.
+    ///
+    /// AUDITED, NOT ASSERTED: `extension_surface_completeness_matches_php_baseline` in the
+    /// compiler crate recomputes this from [`crate::contracts`] and the vendored
+    /// `scripts/docs/php_baseline.json`, and fails with the exact per-module diff when a catalog
+    /// change makes a module complete (or incomplete) without this list moving with it.
+    pub const fn covers_php_function_surface(self) -> bool {
+        matches!(
+            self,
+            Self::Bcmath
+                | Self::Calendar
+                | Self::Date
+                | Self::Exif
+                | Self::Iconv
+                | Self::Json
+                | Self::Pcntl
+                | Self::Pdo
+                | Self::Reflection
+                | Self::Session
+                | Self::Spl
+                | Self::Xml
+                | Self::Xmlwriter
+                | Self::ZendOpcache
         )
     }
 }
@@ -184,7 +279,7 @@ mod tests {
         assert_eq!(PhpModule::parse("SPL"), Some(PhpModule::Spl));
         assert_eq!(PhpModule::parse("nope"), None);
         assert!(!PhpModule::Elephc.is_php());
-        assert_eq!(PhpModule::ALL.len(), 68 + 4 + 1);
+        assert_eq!(PhpModule::ALL.len(), 68 + 5 + 1);
         assert!(!PhpModule::Imagick.is_bundled() && PhpModule::Imagick.is_php());
     }
 

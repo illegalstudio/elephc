@@ -2,7 +2,7 @@
 title: "stream_context_set_option()"
 description: "Sets an option on the specified context."
 sidebar:
-  order: 374
+  order: 386
 ---
 
 ## stream_context_set_option()

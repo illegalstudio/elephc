@@ -20,8 +20,8 @@ use elephc_builtin_contract::{
 fn builtin_variadic_reference_modes_match_contracts() {
     for name in registry::names() {
         let def = registry::lookup(name).expect("registered builtin");
-        if def.spec.variadic.is_some() {
-            assert_eq!(def.ref_params.last().copied(), Some(def.spec.variadic_by_ref),
+        if let Some(variadic) = def.spec.variadic {
+            assert_eq!(def.ref_params.last().copied(), Some(variadic.is_by_reference()),
                 "{name} variadic passing mode");
         }
     }
@@ -111,6 +111,42 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ),
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
         ("web_application", crate::web_prelude::application::declarations()),
+        ("addcslashes_prelude", crate::addcslashes_prelude::declarations()),
+        ("strtok_prelude", crate::strtok_prelude::declarations()),
+        (
+            "proc_prelude",
+            crate::proc_prelude::declarations(crate::proc_prelude::FUNCTIONS),
+        ),
+        ("csv_prelude", crate::csv_prelude::declarations()),
+        ("exec_prelude", crate::exec_prelude::declarations()),
+        ("stream_select_prelude", crate::stream_select_prelude::declarations()),
+        ("min_max_prelude", crate::min_max_prelude::declarations()),
+        ("count_recursive_prelude", crate::count_recursive_prelude::declarations()),
+        (
+            "numeric_string_arg_prelude",
+            crate::numeric_string_arg_prelude::declarations(),
+        ),
+        (
+            "array_fill_keys_prelude",
+            crate::array_fill_keys_prelude::declarations(),
+        ),
+        (
+            "version_compare_prelude",
+            crate::version_compare_prelude::declarations(),
+        ),
+        ("hash_pbkdf2_prelude", crate::hash_pbkdf2_prelude::declarations()),
+        ("parse_str_prelude", crate::parse_str_prelude::declarations()),
+        // Built from the program's classes; an empty program still declares the entry points.
+        ("implode_prelude", crate::implode_prelude::declarations()),
+        ("array_sum_prelude", crate::array_sum_prelude::declarations()),
+        ("array_pad_prelude", crate::array_pad_prelude::declarations()),
+        ("dynamic_define_prelude", crate::dynamic_define_prelude::declarations()),
+        ("preg_array_prelude", crate::preg_array_prelude::declarations()),
+        ("sodium_prelude", crate::sodium_prelude::declarations(true, true)),
+        ("password_prelude", crate::password_prelude::declarations()),
+        ("array_edge_prelude", crate::array_edge_prelude::declarations()),
+        ("array_gradual_prelude", crate::array_gradual_prelude::declarations()),
+        ("array_ucompare_prelude", crate::array_ucompare_prelude::declarations()),
     ];
     // The mysqli prelude is a second bridge surface built as Rust AST like the others; the
     // gate must cover its `__elephc_*` internal-alias discipline too. The shared `elephc_pdo`
@@ -216,18 +252,38 @@ fn catalog_hosted_preludes() -> Vec<(&'static str, String, bool)> {
         .collect()
 }
 
+/// PHP-visible functions a prelude declares to SHADOW a registry builtin, with the reason the
+/// contract's non-prelude AOT route is the correct one.
+///
+/// A shadowing declaration is not a second implementation of the same thing: the registry
+/// binding is what an ordinary compile calls, and the prelude replaces it only in the mode
+/// that needs different behaviour. The contract records the route that survives everywhere.
+const PRELUDE_SHADOWED_REGISTRY_BUILTINS: &[(&str, &str)] = &[(
+    "error_log",
+    "the registry builtin (`src/builtins/system/error_log.rs` + `__rt_error_log`) writes the      message to stderr and ignores `$message_type`, which is right for the one-argument call      and wrong for every other. `crate::error_handling_prelude` declares a PHP `error_log()`      that implements PHP's `message_type` routing (mail/file/SAPI) on top of it and shadows      the builtin — in BOTH SAPIs now (it used to be `--web` only, so a CLI      `error_log($m, 3, $file)` logged to the console), and pay-for-use: a program that never      spells `error_log` keeps the direct runtime call. `Implemented(Registry)` is the route      every compile has; the prelude one is added by the injection gate.",
+)];
+
 /// PHP-visible functions a catalog-hosted prelude declares WITHOUT a shared contract,
 /// with the reason each exclusion is correct rather than an oversight.
-const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
-    "curl_file_create",
-    "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
-     is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
-     resolves through the native-class fallback, see elephc-magician's \
-     interpreter::builtins::curl module doc. A contract would need an eval binding that \
-     does not exist, or an EvalImplementationPending label that would be false because \
-     eval() can already call it. Consequence, accepted: the PHP comparison page counts \
-     the curl module 34/35 rather than 35/35.",
-)];
+const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[
+    (
+        "curl_file_create",
+        "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
+         is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
+         resolves through the native-class fallback, see elephc-magician's \
+         interpreter::builtins::curl module doc. A contract would need an eval binding that \
+         does not exist, or an EvalImplementationPending label that would be false because \
+         eval() can already call it. Consequence, accepted: the PHP comparison page counts \
+         the curl module 34/35 rather than 35/35.",
+    ),
+    (
+        "request_parse_body",
+        "a --web-only function (php 8.4): the web prelude implements it over the worker's \
+         request state, which only exists in a --web build, so there is no CLI builtin for a \
+         contract to describe and no eval binding. A contract would publish it to programs that \
+         cannot call it.",
+    ),
+];
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
 ///
@@ -367,6 +423,20 @@ fn prelude_contracts_match_their_injected_signatures() {
             })
             .collect::<Vec<_>>();
         let declaring = found.iter().map(|(prelude, _)| *prelude).collect::<Vec<_>>();
+        if contract.name == "levenshtein" {
+            // The one prelude route whose injected declaration is NARROWER than its contract,
+            // by design: `src/backend_gap_prelude.rs` injects the two-argument wrapper the AOT
+            // backend can lower, while the contract carries PHP's full five-parameter
+            // signature so `eval()` and the generated page describe the real function (see
+            // the entry's own comment in `catalog_surfaces.rs`). Comparing them here would
+            // demand the prelude grow three parameters it cannot implement.
+            assert!(
+                found.is_empty(),
+                "levenshtein is now declared by {declaring:?}; compare it like any other \
+                 prelude contract instead of skipping it"
+            );
+            continue;
+        }
         assert!(
             !found.is_empty(),
             "{} has a prelude route but no prelude declares it",
@@ -390,7 +460,7 @@ fn prelude_contracts_match_their_injected_signatures() {
             .params
             .iter()
             .map(|param| param.name)
-            .chain(signature.variadic)
+            .chain(signature.variadic.map(|variadic| variadic.name))
             .collect::<Vec<_>>();
         let declared_names = declared
             .iter()
@@ -432,10 +502,14 @@ fn prelude_contracts_match_their_injected_signatures() {
         // checked here rather than folded into the fixed-parameter loop above.
         if let Some(variadic) = signature.variadic {
             let actual = declared.last().expect("names matched, so a tail exists");
-            let at = format!("{name}(...${variadic}) in {prelude}");
-            assert!(actual.variadic, "{at}: must be declared `...${variadic}`");
+            let spelling = variadic.name;
+            let at = format!("{name}(...${spelling}) in {prelude}");
+            assert!(actual.variadic, "{at}: must be declared `...${spelling}`");
+            // The variadic carries its own passing mode now: one collected argument list either
+            // binds values or binds writable caller storage, never a mix.
             assert_eq!(
-                actual.by_ref, contract.variadic_by_ref,
+                actual.by_ref,
+                variadic.passing == elephc_builtin_contract::PassingMode::ByReference,
                 "{at}: by-reference marker on the variadic"
             );
             assert_eq!(actual.default, None, "{at}: a variadic takes no default");
@@ -576,6 +650,8 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
     let declared = declared.trim().trim_start_matches('?').trim();
     let scalar = match expected {
         TypeSpec::Int => "int",
+        // `NullableInt` is `?int` spelled as one variant; `declared` already lost its `?`.
+        TypeSpec::NullableInt => "int",
         TypeSpec::Float => "float",
         TypeSpec::Str => "string",
         TypeSpec::Bool => "bool",
@@ -703,6 +779,21 @@ fn catalog_hosted_preludes_declare_no_uncontracted_php_function() {
                      it to UNCONTRACTED_PRELUDE_DECLARATIONS with the reason"
                 )
             });
+            if let Some(reason) = PRELUDE_SHADOWED_REGISTRY_BUILTINS
+                .iter()
+                .find(|(allowed, _)| *allowed == name)
+                .map(|(_, reason)| *reason)
+            {
+                assert!(
+                    !matches!(
+                        aot_support(contract),
+                        BackendSupport::Implemented(BackendImplementation::Prelude)
+                    ),
+                    "{name} now routes through a prelude; drop it from \
+                     PRELUDE_SHADOWED_REGISTRY_BUILTINS (recorded reason: {reason})"
+                );
+                continue;
+            }
             assert_eq!(
                 aot_support(contract),
                 BackendSupport::Implemented(BackendImplementation::Prelude),

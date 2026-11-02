@@ -38,13 +38,20 @@ installXmlHandlers(xml_parser_create());
         }).collect();
         let installer = module.functions.iter().find(|function| function.name == "installXmlHandlers")
             .expect("the XML installer must be emitted");
+        // `xmlParserSource()` is declared `array`, which is now carried as a boxed PHP-array cell
+        // (`php=array` over Mixed storage). The spread of that cell used to bound itself with the
+        // typed `count` runtime on the Mixed operand; it now goes through the call-spread
+        // normalization runtime call on the cell. Either way a boxed source is only ever inspected
+        // by a runtime routine that checks its tag -- never by an inline `ArrayLen` on the cell
+        // (asserted below) -- so a non-array or null source cannot be read as a raw container.
         assert!(installer.instructions.iter().any(|inst| {
-            matches!(inst.immediate, Some(crate::ir::Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Count),
-            ))) && installer.value(inst.operands[0]).is_some_and(|value| {
-                value.php_type.codegen_repr() == PhpType::Mixed
-            })
-        }), "{target}: boxed unpack bounds must use the typed count runtime");
+            (inst.op == Op::RuntimeCall || matches!(inst.immediate, Some(crate::ir::Immediate::RuntimeCall(_))))
+                && inst.operands.first().is_some_and(|operand| {
+                    installer.value(*operand).is_some_and(|value| {
+                        value.ir_type == crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)
+                    })
+                })
+        }), "{target}: a boxed spread source must be consumed by a tag-checking runtime call");
         for inst in &installer.instructions {
             if inst.op == Op::ArrayLen {
                 assert!(installer.value(inst.operands[0]).is_some_and(|value| {

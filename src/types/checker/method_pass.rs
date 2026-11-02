@@ -15,6 +15,14 @@ use crate::types::{traits::FlattenedClass, FunctionSig, PhpType, TypeEnv};
 
 use super::Checker;
 
+/// How many previously produced class tables the method-pass fixpoint remembers.
+///
+/// Long enough to catch the oscillations that actually occur (the one measured on Symfony has
+/// period two), short enough that the memory is a handful of tables rather than a transcript of
+/// the whole run. An oscillation longer than this still terminates on the pass budget, exactly as
+/// it did before.
+const PASS_CYCLE_WINDOW: usize = 4;
+
 impl Checker {
     /// Gives untyped source interface parameters one boxed ABI in every implementing class.
     ///
@@ -81,6 +89,56 @@ impl Checker {
             }
         }
         self.interface_method_boxed_params = boxed;
+        self.keep_instanceof_tested_params_gradual();
+    }
+
+    /// Keeps an untyped parameter the method body tests with `instanceof` at `mixed`.
+    ///
+    /// Call-site specialization types an untyped parameter from the arguments the closed world
+    /// passes. When the body asks `$p instanceof C`, that question is the point of the parameter:
+    /// Carbon's `Creator::make($var)` is only ever called with strings in Laravel, the
+    /// specialization made `$var` a `string`, and the `instanceof DateTimeInterface` branch then
+    /// passed a string to `instance(DateTimeInterface $date)` -- a refusal that sent Carbon to
+    /// the interpreter.
+    fn keep_instanceof_tested_params_gradual(&mut self) {
+        let mut tested = std::collections::HashSet::new();
+        for (class_name, class_info) in &self.classes {
+            for method in &class_info.method_decls {
+                for (index, (name, type_expr, _, _)) in method.params.iter().enumerate() {
+                    if type_expr.is_none() && body_tests_instanceof(&method.body, name) {
+                        tested.insert((
+                            php_symbol_key(class_name),
+                            php_symbol_key(&method.name),
+                            index,
+                        ));
+                    }
+                }
+            }
+        }
+        for (class_name, class_info) in self.classes.iter_mut() {
+            let class_key = php_symbol_key(class_name);
+            for (method_key, sig) in class_info
+                .methods
+                .iter_mut()
+                .chain(class_info.static_methods.iter_mut())
+            {
+                for (index, (_, ty)) in sig.params.iter_mut().enumerate() {
+                    if tested.contains(&(class_key.clone(), method_key.clone(), index)) {
+                        *ty = PhpType::Mixed;
+                    }
+                }
+            }
+        }
+        self.instanceof_tested_params = tested;
+    }
+
+    /// Whether a parameter is still gradual by the rule above.
+    pub(crate) fn instanceof_tested_param(&self, class_name: &str, method_key: &str, index: usize) -> bool {
+        self.instanceof_tested_params.contains(&(
+            php_symbol_key(class_name),
+            php_symbol_key(method_key),
+            index,
+        ))
     }
 
     /// Runs method-body validation in passes until class type information stabilizes.
@@ -92,8 +150,9 @@ impl Checker {
     ///
     /// For non-static methods, `$this` is inserted into the per-method `TypeEnv` as an
     /// `Object` of the declaring class. Parameters are resolved against declared type hints
-    /// or inferred from the class signature; variadic parameters use `PhpType::Array(Int)`
-    /// as a fallback.
+    /// or inferred from the class signature. Untyped parameters without an observed call-site
+    /// specialization are checked as gradual `Mixed`; variadic parameters use
+    /// `PhpType::Array(Int)` as a fallback.
     ///
     /// Sets `self.current_class`, `self.current_method`, and `self.current_method_is_static`
     /// during body checking to enable context-sensitive diagnostics.
@@ -102,10 +161,37 @@ impl Checker {
         flattened_classes: &[FlattenedClass],
         errors: &mut Vec<CompileError>,
     ) -> Result<(), CompileError> {
+        // This loop is 32.61s of the 33.30s type-checking phase, and it is three things per
+        // pass: a deep CLONE of the whole class table, the body checking, and up to five deep
+        // COMPARISONS of that table (one for stability, four against the cycle window).
+        // `ELEPHC_TYPECHECK_TIMES=1` says which, and how many passes it takes to get there.
+        let trace = std::env::var("ELEPHC_TYPECHECK_TIMES").is_ok();
+        let mut passes = 0usize;
+        let (mut clone_secs, mut bodies_secs, mut compare_secs) = (0f64, 0f64, 0f64);
         let mut method_passes_remaining = (flattened_classes.len().max(1) * 2) + 1;
+        // Tables this loop has already produced, newest last. A pass that repeats one has added
+        // nothing and never will — the next table is a function of this one alone, so the
+        // sequence is periodic from here. See `PASS_CYCLE_WINDOW`.
+        let mut recent_tables = std::collections::VecDeque::with_capacity(PASS_CYCLE_WINDOW);
+        self.seed_runtime_contract_param_types();
         loop {
+            passes += 1;
+            let mut mark = std::time::Instant::now();
             let classes_before_pass = self.classes.clone();
+            if trace {
+                clone_secs += mark.elapsed().as_secs_f64();
+                mark = std::time::Instant::now();
+            }
             let mut pass_errors = Vec::new();
+            let recursive_mixed_before = self.recursive_mixed_methods.len();
+            // Only the LAST round's answer counts: a seed that looked unrefined on an early round
+            // can be specialized by a call site the same round walks later.
+            self.unspecialized_seed_params.clear();
+            // Rebuilt once per round, although no round adds a method: a stale owner list would
+            // silently narrow a mixed receiver's candidates.
+            *self.method_owners.borrow_mut() = None;
+            self.subtype_dispatch_cache.borrow_mut().1.clear();
+            self.method_impl_users_index = None;
 
             for class in flattened_classes {
                 for method in &class.methods {
@@ -143,35 +229,34 @@ impl Checker {
                                 method.span,
                                 &format!("Method parameter ${}", pname),
                             )?;
-                            // A generic `array` hint is sharpened to the call-site array shape
-                            // recorded on the stored signature, mirroring how free-function
-                            // `array` parameters are specialized (issue #406). Without this a
-                            // method `array` parameter stays an integer-indexed list and rejects
-                            // string-key access / mis-encodes associative arrays.
-                            if Self::is_generic_array_hint(&declared) {
-                                sig_params
-                                    .as_ref()
-                                    .and_then(|p| p.get(i))
-                                    .map(|(_, t)| t.clone())
-                                    .filter(|t| {
-                                        matches!(
-                                            t,
-                                            PhpType::Array(_) | PhpType::AssocArray { .. }
-                                        )
-                                    })
-                                    .map(|t| {
-                                        Self::specialize_generic_array_param_hint(&declared, &t)
-                                    })
-                                    .unwrap_or(declared)
-                            } else {
-                                declared
-                            }
+                            // A declared bare `array` remains generic. Call boundaries normalize
+                            // concrete indexed/hash payloads while the method body dispatches on
+                            // the runtime array kind, so one call site cannot narrow the contract.
+                            // A `callable` read as a value keeps its value (`callable_param_storage`),
+                            // the same answer the schema pass gave.
+                            Self::callable_param_storage(declared, &method.body, pname)
                         } else {
-                            sig_params
+                            let inferred = sig_params
                                 .as_ref()
                                 .and_then(|p| p.get(i))
                                 .map(|(_, t)| t.clone())
-                                .unwrap_or(PhpType::Int)
+                                .unwrap_or(PhpType::Int);
+                            let was_seed = inferred == PhpType::Int;
+                            let body_ty = self.method_body_param_type(class, method, i, inferred);
+                            // The body is checked with `mixed` for a seed no call site refined,
+                            // and the SIGNATURE has to say so too or the backend lowers the
+                            // parameter as the raw `int` the seed left behind. Recorded here and
+                            // published once the pass loop settles -- on any earlier round the
+                            // call site that refines it may simply not have been walked yet.
+                            if was_seed && body_ty == PhpType::Mixed {
+                                self.unspecialized_seed_params.insert((
+                                    class.name.clone(),
+                                    method_key.clone(),
+                                    method.is_static,
+                                    i,
+                                ));
+                            }
+                            body_ty
                         };
                         // Match build_method_sig and the runtime hydration adapter:
                         // user hooks consume boxed PHP arrays, synthetic SPL keeps
@@ -194,6 +279,15 @@ impl Checker {
                                 .insert(pname.clone(), sig.return_type.clone());
                             self.callable_sigs.insert(pname.clone(), sig);
                         }
+                        // A by-reference parameter this body widens is bound `mixed` for the whole
+                        // body — see `Checker::widened_ref_param_env_type`. Only the ENVIRONMENT
+                        // moves; `self.classes`' signature keeps the declared type, so every call
+                        // site still validates its argument against it.
+                        let ty = self.widened_ref_param_env_type(
+                            &format!("{}::{}", class.name, method.name),
+                            pname,
+                            &ty,
+                        );
                         method_env.insert(pname.clone(), ty);
                     }
                     if let Some(variadic_name) = &method.variadic {
@@ -212,6 +306,18 @@ impl Checker {
                     if method_key == "__construct" {
                         self.patch_constructor_method_env(class, method, &mut method_env);
                     }
+                    // A local a body CREATES by writing an array element into it —
+                    // `$keys[] = $k` against a name nothing has assigned — exists from that
+                    // write onwards, because PHP auto-vivifies the array. Every other scope
+                    // seeds those names at entry (`resolve_function_signature` for a function,
+                    // `infer_closure_type_with_param_hints` for a closure,
+                    // `check_top_level_program` for file scope) and the method pass did not, so
+                    // a read after the loop that fills the array was "Undefined variable" here
+                    // and lowered fine in the backend, which runs the same scan for every body.
+                    // Seeded last: the scan treats everything already in the environment as
+                    // bound, so the parameters, the variadic and the promoted constructor
+                    // properties must be in place first.
+                    Self::seed_vivified_array_locals(&mut method_env, &method.body);
 
                     self.current_class = Some(class.name.clone());
                     self.current_method = Some(method_key.clone());
@@ -249,7 +355,59 @@ impl Checker {
                                 method_env.get(name).map(|ty| (name.clone(), ty.clone()))
                             })
                             .collect();
-                    self.with_local_storage_context(
+                    // A parameter DECLARED `callable` carries no signature anyone can check
+                    // against: its real one arrives with the argument. `resolve_function_signature`
+                    // records such parameters so a spread call on one is not refused for the
+                    // by-reference parameters of whatever signature inference happened to guess —
+                    // and it only ever did it for plain FUNCTIONS, so the same parameter in a
+                    // METHOD lost the allowance. Symfony's
+                    // `PhpFileLoader::callConfigurator(callable $callback, ...)` is exactly that
+                    // shape: `$callback(...$arguments)` was refused inside the method and accepted
+                    // outside one.
+                    let saved_callable_param_names = self.callable_param_names.clone();
+                    for (pname, type_ann, _, _) in &method.params {
+                        if type_ann.is_some()
+                            && method_env.get(pname) == Some(&PhpType::Callable)
+                        {
+                            self.callable_param_names.insert(pname.clone());
+                        }
+                    }
+                    // Every parameter is a fresh binding, and the callable records are keyed by
+                    // NAME alone: whichever body last bound a `$callback` closure described this
+                    // method's `$callback` too. `resolve_function_signature` isolates a function's
+                    // parameters this way; methods did not, so Laravel's
+                    // `EnvironmentDetector::detectWebEnvironment(Closure $callback)` typed
+                    // `return $callback();` as some other body's int closure, cast the string the
+                    // interpreted caller's closure returned to `int`, and every request ran in
+                    // environment `0`. No call site records a METHOD's callable parameter, so
+                    // the honest signature is none: the call returns `mixed`.
+                    let hidden_param_callable_records: Vec<_> = method
+                        .params
+                        .iter()
+                        .map(|(pname, type_ann, _, _)| {
+                            // A DECLARED `callable(A): B` was recorded for this very body above
+                            // and is the honest signature of the parameter: keep it in place.
+                            if type_ann.as_ref().is_some_and(|t| {
+                                self.declared_callable_signature(t, method.span).is_some()
+                            }) {
+                                return (
+                                    pname.clone(),
+                                    self.callable_sigs.get(pname).cloned(),
+                                    self.closure_return_types.get(pname).cloned(),
+                                    self.first_class_callable_targets.remove(pname),
+                                    self.callable_array_targets.remove(pname),
+                                );
+                            }
+                            (
+                                pname.clone(),
+                                self.callable_sigs.remove(pname),
+                                self.closure_return_types.remove(pname),
+                                self.first_class_callable_targets.remove(pname),
+                                self.callable_array_targets.remove(pname),
+                            )
+                        })
+                        .collect();
+                    let body_result = self.with_local_storage_context(
                         method_ref_params,
                         method_param_names,
                         pre_bound_own_storage,
@@ -260,17 +418,87 @@ impl Checker {
                                 .map(|(name, _, _, _)| name.clone()));
                             for s in &method.body {
                                 if let Err(error) = checker.check_stmt(s, &mut method_env) {
-                                    method_errors.extend(error.flatten());
+                                    // Naming the enclosing CLASS is what lets `pipeline` recover
+                                    // the FILE: after autoload expansion every spliced file
+                                    // shares one line-number space, so `line:col` alone
+                                    // identifies nothing. `resolve_function_signature` already
+                                    // does this for a plain function; a method body reached the
+                                    // reporter untagged, which is why a Symfony preload error
+                                    // printed as a bare `error[213:13]`.
+                                    method_errors.extend(
+                                        error.within_declaration(class.name.as_str()).flatten(),
+                                    );
                                 }
                             }
                             Ok(())
                         },
-                    )?;
+                    );
+                    self.callable_param_names = saved_callable_param_names;
+                    for (pname, sig, return_ty, first_class_target, array_target) in
+                        hidden_param_callable_records
+                    {
+                        match sig {
+                            Some(sig) => {
+                                self.callable_sigs.insert(pname.clone(), sig);
+                            }
+                            None => {
+                                self.callable_sigs.remove(&pname);
+                            }
+                        }
+                        match return_ty {
+                            Some(return_ty) => {
+                                self.closure_return_types.insert(pname.clone(), return_ty);
+                            }
+                            None => {
+                                self.closure_return_types.remove(&pname);
+                            }
+                        }
+                        match first_class_target {
+                            Some(target) => {
+                                self.first_class_callable_targets.insert(pname.clone(), target);
+                            }
+                            None => {
+                                self.first_class_callable_targets.remove(&pname);
+                            }
+                        }
+                        match array_target {
+                            Some(target) => {
+                                self.callable_array_targets.insert(pname, target);
+                            }
+                            None => {
+                                self.callable_array_targets.remove(&pname);
+                            }
+                        }
+                    }
+                    body_result?;
+                    if std::env::var("ELEPHC_BACKEND_INVENTORY").as_deref() == Ok("1") {
+                        for error in &mut method_errors {
+                            error.message = format!(
+                                "{}::{}: {}",
+                                class.name, method.name, error.message
+                            );
+                        }
+                    }
                     let method_has_errors = !method_errors.is_empty();
+                    // A refused untyped body keeps its `int` return seed, and a call to the method
+                    // from inside itself is typed by that seed: retry with the call typed `mixed`.
+                    if method_has_errors && method.return_type.is_none() {
+                        self.recursive_mixed_methods.insert((
+                            class.name.clone(),
+                            method_key.clone(),
+                            method.is_static,
+                        ));
+                    }
                     pass_errors.extend(method_errors);
 
                     if !method_has_errors {
+                        let first_return_error = pass_errors.len();
                         self.update_method_return_type(class, method, &method_env, &mut pass_errors);
+                        for error in &mut pass_errors[first_return_error..] {
+                            if error.declaration.is_none() {
+                                error.declaration = Some(class.name.clone());
+                            }
+                        }
                     }
                     self.current_class = None;
                     self.current_method = None;
@@ -280,16 +508,497 @@ impl Checker {
                 }
             }
 
-            let stabilized = self.classes == classes_before_pass;
+            if trace {
+                bodies_secs += mark.elapsed().as_secs_f64();
+                mark = std::time::Instant::now();
+            }
+            self.unify_override_family_return_types();
+            self.sync_inherited_method_return_types();
+            let stabilized = self.classes == classes_before_pass
+                && self.recursive_mixed_methods.len() == recursive_mixed_before;
+            if trace && !stabilized {
+                // Which signatures actually moved this pass. The loop exits on CYCLE detection,
+                // not convergence, so the last passes are re-checking 1000+ classes to chase
+                // whatever this names -- and that is the thing worth fixing, not the loop.
+                let mut moved: Vec<String> = Vec::new();
+                for (class_name, after) in &self.classes {
+                    let Some(before) = classes_before_pass.get(class_name) else {
+                        moved.push(format!("{class_name}(new)"));
+                        continue;
+                    };
+                    for (method, signature) in &after.methods {
+                        if before.methods.get(method) != Some(signature) {
+                            moved.push(format!("{class_name}::{method}"));
+                        }
+                    }
+                    for (method, signature) in &after.static_methods {
+                        if before.static_methods.get(method) != Some(signature) {
+                            moved.push(format!("{class_name}::{method}(static)"));
+                        }
+                    }
+                    if before.callable_method_return_sigs != after.callable_method_return_sigs {
+                        moved.push(format!("{class_name}(callable_return_sigs)"));
+                    }
+                    if before != after && moved.last().map(|last| !last.starts_with(class_name.as_str())).unwrap_or(true) {
+                        // A field OUTSIDE the three a pass writes here has moved, which means
+                        // something deeper in the checker mutates `ClassInfo` too. Name it by
+                        // diffing the debug renderings rather than enumerating forty fields:
+                        // this runs only for the handful of classes that are still moving.
+                        let (before_text, after_text) =
+                            (format!("{before:?}"), format!("{after:?}"));
+                        let at = before_text
+                            .bytes()
+                            .zip(after_text.bytes())
+                            .position(|(left, right)| left != right)
+                            .unwrap_or(before_text.len().min(after_text.len()));
+                        let from = at.saturating_sub(70);
+                        moved.push(format!(
+                            "{class_name}(other @{at}: {:?} -> {:?})",
+                            &before_text[from..before_text.len().min(at + 40)],
+                            &after_text[from..after_text.len().min(at + 40)],
+                        ));
+                    }
+                }
+                moved.sort();
+                eprintln!(
+                    "[elephc-methodpass] pass={passes} moved={} first={:?}",
+                    moved.len(),
+                    &moved[..moved.len().min(12)]
+                );
+            }
+            // A REPEAT is not progress. Symfony's 246-file preload is quiet for every class but
+            // one after three passes and then oscillates forever on a single property, which used
+            // to burn the whole budget — 1630 passes at ~2s each — to land on a table pass three
+            // had already produced. Stopping here ends on a state the loop reached by itself.
+            let cycling = !stabilized
+                && recent_tables
+                    .iter()
+                    .any(|table| table == &self.classes);
             let out_of_passes = method_passes_remaining == 0;
-            if stabilized || out_of_passes {
+            if trace {
+                compare_secs += mark.elapsed().as_secs_f64();
+            }
+            if stabilized || cycling || out_of_passes {
                 errors.extend(pass_errors);
+                if trace {
+                    eprintln!(
+                        "[elephc-methodpass] passes={passes} clone={clone_secs:.2}s \
+                         bodies={bodies_secs:.2}s compare={compare_secs:.2}s \
+                         classes={} stabilized={stabilized} cycling={cycling}",
+                        self.classes.len()
+                    );
+                }
                 break;
             }
 
+            while recent_tables.len() >= PASS_CYCLE_WINDOW {
+                recent_tables.pop_front();
+            }
+            // The clone the stabilization check already made, reused rather than repeated.
+            recent_tables.push_back(classes_before_pass);
             method_passes_remaining -= 1;
         }
         Ok(())
+    }
+
+    /// Widens the returns of untyped override-family members that disagree on their storage.
+    ///
+    /// A call through `$this->m()` or `static::m()` is typed by the class the CALL sits in, and
+    /// the vtable then runs whichever override the receiver has. Every body therefore has to hand
+    /// its value back in the storage the caller reads. Nothing made two untyped bodies agree:
+    /// Laravel's `Facade::getFacadeAccessor()` only throws (so it was typed `void`) while every
+    /// facade returns a string, and `static::getFacadeAccessor()` read the string as nothing --
+    /// every facade resolved the empty accessor. A base returning a string with an override
+    /// returning an int read garbage and crashed.
+    ///
+    /// Each untyped method is compared with the nearest ancestor that declares the same method;
+    /// when their storage differs both become `mixed`, which every return boxes into. Recorded in
+    /// `family_return_widenings` so the next pass's `update_method_return_type` keeps it, and
+    /// repeated until stable by the enclosing fixpoint: a sibling or a grandparent that still
+    /// disagrees with a newly widened member is widened on a later pass.
+    fn unify_override_family_return_types(&mut self) {
+        let mut widenings: Vec<(String, String, bool, PhpType)> = Vec::new();
+        for (class_name, info) in &self.classes {
+            for is_static in [false, true] {
+                let (declaring, methods) = if is_static {
+                    (&info.static_method_declaring_classes, &info.static_methods)
+                } else {
+                    (&info.method_declaring_classes, &info.methods)
+                };
+                for (method_key, owner) in declaring {
+                    if owner != class_name || method_key == "__construct" {
+                        continue;
+                    }
+                    let Some(own) = methods.get(method_key) else { continue };
+                    if own.declared_return {
+                        // A DECLARED override of an untyped ancestor: the ancestor's callers read
+                        // its inferred storage, which the override does not return. Monolog's
+                        // `LineFormatter::normalizeException(): string` overrides an untyped
+                        // `NormalizerFormatter::normalizeException()` that returns an array, and
+                        // `$this->normalizeException()` inside the base stored the string as an
+                        // array. The ancestor widens to `mixed`; `ancestor_return_storage` then
+                        // boxes the override's returns to match.
+                        if let Some((ancestor, ancestor_sig)) =
+                            self.nearest_ancestor_declaring(class_name, method_key, is_static)
+                        {
+                            if !ancestor_sig.declared_return
+                                && ancestor_sig.return_type.codegen_repr() != PhpType::Mixed
+                                && own.return_type.codegen_repr()
+                                    != ancestor_sig.return_type.codegen_repr()
+                            {
+                                widenings.push((ancestor, method_key.clone(), is_static, PhpType::Mixed));
+                            }
+                        }
+                        continue;
+                    }
+                    // A call through an interface that declares the method WITHOUT a return type
+                    // reads the result boxed, so the implementation has to return it boxed too:
+                    // `interface N { function name(); }` implemented by `function name() {
+                    // return $this->name; }` handed `$this->name()` an unboxed string that the
+                    // interface-typed caller read as "".
+                    let untyped_in_an_interface = self.class_and_ancestor_interfaces(class_name).iter().any(|interface| {
+                        self.interfaces
+                            .get(interface.trim_start_matches('\\'))
+                            .and_then(|interface| {
+                                if is_static {
+                                    interface.static_methods.get(method_key)
+                                } else {
+                                    interface.methods.get(method_key)
+                                }
+                            })
+                            .is_some_and(|sig| !sig.declared_return)
+                    });
+                    if untyped_in_an_interface && own.return_type.codegen_repr() != PhpType::Mixed {
+                        widenings.push((class_name.clone(), method_key.clone(), is_static, PhpType::Mixed));
+                        continue;
+                    }
+                    let Some((ancestor, ancestor_sig)) =
+                        self.nearest_ancestor_declaring(class_name, method_key, is_static)
+                    else {
+                        continue;
+                    };
+                    if ancestor_sig.declared_return
+                        || own.return_type.codegen_repr() == ancestor_sig.return_type.codegen_repr()
+                    {
+                        continue;
+                    }
+                    widenings.push((class_name.clone(), method_key.clone(), is_static, PhpType::Mixed));
+                    widenings.push((ancestor, method_key.clone(), is_static, PhpType::Mixed));
+                }
+            }
+        }
+        for (class_name, method_key, is_static, widened) in widenings {
+            if let Some(info) = self.classes.get_mut(&class_name) {
+                let methods = if is_static { &mut info.static_methods } else { &mut info.methods };
+                if let Some(sig) = methods.get_mut(&method_key) {
+                    sig.return_type = widened.clone();
+                }
+            }
+            self.family_return_widenings
+                .insert((class_name, method_key, is_static), widened);
+        }
+    }
+
+    /// Returns every interface `class_name` implements, including those an ancestor implements and
+    /// those an implemented interface extends.
+    fn class_and_ancestor_interfaces(&self, class_name: &str) -> Vec<String> {
+        let mut pending: Vec<String> = Vec::new();
+        let mut current = Some(class_name.to_string());
+        let mut depth = 0;
+        while let Some(name) = current {
+            depth += 1;
+            let Some(info) = self.classes.get(&name).filter(|_| depth <= 256) else {
+                break;
+            };
+            pending.extend(info.interfaces.iter().map(|i| i.trim_start_matches('\\').to_string()));
+            current = info.parent.clone();
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut all = Vec::new();
+        while let Some(interface) = pending.pop() {
+            if !seen.insert(interface.clone()) {
+                continue;
+            }
+            if let Some(info) = self.interfaces.get(&interface) {
+                pending.extend(info.parents.iter().map(|p| p.trim_start_matches('\\').to_string()));
+            }
+            all.push(interface);
+        }
+        all
+    }
+
+    /// Returns the nearest ancestor that declares `method_key` itself, with its signature, unless
+    /// that declaration is private (a private method is not overridden).
+    fn nearest_ancestor_declaring(
+        &self,
+        class_name: &str,
+        method_key: &str,
+        is_static: bool,
+    ) -> Option<(String, FunctionSig)> {
+        let mut current = self.classes.get(class_name)?.parent.clone();
+        let mut depth = 0;
+        while let Some(parent) = current {
+            depth += 1;
+            if depth > 256 {
+                return None;
+            }
+            let info = self.classes.get(&parent)?;
+            let (declaring, methods, visibilities) = if is_static {
+                (
+                    &info.static_method_declaring_classes,
+                    &info.static_methods,
+                    &info.static_method_visibilities,
+                )
+            } else {
+                (&info.method_declaring_classes, &info.methods, &info.method_visibilities)
+            };
+            if declaring.get(method_key).is_some_and(|owner| owner == &parent) {
+                if visibilities.get(method_key) == Some(&crate::parser::ast::Visibility::Private) {
+                    return None;
+                }
+                return methods.get(method_key).map(|sig| (parent.clone(), sig.clone()));
+            }
+            current = info.parent.clone();
+        }
+        None
+    }
+
+    /// Copies each inherited method's return type from the class whose body implements it.
+    ///
+    /// `update_method_return_type` writes the type a body returns into its DECLARING class only,
+    /// yet every subclass carries its own copy of the signature, and a call on a subclass
+    /// receiver reads that copy. A copy taken on an earlier pass keeps whatever the body returned
+    /// then: `class Section extends Out` kept `getStream(): resource` from the pass on which
+    /// `parent::__construct(fopen(...))` had typed the untyped property, while `Out::getStream()`
+    /// had since widened to the boxed Mixed it is emitted with. A caller then re-boxed that box
+    /// pointer as an `int`, and Symfony's `ConsoleOutput::section()` handed `int(4316502720)` to
+    /// `StreamOutput::__construct`, which refused it as "not a stream".
+    ///
+    /// One sweep per pass over every inherited entry: cheaper than a search per updated method,
+    /// and the fixpoint then sees the copies move in the same pass as the body.
+    /// A late-static return (`: static`) is resolved per receiver class, so its copy is skipped.
+    fn sync_inherited_method_return_types(&mut self) {
+        let mut updates: Vec<(String, String, PhpType)> = Vec::new();
+        for (class_name, info) in &self.classes {
+            for (method_key, impl_class) in &info.method_impl_classes {
+                if impl_class == class_name || info.late_static_method_returns.contains_key(method_key) {
+                    continue;
+                }
+                let Some(own) = info.methods.get(method_key) else { continue };
+                if own.declared_return && info.abstract_methods.contains(method_key) {
+                    continue;
+                }
+                let Some(body) = self
+                    .classes
+                    .get(impl_class)
+                    .and_then(|owner| owner.methods.get(method_key))
+                else {
+                    continue;
+                };
+                if own.return_type != body.return_type {
+                    updates.push((class_name.clone(), method_key.clone(), body.return_type.clone()));
+                }
+            }
+        }
+        for (class_name, method_key, return_type) in updates {
+            if let Some(sig) = self
+                .classes
+                .get_mut(&class_name)
+                .and_then(|info| info.methods.get_mut(&method_key))
+            {
+                sig.return_type = return_type;
+            }
+        }
+    }
+
+    /// Returns the body-checking type for an untyped method parameter.
+    ///
+    /// Class schemas retain `Int` as the unspecialized legacy sentinel. A real call records the
+    /// parameter in `param_specialization_seen`, including the homogeneous integer case where the
+    /// stored type remains `Int`. Without that evidence PHP's untyped parameter is gradual
+    /// `Mixed`; using the sentinel in its body creates false diagnostics and disagrees with the
+    /// boxed PHP parameter contract used by EIR lowering.
+    fn method_body_param_type(
+        &self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        index: usize,
+        inferred: PhpType,
+    ) -> PhpType {
+        if inferred != PhpType::Int
+            || self.is_runtime_contract_method(&class.name, &php_symbol_key(&method.name), method.is_static)
+        {
+            return inferred;
+        }
+        let owner = if method.is_static {
+            format!("static:{}::{}", class.name, method.name)
+        } else {
+            format!("{}::{}", class.name, php_symbol_key(&method.name))
+        };
+        if self.param_specialization_seen.contains(&(owner, index)) {
+            inferred
+        } else {
+            PhpType::Mixed
+        }
+    }
+
+
+    /// Publishes `mixed` for every undeclared parameter whose `int` inference seed no call site
+    /// refined, so the signature says what the body was checked with.
+    ///
+    /// `method_body_param_type` already answers `mixed` for such a parameter -- PHP reads an
+    /// undeclared parameter as `mixed` -- but it only moved the ENVIRONMENT. The signature kept
+    /// the seed, and the signature is what EIR lowers the parameter as, so the body reasoned about
+    /// a boxed value while the backend read a raw integer register. `twig/twig`'s
+    /// `CoreExtension::filter($env, $isSandboxed, $array, $arrow)` has no compiled caller: its
+    /// `$array` reached `new \IteratorIterator($array)` as `Int` and its `$arrow` reached
+    /// `new \CallbackFilterIterator(..., $arrow)` as `Int` against a `callable` property, on code
+    /// php runs. The free-function half of this rule is
+    /// `widen_unrefined_params_of_an_uncalled_function`.
+    pub(super) fn publish_unspecialized_method_param_seeds(&mut self) {
+        let slots: Vec<(String, String, bool, usize)> =
+            self.unspecialized_seed_params.iter().cloned().collect();
+        for (class_name, method_key, is_static, index) in slots {
+            if self.is_runtime_contract_method(&class_name, &method_key, is_static) {
+                continue;
+            }
+            let Some(class_info) = self.classes.get_mut(&class_name) else {
+                continue;
+            };
+            let table = if is_static {
+                &mut class_info.static_methods
+            } else {
+                &mut class_info.methods
+            };
+            let Some(sig) = table.get_mut(&method_key) else {
+                continue;
+            };
+            let Some(param) = sig.params.get_mut(index) else {
+                continue;
+            };
+            // Only the seed itself: a later round may have refined it after all.
+            if param.1 == PhpType::Int {
+                param.1 = PhpType::Mixed;
+            }
+        }
+        self.sync_inherited_method_param_types();
+    }
+
+    /// Copies each inherited method's parameter types from the class whose body implements it.
+    ///
+    /// The parameter twin of `sync_inherited_method_return_types`: a call site specializes the
+    /// IMPLEMENTING class's signature, and the body is emitted with it, but a call on a subclass
+    /// receiver plans its arguments against the subclass's own copy. That copy kept the seed,
+    /// which the publish above turned into `mixed`, so `$child->bind('k', fn () => 1)` boxed the
+    /// closure while `Container::bind()` read its `callable` parameter raw -- Laravel's
+    /// `Application` (a `Container` subclass) lost every `$app['env'] = ...` binding that way.
+    fn sync_inherited_method_param_types(&mut self) {
+        let mut updates: Vec<(String, String, bool, Vec<PhpType>)> = Vec::new();
+        for (class_name, info) in &self.classes {
+            for (is_static, impl_classes, table) in [
+                (false, &info.method_impl_classes, &info.methods),
+                (true, &info.static_method_impl_classes, &info.static_methods),
+            ] {
+                for (method_key, impl_class) in impl_classes.iter() {
+                    if impl_class == class_name {
+                        continue;
+                    }
+                    let Some(own) = table.get(method_key) else { continue };
+                    let Some(body) = self.classes.get(impl_class).and_then(|owner| {
+                        if is_static {
+                            owner.static_methods.get(method_key)
+                        } else {
+                            owner.methods.get(method_key)
+                        }
+                    }) else {
+                        continue;
+                    };
+                    if own.params.len() != body.params.len() {
+                        continue;
+                    }
+                    if own.params.iter().zip(&body.params).any(|(a, b)| a.1 != b.1) {
+                        let types = body.params.iter().map(|(_, ty)| ty.clone()).collect();
+                        updates.push((class_name.clone(), method_key.clone(), is_static, types));
+                    }
+                }
+            }
+        }
+        for (class_name, method_key, is_static, types) in updates {
+            let Some(info) = self.classes.get_mut(&class_name) else { continue };
+            let table = if is_static { &mut info.static_methods } else { &mut info.methods };
+            if let Some(sig) = table.get_mut(&method_key) {
+                for (param, ty) in sig.params.iter_mut().zip(types) {
+                    param.1 = ty;
+                }
+            }
+        }
+    }
+
+    /// Gives every undeclared parameter of a stream-wrapper contract method php's prototype type.
+    ///
+    /// The runtime passes these arguments raw, so the seed the body and the signature keep for a
+    /// contract method (`is_runtime_contract_method`) must BE the contract type, not the `int`
+    /// placeholder every undeclared parameter starts from. See
+    /// `codegen_support::runtime::user_wrapper_contract_param_type`.
+    fn seed_runtime_contract_param_types(&mut self) {
+        let mut updates = Vec::new();
+        for (class_name, class_info) in &self.classes {
+            for (method_key, sig) in &class_info.methods {
+                if !self.is_runtime_contract_method(class_name, method_key, false) {
+                    continue;
+                }
+                for index in 0..sig.params.len() {
+                    if sig.declared_params.get(index).copied().unwrap_or(false) {
+                        continue;
+                    }
+                    if let Some(ty) =
+                        crate::codegen_support::runtime::user_wrapper_contract_param_type(method_key, index)
+                    {
+                        updates.push((class_name.clone(), method_key.clone(), index, ty));
+                    }
+                }
+            }
+        }
+        for (class_name, method_key, index, ty) in updates {
+            if let Some(param) = self
+                .classes
+                .get_mut(&class_name)
+                .and_then(|info| info.methods.get_mut(&method_key))
+                .and_then(|sig| sig.params.get_mut(index))
+            {
+                param.1 = ty;
+            }
+        }
+    }
+
+    /// Returns whether the runtime calls this method through a fixed raw-argument vtable: a
+    /// stream wrapper's or a user filter's contract method. The EIR metadata keeps their seeds
+    /// (`normalize_method_map_for_eir`), so the body and the signature must keep them too: a
+    /// `mixed` parameter read the raw path pointer `fopen()` passed as a box and crashed in
+    /// `stream_open($path, $mode, $options, &$opened)`.
+    fn is_runtime_contract_method(&self, class_name: &str, method_key: &str, is_static: bool) -> bool {
+        if is_static {
+            return false;
+        }
+        let Some(class_info) = self.classes.get(class_name) else {
+            return false;
+        };
+        let is_wrapper_class = class_info.methods.keys().any(|method| {
+            crate::codegen_support::runtime::is_user_wrapper_contract_method(method)
+        });
+        // phpoption's `Some::filter($callable)` is no stream filter: in a world that registers
+        // one (Laravel's does), its `$callable` kept the filter ABI's raw `int` seed and the call
+        // `$callable($this->value)` was refused. See `types::is_user_filter_class`.
+        let is_filter_class = self.user_filters_reachable
+            && class_info.methods.contains_key("filter")
+            && crate::types::is_user_filter_class(
+                &self.classes,
+                self.user_filter_registered.as_ref(),
+                class_name,
+            );
+        (is_wrapper_class && crate::codegen_support::runtime::is_user_wrapper_contract_method(method_key))
+            || (is_filter_class
+                && crate::codegen_support::runtime::is_user_filter_contract_method(method_key))
     }
 
     /// Builds the PHP-local base environment shared by all method bodies.
@@ -392,7 +1101,13 @@ impl Checker {
             }
             Some(widest)
         };
-        let inferred_return = raw_inferred.clone().unwrap_or(PhpType::Void);
+        let inferred_return = match raw_inferred.clone() {
+            Some(inferred) if method.return_type.is_none() => {
+                self.widen_return_for_fall_off(&method.body, inferred)
+            }
+            Some(inferred) => inferred,
+            None => PhpType::Void,
+        };
         let inferred_php_array = return_infos
             .iter()
             .any(|return_info| return_info.ty.is_php_array())
@@ -460,6 +1175,7 @@ impl Checker {
                                 &declared,
                                 &return_info.ty,
                                 return_info.has_value,
+                                return_info.strict_types,
                                 method.span,
                                 &format!("Method '{}::{}' return type", class.name, method.name),
                             ) {
@@ -474,13 +1190,18 @@ impl Checker {
                     if Self::is_generic_array_hint(&declared) && inferred_php_array {
                         PhpType::php_array()
                     } else if Self::is_generic_array_hint(&declared)
-                        && (inferred_return.is_php_array()
-                            || matches!(
-                                inferred_return,
-                                PhpType::Array(_) | PhpType::AssocArray { .. }
-                            ))
+                        && !self.method_overridden_by_descendant(
+                            &class.name,
+                            &php_symbol_key(&method.name),
+                            method.is_static,
+                        )
                     {
-                        inferred_return
+                        // Resolved from the individual returns, not from `inferred_return`:
+                        // `wider_type` collapses an indexed return joined with a hash one to
+                        // `Mixed`, which this guard used to reject, leaving the declared INDEXED
+                        // hint to describe a container that is a hash at runtime.
+                        Self::generic_array_return_contract(&return_infos)
+                        .unwrap_or(declared)
                     } else {
                         declared
                     }
@@ -494,9 +1215,30 @@ impl Checker {
                 }
             }
         } else {
-            inferred_return
+            // An untyped member of an override family keeps the storage the family agreed on
+            // (`unify_override_family_return_types`), or this pass would narrow it straight back.
+            self.family_return_widenings
+                .get(&(class.name.clone(), php_symbol_key(&method.name), method.is_static))
+                .cloned()
+                .unwrap_or_else(|| {
+                    if self.diverging_placeholder_may_be_overridden_elsewhere(
+                        class,
+                        method,
+                        raw_inferred.is_some(),
+                    ) {
+                        PhpType::Mixed
+                    } else {
+                        inferred_return
+                    }
+                })
         };
         let method_key = php_symbol_key(&method.name);
+        // An override keeps the storage its ancestors agreed on.
+        let effective_return = if method.is_static {
+            effective_return
+        } else {
+            self.ancestor_return_storage(&class.name, &method_key, effective_return.clone())
+        };
         // A subclass copies the method signature before body inference runs. Calls through
         // that subclass must use the implementing method's return ABI, or a boxed result can
         // be read as a scalar even though both names dispatch to the same body.
@@ -508,6 +1250,27 @@ impl Checker {
             let Some(ci) = self.classes.get_mut(&name) else {
                 continue;
             };
+            let implementation = if method.is_static {
+                ci.static_method_impl_classes.get(&method_key)
+            } else {
+                ci.method_impl_classes.get(&method_key)
+            };
+            if name != class.name && implementation != Some(&class.name) {
+                continue;
+            }
+            // An ABSTRACT declaration keeps the signature it declared. Its implementors narrow the
+            // return covariantly (`create(): SQLiteSchemaManager` over `create(): AbstractSchemaManager`),
+            // and reflection and the eval bridge's declared-signature registration read this copy.
+            let declared_abstract = if method.is_static {
+                ci.abstract_static_methods.contains(&method_key)
+                    && ci.static_methods.get(&method_key).is_some_and(|sig| sig.declared_return)
+            } else {
+                ci.abstract_methods.contains(&method_key)
+                    && ci.methods.get(&method_key).is_some_and(|sig| sig.declared_return)
+            };
+            if name != class.name && declared_abstract {
+                continue;
+            }
             let sig = if method.is_static {
                 ci.static_methods.get_mut(&method_key)
             } else {
@@ -528,7 +1291,11 @@ impl Checker {
     }
 
     /// The classes whose `method_key` dispatches to `impl_class`'s body (see
-    /// `Checker::method_impl_users_index`).
+    /// `Checker::method_impl_users_index`), from an index rebuilt whenever the class count
+    /// changed or a pass round starts.
+    ///
+    /// The index is a candidate list: the caller re-checks each entry against the live maps, so a
+    /// map edited since the build only costs a miss, never a wrong write.
     fn method_impl_users(
         &mut self,
         impl_class: &str,
@@ -541,8 +1308,8 @@ impl Checker {
             .as_ref()
             .is_none_or(|(built_for, _)| *built_for != class_count)
         {
-            let mut index: std::collections::HashMap<(String, String, bool), Vec<String>> =
-                std::collections::HashMap::new();
+            let mut index: crate::fast_hash::FastMap<(String, String, bool), Vec<String>> =
+                Default::default();
             for (name, info) in &self.classes {
                 for (key, implementation) in &info.method_impl_classes {
                     index
@@ -566,6 +1333,94 @@ impl Checker {
             })
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Returns whether an untyped method that never returns normally -- a placeholder that
+    /// throws, like Laravel's `Facade::getFacadeAccessor()` -- must keep a value-carrying return
+    /// storage because code the compiler cannot see may override it.
+    ///
+    /// Its body alone infers `void`, so every compiled call through it (`static::accessor()`)
+    /// was typed `void` and discarded what an interpreted subclass's override returned: every
+    /// runtime-loaded facade resolved the empty accessor name, and `Date::now()` failed with
+    /// "Target class [date] does not exist". A compiled override is already covered by
+    /// `unify_override_family_return_types`; this is for the ones only eval can declare.
+    fn diverging_placeholder_may_be_overridden_elsewhere(
+        &self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        returns_a_value: bool,
+    ) -> bool {
+        self.program_has_interpreted_callers
+            && !returns_a_value
+            && method.visibility != crate::parser::ast::Visibility::Private
+            && !method.is_final
+            && !class.is_final
+            && !method.name.eq_ignore_ascii_case("__construct")
+            && crate::termination::block_guarantees_function_exit_with_divergence(
+                &method.body,
+                &|_| false,
+            )
+    }
+
+    /// Returns whether a descendant class declares its own body for this method.
+    ///
+    /// A generic `array` hint is narrowed to the element type the body returns, and a call typed
+    /// at this class reads elements with that narrowed type. An override narrows independently,
+    /// so a family member must keep the declared contract, whose element reads follow the
+    /// array's runtime value type -- the reading an interface-typed call already uses. Twig's
+    /// `AbstractExpressionParser::getAliases(): array { return []; }` is the shape: narrowed to
+    /// `array<never>`, `[$this->getName(), ...$this->getAliases()]` read DotExpressionParser's
+    /// `['?.']` as null, the operator regex gained an empty alternative, and the lexer looped.
+    fn method_overridden_by_descendant(&self, class_name: &str, method_key: &str, is_static: bool) -> bool {
+        self.classes.iter().any(|(descendant, info)| {
+            let declaring = if is_static {
+                info.static_method_declaring_classes.get(method_key)
+            } else {
+                info.method_declaring_classes.get(method_key)
+            };
+            descendant != class_name
+                && declaring.is_some_and(|declaring| declaring == descendant)
+                && self.is_subclass_of(descendant, class_name)
+        })
+    }
+
+    /// Keeps an override's return in the storage its parent's vtable slot promises.
+    ///
+    /// The schema adopts the ancestor's return storage for an override that narrows it to a
+    /// different representation (`adopt_ancestor_return_storage`); resolving the declared hint
+    /// here would narrow it straight back, and a call through the parent-typed slot would again
+    /// read a raw object where a boxed cell belongs. A parent's PRIVATE method is not overridden,
+    /// and a constructor is never entered through an ancestor's slot.
+    fn ancestor_return_storage(
+        &self,
+        class_name: &str,
+        method_key: &str,
+        effective: PhpType,
+    ) -> PhpType {
+        if method_key == "__construct" {
+            return effective;
+        }
+        let Some(parent) = self.classes.get(class_name).and_then(|info| info.parent.clone()) else {
+            return effective;
+        };
+        let Some(parent_info) = self.classes.get(&parent) else {
+            return effective;
+        };
+        if parent_info.method_visibilities.get(method_key) == Some(&crate::parser::ast::Visibility::Private) {
+            return effective;
+        }
+        let Some(ancestor) = parent_info.methods.get(method_key) else {
+            return effective;
+        };
+        // An untyped ancestor whose storage is boxed binds its overrides the same way a declared
+        // `mixed` does: the ancestor's own callers read a box from every body the vtable can run.
+        let ancestor_repr = ancestor.return_type.codegen_repr();
+        if !matches!(ancestor_repr, PhpType::Mixed | PhpType::Union(_))
+            || effective.codegen_repr() == ancestor_repr
+        {
+            return effective;
+        }
+        ancestor.return_type.clone()
     }
 
     /// Resolves the return type of a method whose body contains `yield`.
@@ -593,6 +1448,7 @@ impl Checker {
                     type_ann,
                     &declared,
                     &generator_ty,
+                    true,
                     true,
                     method.span,
                     &format!("Method '{}::{}' return type", class.name, method.name),
@@ -663,15 +1519,25 @@ fn matching_callable_sig(return_sigs: &[FunctionSig]) -> Option<FunctionSig> {
     }
 }
 
-/// Normalizes untyped mixed parameters in callable-return metadata for codegen.
-fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
-    for (idx, (_, ty)) in sig.params.iter_mut().enumerate() {
-        if !sig.declared_params.get(idx).copied().unwrap_or(false)
-            && !sig.ref_params.get(idx).copied().unwrap_or(false)
-            && matches!(ty, PhpType::Mixed)
-        {
-            *ty = PhpType::Int;
-        }
-    }
+/// Returns the callable-return metadata for one method's returned closure, unchanged.
+///
+/// An undeclared parameter stays `mixed`, the type the closure is compiled with; see the twin
+/// in `functions::resolution::signature`, which used to rewrite it to a fabricated `int`.
+fn callable_return_codegen_sig(sig: FunctionSig) -> FunctionSig {
     sig
+}
+
+/// Whether `body` (closures included) tests the variable `name` with `instanceof`.
+fn body_tests_instanceof(body: &[crate::parser::ast::Stmt], name: &str) -> bool {
+    let mut found = false;
+    crate::parser::ast::visit::walk_nodes(body, &mut |node| {
+        if let crate::parser::ast::visit::Node::Expr(expr) = node {
+            if let crate::parser::ast::ExprKind::InstanceOf { value, .. } = &expr.kind {
+                if matches!(&value.kind, crate::parser::ast::ExprKind::Variable(var) if var == name) {
+                    found = true;
+                }
+            }
+        }
+    });
+    found
 }

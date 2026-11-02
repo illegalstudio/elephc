@@ -69,6 +69,44 @@ fn test_for_parses() {
     assert!(matches!(&stmts[0].kind, StmtKind::For { .. }));
 }
 
+/// Verifies that comma-separated initializer and update clauses retain every expression in order.
+#[test]
+fn test_for_multiple_init_and_update_expressions() {
+    let stmts = parse_source(
+        "<?php for ($i = 0, $j = 3; $i < $j; ++$i, --$j) { echo $i; }",
+    );
+    let StmtKind::For { init, update, .. } = &stmts[0].kind else {
+        panic!("expected for statement");
+    };
+    assert!(matches!(
+        init.as_deref().map(|stmt| &stmt.kind),
+        Some(StmtKind::Synthetic(statements)) if statements.len() == 2
+    ));
+    assert!(matches!(
+        update.as_deref().map(|stmt| &stmt.kind),
+        Some(StmtKind::Synthetic(statements)) if statements.len() == 2
+    ));
+}
+
+/// Verifies that PHP call expressions are accepted in both `for` side-effect clauses.
+#[test]
+fn test_for_call_expression_init_and_update() {
+    let stmts = parse_source(
+        "<?php for (next($paths); null !== key($paths); next($paths)) { echo current($paths); }",
+    );
+    let StmtKind::For { init, update, .. } = &stmts[0].kind else {
+        panic!("expected for statement");
+    };
+    assert!(matches!(
+        init.as_deref().map(|stmt| &stmt.kind),
+        Some(StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { .. }, .. }))
+    ));
+    assert!(matches!(
+        update.as_deref().map(|stmt| &stmt.kind),
+        Some(StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { .. }, .. }))
+    ));
+}
+
 /// Verifies that `<?php while (1) { break; }` parses with the `Break(1)` statement nested
 /// inside `While`. The argument 1 means break one level.
 #[test]
@@ -289,6 +327,39 @@ fn test_parse_foreach_key_with_value_destructuring() {
     assert!(matches!(body[0].kind, StmtKind::ListUnpack { .. }));
 }
 
+/// Verifies property key/value targets bind through hidden loop variables before the user body.
+#[test]
+fn test_parse_foreach_property_targets_desugar_to_hidden_temps() {
+    let stmts = parse_source(
+        "<?php foreach ($items as $stub->class => $stub->position) { echo $stub->class; }",
+    );
+    let StmtKind::Foreach {
+        key_var,
+        value_var,
+        body,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected Foreach");
+    };
+
+    assert!(key_var
+        .as_deref()
+        .is_some_and(|name| name.starts_with("__elephc_foreach_key_")));
+    assert!(value_var.starts_with("__elephc_foreach_value_"));
+    assert_eq!(body.len(), 3);
+    assert!(matches!(
+        &body[0].kind,
+        StmtKind::PropertyAssign { property, value, .. }
+            if property == "class" && matches!(&value.kind, ExprKind::Variable(name) if Some(name) == key_var.as_ref())
+    ));
+    assert!(matches!(
+        &body[1].kind,
+        StmtKind::PropertyAssign { property, value, .. }
+            if property == "position" && matches!(&value.kind, ExprKind::Variable(name) if name == value_var)
+    ));
+}
+
 /// Verifies a reference to a whole destructuring pattern is rejected: PHP allows `&` on the
 /// targets inside the pattern, never on the pattern itself.
 #[test]
@@ -414,11 +485,15 @@ fn test_alternative_syntax_malformed_forms_are_rejected() {
     assert!(parse_fails("<?php for ($i = 0; $i < 1; $i++): echo 1; endfor"));
 }
 
-// --- goto (unsupported) ---
+// --- terminal goto ---
 
-/// Verifies `goto` and its target label are rejected at parse time rather than silently ignored.
+/// Verifies a jump to a terminal fallback tail is desugared, a forward jump to a fall-through label
+/// parses (non-terminal `goto` is supported), and a label nothing jumps to stays rejected.
 #[test]
-fn test_goto_and_labels_are_rejected() {
-    assert!(parse_fails("<?php goto done; done: echo 1;"));
+fn test_terminal_goto_is_desugared() {
+    assert!(!parse_fails(
+        "<?php if ($retry) { fallback: return 1; } try { return 2; } catch (Throwable) { goto fallback; }"
+    ));
+    assert!(!parse_fails("<?php goto done; done: echo 1;"));
     assert!(parse_fails("<?php done: echo 1;"));
 }

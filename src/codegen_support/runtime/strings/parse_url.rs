@@ -107,8 +107,7 @@ fn emit_parse_url_throw_component_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_concat");                                      // append the trailing ` given` text
     emitter.instruction("bl __rt_str_persist");                                 // give the exception object owned message storage
     emitter.instruction("stp x1, x2, [sp, #16]");                               // preserve message pointer and length during object allocation
-    emitter.instruction("mov x0, #56");                                         // request the standard Throwable payload size
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the ValueError object
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     emitter.instruction("mov x9, #6");                                          // heap kind 6 identifies object payloads
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the ValueError allocation as an object
     emitter.instruction("bl __rt_object_handle_acquire");                       // assign the object its PHP-visible handle
@@ -118,7 +117,7 @@ fn emit_parse_url_throw_component_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x10, x11, [sp, #16]");                             // reload the owned diagnostic message
     emitter.instruction("stp x10, x11, [x0, #8]");                              // install message pointer and byte length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous exception defaults to null
+    emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous exception defaults to null
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
     emitter.instruction("str x0, [x9]");                                        // publish the active ValueError for the unwinder
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame before unwinding
@@ -145,8 +144,7 @@ fn emit_parse_url_throw_component_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // give the exception object owned message storage
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve owned message pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // preserve owned message length
-    emitter.instruction("mov rax, 56");                                         // request the standard Throwable payload size
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the ValueError object
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // materialize the canonical object heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the ValueError allocation as an object
     emitter.instruction("call __rt_object_handle_acquire");                     // assign the object its PHP-visible handle
@@ -157,7 +155,7 @@ fn emit_parse_url_throw_component_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload diagnostic message byte length
     emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // install diagnostic message byte length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous exception defaults to null
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous exception defaults to null
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame before unwinding
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

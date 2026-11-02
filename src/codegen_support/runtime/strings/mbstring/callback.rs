@@ -31,7 +31,8 @@ fn call_boundary(emitter: &mut Emitter) { boundary_body(emitter, "__rt_mbstring_
 
 /// Calls a private body while the shared handler owns every escaping PHP exception.
 fn boundary_body(emitter: &mut Emitter, label: &str) {
-    for (index, offset) in [(0, 224), (1, 232), (2, 240)] { load_arg(emitter, index, offset); }
+    let base = crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET;
+    for (index, offset) in [(0, base), (1, base + 8), (2, base + 16)] { load_arg(emitter, index, offset); }
     abi::emit_call_label(emitter, label);
 }
 

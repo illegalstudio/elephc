@@ -38,6 +38,8 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// (past any leading whitespace), NUL-terminated in place at the end of the run;
 /// AArch64 `x1` / x86_64 `rdx` = `1` when the string was FULLY numeric (`is_numeric`
 /// semantics: only PHP whitespace follows the run), `0` otherwise.
+/// AArch64 `x2` / x86_64 `rdi` = `1` when the accepted run uses decimal/exponent syntax,
+/// `0` when its numeric representation is integer-like.
 ///
 /// The helper is a leaf: it makes no calls and needs no stack frame.
 pub fn emit_php_num_scan(emitter: &mut Emitter) {
@@ -51,6 +53,7 @@ pub fn emit_php_num_scan(emitter: &mut Emitter) {
     emitter.label_global("__rt_php_num_scan");
 
     emitter.instruction("mov x9, x0");                                          // x9 = scan cursor over the C string
+    emitter.instruction("mov x2, xzr");                                         // default to integer-like numeric syntax
 
     // -- skip PHP leading whitespace: ' ' plus the 9..13 control range --
     emitter.label("__rt_pns_ws");
@@ -101,6 +104,7 @@ pub fn emit_php_num_scan(emitter: &mut Emitter) {
     emitter.instruction("b __rt_pns_frac_loop");                                // keep consuming fractional digits
     emitter.label("__rt_pns_frac_done");
     emitter.instruction("cbz x13, __rt_pns_after_mantissa");                    // a lone '.' is not part of any numeric run
+    emitter.instruction("mov x2, #1");                                          // accepted decimal syntax requires floating-point arithmetic
     emitter.instruction("mov x9, x14");                                         // accept the '.' and its fractional digits
 
     // -- a run with no digit at all is not numeric --
@@ -132,6 +136,7 @@ pub fn emit_php_num_scan(emitter: &mut Emitter) {
     emitter.label("__rt_pns_exp_done");
     emitter.instruction("cmp x14, x15");                                        // did the exponent contain any digit?
     emitter.instruction("b.ls __rt_pns_end");                                   // bare "1e" keeps the 'e' out of the run
+    emitter.instruction("mov x2, #1");                                          // accepted exponent syntax requires floating-point arithmetic
     emitter.instruction("mov x9, x14");                                         // accept the exponent
 
     // -- classify the trailing bytes: only PHP whitespace keeps the string numeric --
@@ -170,13 +175,15 @@ pub fn emit_php_num_scan(emitter: &mut Emitter) {
 ///
 /// Mirrors the AArch64 grammar exactly using SysV registers.
 /// Input: `rdi` = pointer to a NUL-terminated, writable C string.
-/// Output: `rax` = pointer to the (in-place clipped) numeric run, `rdx` = fully-numeric flag.
+/// Output: `rax` = pointer to the numeric run, `rdx` = fully-numeric flag,
+/// `rdi` = decimal/exponent syntax flag.
 fn emit_php_num_scan_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: php_num_scan (PHP numeric-string grammar) ---");
     emitter.label_global("__rt_php_num_scan");
 
     emitter.instruction("mov r8, rdi");                                         // r8 = scan cursor over the C string
+    emitter.instruction("xor edi, edi");                                        // default to integer-like numeric syntax
 
     emitter.label("__rt_pns_ws_x");
     emitter.instruction("movzx ecx, BYTE PTR [r8]");                            // load the next candidate whitespace byte
@@ -227,6 +234,7 @@ fn emit_php_num_scan_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pns_frac_done_x");
     emitter.instruction("test r11, r11");                                       // did the run contain any digit?
     emitter.instruction("jz __rt_pns_after_mantissa_x");                        // a lone '.' is not part of any numeric run
+    emitter.instruction("mov edi, 1");                                          // accepted decimal syntax requires floating-point arithmetic
     emitter.instruction("mov r8, rsi");                                         // accept the '.' and its fractional digits
 
     emitter.label("__rt_pns_after_mantissa_x");
@@ -259,6 +267,7 @@ fn emit_php_num_scan_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pns_exp_done_x");
     emitter.instruction("cmp rsi, r9");                                         // did the exponent contain any digit?
     emitter.instruction("jbe __rt_pns_end_x");                                  // bare "1e" keeps the 'e' out of the run
+    emitter.instruction("mov edi, 1");                                          // accepted exponent syntax requires floating-point arithmetic
     emitter.instruction("mov r8, rsi");                                         // accept the exponent
 
     emitter.label("__rt_pns_end_x");

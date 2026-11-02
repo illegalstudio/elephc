@@ -10,6 +10,7 @@
 use super::*;
 
 /// Resolved method metadata needed to issue a direct method call.
+#[derive(Clone)]
 pub(super) struct MethodCallTarget {
     pub(super) impl_class: String,
     pub(super) method_key: String,
@@ -22,10 +23,18 @@ pub(super) struct MethodCallTarget {
 }
 
 /// Concrete runtime class branch available to a `Mixed` receiver method call.
-pub(super) struct MixedMethodCandidate {
+#[derive(Clone)]
+pub(in crate::codegen) struct MixedMethodCandidate {
     pub(super) class_id: u64,
     pub(super) class_name: String,
     pub(super) target: MethodCallTarget,
+    /// The candidate's declared defaults, one per parameter, for the arguments the call site
+    /// omits (see `omitted_default_is_materializable`).
+    pub(super) defaults: Vec<Option<crate::parser::ast::Expr>>,
+    /// The last parameter is a variadic tail the call packs from the surplus operands.
+    pub(super) variadic_last: bool,
+    /// That tail is a hidden `func_get_args()` collector opening with the actual argument count.
+    pub(super) tail_counts_args: bool,
 }
 
 /// Outgoing call argument state that must be cleaned up after the call returns.
@@ -78,12 +87,28 @@ pub(super) enum RefArgCellLifetime {
     MayOutliveCall,
 }
 
+impl RefArgCellLifetime {
+    /// The lifetime a call to the function or method named `callee` needs.
+    ///
+    /// A closure that binds the callee's by-reference parameter (`use (&$param)`) does not need
+    /// the persistent fallback: closure creation takes its own managed lease on the cell
+    /// (`__rt_reference_cell_owner` + incref in `lower_closure_new`), so the caller may retire its
+    /// lease after the call and the closure's release frees the cell. Only constructors that
+    /// promote a by-reference parameter into a property borrow the cell, and those choose
+    /// `MayOutliveCall` through `constructor_ref_cell_lifetime`.
+    pub(super) fn for_callee(_ctx: &FunctionContext<'_>, _callee: &str) -> Self {
+        RefArgCellLifetime::CallOnly
+    }
+}
+
 /// A managed cell for a reference argument without a caller variable, typically a default.
 /// Its stack slot holds the cell pointer, followed by an unwind record for the caller lease.
 /// There is no source location to write back; escaping closures retain independent leases.
 pub(super) struct RefArgTempCell {
     pub(super) param_index: usize,
-    pub(super) source_value: ValueId,
+    /// `None` for an OMITTED optional by-reference argument: there is no operand to load,
+    /// so the cell is seeded with PHP null and only its ADDRESS matters to the callee.
+    pub(super) source_value: Option<ValueId>,
     /// The cell's storage representation: the callee writes through the pointer with the
     /// PARAMETER's type, so the cell must be that type and not the argument's.
     pub(super) cell_ty: PhpType,

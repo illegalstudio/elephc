@@ -1,14 +1,50 @@
 //! Purpose:
-//! End-to-end array_flip coverage for associative and packed function results.
-//! Pins key normalization, duplicate replacement, warnings and independent result ownership.
+//! End-to-end tests for `array_flip()` over an ASSOCIATIVE source — the `__rt_hash_flip`
+//! runtime helper (`src/codegen_support/runtime/arrays/hash_flip.rs`) and its lowering
+//! (`lower_hash_flip` in `src/codegen/lower_inst/builtins/arrays/basic.rs`) — plus the heap-ownership
+//! fix that made `RuntimeFnId::ArrayFlip` a `Fresh`-result operation.
+//!
+//! Two independent behaviours are pinned here because they ship together:
+//!
+//! - FLIP OVER A HASH. Before `__rt_hash_flip` existed, only INDEXED sources could be flipped;
+//!   an associative source had no helper at all. The helper walks the source hash in insertion
+//!   order and dispatches on each entry's RUNTIME value tag, so `Str`-, `Int`-, and boxed
+//!   `Mixed`-valued hashes share one lowering, and string values are normalized through
+//!   `__rt_hash_normalize_key` so
+//!   numeric strings collapse to integer keys exactly as php-src does.
+//! - RESULT OWNERSHIP. `RuntimeFnId::ArrayFlip` sat in the default `MayAliasArguments` bucket,
+//!   which suppresses the release of an owned source TEMPORARY. `array_flip(build())` therefore
+//!   leaked the entire source table on every call while the same flip through a named local
+//!   stayed clean. Every `array_flip` lowering allocates its destination before writing a single
+//!   entry (`__rt_hash_flip` calls `__rt_hash_new`, the indexed helpers call `__rt_array_new`),
+//!   so the result can never alias the source and `Fresh` is the correct classification. The
+//!   `--heap-debug` tests below pin that, in the temporary-argument shape that actually leaked.
 //!
 //! Called from:
 //! - `cargo test --test array_flip_assoc_tests` through Rust's test harness.
 //!
 //! Key details:
-//! - Fixtures compile and run in isolated directories on the host target.
-//! - Declared array returns exercise boxed runtime dispatch instead of constant folding.
-//! - Heap fixtures assert warnings from program stderr separately from compiler diagnostics.
+//! - Harness style mirrors `tests/null_coalesce_merge_tests.rs`: the elephc CLI
+//!   (`CARGO_BIN_EXE_elephc`) is invoked as a subprocess in an isolated temp dir, compiled to a
+//!   plain executable, run, and its stdout asserted. Host-target only.
+//! - Every expected value was captured from reference PHP 8.5.6 (`php -d xdebug.mode=off`); the
+//!   host `php` loads Xdebug, which overloads `var_dump`, so that flag is mandatory.
+//! - Sources come from a FUNCTION RETURN rather than a literal wherever the shape allows it, so
+//!   the constant folder cannot answer in place of the runtime helper.
+//! - THE SKIP RULE IS ONLY REACHABLE THROUGH `Mixed`. php-src's
+//!   `array_flip()` warns `Can only flip string and integer values, entry skipped` for any
+//!   float/bool/array/null value, and `__rt_hash_flip` implements that arm
+//!   (`ARRAY_FLIP_SKIPPED_MESSAGES`). A heterogeneous associative source reaches it as boxed
+//!   `Mixed`; homogeneous float-, bool-, array-, or null-valued sources remain compile-time
+//!   refusals because their static type proves every entry invalid.
+//! - Mixed associative writes preserve a correct concrete tag in each boxed cell. The flip
+//!   helper unboxes those cells before dispatch, so heterogeneous integer and string values can
+//!   be flipped faithfully through the same runtime path.
+//! - Compile-failure assertions read the RAW stderr and only assert a substring, so the HOST
+//!   linker's environmental warnings (GNU `ld` on Linux, silent on macOS) cannot interfere.
+//!   Successful compiles go through `elephc_diagnostics`, which keeps elephc's own lines only.
+//! - Runtime warnings come from the COMPILED PROGRAM's stderr, never the compiler's, so the
+//!   diagnostic filter above can never swallow one.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -112,6 +148,29 @@ fn assert_program_output(prefix: &str, source: &str, expected: &str) {
     let dir = make_test_dir(prefix);
     let bin = compile(&dir, source, prefix, &[]);
     assert_eq!(run_binary(&bin), expected);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Compiles and runs `source`, asserting both output streams from the generated program.
+fn assert_program_output_and_stderr(
+    prefix: &str,
+    source: &str,
+    expected_stdout: &str,
+    expected_stderr: &str,
+) {
+    let dir = make_test_dir(prefix);
+    let bin = compile(&dir, source, prefix, &[]);
+    let output = Command::new(&bin)
+        .output()
+        .expect("failed to run compiled binary");
+    assert!(
+        output.status.success(),
+        "compiled binary exited non-zero ({:?}):\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected_stdout);
+    assert_eq!(String::from_utf8_lossy(&output.stderr), expected_stderr);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -305,6 +364,20 @@ function build(): array { return ["a" => 1, "b" => "s"]; }
 var_dump(array_flip(build()));
 "#,
         "array(2) {\n  [1]=>\n  string(1) \"a\"\n  [\"s\"]=>\n  string(1) \"b\"\n}\n",
+    );
+}
+
+/// A boxed unsupported value warns once, is skipped, and does not stop later valid entries.
+#[test]
+fn a_mixed_valued_associative_source_warns_and_skips_unsupported_runtime_values() {
+    assert_program_output_and_stderr(
+        "flip_assoc_mixed_runtime_skip",
+        r#"<?php
+function build(): array { return ["a" => 1, "skip" => true, "b" => "s"]; }
+var_dump(array_flip(build()));
+"#,
+        "array(2) {\n  [1]=>\n  string(1) \"a\"\n  [\"s\"]=>\n  string(1) \"b\"\n}\n",
+        "Warning: array_flip(): Can only flip string and integer values, entry skipped\n",
     );
 }
 

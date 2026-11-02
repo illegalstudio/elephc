@@ -2,7 +2,7 @@
 title: "mime_content_type() - internals"
 description: "Compiler internals for mime_content_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 349
+  order: 361
 ---
 
 ## `mime_content_type()` - internals

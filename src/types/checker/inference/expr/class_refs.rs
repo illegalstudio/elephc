@@ -8,7 +8,7 @@
 //! Key details:
 //! - Expression inference shares environments with statement checking, so variable and effect updates must stay synchronized.
 
-use crate::errors::CompileError;
+use crate::errors::{CompileError, RuntimeFault};
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
@@ -17,10 +17,11 @@ use super::super::super::Checker;
 
 impl Checker {
     /// Validates `new` expressions on late-bound static constructor targets by inferring
-    /// the object type for every class that descends from `base_class`.
+    /// the object type for every concrete class that descends from `base_class`.
     ///
     /// Used when `$obj::new(...)` or similar late-bound constructor syntax is used,
-    /// to ensure each possible class variant is well-typed.
+    /// to ensure each possible runtime-instantiable class variant is well-typed. Abstract bases
+    /// and descendants cannot be the late-bound runtime class of a successful construction.
     pub(super) fn validate_late_bound_constructor_targets(
         &mut self,
         base_class: &str,
@@ -36,7 +37,12 @@ impl Checker {
         for class_name in class_names {
             // Abstract receivers fail at runtime. Their concrete descendants still need
             // constructor validation, but an abstract candidate is never instantiated here.
-            if self.classes.get(&class_name).is_some_and(|class| class.is_abstract) {
+            if self.classes.get(&class_name).is_some_and(|class| class.is_abstract)
+                // A descendant that is not a construction candidate for these arguments is a
+                // separate call site php decides at run time; see `late_bound_target_cannot_bind`.
+                || (class_name != base_class
+                    && self.late_bound_target_cannot_bind(&class_name, args, env)?)
+            {
                 continue;
             }
             let constructor = self
@@ -77,6 +83,81 @@ impl Checker {
         Ok(())
     }
 
+    /// Returns whether this late-bound descendant is not a construction candidate for these
+    /// arguments, and so has nothing to say about whether the program is well typed.
+    ///
+    /// `new static` binds to the class the call was made ON, so a descendant is a SEPARATE call
+    /// site that PHP decides at run time. Two shapes matter, and Symfony's
+    /// `HttpException::fromStatusCode()` — which ends in
+    /// `new static($statusCode, $message, $previous, $headers, $code)` — hits both:
+    ///
+    /// - SURPLUS: `AccessDeniedHttpException` declares four parameters. PHP discards the surplus
+    ///   and runs, so this is not an error at all; the lowering reproduces it by dropping the
+    ///   extra arguments (`static_new_droppable_surplus_args`).
+    /// - STORAGE CONFLICT: `MethodNotAllowedHttpException` takes `array $allow` where the factory
+    ///   passes an int. PHP raises a TypeError, but only for a program that actually calls
+    ///   `MethodNotAllowedHttpException::fromStatusCode()`; the lowering drops the class from its
+    ///   candidate set (`static_new_args_match_param_storage`) and the branch raises if reached.
+    ///
+    /// - TOO FEW: Laravel's `Collection::newInstance()` is `new static($items)`, and
+    ///   `SortedMiddleware extends Collection` declares `__construct(array $priorityMap,
+    ///   $middlewares)`. PHP raises `ArgumentCountError` only if a `SortedMiddleware` receiver
+    ///   reaches that method, which Laravel never does; reporting it at compile time refused the
+    ///   whole `Collection` class, and the deferred class then failed to declare at run time, so
+    ///   every request died. The lowering already leaves such a class out of its candidate set
+    ///   (`dynamic_new_args_lower_to_exact_arity`).
+    fn late_bound_target_cannot_bind(
+        &mut self,
+        class_name: &str,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        let Some(sig) = self
+            .classes
+            .get(class_name)
+            .and_then(|class_info| class_info.methods.get("__construct"))
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        // Arguments before the first spread or named one bind by position whatever follows, so
+        // their storage still rules a descendant out; only the arity checks need the full list.
+        let positional = args
+            .iter()
+            .position(|arg| {
+                matches!(
+                    arg.kind,
+                    crate::parser::ast::ExprKind::Spread(_)
+                        | crate::parser::ast::ExprKind::NamedArg { .. }
+                )
+            })
+            .unwrap_or(args.len());
+        if positional == args.len() {
+            if !crate::func_args::sig_collects_surplus_args(&sig) && args.len() > sig.params.len() {
+                return Ok(true);
+            }
+            if args.len() < crate::types::checker::schema::validation::required_param_count(&sig) {
+                return Ok(true);
+            }
+        }
+        for (index, arg) in args[..positional].iter().enumerate() {
+            let Some((_, param_ty)) = sig.params.get(index) else {
+                break;
+            };
+            if crate::types::late_static_dispatch::literal_string_cannot_bind_numeric(param_ty, arg) {
+                return Ok(true);
+            }
+            let arg_ty = self.infer_type(arg, env)?;
+            if late_bound_param_storage_conflicts(
+                &param_ty.late_bound_param_storage(),
+                &arg_ty.codegen_repr(),
+            ) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Infers the type of a class constant or enum case accessed via scope resolution
     /// (e.g., `MyClass::CONSTANT` or `Color::Red`).
     ///
@@ -90,7 +171,10 @@ impl Checker {
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
         let class_name = self.resolve_static_receiver_class(receiver, expr.span)?;
-        if !self.scoped_constant_receiver_is_known(&class_name) && self.eval_barrier_active {
+        if !self.scoped_constant_receiver_is_known(&class_name) {
+            // PHP resolves classes lazily when this expression executes. Keep an unknown
+            // receiver gradual so optional integrations in unexecuted paths remain compilable;
+            // the EIR backend emits the runtime class-not-found fatal for an executed read.
             return Ok(PhpType::Mixed);
         }
         // First: enum case access (`Color::Red`). Enums shadow classes for
@@ -152,10 +236,44 @@ impl Checker {
                 &format!("Undefined enum case: {}::{}", class_name, name),
             ));
         }
+        // php resolves the constant when the read runs: `Error: Undefined constant X::C`.
         Err(CompileError::new(
             expr.span,
             &format!("Undefined class constant: {}::{}", class_name, name),
-        ))
+        )
+        .with_runtime_fault(RuntimeFault::UndefinedClassConstant {
+            class: class_name.clone(),
+            constant: name.to_string(),
+        }))
+    }
+
+    /// Infers a class constant read whose receiver is an object-valued expression.
+    pub(crate) fn infer_dynamic_scoped_constant_access(
+        &mut self,
+        receiver: &Expr,
+        name: &str,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let receiver_type = self.infer_type(receiver, env)?;
+        match receiver_type.codegen_repr() {
+            PhpType::Object(class_name) => self.infer_scoped_constant_access(
+                &StaticReceiver::Named(crate::names::Name::from(class_name)),
+                name,
+                expr,
+            ),
+            // PHP permits `$className::CONSTANT` with a runtime class-string. The concrete
+            // class and constant are selected by the closed-world registry during lowering;
+            // until then its value must remain gradual.
+            PhpType::Str | PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+            other => Err(CompileError::new(
+                receiver.span,
+                &format!(
+                    "Dynamic class constant receiver must be an object or class-string, got {}",
+                    other
+                ),
+            )),
+        }
     }
 
     /// Returns whether a scoped-constant receiver is known in static class-like metadata.
@@ -286,4 +404,21 @@ impl Checker {
             }
         }
     }
+}
+
+/// Returns whether two concrete representations can never hold one another's values.
+///
+/// Mirrors `crate::ir_lower::expr::static_new_param_storage_conflicts`, so the checker and the
+/// lowering agree on which late-bound descendants are construction candidates.
+fn late_bound_param_storage_conflicts(param: &PhpType, arg: &PhpType) -> bool {
+    let array_like = |ty: &PhpType| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. });
+    let scalar_like = |ty: &PhpType| {
+        matches!(
+            ty,
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+        )
+    };
+    let object_like = |ty: &PhpType| matches!(ty, PhpType::Object(_));
+    (array_like(param) && (scalar_like(arg) || object_like(arg)))
+        || ((scalar_like(param) || object_like(param)) && array_like(arg))
 }

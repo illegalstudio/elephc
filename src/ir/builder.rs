@@ -186,6 +186,13 @@ impl<'f> Builder<'f> {
         local.php_type = storage_type;
     }
 
+    /// Replaces a slot's storage type outright, for a slot no store has yet given a real payload.
+    pub fn set_local_storage_type(&mut self, slot: LocalSlotId, php_type: PhpType) {
+        let local = &mut self.func.locals[slot.as_raw() as usize];
+        local.ir_type = local_storage_ir_type(&php_type);
+        local.php_type = php_type;
+    }
+
     /// Returns the storage type a slot WOULD have after widening with `php_type`, unchanged.
     ///
     /// The store lowering decides whether a slot needs a release from the widened type but
@@ -199,6 +206,31 @@ impl<'f> Builder<'f> {
     /// Returns the current frame storage PHP type for a local slot.
     pub fn local_php_type(&self, slot: LocalSlotId) -> PhpType {
         self.func.locals[slot.as_raw() as usize].php_type.clone()
+    }
+
+    /// Returns whether a local slot was created for one of the function's incoming parameters.
+    pub fn local_is_parameter(&self, slot: LocalSlotId) -> bool {
+        self.func.params.get(slot.as_raw() as usize).is_some()
+    }
+
+    /// Records that a by-value parameter slot is passed to a by-reference parameter.
+    pub fn note_by_ref_argument_param_slot(&mut self, slot: LocalSlotId) {
+        if self
+            .func
+            .params
+            .get(slot.as_raw() as usize)
+            .is_some_and(|param| !param.by_ref)
+        {
+            self.func.by_ref_argument_param_slots.insert(slot);
+        }
+    }
+
+    /// Returns whether a local slot holds one of the function's by-reference parameters.
+    pub fn local_is_by_ref_parameter(&self, slot: LocalSlotId) -> bool {
+        self.func
+            .params
+            .get(slot.as_raw() as usize)
+            .is_some_and(|param| param.by_ref)
     }
 
     /// Neutralizes deferred `release_local_slot` ops whose slot never widened to
@@ -315,6 +347,184 @@ impl<'f> Builder<'f> {
             inst.immediate = None;
             inst.effects = Op::Nop.default_effects();
         }
+    }
+
+    /// Retypes a slot-occupant release whose load was lowered at a now-stale representation.
+    ///
+    /// `release_stored_local_value` names the value a store is about to overwrite by loading it
+    /// and releasing the load. It types that load with the slot's storage type AS KNOWN THEN, and
+    /// a store lowered LATER can still widen the slot to boxed Mixed — `$a = new C(); $a = new C();
+    /// $a = null;` is the shape, where only the trailing null store widens the slot.
+    ///
+    /// Codegen lays the frame out with the FINAL storage type, so the stale narrow load becomes an
+    /// unbox PLUS a retain (`local_load_requires_owned_mixed_unbox`), and the paired release then
+    /// only gives that retain back: the Mixed box that actually owns the occupant is overwritten
+    /// without ever being released, so the object's refcount never reaches zero and `__destruct`
+    /// never runs (php prints `destruct A1` at the second store; elephc printed nothing).
+    ///
+    /// A load whose ONLY use is that release exists solely to name the occupant — nothing else can
+    /// observe the narrow payload — so retyping it to the slot's final storage type is what the
+    /// release always meant. That is the same rule `lower_release_local_slot` states for the
+    /// deferred form: a slot release is typed by the slot, not by what lowering guessed.
+    ///
+    /// Loads with further uses are left alone: there the release balances a retain codegen really
+    /// does need, which is exactly what `prune_borrowed_local_load_release_ops` keeps it for.
+    pub fn retype_stale_local_load_release_ops(&mut self) {
+        let mut uses = vec![0usize; self.func.values.len()];
+        for inst in &self.func.instructions {
+            for operand in &inst.operands {
+                if let Some(count) = uses.get_mut(operand.as_raw() as usize) {
+                    *count += 1;
+                }
+            }
+        }
+        let count_use = |uses: &mut Vec<usize>, value: ValueId| {
+            if let Some(count) = uses.get_mut(value.as_raw() as usize) {
+                *count += 1;
+            }
+        };
+        for block in &self.func.blocks {
+            match &block.terminator {
+                Some(Terminator::Br { args, .. }) => {
+                    for value in args {
+                        count_use(&mut uses, *value);
+                    }
+                }
+                Some(Terminator::CondBr {
+                    cond,
+                    then_args,
+                    else_args,
+                    ..
+                }) => {
+                    count_use(&mut uses, *cond);
+                    for value in then_args.iter().chain(else_args) {
+                        count_use(&mut uses, *value);
+                    }
+                }
+                Some(Terminator::Switch {
+                    scrutinee,
+                    cases,
+                    default_args,
+                    ..
+                }) => {
+                    count_use(&mut uses, *scrutinee);
+                    for value in default_args {
+                        count_use(&mut uses, *value);
+                    }
+                    for case in cases {
+                        for value in &case.args {
+                            count_use(&mut uses, *value);
+                        }
+                    }
+                }
+                Some(Terminator::Return { value: Some(value) }) => count_use(&mut uses, *value),
+                Some(Terminator::Throw { value }) => count_use(&mut uses, *value),
+                Some(Terminator::GeneratorSuspend {
+                    key,
+                    value,
+                    resume_args,
+                    ..
+                }) => {
+                    for operand in key.iter().chain(value.iter()) {
+                        count_use(&mut uses, *operand);
+                    }
+                    for operand in resume_args {
+                        count_use(&mut uses, *operand);
+                    }
+                }
+                Some(Terminator::Return { value: None })
+                | Some(Terminator::Fatal { .. })
+                | Some(Terminator::Unreachable)
+                | None => {}
+            }
+        }
+        // Where each instruction sits, so a release can be checked against what follows it.
+        let mut position = vec![None; self.func.instructions.len()];
+        for (block_index, block) in self.func.blocks.iter().enumerate() {
+            for (offset, inst) in block.instructions.iter().enumerate() {
+                if let Some(slot) = position.get_mut(inst.as_raw() as usize) {
+                    *slot = Some((block_index, offset));
+                }
+            }
+        }
+        let mut retype = Vec::new();
+        for (release_index, inst) in self.func.instructions.iter().enumerate() {
+            if inst.op != Op::Release {
+                continue;
+            }
+            let Some(source) = inst.operands.first().copied() else {
+                continue;
+            };
+            if inst.operands.len() != 1 {
+                continue;
+            }
+            if uses.get(source.as_raw() as usize).copied() != Some(1) {
+                continue;
+            }
+            let Some(value) = self.func.values.get(source.as_raw() as usize) else {
+                continue;
+            };
+            let ValueDef::Instruction { inst: source_inst, .. } = value.def else {
+                continue;
+            };
+            let Some(load) = self.func.instructions.get(source_inst.as_raw() as usize) else {
+                continue;
+            };
+            if !matches!(load.op, Op::LoadLocal | Op::LoadStaticLocal) {
+                continue;
+            }
+            let Some(Immediate::LocalSlot(slot)) = load.immediate else {
+                continue;
+            };
+            let Some(local) = self.func.locals.get(slot.as_raw() as usize) else {
+                continue;
+            };
+            if !matches!(local.kind, LocalKind::PhpLocal | LocalKind::StaticLocal) {
+                continue;
+            }
+            if !local_load_requires_owned_mixed_unbox(&local.php_type, &value.php_type) {
+                continue;
+            }
+            // Only an OCCUPANT release is retyped: one that names the value a store to the same
+            // slot is about to overwrite. A load released for any other reason -- an expression
+            // statement discarding `$this->{$name} = $temp`'s result -- was lowered as an owned
+            // unbox, and retyping it to the borrowed storage read left its release unbalanced:
+            // the slot's own box was freed while the slot still held it.
+            if !self.slot_store_follows(&position, release_index, slot) {
+                continue;
+            }
+            retype.push((source, source_inst, local.php_type.clone()));
+        }
+        for (value, load_inst, storage_type) in retype {
+            let ir_type = local_storage_ir_type(&storage_type);
+            let value_index = value.as_raw() as usize;
+            self.func.values[value_index].php_type = storage_type.clone();
+            self.func.values[value_index].ir_type = ir_type;
+            let load = &mut self.func.instructions[load_inst.as_raw() as usize];
+            load.result_php_type = storage_type;
+            load.result_type = ir_type;
+        }
+    }
+
+    /// Returns whether a store to `slot` follows instruction `inst_index` in its own block.
+    fn slot_store_follows(
+        &self,
+        position: &[Option<(usize, usize)>],
+        inst_index: usize,
+        slot: LocalSlotId,
+    ) -> bool {
+        let Some(Some((block_index, offset))) = position.get(inst_index).copied() else {
+            return false;
+        };
+        self.func.blocks[block_index].instructions[offset + 1..]
+            .iter()
+            .filter_map(|inst| self.func.instructions.get(inst.as_raw() as usize))
+            .any(|inst| {
+                matches!(
+                    inst.op,
+                    Op::StoreLocal | Op::StoreStaticLocal | Op::StoreRefCell
+                ) && inst.immediate == Some(Immediate::LocalSlot(slot))
+            })
     }
 
     /// Neutralizes exception guards for provisional local owners that stayed borrowed.
@@ -546,6 +756,14 @@ impl<'f> Builder<'f> {
         for operand in &operands {
             self.assert_value_exists(*operand);
         }
+        // An unbox's effects follow its result: a refcounted payload is retained and published
+        // (`Op::mixed_unbox_effects`), which the validator requires exactly. Deriving them here
+        // keeps every producer in step instead of each one restating the rule.
+        let effects = if op == Op::MixedUnbox {
+            Op::mixed_unbox_effects(&result_php_type)
+        } else {
+            effects
+        };
 
         let inst_id = InstId::from_raw(self.func.instructions.len() as u32);
         let block_index = block_id.as_raw() as usize;
@@ -778,16 +996,21 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
     if current == incoming {
         return current;
     }
+    // `bool` and `int` share the I64 representation but are different PHP values, so a slot that
+    // has held both must keep the tag: widening one into the other made
+    // `$p = false; if (…) { $p = 3; }` read back `int(0)` below the branch, `$p === false` answer
+    // false, and `$x = require_once F;` turn php's `true` for a repeat inclusion into `int(1)`.
+    // `TaggedScalar` is `int|null` only (its tag has no bool), so a bool meeting it is boxed too.
     match (&current, &incoming) {
-        (current, PhpType::Void | PhpType::Never) if local_storage_can_hold_null(current) => {
-            current.clone()
-        }
+        (current, PhpType::Void | PhpType::Never) => current.clone(),
+        (PhpType::TaggedScalar, PhpType::Int | PhpType::TaggedScalar)
+        | (
+            PhpType::Int | PhpType::Void | PhpType::Never,
+            PhpType::TaggedScalar,
+        ) => PhpType::TaggedScalar,
         (PhpType::Array(_), PhpType::Array(_)) => incoming,
         (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => incoming,
-        (
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
-        ) => incoming,
+        (PhpType::Void | PhpType::Never, PhpType::Int | PhpType::Bool) => incoming,
         _ => PhpType::Mixed,
     }
 }
@@ -816,7 +1039,13 @@ pub(crate) fn local_load_types_share_storage(source_ty: &PhpType, result_ty: &Ph
             | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
             | (PhpType::Array(_), PhpType::AssocArray { .. })
             | (PhpType::AssocArray { .. }, PhpType::Array(_))
+            // Every object is one pointer, whatever its class: an `instanceof` narrowing is a move.
             | (PhpType::Object(_), PhpType::Object(_))
+            // An `iterable` slot holds the UNBOXED payload (coercing a gradual value to
+            // `iterable` emits `Op::MixedUnbox`), so once `instanceof` has proven the value is
+            // the Traversable half, the pointer already IS the object pointer.
+            | (PhpType::Iterable, PhpType::Object(_))
+            | (PhpType::Object(_), PhpType::Iterable)
             | (PhpType::Pointer(_), PhpType::Pointer(_) | PhpType::Packed(_))
             | (PhpType::Packed(_), PhpType::Pointer(_))
     )
@@ -948,22 +1177,6 @@ fn terminator_uses_value(terminator: &Terminator, value: ValueId) -> bool {
         }
         Terminator::Fatal { .. } | Terminator::Unreachable => false,
     }
-}
-
-/// Returns true when a local storage shape can represent PHP null as a zero pointer.
-fn local_storage_can_hold_null(php_type: &PhpType) -> bool {
-    matches!(
-        php_type,
-        PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Object(_)
-            | PhpType::Packed(_)
-            | PhpType::Mixed
-            | PhpType::Union(_)
-            | PhpType::Iterable
-            | PhpType::Buffer(_)
-            | PhpType::Callable
-    )
 }
 
 /// Returns the IR storage class used for a local slot's PHP representation.

@@ -16,7 +16,15 @@ pub(super) fn builtin_reflection_function() -> FlattenedClass {
     let mut class = builtin_reflection_owner_class(
         "ReflectionFunction",
         true,
-        vec![("function", Some(TypeExpr::Str), None, false)],
+        vec![(
+            "function",
+            Some(TypeExpr::Union(vec![
+                TypeExpr::Named(Name::unqualified("Closure")),
+                TypeExpr::Str,
+            ])),
+            None,
+            false,
+        )],
     );
     if let Some(constructor) = class
         .methods
@@ -36,9 +44,10 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
         name: "ReflectionParameter".to_string(),
         span: dummy(),
         extends: None,
-        implements: Vec::new(),
+        implements: vec!["Reflector".to_string()],
         is_abstract: false,
-        is_final: true,
+        // Not final in php: psysh's `ReflectionLanguageConstructParameter` extends it.
+        is_final: false,
         is_readonly_class: false,
         properties: vec![
             builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
@@ -268,7 +277,9 @@ pub(super) fn reflection_parameter_get_default_object_body(span: crate::span::Sp
             span,
         ),
     ];
-    for arg_count in 1..=8 {
+    // Zero counts too: the lazily built member table retains an argument-less default
+    // (`new Foo`, or a constant of an undefined class) as an empty array, not null.
+    for arg_count in 0..=8 {
         body.push(reflection_parameter_default_object_arg_count_branch(
             arg_count,
             arg_count_var,
@@ -340,9 +351,11 @@ pub(super) fn reflection_parameter_default_object_arg(index: usize, span: crate:
 
 /// Returns a public `ReflectionClass::newInstanceWithoutConstructor()` method.
 ///
-/// Eval dispatch supplies the real constructorless allocation. The body remains
-/// a conservative placeholder so the built-in class metadata exposes the PHP
-/// method without forcing ordinary method lowering to construct a class.
+/// A call on a receiver typed `ReflectionClass` never reaches this body: the call site lowers
+/// straight to a constructorless allocation. A receiver the compiler only knows as `mixed` (a
+/// reflector kept in an array, as DeepClone does) dispatches here instead, so the body is that
+/// same call on `$this` -- which the call-site lowering turns into the allocation. It used to
+/// return null, and every such call answered null.
 pub(super) fn builtin_reflection_class_new_instance_without_constructor_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
@@ -361,7 +374,298 @@ pub(super) fn builtin_reflection_class_new_instance_without_constructor_method()
         return_type: Some(mixed_type()),
         by_ref_return: false,
         body: vec![Stmt::new(
-            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            StmtKind::Return(Some(method_call_expr(
+                Expr::new(ExprKind::This, dummy_span),
+                "newInstanceWithoutConstructor",
+                Vec::new(),
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass::newLazyGhost()` method backed by eager initialization.
+///
+/// The AOT object model does not defer property access, so it allocates without invoking the
+/// target constructor, calls the initializer once with that fresh object, and returns the
+/// initialized instance. This preserves initializer and constructor-bypass semantics while
+/// making the object immediately usable through the ordinary runtime object representation.
+///
+/// A Throwable the initializer raises is NOT propagated from here. php runs the initializer only
+/// on the object's first use, so a ghost nothing ever touches never raises at all: Symfony's
+/// container hands out ghosts whose initializer resolves configuration the running command never
+/// needs, and an eager failure (`uri_signer` with an empty `kernel.secret`) aborted
+/// `debug:event-dispatcher`, which php completes. The known difference: a ghost whose initializer
+/// failed and that IS used later behaves as the half-initialized object, where php would raise
+/// the initializer's Throwable at that first use.
+pub(super) fn builtin_reflection_class_new_lazy_ghost_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let instance = variable_expr("instance", dummy_span);
+    ClassMethod {
+        type_params: Vec::new(),
+        name: "newLazyGhost".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            (
+                "initializer".to_string(),
+                Some(TypeExpr::Named(Name::unqualified("Closure"))),
+                None,
+                false,
+            ),
+            (
+                "options".to_string(),
+                Some(TypeExpr::Int),
+                int_lit(0),
+                false,
+            ),
+        ],
+        param_attributes: vec![Vec::new(), Vec::new()],
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(object_type()),
+        by_ref_return: false,
+        body: vec![
+            Stmt::new(
+                StmtKind::Assign {
+                    name: "instance".to_string(),
+                    value: method_call_expr(
+                        Expr::new(ExprKind::This, dummy_span),
+                        "newInstanceWithoutConstructor",
+                        Vec::new(),
+                        dummy_span,
+                    ),
+                },
+                dummy_span,
+            ),
+            Stmt::new(
+                StmtKind::Try {
+                    try_body: vec![Stmt::new(
+                        StmtKind::ExprStmt(Expr::new(
+                            ExprKind::ExprCall {
+                                callee: Box::new(variable_expr("initializer", dummy_span)),
+                                args: vec![instance.clone()],
+                            },
+                            dummy_span,
+                        )),
+                        dummy_span,
+                    )],
+                    catches: vec![crate::parser::ast::CatchClause {
+                        exception_type_args: Vec::new(),
+                        exception_types: vec![Name::from_parts(
+                            crate::names::NameKind::FullyQualified,
+                            vec!["Throwable".to_string()],
+                        )],
+                        variable: None,
+                        body: Vec::new(),
+                    }],
+                    finally_body: None,
+                },
+                dummy_span,
+            ),
+            Stmt::new(StmtKind::Return(Some(instance)), dummy_span),
+        ],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::resetAsLazyGhost()` / `resetAsLazyProxy()` in the eager model the
+/// `newLazy*()` methods above use.
+///
+/// php resets the object to a lazy state and re-runs the initializer (or factory) on its first
+/// use; Symfony's Doctrine `ManagerRegistry::resetService()` re-creates a closed entity manager in
+/// place this way. Eagerly: a ghost has every non-static property with a default reset to it and
+/// the initializer run on the object; a proxy copies the properties the factory's instance has
+/// initialized onto the object. A Throwable the callback raises is swallowed, as for
+/// `newLazyGhost()`. The known differences: a readonly property already set cannot be reset, and
+/// a proxy is the object itself rather than a forwarder to the factory's instance.
+pub(super) fn builtin_reflection_class_reset_as_lazy_method(proxy: bool) -> ClassMethod {
+    use crate::synthetic_class::{
+        e_call, e_method_call, e_not, e_var, method, s_assign, s_expr, s_foreach, s_if, s_try,
+    };
+    let callback = if proxy { "factory" } else { "initializer" };
+    let source = if proxy { "_real" } else { "object" };
+    let copy_value = if proxy {
+        e_method_call(e_var("_p"), "getValue", vec![e_var("_real")])
+    } else {
+        e_method_call(e_var("_p"), "getDefaultValue", vec![])
+    };
+    let applies = if proxy {
+        e_method_call(e_var("_p"), "isInitialized", vec![e_var("_real")])
+    } else {
+        e_method_call(e_var("_p"), "hasDefaultValue", vec![])
+    };
+    let copy = s_foreach(
+        e_method_call(Expr::new(ExprKind::This, crate::span::Span::dummy()), "getProperties", vec![]),
+        None,
+        "_p",
+        vec![s_if(
+            crate::synthetic_class::e_binop(
+                e_not(e_method_call(e_var("_p"), "isStatic", vec![])),
+                crate::parser::ast::BinOp::And,
+                applies,
+            ),
+            vec![s_try(
+                vec![s_expr(e_method_call(e_var("_p"), "setValue", vec![e_var("object"), copy_value]))],
+                vec![(vec!["Error"], None, vec![])],
+                None,
+            )],
+            vec![],
+            None,
+        )],
+    );
+    let run = Expr::new(
+        ExprKind::ExprCall {
+            callee: Box::new(e_var(callback)),
+            args: vec![e_var("object")],
+        },
+        crate::span::Span::dummy(),
+    );
+    let body = if proxy {
+        vec![
+            s_try(vec![s_assign("_real", run)], vec![(vec!["Throwable"], None, vec![crate::synthetic_class::s_return_void()])], None),
+            s_if(e_not(e_call("is_object", vec![e_var(source)])), vec![crate::synthetic_class::s_return_void()], vec![], None),
+            copy,
+        ]
+    } else {
+        vec![copy, s_try(vec![s_expr(run)], vec![(vec!["Throwable"], None, vec![])], None)]
+    };
+    method(if proxy { "resetAsLazyProxy" } else { "resetAsLazyGhost" })
+        .param("object", object_type())
+        .param(callback, TypeExpr::Named(Name::unqualified("Closure")))
+        .param_default("options", TypeExpr::Int, int_lit(0).expect("int literal"))
+        .returns(TypeExpr::Void)
+        .body(body)
+        .build()
+}
+
+/// Returns a public `ReflectionClass::isUninitializedLazyObject()` method that answers false.
+///
+/// `newLazyGhost()` and `newLazyProxy()` above are backed by EAGER initialization: the object is
+/// allocated and its initializer run before either returns, so the AOT object model never holds
+/// an object in the uninitialized lazy state this predicate asks about. False is therefore the
+/// exact answer here, not an approximation of one.
+///
+/// `Symfony\Component\DependencyInjection\ServicesResetter::isInitialized()` calls it on every
+/// service it considers resetting.
+pub(super) fn builtin_reflection_class_is_uninitialized_lazy_object_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        type_params: Vec::new(),
+        name: "isUninitializedLazyObject".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(object_type()), None, false)],
+        param_attributes: vec![Vec::new()],
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Bool),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(ExprKind::BoolLiteral(false), dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `ReflectionClass::initializeLazyObject()` or `markLazyObjectAsInitialized()`, which
+/// both hand back the object they were given.
+///
+/// Exact, not approximate, for the same reason `isUninitializedLazyObject()` answers false: the
+/// compiled lazy objects are initialized before `newLazyGhost()`/`newLazyProxy()` return, so
+/// there is nothing left to initialize or to mark. Ghosts of interpreter-declared classes are
+/// genuinely lazy, and the interpreter answers these methods for them before this body is reached.
+pub(super) fn builtin_reflection_class_lazy_object_identity_method(name: &str) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        type_params: Vec::new(),
+        name: name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![("object".to_string(), Some(object_type()), None, false)],
+        param_attributes: vec![Vec::new()],
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(object_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(variable_expr("object", dummy_span))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns a public `ReflectionClass::newLazyProxy()` method backed by eager initialization.
+///
+/// The AOT object model has no deferred proxy boundary. Calling the supplied factory immediately,
+/// with an uninitialized instance standing in for the proxy PHP would pass, preserves its
+/// object-producing contract and returns the ordinary object representation that
+/// subsequent property and method operations already understand.
+pub(super) fn builtin_reflection_class_new_lazy_proxy_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        type_params: Vec::new(),
+        name: "newLazyProxy".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: vec![
+            (
+                "factory".to_string(),
+                Some(TypeExpr::Named(Name::unqualified("Closure"))),
+                None,
+                false,
+            ),
+            (
+                "options".to_string(),
+                Some(TypeExpr::Int),
+                int_lit(0),
+                false,
+            ),
+        ],
+        param_attributes: vec![Vec::new(), Vec::new()],
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(object_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::ExprCall {
+                    callee: Box::new(variable_expr("factory", dummy_span)),
+                    // PHP hands the factory the (still uninitialized) proxy; factories declare
+                    // that parameter, so an uninitialized instance stands in for it here.
+                    args: vec![method_call_expr(
+                        Expr::new(ExprKind::This, dummy_span),
+                        "newInstanceWithoutConstructor",
+                        Vec::new(),
+                        dummy_span,
+                    )],
+                },
+                dummy_span,
+            ))),
             dummy_span,
         )],
         span: dummy_span,

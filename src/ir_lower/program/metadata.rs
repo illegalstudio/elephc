@@ -42,6 +42,7 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         collect_declared_interface_names(program, &check_result.interfaces);
     module.declared_trait_names = collect_declared_trait_names(program);
     module.declared_trait_source_lines = collect_declared_trait_source_lines(program);
+    module.declared_function_source_lines = collect_declared_function_source_lines(program);
     module.declared_trait_uses = collect_declared_trait_uses(program);
     module.declared_trait_method_names = collect_declared_trait_method_names(program);
     module.declared_trait_methods = collect_declared_trait_methods(program);
@@ -59,7 +60,13 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     module.declared_trait_final_constants = collect_declared_trait_final_constants(program);
     module.imported_trait_method_names = collect_imported_trait_method_names(program, &check_result.classes);
     module.class_infos = check_result.classes.clone();
-    normalize_class_method_signatures_for_eir(module, &check_result.callable_param_sigs);
+    normalize_untyped_instance_storage_for_eir(&mut module.class_infos);
+    normalize_class_method_signatures_for_eir(
+        module,
+        &check_result.callable_param_sigs,
+        check_result.user_filters_reachable,
+        check_result.user_filter_registered.as_ref(),
+    );
     module.interface_infos = check_result.interfaces.clone();
     for interface in module.interface_infos.values_mut() {
         for signature in interface.methods.values_mut()
@@ -102,6 +109,9 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
             link_libs: sig.library.iter().cloned().collect(),
         })
         .collect();
+    // The checker keys these in a hash map; the module lists them in name order so every table
+    // built from the list (function_exists candidates, link libraries) is the same on every run.
+    module.extern_decls.sort_by(|left, right| left.name.cmp(&right.name));
     module.required_runtime_features =
         crate::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
     // Callable descriptors can introduce bridge calls only during assembly emission.
@@ -116,18 +126,81 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     }
 }
 
+/// Normalizes untyped instance slots that need EIR's runtime-dispatched storage representation.
+///
+/// Closed-world checking can infer a precise indexed or associative shape from the first writes
+/// to an untyped property. PHP does not make that shape a contract: later assignments, casts,
+/// merges, or nested keyed writes can change both storage kind and element representation. EIR
+/// therefore picks ONE representation so all loads, stores, and cleanup agree.
+///
+/// That one has to be the HASH. `array<mixed>` is not a runtime-dispatched "either": consumers
+/// read the STATIC type, so a hash parked in a packed slot is read as packed storage. `twig/twig`'s
+/// `StagingExtension` is what that costs -- `private $functions = []` normalized to `array<mixed>`
+/// while `$this->functions[$name] = $fn` had promoted the real property to a hash, so
+/// `getFunctions(): array` asked the backend to convert a packed vector into the hash of objects
+/// its contract had become, and five Twig accessors refused to lower. A hash represents every php
+/// array; a packed vector cannot. Parking a list in a hash costs nothing observable: measured
+/// against php 8.5.10, a hash holding sequential integer keys encodes as `["a","b"]` and
+/// serializes as `a:2:{i:0;s:1:"a";i:1;s:1:"b";}`.
+///
+/// An untyped property with no statically attributable write remains `Void` in the checker, but
+/// still needs a boxed `Mixed` cell because a bare `object` receiver can initialize it at runtime.
+/// Declared PHP properties and static properties retain their explicit or specialized contracts.
+fn normalize_untyped_instance_storage_for_eir(
+    classes: &mut crate::fast_hash::FastMap<String, ClassInfo>,
+) {
+    for class_info in classes.values_mut() {
+        class_info.normalize_untyped_array_property_storage();
+        for index in 0..class_info.properties.len() {
+            let property = class_info.properties[index].0.clone();
+            if class_info.property_slot_is_declared(index, &property) {
+                continue;
+            }
+            match class_info.properties[index].1.codegen_repr() {
+                PhpType::Void | PhpType::Never => {
+                    class_info.properties[index].1 = PhpType::Mixed;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Normalizes class method metadata to the ABI contracts emitted in EIR.
 pub(super) fn normalize_class_method_signatures_for_eir(
     module: &mut Module,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    user_filters_reachable: bool,
+    user_filter_registered: Option<&std::collections::HashSet<String>>,
 ) {
+    // A stream filter is a registered class or a `php_user_filter` descendant (see
+    // `types::is_user_filter_class`), not any class with a method named `filter`.
+    let filter_classes: std::collections::HashSet<String> = if user_filters_reachable {
+        module
+            .class_infos
+            .keys()
+            .filter(|name| {
+                crate::types::is_user_filter_class(
+                    &module.class_infos,
+                    user_filter_registered,
+                    name,
+                )
+            })
+            .cloned()
+            .collect()
+    } else {
+        Default::default()
+    };
     for (class_name, class_info) in module.class_infos.iter_mut() {
+        let direct_property_returns = direct_this_property_return_types(class_info);
+        let is_filter_class = filter_classes.contains(class_name);
         normalize_method_map_for_eir(
             class_name,
             &mut class_info.methods,
             &class_info.method_decls,
             false,
             callable_param_sigs,
+            is_filter_class,
         );
         normalize_method_map_for_eir(
             class_name,
@@ -135,17 +208,63 @@ pub(super) fn normalize_class_method_signatures_for_eir(
             &class_info.method_decls,
             true,
             callable_param_sigs,
+            is_filter_class,
         );
+        for (method, return_type) in direct_property_returns {
+            if let Some(signature) = class_info.methods.get_mut(&method) {
+                // A getter the checker already returns BOXED keeps the box: that is the storage an
+                // override family or an untyped interface method agreed on, and narrowing it back
+                // to the property type made `$this->name()` through `interface N { function
+                // name(); }` read an unboxed string as Mixed and print "".
+                if !signature.declared_return
+                    && signature.return_type.codegen_repr() != PhpType::Mixed
+                {
+                    signature.return_type = return_type;
+                }
+            }
+        }
     }
 }
 
+/// Collects untyped instance methods that directly return one `$this->property` slot.
+///
+/// Property ABI normalization happens after semantic checking. A getter inferred from the old
+/// precise property shape must expose the normalized EIR storage type as well, otherwise return
+/// lowering invents a conversion from `array<mixed>` back to stale phpdoc-like metadata.
+fn direct_this_property_return_types(class_info: &ClassInfo) -> Vec<(String, PhpType)> {
+    let mut returns = Vec::new();
+    for method in &class_info.method_decls {
+        if method.is_static || method.return_type.is_some() {
+            continue;
+        }
+        let [stmt] = method.body.as_slice() else {
+            continue;
+        };
+        let StmtKind::Return(Some(expr)) = &stmt.kind else {
+            continue;
+        };
+        let ExprKind::PropertyAccess { object, property } = &expr.kind else {
+            continue;
+        };
+        if !matches!(&object.kind, ExprKind::This) {
+            continue;
+        }
+        let Some((_, (_, property_type))) = class_info.visible_property(property) else {
+            continue;
+        };
+        returns.push((php_symbol_key(&method.name), property_type.clone()));
+    }
+    returns
+}
+
 /// Normalizes one instance/static method table for EIR call and bridge metadata.
-pub(super) fn normalize_method_map_for_eir(
+pub(super) fn normalize_method_map_for_eir<S: std::hash::BuildHasher>(
     class_name: &str,
-    methods: &mut HashMap<String, FunctionSig>,
+    methods: &mut std::collections::HashMap<String, FunctionSig, S>,
     method_decls: &[ClassMethod],
     is_static: bool,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
+    is_filter_class: bool,
 ) {
     // Stream-wrapper and user-filter contract methods are invoked through
     // runtime vtables with raw fixed-ABI arguments; widening their untyped
@@ -155,7 +274,8 @@ pub(super) fn normalize_method_map_for_eir(
     let is_wrapper_class = methods.keys().any(|method| {
         crate::codegen_support::runtime::is_user_wrapper_contract_method(method)
     });
-    let is_filter_class = methods.contains_key("filter");
+    // Only a program that can register a filter has one; see `Checker::user_filters_reachable`.
+    let is_filter_class = is_filter_class && methods.contains_key("filter");
     for (method_key, signature) in methods.iter_mut() {
         if (is_wrapper_class
             && crate::codegen_support::runtime::is_user_wrapper_contract_method(method_key))

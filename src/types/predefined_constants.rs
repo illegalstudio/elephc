@@ -20,6 +20,7 @@ use elephc_builtin_contract::{
     constants, lookup_constant, ConstType, ConstValue, ConstantContract, ConstantRoute,
 };
 
+use crate::codegen_support::platform::Target;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
@@ -36,6 +37,31 @@ pub(crate) fn registered_constants() -> impl Iterator<Item = &'static ConstantCo
 /// registers for every program.
 pub(crate) fn is_registered_constant(name: &str) -> bool {
     lookup_constant(name).is_some_and(|constant| is_registered_route(constant.route))
+}
+
+/// Returns whether php defines `constant` when compiling for `target`.
+///
+/// The catalog restricts a few names to the platforms whose php has them
+/// (`PHP_WINDOWS_VERSION_*`). Such a name stays registered, so the checker types it and a branch
+/// guarded by a platform test compiles, but off those targets it is not defined: prescan gives
+/// it no value, so `defined()` answers false, and a read throws `Undefined constant`.
+pub(crate) fn constant_defined_on_target(constant: &ConstantContract, target: Target) -> bool {
+    constant.target_support.is_none_or(|targets| {
+        targets.iter().any(|spelling| {
+            Target::parse(spelling)
+                .is_ok_and(|named| named.platform == target.platform && named.arch == target.arch)
+        })
+    })
+}
+
+/// Returns the checker type of a registered constant the catalog restricts to some targets.
+///
+/// Lowering asks this only after prescan (which runs per target) gave the name no value, so a
+/// `Some` there means php does not define the constant on the target being compiled.
+pub(crate) fn target_restricted_type(name: &str) -> Option<PhpType> {
+    let constant = lookup_constant(name.trim_start_matches('\\'))?;
+    (is_registered_route(constant.route) && constant.target_support.is_some())
+        .then(|| php_type_of(constant.value))
 }
 
 /// Returns the fixed integer value of a predefined constant, if `name` is one.
@@ -111,4 +137,39 @@ pub(crate) fn is_executable_path_alias(
         name = next.as_str();
     }
     false
+}
+
+thread_local! {
+    /// `CheckResult::undefined_constant_reads` for the program being lowered.
+    static UNDEFINED_CONSTANT_READS: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Restores the enclosing compilation's undefined-constant set on drop.
+pub(crate) struct UndefinedConstantReadsGuard {
+    previous: std::collections::HashSet<String>,
+}
+
+impl Drop for UndefinedConstantReadsGuard {
+    fn drop(&mut self) {
+        let previous = std::mem::take(&mut self.previous);
+        UNDEFINED_CONSTANT_READS.with(|set| *set.borrow_mut() = previous);
+    }
+}
+
+/// Publishes, for one compilation, the constant names the checked program reads but never
+/// defines. Thread-local because tests compile programs in parallel threads.
+pub(crate) fn set_undefined_constant_reads(
+    names: std::collections::HashSet<String>,
+) -> UndefinedConstantReadsGuard {
+    let previous =
+        UNDEFINED_CONSTANT_READS.with(|set| std::mem::replace(&mut *set.borrow_mut(), names));
+    UndefinedConstantReadsGuard { previous }
+}
+
+/// Whether the checker found no definition for the constant `name` (optional leading `\`): a
+/// read of it throws `Error: Undefined constant`, so lowering emits the runtime lookup.
+pub(crate) fn is_undefined_constant_read(name: &str) -> bool {
+    let bare = name.trim_start_matches('\\');
+    UNDEFINED_CONSTANT_READS.with(|set| set.borrow().contains(bare))
 }

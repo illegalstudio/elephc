@@ -2,7 +2,7 @@
 title: "mysqli_rollback() - internals"
 description: "Compiler internals for mysqli_rollback(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 156
+  order: 167
 ---
 
 ## `mysqli_rollback()` - internals

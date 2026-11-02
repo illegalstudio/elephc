@@ -1,5 +1,5 @@
 //! Purpose:
-//! Integration or regression tests for parser AST coverage of expression modern PHP operators ternary and null coalesce, including short ternary expression, short ternary lower than symbolic or, and short ternary default accepts null coalesce.
+//! Integration or regression tests for parser AST coverage of expression modern PHP operators ternary and null coalesce, including assignment-bearing short-ternary defaults.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -60,6 +60,38 @@ fn test_short_ternary_default_accepts_null_coalesce() {
         elephc::span::Span::dummy(),
     ));
     assert_eq!(stmts, vec![expected]);
+}
+
+/// Verifies an assignment in a short-ternary default remains inside that branch.
+#[test]
+fn test_short_ternary_default_accepts_property_assignment() {
+    let stmts = parse_source("<?php ready() ?: $value->text = normalize($value->text);");
+    let StmtKind::ExprStmt(expr) = &stmts[0].kind else {
+        panic!("expected expression statement, got {:?}", stmts[0].kind);
+    };
+    let ExprKind::ShortTernary { default, .. } = &expr.kind else {
+        panic!("expected short ternary, got {:?}", expr.kind);
+    };
+    let ExprKind::Assignment { target, .. } = &default.kind else {
+        panic!("expected assignment in the default branch, got {:?}", default.kind);
+    };
+    assert!(matches!(target.kind, ExprKind::PropertyAccess { .. }));
+}
+
+/// Verifies an unparenthesized assignment remains the rightmost fallback of a `??` chain.
+#[test]
+fn test_null_coalesce_chain_accepts_assignment_fallback() {
+    let statements = parse_source("<?php $a ?? $b ?? $k = $name;");
+    let StmtKind::ExprStmt(expression) = &statements[0].kind else {
+        panic!("expected expression statement");
+    };
+    let ExprKind::NullCoalesce { default, .. } = &expression.kind else {
+        panic!("expected outer null coalesce");
+    };
+    let ExprKind::NullCoalesce { default, .. } = &default.kind else {
+        panic!("expected right-associated null coalesce fallback");
+    };
+    assert!(matches!(&default.kind, ExprKind::Assignment { .. }));
 }
 
 /// Verifies short ternary can appear as the else branch of a full ternary.

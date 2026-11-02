@@ -16,7 +16,7 @@
 //! - Output `zval`: `value` at `+0`, `u1.type_info` at `+8`, `u2` at `+12`.
 //! - Refcounted children (strings, arrays) are freshly allocated so the returned
 //!   `zval` owns independent PHP-shaped storage.
-//! - A raw `?ptr` word (tag 13, from a hash entry of pointers) packs as PHP null
+//! - A raw `?ptr` word (tag 14, from a hash entry of pointers) packs as PHP null
 //!   when it is the null pointer and as an integer address otherwise in ordinary output.
 //! - The PHP extension profile rejects unsupported tags before that normalization.
 

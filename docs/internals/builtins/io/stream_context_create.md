@@ -2,7 +2,7 @@
 title: "stream_context_create() - internals"
 description: "Compiler internals for stream_context_create(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 369
+  order: 381
 ---
 
 ## `stream_context_create()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_context_create.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_context_create.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -180,7 +180,13 @@ pub(super) fn lower_dynamic_call_user_func_array(
         }
         None => lower_expr(ctx, arg_array_expr),
     };
-    Some(emit_callable_descriptor_invoke(ctx, callback, arg_array, expr.span))
+    Some(emit_callable_descriptor_invoke_as(
+        ctx,
+        callback,
+        arg_array,
+        expr.span,
+        callback_validating_builtin(expr),
+    ))
 }
 
 /// Returns the callable signature available to descriptor-invoker argument lowering.
@@ -476,7 +482,29 @@ pub(super) fn lower_call_user_func_descriptor_invoke_from_value(
     let callback = root_descriptor_callback(ctx, callback, result_type, expr.span);
     let arg_container =
         lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, expr.span);
-    emit_callable_descriptor_invoke(ctx, callback, arg_container, expr.span)
+    emit_callable_descriptor_invoke_as(
+        ctx,
+        callback,
+        arg_container,
+        expr.span,
+        callback_validating_builtin(expr),
+    )
+}
+
+/// Names the callback-validating builtin a call expression is, when it is one.
+///
+/// `call_user_func()` and `call_user_func_array()` validate their callback before calling it, so
+/// an unreachable `[$object, 'method']` is a `TypeError` that names the builtin rather than the
+/// `Error` a direct `$callable()` call raises. The backend needs the name to word that message.
+pub(super) fn callback_validating_builtin(expr: &Expr) -> Option<&'static str> {
+    let ExprKind::FunctionCall { name, .. } = &expr.kind else {
+        return None;
+    };
+    match php_symbol_key(name.as_str().trim_start_matches('\\')).as_str() {
+        "call_user_func" => Some("call_user_func"),
+        "call_user_func_array" => Some("call_user_func_array"),
+        _ => None,
+    }
 }
 
 /// A descriptor callback already published in the unwind chain, before its arguments were lowered.
@@ -526,6 +554,17 @@ pub(super) fn emit_callable_descriptor_invoke(
     arg_container: LoweredValue,
     span: Span,
 ) -> LoweredValue {
+    emit_callable_descriptor_invoke_as(ctx, callback, arg_container, span, None)
+}
+
+/// Same, for a call that is `builtin`, whose callback validation words its own diagnostics.
+pub(super) fn emit_callable_descriptor_invoke_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback: RootedDescriptorCallback,
+    arg_container: LoweredValue,
+    span: Span,
+    builtin: Option<&'static str>,
+) -> LoweredValue {
     let RootedDescriptorCallback {
         value: callback,
         owner: callback_owner,
@@ -537,11 +576,20 @@ pub(super) fn emit_callable_descriptor_invoke(
     // owners so a throw cannot bypass their EIR retirement.
     let (arg_container, container_owner) = root_owned_call_operand(ctx, arg_container, span);
     let strict_types = ctx.builder.emit_const_bool(crate::source::current_strict_types());
+    // A builtin names itself in the immediate so its callback validation words its own
+    // diagnostics; any other call carries the plain profile.
+    let immediate = match builtin {
+        Some(name) => Some(Immediate::ProfiledData {
+            data: ctx.intern_string(name),
+            strict_php: crate::strict_php::is_enabled(),
+        }),
+        None => callable_profile_immediate(),
+    };
     let result = emit_descriptor_invoker_value(
         ctx,
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_container.value, strict_types],
-        callable_profile_immediate(),
+        immediate,
         result_type,
         span,
     );

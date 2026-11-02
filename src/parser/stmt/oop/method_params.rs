@@ -66,6 +66,9 @@ pub(super) fn parse_method_params(
     let mut promoted_assignments = Vec::new();
 
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+        while *pos < tokens.len() && matches!(tokens[*pos].0, Token::DocComment(_)) {
+            *pos += 1;
+        }
         if !params.is_empty() || variadic.is_some() {
             expect_token(
                 tokens,
@@ -76,6 +79,9 @@ pub(super) fn parse_method_params(
             // Allow a trailing comma before the closing paren (PHP 8.0+).
             if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
                 break;
+            }
+            while *pos < tokens.len() && matches!(tokens[*pos].0, Token::DocComment(_)) {
+                *pos += 1;
             }
         }
         // PHP 8.0 parameter attributes — also covers attributes preceding a
@@ -179,7 +185,7 @@ pub(super) fn parse_method_params(
                         // not on the promoted property's default metadata.
                         default: None,
                         span: property_span,
-                        attributes: attributes.clone(),
+                        attributes: promoted_property_attributes(&attributes),
                     });
                     promoted_assignments.push(promoted_property_assignment(&n, param_span));
                 }
@@ -299,4 +305,36 @@ fn promoted_property_assignment(name: &str, span: Span) -> Stmt {
         },
         span,
     )
+}
+
+/// The attributes a promoted parameter hands its property.
+///
+/// php copies a promoted parameter's attributes to the property too, except a built-in one that
+/// cannot target a property: `#[\SensitiveParameter] public string $password` (Symfony's
+/// security tokens) marks the parameter only, and `ReflectionProperty::getAttributes()` lists
+/// nothing. Copying it made the checker refuse the declaration as
+/// "Attribute "SensitiveParameter" cannot target property". A user attribute is copied whatever
+/// its `#[Attribute]` flags: php checks those only in `newInstance()`.
+fn promoted_property_attributes(
+    groups: &[crate::parser::ast::AttributeGroup],
+) -> Vec<crate::parser::ast::AttributeGroup> {
+    const TARGET_PROPERTY: i64 = 8;
+    groups
+        .iter()
+        .filter_map(|group| {
+            let attributes: Vec<_> = group
+                .attributes
+                .iter()
+                .filter(|attribute| {
+                    elephc_builtin_contract::core_attribute_flags(attribute.name.as_str())
+                        .is_none_or(|flags| flags & TARGET_PROPERTY != 0)
+                })
+                .cloned()
+                .collect();
+            (!attributes.is_empty()).then(|| crate::parser::ast::AttributeGroup {
+                attributes,
+                span: group.span,
+            })
+        })
+        .collect()
 }

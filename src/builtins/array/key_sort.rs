@@ -25,9 +25,16 @@ pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let accepts_mixed_nested_element = ty == PhpType::Mixed
         && is_mixed_array_element_lvalue(cx.checker, cx.env, &cx.args[0])?;
+    // A gradual receiver (`mixed`, or a union with an array arm) is accepted for the same
+    // reason the nested cell above is: the concrete container is only known from the runtime
+    // tag, and the lowering raises PHP's own `TypeError` for a non-array payload. Refusing it
+    // statically took down whole programs whose `ksort()` call was never reached.
+    let accepts_gradual_receiver =
+        crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty);
     if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
         && !ty.is_php_array()
         && !accepts_mixed_nested_element
+        && !accepts_gradual_receiver
     {
         return Err(CompileError::new(cx.span, &format!("{}() argument must be array", cx.name)));
     }

@@ -26,6 +26,38 @@ echo ($a instanceof Missing) ? "T" : "F";
     assert_eq!(out, "TFFF");
 }
 
+/// Verifies an unresolved target gives the true branch dynamic access without inventing a class.
+#[test]
+fn test_unknown_instanceof_target_uses_dynamic_true_branch_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Candidate {
+    public static int $checks = 0;
+
+    public static function make(): Candidate {
+        self::$checks++;
+        return new Candidate();
+    }
+}
+
+function inspect(Candidate $value): void {
+    if ($value instanceof Missing) {
+        echo $value->label;
+    }
+}
+
+inspect(new Candidate());
+if (Candidate::make() instanceof Missing) {
+    echo "bad";
+}
+$candidate = new Candidate();
+echo ($candidate instanceof Missing) ? $candidate->missing() : "ok";
+echo Candidate::$checks;
+"#,
+    );
+    assert_eq!(out, "ok1");
+}
+
 /// Tests instanceof with class inheritance hierarchies and interface implementations.
 #[test]
 fn test_instanceof_inheritance_and_interfaces() {
@@ -84,6 +116,62 @@ $child->checkParent($child);
 "#,
     );
     assert_eq!(out, "STStP");
+}
+
+/// Verifies that flow narrowing resolves relative `instanceof` targets before member access.
+#[test]
+fn test_instanceof_self_and_parent_narrow_to_concrete_classes() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public string $value = "B";
+
+    public function fromSelf($candidate): string {
+        if ($candidate instanceof self) {
+            return $candidate->value;
+        }
+
+        return "x";
+    }
+}
+
+class Child extends Base {
+    public function fromParent($candidate): string {
+        if ($candidate instanceof parent) {
+            return $candidate->value;
+        }
+
+        return "x";
+    }
+}
+
+$child = new Child();
+echo $child->fromSelf($child);
+echo $child->fromParent($child);
+"#,
+    );
+    assert_eq!(out, "BB");
+}
+
+/// Verifies that the native `object` pseudo-type dispatches methods by runtime class.
+#[test]
+fn test_generic_object_parameter_method_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+final class NamedObject {
+    public function name(): string {
+        return "ok";
+    }
+}
+
+function invokeName(object $value): string {
+    return $value->name();
+}
+
+echo invokeName(new NamedObject());
+"#,
+    );
+    assert_eq!(out, "ok");
 }
 
 /// Verifies that the LHS object expression is evaluated exactly once by calling a
@@ -295,6 +383,26 @@ echo ($user instanceof (User::class)) ? "T" : "F";
     assert_eq!(out, "T");
 }
 
+/// Tests a `$this` property as a dynamic class target used by metadata-processing code.
+#[test]
+fn test_dynamic_instanceof_this_property_target() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicTargetUser {}
+class DynamicTargetHolder {
+    public object $target;
+    public function __construct(object $target) { $this->target = $target; }
+    public function matches(object $value): bool {
+        return $value instanceof $this->target;
+    }
+}
+$holder = new DynamicTargetHolder(new DynamicTargetUser());
+echo $holder->matches(new DynamicTargetUser()) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "T");
+}
+
 /// Tests that dynamic instanceof with a non-string, non-object target (integer) fails
 /// with a Fatal error when the LHS is an object.
 #[test]
@@ -392,6 +500,168 @@ echo ($value instanceof $target) ? "T" : "F";
         "unexpected stderr: {}",
         out.stderr
     );
+}
+
+/// A guard whose target the receiver's own class cannot satisfy must keep the receiver's
+/// properties: `instanceof` is an intersection, not a replacement.
+///
+/// Symfony's `CompiledUrlMatcherTrait::match()` is the shape. It guards
+/// `if (!$this instanceof RedirectableUrlMatcherInterface) { throw … }` and then reads
+/// `$this->context->getScheme()`. `CompiledUrlMatcher` does NOT implement that interface -- a
+/// subclass does, which is exactly why the guard is written -- so narrowing `$this` to the
+/// interface threw the inherited property away and the backend refused the call with
+/// `method call receiver for PHP type Int`. The closed world names the subclass that satisfies
+/// both halves instead.
+#[test]
+fn test_sibling_interface_guard_keeps_inherited_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Ctx {
+    public function getMethod(): string { return 'GET'; }
+    public function getScheme(): string { return 'https'; }
+}
+
+interface Redirectable {
+    public function redirect(string $path, string $route): array;
+}
+
+class Base {
+    public function __construct(protected Ctx $context) {}
+}
+
+trait MatcherTrait {
+    public function match(string $p): string
+    {
+        if (!$this instanceof Redirectable) {
+            throw new RuntimeException('no');
+        }
+        // Two reads, because only the SECOND one failed: the first was served by a type the
+        // checker had recorded for that exact span, and nothing recorded the second.
+        $method = $this->context->getMethod();
+        $scheme = $this->context->getScheme();
+        return $method . ':' . $scheme . ':' . count($this->redirect($p, 'r'));
+    }
+}
+
+class Compiled extends Base {
+    use MatcherTrait;
+}
+
+class RedirectableCompiled extends Compiled implements Redirectable {
+    public function redirect(string $path, string $route): array
+    {
+        return ['_route' => $route, 'path' => $path];
+    }
+}
+
+echo (new RedirectableCompiled(new Ctx()))->match('/x');
+"#,
+    );
+    assert_eq!(out, "GET:https:2");
+}
+
+
+/// The same guard reaching the LEXICAL scope's private method, whose trailing parameters are
+/// optional and by-reference.
+///
+/// Three passes resolve members independently and all three had to agree. The checker refused the
+/// call outright (`unknown method RedirectableCompiled::doMatch`); once it resolved, the IR
+/// lowering still found no signature for it, so the two omitted optional arguments were never
+/// materialized and codegen reported `2 operands for 4 ABI params`. Symfony's
+/// `CompiledUrlMatcherTrait` writes exactly this: `private function doMatch(string $pathinfo,
+/// array &$allow = [], array &$allowSchemes = [])`, called as `$this->doMatch($pathinfo)`.
+#[test]
+fn test_sibling_interface_guard_reaches_the_lexical_scopes_private_method() {
+    let out = compile_and_run(
+        r#"<?php
+interface Redirectable {
+    public function redirect(string $path, string $route): array;
+}
+
+trait MatcherTrait {
+    private bool $matchHost = true;
+
+    private function doMatch(string $p, array &$allow = [], array &$allowSchemes = []): array
+    {
+        $allow[] = 'GET';
+        $allowSchemes[] = 'https';
+        return ['p' => $p, 'n' => count($allow) + count($allowSchemes)];
+    }
+
+    public function match(string $p): string
+    {
+        if (!$this instanceof Redirectable) {
+            throw new RuntimeException('no');
+        }
+        $ret = $this->doMatch($p);
+        $host = $this->matchHost ? 'H' : 'h';
+        return $ret['p'] . '/' . $ret['n'] . ':' . $host . ':' . count($this->redirect($p, 'r'));
+    }
+}
+
+class Compiled {
+    use MatcherTrait;
+}
+
+class RedirectableCompiled extends Compiled implements Redirectable {
+    public function redirect(string $path, string $route): array
+    {
+        return ['_route' => $route, 'path' => $path];
+    }
+}
+
+echo (new RedirectableCompiled())->match('/x');
+"#,
+    );
+    assert_eq!(out, "/x/2:H:2");
+}
+
+/// `instanceof` on a local that holds a scalar leaves its type alone on the (dead) true edge.
+///
+/// Twig compiles `{{ ... ? ' has-error' : '' }}` over a boolean to
+/// `($tmp = !$x) && $tmp instanceof Markup ? (string) $tmp : $tmp`; narrowing the `bool` slot to
+/// `Markup` made the backend refuse the read ("local load from PHP type Bool as Object"), which
+/// failed every Twig form theme block. Expected output is php 8.5's.
+#[test]
+fn test_instanceof_on_a_scalar_local_keeps_its_storage_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Markup { public function __toString(): string { return "m"; } }
+function f($c) { return ((($tmp = !($c["valid"] ?? null)) && $tmp instanceof Markup ? (string) $tmp : $tmp)) ? " has-error" : ""; }
+var_dump(f(["valid" => $argc > 5]), f(["valid" => true]));
+function g($n) { $t = $n + 1; return $t instanceof Markup ? (string) $t : $t; }
+var_dump(g($argc));
+"#,
+    );
+    assert_eq!(out, "string(10) \" has-error\"\nstring(0) \"\"\nint(2)\n");
+}
+
+/// `instanceof Closure` recognizes a compiled closure inside a function that owns an eval-bridge
+/// context (here through `new ReflectionClass()` over a runtime class name), where the bridge
+/// alone sees no object and used to answer false.
+#[test]
+fn test_instanceof_closure_in_function_with_eval_context() {
+    let out = compile_and_run(
+        r#"<?php
+function build($concrete) {
+    if ($concrete instanceof Closure) {
+        try {
+            return $concrete();
+        } finally {
+            echo "F";
+        }
+    }
+    try {
+        $reflector = new ReflectionClass($concrete);
+    } catch (ReflectionException $e) {
+        return 'missing';
+    }
+    return $reflector->getName();
+}
+echo build(fn () => 'closure'), "|", build('stdClass'), "|", build('NoSuchClassHere'), "\n";
+"#,
+    );
+    assert_eq!(out, "Fclosure|stdClass|missing\n");
 }
 
 /// The class operand of `instanceof` may be any variable expression holding a class name:

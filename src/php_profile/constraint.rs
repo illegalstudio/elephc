@@ -1,30 +1,28 @@
 //! Purpose:
-//! Evaluates a Composer version constraint (`"^8.2"`, `"~8.3.0"`, `">=8.2 <8.5"`) against the
-//! maintained profile set, so a project that declares only `require.php` can still narrow the
-//! profile elephc compiles for.
+//! Evaluates PHP version constraints (`"^8.2"`, `"~8.3.0"`, `">=8.2 <8.5"`) against the
+//! maintained profile set, so a project manifest can narrow the profile elephc compiles for.
 //!
 //! Called from:
 //! - `crate::php_profile::resolve`, as the last source before the default.
 //!
 //! Key details:
 //!
-//! - THE `semver` CRATE CANNOT DO THIS. Composer and Cargo spell the same operators with
-//!   different meanings: Composer's `~8.2` is `>=8.2 <9.0` while Cargo's is `>=8.2 <8.3`.
-//!   Reusing a Cargo-semantics parser would silently misread the single most common
-//!   narrowing operator, so the grammar below is Composer's.
+//! - THE GRAMMAR IS EXPLICIT. Constraint dialects do not agree on abbreviated ranges such as
+//!   `~8.2`. This module defines the project-manifest dialect locally instead of borrowing a
+//!   parser with different range semantics.
 //!
 //! - PARSE FAILURE IS `None`, NEVER AN ERROR. An unsupported spelling (hyphen ranges,
 //!   stability flags) leaves the profile at the default, which is what would have happened
 //!   before this module existed. A constraint elephc cannot read must not fail a build or,
 //!   worse, be half-read into a wrong answer.
 //!
-//! - COMPARISON IS ON THREE COMPONENTS because Composer's are: `8.2` normalizes to `8.2.0`,
+//! - COMPARISON IS ON THREE COMPONENTS: `8.2` normalizes to `8.2.0`,
 //!   which is exactly how a profile is spelled (see `PhpVersion::version_string` for the
 //!   patch-is-zero rule), so the two line up without special cases.
 
 use crate::web_prelude::PhpVersion;
 
-/// A version as Composer compares them.
+/// A normalized version used by the constraint evaluator.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 struct Version {
     /// Major component.
@@ -88,7 +86,7 @@ impl Clause {
 
 /// Parses a dotted numeric version, tolerating one or two components and a stability suffix.
 ///
-/// Missing components are zero, matching Composer's normalization: `8.2` is `8.2.0`.
+/// Missing components are zero, so `8.2` is normalized to `8.2.0`.
 fn parse_version(raw: &str) -> Option<Version> {
     let raw = raw.split(['-', '+', '@']).next()?.trim();
     if raw.is_empty() {
@@ -99,7 +97,7 @@ fn parse_version(raw: &str) -> Option<Version> {
     let minor = parts.next().unwrap_or("0").parse::<u32>().ok()?;
     let patch = parts.next().unwrap_or("0").parse::<u32>().ok()?;
     if parts.next().is_some() {
-        // A fourth component is Composer-legal but never meaningful for a language profile.
+        // A fourth component is accepted but never meaningful for a language profile.
         return Some(Version { major, minor, patch });
     }
     Some(Version { major, minor, patch })
@@ -172,7 +170,7 @@ fn parse_term(term: &str) -> Option<Vec<Clause>> {
             }]);
         }
     }
-    // A bare version is an exact match in Composer.
+    // A bare version is an exact match in this constraint dialect.
     Some(vec![Clause {
         op: Op::Eq,
         version: parse_version(term)?,
@@ -182,8 +180,8 @@ fn parse_term(term: &str) -> Option<Vec<Clause>> {
 /// Parses an inclusive hyphen range (`"8.2 - 8.4"`), or returns `None` when the text is not
 /// one.
 ///
-/// The upper bound's arity decides how inclusive it is, which is Composer's rule rather than
-/// an approximation: a PARTIAL upper bound admits everything carrying that prefix, so
+/// The upper bound's arity decides how inclusive it is: a PARTIAL upper bound admits
+/// everything carrying that prefix, so
 /// `8.2 - 8.4` is `>=8.2.0 <8.5.0`, while a complete `8.2.0 - 8.4.0` is `>=8.2.0 <=8.4.0`.
 ///
 /// The separator must be a SPACED hyphen. `8.2-dev` is one version with a stability suffix,
@@ -275,8 +273,7 @@ pub fn newest_admitted(constraint: &str) -> Option<PhpVersion> {
 #[cfg(test)]
 mod tests {
     //! Purpose:
-    //! Unit tests for Composer constraint evaluation, with particular attention to the
-    //! operators whose meaning differs from Cargo's.
+    //! Unit tests for project-manifest constraint evaluation, especially abbreviated ranges.
     //!
     //! Called from:
     //! - `cargo test` through Rust's test harness.
@@ -289,8 +286,7 @@ mod tests {
         assert_eq!(newest_admitted("^8.2"), Some(PhpVersion::Php85));
     }
 
-    /// COMPOSER's `~8.2` is `>=8.2 <9.0` — NOT Cargo's `>=8.2 <8.3`. Getting this backwards
-    /// is the single most likely way to misread a real `composer.json`.
+    /// `~8.2` expands to `>=8.2 <9.0`; its abbreviated upper bound must not stop at 8.3.
     #[test]
     fn two_component_tilde_spans_to_the_next_major() {
         assert_eq!(newest_admitted("~8.2"), Some(PhpVersion::Php85));
@@ -355,7 +351,7 @@ mod tests {
     }
 
     /// A hyphen range with a PARTIAL upper bound admits everything carrying that prefix, so
-    /// `8.2 - 8.4` reaches 8.4 — Composer's rule, and the trap in reading one as `<8.4.0`.
+    /// `8.2 - 8.4` reaches 8.4 because a partial upper bound includes that release line.
     #[test]
     fn hyphen_range_with_partial_upper_bound_is_inclusive() {
         assert_eq!(newest_admitted("8.2 - 8.4"), Some(PhpVersion::Php84));

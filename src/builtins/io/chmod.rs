@@ -5,7 +5,7 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` returns `Bool` and requires the `permissions` argument to be `Int`,
+//! - `check` returns `Bool` and requires the `permissions` argument to possibly be an `Int`,
 //!   emitting the diagnostic at the mode argument's span.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -20,11 +20,21 @@ builtin! {
     ),
 }
 
-/// Returns `Bool`, rejecting a non-`Int` `permissions` argument at its own span.
+/// Returns `Bool`, rejecting a `permissions` argument that can never be an `Int` at its own span.
+///
+/// A value that MAY be an int is coerced at run time, as php coerces it. Property reads are not
+/// narrowed, so Monolog's `if ($this->filePermission !== null) { @chmod($url,
+/// $this->filePermission); }` reaches here as `?int`, and refusing it left `StreamHandler` -- the
+/// handler behind every Laravel log channel -- to the interpreter.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let mode_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if mode_ty != PhpType::Int {
+    let may_be_int = match &mode_ty {
+        PhpType::Int | PhpType::Mixed => true,
+        PhpType::Union(members) => members.iter().any(|member| *member == PhpType::Int),
+        _ => false,
+    };
+    if !may_be_int {
         return Err(CompileError::new(cx.args[1].span, "chmod() mode must be int"));
     }
     Ok(PhpType::Bool)

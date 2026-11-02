@@ -160,7 +160,7 @@ mod tests {
     /// A bare undefined variable is reported as the probe root.
     #[test]
     fn bare_undefined_variable_is_a_probe_root() {
-        let env = TypeEnv::new();
+        let env = TypeEnv::default();
         let arg = expr(ExprKind::Variable("never".to_string()));
         assert_eq!(undefined_probe_root_variable(&arg, &env), Some("never"));
     }
@@ -168,7 +168,7 @@ mod tests {
     /// A variable that is already bound is not a probe root, so normal inference applies.
     #[test]
     fn defined_variable_is_not_a_probe_root() {
-        let mut env = TypeEnv::new();
+        let mut env = TypeEnv::default();
         env.insert("known".to_string(), PhpType::Int);
         let arg = expr(ExprKind::Variable("known".to_string()));
         assert_eq!(undefined_probe_root_variable(&arg, &env), None);
@@ -177,7 +177,7 @@ mod tests {
     /// `$never['k']->p` resolves through the chain spine down to `$never`.
     #[test]
     fn chain_spine_resolves_to_the_base_variable() {
-        let env = TypeEnv::new();
+        let env = TypeEnv::default();
         let arg = expr(ExprKind::PropertyAccess {
             object: Box::new(expr(ExprKind::ArrayAccess {
                 array: Box::new(expr(ExprKind::Variable("never".to_string()))),
@@ -192,7 +192,7 @@ mod tests {
     /// inference so it keeps PHP's undefined-variable diagnostic.
     #[test]
     fn index_subexpression_is_not_part_of_the_spine() {
-        let env = TypeEnv::new();
+        let env = TypeEnv::default();
         let arg = expr(ExprKind::ArrayAccess {
             array: Box::new(expr(ExprKind::Variable("a".to_string()))),
             index: Box::new(expr(ExprKind::Variable("b".to_string()))),
@@ -203,7 +203,7 @@ mod tests {
     /// A non-lvalue operand shape yields no probe root.
     #[test]
     fn non_lvalue_operand_has_no_probe_root() {
-        let env = TypeEnv::new();
+        let env = TypeEnv::default();
         let arg = expr(ExprKind::IntLiteral(1));
         assert_eq!(undefined_probe_root_variable(&arg, &env), None);
     }

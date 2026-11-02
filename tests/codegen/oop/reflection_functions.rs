@@ -154,7 +154,29 @@ echo ($plain->hasReturnType() ? "P" : "p") . ":";
 echo $plain->getReturnType() === null ? "Q" : "q";
 "#,
     );
+    // php 8.5 agrees: `int|string` lists `string` before `int`.
     assert_eq!(out, "T:int:N:B:int:2:stringBintB:never:n:B:p:Q");
+}
+
+/// Verifies every concrete reflection type is a subtype of the abstract ReflectionType parent.
+#[test]
+fn test_reflection_type_subclass_compatibility_and_runtime_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+function reflected_named_type(int $value): int { return $value; }
+function reflected_union_type(int|string $value): int|string { return $value; }
+function render_reflection_type(ReflectionType $type): string { return "accepted"; }
+function render_named_type(ReflectionNamedType $type): string { return render_reflection_type($type); }
+function render_union_type(ReflectionUnionType $type): string { return render_reflection_type($type); }
+function render_intersection_type(ReflectionIntersectionType $type): string { return render_reflection_type($type); }
+$named = (new ReflectionFunction("reflected_named_type"))->getParameters()[0]->getType();
+$union = (new ReflectionFunction("reflected_union_type"))->getParameters()[0]->getType();
+echo render_named_type($named), "|", render_union_type($union), "|";
+echo $named instanceof ReflectionType ? "parent" : "missing";
+echo ":", $union instanceof ReflectionType ? "parent" : "missing";
+"#,
+    );
+    assert_eq!(out, "accepted|accepted|parent:parent");
 }
 
 /// Verifies `ReflectionFunction::isVariadic()` reports the function-level variadic flag.
@@ -194,6 +216,24 @@ echo $ref->isUserDefined() ? "U" : "u";
 "#,
     );
     assert_eq!(out, "ReflectFunctionMetaNs\\sample:sample:ReflectFunctionMetaNs:Y:i:U");
+}
+
+/// An eval-enabled program still routes an abstract reflection receiver to the
+/// concrete reflection object that owns the synthetic metadata slots.
+#[test]
+fn test_reflection_function_abstract_metadata_slot_uses_concrete_dispatch_with_eval() {
+    let out = compile_and_run(
+        r#"<?php
+function reflected_abstract_eval_target(): void {}
+function reflection_abstract_name(ReflectionFunctionAbstract $reflection): string {
+    return $reflection->getName();
+}
+
+$reflection = new ReflectionFunction("reflected_abstract_eval_target");
+echo reflection_abstract_name($reflection), ":", eval('return "eval";');
+"#,
+    );
+    assert_eq!(out, "reflected_abstract_eval_target:eval");
 }
 
 /// Verifies `ReflectionFunction` exposes supported callable-builtin metadata.

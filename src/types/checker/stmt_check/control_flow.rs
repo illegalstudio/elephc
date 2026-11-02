@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 use crate::parser::ast::{
     BinOp, CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, Visibility,
 };
+use crate::termination::{block_terminal_effect_with_divergence, TerminalEffect};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::{Checker, SavedNarrowingOrigin};
@@ -48,11 +49,15 @@ impl Checker {
 /// cascading promotions, non-literal RHSs, and raw-to-raw element changes converge before any
 /// header/body read is checked. EIR lowering later consumes the recorded contract for the same
 /// loop span rather than repeating expression inference.
+///
+/// `ref_value_binding` is `Some((source, value))` only for a by-REFERENCE `foreach` whose source is
+/// a plain local — the one shape whose body writes reach the iterated array without naming it.
 fn stabilize_loop_storage(
     checker: &mut Checker,
     loop_span: crate::span::Span,
     body: &[Stmt],
     update: Option<&Stmt>,
+    ref_value_binding: Option<(&str, &str)>,
     env: &mut TypeEnv,
     packed_counter: Option<&str>,
 ) {
@@ -71,6 +76,7 @@ fn stabilize_loop_storage(
         update,
         &snapshot,
         packed_counter,
+        ref_value_binding,
         &mut |expr, analysis_env| {
             let is_call = matches!(
                 expr.kind,
@@ -143,7 +149,7 @@ fn promoted_by_ref_foreach_root_type(ty: &PhpType) -> Option<PhpType> {
 }
 
 /// Widens local or static property storage when foreach exposes mutable element references.
-fn widen_by_ref_foreach_source_storage(
+pub(super) fn widen_by_ref_foreach_source_storage(
     checker: &mut Checker,
     source: &Expr,
     env: &mut TypeEnv,
@@ -274,6 +280,229 @@ fn widen_by_ref_foreach_source_storage(
     Ok(())
 }
 
+/// Gives `$object->property` the storage an array element can share: an object-owned reference
+/// cell holding a boxed `Mixed`.
+///
+/// `$a[$k] = &$o->p` and `[&$this->p]` store a marker over the property's cell, and the marker
+/// writes boxed values through it (`ArrayLocalRefCell`). A property still stored as its concrete
+/// representation read those boxes back as raw payloads -- `$a['r'] = 7; echo $o->p;` printed a
+/// pointer. An untyped property (or one whose declared type already is `Mixed` storage) is
+/// widened; a scalar-typed one keeps its type, the marker carrying the cell's tag instead; returns
+/// `false` for any other, which the caller refuses.
+pub(in crate::types::checker) fn widen_property_for_element_reference(
+    checker: &mut Checker,
+    object: &Expr,
+    property: &str,
+    env: &TypeEnv,
+) -> Result<bool, CompileError> {
+    let object_ty = checker.infer_type(object, env)?;
+    let Some(access_class) = crate::types::checker::single_object_class_name(&object_ty) else {
+        return Ok(widen_property_for_unknown_receiver_reference(checker, property));
+    };
+    let access_class = access_class.trim_start_matches('\\').to_string();
+    let Some(info) = checker.classes.get(&access_class) else {
+        return Ok(false);
+    };
+    let Some(declaring_class) = info.property_declaring_classes.get(property).cloned() else {
+        return Ok(false);
+    };
+    let Some(slot) = info.visible_property_index(property) else {
+        return Ok(false);
+    };
+    let declared = info.declared_properties.contains(property);
+    let widenable = !declared || info.properties[slot].1.codegen_repr() == PhpType::Mixed;
+    // A scalar-typed property is widened too (`private int $cursor`, which Symfony's
+    // `OrderedHashMapIterator` shares as `$this->managedCursors[$id] = &$this->cursor`): the
+    // element markers' readers (the `array_splice()` prelude among them) only follow boxed cells.
+    // The one php behaviour this gives up is the TypeError for a wrong-typed write through the
+    // reference.
+    let typed_scalar = declared
+        && matches!(
+            info.properties[slot].1.codegen_repr(),
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
+        );
+    let addressable = !info
+        .methods
+        .contains_key(&php_symbol_key(&property_hook_get_method(property)))
+        && matches!(
+            crate::types::resolve_property_name(
+                &checker.classes,
+                &access_class,
+                property,
+                checker.current_class.as_deref(),
+            ),
+            crate::types::PropertyNameResolution::Visible
+                | crate::types::PropertyNameResolution::ScopePrivate { .. }
+        );
+    if !(widenable || typed_scalar) || !addressable {
+        return Ok(false);
+    }
+    checker
+        .reference_property_promotions
+        .insert((access_class, property.to_string()));
+    for info in checker.classes.values_mut() {
+        if info.property_declaring_classes.get(property) != Some(&declaring_class) {
+            continue;
+        }
+        if let Some(slot) = info.visible_property_index(property) {
+            info.properties[slot].1 = PhpType::Mixed;
+        }
+    }
+    Ok(true)
+}
+
+/// Gives `$property` boxed `Mixed` reference-cell storage on every class that declares it, for a
+/// reference whose receiver class is only known at run time (`$t = &$object->n` with an untyped
+/// `$object`).
+///
+/// The reference is read and written as `Mixed`, and the class-id ladder that resolves its cell
+/// can land on any declaring class, so every one of them has to store a box: a cell left as a raw
+/// `int` received the box pointer itself (`echo $a->n` printed an address). Classes whose
+/// `$property` is hooked or not visible from this scope keep their storage and get no arm, which
+/// raises php's no-cell `Error` at run time. As for element references, the one php behaviour
+/// given up is the TypeError for a wrong-typed write through the reference. Returns whether any
+/// class was widened.
+pub(in crate::types::checker) fn widen_property_for_unknown_receiver_reference(
+    checker: &mut Checker,
+    property: &str,
+) -> bool {
+    widen_properties_for_unknown_receiver_reference(checker, |name| name == property)
+}
+
+/// Widens every property whose name satisfies `selects` the way
+/// [`widen_property_for_unknown_receiver_reference`] widens one, for a reference whose NAME is
+/// also only known at run time (`$r = &$object->$name`, Symfony's `PropertyAccessor`). Readonly
+/// properties are left alone: php refuses a reference to them.
+pub(in crate::types::checker) fn widen_properties_for_unknown_receiver_reference(
+    checker: &mut Checker,
+    selects: impl Fn(&str) -> bool,
+) -> bool {
+    let mut selected = Vec::new();
+    for (class_name, info) in &checker.classes {
+        if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+            continue;
+        }
+        for (property, _) in &info.properties {
+            if !selects(property)
+                || info.readonly_properties.contains(property)
+                || info
+                    .methods
+                    .contains_key(&php_symbol_key(&property_hook_get_method(property)))
+                || !matches!(
+                    crate::types::resolve_property_name(
+                        &checker.classes,
+                        class_name,
+                        property,
+                        checker.current_class.as_deref(),
+                    ),
+                    crate::types::PropertyNameResolution::Visible
+                        | crate::types::PropertyNameResolution::ScopePrivate { .. }
+                )
+            {
+                continue;
+            }
+            let Some(declaring) = info.property_declaring_classes.get(property) else {
+                continue;
+            };
+            selected.push((class_name.clone(), property.clone(), declaring.clone()));
+        }
+    }
+    if selected.is_empty() {
+        return false;
+    }
+    let declarers = selected
+        .iter()
+        .map(|(_, property, declaring)| (property.clone(), declaring.clone()))
+        .collect::<HashSet<_>>();
+    for (class_name, property, _) in selected {
+        if checker.is_native_throwable_payload_property(&class_name, &property) {
+            continue;
+        }
+        checker
+            .reference_property_promotions
+            .insert((class_name, property));
+    }
+    for info in checker.classes.values_mut() {
+        for slot in 0..info.properties.len() {
+            let property = &info.properties[slot].0;
+            let shares_declarer = info
+                .property_declaring_classes
+                .get(property)
+                .is_some_and(|declaring| declarers.contains(&(property.clone(), declaring.clone())));
+            if shares_declarer && info.visible_property_index(property) == Some(slot) {
+                info.properties[slot].1 = PhpType::Mixed;
+            }
+        }
+    }
+    true
+}
+
+/// Widens a local array to the storage a reference into one of its (possibly nested) elements
+/// needs, before the reference's own type is inferred.
+///
+/// `$cell = &$nested['x']['y']` auto-vivifies `$nested['x']` and makes the leaf a reference
+/// marker that can later hold a value of ANY type. The checker therefore has to stop describing
+/// the container with the initializer's narrow shape: an empty literal (`array<never>`) has no
+/// element type to index into, and a hash of fixed-type rows would read the marker back as a raw
+/// value. A chain of two or more levels promotes its root to boxed `Mixed` values so every
+/// intermediate level reads as `Mixed` and dispatches on the runtime tag; a single level over an
+/// empty literal takes the shape its first key selects, as an ordinary keyed write does.
+///
+/// Only a plain local root is handled here; property and static-property roots go through
+/// [`widen_by_ref_foreach_source_storage`].
+pub(super) fn widen_local_root_for_element_reference(
+    checker: &mut Checker,
+    source: &Expr,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let ExprKind::ArrayAccess { array, .. } = &source.kind else {
+        return Ok(());
+    };
+    let nested = matches!(array.kind, ExprKind::ArrayAccess { .. });
+    // `root_index` ends as the key of the access made directly on the root variable.
+    let mut root_index = None;
+    let mut root = source;
+    while let ExprKind::ArrayAccess { array: inner, index } = &root.kind {
+        root_index = Some(index.as_ref());
+        root = inner;
+    }
+    let (ExprKind::Variable(name), Some(root_index)) = (&root.kind, root_index) else {
+        return Ok(());
+    };
+    let Some(root_ty) = env.get(name).cloned() else {
+        return Ok(());
+    };
+    if matches!(&root_ty, PhpType::Array(elem) if matches!(elem.as_ref(), PhpType::Never)) {
+        // The reference creates the first element of an empty literal: key the container like a
+        // keyed write would.
+        let key_ty = checker.infer_type(root_index, env)?;
+        let widened = match crate::types::normalized_array_key_type(root_index, key_ty) {
+            PhpType::Int => PhpType::Array(Box::new(PhpType::Mixed)),
+            key @ (PhpType::Str | PhpType::Mixed) => PhpType::AssocArray {
+                key: Box::new(key),
+                value: Box::new(PhpType::Mixed),
+            },
+            _ => return Ok(()),
+        };
+        env.insert(name.clone(), widened);
+        return Ok(());
+    }
+    if nested {
+        // `&$maps[0][$key]` over a list of WeakMaps: the last level is an object place, so the
+        // container keeps its object element type instead of becoming boxed Mixed values.
+        if matches!(
+            checker.infer_type(array, env),
+            Ok(PhpType::Object(ref class)) if class.eq_ignore_ascii_case("WeakMap")
+        ) {
+            return Ok(());
+        }
+        if let Some(widened) = promoted_by_ref_foreach_root_type(&root_ty) {
+            env.insert(name.clone(), widened);
+        }
+    }
+    Ok(())
+}
+
 /// Restores a narrowed variable in the environment to its previously saved type after a guarded
 /// branch, removing it when it had no prior type. Used to keep `if`/`else` type narrowing scoped
 /// to its branch.
@@ -366,6 +595,85 @@ fn filesystem_iterator_default_flags(class_name: &str) -> Option<i64> {
     }
 }
 
+/// Joins the bindings from every branch that can reach the statement after a conditional.
+///
+/// A real PHP local absent from one reachable branch remains a possible runtime binding but has no
+/// safe precise type, so it is widened to `Mixed`. Synthetic property-narrowing keys are different:
+/// absence means the fact is not common to every path, so those keys are omitted. Bindings present
+/// everywhere are widened to the normalized union of their exit types.
+fn join_fallthrough_type_envs(checker: &Checker, branches: &[TypeEnv]) -> Option<TypeEnv> {
+    branches.first()?;
+    let mut names = branches
+        .iter()
+        .flat_map(|branch| branch.keys().cloned())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+
+    let mut joined = TypeEnv::default();
+    for name in names {
+        let mut types = Vec::with_capacity(branches.len());
+        for branch in branches {
+            if let Some(ty) = branch.get(&name) {
+                types.push(ty.clone());
+            }
+        }
+
+        if types.len() != branches.len() {
+            if !name.starts_with('\u{1}') {
+                joined.insert(name, PhpType::Mixed);
+            }
+        } else {
+            joined.insert(name, join_fallthrough_binding_types(checker, &types));
+        }
+    }
+    Some(joined)
+}
+
+/// Joins one binding's types across reachable branch exits without losing container shape.
+///
+/// A compatible supertype wins when it accepts every observed value. Differing array element
+/// types widen inside the same array container, because representing them as a union of whole
+/// arrays would collapse to boxed `Mixed` storage in codegen and make subsequent element access
+/// or reference binding lose the fact that the runtime value is definitely an array.
+fn join_fallthrough_binding_types(checker: &Checker, types: &[PhpType]) -> PhpType {
+    let mut joined = types.first().cloned().unwrap_or(PhpType::Never);
+    for next in types.iter().skip(1) {
+        joined = if checker.type_accepts(&joined, next) {
+            joined
+        } else if checker.type_accepts(next, &joined) {
+            next.clone()
+        } else {
+            match (&joined, next) {
+                (PhpType::Array(left), PhpType::Array(right)) => PhpType::Array(Box::new(
+                    PhpType::widen_array_branch_element((**left).clone(), (**right).clone()),
+                )),
+                (
+                    PhpType::AssocArray {
+                        key: left_key,
+                        value: left_value,
+                    },
+                    PhpType::AssocArray {
+                        key: right_key,
+                        value: right_value,
+                    },
+                ) => PhpType::AssocArray {
+                    key: Box::new(PhpType::widen_array_branch_element(
+                        (**left_key).clone(),
+                        (**right_key).clone(),
+                    )),
+                    value: Box::new(PhpType::widen_array_branch_element(
+                        (**left_value).clone(),
+                        (**right_value).clone(),
+                    )),
+                },
+                _ => checker.normalize_union_type(vec![joined, next.clone()]),
+            }
+        };
+    }
+    joined
+}
+
 impl Checker {
     /// Validates control-flow statements and updates the type environment for their assignment effects.
     ///
@@ -410,14 +718,25 @@ impl Checker {
                 //
                 // Recorded before the iterable is inferred so an iterable that fails to type is
                 // still treated as aliased.
+                //
+                // Both names are REF-BOUND rather than merely lent: `$v` is a cell
+                // `typed_foreach` keeps alive across the whole loop (and past it, as PHP
+                // leaves it bound to the last element), and the iterable holds the elements
+                // those cells point into. Neither slot may be re-represented by a widening.
                 if *value_by_ref {
-                    self.record_reference_alias_root(array);
+                    self.record_ref_bound_alias_root(array);
                     self.ref_aliased_locals.insert(value_var.clone());
                     self.non_builtin_ref_aliased_locals
                         .insert(value_var.clone());
+                    self.ref_bound_locals.insert(value_var.clone());
+                    // Same rule as `=&`: a by-reference foreach binds the element cell,
+                    // which is not the boxed capture cell the exemption is about.
+                    self.by_ref_capture_boxed_locals.remove(value_var);
                 }
                 let value_was_bound = env.contains_key(value_var);
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
+                let warning_site = (self.current_loop_storage_scope.clone(), stmt.span);
+                self.foreach_warnings.remove(&warning_site);
                 if *value_by_ref {
                     widen_by_ref_foreach_source_storage(self, array, env)?;
                 }
@@ -492,17 +811,57 @@ impl Checker {
                         }
                     }
                 } else if let PhpType::Object(class_name) = &arr_ty {
-                    if !self.object_type_implements_iterable(class_name) {
-                        return Err(CompileError::new(
-                            stmt.span,
-                            &format!(
-                                "foreach over object requires {} to implement Iterator or IteratorAggregate",
-                                class_name
-                            ),
-                        ));
-                    }
-                    let (key_ty, value_ty) =
-                        self.foreach_object_key_value_types(class_name, array);
+                    let is_iter = self.class_implements_interface(class_name, "Iterator")
+                        || self.interface_extends_interface(class_name, "Iterator");
+                    let is_iter_agg = self
+                        .class_implements_interface(class_name, "IteratorAggregate")
+                        || self.interface_extends_interface(class_name, "IteratorAggregate");
+                    let is_traversable_marker = class_name
+                        .trim_start_matches('\\')
+                        .eq_ignore_ascii_case("Traversable")
+                        || self.interface_extends_interface(class_name, "Traversable");
+                    let (key_ty, value_ty) = if !is_iter
+                        && !is_iter_agg
+                        && !is_traversable_marker
+                        && !self.object_type_implements_iterable(class_name)
+                    {
+                        // A by-value walk is the scope-filtered property projection
+                        // (`get_object_vars()` from the loop's scope), so it works anywhere: outside
+                        // the class only the public properties are visited, as in php. A
+                        // by-reference walk binds property slots in place, which only the declaring
+                        // scope supports.
+                        if *value_by_ref
+                            && crate::types::checker::builtin_stdclass::is_stdclass(class_name)
+                        {
+                            if let Some(walk) = crate::stdclass_by_ref_walk::rewrite(
+                                array,
+                                key_var.as_deref(),
+                                value_var,
+                                body,
+                                stmt.span,
+                            ) {
+                                self.stdclass_by_ref_walk_sites.insert(stmt.span);
+                                return self.check_stmt(&walk, env);
+                            }
+                        }
+                        if *value_by_ref
+                            && !self.current_class.as_deref().is_some_and(|current| {
+                                crate::names::php_symbol_key(current)
+                                    == crate::names::php_symbol_key(class_name)
+                            })
+                        {
+                            return Err(CompileError::new(
+                                stmt.span,
+                                &format!(
+                                    "foreach over object requires {} to implement Iterator or IteratorAggregate outside its declaring scope",
+                                    class_name
+                                ),
+                            ));
+                        }
+                        (PhpType::Str, PhpType::Mixed)
+                    } else {
+                        self.foreach_object_key_value_types(class_name, array)
+                    };
                     if let Some(k) = key_var {
                         env.insert(k.clone(), key_ty);
                         self.clear_foreach_callable_metadata(k);
@@ -511,8 +870,10 @@ impl Checker {
                     self.clear_foreach_callable_metadata(value_var);
                 } else if matches!(
                     arr_ty,
-                    PhpType::Iterable | PhpType::Mixed | PhpType::Union(_)
+                    PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) | PhpType::Never
                 ) {
+                    // `Never` is a source that cannot produce a value (`foreach ((throw $e) as ...)`):
+                    // the loop body is dead, but it is still checked like any other walk.
                     if let Some(k) = key_var {
                         env.insert(k.clone(), PhpType::Mixed);
                         self.clear_foreach_callable_metadata(k);
@@ -529,13 +890,16 @@ impl Checker {
                     // `src/codegen/lower_inst/iterators.rs`). Compiler-internal types
                     // (`Packed`, `Pointer`, `Buffer`, `Never`, `Callable`, `TaggedScalar`)
                     // have no PHP-visible spelling and stay a hard error below.
-                    self.warnings.push(crate::errors::CompileWarning::new(
-                        stmt.span,
-                        &format!(
-                            "foreach() argument must be of type array|object, {} given; the loop body will never run",
-                            type_name
-                        ),
-                    ));
+                    self.foreach_warnings.insert(
+                        warning_site,
+                        (self.current_function.clone(), crate::errors::CompileWarning::new(
+                            stmt.span,
+                            &format!(
+                                "foreach() argument must be of type array|object, {} given; the loop body will never run",
+                                type_name
+                            ),
+                        )),
+                    );
                     // The body is still type-checked, so bind both loop variables the way
                     // the `Mixed` source path does.
                     if let Some(k) = key_var {
@@ -563,9 +927,35 @@ impl Checker {
                         "by-reference foreach over Iterator/IteratorAggregate objects or iterable-typed values is not supported; use an array source or remove &",
                     ));
                 }
+                // A by-REFERENCE value variable is a cell INTO the iterated array, so every
+                // assignment to it is an element write and has to reach the storage fixed point
+                // as one. Only a plain local source qualifies: the contract re-types a NAME, and
+                // `$this->items` has no name in this environment to re-type.
+                let ref_value_binding = match (*value_by_ref, &array.kind) {
+                    (true, ExprKind::Variable(source)) => {
+                        Some((source.as_str(), value_var.as_str()))
+                    }
+                    _ => None,
+                };
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
-                stabilize_loop_storage(self, stmt.span, body, None, env, None);
+                stabilize_loop_storage(self, stmt.span, body, None, ref_value_binding, env, None);
+                // The contract may have just widened the SOURCE's payload — `array<string>` ->
+                // `array<mixed>` for `foreach ($chunks as &$chunk) { $chunk = new Chunk($chunk); }`
+                // — and the value variable is bound to that payload. Re-read it, or the body is
+                // checked against the element type the array had BEFORE the preheader conversion
+                // EIR lowering is about to emit, and the store into the cell is refused (or, worse
+                // under `--strict-locals` lifted, lowered at the narrower representation).
+                if let Some((source, value)) = ref_value_binding {
+                    let element = match env.get(source).map(PhpType::codegen_repr) {
+                        Some(PhpType::Array(element)) => Some(*element),
+                        Some(PhpType::AssocArray { value, .. }) => Some(*value),
+                        _ => None,
+                    };
+                    if let Some(element) = element {
+                        env.insert(value.to_string(), element);
+                    }
+                }
                 let errors = self.check_break_continue_target_body(body, env);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
@@ -588,7 +978,11 @@ impl Checker {
                         self.infer_type_with_assignment_effects(v, env)?;
                     }
                 }
+                let direct_entry_env = env.clone();
+                let mut switch_exit_envs = Vec::new();
+                let mut fallthrough_env = None;
                 self.break_continue_depth += 1;
+                self.loop_break_envs.push(Vec::new());
                 for (_, body) in cases {
                     let invalidated = self
                         .conditional_boxed_ref_invalidations
@@ -600,7 +994,22 @@ impl Checker {
                         .filter(|name| !invalidated.contains(*name))
                         .cloned()
                         .collect();
-                    errors.extend(self.check_body(body, env));
+                    let mut entry_envs = vec![direct_entry_env.clone()];
+                    if let Some(previous) = fallthrough_env.take() {
+                        entry_envs.push(previous);
+                    }
+                    let mut branch_env = join_fallthrough_type_envs(self, &entry_envs)
+                        .unwrap_or_else(|| direct_entry_env.clone());
+                    errors.extend(self.check_body(body, &mut branch_env));
+                    match block_terminal_effect_with_divergence(body, &|expr| {
+                        self.expr_is_declared_never_call(expr)
+                    }) {
+                        TerminalEffect::FallsThrough => fallthrough_env = Some(branch_env),
+                        TerminalEffect::Breaks | TerminalEffect::TerminatesMixed => {
+                            switch_exit_envs.push(branch_env);
+                        }
+                        TerminalEffect::ExitsCurrentBlock => {}
+                    }
                 }
                 if let Some(body) = default {
                     let invalidated = self
@@ -612,11 +1021,37 @@ impl Checker {
                         .into_iter()
                         .filter(|name| !invalidated.contains(name))
                         .collect();
-                    errors.extend(self.check_body(body, env));
+                    let mut entry_envs = vec![direct_entry_env.clone()];
+                    if let Some(previous) = fallthrough_env.take() {
+                        entry_envs.push(previous);
+                    }
+                    let mut branch_env = join_fallthrough_type_envs(self, &entry_envs)
+                        .unwrap_or_else(|| direct_entry_env.clone());
+                    errors.extend(self.check_body(body, &mut branch_env));
+                    match block_terminal_effect_with_divergence(body, &|expr| {
+                        self.expr_is_declared_never_call(expr)
+                    }) {
+                        TerminalEffect::FallsThrough => switch_exit_envs.push(branch_env),
+                        TerminalEffect::Breaks | TerminalEffect::TerminatesMixed => {
+                            switch_exit_envs.push(branch_env);
+                        }
+                        TerminalEffect::ExitsCurrentBlock => {}
+                    }
+                } else {
+                    switch_exit_envs.push(direct_entry_env);
+                    if let Some(previous) = fallthrough_env.take() {
+                        switch_exit_envs.push(previous);
+                    }
                 }
+                // A case whose LAST statement breaks is already an exit above; a `break` nested
+                // deeper in a case (inside an `if`) is only seen here.
+                switch_exit_envs.extend(self.loop_break_envs.pop().unwrap_or_default());
                 self.break_continue_depth -= 1;
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
+                if let Some(joined) = join_fallthrough_type_envs(self, &switch_exit_envs) {
+                    *env = joined;
+                }
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -631,38 +1066,18 @@ impl Checker {
             } => {
                 let mut errors = Vec::new();
 
-                // Flow-sensitive type narrowing across the if / elseif* / else chain.
-                //
-                // Each recognized guard narrows its variable to the guarded type while checking
-                // that branch's body. The fallthrough env for the remaining clauses (and the final
-                // else) accumulates the complement, which is sound because reaching a later clause
-                // means every earlier condition was false.
-                //
-                // After the whole construct we restore every variable we narrowed, so code after
-                // the `if` sees the joined view. The single exception is an exhaustively divergent
-                // chain (no else and *every* clause body diverges): there the only way to fall
-                // through is with all conditions false, so the accumulated complement is sound for
-                // the statements after the `if`.
+                // Each clause body receives its own environment. The shared `env` carries only the
+                // accumulated false-condition path into the next elseif/else; mutating it while
+                // checking a truthy sibling would leak assignments between mutually exclusive
+                // branches. Reachable exits are joined after the whole chain.
                 let mut clauses: Vec<(&Expr, &Vec<Stmt>)> = vec![(condition, then_body)];
                 clauses.extend(elseif_clauses.iter().map(|(c, b)| (c, b)));
-
-                // Pre-`if` type of every variable we narrow, captured the first time we touch it,
-                // so each one can be restored after the construct.
-                let mut saved_vars: Vec<(String, Option<PhpType>)> = Vec::new();
-                // The same pre-`if` types, held for `merge_local_assignment_type` so a store
-                // inside a guarded region is measured against the BINDING rather than against
-                // the guard's view of the value (issue #509). Opened where `saved_vars` records
-                // a variable and closed once for the whole construct: the complement a guarded
-                // clause publishes narrows the later clauses and the `else` body too, so the
-                // origin has to outlive the then-branch it was opened for.
+                let mut fallthrough_clause_envs = Vec::new();
+                // Pre-guard types held for `merge_local_assignment_type` so a store inside a guarded
+                // region is measured against the BINDING rather than against the guard's view of
+                // the value (issue #509). Closed once for the whole construct: the complement a
+                // guarded clause publishes narrows the later clauses and the `else` body too.
                 let mut saved_origins: Vec<SavedNarrowingOrigin> = Vec::new();
-                let mut applied_any_guard = false;
-                // Single-clause join state: the guarded key and the type it has where the
-                // then-branch falls out of the construct. `None` means "no usable fact" (the
-                // branch diverged, or a call inside it purged the narrowing).
-                let mut join_key: Option<String> = None;
-                let mut then_exit_ty: Option<PhpType> = None;
-                let single_clause = clauses.len() == 1;
                 let mut callable_target_exits = Vec::new();
                 let mut callable_target_version_exits = Vec::new();
 
@@ -672,86 +1087,75 @@ impl Checker {
                     let branch_entry_target_versions =
                         self.callable_array_target_versions.clone();
                     let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
+                    let condition_env = env.clone();
+                    let mut branch_env = condition_env.clone();
+                    self.install_truthy_short_circuit_effects(cond, &mut branch_env)?;
 
-                    if let Some(guard) = self.guard_narrowing(cond, env)? {
-                        applied_any_guard = true;
-                        // Remember the variable's pre-`if` type the first time we narrow it.
-                        if !saved_vars.iter().any(|(v, _)| v == &guard.var) {
-                            saved_vars.push((guard.var.clone(), env.get(&guard.var).cloned()));
-                        }
+                    let mut published_else: Option<(String, PhpType)> = None;
+                    // `isset($never)` binds `$never` for the true branch only. Narrowing it would
+                    // publish the false edge's `null` as a binding after the `if`, and PHP's
+                    // `isset()` creates nothing.
+                    let isset_roots = Self::truthy_isset_fact_roots(cond, &condition_env);
+                    let guard = self
+                        .guard_narrowing(cond, &branch_env)?
+                        .filter(|guard| !isset_roots.contains(&guard.var));
+                    if let Some(guard) = guard {
+                        self.box_iterable_local_narrowed_to_array(&guard, &condition_env);
                         saved_origins.push(self.enter_flow_narrowing(
                             &guard.var,
-                            env.get(&guard.var),
+                            condition_env.get(&guard.var),
                             &guard.then_ty,
                         ));
-
-                        // Check the guarded body with the "then" type.
-                        let saved = env.get(&guard.var).cloned();
-                        env.insert(guard.var.clone(), guard.then_ty.clone());
-                        for s in *body {
-                            if let Err(error) = self.check_stmt(s, env) {
-                                errors.extend(error.flatten());
-                            }
-                        }
-                        // Join only when the then-branch WROTE the guarded place, i.e. when the
-                        // fact at branch exit is no longer the guard's own `then` type. That is
-                        // exactly the lazy-initialization shape; joining unconditionally would
-                        // instead publish a guard's narrowing (e.g. `instanceof`) to the code
-                        // after the `if`, where it does not hold.
-                        let branch_exit = env.get(&guard.var);
-                        if single_clause
-                            && Self::narrowed_place_key_is_property(&guard.var)
-                            && !self.body_cannot_fall_through(body)
-                            && branch_exit.is_some_and(|ty| *ty != guard.then_ty)
-                        {
-                            join_key = Some(guard.var.clone());
-                            then_exit_ty = branch_exit.cloned();
-                        }
-                        if !self.body_cannot_fall_through(body) {
-                            callable_target_exits.push(self.callable_array_targets.clone());
-                            callable_target_version_exits
-                                .push(self.callable_array_target_versions.clone());
-                        }
-                        self.callable_array_targets = branch_entry_targets;
-                        self.callable_array_target_versions = branch_entry_target_versions;
-                        self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
-                        restore_narrowed_var(env, &guard.var, &saved);
-
-                        // The fallthrough env for the rest of the chain (next elseif or else)
-                        // sees the complement.
+                        branch_env.insert(guard.var.clone(), guard.then_ty);
+                        *env = condition_env;
                         env.insert(guard.var.clone(), guard.else_ty.clone());
-                        self.republish_flow_narrowing(&guard.var, &guard.else_ty);
+                        published_else = Some((guard.var, guard.else_ty));
                     } else {
-                        // No narrowing for this clause — check the body with the current env.
-                        for s in *body {
-                            if let Err(error) = self.check_stmt(s, env) {
-                                errors.extend(error.flatten());
-                            }
-                        }
-                        if !self.body_cannot_fall_through(body) {
-                            callable_target_exits.push(self.callable_array_targets.clone());
-                            callable_target_version_exits
-                                .push(self.callable_array_target_versions.clone());
-                        }
-                        self.callable_array_targets = branch_entry_targets;
-                        self.callable_array_target_versions = branch_entry_target_versions;
-                        self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
+                        *env = condition_env;
                     }
+
+                    for s in *body {
+                        if let Err(error) = self.check_stmt(s, &mut branch_env) {
+                            errors.extend(error.flatten());
+                        }
+                    }
+                    // A probe root the condition proved set is a fact of this branch only.
+                    Self::drop_truthy_isset_root_facts(cond, env, &mut branch_env);
+                    let falls_through = !self.body_cannot_fall_through(body);
+                    if falls_through {
+                        callable_target_exits.push(self.callable_array_targets.clone());
+                        callable_target_version_exits
+                            .push(self.callable_array_target_versions.clone());
+                    }
+                    self.callable_array_targets = branch_entry_targets;
+                    self.callable_array_target_versions = branch_entry_target_versions;
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
+                    if let Some((var, else_ty)) = &published_else {
+                        self.republish_flow_narrowing(var, else_ty);
+                    }
+                    if falls_through {
+                        fallthrough_clause_envs.push(branch_env);
+                    }
+                    self.install_falsy_short_circuit_effects(cond, env)?;
                 }
 
-                // Final else body (if present) is checked with the accumulated complement.
-                // `None` = the else path cannot reach the code after the `if`. `Some(None)` = it
-                // can, but the guarded fact was lost there. `Some(Some(ty))` = it can and the
-                // fact is `ty`.
-                let mut else_exit_ty: Option<Option<PhpType>> = None;
+                // The final else receives the accumulated complements without mutating the
+                // already-recorded truthy exits. With no explicit else, that false path itself is
+                // a reachable exit.
                 let mut else_falls_through = else_body.is_none();
                 if let Some(body) = else_body {
+                    let mut branch_env = env.clone();
                     for s in body {
-                        if let Err(error) = self.check_stmt(s, env) {
+                        if let Err(error) = self.check_stmt(s, &mut branch_env) {
                             errors.extend(error.flatten());
                         }
                     }
                     else_falls_through = !self.body_cannot_fall_through(body);
+                    if else_falls_through {
+                        fallthrough_clause_envs.push(branch_env);
+                    }
+                } else {
+                    fallthrough_clause_envs.push(env.clone());
                 }
                 if else_falls_through {
                     callable_target_exits.push(self.callable_array_targets.clone());
@@ -764,43 +1168,8 @@ impl Checker {
                 );
                 self.callable_array_targets = joined_targets;
                 self.callable_array_target_versions = joined_target_versions;
-                if let Some(key) = &join_key {
-                    if else_falls_through {
-                        else_exit_ty = Some(env.get(key).cloned());
-                    }
-                }
-
-                // Keep the accumulated complement for the statements after the `if` only when no
-                // guarded clause can fall through: there is no else and every clause ends in a
-                // non-fallthrough statement, so reaching the following code implies all conditions
-                // were false. Otherwise restore every narrowed variable to its pre-`if` type.
-                let keep_complement_after_if = applied_any_guard
-                    && else_body.is_none()
-                    && clauses
-                        .iter()
-                        .all(|(_, body)| self.body_cannot_fall_through(body));
-                // A single guarded clause whose then-branch also falls through joins the two
-                // exit facts instead of discarding both. `if (X === null) { X = new S(); }`
-                // leaves `S` on the then path (the write recorded it) and `S` on the else path
-                // (the guard complement), so the union is `S` — the singleton pattern.
-                let joined = join_key.as_ref().and_then(|key| {
-                    let then_ty = then_exit_ty.clone()?;
-                    let joined = match &else_exit_ty {
-                        None => then_ty,
-                        Some(Some(else_ty)) => {
-                            self.normalize_union_type(vec![then_ty, else_ty.clone()])
-                        }
-                        Some(None) => return None,
-                    };
-                    Some((key.clone(), joined))
-                });
-                if !keep_complement_after_if {
-                    for (var, original) in &saved_vars {
-                        restore_narrowed_var(env, var, original);
-                    }
-                    if let Some((key, joined)) = joined {
-                        env.insert(key, joined);
-                    }
+                if let Some(joined) = join_fallthrough_type_envs(self, &fallthrough_clause_envs) {
+                    *env = joined;
                 }
                 // Closed for the construct even when the complement is KEPT for the code after
                 // it. A kept complement is a sound fact about every path that gets there, so the
@@ -819,7 +1188,7 @@ impl Checker {
             }
             StmtKind::DoWhile { body, condition } => {
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, None, env, None);
+                stabilize_loop_storage(self, stmt.span, body, None, None, env, None);
                 let errors = self.check_break_continue_target_body(body, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
                 self.callable_array_targets.clear();
@@ -832,12 +1201,16 @@ impl Checker {
             }
             StmtKind::While { condition, body } => {
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, None, env, None);
+                stabilize_loop_storage(self, stmt.span, body, None, None, env, None);
                 self.infer_type_with_assignment_effects(condition, env)?;
+                let truthy_short_circuit_bindings =
+                    self.install_truthy_short_circuit_effects(condition, env)?;
                 // The condition is re-evaluated before every iteration, so a guard on it
                 // holds on entry to each one: `while (($row = fgetcsv($h)) !== false)`
                 // leaves `$row` an array inside the body. The narrowing is dropped again
                 // afterwards, because the loop exits precisely when the guard is false.
+                // Installed INSIDE the short-circuit effects and undone before them, so the
+                // two restores nest instead of overwriting one another.
                 let guard = self.guard_narrowing(condition, env)?;
                 let saved = guard
                     .as_ref()
@@ -861,6 +1234,9 @@ impl Checker {
                             env.remove(&var);
                         }
                     }
+                }
+                for (name, previous) in &truthy_short_circuit_bindings {
+                    restore_narrowed_var(env, name, previous);
                 }
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
@@ -922,6 +1298,7 @@ impl Checker {
                     stmt.span,
                     body,
                     update.as_deref(),
+                    None,
                     env,
                     packed_counter_name.as_deref(),
                 );
@@ -939,6 +1316,8 @@ impl Checker {
                 match thrown_ty {
                     PhpType::Object(type_name)
                         if self.object_type_implements_throwable(&type_name)
+                            || self.unresolved_new_object_defers_to_runtime(expr, &type_name)
+                            || self.absent_class_defers_to_runtime(&type_name)
                             || self.object_type_may_be_eval_declared(&type_name) =>
                     {
                         Ok(())
@@ -948,6 +1327,14 @@ impl Checker {
                         stmt.span,
                         "Type error: throw requires an object implementing Throwable",
                     )),
+                    // `Never` reaches here only from a guard the checker has just proven
+                    // cannot be taken, so the statement is unreachable rather than wrong.
+                    PhpType::Never => Ok(()),
+                    ref ty
+                        if crate::types::checker::type_compat::type_is_gradual_object_family(ty) =>
+                    {
+                        Ok(())
+                    }
                     _ => Err(CompileError::new(
                         stmt.span,
                         "Type error: throw requires an object value",
@@ -960,27 +1347,74 @@ impl Checker {
                 finally_body,
             } => {
                 let mut errors = Vec::new();
+                // A `catch` runs because some statement in the try RAISED, so it must see what
+                // the variables held at a point where that could happen: the environment BEFORE
+                // each statement. Checking the catches against the environment the try body LEFT
+                // says every assignment completed — the one thing that cannot be true of the
+                // statement that threw.
+                //
+                // Symfony's `ClassStub::__construct` is the shape that exposed it:
+                //
+                //     if (\is_array($r)) {
+                //         try { $r = new \ReflectionMethod($r[0], $r[1]); }
+                //         catch (\ReflectionException) { $r = new \ReflectionClass($r[0]); }
+                //     }
+                //
+                // The catch indexes `$r`, which is still the array — the store never happened —
+                // but the checker had already retyped it to `ReflectionMethod` and refused with
+                // "Cannot index non-array".
+                //
+                // The env AFTER the last statement is deliberately NOT joined in: if every
+                // statement completed, nothing threw and no catch runs.
+                //
+                // Residual imprecision, in exchange: a statement that completes a nested
+                // assignment and only then raises (`foo($r = 1, throws())`) reaches its catch
+                // with the pre-statement type. The previous behaviour had the mirror-image
+                // problem for every ordinary assignment, which is the common shape.
+                let mut throw_point_envs = Vec::with_capacity(try_body.len().max(1));
                 let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
                 for s in try_body {
+                    throw_point_envs.push(env.clone());
                     if let Err(error) = self.check_stmt(s, env) {
                         errors.extend(error.flatten());
                     }
                 }
+                let catch_env = join_fallthrough_type_envs(self, &throw_point_envs).map(
+                    |mut joined| {
+                        // A name the TRY INTRODUCED is not in any throw-point environment, but it
+                        // can still be live in the catch: PHP binds a BY-REFERENCE argument at the
+                        // call, before the callee body can raise. `HttpKernel::handle` does
+                        // exactly that with `$controllerMetadata`. Such a name can only have come
+                        // from the try, so it keeps the type the try left.
+                        for (name, ty) in env.iter() {
+                            if !joined.contains_key(name) {
+                                joined.insert(name.clone(), ty.clone());
+                            }
+                        }
+                        joined
+                    },
+                );
+                // Every way the statement can finish: the try body completing, or one of the
+                // catches completing. They are joined on the way out so a catch's bindings —
+                // including its own exception variable, which PHP leaves defined afterwards —
+                // survive the statement.
+                let mut exit_envs = vec![env.clone()];
                 for catch_clause in catches {
+                    let mut catch_scope = match &catch_env {
+                        Some(joined) => joined.clone(),
+                        None => env.clone(),
+                    };
+                    let env = &mut catch_scope;
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
                     let mut resolved_types = Vec::new();
                     for raw_exception_type in &catch_clause.exception_types {
                         let exception_type =
                             self.resolve_catch_type_name(raw_exception_type, stmt.span)?;
-                        if !self.classes.contains_key(&exception_type)
-                            && !self.interfaces.contains_key(&exception_type)
+                        let catch_type_is_known = self.classes.contains_key(&exception_type)
+                            || self.interfaces.contains_key(&exception_type);
+                        if catch_type_is_known
+                            && !self.object_type_implements_throwable(&exception_type)
                         {
-                            return Err(CompileError::new(
-                                stmt.span,
-                                &format!("Undefined class: {}", exception_type),
-                            ));
-                        }
-                        if !self.object_type_implements_throwable(&exception_type) {
                             return Err(CompileError::new(
                                 stmt.span,
                                 &format!(
@@ -989,6 +1423,12 @@ impl Checker {
                                 ),
                             ));
                         }
+                        if !catch_type_is_known {
+                            self.unresolved_catch_types.insert(exception_type.clone());
+                        }
+                        // PHP permits unresolved catch names: if the class never loads, that arm
+                        // simply cannot match. Keep the declared nominal type so unreachable-arm
+                        // analysis does not erase callback and collection element precision.
                         resolved_types.push(exception_type);
                     }
                     if let Some(variable) = &catch_clause.variable {
@@ -1002,6 +1442,12 @@ impl Checker {
                             errors.extend(error.flatten());
                         }
                     }
+                    if !self.body_cannot_fall_through(&catch_clause.body) {
+                        exit_envs.push(catch_scope);
+                    }
+                }
+                if let Some(joined) = join_fallthrough_type_envs(self, &exit_envs) {
+                    *env = joined;
                 }
                 if let Some(body) = finally_body {
                     let invalidated = self
@@ -1028,6 +1474,30 @@ impl Checker {
             }
             _ => unreachable!("non-control-flow statement routed to control-flow checker"),
         }
+    }
+
+    /// Gives an `iterable` local that a guard narrows to an array boxed `Mixed` storage for its
+    /// whole frame, from the incoming-parameter store on.
+    ///
+    /// `iterable` storage is a bare heap pointer (an array or a `Traversable`). The narrowed reads
+    /// still load that pointer, which array builtins cannot take (`implode()` was refused), and a
+    /// by-reference one wrote an array back through it as if the slot were one: Symfony's
+    /// `if (!is_array($providers)) { $providers = iterator_to_array($providers); }
+    /// array_unshift($providers, ...)` produced garbage. A boxed slot takes every builtin's
+    /// run-time-checked `Mixed` path instead.
+    fn box_iterable_local_narrowed_to_array(&mut self, guard: &super::narrowing::GuardNarrowing, env: &TypeEnv) {
+        let narrows_to_array = |ty: &PhpType| {
+            matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+        };
+        if env.get(&guard.var).map(PhpType::codegen_repr) != Some(PhpType::Iterable)
+            || !(narrows_to_array(&guard.then_ty) || narrows_to_array(&guard.else_ty))
+        {
+            return;
+        }
+        self.by_ref_local_storage_types.insert(
+            (self.current_loop_storage_scope.clone(), guard.var.clone()),
+            PhpType::Mixed,
+        );
     }
 
     /// Returns the static key and value types exposed by foreach over an object iterator.
@@ -1203,8 +1673,20 @@ impl Checker {
         // loop cannot be trusted inside it.
         Self::purge_property_narrowings(env);
         self.break_continue_depth += 1;
+        self.loop_break_envs.push(Vec::new());
         let errors = self.check_body(body, env);
+        let breaks = self.loop_break_envs.pop().unwrap_or_default();
         self.break_continue_depth -= 1;
+        // The loop is left by its own condition (the environment the body ends with, which is
+        // also what the next condition check sees) and by every `break` that targets it.
+        if !breaks.is_empty() {
+            let mut exits = Vec::with_capacity(breaks.len() + 1);
+            exits.push(env.clone());
+            exits.extend(breaks);
+            if let Some(joined) = join_fallthrough_type_envs(self, &exits) {
+                *env = joined;
+            }
+        }
         errors
     }
 

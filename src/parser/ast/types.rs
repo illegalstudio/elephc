@@ -36,6 +36,13 @@ pub struct TypeParam {
     /// WRITE: two instantiations are then simply different types, which is also what
     /// monomorphization makes them.
     pub variance: Variance,
+    /// The parameter comes from a PHPDoc `@template` tag rather than written syntax.
+    ///
+    /// php never reads a docblock, so an annotation cannot make valid code fail to compile:
+    /// a variance marker the annotated body does not honour (Symfony's `NodeDefinition` stores its
+    /// `@template-covariant TParent` in a writable property) is not refused. Written `+T`/`-T`
+    /// syntax is still verified.
+    pub doc_annotated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -92,9 +99,28 @@ pub struct GenericDecl {
     /// a map: alignment is what lets `implements Repository<User>, Countable` keep the arguments
     /// on the interface they were written on.
     pub interface_args: Vec<Vec<TypeExpr>>,
+    /// The declaration's generic half was adopted from a PHPDoc block (`@template`,
+    /// `@extends`, `@implements`) rather than written syntax.
+    ///
+    /// php never reads a docblock, so an inherited annotation naming a class that declares no
+    /// type parameters (Symfony's `@extends \FilterIterator<string, SplFileInfo>`) is forgotten
+    /// rather than refused. Written `extends Base<int>` on a non-generic `Base` still is.
+    pub doc_annotated: bool,
 }
 
 impl GenericDecl {
+    /// [`GenericDecl::new`], remembering whether the generic half came from a docblock.
+    pub fn with_origin(
+        type_params: Vec<TypeParam>,
+        extends_args: Vec<TypeExpr>,
+        interface_args: Vec<Vec<TypeExpr>>,
+        doc_annotated: bool,
+    ) -> Option<Box<GenericDecl>> {
+        let mut decl = Self::new(type_params, extends_args, interface_args)?;
+        decl.doc_annotated = doc_annotated;
+        Some(decl)
+    }
+
     /// Builds the optional generic half of a declaration, or `None` when nothing is generic.
     ///
     /// The `None` is not an optimization detail, it is the contract: every pass that predates
@@ -117,6 +143,7 @@ impl GenericDecl {
             type_params,
             extends_args,
             interface_args,
+            doc_annotated: false,
         }))
     }
 }

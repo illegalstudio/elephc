@@ -27,7 +27,7 @@ use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Module, Ownership};
 use crate::codegen_support::source_method_adapters::MethodKind;
-use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
+use crate::names::{join_php_symbol, method_symbol, php_symbol_key, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
@@ -36,7 +36,10 @@ use super::eval_ref_arg_helpers::{
     eval_normalized_ref_params, eval_ref_arg_slots, eval_signature_ref_params_supported,
     emit_aarch64_write_back_ref_args, emit_acquire_mixed_ref_args, emit_x86_64_write_back_ref_args,
 };
+use super::eval_callable_helpers::{EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET, EVAL_ARG_BOXED_VALUE_X86_64_OFFSET,
+    EVAL_ARG_CONTEXT_AARCH64_OFFSET};
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
+use super::class_id_dispatch::{emit_class_id_switch, ClassIdSwitch};
 use super::eval_argument_helpers::emit_borrowed_string_arg;
 use super::eval_value_helpers::{emit_borrowed_eval_string_argument, native_method_returns_owned_value};
 
@@ -54,6 +57,9 @@ struct EvalMethodSlot {
     return_ty: PhpType,
     return_is_owned: bool,
     return_uses_marker: bool,
+    /// The compiled method returns BY REFERENCE: its result register holds the address of the
+    /// returned storage, which the bridge reads before boxing.
+    return_by_ref: bool,
     is_hidden_shadow: bool,
     entry_symbol: String,
     runtime_helper: Option<&'static str>,
@@ -73,6 +79,8 @@ struct EvalStaticMethodSlot {
     return_ty: PhpType,
     return_is_owned: bool,
     return_uses_marker: bool,
+    /// See `EvalMethodSlot::return_by_ref`.
+    return_by_ref: bool,
     entry_symbol: String,
 }
 
@@ -118,7 +126,44 @@ const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
 ];
 const BUILTIN_THROWABLE_GET_MESSAGE_LABEL: &str = "__elephc_eval_builtin_throwable_getmessage";
 const BUILTIN_THROWABLE_GET_CODE_LABEL: &str = "__elephc_eval_builtin_throwable_getcode";
-const BUILTIN_THROWABLE_GET_PREVIOUS_LABEL: &str = "__elephc_eval_builtin_throwable_getprevious";
+/// `getFile()` and `getLine()` are NOT rows here: their result is the Throwable's EFFECTIVE
+/// location (an `ErrorException` override, a synthesized origin), which `__rt_throwable_get_file`
+/// and `__rt_throwable_get_line` resolve; see `emit_builtin_throwable_location_bodies`.
+const BUILTIN_THROWABLE_SCALAR_GETTERS: &[(&str, &str, usize, bool)] = &[
+    ("getmessage", BUILTIN_THROWABLE_GET_MESSAGE_LABEL, 8, true),
+    ("getcode", BUILTIN_THROWABLE_GET_CODE_LABEL, 24, false),
+];
+/// Builtin `Throwable` methods the bridge answers WITHOUT reading a payload field.
+///
+/// Both are synthetic on the compiled side too: elephc keeps no call stack, so
+/// `lower_inst::throwable_methods` answers an empty array and an empty string. The bridge has to
+/// answer the SAME rather than refuse the call, because a builtin Throwable has no emitted method
+/// body to dispatch to -- `nm` on a compiled Symfony shows `gettraceasstring` only for the one
+/// userland class that declares it. An eval-declared subclass reading either accessor therefore
+/// failed outright, and Symfony's `ErrorListener::logKernelException` reads both while flattening
+/// an exception. That listener runs at priority 0, ahead of the `RouterListener` at -64 that
+/// renders the 404 welcome page, so the failure hid the page the request was meant to produce.
+const BUILTIN_THROWABLE_SYNTHETIC_GETTERS: &[(&str, &str)] = &[
+    ("gettrace", "__elephc_eval_builtin_throwable_gettrace"),
+    (
+        "gettraceasstring",
+        "__elephc_eval_builtin_throwable_gettraceasstring",
+    ),
+];
+/// `Throwable::getPrevious()`, whose slot two producers write with DIFFERENT shapes.
+///
+/// It gets its own entry rather than a row in either table above because neither shape fits:
+/// the value is not a scalar field to re-box, and it is not synthetic either. The compiled
+/// `Exception::__construct` assigns `$this->previous`, a declared `?Throwable`, so the slot holds
+/// a BOXED Mixed cell; the eval/native bridge instead materializes a raw object pointer there.
+/// `lower_inst::throwable_methods::lower_throwable_get_previous` tells them apart by heap kind 5
+/// and this bridge body mirrors it exactly -- reading every slot as raw answers non-null for an
+/// exception that has no previous, which is what turns Symfony's
+/// `do { ... } while ($prev = $prev->getPrevious());` into a walk off the end.
+const BUILTIN_THROWABLE_GET_PREVIOUS: (&str, &str) = (
+    "getprevious",
+    "__elephc_eval_builtin_throwable_getprevious",
+);
 const METHOD_HELPER_BASE_FRAME_SIZE: usize = 80;
 const METHOD_HELPER_HANDLER_OFFSET: usize = METHOD_HELPER_BASE_FRAME_SIZE;
 const METHOD_HELPER_FRAME_SIZE: usize = METHOD_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
@@ -136,7 +181,7 @@ pub(super) fn emit_eval_method_helpers(
     data: &mut DataSection,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
-    if !module_uses_eval(module) {
+    if !module.required_runtime_features.eval_bridge {
         return;
     }
     let slots = collect_eval_method_slots(module);
@@ -151,27 +196,6 @@ pub(super) fn emit_eval_method_helpers(
         callable_support,
     );
     emit_static_method_call_helper(module, emitter, data, &static_slots, callable_support);
-}
-
-/// Returns whether this binary links the eval bridge, and therefore needs these helpers.
-///
-/// THE INVARIANT IS "LINKED", NOT "USES EVAL". `libelephc_magician.a` references the
-/// `__elephc_eval_*` callbacks unconditionally, so any binary that links it must define
-/// them or fail to link — `__elephc_eval_reflection_attribute_new` undefined and a dozen
-/// like it. This used to scan for functions carrying an eval local instead, which is a
-/// different question that happened to give the same answer while the ONLY reason to link
-/// the archive was an `eval()` in the program.
-///
-/// That stopped being the only reason. `opcache_compile_file()` populates the runtime script
-/// cache, which lives in the archive, so a program calling it needs the archive whether or
-/// not it ever evaluates a string. Keeping the narrower scan here made that combination
-/// unlinkable, which is what kept the fold in place and left the function answering `false`
-/// where reference answers `true`.
-///
-/// The call sites are all inside a block already gated on the same flag, so for a program
-/// that does use `eval()` nothing changes.
-fn module_uses_eval(module: &Module) -> bool {
-    module.required_runtime_features.eval_bridge
 }
 
 /// Collects bridge-supported instance methods backed by emitted EIR symbols.
@@ -199,12 +223,51 @@ fn collect_eval_static_method_slots(module: &Module) -> Vec<EvalStaticMethodSlot
 }
 
 /// Collects compact builtin Throwable class ids that eval can inspect directly.
+///
+/// THE INHERITING SUBCLASSES BELONG HERE TOO, for the same reason they do in
+/// `eval_constructor_helpers::collect_builtin_throwable_constructor_class_ids`: a builtin
+/// Throwable's getters have no EIR body to build a slot from, so a class that INHERITS
+/// them matches neither this dispatch (its own id is not a builtin id) nor the slot table,
+/// and the bridge reports `unsupported MethodCall expression` where PHP returns the value.
+///
+/// SHADOWING IS NOT A RISK HERE, and that is what makes routing by class id sound: this
+/// dispatch runs BEFORE the slot dispatch, so it would hide a subclass override — but the
+/// only methods it answers are getMessage, getCode, getFile, getLine, getTrace,
+/// getTraceAsString and getPrevious, and php-src declares every one of them `final` on
+/// `Exception` and `Error`. No subclass can override them, so the builtin body is always the
+/// right one. Adding a non-final method to any of those tables would break this argument and
+/// must be reconsidered here -- `__toString()`, notably, is NOT final and does not belong.
+///
+/// Measured against `php -n` 8.5.10: with the constructor half fixed but this one not, the
+/// same `AotEx extends InvalidArgumentException` probe constructed correctly and then died
+/// on `$e->getMessage()` with `unsupported MethodCall expression`, where PHP printed the
+/// message. It is also the mechanism recorded as deferred for `getPrevious()`.
 fn collect_builtin_throwable_method_class_ids(module: &Module) -> Vec<u64> {
     let mut class_ids = BUILTIN_THROWABLE_METHOD_CLASSES
         .iter()
         .filter_map(|class_name| module.class_infos.get(*class_name))
         .map(|class_info| class_info.class_id)
         .collect::<Vec<_>>();
+    for class_info in module.class_infos.values() {
+        let inherits_builtin_getter = BUILTIN_THROWABLE_SCALAR_GETTERS
+            .iter()
+            .map(|(name, ..)| *name)
+            .chain(BUILTIN_THROWABLE_SYNTHETIC_GETTERS.iter().map(|(name, _)| *name))
+            .chain(std::iter::once(BUILTIN_THROWABLE_GET_PREVIOUS.0))
+            .any(|name| {
+                class_info
+                    .method_impl_classes
+                    .get(&php_symbol_key(name))
+                    .is_some_and(|impl_class| {
+                        BUILTIN_THROWABLE_METHOD_CLASSES
+                            .iter()
+                            .any(|builtin| *builtin == impl_class.trim_start_matches('\\'))
+                    })
+            });
+        if inherits_builtin_getter {
+            class_ids.push(class_info.class_id);
+        }
+    }
     class_ids.sort_unstable();
     class_ids.dedup();
     class_ids
@@ -306,11 +369,12 @@ fn collect_class_method_slots(
             allowed_scopes: visibility_scope_names(module, impl_class, visibility),
             params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-            return_ty: crate::types::mixed_box_php_type(&sig.return_type),
+            return_ty: emitted_method_return_type(module, entry_symbol, sig),
             return_is_owned: runtime_helper.is_none()
                 && native_method_returns_owned_value(module, impl_class, method, false),
             return_uses_marker: runtime_helper.is_none()
                 && compiled_method_return_uses_marker(sig),
+            return_by_ref: runtime_helper.is_none() && sig.by_ref_return,
             is_hidden_shadow: false,
             entry_symbol: entry_symbol.clone(),
             runtime_helper,
@@ -361,9 +425,10 @@ fn collect_hidden_private_ancestor_method_slots(
                 allowed_scopes: visibility_scope_names(module, impl_class, visibility),
                 params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
                 ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-                return_ty: crate::types::mixed_box_php_type(&sig.return_type),
+                return_ty: emitted_method_return_type(module, entry_symbol, sig),
                 return_is_owned: native_method_returns_owned_value(module, impl_class, method, false),
                 return_uses_marker: compiled_method_return_uses_marker(sig),
+                return_by_ref: sig.by_ref_return,
                 is_hidden_shadow: true,
                 entry_symbol: entry_symbol.clone(),
                 runtime_helper: None,
@@ -377,9 +442,13 @@ fn eval_runtime_backed_instance_method_intrinsic(
     class_name: &str,
     method_name: &str,
 ) -> Option<IntrinsicCall> {
+    // `Generator` belongs here too: interpreted code iterating a COMPILED generator --
+    // `foreach ($this->warmers as $w)` over a container `RewindableGenerator` whose
+    // `getIterator()` runs a compiled closure -- drives it by method name, and without a slot
+    // `rewind()` failed as an unknown native method ("unsupported Foreach statement").
     if !matches!(
         class_name.trim_start_matches('\\'),
-        "SplDoublyLinkedList" | "SplStack" | "SplQueue" | "SplFixedArray"
+        "SplDoublyLinkedList" | "SplStack" | "SplQueue" | "SplFixedArray" | "Generator"
     ) {
         return None;
     }
@@ -427,12 +496,33 @@ fn collect_class_static_method_slots(
             allowed_scopes: visibility_scope_names(module, impl_class, visibility),
             params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
-            return_ty: crate::types::mixed_box_php_type(&sig.return_type),
+            return_ty: emitted_method_return_type(module, entry_symbol, sig),
             return_is_owned: native_method_returns_owned_value(module, impl_class, method, true),
             return_uses_marker: compiled_method_return_uses_marker(sig),
+            return_by_ref: sig.by_ref_return,
             entry_symbol: entry_symbol.clone(),
         });
     }
+}
+
+/// Returns the actual ABI return representation of an emitted method symbol.
+///
+/// Class metadata may retain a checker-facing interface or union contract while
+/// the emitted EIR function returns a concrete object or scalar representation.
+/// The eval bridge must box the latter, because it receives the raw ABI result.
+/// `entry_symbol` is the physical entry the bridge calls (an adapter when the source method
+/// needed one), so the lookup follows the function that is actually invoked.
+fn emitted_method_return_type(
+    module: &Module,
+    entry_symbol: &str,
+    signature: &crate::types::FunctionSig,
+) -> PhpType {
+    module
+        .class_methods
+        .iter()
+        .find(|function| function.name == entry_symbol)
+        .map(|function| crate::types::mixed_box_php_type(&function.return_php_type))
+        .unwrap_or_else(|| crate::types::mixed_box_php_type(&signature.return_type))
 }
 
 /// Returns whether a compiled by-value method publishes the private ownership marker.
@@ -680,6 +770,20 @@ fn emit_static_method_call_x86_64(
     emitter.instruction("ret");                                                 // return the boxed static method result to Rust
 }
 
+/// Branches on AArch64 zero through an unconditional branch with the wider displacement range.
+fn emit_aarch64_branch_if_zero_far(emitter: &mut Emitter, reg: &str, label: &str) {
+    emitter.instruction(&format!("cbnz {}, 1f", reg));                          // skip the far failure branch when the tested value is nonzero
+    emitter.instruction(&format!("b {}", label));                               // reach the shared failure tail through the wider branch encoding
+    emitter.label("1");
+}
+
+/// Branches on AArch64 inequality through an unconditional branch with wider reach.
+fn emit_aarch64_branch_if_not_equal_far(emitter: &mut Emitter, label: &str) {
+    emitter.instruction("b.eq 1f");                                             // skip the far failure branch when the compared values are equal
+    emitter.instruction(&format!("b {}", label));                               // reach the shared failure tail through the wider branch encoding
+    emitter.label("1");
+}
+
 /// Emits the ARM64 method-call helper body.
 fn emit_method_call_aarch64(
     module: &Module,
@@ -700,10 +804,10 @@ fn emit_method_call_aarch64(
     emitter.instruction("str x4, [sp, #32]");                                   // save the active eval class-scope pointer
     emitter.instruction("str x5, [sp, #40]");                                   // save the active eval class-scope length
     emitter.instruction("str x6, [sp, #64]");                                   // save the active eval context for callable descriptors
-    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // null Mixed receiver cannot dispatch a method
+    emit_aarch64_branch_if_zero_far(emitter, "x0", fail_label);
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // non-object receivers cannot dispatch instance methods
+    emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for method calls
     emit_aarch64_builtin_throwable_method_dispatch(
         module,
@@ -713,7 +817,7 @@ fn emit_method_call_aarch64(
     );
     emit_aarch64_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("b {}", fail_label));                          // no supported method matched the request
-    emit_aarch64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
+    emit_aarch64_builtin_throwable_method_bodies(module, emitter, data, done_label, fail_label);
     emit_aarch64_method_bodies(
         module,
         emitter,
@@ -767,7 +871,7 @@ fn emit_method_call_x86_64(
     );
     emit_x86_64_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported method matched the request
-    emit_x86_64_builtin_throwable_method_bodies(module, emitter, done_label, fail_label);
+    emit_x86_64_builtin_throwable_method_bodies(module, emitter, data, done_label, fail_label);
     emit_x86_64_method_bodies(
         module,
         emitter,
@@ -816,7 +920,8 @@ fn emit_aarch64_method_exception_boundary_pop(emitter: &mut Emitter, handler_off
     emitter.comment("pop eval method exception boundary");
     emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset));       // reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(                                               // reload the saved diagnostic suppression depth
+    emit_native_handler_pop_trace(emitter, 1, "x10");
+    emitter.instruction(&format!(
         "ldr x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
     ));
@@ -861,11 +966,31 @@ fn emit_x86_64_method_exception_boundary_pop(emitter: &mut Emitter, handler_base
         &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
     );
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(                                               // reload the saved diagnostic suppression depth
+    emit_native_handler_pop_trace(emitter, 1, "r10");
+    emitter.instruction(&format!(
         "mov r10, QWORD PTR [rbp - {}]",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
     ));
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+}
+
+/// Emits an opt-in native boundary-pop trace while preserving the boxed result.
+fn emit_native_handler_pop_trace(emitter: &mut Emitter, site: i64, top_reg: &str) {
+    if std::env::var_os("ELEPHC_CODEGEN_HANDLER_TRACE").is_none() {
+        return;
+    }
+    let result_reg = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, result_reg);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 3);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), site);
+    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 2), top_reg);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 3), 0);
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 4), 0);
+    let symbol = emitter
+        .target
+        .extern_symbol("__elephc_eval_trace_aot_handler_top");
+    abi::emit_call_label(emitter, &symbol);
+    abi::emit_pop_reg(emitter, result_reg);
 }
 
 /// Emits ARM64 class-id and method-name dispatch for helper method bodies.
@@ -876,18 +1001,18 @@ fn emit_aarch64_method_dispatch(
     slots: &[EvalMethodSlot],
     fail_label: &str,
 ) {
-    for (class_id, class_slots) in grouped_slots(slots) {
-        let next_label = format!("__elephc_eval_method_next_{}", class_id);
-        emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this class test
-        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for method dispatch
-        abi::emit_load_int_immediate(emitter, "x10", class_id as i64);
-        emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this eval bridge class
-        emitter.instruction(&format!("b.ne {}", next_label));                   // try the next class when ids differ
-        for slot in class_slots {
+    let groups = grouped_slots(slots).into_iter().collect::<Vec<_>>();
+    let ids = groups.iter().map(|(class_id, _)| *class_id).collect::<Vec<_>>();
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("ldr {}, [sp, #16]", reg));                // reload the unboxed object pointer before this class test
+        emitter.instruction(&format!("ldr {0}, [{0}]", reg));                   // load the receiver class id for method dispatch
+    };
+    let switch = ClassIdSwitch { load_id: &load_id, stem: "__elephc_eval_method", suffix: "" };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, index| {
+        for slot in &groups[index].1 {
             emit_aarch64_method_name_compare(module, emitter, data, slot, fail_label);
         }
-        emitter.label(&next_label);
-    }
+    });
 }
 
 /// Emits x86_64 class-id and method-name dispatch for helper method bodies.
@@ -898,18 +1023,18 @@ fn emit_x86_64_method_dispatch(
     slots: &[EvalMethodSlot],
     fail_label: &str,
 ) {
-    for (class_id, class_slots) in grouped_slots(slots) {
-        let next_label = format!("__elephc_eval_method_next_{}_x", class_id);
-        emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this class test
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for method dispatch
-        abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
-        emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this eval bridge class
-        emitter.instruction(&format!("jne {}", next_label));                    // try the next class when ids differ
-        for slot in class_slots {
+    let groups = grouped_slots(slots).into_iter().collect::<Vec<_>>();
+    let ids = groups.iter().map(|(class_id, _)| *class_id).collect::<Vec<_>>();
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("mov {}, QWORD PTR [rbp - 24]", reg));     // reload the unboxed object pointer before this class test
+        emitter.instruction(&format!("mov {0}, QWORD PTR [{0}]", reg));         // load the receiver class id for method dispatch
+    };
+    let switch = ClassIdSwitch { load_id: &load_id, stem: "__elephc_eval_method", suffix: "_x" };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, index| {
+        for slot in &groups[index].1 {
             emit_x86_64_method_name_compare(module, emitter, data, slot, fail_label);
         }
-        emitter.label(&next_label);
-    }
+    });
 }
 
 /// Emits ARM64 class-name and method-name dispatch for static method helper bodies.
@@ -991,35 +1116,38 @@ fn emit_aarch64_builtin_throwable_method_dispatch(
     data: &mut DataSection,
     class_ids: &[u64],
 ) {
-    for class_id in class_ids {
-        let next_label = format!("__elephc_eval_builtin_throwable_method_next_{}", class_id);
-        emitter.instruction("ldr x9, [sp, #16]");                               // reload the unboxed object pointer before this builtin Throwable test
-        emitter.instruction("ldr x9, [x9]");                                    // load the receiver class id for builtin Throwable dispatch
-        abi::emit_load_int_immediate(emitter, "x10", *class_id as i64);
-        emitter.instruction("cmp x9, x10");                                     // compare receiver class id against this builtin Throwable class
-        emitter.instruction(&format!("b.ne {}", next_label));                   // try the next builtin Throwable class when ids differ
-        emit_aarch64_builtin_throwable_method_name_branch(
-            module,
-            emitter,
-            data,
-            "getmessage",
-            BUILTIN_THROWABLE_GET_MESSAGE_LABEL,
-        );
-        emit_aarch64_builtin_throwable_method_name_branch(
-            module,
-            emitter,
-            data,
-            "getcode",
-            BUILTIN_THROWABLE_GET_CODE_LABEL,
-        );
-        emit_aarch64_builtin_throwable_method_name_branch(
-            module, emitter, data, "getprevious", BUILTIN_THROWABLE_GET_PREVIOUS_LABEL,
-        );
-        for (method, label) in [("getfile", "__elephc_eval_throwable_file"), ("getline", "__elephc_eval_throwable_line")] {
+    let ids = super::eval_constructor_helpers::sorted_class_ids(class_ids);
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("ldr {}, [sp, #16]", reg));                // reload the unboxed object pointer before this builtin Throwable test
+        emitter.instruction(&format!("ldr {0}, [{0}]", reg));                   // load the receiver class id for builtin Throwable dispatch
+    };
+    let switch = ClassIdSwitch {
+        load_id: &load_id,
+        stem: "__elephc_eval_builtin_throwable_method",
+        suffix: "",
+    };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, _| {
+        for (method, label, _, _) in BUILTIN_THROWABLE_SCALAR_GETTERS {
             emit_aarch64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
         }
-        emitter.label(&next_label);
-    }
+        for (method, label) in BUILTIN_THROWABLE_SYNTHETIC_GETTERS {
+            emit_aarch64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
+        }
+        let (previous_method, previous_label) = BUILTIN_THROWABLE_GET_PREVIOUS;
+        emit_aarch64_builtin_throwable_method_name_branch(
+            module,
+            emitter,
+            data,
+            previous_method,
+            previous_label,
+        );
+        for (method, label) in [
+            ("getfile", "__elephc_eval_throwable_file"),
+            ("getline", "__elephc_eval_throwable_line"),
+        ] {
+            emit_aarch64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
+        }
+    });
 }
 
 /// Emits x86_64 class-id and method-name dispatch for compact Throwable methods.
@@ -1029,35 +1157,38 @@ fn emit_x86_64_builtin_throwable_method_dispatch(
     data: &mut DataSection,
     class_ids: &[u64],
 ) {
-    for class_id in class_ids {
-        let next_label = format!("__elephc_eval_builtin_throwable_method_next_{}_x", class_id);
-        emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                   // reload the unboxed object pointer before this builtin Throwable test
-        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the receiver class id for builtin Throwable dispatch
-        abi::emit_load_int_immediate(emitter, "r10", *class_id as i64);
-        emitter.instruction("cmp r11, r10");                                    // compare receiver class id against this builtin Throwable class
-        emitter.instruction(&format!("jne {}", next_label));                    // try the next builtin Throwable class when ids differ
-        emit_x86_64_builtin_throwable_method_name_branch(
-            module,
-            emitter,
-            data,
-            "getmessage",
-            BUILTIN_THROWABLE_GET_MESSAGE_LABEL,
-        );
-        emit_x86_64_builtin_throwable_method_name_branch(
-            module,
-            emitter,
-            data,
-            "getcode",
-            BUILTIN_THROWABLE_GET_CODE_LABEL,
-        );
-        emit_x86_64_builtin_throwable_method_name_branch(
-            module, emitter, data, "getprevious", BUILTIN_THROWABLE_GET_PREVIOUS_LABEL,
-        );
-        for (method, label) in [("getfile", "__elephc_eval_throwable_file"), ("getline", "__elephc_eval_throwable_line")] {
+    let ids = super::eval_constructor_helpers::sorted_class_ids(class_ids);
+    let load_id = |emitter: &mut Emitter, reg: &str| {
+        emitter.instruction(&format!("mov {}, QWORD PTR [rbp - 24]", reg));     // reload the unboxed object pointer before this builtin Throwable test
+        emitter.instruction(&format!("mov {0}, QWORD PTR [{0}]", reg));         // load the receiver class id for builtin Throwable dispatch
+    };
+    let switch = ClassIdSwitch {
+        load_id: &load_id,
+        stem: "__elephc_eval_builtin_throwable_method",
+        suffix: "_x",
+    };
+    emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, _| {
+        for (method, label, _, _) in BUILTIN_THROWABLE_SCALAR_GETTERS {
             emit_x86_64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
         }
-        emitter.label(&next_label);
-    }
+        for (method, label) in BUILTIN_THROWABLE_SYNTHETIC_GETTERS {
+            emit_x86_64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
+        }
+        let (previous_method, previous_label) = BUILTIN_THROWABLE_GET_PREVIOUS;
+        emit_x86_64_builtin_throwable_method_name_branch(
+            module,
+            emitter,
+            data,
+            previous_method,
+            previous_label,
+        );
+        for (method, label) in [
+            ("getfile", "__elephc_eval_throwable_file"),
+            ("getline", "__elephc_eval_throwable_line"),
+        ] {
+            emit_x86_64_builtin_throwable_method_name_branch(module, emitter, data, method, label);
+        }
+    });
 }
 
 /// Emits one ARM64 method-name comparison for a compact Throwable method.
@@ -1074,7 +1205,7 @@ fn emit_aarch64_builtin_throwable_method_name_branch(
     abi::emit_symbol_address(emitter, "x3", &label);
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
     emitter.instruction("bl __rt_strcasecmp");                                  // compare Throwable method names with PHP case-insensitive rules
-    emitter.instruction(&format!("cbz x0, {}", target_label));                  // dispatch to the compact Throwable method when names match
+    emit_aarch64_branch_if_zero_far(emitter, "x0", target_label);               // dispatch to the compact Throwable method when names match
 }
 
 /// Emits one x86_64 method-name comparison for a compact Throwable method.
@@ -1111,7 +1242,7 @@ fn emit_aarch64_method_name_compare(
     emitter.instruction("bl __rt_strcasecmp");                                  // compare method names with PHP case-insensitive rules
     let target_label = method_body_label(module, slot);
     if matches!(slot.visibility, Visibility::Public) {
-        emitter.instruction(&format!("cbz x0, {}", target_label));              // dispatch to the method body when the names match
+        emit_aarch64_branch_if_zero_far(emitter, "x0", &target_label);         // dispatch to the method body when the names match
         return;
     }
     let miss_label = method_access_miss_label(module, slot);
@@ -1186,7 +1317,7 @@ fn emit_aarch64_static_method_name_compare(
     emitter.instruction("bl __rt_strcasecmp");                                  // compare static method names with PHP case-insensitive rules
     let target_label = static_method_body_label(module, slot);
     if matches!(slot.visibility, Visibility::Public) {
-        emitter.instruction(&format!("cbz x0, {}", target_label));              // dispatch to the static method body when the names match
+        emit_aarch64_branch_if_zero_far(emitter, "x0", &target_label);         // dispatch to the static method body when the names match
         return;
     }
     let miss_label = static_method_access_miss_label(module, slot);
@@ -1233,17 +1364,29 @@ fn emit_aarch64_method_scope_check(
     let (scope_ptr_offset, scope_len_offset) = aarch64_method_scope_offsets(is_static);
     emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));       // reload the active eval class-scope pointer
     emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));       // reload the active eval class-scope length
-    emitter.instruction(&format!("cbz x1, {}", fail_label));                    // reject scoped method access outside a class scope
+    emit_aarch64_branch_if_zero_far(emitter, "x1", fail_label);
+    // The scope list is a data table walked by the shared `__rt_eval_scope_allowed`; unrolled
+    // inline it cost one `strcasecmp` per related class at every arm, three million arms over
+    // Symfony's compiled container.
+    let table = eval_scope_table_label(data, allowed_scopes);
+    abi::emit_symbol_address(emitter, "x3", &table);
+    emitter.instruction("bl __rt_eval_scope_allowed");                          // test the active scope against the member's allowed classes
+    emit_aarch64_branch_if_zero_far(emitter, "x0", fail_label);
+    emitter.instruction(&format!("b {}", success_label));                       // dispatch when scoped visibility is satisfied
+}
+
+/// Builds the deduplicated `[count, ptr, len, ...]` table of class names that may see a member,
+/// the operand of the shared `__rt_eval_scope_allowed` loop.
+pub(super) fn eval_scope_table_label(data: &mut DataSection, allowed_scopes: &[String]) -> String {
+    use crate::codegen_support::data_section::DataWord;
+    let mut words = Vec::with_capacity(1 + allowed_scopes.len() * 2);
+    words.push(DataWord::U64(allowed_scopes.len() as u64));
     for scope_name in allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));   // reload the active eval class-scope pointer
-        emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));   // reload the active eval class-scope length
-        abi::emit_symbol_address(emitter, "x3", &label);
-        abi::emit_load_int_immediate(emitter, "x4", len as i64);
-        emitter.instruction("bl __rt_strcasecmp");                              // compare current eval scope with an allowed class
-        emitter.instruction(&format!("cbz x0, {}", success_label));             // dispatch when scoped visibility is satisfied
+        words.push(DataWord::Symbol(label));
+        words.push(DataWord::U64(len as u64));
     }
-    emitter.instruction(&format!("b {}", fail_label));                          // reject scoped method access from unrelated classes
+    data.add_words(words)
 }
 
 /// Emits x86_64 visibility checks for a protected/private method bridge hit.
@@ -1264,21 +1407,12 @@ fn emit_x86_64_method_scope_check(
     );
     emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
     emitter.instruction(&format!("jz {}", fail_label));                         // reject scoped method access outside a class scope
-    for scope_name in allowed_scopes {
-        let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction(                                                    // reload the active eval class-scope pointer
-            &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
-        );
-        emitter.instruction(                                                    // reload the active eval class-scope length
-            &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
-        );
-        abi::emit_symbol_address(emitter, "rdx", &label);
-        abi::emit_load_int_immediate(emitter, "rcx", len as i64);
-        emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class
-        emitter.instruction("test rax, rax");                                   // check whether the current scope matched
-        emitter.instruction(&format!("je {}", success_label));                  // dispatch when scoped visibility is satisfied
-    }
-    emitter.instruction(&format!("jmp {}", fail_label));                        // reject scoped method access from unrelated classes
+    let table = eval_scope_table_label(data, allowed_scopes);
+    abi::emit_symbol_address(emitter, "rdx", &table);
+    emitter.instruction("call __rt_eval_scope_allowed");                        // test the active scope against the member's allowed classes
+    emitter.instruction("test rax, rax");                                       // did any allowed class match?
+    emitter.instruction(&format!("jz {}", fail_label));                         // reject scoped method access from unrelated classes
+    emitter.instruction(&format!("jmp {}", success_label));                     // dispatch when scoped visibility is satisfied
 }
 
 /// Returns ARM64 stack offsets for method class-scope pointer and length.
@@ -1303,55 +1437,173 @@ fn x86_64_method_scope_offsets(is_static: bool) -> (usize, usize) {
 fn emit_aarch64_builtin_throwable_method_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     done_label: &str,
     fail_label: &str,
 ) {
-    emitter.label(BUILTIN_THROWABLE_GET_MESSAGE_LABEL);
-    emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for getMessage()
-    emitter.instruction("ldr x1, [x9, #8]");                                    // load Throwable message pointer
-    emitter.instruction("ldr x2, [x9, #16]");                                   // load Throwable message length
-    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the Throwable message as a Mixed string
-    emitter.instruction(&format!("b {}", done_label));                          // return the boxed Throwable method result
-
-    emitter.label(BUILTIN_THROWABLE_GET_CODE_LABEL);
-    emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for getCode()
-    emitter.instruction("ldr x1, [x9, #24]");                                   // load Throwable integer code
-    emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
-    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the Throwable code as a Mixed integer
-    emitter.instruction(&format!("b {}", done_label));                          // return the boxed Throwable method result
-    emit_builtin_throwable_previous_body(module, emitter, done_label, fail_label);
+    for (_, label, offset, string_field) in BUILTIN_THROWABLE_SCALAR_GETTERS {
+        emitter.label(label);
+        emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+        emitter.instruction("ldr x9, [sp, #16]");                               // reload the Throwable receiver before reading its declared property
+        abi::emit_load_from_address(emitter, "x1", "x9", *offset);
+        if *string_field {
+            abi::emit_load_from_address(emitter, "x2", "x9", offset + 8);
+        } else {
+            abi::emit_load_int_immediate(emitter, "x2", 0);
+        }
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::from(*string_field));
+        abi::emit_call_label(emitter, "__rt_mixed_from_value");
+        abi::emit_jump(emitter, done_label);
+    }
+    for (method, label) in BUILTIN_THROWABLE_SYNTHETIC_GETTERS {
+        emitter.label(label);
+        emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+        if *method == "gettrace" {
+            // A trace recorded at creation lives in the declared `trace` slot and is boxed
+            // borrowed (the box takes its own reference). Otherwise the same empty indexed
+            // array `lower_throwable_empty_trace_array` builds: runtime tag 4, capacity 8,
+            // value type Mixed.
+            let stored_label = format!("{label}_stored");
+            emitter.instruction("ldr x9, [sp, #16]");                           // reload the Throwable receiver before reading its trace slot
+            abi::emit_load_from_address(
+                emitter,
+                "x1",
+                "x9",
+                crate::codegen_support::throwable_layout::TRACE_OFFSET,
+            );
+            emitter.instruction(&format!("cbnz x1, {stored_label}"));           // a recorded trace is returned as it is
+            abi::emit_load_int_immediate(emitter, "x0", 4);
+            abi::emit_load_int_immediate(emitter, "x1", 8);
+            abi::emit_call_label(emitter, "__rt_array_new");
+            crate::codegen::emit_array_value_type_stamp(
+                emitter,
+                abi::int_result_reg(emitter),
+                &PhpType::Mixed,
+            );
+            emitter.instruction("mov x1, x0");                                  // move the fresh array into the Mixed payload word
+            emitter.label(&stored_label);
+            abi::emit_load_int_immediate(emitter, "x0", 4);
+            abi::emit_load_int_immediate(emitter, "x2", 0);
+        } else {
+            let (string_label, string_len) = data.add_string(b"");
+            abi::emit_symbol_address(emitter, "x1", &string_label);
+            abi::emit_load_int_immediate(emitter, "x2", string_len as i64);
+            abi::emit_load_int_immediate(emitter, "x0", 1);
+        }
+        abi::emit_call_label(emitter, "__rt_mixed_from_value");
+        abi::emit_jump(emitter, done_label);
+    }
+    emit_aarch64_builtin_throwable_get_previous_body(module, emitter, done_label, fail_label);
     emit_builtin_throwable_location_bodies(module, emitter, done_label, fail_label);
+}
+
+/// Emits the ARM64 `Throwable::getPrevious()` bridge body.
+///
+/// Mirrors `lower_inst::throwable_methods::lower_throwable_get_previous`: an empty slot answers
+/// null, heap kind 5 means the compiled constructor already boxed the previous and the cell is
+/// handed back retained, and anything else is the raw object pointer the eval bridge stores.
+fn emit_aarch64_builtin_throwable_get_previous_body(
+    module: &Module,
+    emitter: &mut Emitter,
+    done_label: &str,
+    fail_label: &str,
+) {
+    let (_, label) = BUILTIN_THROWABLE_GET_PREVIOUS;
+    let boxed_label = format!("{}_boxed", label);
+    let null_label = format!("{}_null", label);
+    emitter.label(label);
+    emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the Throwable receiver before reading its previous slot
+    abi::emit_load_from_address(
+        emitter,
+        "x0",
+        "x9",
+        crate::codegen_support::throwable_layout::PREVIOUS_OFFSET,
+    );
+    emitter.instruction(&format!("cbz x0, {}", null_label));                    // an empty slot is a missing previous
+    emitter.instruction("str x0, [sp, #-16]!");                                 // preserve the slot across the kind probe
+    abi::emit_call_label(emitter, "__rt_heap_kind");
+    emitter.instruction("mov x11, x0");                                         // heap kind of the stored value
+    emitter.instruction("ldr x0, [sp], #16");                                   // restore the stored value
+    emitter.instruction("cmp x11, #5");                                         // kind 5 = boxed Mixed cell
+    emitter.instruction(&format!("b.eq {}", boxed_label));
+    emitter.instruction("mov x1, x0");                                          // raw object pointer becomes the Mixed payload word
+    abi::emit_load_int_immediate(emitter, "x2", 0);
+    abi::emit_load_int_immediate(emitter, "x0", 6);                             // runtime tag 6 = object; the helper retains the payload
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");
+    abi::emit_jump(emitter, done_label);
+
+    emitter.label(&boxed_label);
+    abi::emit_call_label(emitter, "__rt_incref");                               // boxed cell: retain and hand the same cell back
+    abi::emit_jump(emitter, done_label);
+
+    emitter.label(&null_label);
+    abi::emit_load_int_immediate(emitter, "x1", 0);
+    abi::emit_load_int_immediate(emitter, "x2", 0);
+    abi::emit_load_int_immediate(emitter, "x0", 8);                             // runtime tag 8 = null
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");
+    abi::emit_jump(emitter, done_label);
 }
 
 /// Emits x86_64 bodies for compact Throwable methods used by eval.
 fn emit_x86_64_builtin_throwable_method_bodies(
     module: &Module,
     emitter: &mut Emitter,
+    data: &mut DataSection,
     done_label: &str,
     fail_label: &str,
 ) {
-    emitter.label(BUILTIN_THROWABLE_GET_MESSAGE_LABEL);
-    emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for getMessage()
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // load Throwable message pointer
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // load Throwable message length
-    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
-    emitter.instruction("call __rt_mixed_from_value");                          // box the Throwable message as a Mixed string
-    emitter.instruction(&format!("jmp {}", done_label));                        // return the boxed Throwable method result
-
-    emitter.label(BUILTIN_THROWABLE_GET_CODE_LABEL);
-    emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for getCode()
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 24]");                       // load Throwable integer code
-    emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
-    emitter.instruction("xor eax, eax");                                        // runtime tag 0 = integer
-    emitter.instruction("call __rt_mixed_from_value");                          // box the Throwable code as a Mixed integer
-    emitter.instruction(&format!("jmp {}", done_label));                        // return the boxed Throwable method result
-    emit_builtin_throwable_previous_body(module, emitter, done_label, fail_label);
+    for (_, label, offset, string_field) in BUILTIN_THROWABLE_SCALAR_GETTERS {
+        emitter.label(label);
+        emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+        emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                   // reload the Throwable receiver before reading its declared property
+        abi::emit_load_from_address(emitter, "rdi", "r10", *offset);
+        if *string_field {
+            abi::emit_load_from_address(emitter, "rsi", "r10", offset + 8);
+        } else {
+            abi::emit_load_int_immediate(emitter, "rsi", 0);
+        }
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), i64::from(*string_field));
+        abi::emit_call_label(emitter, "__rt_mixed_from_value");
+        abi::emit_jump(emitter, done_label);
+    }
+    for (method, label) in BUILTIN_THROWABLE_SYNTHETIC_GETTERS {
+        emitter.label(label);
+        emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+        if *method == "gettrace" {
+            // See the ARM64 body: a recorded trace, or the empty array the intrinsic builds.
+            let stored_label = format!("{label}_stored");
+            emitter.instruction("mov r10, QWORD PTR [rbp - 24]");               // reload the Throwable receiver before reading its trace slot
+            abi::emit_load_from_address(
+                emitter,
+                "rdi",
+                "r10",
+                crate::codegen_support::throwable_layout::TRACE_OFFSET,
+            );
+            emitter.instruction("test rdi, rdi");                               // was a trace recorded at creation?
+            emitter.instruction(&format!("jnz {stored_label}"));                // a recorded trace is returned as it is
+            abi::emit_load_int_immediate(emitter, "rdi", 4);
+            abi::emit_load_int_immediate(emitter, "rsi", 8);
+            abi::emit_call_label(emitter, "__rt_array_new");
+            crate::codegen::emit_array_value_type_stamp(
+                emitter,
+                abi::int_result_reg(emitter),
+                &PhpType::Mixed,
+            );
+            emitter.instruction("mov rdi, rax");                                // move the fresh array into the Mixed payload word
+            emitter.label(&stored_label);
+            abi::emit_load_int_immediate(emitter, "rsi", 0);
+            abi::emit_load_int_immediate(emitter, "rax", 4);
+        } else {
+            let (string_label, string_len) = data.add_string(b"");
+            abi::emit_symbol_address(emitter, "rdi", &string_label);
+            abi::emit_load_int_immediate(emitter, "rsi", string_len as i64);
+            abi::emit_load_int_immediate(emitter, "rax", 1);
+        }
+        abi::emit_call_label(emitter, "__rt_mixed_from_value");
+        abi::emit_jump(emitter, done_label);
+    }
+    emit_x86_64_builtin_throwable_get_previous_body(module, emitter, done_label, fail_label);
     emit_builtin_throwable_location_bodies(module, emitter, done_label, fail_label);
 }
 
@@ -1384,31 +1636,50 @@ fn emit_builtin_throwable_location_bodies(
     }
 }
 
-/// Boxes a borrowed previous link independently so retiring the outer exception cannot invalidate it.
-fn emit_builtin_throwable_previous_body(
+/// Emits the x86_64 `Throwable::getPrevious()` bridge body. See the ARM64 body for the shapes.
+fn emit_x86_64_builtin_throwable_get_previous_body(
     module: &Module,
     emitter: &mut Emitter,
     done_label: &str,
     fail_label: &str,
 ) {
-    let null_label = "__elephc_eval_builtin_throwable_previous_null";
-    emitter.label(BUILTIN_THROWABLE_GET_PREVIOUS_LABEL);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emit_aarch64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
-            emitter.instruction("ldr x0, [sp, #16]");                           // borrow the compact outer exception for previous-link lookup
-        }
-        Arch::X86_64 => {
-            emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
-            emitter.instruction("mov rax, QWORD PTR [rbp - 24]");               // borrow the compact outer exception for previous-link lookup
-        }
-    }
-    abi::emit_call_label(emitter, "__rt_throwable_previous");
-    abi::emit_branch_if_int_result_zero(emitter, null_label);
-    emit_box_current_value_as_mixed(emitter, &PhpType::Object("Throwable".to_string()));
+    let (_, label) = BUILTIN_THROWABLE_GET_PREVIOUS;
+    let boxed_label = format!("{}_boxed_x", label);
+    let null_label = format!("{}_null_x", label);
+    emitter.label(label);
+    emit_x86_64_validate_builtin_throwable_method_arg_count(module, emitter, fail_label);
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the Throwable receiver before reading its previous slot
+    abi::emit_load_from_address(
+        emitter,
+        "rax",
+        "r10",
+        crate::codegen_support::throwable_layout::PREVIOUS_OFFSET,
+    );
+    emitter.instruction("test rax, rax");                                       // an empty slot is a missing previous
+    emitter.instruction(&format!("jz {}", null_label));
+    emitter.instruction("push rax");                                            // preserve the slot across the kind probe
+    emitter.instruction("sub rsp, 8");                                          // keep the stack 16-byte aligned for the call
+    abi::emit_call_label(emitter, "__rt_heap_kind");
+    emitter.instruction("mov r11, rax");                                        // heap kind of the stored value
+    emitter.instruction("add rsp, 8");                                          // undo the alignment padding
+    emitter.instruction("pop rax");                                             // restore the stored value
+    emitter.instruction("cmp r11, 5");                                          // kind 5 = boxed Mixed cell
+    emitter.instruction(&format!("je {}", boxed_label));
+    emitter.instruction("mov rdi, rax");                                        // raw object pointer becomes the Mixed payload word
+    abi::emit_load_int_immediate(emitter, "rsi", 0);
+    abi::emit_load_int_immediate(emitter, "rax", 6);                            // runtime tag 6 = object; the helper retains the payload
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");
     abi::emit_jump(emitter, done_label);
-    emitter.label(null_label);
-    emit_box_current_value_as_mixed(emitter, &PhpType::Void);
+
+    emitter.label(&boxed_label);
+    abi::emit_call_label(emitter, "__rt_incref");                               // boxed cell: retain and hand the same cell back
+    abi::emit_jump(emitter, done_label);
+
+    emitter.label(&null_label);
+    abi::emit_load_int_immediate(emitter, "rdi", 0);
+    abi::emit_load_int_immediate(emitter, "rsi", 0);
+    abi::emit_load_int_immediate(emitter, "rax", 8);                            // runtime tag 8 = null
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");
     abi::emit_jump(emitter, done_label);
 }
 
@@ -1422,7 +1693,7 @@ fn emit_aarch64_validate_builtin_throwable_method_arg_count(
     let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     emitter.instruction("cmp x0, #0");                                          // compact Throwable methods accept no eval arguments
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject unsupported Throwable method arguments from eval
+    emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
 }
 
 /// Emits x86_64 zero-argument validation for compact Throwable eval methods.
@@ -1453,6 +1724,8 @@ fn emit_aarch64_method_bodies(
         let prep_fail_label = format!("{}_prep_fail", body_label);
         emitter.label(&body_label);
         emit_aarch64_validate_method_arg_count(module, emitter, slot, fail_label);
+        let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
+        super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
         let (arg_temp_bytes, ref_slots) =
             emit_aarch64_prepare_method_args(
                 module,
@@ -1488,17 +1761,21 @@ fn emit_aarch64_method_bodies(
         } else {
             EvalMethodResultSource::CompiledInstance
         };
+        if slot.return_by_ref {
+            emit_load_by_ref_method_result(emitter, &slot.return_ty);
+        }
         emit_box_method_result(
             module,
             emitter,
             &slot.return_ty,
-            slot.return_is_owned,
-            slot.return_uses_marker,
+            slot.return_is_owned && !slot.return_by_ref,
+            slot.return_uses_marker && !slot.return_by_ref,
             result_source,
             &body_label,
         );
         preserve_result_and_write_back_aarch64_ref_args(emitter, &ref_slots, &body_label);
         emit_aarch64_method_exception_boundary_pop(emitter, METHOD_HELPER_HANDLER_OFFSET - 48);
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), true);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native method result
         emitter.label(&escape_label);
         abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1506,6 +1783,7 @@ fn emit_aarch64_method_bodies(
         emit_aarch64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
         abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
         emit_aarch64_method_exception_boundary_pop(emitter, METHOD_HELPER_HANDLER_OFFSET - 48);
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
         emitter.instruction(&format!("b {}", fail_label));                      // return failure after preserving by-reference writes
         emitter.label(&prep_fail_label);
         emit_aarch64_method_prep_fail_cleanup(emitter, 48, fail_label);
@@ -1527,6 +1805,8 @@ fn emit_x86_64_method_bodies(
         let prep_fail_label = format!("{}_prep_fail_x", body_label);
         emitter.label(&body_label);
         emit_x86_64_validate_method_arg_count(module, emitter, slot, fail_label);
+        let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
+        super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
         let (arg_temp_bytes, ref_slots) =
             emit_x86_64_prepare_method_args(
                 module,
@@ -1558,17 +1838,21 @@ fn emit_x86_64_method_bodies(
         } else {
             EvalMethodResultSource::CompiledInstance
         };
+        if slot.return_by_ref {
+            emit_load_by_ref_method_result(emitter, &slot.return_ty);
+        }
         emit_box_method_result(
             module,
             emitter,
             &slot.return_ty,
-            slot.return_is_owned,
-            slot.return_uses_marker,
+            slot.return_is_owned && !slot.return_by_ref,
+            slot.return_uses_marker && !slot.return_by_ref,
             result_source,
             &body_label,
         );
         preserve_result_and_write_back_x86_64_ref_args(emitter, &ref_slots, &body_label);
         emit_x86_64_method_exception_boundary_pop(emitter, METHOD_HELPER_FRAME_SIZE);
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), true);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native method result
         emitter.label(&escape_label);
         abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1576,6 +1860,7 @@ fn emit_x86_64_method_bodies(
         emit_x86_64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
         abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
         emit_x86_64_method_exception_boundary_pop(emitter, METHOD_HELPER_FRAME_SIZE);
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
         emitter.instruction(&format!("jmp {}", fail_label));                    // return failure after preserving by-reference writes
         emitter.label(&prep_fail_label);
         emit_x86_64_method_prep_fail_cleanup(emitter, fail_label);
@@ -1597,6 +1882,8 @@ fn emit_aarch64_static_method_bodies(
         let prep_fail_label = format!("{}_prep_fail", body_label);
         emitter.label(&body_label);
         emit_aarch64_validate_static_method_arg_count(module, emitter, slot, fail_label);
+        let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
+        super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
         let (arg_temp_bytes, ref_slots) =
             emit_aarch64_prepare_static_method_args(
                 module,
@@ -1620,12 +1907,15 @@ fn emit_aarch64_static_method_bodies(
         abi::emit_call_label(emitter, &slot.entry_symbol);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
+        if slot.return_by_ref {
+            emit_load_by_ref_method_result(emitter, &slot.return_ty);
+        }
         emit_box_method_result(
             module,
             emitter,
             &slot.return_ty,
-            slot.return_is_owned,
-            slot.return_uses_marker,
+            slot.return_is_owned && !slot.return_by_ref,
+            slot.return_uses_marker && !slot.return_by_ref,
             EvalMethodResultSource::CompiledStatic,
             &body_label,
         );
@@ -1634,6 +1924,7 @@ fn emit_aarch64_static_method_bodies(
             emitter,
             STATIC_METHOD_HELPER_HANDLER_OFFSET - 64,
         );
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), true);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the native static method result
         emitter.label(&escape_label);
         abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1644,6 +1935,7 @@ fn emit_aarch64_static_method_bodies(
             emitter,
             STATIC_METHOD_HELPER_HANDLER_OFFSET - 64,
         );
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
         emitter.instruction(&format!("b {}", fail_label));                      // return failure after preserving by-reference writes
         emitter.label(&prep_fail_label);
         emit_aarch64_method_prep_fail_cleanup(emitter, 64, fail_label);
@@ -1665,6 +1957,8 @@ fn emit_x86_64_static_method_bodies(
         let prep_fail_label = format!("{}_prep_fail_x", body_label);
         emitter.label(&body_label);
         emit_x86_64_validate_static_method_arg_count(module, emitter, slot, fail_label);
+        let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
+        super::eval_argument_helpers::emit_reserve_callable_arg_owners(emitter, callable_owners.len());
         let (arg_temp_bytes, ref_slots) =
             emit_x86_64_prepare_static_method_args(
                 module,
@@ -1688,17 +1982,21 @@ fn emit_x86_64_static_method_bodies(
         abi::emit_call_label(emitter, &slot.entry_symbol);
         abi::emit_release_temporary_stack(emitter, caller_stack_pad_bytes);
         abi::emit_release_temporary_stack(emitter, overflow_bytes);
+        if slot.return_by_ref {
+            emit_load_by_ref_method_result(emitter, &slot.return_ty);
+        }
         emit_box_method_result(
             module,
             emitter,
             &slot.return_ty,
-            slot.return_is_owned,
-            slot.return_uses_marker,
+            slot.return_is_owned && !slot.return_by_ref,
+            slot.return_uses_marker && !slot.return_by_ref,
             EvalMethodResultSource::CompiledStatic,
             &body_label,
         );
         preserve_result_and_write_back_x86_64_ref_args(emitter, &ref_slots, &body_label);
         emit_x86_64_method_exception_boundary_pop(emitter, STATIC_METHOD_HELPER_FRAME_SIZE);
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), true);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the native static method result
         emitter.label(&escape_label);
         abi::emit_release_temporary_stack(emitter, arg_temp_bytes);
@@ -1706,6 +2004,7 @@ fn emit_x86_64_static_method_bodies(
         emit_x86_64_write_back_ref_args(emitter, &ref_slots, 0, &escape_writeback_label);
         abi::emit_release_temporary_stack(emitter, ref_slots.len() * 32);
         emit_x86_64_method_exception_boundary_pop(emitter, STATIC_METHOD_HELPER_FRAME_SIZE);
+        super::eval_argument_helpers::emit_release_callable_arg_owners(emitter, callable_owners.len(), false);
         emitter.instruction(&format!("jmp {}", fail_label));                    // return failure after preserving by-reference writes
         emitter.label(&prep_fail_label);
         emit_x86_64_method_prep_fail_cleanup(emitter, fail_label);
@@ -1740,7 +2039,7 @@ fn emit_aarch64_validate_method_arg_count(
     abi::emit_call_label(emitter, &array_len_symbol);
     abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
     emitter.instruction("cmp x0, x9");                                          // compare supplied eval argument count with the method signature
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject method dispatch when arity differs
+    emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
 }
 
 /// Emits x86_64 arity validation for one method body.
@@ -1770,7 +2069,7 @@ fn emit_aarch64_validate_static_method_arg_count(
     abi::emit_call_label(emitter, &array_len_symbol);
     abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
     emitter.instruction("cmp x0, x9");                                          // compare supplied eval argument count with the static method signature
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject static method dispatch when arity differs
+    emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
 }
 
 /// Emits x86_64 arity validation for one static method body.
@@ -1810,6 +2109,8 @@ fn emit_aarch64_prepare_method_args(
         callable_support,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
+    // The body reserved one zeroed owner slot per by-value callable below the ref cells.
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("ldr x0, [x29, #-32]");                                 // load the unboxed receiver as the first method argument
     abi::emit_push_result_value(emitter, &receiver_ty);
@@ -1830,6 +2131,12 @@ fn emit_aarch64_prepare_method_args(
                     module, emitter, data, param_ty, &label_prefix, fail_label, callable_support,
                 );
             }
+            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
+                emitter,
+                &callable_owners,
+                index,
+                ref_slots.len() * 32 + arg_temp_bytes,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1859,6 +2166,8 @@ fn emit_aarch64_prepare_static_method_args(
         callable_support,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
+    // The body reserved one zeroed owner slot per by-value callable below the ref cells.
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     abi::emit_load_int_immediate(emitter, "x0", slot.class_id as i64);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     let mut arg_temp_bytes = eval_arg_temp_slot_size(&PhpType::Int);
@@ -1878,6 +2187,12 @@ fn emit_aarch64_prepare_static_method_args(
                     module, emitter, data, param_ty, &label_prefix, fail_label, callable_support,
                 );
             }
+            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
+                emitter,
+                &callable_owners,
+                index,
+                ref_slots.len() * 32 + arg_temp_bytes,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1907,6 +2222,8 @@ fn emit_x86_64_prepare_method_args(
         X86_64_METHOD_CONTEXT_FRAME_OFFSET,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
+    // The body reserved one zeroed owner slot per by-value callable below the ref cells.
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the unboxed receiver as the first method argument
     abi::emit_push_result_value(emitter, &receiver_ty);
@@ -1928,6 +2245,12 @@ fn emit_x86_64_prepare_method_args(
                     X86_64_METHOD_CONTEXT_FRAME_OFFSET,
                 );
             }
+            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
+                emitter,
+                &callable_owners,
+                index,
+                ref_slots.len() * 32 + arg_temp_bytes,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -1957,6 +2280,8 @@ fn emit_x86_64_prepare_static_method_args(
         X86_64_STATIC_METHOD_CONTEXT_FRAME_OFFSET,
     );
     let visible_abi_params = eval_abi_param_types_for_refs(&slot.params, &slot.ref_params);
+    // The body reserved one zeroed owner slot per by-value callable below the ref cells.
+    let callable_owners = super::eval_argument_helpers::callable_arg_owner_params(&slot.params, &slot.ref_params);
     abi::emit_load_int_immediate(emitter, "rax", slot.class_id as i64);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     let mut arg_temp_bytes = eval_arg_temp_slot_size(&PhpType::Int);
@@ -1977,6 +2302,12 @@ fn emit_x86_64_prepare_static_method_args(
                     X86_64_STATIC_METHOD_CONTEXT_FRAME_OFFSET,
                 );
             }
+            super::eval_argument_helpers::emit_record_callable_arg_owner_for_param(
+                emitter,
+                &callable_owners,
+                index,
+                ref_slots.len() * 32 + arg_temp_bytes,
+            );
             abi::emit_push_result_value(emitter, &param_ty.codegen_repr());
         }
         arg_temp_bytes += eval_arg_temp_slot_size(&visible_abi_params[index]);
@@ -2182,6 +2513,8 @@ fn emit_aarch64_cast_eval_arg(
                 callable_support,
                 label_prefix,
                 fail_label,
+                EVAL_ARG_CONTEXT_AARCH64_OFFSET,
+                EVAL_ARG_BOXED_VALUE_AARCH64_OFFSET,
             );
         }
         PhpType::TaggedScalar => {
@@ -2194,10 +2527,10 @@ fn emit_aarch64_cast_eval_arg(
             emit_aarch64_cast_eval_object_arg(module, emitter, data, &class_name, fail_label);
         }
         PhpType::Array(_) => {
-            emit_aarch64_cast_eval_array_arg(emitter, 4, fail_label);
+            emit_aarch64_cast_eval_array_arg(emitter, 4, true, fail_label);
         }
         PhpType::AssocArray { .. } => {
-            emit_aarch64_cast_eval_array_arg(emitter, 5, fail_label);
+            emit_aarch64_cast_eval_array_arg(emitter, 5, false, fail_label);
         }
         PhpType::Iterable => {
             emit_aarch64_cast_eval_iterable_arg(module, emitter, label_prefix, fail_label);
@@ -2233,37 +2566,55 @@ fn emit_aarch64_cast_eval_object_arg(
     class_name: &str,
     fail_label: &str,
 ) {
-    if class_name.is_empty() {
-        emitter.instruction("ldr x0, [x29, #-16]");                             // a generic object hint needs only the runtime object tag
-        emitter.instruction("bl __rt_mixed_unbox");                             // expose the borrowed object payload
-        emitter.instruction("cmp x0, #6");                                      // scalars and null do not satisfy object
-        emitter.instruction(&format!("b.ne {}", fail_label));                   // reject a non-object argument
-        emitter.instruction("mov x0, x1");                                      // pass the native object pointer
-        return;
+    if !class_name.is_empty() {
+        let (label, len) = data.add_string(class_name.as_bytes());
+        let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+        emitter.instruction("ldr x0, [x29, #-16]");                             // reload the boxed eval argument for named object type validation
+        abi::emit_symbol_address(emitter, "x1", &label);
+        abi::emit_load_int_immediate(emitter, "x2", len as i64);
+        emitter.instruction("mov x3, xzr");                                     // allow exact class matches for named object type hints
+        abi::emit_call_label(emitter, &is_a_symbol);
+        emit_aarch64_branch_if_zero_far(emitter, "x0", fail_label);
     }
-    let (label, len) = data.add_string(class_name.as_bytes());
-    let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
-    emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for object type validation
-    abi::emit_symbol_address(emitter, "x1", &label);
-    abi::emit_load_int_immediate(emitter, "x2", len as i64);
-    emitter.instruction("mov x3, xzr");                                         // allow exact class matches for object type hints
-    abi::emit_call_label(emitter, &is_a_symbol);
-    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject values that fail the object type hint
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for object unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the object payload for the native method call
     emitter.instruction("cmp x0, #6");                                          // object type hints require an object payload, not a class string
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed non-object payloads
+    emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
     emitter.instruction("mov x0, x1");                                          // place the unboxed object pointer in the result register
 }
 
 /// Validates and unboxes one ARM64 array-typed eval argument for native method dispatch.
-fn emit_aarch64_cast_eval_array_arg(emitter: &mut Emitter, expected_tag: i64, fail_label: &str) {
+///
+/// A PHP `array` parameter accepts both runtime storage shapes; an internally associative
+/// parameter still requires its hash representation so its native body can use hash operations.
+fn emit_aarch64_cast_eval_array_arg(
+    emitter: &mut Emitter,
+    expected_tag: i64,
+    allow_assoc_shape: bool,
+    fail_label: &str,
+) {
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the array payload for the native method call
+    // A null reaching an array slot here is a parameter DEFAULT (binding type-checks every
+    // argument the caller passed): `$default = null` in storage adopted from an ancestor's
+    // hidden variadic. Compiled callers pass that default as a null pointer, so this does too.
+    emitter.instruction("cmp x0, #8");                                          // runtime tag 8 means the defaulted argument is null
+    emitter.instruction("b.eq 3f");                                             // pass the null default as a null array pointer
     abi::emit_load_int_immediate(emitter, "x9", expected_tag);
     emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject array payloads with an incompatible ABI shape
+    if allow_assoc_shape {
+        emitter.instruction("b.eq 2f");                                         // accept the indexed representation immediately
+        emitter.instruction("cmp x0, #5");                                      // generic PHP arrays also accept associative storage
+        emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
+        emitter.label("2");
+    } else {
+        emit_aarch64_branch_if_not_equal_far(emitter, fail_label);
+    }
     emitter.instruction("mov x0, x1");                                          // place the unboxed array pointer in the result register
+    emitter.instruction("b 4f");                                                // skip the null-default materialization
+    emitter.label("3");
+    emitter.instruction("mov x0, #0");                                          // a null default travels as a null array pointer
+    emitter.label("4");
 }
 
 /// Validates and unboxes one ARM64 iterable-typed eval argument for native method dispatch.
@@ -2362,6 +2713,7 @@ fn emit_x86_64_cast_eval_arg(
                 label_prefix,
                 fail_label,
                 context_frame_offset,
+                EVAL_ARG_BOXED_VALUE_X86_64_OFFSET,
             );
         }
         PhpType::TaggedScalar => {
@@ -2374,10 +2726,10 @@ fn emit_x86_64_cast_eval_arg(
             emit_x86_64_cast_eval_object_arg(module, emitter, data, &class_name, fail_label);
         }
         PhpType::Array(_) => {
-            emit_x86_64_cast_eval_array_arg(emitter, 4, fail_label);
+            emit_x86_64_cast_eval_array_arg(emitter, 4, true, fail_label);
         }
         PhpType::AssocArray { .. } => {
-            emit_x86_64_cast_eval_array_arg(emitter, 5, fail_label);
+            emit_x86_64_cast_eval_array_arg(emitter, 5, false, fail_label);
         }
         PhpType::Iterable => {
             emit_x86_64_cast_eval_iterable_arg(module, emitter, label_prefix, fail_label);
@@ -2411,23 +2763,17 @@ fn emit_x86_64_cast_eval_object_arg(
     class_name: &str,
     fail_label: &str,
 ) {
-    if class_name.is_empty() {
-        emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // a generic object hint needs only the runtime object tag
-        emitter.instruction("call __rt_mixed_unbox");                           // expose the borrowed object payload
-        emitter.instruction("cmp rax, 6");                                      // scalars and null do not satisfy object
-        emitter.instruction(&format!("jne {}", fail_label));                    // reject a non-object argument
-        emitter.instruction("mov rax, rdi");                                    // pass the native object pointer
-        return;
+    if !class_name.is_empty() {
+        let (label, len) = data.add_string(class_name.as_bytes());
+        let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                   // reload the boxed eval argument for named object type validation
+        abi::emit_symbol_address(emitter, "rsi", &label);
+        abi::emit_load_int_immediate(emitter, "rdx", len as i64);
+        emitter.instruction("xor ecx, ecx");                                    // allow exact class matches for named object type hints
+        abi::emit_call_label(emitter, &is_a_symbol);
+        emitter.instruction("test rax, rax");                                   // check whether the value satisfied the named object type hint
+        emitter.instruction(&format!("je {}", fail_label));                     // reject values that fail the named object type hint
     }
-    let (label, len) = data.add_string(class_name.as_bytes());
-    let is_a_symbol = module.target.extern_symbol("__elephc_eval_value_is_a");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for object type validation
-    abi::emit_symbol_address(emitter, "rsi", &label);
-    abi::emit_load_int_immediate(emitter, "rdx", len as i64);
-    emitter.instruction("xor ecx, ecx");                                        // allow exact class matches for object type hints
-    abi::emit_call_label(emitter, &is_a_symbol);
-    emitter.instruction("test rax, rax");                                       // check whether the value satisfied the object type hint
-    emitter.instruction(&format!("je {}", fail_label));                         // reject values that fail the object type hint
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for object unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // expose the object payload for the native method call
     emitter.instruction("cmp rax, 6");                                          // object type hints require an object payload, not a class string
@@ -2436,13 +2782,34 @@ fn emit_x86_64_cast_eval_object_arg(
 }
 
 /// Validates and unboxes one x86_64 array-typed eval argument for native method dispatch.
-fn emit_x86_64_cast_eval_array_arg(emitter: &mut Emitter, expected_tag: i64, fail_label: &str) {
+///
+/// A PHP `array` parameter accepts both runtime storage shapes; an internally associative
+/// parameter still requires its hash representation so its native body can use hash operations.
+fn emit_x86_64_cast_eval_array_arg(
+    emitter: &mut Emitter,
+    expected_tag: i64,
+    allow_assoc_shape: bool,
+    fail_label: &str,
+) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
     emitter.instruction("call __rt_mixed_unbox");                               // expose the array payload for the native method call
+    emitter.instruction("cmp rax, 8");                                          // runtime tag 8 means the defaulted argument is null
+    emitter.instruction("je 3f");                                               // pass the null default as a null array pointer
     abi::emit_load_int_immediate(emitter, "r10", expected_tag);
     emitter.instruction("cmp rax, r10");                                        // compare the eval payload tag with the expected array ABI
-    emitter.instruction(&format!("jne {}", fail_label));                        // reject array payloads with an incompatible ABI shape
+    if allow_assoc_shape {
+        emitter.instruction("je 2f");                                           // accept the indexed representation immediately
+        emitter.instruction("cmp rax, 5");                                      // generic PHP arrays also accept associative storage
+        emitter.instruction(&format!("jne {}", fail_label));                    // reject values that are not either PHP array representation
+        emitter.label("2");
+    } else {
+        emitter.instruction(&format!("jne {}", fail_label));                    // reject array payloads with an incompatible ABI shape
+    }
     emitter.instruction("mov rax, rdi");                                        // place the unboxed array pointer in the result register
+    emitter.instruction("jmp 4f");                                              // skip the null-default materialization
+    emitter.label("3");
+    emitter.instruction("xor eax, eax");                                        // a null default travels as a null array pointer
+    emitter.label("4");
 }
 
 /// Validates and unboxes one x86_64 iterable-typed eval argument for native method dispatch.
@@ -2501,6 +2868,13 @@ fn emit_x86_64_validate_iterable_object(
 }
 
 /// Boxes the current native method result as the owned Mixed cell expected by eval.
+///
+/// The boxer is handed the CODEGEN REPRESENTATION, not the declared type. The two differ for
+/// exactly one shape that matters here: a method declared `: \Closure` is `PhpType::Object` but
+/// its value in the result register is a callable DESCRIPTOR, not an object pointer. Boxing that
+/// with the declared type stamped runtime tag 6 on a descriptor, and the interpreter then unboxed
+/// it as an object — Symfony's `HtmlErrorRenderer::isDebug(): \Closure` segfaulted the worker the
+/// first time interpreted code asked the returned value for its type.
 fn emit_box_method_result(
     module: &Module,
     emitter: &mut Emitter,
@@ -2510,7 +2884,8 @@ fn emit_box_method_result(
     source: EvalMethodResultSource,
     label_prefix: &str,
 ) {
-    if return_ty.codegen_repr() == PhpType::Void {
+    let repr = return_ty.codegen_repr();
+    if repr == PhpType::Void {
         let null_symbol = module.target.extern_symbol("__elephc_eval_value_null");
         abi::emit_call_label(emitter, &null_symbol);
     } else if return_uses_marker
@@ -2525,21 +2900,93 @@ fn emit_box_method_result(
         emit_box_borrowed_method_result(emitter, return_ty);
         abi::emit_jump(emitter, &done_label);
         emitter.label(&owned_label);
-        emit_box_current_owned_value_as_mixed(emitter, return_ty);
+        emit_box_current_owned_value_as_mixed(emitter, &repr);
         emitter.label(&done_label);
     } else if owned {
-        emit_box_current_owned_value_as_mixed(emitter, return_ty);
+        emit_box_current_owned_value_as_mixed(emitter, &repr);
     } else {
-        emit_box_current_value_as_mixed(emitter, return_ty);
+        emit_box_current_value_as_mixed(emitter, &repr);
+    }
+}
+
+/// Reads the value a by-reference method returned the ADDRESS of into the result registers.
+///
+/// A `&method()` hands its caller the storage address; compiled callers bind or read through it,
+/// but the eval bridge boxed the address itself, so `&$session->getUsageIndex()` from interpreted
+/// code (Symfony's `ContextListener`) produced an integer that was a pointer. The value read here
+/// is borrowed, and is boxed as such.
+fn emit_load_by_ref_method_result(emitter: &mut Emitter, return_ty: &PhpType) {
+    let address = abi::symbol_scratch_reg(emitter);
+    let result = abi::int_result_reg(emitter);
+    abi::emit_reg_move(emitter, address, result);
+    match return_ty.codegen_repr() {
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+            abi::emit_load_from_address(emitter, ptr_reg, address, 0);
+            abi::emit_load_from_address(emitter, len_reg, address, 8);
+        }
+        PhpType::Float => {
+            abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), address, 0);
+        }
+        PhpType::TaggedScalar => {
+            abi::emit_load_from_address(emitter, result, address, 0);
+            abi::emit_load_from_address(
+                emitter,
+                crate::codegen::sentinels::tagged_scalar_tag_reg(emitter),
+                address,
+                8,
+            );
+        }
+        _ => abi::emit_load_from_address(emitter, result, address, 0),
     }
 }
 
 /// Promotes one borrowed compiled-PHP method result into an owned eval result cell.
 fn emit_box_borrowed_method_result(emitter: &mut Emitter, return_ty: &PhpType) {
-    if matches!(return_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+    let repr = return_ty.codegen_repr();
+    if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_call_label(emitter, "__rt_incref");
     } else {
-        emit_box_current_value_as_mixed(emitter, return_ty);
+        if method_result_is_object_only(return_ty) {
+            emit_box_owned_object_method_result(emitter);
+        } else {
+            emit_box_current_value_as_mixed(emitter, &repr);
+        }
+    }
+}
+
+/// Returns whether a method bridge result is represented only by object alternatives.
+fn method_result_is_object_only(return_ty: &PhpType) -> bool {
+    match return_ty.codegen_repr() {
+        PhpType::Object(_) => true,
+        PhpType::Union(members) => members
+            .iter()
+            .all(|member| matches!(member.codegen_repr(), PhpType::Object(_))),
+        _ => false,
+    }
+}
+
+/// Boxes an owned native object return while transferring its call-result ownership to eval.
+fn emit_box_owned_object_method_result(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(emitter, "x0");
+            emit_box_current_value_as_mixed(emitter, &PhpType::Object(String::new()));
+            abi::emit_push_reg(emitter, "x0");
+            abi::emit_load_temporary_stack_slot(emitter, "x0", 16);
+            abi::emit_call_label(emitter, "__rt_decref_object");
+            abi::emit_pop_reg(emitter, "x0");
+            abi::emit_release_temporary_stack(emitter, 16);
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(emitter, "rax");
+            emit_box_current_value_as_mixed(emitter, &PhpType::Object(String::new()));
+            abi::emit_push_reg(emitter, "rax");
+            abi::emit_load_temporary_stack_slot(emitter, "rax", 16);
+            abi::emit_call_label(emitter, "__rt_decref_object");
+            abi::emit_pop_reg(emitter, "rax");
+            abi::emit_release_temporary_stack(emitter, 16);
+        }
     }
 }
 
@@ -2685,6 +3132,73 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
     let symbol = module.target.extern_symbol(name);
     emitter.label_global(&symbol);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::{Platform, Target};
+    use crate::ir::{Function, IrType};
+    use crate::types::FunctionSig;
+
+    /// Verifies far zero checks invert `cbz` locally before the wider unconditional branch.
+    #[test]
+    fn far_zero_branch_uses_inverted_compare_and_branch_shape() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_aarch64_branch_if_zero_far(&mut emitter, "x3", "_far_fail");
+
+        assert_eq!(
+            emitter.output(),
+            concat!("    cbnz x3, 1f\n", "    b _far_fail\n", "1:\n")
+        );
+    }
+
+    /// Verifies far inequality checks invert the condition before the wider branch.
+    #[test]
+    fn far_not_equal_branch_uses_inverted_condition_shape() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        emit_aarch64_branch_if_not_equal_far(&mut emitter, "_far_fail");
+
+        assert_eq!(
+            emitter.output(),
+            concat!("    b.eq 1f\n", "    b _far_fail\n", "1:\n")
+        );
+    }
+
+    /// Verifies eval bridge slots box the physical EIR object return despite a Mixed signature.
+    #[test]
+    fn emitted_method_return_type_uses_eir_abi_representation() {
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let mut module = Module::new(target);
+        module.class_methods.push(Function::new(
+            method_symbol("ConcreteResolver", "resolve"),
+            IrType::I64,
+            PhpType::Object("ConcreteResolver".to_string()),
+        ));
+        let signature = FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: PhpType::Mixed,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+            is_generator: false,
+        };
+
+        assert_eq!(
+            emitted_method_return_type(
+                &module,
+                &method_symbol("ConcreteResolver", "resolve"),
+                &signature,
+            ),
+            PhpType::Object("ConcreteResolver".to_string()),
+        );
+    }
 }
 
 #[cfg(test)]

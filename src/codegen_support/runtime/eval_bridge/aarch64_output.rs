@@ -205,6 +205,16 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_retain");
     emitter.instruction("b __rt_incref");                                       // retain one eval-owned boxed Mixed cell
 
+    // The two memory reporters read the `$real_usage` flag from the internal integer result
+    // register, which is x0 here, so each entry point is one unconditional branch. Eval must ask
+    // the compiled side because `_gc_live` / `_gc_peak` / `_heap_off` live in generated-runtime
+    // storage — the same reason `headers_sent` does.
+    label_c_global(emitter, "__elephc_eval_memory_get_usage");
+    emitter.instruction("b __rt_memory_get_usage");                             // report live heap bytes, or arena bytes taken when the flag is set
+
+    label_c_global(emitter, "__elephc_eval_memory_get_peak_usage");
+    emitter.instruction("b __rt_memory_get_peak_usage");                        // report the live-byte high watermark, or arena bytes taken
+
     label_c_global(emitter, "__elephc_eval_pcntl_aot_signal_handler");
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_handler_value");
     emitter.instruction("ldr x0, [x9, x0, lsl #3]");                            // load the AOT table's original boxed PHP handler
@@ -246,7 +256,7 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_warning");
     emitter.instruction("mov x2, x1");                                          // move warning length into the runtime diagnostic length register
     emitter.instruction("mov x1, x0");                                          // move warning pointer into the runtime diagnostic buffer register
-    emitter.instruction("b __rt_diag_warning");                                 // emit or suppress one eval runtime warning
+    emitter.instruction("b __rt_diag_warning");                                 // one WHOLE interpreted diagnostic: it carries no trailing newline
 
     label_c_global(emitter, "__elephc_eval_fatal");
     emitter.instruction("mov x2, x1");                                          // move fatal length into the stderr write-length register
@@ -274,4 +284,22 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // adapt the already-filtered warning pointer to the writer ABI
     emitter.instruction("b __rt_diag_write");                                   // do not redispatch trigger_error default output
 
+    label_c_global(emitter, "__elephc_eval_record_last_error");
+    emitter.instruction("b __rt_last_error_record");                            // the C arguments already match the record writer
+
+    label_c_global(emitter, "__elephc_eval_diag_suppression");
+    emitter.instruction("cbz x0, __elephc_eval_diag_suppression_leave");        // zero leaves one interpreted @ scope
+    emitter.instruction("b __rt_diag_push_suppression");                        // non-zero enters one interpreted @ scope
+    emitter.label("__elephc_eval_diag_suppression_leave");
+    emitter.instruction("b __rt_diag_pop_suppression");                         // restore the enclosing suppression depth
+
+    label_c_global(emitter, "__elephc_eval_user_wrapper_table");
+    abi::emit_symbol_address(emitter, "x0", "_user_wrappers");
+    emitter.instruction("ret");                                                 // hand the compiled stream-wrapper table to the interpreter
+
+    label_c_global(emitter, "__elephc_eval_request_invoker_boundary");
+    abi::emit_symbol_address(emitter, "x9", "__rt_eval_invoker_bounded");
+    emitter.instruction("mov x10, #1");                                         // the next descriptor invoker is called by the interpreter
+    emitter.instruction("str x10, [x9]");                                       // ask that invoker for its exception boundary
+    emitter.instruction("ret");                                                 // return to the Rust interpreter
 }

@@ -26,6 +26,151 @@ fn execute_program_evaluates_compound_assignments() {
     assert_eq!(values.output, "v15");
     assert_eq!(values.get(x), FakeValue::Int(15));
 }
+
+/// Verifies null-coalescing assignment writes missing targets and keeps later defaults lazy.
+#[test]
+fn execute_program_evaluates_null_coalesce_assignment_lazily() {
+    let program = parse_fragment(
+        br#"$x ??= print "R"; $x ??= print "bad"; echo ":"; echo $x; $items = []; $items[0]["nested"] ??= 4; $items[0]["nested"] ??= print "bad"; return $items[0]["nested"];"#,
+    )
+    .expect("parse null-coalescing assignments");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute null-coalescing assignments");
+
+    assert_eq!(values.output, "R:1");
+    assert_eq!(values.get(result), FakeValue::Int(4));
+    let x = scope.visible_cell("x").expect("scope should contain x");
+    assert_eq!(values.get(x), FakeValue::Int(1));
+}
+
+/// Verifies a compound assignment expression returns and stores the computed value.
+#[test]
+fn execute_program_evaluates_compound_assignment_expression() {
+    let program = parse_fragment(
+        b"$x = 1; $result = ($x += 2); $outer = $inner = 3; return $x + $result + $outer + $inner;",
+    )
+        .expect("parse compound assignment expression");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute compound assignment expression");
+
+    assert_eq!(values.get(result), FakeValue::Int(12));
+    let x = scope.visible_cell("x").expect("scope should contain x");
+    assert_eq!(values.get(x), FakeValue::Int(3));
+}
+
+/// Verifies array `+=` keeps left keys and appends only missing right keys.
+#[test]
+fn execute_program_evaluates_array_union_compound_assignment() {
+    let program = parse_fragment(
+        br#"$options = ["keep" => "left"]; $options += ["keep" => "right", "project_dir" => "/tmp"]; return $options["keep"] . ":" . $options["project_dir"];"#,
+    )
+    .expect("parse array union compound assignment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute array union compound assignment");
+
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("left:/tmp".to_string())
+    );
+}
+
+/// Verifies array-element concatenation assignments work in statements and `for` update clauses.
+#[test]
+fn execute_program_evaluates_array_element_concat_assignment() {
+    let program = parse_fragment(
+        br#"
+$info = ["message" => "first"];
+$info["message"] .= " second";
+for ($i = 0; $i < 1; $info["message"] .= "!") {
+    $i += 1;
+}
+return $info["message"];
+"#,
+    )
+    .expect("parse array element concatenation assignment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute array element concatenation assignment");
+
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("first second!".to_string())
+    );
+}
+
+/// Verifies coalesce and union writes reach an implicitly aliased superglobal array.
+#[test]
+fn execute_program_writes_compound_assignment_through_superglobal_alias() {
+    let program = parse_fragment(
+        br#"
+$_SERVER["APP_RUNTIME_OPTIONS"] ??= [];
+$result = $_SERVER["APP_RUNTIME_OPTIONS"] += [
+    "project_dir" => "/tmp",
+];
+return $result["project_dir"];
+"#,
+    )
+    .expect("parse superglobal compound assignments");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut global_scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let server = values.assoc_new(1).expect("create fake server array");
+    global_scope.set("_SERVER", server, ScopeCellOwnership::Borrowed);
+    context.set_global_scope(&mut global_scope);
+    scope.mark_global_alias_to("_SERVER", "_SERVER");
+
+    let result = execute_program_with_context(
+        &mut context,
+        &program,
+        &mut scope,
+        &mut values,
+    )
+    .expect("execute superglobal compound assignments");
+
+    assert_eq!(values.get(result), FakeValue::String("/tmp".to_string()));
+}
+
+/// Verifies short array destructuring stores positional values in source order.
+#[test]
+fn execute_program_evaluates_short_array_destructuring() {
+    let program = parse_fragment(b"[$left, $right] = [2, 3]; return $left + $right;")
+        .expect("parse short array destructuring");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute short array destructuring");
+
+    assert_eq!(values.get(result), FakeValue::Int(5));
+}
+
+/// Verifies a nested array assignment expression autovivifies and writes through its root.
+#[test]
+fn execute_program_evaluates_nested_array_assignment() {
+    let program = parse_fragment(
+        br#"$items = []; $items["outer"]["inner"] = 4; return $items["outer"]["inner"];"#,
+    )
+    .expect("parse nested array assignment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values)
+        .expect("execute nested array assignment");
+
+    assert_eq!(values.get(result), FakeValue::Int(4));
+}
 /// Verifies division and modulo evaluate through fake runtime numeric hooks.
 #[test]
 fn execute_program_evaluates_division_and_modulo() {
@@ -243,6 +388,25 @@ fn execute_program_constructs_named_object_with_args() {
     assert_eq!(values.get(x), FakeValue::Int(1));
 }
 
+/// Verifies dynamic construction resolves an array-held class name before its arguments.
+#[test]
+fn execute_program_constructs_array_element_dynamic_class_with_args() {
+    let program = parse_fragment(
+        br#"$classes = ["box" => "Box"]; return new $classes["box"](1);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    let FakeValue::Object(properties) = values.get(result) else {
+        panic!("expected fake object");
+    };
+    let x = FakeOps::object_property(&properties, "x").expect("constructor should set x");
+
+    assert_eq!(values.get(x), FakeValue::Int(1));
+}
+
 /// Verifies eval object construction binds registered AOT constructor named arguments.
 #[test]
 fn execute_program_constructs_named_object_with_registered_named_args() {
@@ -257,6 +421,29 @@ fn execute_program_constructs_named_object_with_registered_named_args() {
 
     let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("registered constructor named args should bind");
+
+    assert_eq!(values.get(result), FakeValue::Int(9));
+}
+
+/// Verifies a dynamic child binds named constructor arguments from its declaring AOT ancestor.
+#[test]
+fn execute_program_constructs_dynamic_child_with_inherited_constructor_signature() {
+    let program = parse_fragment(
+        br#"class EvalInheritedRuntimeChild extends KnownClass {}
+$box = new EvalInheritedRuntimeChild(value: 9);
+return $box->read_x();"#,
+    )
+    .expect("parse inherited runtime constructor source");
+    let mut context = ElephcEvalContext::new();
+    assert!(context.define_native_class_parent("KnownClass", "KnownConstructorOwner"));
+    let mut signature = NativeCallableSignature::new(1);
+    assert!(signature.set_param_name(0, "value"));
+    assert!(context.define_native_constructor_signature("KnownConstructorOwner", signature));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("inherited constructor signature should bind named args");
 
     assert_eq!(values.get(result), FakeValue::Int(9));
 }

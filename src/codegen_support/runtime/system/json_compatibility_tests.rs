@@ -46,7 +46,7 @@ fn json_compatibility_assembles_on_all_supported_targets() {
             let mut emitter = Emitter::new(target);
             emitter.pic_data_refs = pic;
             emit_json_encode_str(&mut emitter);
-            emit_json_encode_object(&mut emitter);
+            emit_json_encode_object(&mut emitter, false);
             let syntax = if target.arch == Arch::X86_64 { ".intel_syntax noprefix\n" } else { "" };
             let source = scratch.0.join(format!("{name}-{pic}.s"));
             fs::write(&source, format!("{syntax}.text\n{}", emitter.output())).unwrap();

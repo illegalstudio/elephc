@@ -16,7 +16,82 @@ use crate::types::CheckResult;
 use super::{ClassKind, ClassNode, DeclarationIndex};
 use crate::optimize::reachability::usage::{self, CallSignatureIndex};
 
+/// The usage of every flattened method body, per class, in `classes` order.
+///
+/// Each body is scanned on its own, so the classes are split across threads. Scanning them one by
+/// one was ~70% of "Pruning unreachable declarations" on the Symfony demo (88 s, one core).
+fn scan_class_methods_in_parallel(
+    classes: &[(&String, &crate::types::ClassInfo)],
+    call_signatures: &CallSignatureIndex,
+) -> Vec<Vec<((String, bool), usage::Usage)>> {
+    let scan_class = |(class_name, info): &(&String, &crate::types::ClassInfo)| {
+        let parent = info.parent.as_deref().map(php_symbol_key);
+        info.method_decls
+            .iter()
+            .map(|method| {
+                (
+                    (php_symbol_key(&method.name), method.is_static),
+                    usage::scan_method(method, class_name, parent.as_deref(), call_signatures),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let jobs = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .clamp(1, 12);
+    if jobs == 1 || classes.len() < 64 {
+        return classes.iter().map(scan_class).collect();
+    }
+    // A few classes carry most of the bodies, so threads pull the next class from a shared
+    // counter rather than owning a fixed slice.
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut slots: Vec<Option<Vec<((String, bool), usage::Usage)>>> = Vec::new();
+    slots.resize_with(classes.len(), || None);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..jobs)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(class) = classes.get(index) else {
+                            break;
+                        };
+                        done.push((index, scan_class(class)));
+                    }
+                    done
+                })
+            })
+            .collect();
+        for handle in handles {
+            for (index, methods) in handle.join().expect("method usage scan panicked") {
+                slots[index] = Some(methods);
+            }
+        }
+    });
+    slots.into_iter().map(Option::unwrap_or_default).collect()
+}
+
 impl DeclarationIndex {
+    /// Returns statically resolved class-alias targets declared anywhere in source callables.
+    pub(super) fn class_alias_targets(&self) -> std::collections::HashSet<String> {
+        let mut targets = std::collections::HashSet::new();
+        for usage in self.functions.values() {
+            targets.extend(usage.class_alias_targets.iter().cloned());
+        }
+        for node in self.classes.values() {
+            targets.extend(node.usage.class_alias_targets.iter().cloned());
+            for usage in node.methods.values() {
+                targets.extend(usage.class_alias_targets.iter().cloned());
+            }
+        }
+        for usage in self.checker_methods.values() {
+            targets.extend(usage.class_alias_targets.iter().cloned());
+        }
+        targets
+    }
+
     /// Builds a declaration index matching the recursive statement shapes lowered by EIR.
     pub(crate) fn build(program: &[Stmt], check_result: &CheckResult) -> Self {
         let call_signatures = CallSignatureIndex::from_check_result(check_result);
@@ -41,24 +116,12 @@ impl DeclarationIndex {
         check_result: &CheckResult,
         call_signatures: &CallSignatureIndex,
     ) {
-        for (class_name, info) in &check_result.classes {
+        let classes: Vec<_> = check_result.classes.iter().collect();
+        let mut scanned = scan_class_methods_in_parallel(&classes, call_signatures).into_iter();
+        for (class_name, info) in classes {
             let class_key = php_symbol_key(class_name);
-            let parent = info.parent.as_deref().map(php_symbol_key);
-            let mut methods: std::collections::HashMap<_, _> = info
-                .method_decls
-                .iter()
-                .map(|method| {
-                    (
-                        (php_symbol_key(&method.name), method.is_static),
-                        usage::scan_method(
-                            method,
-                            class_name,
-                            parent.as_deref(),
-                            call_signatures,
-                        ),
-                    )
-                })
-                .collect();
+            let mut methods: crate::fast_hash::FastMap<_, _> =
+                scanned.next().unwrap_or_default().into_iter().collect();
             let has_runtime_owned_parent = info
                 .parent
                 .as_deref()
@@ -85,6 +148,19 @@ impl DeclarationIndex {
                         .entry((php_symbol_key(method), true))
                         .or_default();
                 }
+            }
+            // Trait-imported and flattened methods carry their attributes here, not in the class
+            // statement `index_class` saw.
+            for (method, names) in &info.method_attribute_names {
+                if names.is_empty() {
+                    continue;
+                }
+                let is_static = info.static_methods.contains_key(method)
+                    && !info.methods.contains_key(method);
+                self.attributed_methods
+                    .entry(class_key.clone())
+                    .or_default()
+                    .insert((php_symbol_key(method), is_static));
             }
             if let Some(node) = self.classes.get_mut(&class_key) {
                 let attribute_classes: Vec<_> = info
@@ -219,6 +295,7 @@ impl DeclarationIndex {
                 StmtKind::ExternClassDecl { name, .. } => {
                     self.extern_classes.insert(php_symbol_key(name));
                 }
+                StmtKind::ClassLikeActivate { .. } => {}
                 StmtKind::ExternFunctionDecl { name, .. } => {
                     self.externs.insert(php_symbol_key(name));
                 }
@@ -300,9 +377,12 @@ impl DeclarationIndex {
                 | StmtKind::Global { .. }
                 | StmtKind::StaticVar { .. }
                 | StmtKind::PropertyAssign { .. }
+                | StmtKind::PropertyRefAssign { .. }
                 | StmtKind::StaticPropertyAssign { .. }
                 | StmtKind::StaticPropertyArrayPush { .. }
                 | StmtKind::StaticPropertyArrayAssign { .. }
+                | StmtKind::StaticPropertyElementRefAssign { .. }
+                | StmtKind::DynamicStaticPropertyWrite { .. }
                 | StmtKind::PropertyArrayPush { .. }
                 | StmtKind::PropertyArrayAssign { .. }
                 | StmtKind::ExternGlobalDecl { .. } => {}
@@ -323,6 +403,12 @@ impl DeclarationIndex {
         call_signatures: &CallSignatureIndex,
     ) {
         let class_key = php_symbol_key(name);
+        for method in methods.iter().filter(|method| !method.attributes.is_empty()) {
+            self.attributed_methods
+                .entry(class_key.clone())
+                .or_default()
+                .insert((php_symbol_key(&method.name), method.is_static));
+        }
         let methods = methods
             .iter()
             .map(|method| {

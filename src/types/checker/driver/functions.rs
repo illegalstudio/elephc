@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, Program, StmtKind, TypeExpr};
+use crate::source::SourceMode;
 use crate::types::FunctionSig;
 
 use super::super::{Checker, FnDecl};
@@ -50,7 +51,7 @@ impl Checker {
                             )
                         })
                 });
-                if let Some(builtin) = builtin {
+                if let Some(builtin) = builtin.filter(|_| stmt.source_mode != SourceMode::Internal) {
                     errors.push(CompileError::new(
                         stmt.span,
                         &format!("Cannot redeclare built-in function: {}", builtin),
@@ -91,7 +92,7 @@ impl Checker {
                             )
                         })
                 });
-                if let Some(builtin) = builtin {
+                if let Some(builtin) = builtin.filter(|_| stmt.source_mode != SourceMode::Internal) {
                     errors.push(CompileError::new(
                         stmt.span,
                         &format!("Cannot redeclare built-in function: {}", builtin),
@@ -156,27 +157,53 @@ impl Checker {
         {
             return true;
         }
-        let key = php_symbol_key(name);
-        self.fn_decls
-            .keys()
-            .any(|existing| php_symbol_key(existing) == key)
-            || self
-                .function_variant_groups
+        // Asked per function reference, and most references name a builtin that no table holds:
+        // scanning the three tables each time was a top checker cost on a Symfony build. The
+        // tables only grow, so their folded names are refreshed whenever a size changed.
+        let shape = (self.fn_decls.len(), self.function_variant_groups.len(), self.extern_functions.len());
+        let mut folded = self.folded_function_names.borrow_mut();
+        if folded.0 != shape || (folded.1.is_empty() && shape != (0, 0, 0)) {
+            folded.1 = self
+                .fn_decls
                 .keys()
-                .any(|existing| php_symbol_key(existing) == key)
-            || self
-                .extern_functions
-                .keys()
-                .any(|existing| php_symbol_key(existing) == key)
+                .chain(self.function_variant_groups.keys())
+                .chain(self.extern_functions.keys())
+                .map(|existing| existing.to_ascii_lowercase())
+                .collect();
+            folded.0 = shape;
+        }
+        folded.1.contains(&name.to_ascii_lowercase())
     }
 
     /// Returns the canonical (case-matching) name of a user function identified by `name` by
     /// case-insensitive lookup in `functions`, `function_variant_groups`, and `fn_decls`. Returns
     /// `None` if no matching function exists.
     pub(crate) fn canonical_function_name_folded(&self, name: &str) -> Option<String> {
-        folded_map_key(&self.functions, name)
-            .or_else(|| folded_map_key(&self.function_variant_groups, name))
-            .or_else(|| folded_map_key(&self.fn_decls, name))
+        // Asked per call expression, mostly with builtin names no table holds: three linear
+        // scans each time were a top checker cost on a Symfony build. The folded index answers
+        // the same thing (first table first), rebuilt when a table grew.
+        let shape = (self.functions.len(), self.function_variant_groups.len(), self.fn_decls.len());
+        let mut cache = self.canonical_function_names.borrow_mut();
+        if cache.as_ref().is_none_or(|(built_for, _)| *built_for != shape) {
+            let fold = |keys: &mut dyn Iterator<Item = &String>| {
+                let mut index = crate::fast_hash::FastMap::default();
+                for key in keys {
+                    index.entry(key.to_ascii_lowercase()).or_insert_with(|| key.clone());
+                }
+                index
+            };
+            *cache = Some((
+                shape,
+                [
+                    fold(&mut self.functions.keys()),
+                    fold(&mut self.function_variant_groups.keys()),
+                    fold(&mut self.fn_decls.keys()),
+                ],
+            ));
+        }
+        let (_, tables) = cache.as_ref()?;
+        let folded = name.to_ascii_lowercase();
+        tables.iter().find_map(|table| table.get(&folded).cloned())
     }
 
     /// Returns the canonical (case-matching) name of an extern function identified by `name` by
@@ -185,10 +212,75 @@ impl Checker {
         folded_map_key(&self.extern_functions, name)
     }
 
-    /// Resolves type signatures for all user functions that were not already resolved during the
-    /// initial pass. Iterates `fn_decls`, calls `initial_function_param_types` then
-    /// `resolve_function_signature` for each unchecked function, and finally resolves all variant
-    /// groups via `resolve_function_variant_groups`. Appends errors to `errors`.
+    /// Re-resolves every user function whose return type is inferred, with the parameter types it
+    /// already has, and answers whether any return type changed. Diagnostics are not collected:
+    /// the first resolution reported them, and the final top-level pass reports what remains.
+    pub(super) fn reinfer_undeclared_function_returns(&mut self) -> bool {
+        let candidates: Vec<(String, Vec<(String, crate::types::PhpType)>, crate::types::PhpType)> = self
+            .functions
+            .iter()
+            // A `mixed` return is already the widest answer; re-resolving could only narrow it,
+            // which is what undid `widen_dynamic_only_passthrough_returns`.
+            .filter(|(name, sig)| {
+                !sig.declared_return
+                    && sig.return_type.codegen_repr() != crate::types::PhpType::Mixed
+                    && self.fn_decls.contains_key(*name)
+            })
+            .map(|(name, sig)| (name.clone(), sig.params.clone(), sig.return_type.clone()))
+            .collect();
+        let mut changed = false;
+        for (name, params, before) in candidates {
+            let Some(decl) = self.fn_decls.get(&name).cloned() else {
+                continue;
+            };
+            if self.resolve_function_signature(&name, &decl, params).is_err() {
+                continue;
+            }
+            if self.functions.get(&name).is_some_and(|sig| sig.return_type != before) {
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Rechecks only functions carrying a scalar-foreach diagnostic after return types settle.
+    /// Declared returns (notably void) skip return reinference, but their loop subjects can also
+    /// depend on a method's provisional return. Rewalk the body so locals derived from that
+    /// return are refreshed too; merely reinferring the subject in its old environment is stale.
+    pub(super) fn recheck_foreach_warning_functions(&mut self, errors: &mut Vec<CompileError>) {
+        let mut names: Vec<String> = self
+            .foreach_warnings
+            .values()
+            .filter_map(|(function, _)| function.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+        for name in names {
+            let Some(decl) = self.fn_decls.get(&name).cloned() else {
+                continue;
+            };
+            let Some((params, return_type)) = self
+                .functions
+                .get(&name)
+                .map(|sig| (sig.params.clone(), sig.return_type.clone()))
+            else {
+                continue;
+            };
+            if let Err(error) = self.resolve_function_signature(&name, &decl, params) {
+                errors.extend(error.flatten());
+            }
+            // A diagnostic rewalk uses the direct-call parameter types. They cannot narrow a
+            // Mixed return already widened for dynamic callers that may supply other values.
+            if return_type == crate::types::PhpType::Mixed {
+                if let Some(signature) = self.functions.get_mut(&name) {
+                    signature.return_type = return_type;
+                }
+            }
+        }
+    }
+
+    /// Resolves type signatures for user functions not already resolved during the initial pass,
+    /// then resolves variant groups. Appends errors to `errors`.
     pub(super) fn resolve_unchecked_functions(&mut self, errors: &mut Vec<CompileError>) {
         let unchecked: Vec<String> = self
             .fn_decls
@@ -203,20 +295,70 @@ impl Checker {
             .map(|(name, _)| name.clone())
             .collect();
         for name in unchecked {
-            if let Some(decl) = self.fn_decls.get(&name).cloned() {
-                match self.initial_function_param_types(&name, &decl) {
-                    Ok(param_types) => {
-                        if let Err(error) =
-                            self.resolve_function_signature(&name, &decl, param_types)
-                        {
-                            errors.extend(error.flatten());
-                        }
-                    }
-                    Err(error) => errors.extend(error.flatten()),
-                }
+            if let Err(error) = self.resolve_uncalled_function(&name) {
+                errors.extend(error.flatten());
             }
         }
         self.resolve_function_variant_groups(errors);
+    }
+
+    /// Resolves the signature of a declared function no call site has reached, reading its
+    /// undeclared parameters as `mixed` (see `widen_unrefined_params_of_an_uncalled_function`).
+    ///
+    /// Shared by the end-of-pass resolution and by `function_exists('name')`, which resolves the
+    /// function it names without being a call.
+    pub(crate) fn resolve_uncalled_function(&mut self, name: &str) -> Result<(), CompileError> {
+        let Some(decl) = self.fn_decls.get(name).cloned() else {
+            return Ok(());
+        };
+        let mut param_types = self.initial_function_param_types(name, &decl)?;
+        Self::widen_unrefined_params_of_an_uncalled_function(&decl, &mut param_types);
+        self.resolve_function_signature(name, &decl, param_types)
+            .map(|_| ())
+    }
+
+    /// Resolves a function-variant group no call site has reached, with the same `mixed` reading
+    /// of undeclared parameters as [`Self::resolve_uncalled_function`].
+    pub(crate) fn resolve_uncalled_function_variant_group(
+        &mut self,
+        name: &str,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        self.resolve_function_variant_group_signature(name, span, true)
+    }
+
+    /// Makes an UNCALLED function's undeclared parameters `mixed` instead of the `Int` seed.
+    ///
+    /// `initial_function_param_types` seeds an undeclared parameter with `PhpType::Int` as a
+    /// gradual starting point that the FIRST call site then discards and replaces with the real
+    /// argument type. This path is the one where that call site never comes — the function is
+    /// resolved precisely because nothing calls it — so the seed is not a starting point, it is
+    /// the final answer, and it is a fabrication: PHP reads an undeclared parameter as `mixed`.
+    ///
+    /// Left alone it does not stay contained either, because the body is still checked and every
+    /// call it makes carries the fabricated `int` outward. Twig's deprecated
+    /// `twig_array_filter(Environment $env, $array, $arrow)` is called by nothing, and passing
+    /// its two `int` locals to `CoreExtension::filter()` locked that method's `$array` and
+    /// `$arrow` to `int` for the whole build — so `$arrow($v, $k)` inside it read as "Cannot call
+    /// $arrow — not a callable (got Int)" and `new \IteratorIterator($array)` as "expects
+    /// Object(Traversable), got Int", on code PHP runs.
+    ///
+    /// The methods equivalent already behaves this way: `method_body_param_type` answers `mixed`
+    /// for an undeclared parameter that no call site has specialized.
+    fn widen_unrefined_params_of_an_uncalled_function(
+        decl: &crate::types::checker::FnDecl,
+        param_types: &mut [(String, crate::types::PhpType)],
+    ) {
+        for (idx, (_, param_ty)) in param_types.iter_mut().enumerate() {
+            let declared = decl.param_types.get(idx).and_then(|ty| ty.as_ref()).is_some();
+            let has_default = decl.defaults.get(idx).and_then(|d| d.as_ref()).is_some();
+            let by_ref = decl.ref_params.get(idx).copied().unwrap_or(false);
+            // Only the seed itself is replaced: a declared `int`, a default, or a by-reference
+            // parameter each carry a real fact and keep it.
+            if !declared && !has_default && !by_ref && *param_ty == crate::types::PhpType::Int {
+                *param_ty = crate::types::PhpType::Mixed;
+            }
+        }
     }
 
     /// Reports whether a real call site ever invoked this declaration with an argument list.
@@ -300,8 +442,10 @@ impl Checker {
             if self.fn_decls.get(&name).is_some_and(|decl| !decl.type_params.is_empty()) {
                 continue;
             }
+            // Nothing called this group, so its variants are resolved the way an uncalled plain
+            // function is: see `widen_unrefined_params_of_an_uncalled_function`.
             if let Err(error) =
-                self.ensure_function_variant_group_signature(&name, crate::span::Span::dummy())
+                self.resolve_uncalled_function_variant_group(&name, crate::span::Span::dummy())
             {
                 errors.extend(error.flatten());
             }
@@ -319,6 +463,23 @@ impl Checker {
         name: &str,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
+        self.resolve_function_variant_group_signature(name, span, false)
+    }
+
+    /// Resolves a variant group's unified signature; `uncalled` widens every undeclared
+    /// parameter's `int` inference seed to `mixed`, because no call site will ever refine it.
+    ///
+    /// A conditionally declared function (`if (!function_exists('f')) { function f($x) {…} }`)
+    /// becomes a variant group, and the group reached this point with the raw seed: the plain
+    /// function path already widened it, this one did not. So Laravel's never-called `lazy($class,
+    /// …)` exported `int` for `$class` into `typeFromParameter($class)`, and from there into a
+    /// trait method declared `Closure $closure` — a refused build on code php runs.
+    fn resolve_function_variant_group_signature(
+        &mut self,
+        name: &str,
+        span: crate::span::Span,
+        uncalled: bool,
+    ) -> Result<(), CompileError> {
         if let Some(error) = self.failed_variant_contracts.get(name) {
             return Err(error.clone());
         }
@@ -335,16 +496,29 @@ impl Checker {
             .get(name)
             .cloned()
             .ok_or_else(|| CompileError::new(span, &format!("Undefined function: {}", name)))?;
+        // The group's calling convention is its WIDEST variant's: a caller fills every optional
+        // parameter any variant declares, and a narrower variant ignores the extra argument.
+        //
+        // `max_by_key` keeps the LAST of equal keys, so the walk is reversed: on a tie the group's
+        // first declared variant stays the reference and the later one is blamed for a conflict.
         let first_variant = variants
-            .first()
+            .iter()
+            .rev()
+            .max_by_key(|variant| {
+                self.fn_decls.get(*variant).map_or(0, |decl| decl.params.len())
+            })
             .ok_or_else(|| CompileError::new(span, &format!("Function '{}' has no variants", name)))?
             .clone();
 
-        if let Some(provisional) = self.provisional_variant_group_sig(&first_variant)? {
+        if let Some(provisional) = self.provisional_variant_group_sig(&first_variant, uncalled)? {
             let declared = self.declared_variant_signature(&first_variant)?;
-            for variant in variants.iter().skip(1) {
+            for variant in variants.iter().filter(|variant| **variant != first_variant) {
                 if let Some(candidate) = self.declared_variant_signature(variant)? {
-                    if Some(candidate) != declared {
+                    let compatible = declared
+                        .as_ref()
+                        .and_then(|declared| widest_compatible_variant(declared, &candidate))
+                        .is_some();
+                    if !compatible {
                         let conflict_span = self.fn_decls.get(variant)
                             .map_or(span, |decl| decl.span);
                         let error = CompileError::new(
@@ -372,7 +546,10 @@ impl Checker {
                     ),
                 )
             })?;
-            let param_types = self.initial_function_param_types(variant, &decl)?;
+            let mut param_types = self.initial_function_param_types(variant, &decl)?;
+            if uncalled {
+                Self::widen_unrefined_params_of_an_uncalled_function(&decl, &mut param_types);
+            }
             self.resolve_function_signature(variant, &decl, param_types)?;
         }
 
@@ -394,13 +571,15 @@ impl Checker {
                 )
             })
         });
-        let first = sigs
+        let mut first = sigs
             .next()
             .transpose()?
             .ok_or_else(|| CompileError::new(span, &format!("Function '{}' has no variants", name)))?;
         for (index, sig) in sigs.enumerate() {
             let sig = sig?;
-            if sig != first {
+            if let Some(widest) = widest_compatible_variant(&first, &sig) {
+                first = widest;
+            } else {
                 let conflict_span = self.fn_decls.get(&variants[index + 1])
                     .map_or(span, |decl| decl.span);
                 return Err(CompileError::new(
@@ -420,7 +599,9 @@ impl Checker {
     /// Builds a provisional `FunctionSig` for the first variant in a group using its declaration and
     /// initial param types. Used as a placeholder when a unified variant-group signature is needed
     /// before individual variants are fully resolved. Returns `Ok(None)` if no declaration exists
-    /// for the variant.
+    /// for the variant. `uncalled` widens the undeclared parameters' seeds exactly as the variants
+    /// themselves are widened, so the placeholder never advertises a type they will not have.
+    ///
     ///
     /// A recursive call inside an include-loaded variant names the group, so this placeholder is
     /// what types that self-call while the variant's body is walked. It is built by the same
@@ -429,11 +610,15 @@ impl Checker {
     fn provisional_variant_group_sig(
         &mut self,
         first_variant: &str,
+        uncalled: bool,
     ) -> Result<Option<FunctionSig>, CompileError> {
         let Some(decl) = self.fn_decls.get(first_variant).cloned() else {
             return Ok(None);
         };
-        let param_types = self.initial_function_param_types(first_variant, &decl)?;
+        let mut param_types = self.initial_function_param_types(first_variant, &decl)?;
+        if uncalled {
+            Self::widen_unrefined_params_of_an_uncalled_function(&decl, &mut param_types);
+        }
         Ok(Some(self.provisional_function_sig(&decl, param_types)))
     }
 
@@ -483,8 +668,66 @@ fn folded_map_key<T>(map: &HashMap<String, T>, name: &str) -> Option<String> {
     if map.contains_key(name) {
         return Some(name.to_string());
     }
-    let key = php_symbol_key(name);
     map.keys()
-        .find(|existing| php_symbol_key(existing) == key)
+        .find(|existing| existing.eq_ignore_ascii_case(name))
         .cloned()
+}
+
+#[cfg(test)]
+mod folded_lookup_tests {
+    use super::*;
+
+    /// The folded-name index answers case-insensitively and picks up a name declared after an
+    /// earlier question (the tables grow while the checker runs).
+    #[test]
+    fn folded_function_lookup_sees_later_declarations() {
+        let mut checker = Checker::new(crate::codegen_support::platform::Target::parse("macos-aarch64").unwrap());
+        assert!(!checker.has_function_decl_folded("Late\\Fn"));
+        checker.function_variant_groups.insert("Late\\Fn".to_string(), Vec::new());
+        assert!(checker.has_function_decl_folded("late\\fn"));
+        assert!(checker.has_function_decl_folded("LATE\\FN"));
+        assert!(!checker.has_function_decl_folded("other"));
+    }
+}
+
+/// The signature a variant group can call both `a` and `b` through, or `None` when there is none.
+///
+/// Identical signatures trivially share one. Beyond that, two variants may differ only by
+/// OPTIONAL parameters the wider one appends: Symfony's polyfill declares php 8.5's
+/// `grapheme_stripos(..., ?string $locale = '')` beside the 8.4 shape, each behind its own
+/// `function_exists()` guard in a different bootstrap file, exactly one of which binds. The caller
+/// passes the wider list and the narrower body never reads the surplus argument. Any other
+/// difference in how arguments or the result are stored, a passing mode, a default, or a
+/// variadic stays a refusal.
+fn widest_compatible_variant(
+    a: &crate::types::FunctionSig,
+    b: &crate::types::FunctionSig,
+) -> Option<crate::types::FunctionSig> {
+    if a == b {
+        return Some(a.clone());
+    }
+    let (narrow, wide) = if a.params.len() <= b.params.len() { (a, b) } else { (b, a) };
+    let n = narrow.params.len();
+    // Compared by STORAGE, not by declared php type: the call goes through one convention, so
+    // what must agree is how each argument and the result are passed. The 8.0 polyfill's
+    // untyped `$haystack` and the 8.4 one's `?string $haystack` are both a boxed mixed cell.
+    // The defaults must be the same expressions, because the CALLER fills them in.
+    let same_storage = |left: &crate::types::PhpType, right: &crate::types::PhpType| {
+        left.codegen_repr() == right.codegen_repr()
+    };
+    let same_shape = narrow.variadic.is_none()
+        && wide.variadic.is_none()
+        && same_storage(&narrow.return_type, &wide.return_type)
+        && narrow.by_ref_return == wide.by_ref_return
+        && narrow.is_generator == wide.is_generator
+        && narrow
+            .params
+            .iter()
+            .zip(&wide.params[..n])
+            .all(|((_, left), (_, right))| same_storage(left, right))
+        && narrow.defaults[..] == wide.defaults[..n]
+        && narrow.ref_params[..] == wide.ref_params[..n];
+    let surplus_optional = wide.defaults[n..].iter().all(Option::is_some)
+        && !wide.ref_params[n..].iter().any(|by_ref| *by_ref);
+    (same_shape && surplus_optional).then(|| wide.clone())
 }

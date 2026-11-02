@@ -14,6 +14,7 @@ use crate::parser::ast::{Stmt, StmtKind};
 use super::{canonical_builtin_function_name, namespace_name, Symbols};
 
 
+
 impl Symbols {
     /// canonical_function
     pub(super) fn canonical_function(&self, name: &str) -> Option<String> {
@@ -33,6 +34,21 @@ impl Symbols {
             .or_else(|| self.extern_functions.get(&key))
             .cloned()
             .or_else(|| canonical_builtin_function_name(name))
+            .or_else(|| super::canonical_compat_prelude_function_name(name))
+            // PHP's global fallback for a bare call, applied by DECLARATION rather than by an
+            // allow-list. An eager `autoload.files` entry runs before any class file is resolved,
+            // so every global function it declares is known by the time a namespaced file calls
+            // one bare. Without this, `trigger_deprecation()` inside
+            // `namespace Symfony\Component\Console\Input` stays
+            // `Symfony\Component\Console\Input\trigger_deprecation` and dies at run time while
+            // the very same declaration answers a call from global scope — measured, three files,
+            // no framework. `canonical_compat_prelude_function_name` above is the hand-maintained
+            // version of this rule and has been caught missing a name three times; this one needs
+            // no list.
+            .or_else(|| {
+                crate::eager_globals::declares(name)
+                    .then(|| name.trim_start_matches('\\').to_string())
+            })
     }
 
     /// Returns whether `name` resolves to a user-declared (or extern) function,
@@ -153,7 +169,7 @@ pub(super) fn collect_symbols(
                     canonical_name_for_decl(namespace.as_deref(), name),
                 );
             }
-            StmtKind::ExternClassDecl { name, .. } => {
+        StmtKind::ExternClassDecl { name, .. } => {
                 insert_folded_symbol(
                     &mut symbols.extern_classes,
                     canonical_name_for_decl(namespace.as_deref(), name),
@@ -164,9 +180,61 @@ pub(super) fn collect_symbols(
                     .constants
                     .insert(canonical_name_for_decl(namespace.as_deref(), name));
             }
+            StmtKind::ExprStmt(expr) => {
+                if let Some(defined) = defined_constant_name(expr) {
+                    symbols.constants.insert(defined);
+                }
+            }
             _ => {}
         }
     }
+}
+
+/// Returns the constant name a top-level `define('NAME', …)` statement creates, if any.
+///
+/// `define()` takes the name as a STRING, so the current namespace never qualifies it: inside
+/// `namespace Symfony\Polyfill\Intl\Grapheme;`, `\define('SYMFONY_GRAPHEME_CLUSTER_RX', …)`
+/// creates the constant in the GLOBAL namespace, and php resolves the file's own unqualified
+/// `SYMFONY_GRAPHEME_CLUSTER_RX` by falling back there. That fallback is
+/// [`super::names::resolve_constant_name`]'s `symbols.has_constant(&name.as_canonical())` arm,
+/// which only ever saw `const` DECLARATIONS — so every `define()`d constant failed the fallback
+/// and resolved to `<namespace>\NAME`, which nothing defines. Recording the name here is what
+/// makes the arm reachable.
+///
+/// Only a LITERAL name is recorded: `define($name, …)` cannot be known here, and php would not
+/// let a namespace fallback find it either. A name written with backslashes is honoured as php
+/// does (`define('Foo\\BAR', 1)` really does create `Foo\BAR`), with a leading separator trimmed
+/// so the key matches `Name::as_canonical`'s spelling.
+///
+/// Deliberately limited to an UNCONDITIONAL statement. `if (!defined('X')) { define('X', …); }`
+/// is the other common polyfill shape, and recording it here would claim a constant that the
+/// branch may not create — the conditional collector below takes the same care with functions.
+fn defined_constant_name(expr: &crate::parser::ast::Expr) -> Option<String> {
+    use crate::parser::ast::ExprKind;
+    let ExprKind::FunctionCall { name, args } = &expr.kind else {
+        return None;
+    };
+    if !is_define_call(name) {
+        return None;
+    }
+    let ExprKind::StringLiteral(defined) = &args.first()?.kind else {
+        return None;
+    };
+    let defined = defined.trim_start_matches('\\');
+    (!defined.is_empty()).then(|| defined.to_string())
+}
+
+/// Reports whether `name` refers to the builtin `define()`.
+///
+/// Case-insensitive and single-segment, mirroring `is_dirname_call` in
+/// `crate::resolver::path_eval`: php function names are case-insensitive, this runs BEFORE the
+/// name resolver has folded anything, and a multi-segment `Foo\define` is a user function.
+fn is_define_call(name: &crate::names::Name) -> bool {
+    matches!(
+        name.kind,
+        crate::names::NameKind::Unqualified | crate::names::NameKind::FullyQualified
+    ) && name.parts.len() == 1
+        && name.parts[0].eq_ignore_ascii_case("define")
 }
 
 /// Collects function declarations from conditional branches without predeclaring class-like names.

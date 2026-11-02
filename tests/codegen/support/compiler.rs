@@ -38,6 +38,7 @@ pub(crate) fn compile_and_run_capture_merged_with_gmp(source: &str) -> ProgramOu
     compile_and_run_capture_merged_with_heap(source, 128 * 1024 * 1024)
 }
 
+
 /// Returns true when codegen fixtures are compiling through the EIR backend.
 pub(crate) fn codegen_fixture_uses_ir_backend() -> bool {
     true
@@ -233,6 +234,7 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
     let (user_asm, _runtime_asm, _link_requirements) = try_compile_source_to_asm_with_defines_repr(
         source,
         &dir,
@@ -245,7 +247,6 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
         false,
         elephc::php_version::PhpVersion::default(),
     );
-    let _ = fs::remove_dir_all(&dir);
     match user_asm {
         Ok(_) => panic!("expected the EIR backend to reject this program, but it compiled"),
         Err(error) => error.to_string(),
@@ -334,9 +335,14 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let ast = elephc::conditional::apply(ast, defines);
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
-    let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
+    let (resolved, _, included_sources) =
+        elephc::resolver::resolve_collecting_includes_with_defines_and_sources(ast, dir, defines)
+            .expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    // Mirrors `pipeline::compile`: the classic DOM classes are injected when the program names
+    // one (or a `libxml_*` function); the late gate after autoloading covers the rest.
+    let resolved = elephc::dom_prelude::inject_if_used(resolved, &mut prelude_inventory);
     // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
     // the harness seeds `set_linked_extensions` from the same bits so
     // `extension_loaded('PDO'/'mysqli')` agrees between `compile_and_run` and
@@ -376,29 +382,87 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::gmp_prelude::inject_if_used(resolved, force_gmp, &mut prelude_inventory);
     let resolved = elephc::random_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::sodium_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::password_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_edge_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_gradual_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved =
+        elephc::dom_html_prelude::inject_if_used(resolved, php_version, false, &mut prelude_inventory);
+    let resolved = elephc::array_ucompare_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::fileinfo_prelude::inject_if_used_for_version(
         resolved, false, php_version, &mut prelude_inventory,
     );
     let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
-    let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    // Mirrors `pipeline::compile`: the entry file's own interface declarations travel
+    // neither the resolver's include stripping nor the autoload pass, so this is the only
+    // place that gives them the activation event `interface_exists()` reads.
+    let resolved = elephc::autoload::activate_entry_interface_declarations(
+        resolved,
+        &synthetic_main
+            .canonicalize()
+            .unwrap_or_else(|_| synthetic_main.clone()),
+    );
+    let (resolved, autoloaded_files, declaration_source_files) =
+        elephc::autoload::run_collecting_included_with_defines_and_sources(
+            resolved,
+            dir,
+            &autoload_registry,
+            defines,
+        )
+        .expect("autoload failed");
+    let resolved = elephc::assert_prelude::inject_if_used(resolved);
+    let resolved = elephc::throwable_string_prelude::inject(resolved, &mut prelude_inventory);
+    let resolved = elephc::error_exception_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::sodium_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::password_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_edge_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_gradual_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved =
-        elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
-    let resolved = elephc::dom_html_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
-        .expect("autoload DOM prelude injection failed");
+        elephc::dom_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved =
+        elephc::dom_html_prelude::inject_if_used(resolved, php_version, false, &mut prelude_inventory);
+    let resolved = elephc::array_ucompare_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::attribute_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::array_merge_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    // Mirrors `pipeline::compile`, which injects this between `array_merge` and the backend
+    // gap prelude. Omitting it here left the harness unable to compile any `filter_var()`
+    // call with a runtime `$filter`, so that whole path had no test coverage at all.
+    let resolved = elephc::filter_var_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    // Mirrors `pipeline::compile`: the error-handling surface (`trigger_error()`,
+    // `set_error_handler()`, `error_reporting()`, ...) is injected when the program names it,
+    // or defines a constant under a computed name, whose prelude warns through it. Without it a
+    // fixture naming any of them died at run time on an undefined function.
+    let resolved = elephc::error_handling_prelude::inject_if_used(
+        resolved,
+        false,
+        &synthetic_main,
+        &mut prelude_inventory,
+    );
     // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
     // `(object)` cast that only appears in an autoloaded class file is still detected.
     let resolved = elephc::testing_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
         .expect("testing prelude post-autoload injection failed");
     let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("object-cast prelude injection failed");
+    let resolved = elephc::backend_gap_prelude::inject_if_used(resolved, &mut prelude_inventory);
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::lazy_static_defaults::apply(resolved);
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
+    // Mirrors `pipeline::compile`'s `conditional-functions` phase: a function declared inside
+    // `if (!function_exists(...))` binds when the statement runs, through a variant group.
+    // Without it the harness compiled such a declaration as absent, and a program the CLI
+    // runs failed here with "Call to undefined function".
+    // Mirrors `pipeline::compile`: a `static` captured by reference becomes a hidden global.
+    let resolved = elephc::static_ref_capture::rewrite_captured_statics(resolved);
+    let resolved =
+        elephc::conditional_functions::bind_conditional_declarations(resolved, target());
+    let resolved = elephc::conditional_classes::hoist_unique_conditional_class_likes(resolved);
     // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint, so every
     // reachable template has become an ordinary monomorphic declaration before lowering. A
     // plain `check_with_target` here would leave templates in the program and hand the backend
@@ -423,21 +487,71 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         optimized,
         check_result.local_binding_decision_spans(),
     );
-    let empty_roots = HashSet::new();
+    // The Throwable string helpers are called from lowering only, like an export.
+    let mut empty_roots: HashSet<String> = elephc::throwable_string_prelude::FUNCTIONS
+        .iter()
+        .map(|name| name.to_string())
+        .collect();
+    // `assert($x)` is routed to its helper by lowering, as `pipeline::compile` roots it.
+    empty_roots.insert(elephc::assert_prelude::ASSERT_ONE_ARG_NAME.to_string());
     // Mirrors `pipeline::compile`: a generic instantiation is reachable by construction but no
     // call site NAMES it in the AST — lowering resolves that from the checker's answer — so the
     // pruner would otherwise drop every instantiation as unreferenced.
-    let instantiation_roots: HashSet<String> =
-        elephc::generics::instantiation_roots(&check_result.requested_instantiations)
-            .into_iter()
-            .collect();
+    empty_roots.extend(elephc::generics::instantiation_roots(
+        &check_result.requested_instantiations,
+    ));
+    // Mirrors `pipeline::compile`: the array_merge and backend-gap prelude groups are
+    // rooted whenever they were injected, because the lowering names their bodies
+    // without leaving a declaration-level call edge for reachability to follow.
+    let mut forced_groups = HashSet::new();
+    if prelude_inventory.groups.contains_key("array_merge") {
+        forced_groups.insert("array_merge".to_string());
+    }
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::backend_gap_prelude::BACKEND_GAP_GROUP)
+    {
+        forced_groups.insert(elephc::backend_gap_prelude::BACKEND_GAP_GROUP.to_string());
+    }
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::array_gradual_prelude::GROUP)
+    {
+        forced_groups.insert(elephc::array_gradual_prelude::GROUP.to_string());
+    }
+    // eval()-interpreted vendor code reaches the DOM classes through the native-class bridge.
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::dom_prelude::GROUP)
+    {
+        forced_groups.insert(elephc::dom_prelude::GROUP.to_string());
+    }
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::dom_html_prelude::GROUP)
+    {
+        forced_groups.insert(elephc::dom_html_prelude::GROUP.to_string());
+    }
+    // Reached from `exit()` lowering, never from PHP, exactly as `pipeline::compile` forces it.
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::error_handling_prelude::SHUTDOWN_RUN_GROUP)
+    {
+        forced_groups.insert(elephc::error_handling_prelude::SHUTDOWN_RUN_GROUP.to_string());
+    }
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::filter_var_prelude::FILTER_VAR_GROUP)
+    {
+        forced_groups.insert(elephc::filter_var_prelude::FILTER_VAR_GROUP.to_string());
+    }
     let optimized = elephc::optimize::prune_unreachable_declarations(
         optimized,
         &mut check_result,
         elephc::optimize::reachability::PruneOptions {
             inventory: &prelude_inventory,
-            forced_groups: &empty_roots,
-            exported_functions: &instantiation_roots,
+            forced_groups: &forced_groups,
+            exported_functions: &empty_roots,
             eval_forced: false,
         },
     );
@@ -445,11 +559,35 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let mut ir_module =
-        lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result, &synthetic_main);
+    let source_catalog = elephc::ir::SourceCatalog::from_units(std::iter::once(elephc::resolver::SourceUnit {
+        canonical_path: synthetic_main.canonicalize().unwrap_or_else(|_| synthetic_main.clone()),
+        mode: elephc::source::SourceMode::Php,
+        source: std::sync::Arc::from(source),
+    }).chain(included_sources.source_units.into_values())
+      .chain(declaration_source_files.source_units.into_values()))
+        .expect("source snapshot merge failed");
+    let mut ir_module = lower_and_validate_ir_for_codegen_fixture(
+        &optimized, &check_result, &synthetic_main, source_catalog,
+    );
+    ir_module.declared_class_source_files = declaration_source_files.class_likes;
+    ir_module.declared_function_source_files = declaration_source_files.functions;
+    ir_module.declared_class_source_files.extend(included_sources.class_likes);
+    ir_module.declared_function_source_files.extend(included_sources.functions);
+    // Mirror `pipeline`: the autoload pass already performed these inclusions, and the runtime
+    // has to be told so -- otherwise an `include_once` of an autoloaded file redeclares it here
+    // while the CLI answers "already included", and the two disagree on the same program.
+    elephc::autoload::record_compile_time_inclusions(&mut ir_module, &optimized, &autoloaded_files);
     if with_regex {
         ir_module.required_runtime_features.regex = true;
     }
+    // Mirror `pipeline`: a user-declared interface is activated at run time through a
+    // `_classlike_active_interface_*` cell, and `finalize_user_asm` only DEFINES those cells
+    // under `class_introspection`. Without this the fixture emits the reference and the link
+    // fails with an undefined symbol for a program the CLI compiles.
+    ir_module.required_runtime_features.class_introspection |= ir_module
+        .interface_infos
+        .values()
+        .any(|info| info.declaration_span != elephc::span::Span::dummy());
     // Mirror `pipeline::backend`: report the bridges this fixture actually links to
     // `extension_loaded()` / `get_loaded_extensions()`. Extension folding happens during
     // instruction lowering, so the seed has to land before `generate_user_asm_*`.
@@ -473,13 +611,14 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         regalloc_linear,
         false,
         elephc::codegen::WebIsolation::Worker,
+        None, // spill: fixtures are small enough to stay in memory
     );
     let mut runtime_features = ir_module.required_runtime_features;
     if let Ok(output) = &generated_user_asm {
         runtime_features.handler_state |= output.handler_state;
         runtime_features.object_clone |= output.object_clone;
     }
-    let user_asm = generated_user_asm.map(|output| output.asm);
+    let user_asm = generated_user_asm.map(|output| output.asm.into_string());
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
     let link_requirements = TestLinkRequirements::new(
@@ -533,12 +672,15 @@ pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
     program: &elephc::parser::ast::Program,
     check_result: &elephc::types::CheckResult,
     source_path: &Path,
+    source_catalog: elephc::ir::SourceCatalog,
 ) -> elephc::ir::Module {
-    let mut module = elephc::ir_lower::lower_program_with_source_path(
+    let mut module = elephc::ir_lower::lower_program_with_source_catalog(
         program,
         check_result,
         target(),
         source_path,
+        false,
+        source_catalog,
     )
         .expect("AST-to-EIR lowering failed for codegen fixture");
     if ir_opt_enabled_for_codegen_fixture() {
@@ -592,11 +734,16 @@ fn ir_opt_enabled_for_codegen_fixture() -> bool {
 }
 
 /// Returns the process-exit epilogue emitted for a supported test target.
+///
+/// `main` leaves through `__rt_exit_code` with status 0 rather than an inline exit syscall, so
+/// the needle is that tail call; it occurs once per program. The inline-syscall needles it
+/// replaced matched nothing any more, and every harness fixture failed to inject.
 fn main_exit_needle(target: Target) -> &'static str {
     match (target.platform, target.arch) {
-        (Platform::MacOS, Arch::AArch64) => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
-        (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #94\n    svc #0",
-        (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    mov eax, 231\n    syscall",
+        (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
+            "    mov x0, #0\n    b __rt_exit_code"
+        }
+        (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    jmp __rt_exit_code",
         (_, Arch::AArch64) => panic!(
             "main exit harness is not implemented yet for target {}",
             target
@@ -637,6 +784,7 @@ pub(crate) fn compile_harness_expect_failure(
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
@@ -651,7 +799,6 @@ pub(crate) fn compile_harness_expect_failure(
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     stderr
 }
 
@@ -665,6 +812,7 @@ pub(crate) fn compile_harness_and_run(source: &str, heap_size: usize, harness: &
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, false);
@@ -679,7 +827,6 @@ pub(crate) fn compile_harness_and_run(source: &str, heap_size: usize, harness: &
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     stdout
 }
 
@@ -696,6 +843,7 @@ pub(crate) fn compile_harness_and_run_with_heap_debug(
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
@@ -710,7 +858,6 @@ pub(crate) fn compile_harness_and_run_with_heap_debug(
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     stdout
 }
 
@@ -724,6 +871,7 @@ pub(crate) fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, true, false);
@@ -737,7 +885,6 @@ pub(crate) fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     output
 }
 
@@ -751,6 +898,7 @@ pub(crate) fn compile_and_run_with_counters(source: &str) -> ProgramOutput {
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_counters(source, &dir, 8_388_608, false, true, false);
@@ -764,7 +912,6 @@ pub(crate) fn compile_and_run_with_counters(source: &str) -> ProgramOutput {
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     output
 }
 
@@ -829,6 +976,7 @@ fn compile_and_run_capture_with_optional_regex(
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options_and_regex(
@@ -844,7 +992,6 @@ fn compile_and_run_capture_with_optional_regex(
         &[],
     );
 
-    let _ = fs::remove_dir_all(&dir);
     output
 }
 
@@ -925,6 +1072,7 @@ pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramO
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options(source, &dir, 8_388_608, false, true);
@@ -976,6 +1124,31 @@ pub(crate) fn compile_and_run_with_heap_debug_tagged(source: &str) -> ProgramOut
     output
 }
 
+/// Compiles and runs a fixture under heap debug with the explicit regex capability, so a
+/// `preg_*` fixture can report its leak summary.
+pub(crate) fn compile_and_run_with_heap_debug_and_regex(source: &str) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options_and_regex(
+            source, &dir, 8_388_608, false, false, true, true,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    assemble_and_run_capture(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    )
+}
+
 // Parses GC statistics from stderr output produced when gc_stats is enabled.
 // Expects a line matching `GC: allocs=N frees=N` and returns (allocs, frees).
 // Panics if the line is missing or the numbers cannot be parsed.
@@ -1019,6 +1192,7 @@ fn compile_and_run_with_heap_size_and_optional_regex(
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options_and_regex(
@@ -1052,7 +1226,6 @@ fn compile_and_run_with_heap_size_and_optional_regex(
         }
     }
 
-    let _ = fs::remove_dir_all(&dir);
     elephc_out
 }
 
@@ -1078,6 +1251,7 @@ pub(crate) fn compile_and_run_with_php_ini(source: &str, ini: &str) -> String {
         pid, tid, id
     ));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
     let ini_path = dir.join("php.ini");
     fs::write(&ini_path, ini).unwrap();
 
@@ -1093,7 +1267,6 @@ pub(crate) fn compile_and_run_with_php_ini(source: &str, ini: &str) -> String {
         &[],
         &[("PHPRC", ini_path.as_os_str())],
     );
-    let _ = fs::remove_dir_all(&dir);
     output
 }
 
@@ -1145,6 +1318,7 @@ pub(crate) fn compile_and_run_with_php_version(
         pid, tid, id
     ));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, requirements) =
         compile_source_to_asm_with_defines_repr_and_php_version(
@@ -1166,7 +1340,6 @@ pub(crate) fn compile_and_run_with_php_version(
         &default_link_paths(),
         &[],
     );
-    let _ = fs::remove_dir_all(&dir);
     output
 }
 
@@ -1189,6 +1362,7 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("elephc_test_tagged_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
+    let _dir_guard = TestDirGuard::new(dir.clone());
 
     let (user_asm, runtime_asm, required_libraries) = compile_source_to_asm_with_defines_repr(
         source,
@@ -1227,7 +1401,6 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
         }
     }
 
-    let _ = fs::remove_dir_all(&dir);
     elephc_out
 }
 
@@ -1248,17 +1421,25 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
 /// `assemble_and_run`, and a `_script_source_file` with no bytes would make the assembled program
 /// report a garbage filename.
 pub(crate) fn asm_without_embedded_script_path(user_asm: &str) -> String {
-    let mut out = Vec::new();
-    let mut drop_next_ascii = false;
-    for line in user_asm.lines() {
-        if drop_next_ascii && line.trim_start().starts_with(".ascii") {
-            drop_next_ascii = false;
-            continue;
-        }
-        drop_next_ascii = line.trim() == "_script_source_file:";
-        out.push(line);
-    }
-    out.join("\n")
+    let lines: Vec<&str> = user_asm.lines().collect();
+    // The path is ALSO embedded in descriptors other than `_script_source_file`, such as a frame
+    // reader's entry-file fallback (`{ptr, len}` over the same bytes). Dropping only the first
+    // occurrence let the directory name satisfy needles the test meant to search for in code.
+    let script_path_line = lines
+        .iter()
+        .enumerate()
+        .find(|(index, line)| {
+            line.trim() == "_script_source_file:"
+                && lines
+                    .get(index + 1)
+                    .is_some_and(|next| next.trim_start().starts_with(".ascii"))
+        })
+        .and_then(|(index, _)| lines.get(index + 1).copied());
+    lines
+        .into_iter()
+        .filter(|line| Some(*line) != script_path_line)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -1270,15 +1451,15 @@ mod exit_harness_tests {
     fn main_exit_needles_match_supported_target_abis() {
         assert_eq!(
             main_exit_needle(Target::new(Platform::MacOS, Arch::AArch64)),
-            "    mov x0, #0\n    mov x16, #1\n    svc #0x80"
+            "    mov x0, #0\n    b __rt_exit_code"
         );
         assert_eq!(
             main_exit_needle(Target::new(Platform::Linux, Arch::AArch64)),
-            "    mov x0, #0\n    mov x8, #94\n    svc #0"
+            "    mov x0, #0\n    b __rt_exit_code"
         );
         assert_eq!(
             main_exit_needle(Target::new(Platform::Linux, Arch::X86_64)),
-            "    mov edi, 0\n    mov eax, 231\n    syscall"
+            "    mov edi, 0\n    jmp __rt_exit_code"
         );
     }
 }

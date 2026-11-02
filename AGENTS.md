@@ -78,6 +78,12 @@ cargo test <feature_or_regression_filter>      # or the narrower --test <binary>
 git diff --check
 ```
 
+Every commit that touches the builtin catalog or the registry: build the binary and compile one PHP
+file; a startup panic passes every cargo gate. A contract added without its registry binding aborts
+`elephc` before it reads its argument, and the type-check build, the magician suite and the
+builtin-contract census all stay green through it -- only running the built binary on one file
+catches that class of failure.
+
 For docs-only, workflow-only, or configuration-only changes, replace Rust test runs with the relevant syntax/metadata checks. For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. If the change can affect generated assembly, runtime helpers, ABI behavior, linking, ownership/GC, or target-specific libraries, run focused tests for affected supported targets when local evidence is needed; otherwise rely on CI for sharded Linux x86_64/Linux ARM64/macOS ARM64 executable coverage and the target-specific iOS device/Simulator compile and emitter checks. For target-sensitive Darwin work, add the `ci:macos` label so the macOS tier runs on the PR before it reaches the merge queue.
 
 ### Test structure
@@ -113,6 +119,57 @@ fn test_my_feature() {
 Each test runs in an isolated temp directory. Tests run in parallel — the `compile_and_run` helper handles isolation automatically.
 
 A fixture that contains an `eval()` whose source is known only at runtime (the `$argc > 0 ? '...' : ''` pattern, `eval($code)`) lowers the whole builtin catalog and costs tens of seconds per compile; a literal `eval('...')` costs about as much as the same code inline. When several such fixtures only compare stdout, bundle them with `assert_bundle` / `assert_bundle_with` (`tests/codegen/support/bundle.rs`): the cases compile and run as one program, stdout is split per case, and a failure names the case. Cases share one scope and declaration namespace (unique function/class names, no `declare(strict_types=1)`, no `exit`), so keep a fixture on its own when it needs per-program heap or GC statistics, a non-zero exit, or stderr assertions. Name a bundled test `test_<family>_bundle`: `.config/nextest.toml` gives that suffix a longer timeout budget, because one bundle runs every case it replaced.
+## Repository memory (Kage)
+
+Kage is this repository's shared memory: verified, evidence-backed **memory packets** under `.agent_memory/packets/` (`bug_fix`, `decision`, `gotcha`, `convention`, `runbook`, `code_explanation`) plus a code graph over the source. The packets are committed and shared through git — they are part of a change, like a test. Everything else under `.agent_memory/` (indexes, code graph, structural and observation caches, daemon/store/report state) is regenerable local state and is git-ignored.
+
+### Recall before working
+
+- Call `kage_context` as the **first step of a task**, with the question you are actually answering and the files you intend to touch as `targets`. An agent delegated a task calls it as its first instruction.
+- Read the recalled packets and the "Related Code Graph" callers/consumers **before** reading code. A cold recall can take several minutes and is moved to the background — launch it early and keep working while it runs.
+- Before committing, run `kage_risk` on the files you changed, and read its co-change partners as **candidate twins of your change**: the same bug usually also sits in the sibling file, in the x86_64 arm beside the aarch64 one you just fixed.
+- Use `kage_dependency_path` when a hypothesis names a producer and a consumer and you need the edge between them.
+- Run `kage_pr_check` before declaring a change ready. Use `kage_decisions` to audit which hot paths still carry no memory.
+
+### Record at the commit
+
+- `kage_learn` writes the packet. State the **mechanism** — what happens, why, and where — cite the source `paths` (they are verified to exist), give the `evidence` that established it (reducer values before/after, test names, filter counts), and set the `type`.
+- When a new packet replaces an older claim, retire the old one with `kage_supersede` and give the reason.
+- When a commit only moves code under a packet whose claim still holds, run `kage reverify --project <repo root> --packet <id> --evidence "…"` instead of rewriting the packet.
+- Treat a packet a recall marks "Withheld (stale)" as possibly true but unverified: re-measure before acting on it.
+- A packet is not session narration, carries no secrets, and cites no path outside the repo (`allow_missing_paths` is only for a file you are about to create). It states a mechanism a future session can act on, with the evidence that established it.
+
+### Navigating the code (Graft)
+
+Graft is the second half of the same discipline: where Kage answers *why* a mechanism is the way it is, Graft answers *where* it lives. The repository carries a prebuilt context graph under `graft/` — a wiring graph plus per-file cards — and it is queried from the shell, not through MCP.
+
+- `graft ask "<question>"` returns ranked symbols with exact `file:line` and the signature. Use it **before** grepping: a grep over this tree returns hundreds of lines and names nothing, while one `ask` names the owning function. It refreshes the graph for changed files on its own before answering.
+- `graft skeleton <file>` gives a signatures-only view of a file, which is how to read an unfamiliar 700-line module without pulling it all into context.
+- Graft is free and offline for `ask`/`build`; only `build --deep` calls an LLM.
+- A hit is a starting point, not a verdict: confirm the mechanism by reading the named lines, and confirm behaviour by measuring. Graft locates, Kage explains, a `php -n` reducer decides.
+
+### The order of a task
+
+Both tools are mandatory, on every task, and the cost of using them is accepted:
+
+1. `kage_context` first, with the real question and the files you expect to touch. Launch it early; it can take minutes.
+2. `graft ask` to locate the mechanism the recall named.
+3. Measure against `php -n` before changing anything — a recalled packet states what was true when it was written, not what is true now.
+4. `kage_risk` before committing, and read its co-change partners as candidate twins of the change.
+5. `kage_learn` with the commit, `kage_supersede` when it replaces an older claim, `kage reverify` when only the code moved.
+6. Never leave a measured divergence unrecorded because it was not the defect you were chasing. A finding filed as an open item and never scheduled costs exactly as much as a finding never made: on 2026-09-11 the Symfony `--web` request was blocked by an integer-key densification defect that had been measured, written up and filed as an open bug on 2026-08-23, and days were spent on stops downstream of it. Record it, and say plainly in the report that it is unfixed and why.
+
+### Hygiene and known traps
+
+All measured in this repository:
+
+- The packet id derives from the first ~80 characters of the **title**, so a second `kage_learn` with the same title prefix overwrites the packet in place. Useful to repair a broken packet, destructive otherwise.
+- The secret scanner rejects prose containing `token: <word>`, or any `NAME=value` shape, as an "api key assignment". Write "X set to 1" instead.
+- Never use an `Object.prototype` name as a packet tag (`constructor`, `toString`, `valueOf`, `hasOwnProperty`, `__proto__`, `prototype`): the index builder keys a plain JavaScript object by tag, and such a tag breaks **every** Kage tool with `map[key].includes is not a function` (measured 2026-09-06; fix by renaming the tag in the packet and refreshing).
+- A packet is flagged stale as soon as a cited file changes in the **working tree** — uncommitted edits count, not only commits.
+- `kage_refresh` on a non-default branch is a quiet refresh: flags are computed, not written.
+- The graph's "related tests" list can be noise (unrelated repository scripts). Judge it before trusting it.
+- Two agents writing a packet about the same finding within an hour happens; the later one supersedes the earlier, with the reason.
 
 ## Architecture
 
@@ -317,6 +374,9 @@ Key invariants:
   AOT and eval without a second pinned list. Injected preludes must call
   `internal: true` `__elephc_*` aliases instead of PHP-visible extension builtins; a
   parity gate scans the prelude sources to enforce this.
+- **Implement the body, never transcribe PHP into it.** A builtin is Rust semantics, or a
+  declaration assembled with the AST builders — never PHP source text handed to the parser.
+  See *PHP surfaces are built as AST, never parsed from PHP text* below.
 - Add codegen + error tests (include a case-insensitive or namespaced call for
   PHP-visible builtins); keep shared-contract/backend-support parity gates green.
 - Magician bindings contribute only `contract`, `area`, and direct/value hooks. Use
@@ -329,9 +389,54 @@ Key invariants:
   `python3 scripts/docs/extract_builtins.py --render --force`,
   `python3 scripts/docs/audit_builtins.py`, and
   `python3 scripts/docs/elephc_builtins/validate_site_compat.py`, plus
-  `python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture`.
+  `python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture` and
+  `python3 scripts/audit_php_text_parse.py --enforce`.
   Commit the
   generated docs and registry.
+
+### PHP surfaces are built as AST, never parsed from PHP text
+
+Every PHP function, method, or class that elephc provides itself — builtins, preludes,
+synthetic classes, backend gap fills — is **constructed with the AST builders**. Writing
+the PHP as source text in a Rust string and running elephc's own lexer and parser over it
+at compile time is not an accepted shortcut, in new code or in code you are extending.
+
+Two reasons, and the second is the one that changes design decisions:
+
+- The parse is paid on **every** invocation of the compiler, by every user, whether or not
+  the program touches that surface.
+- A string is **opaque to every static pass**. Declarations built as AST participate in name
+  resolution, type checking, EIR lowering, and closed-world pruning like user code; text
+  parsed late cannot be specialized, so the rule is about the quality of the code we emit,
+  not only about compile time.
+
+How: assemble the declaration with `function(...)`, `.param(...)`, `.returns(...)`,
+`.body(vec![...])`, `s_if`, `s_return`, `e_call`, `e_binop`, … The reference implementation
+is `src/web_prelude/build.rs`; `src/pdo_prelude/build.rs` is the proof the approach scales
+past ten thousand lines. Never call `eval()`, never hand a PHP snippet in a Rust literal to
+the parser, and never implement one builtin by generating another's PHP source.
+
+The one legitimate home for PHP source text is **tests** — probes, fixtures, `.phpt` cases,
+and oracle inputs are PHP by nature.
+
+**Prove it mechanically, not by review.** `python3 scripts/audit_php_text_parse.py --enforce`
+is a ratchet: it lists every PHP literal and parser call outside test code and fails on any
+drift from `scripts/php_text_parse_allowlist.json`. A new site fails it — and so does a
+converted site still listed, because an entry nobody removes is an entry that lets the site
+come back. Convert, then re-record with `--write` in the same commit. The list may only shrink.
+
+A converted surface additionally keeps its PHP constant only under `#[cfg(test)]`, so the
+constant does not exist in a release build and a relapse fails to compile. `PDO_PRELUDE_SRC`
+(`src/pdo_prelude.rs`) is the model and states that contract outright.
+
+Legacy sites still parsing text are tracked, bounded, and **must not be extended**: 8 sites,
+~3,750 lines across 13 files, all in `src/*_prelude*` (`dom`, `mysqli`, `backend_gap`,
+`array_merge`, `array_reduce`, `filter_var`, `assert`, and the shared PDO extern block).
+Note that `dom_prelude::inject` has no usage gate, so its text is lexed and parsed on every
+compilation. When converting one, use the transcriber (`src/synthetic_class/transcribe.rs`,
+`#[cfg(test)]`), add your prelude's arm to its oracle — the arm list is not open-ended and it
+panics on an unknown name — and re-run the real codegen tests afterwards, because the oracle
+proves the AST only.
 
 ### Adding a new EIR optimization pass
 

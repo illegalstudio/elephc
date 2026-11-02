@@ -130,6 +130,17 @@ impl FunctionSig {
                 && self.params.get(index).is_some_and(|(_, php_type)| {
                     crate::ir::Ownership::php_type_needs_lifetime_tracking(php_type)
                 }))
+            // Any other by-value parameter the callee tracks is borrowed (no owning shadow), and
+            // returning it ACQUIRES it (`acquire_borrowed_return_value` retains every `LoadLocal`
+            // of a lifetime-tracked value), so the result is the callee's own reference. Treating
+            // it as an unretained alias made the caller skip releasing its temporary:
+            // `id([1, 2, 3])` through an `iterable` parameter leaked the array per call, and
+            // `$id->keep($b->value)` through a `string` one leaked the property string.
+            || (!self.by_ref_return
+                && !self.ref_params.get(index).copied().unwrap_or(false)
+                && self.params.get(index).is_some_and(|(_, php_type)| {
+                    crate::ir::Ownership::php_type_needs_lifetime_tracking(php_type)
+                }))
     }
 
     /// Shares the user-call ownership boundary between caller cleanup, lowering, and inlining.
@@ -442,7 +453,9 @@ fn int_lit(value: i64) -> Expr {
 mod tests {
     use super::*;
 
-    /// Mixed callable returns have independent box owners; raw and reference returns can transfer.
+    /// Mixed callable returns have independent box owners. A raw by-value return is acquired by
+    /// the callee too (`acquire_borrowed_return_value`), so it is independent as well; only a
+    /// reference return can hand the argument's storage straight back.
     #[test]
     fn boxed_callable_returns_do_not_transfer_the_argument_descriptor() {
         let mut sig = variadic_sig(vec![("callback".to_string(), PhpType::Callable)]);
@@ -452,13 +465,14 @@ mod tests {
         sig.return_type = PhpType::Str;
         assert!(sig.returned_parameter_has_independent_owner(0));
         sig.return_type = PhpType::Callable;
-        assert!(!sig.returned_parameter_has_independent_owner(0));
+        assert!(sig.returned_parameter_has_independent_owner(0));
         sig.return_type = PhpType::Mixed;
         sig.by_ref_return = true;
         assert!(!sig.returned_parameter_has_independent_owner(0));
     }
 
-    /// Mixed object returns retain the payload in a fresh box; raw and reference returns can transfer.
+    /// Mixed object returns retain the payload in a fresh box, and so does a raw by-value return
+    /// (the callee acquires it); only a reference return can transfer.
     #[test]
     fn boxed_object_returns_do_not_transfer_the_argument_payload() {
         let mut sig = variadic_sig(vec![(
@@ -469,7 +483,7 @@ mod tests {
         assert!(sig.returned_parameter_has_independent_owner(0));
         assert!(!sig.returned_parameter_has_independent_owner(1));
         sig.return_type = PhpType::Object("Owner".to_string());
-        assert!(!sig.returned_parameter_has_independent_owner(0));
+        assert!(sig.returned_parameter_has_independent_owner(0));
         sig.return_type = PhpType::Mixed;
         sig.by_ref_return = true;
         assert!(!sig.returned_parameter_has_independent_owner(0));

@@ -472,36 +472,43 @@ impl EvalOpenMode {
 pub(super) fn eval_tmpfile_path() -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!(
-        "elephc-magician-tmpfile-{}-{}",
+        "elephc-magician-tmpfile-{}-{}-{}",
         std::process::id(),
-        eval_tmpfile_nonce()
+        eval_tmpfile_nonce(),
+        EVAL_TMPFILE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     path
 }
 
-/// Returns a nonce for temporary file names that no other call in this process repeats.
+/// Per-process sequence that makes two temporary paths distinct even at the same instant.
 ///
-/// THE WALL CLOCK ALONE IS NOT A NONCE. `SystemTime::now()` is *reported* in
-/// nanoseconds, but `CLOCK_REALTIME` only ADVANCES in whole microseconds on macOS (and
-/// at a granularity of its own, coarser than a nanosecond, elsewhere), so `as_nanos()`
-/// hands the same number to every caller inside one tick. Two threads opening an
-/// ephemeral eval stream in the same tick therefore built the SAME path, and the loser's
-/// `create_new` failed with `AlreadyExists` in the window between the winner's create and
-/// its `remove_file` — which `open_ephemeral_stream` turns into `None`, i.e. an eval
-/// `fopen("php://memory")` answering `false` for a stream with nothing wrong with it.
+/// The name used to be process id plus a nanosecond clock reading, and the caller opens it with
+/// `create_new(true)`. Two THREADS of one process share the pid, so the clock was the only thing
+/// separating them -- and two `SystemTime::now()` readings taken at once are not guaranteed to
+/// differ. The loser's open failed with `AlreadyExists`, `open_ephemeral_stream()` returned
+/// `None`, `fopen("php://memory")` returned false, and the resource ids the caller then printed
+/// were not the ones it opened.
 ///
-/// The process-wide sequence is what makes the nonce unique: `fetch_add` gives every
-/// caller a distinct number no matter how many threads ask at once. The clock stays
-/// because the sequence restarts at zero in each process, so it is the clock — with the
-/// process id — that separates one run of the compiler from the next.
-pub(super) fn eval_tmpfile_nonce() -> String {
-    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let clock = std::time::SystemTime::now()
+/// Measured: eight threads each running the three-`fopen` program two hundred times produced 23
+/// failures out of 1600 before this counter, and none after. That is the whole of the eval
+/// stream-id flake -- shared state in the temporary-file NAMESPACE, not in the id allocator,
+/// which is per-context and was never the problem.
+static EVAL_TMPFILE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Returns a monotonic-ish nonce for temporary file names.
+///
+/// WHY THE WALL CLOCK ALONE IS NOT A NONCE, measured upstream: `SystemTime::now()` is REPORTED in
+/// nanoseconds, but `CLOCK_REALTIME` only ADVANCES in whole microseconds on macOS, so `as_nanos()`
+/// hands the same number to every caller inside one tick.
+///
+/// Kept as the cross-PROCESS half of the name: two runs of the same binary reuse pids, so the
+/// clock is what separates their leftovers. Within one process `EVAL_TMPFILE_SEQUENCE` is what
+/// guarantees uniqueness, because this value can repeat.
+pub(super) fn eval_tmpfile_nonce() -> u128 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{clock}-{sequence}")
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -9,6 +9,17 @@
 
 use super::*;
 
+/// One array-valued compiled class constant, as registered by the generated program.
+#[derive(Clone, Debug)]
+pub struct NativeClassConstantDefault {
+    /// The class (or interface) that declares the constant, for visibility checks.
+    pub declaring_class: String,
+    /// The constant's declared visibility.
+    pub visibility: EvalVisibility,
+    /// The constant's value, materialized afresh on every read.
+    pub default: NativeCallableDefault,
+}
+
 impl ElephcEvalContext {
     /// Records the first class-initialization Error separately from individual reflected defaults.
     pub fn define_native_class_default_error(&mut self, class_name: &str, message: String) -> bool {
@@ -22,16 +33,52 @@ impl ElephcEvalContext {
         self.native_class_default_errors.get(&normalize_class_name(class_name)).map(String::as_str)
     }
 
-    /// Defines generated AOT parent metadata for eval `parent::` resolution.
+
+    /// Registers an array-valued compiled class constant under one class that can read it.
+    ///
+    /// The generated `__elephc_eval_value_class_constant_get` helper boxes scalar and enum-case
+    /// constants only, so `ReflectionCaster::UNSET_CLOSURE_FILE_INFO` -- an array built with
+    /// `__CLASS__` -- read from interpreted code was "Undefined constant". The generated program
+    /// registers each such constant here, under every class that inherits it.
+    pub fn define_native_class_constant_default(
+        &mut self,
+        class_name: &str,
+        constant_name: &str,
+        constant: NativeClassConstantDefault,
+    ) -> bool {
+        let key = native_constant_key(class_name, constant_name);
+        if key.0.is_empty() || key.1.is_empty() {
+            return false;
+        }
+        self.native_class_constant_defaults
+            .insert(key, constant)
+            .is_none()
+    }
+
+    /// Returns an array-valued compiled class constant registered for one class.
+    pub fn native_class_constant_default(
+        &self,
+        class_name: &str,
+        constant_name: &str,
+    ) -> Option<NativeClassConstantDefault> {
+        self.native_class_constant_defaults
+            .get(&native_constant_key(class_name, constant_name))
+            .cloned()
+    }
+
+    /// Registers generated AOT parent metadata without replacing an existing hierarchy edge.
     pub fn define_native_class_parent(&mut self, class_name: &str, parent_name: &str) -> bool {
         let class_key = normalize_class_name(class_name);
         let parent_name = parent_name.trim_start_matches('\\');
         if class_key.is_empty() || parent_name.is_empty() {
             return false;
         }
+        if let Some(existing_parent) = self.native_class_parents.get(&class_key) {
+            return existing_parent.eq_ignore_ascii_case(parent_name);
+        }
         self.native_class_parents
-            .insert(class_key, parent_name.to_string())
-            .is_none()
+            .insert(class_key, parent_name.to_string());
+        true
     }
 
     /// Returns generated AOT parent metadata by PHP class name.
@@ -286,5 +333,61 @@ impl ElephcEvalContext {
             .get(&native_property_key(class_name, property_name))
             .cloned()
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies a registration made after adopting the published table forks a private copy.
+    ///
+    /// Contexts no longer deep-copy the AOT registration stream: they adopt the first
+    /// context's tables by reference count. That is only sound while a later write cannot
+    /// reach the shared allocation, so exercise the one registration setter that can run
+    /// after a sync and assert the snapshot every other context still holds is unchanged.
+    #[test]
+    fn a_registration_after_adopting_the_shared_table_forks_it() {
+        let mut publisher = ElephcEvalContext::new();
+        assert!(publisher.define_native_property_default(
+            "Publisher",
+            "kept",
+            NativeCallableDefault::Int(7),
+        ));
+
+        // What `publish_global_eval_aot_metadata` stores and `sync_global_eval_aot_metadata`
+        // hands out: one allocation, reference-counted rather than copied.
+        let published = publisher.native_property_defaults.share();
+        let mut adopter = ElephcEvalContext::new();
+        adopter.native_property_defaults = SharedNative::from_shared(Arc::clone(&published));
+        assert_eq!(published.len(), 1);
+
+        assert!(adopter.define_native_property_default(
+            "Adopter",
+            "added",
+            NativeCallableDefault::Bool(true),
+        ));
+
+        assert_eq!(
+            published.len(),
+            1,
+            "a write made after the sync must not reach the published snapshot",
+        );
+        assert!(published
+            .get(&native_property_key("Adopter", "added"))
+            .is_none());
+
+        // The adopting context keeps both the inherited entry and its own.
+        assert_eq!(
+            adopter.native_property_default("Publisher", "kept"),
+            Some(NativeCallableDefault::Int(7)),
+        );
+        assert_eq!(
+            adopter.native_property_default("Adopter", "added"),
+            Some(NativeCallableDefault::Bool(true)),
+        );
+
+        // And the publishing context never sees another context's later registration.
+        assert_eq!(publisher.native_property_default("Adopter", "added"), None);
     }
 }

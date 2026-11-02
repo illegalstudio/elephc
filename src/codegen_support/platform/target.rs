@@ -277,6 +277,17 @@ impl Platform {
         }
     }
 
+    /// Returns the `O_WRONLY | O_CREAT | O_EXCL` flag combination for `open()`.
+    ///
+    /// PHP's `fopen($f, 'x')`: create the file for writing, failing when it already exists.
+    pub fn o_wronly_creat_excl(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0xA01,
+            Platform::Linux => 0xC1,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// Emits a conditional branch instruction that jumps to `label` on syscall success.
     ///
     /// macOS uses `b.cc` (conditional continue) and Linux uses `b.ge` (greater-than-or-equal),

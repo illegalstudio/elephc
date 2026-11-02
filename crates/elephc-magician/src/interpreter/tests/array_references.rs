@@ -24,7 +24,7 @@ fn mbstring_array_reference_identity_and_late_reads() {
     let later = values.string("UTF-8").unwrap();
     scope.set("encoding", first, ScopeCellOwnership::Borrowed);
     context.bind_array_element_alias(token, key.clone(), EvalReferenceTarget::Variable {
-        scope: &mut scope, name: "encoding".to_string(),
+        scope: crate::scope::EvalScopeRef::new(&mut scope), name: "encoding".to_string(),
     });
     let mut owners = Vec::new();
     let read = read_owned_array_reference(token, key.clone(), &mut context, &mut values, &mut owners).unwrap().unwrap();
@@ -52,7 +52,7 @@ fn mbstring_array_reference_value_copy_metadata() {
     let later = values.string("after").unwrap();
     scope.set("value", first, ScopeCellOwnership::Borrowed);
     context.bind_array_element_alias(source, key.clone(), EvalReferenceTarget::Variable {
-        scope: &mut scope, name: "value".to_string(),
+        scope: crate::scope::EvalScopeRef::new(&mut scope), name: "value".to_string(),
     });
     context.bind_array_element_alias(target, stale.clone(), EvalReferenceTarget::Cell { cell: first });
     context.set_array_cursor(source, EvalArrayCursor::Position(1));
@@ -146,10 +146,10 @@ fn assert_array_element_writeback_preserves_metadata(through_cell: bool) {
     scope.set("array", reference, ScopeCellOwnership::Borrowed);
     let target = if through_cell {
         EvalReferenceTarget::NestedArrayElement {
-            array_target: Box::new(EvalReferenceTarget::Cell { cell: reference }), index,
+            array_target: Box::new(EvalReferenceTarget::Cell { cell: reference }), index: key.clone(),
         }
     } else {
-        EvalReferenceTarget::ArrayElement { scope: &mut scope, array_name: "array".into(), index }
+        EvalReferenceTarget::ArrayElement { scope: crate::scope::EvalScopeRef::new(&mut scope), array_name: "array".into(), index: key.clone() }
     };
     for cursor in [EvalArrayCursor::Position(1), EvalArrayCursor::Invalid] {
         context.set_array_cursor(reference, cursor);

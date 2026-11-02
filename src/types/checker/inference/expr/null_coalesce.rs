@@ -149,7 +149,7 @@ fn declares_non_null_return(sig: &FunctionSig) -> bool {
 /// Builtins and externs are resolved ahead of user functions and are left out, so a call the
 /// checker typed as a builtin (recorded in `builtin_call_types` under its span) never qualifies.
 fn function_call_declares_non_null_return(checker: &Checker, call: &Expr, name: &str) -> bool {
-    if checker.builtin_call_types.contains_key(&call.span)
+    if checker.is_recorded_builtin_call(call.span)
         || checker.canonical_extern_function_name_folded(name).is_some()
     {
         return false;

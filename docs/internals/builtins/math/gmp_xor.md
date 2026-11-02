@@ -2,7 +2,7 @@
 title: "gmp_xor() - internals"
 description: "Compiler internals for gmp_xor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 639
+  order: 652
 ---
 
 ## `gmp_xor()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_xor.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_xor.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -73,6 +73,8 @@ struct LocalAccess {
 impl<'a> NumericInputs<'a> {
     /// Binds all cached facts to an immutable function and its handler policy.
     pub(crate) fn new(function: &'a Function) -> Self {
+        #[cfg(test)]
+        PROOF_BUILDS.with(|builds| builds.set(builds.get() + 1));
         let enabled = !function.instructions.iter().any(|inst| matches!(inst.op,
             Op::TryPushHandler | Op::CatchBind | Op::FinallyEnter));
         Self { function, enabled, proven: HashSet::new(), rejected: HashSet::new(),
@@ -240,6 +242,14 @@ fn local_accesses(function: &Function) -> Vec<LocalAccess> {
 std::thread_local! {
     /// Counts expensive slot eligibility checks within this test thread's proof.
     static SLOT_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Counts `NumericInputs` constructions: each one rescans the whole function.
+    static PROOF_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The number of numeric proofs this test thread has constructed so far.
+#[cfg(test)]
+pub(crate) fn proof_builds_for_tests() -> usize {
+    PROOF_BUILDS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]

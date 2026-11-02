@@ -340,15 +340,8 @@ pub(super) fn instance_method_already_emitted(
     class_name: &str,
     method_key: &str,
 ) -> bool {
-    ctx.module.class_methods.iter().any(|function| {
-        !function.flags.is_static
-            && function
-                .name
-                .rsplit_once("::")
-                .is_some_and(|(class, method)| {
-                    class == class_name && php_symbol_key(method) == method_key
-                })
-    })
+    ctx.shared
+        .emitted_method_contains(class_name, method_key, false)
 }
 
 /// Verifies the wrapper can forward the callback argument ABI without boxing or shuffling pairs.

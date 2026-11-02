@@ -19,6 +19,11 @@
 //!   generic `Mixed`/`Union(_)` boxing arms. A null-capable int slot (`?int` under
 //!   `NullRepr::Tagged`) is an inline two-word `{payload, tag}` TaggedScalar, so it takes
 //!   `TaggedInt`/`TaggedNull` and never a boxed Mixed pointer.
+//! - Every string (value or key) is emitted through `string_bytes::literal_bytes`, never
+//!   `str::as_bytes`: a byte above 0x7F travels through the AST in its private-use marker form,
+//!   and its UTF-8 spelling is three different bytes. The intl-normalizer polyfill keys a static
+//!   property with `"\xC0"`..`"\xF0"`; emitted as markers, no UTF-8 lead byte found its entry and
+//!   its decompose loop advanced by nothing, forever.
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{
@@ -37,6 +42,12 @@ mod tests;
 /// Literal default value that the EIR backend can write directly.
 #[derive(Clone)]
 pub(crate) enum LiteralDefaultValue {
+    /// Some default of the class has no literal form here (an array of enum cases, say): after
+    /// the literal ones are written, the class's `_class_propinit_<id>` thunk runs and assigns
+    /// every default the way compiled PHP would. Always the last entry of its list.
+    InitThunk {
+        class_id: u64,
+    },
     Int(i64),
     Bool(bool),
     Float(f64),
@@ -81,24 +92,42 @@ pub(crate) enum LiteralDefaultValue {
         value_type: PhpType,
         entries: Vec<LiteralAssocEntry>,
     },
-    /// An enum case singleton named by a scoped constant: `public Level $l = Level::Low;`.
+    /// An enum case (`public $s = Status::On;`, `public Level $l = Level::Low;`): the case's
+    /// singleton, read when the default is written. The slot takes its own reference; `boxed`
+    /// wraps it for a `mixed`/union slot.
     ///
-    /// Not a literal in the sense the rest of this enum is — the value is a heap object the
-    /// runtime materializes lazily, so what is stored is the case's canonical singleton, which
-    /// is what makes `$config->level === Level::Low` hold (issue #566). Constructor promotion
-    /// already worked because its default is evaluated as a parameter before the assignment;
-    /// a DIRECTLY declared property had no form for it at all.
-    ///
-    /// Recognition is by shape only, because this function has no module: whether the receiver
-    /// really names an enum, and the constant one of its cases, is settled by
-    /// `emit_property_default`, which does. The checker has already validated the pair by then
-    /// (`schema::defaults::validate_deferred_default`); the emit-side lookup is what keeps a
-    /// non-enum `Foo::BAR` in an object slot reporting unsupported rather than loading a symbol
-    /// that does not exist.
+    /// Recognized by `enum_case_literal_default`, which resolves the receiver against the
+    /// module (so `self::`/aliases work and a non-enum `Foo::BAR` is left to report unsupported
+    /// rather than loading a symbol that does not exist).
     EnumCase {
         enum_name: String,
         case_name: String,
+        boxed: bool,
     },
+}
+
+/// Returns the enum-case default form for a default naming an enum case, when the slot can hold
+/// the case object: the enum's own type, or `mixed`/a union.
+pub(crate) fn enum_case_literal_default(
+    module: &crate::ir::Module,
+    class_name: &str,
+    php_type: &PhpType,
+    expr: &ExprKind,
+) -> Option<LiteralDefaultValue> {
+    let (enum_name, case_name) =
+        crate::codegen::eval_class_constant_helpers::resolve_class_like_enum_case(
+            module, class_name, expr,
+        )?;
+    let boxed = match php_type.codegen_repr() {
+        PhpType::Object(_) => false,
+        PhpType::Mixed | PhpType::Union(_) => true,
+        _ => return None,
+    };
+    Some(LiteralDefaultValue::EnumCase {
+        enum_name,
+        case_name,
+        boxed,
+    })
 }
 
 /// Literal indexed-array element that can be materialized without evaluating code.
@@ -143,7 +172,7 @@ impl LiteralArrayElement {
 /// Literal associative-array key that can be materialized without evaluating code. Positional
 /// literals stored into hash slots use integer keys; `ArrayLiteralAssoc` keys may be integer or
 /// string. String keys are normalized at emit time so PHP numeric-string keys become integer keys.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum LiteralArrayKey {
     Int(i64),
     Str(String),
@@ -157,6 +186,101 @@ pub(crate) struct LiteralAssocEntry {
     value: LiteralArrayElement,
 }
 
+/// Replaces global-constant references throughout a literal default with registered values.
+///
+/// Class constants have already been resolved by the frontend. This pass handles module global
+/// constants, including nested array keys and values, and leaves cycles unresolved so the caller
+/// reports the normal unsupported-default diagnostic.
+pub(crate) fn resolve_literal_default_global_constants(
+    expr: &ExprKind,
+    global_constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+) -> ExprKind {
+    /// Recursively resolves constant references inside one literal expression.
+    fn resolve(
+        expr: &ExprKind,
+        global_constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> ExprKind {
+        match expr {
+            ExprKind::ConstRef(name) => {
+                resolve_name(name.as_str(), expr, global_constants, visiting)
+            }
+            ExprKind::Variable(name) => resolve_name(name, expr, global_constants, visiting),
+            ExprKind::ArrayLiteral(items) => ExprKind::ArrayLiteral(
+                items
+                    .iter()
+                    .map(|item| {
+                        Expr::new(
+                            resolve(&item.kind, global_constants, visiting),
+                            item.span,
+                        )
+                    })
+                    .collect(),
+            ),
+            ExprKind::ArrayLiteralAssoc(items) => ExprKind::ArrayLiteralAssoc(
+                items
+                    .iter()
+                    .map(|(key, value)| {
+                        (
+                            Expr::new(
+                                resolve(&key.kind, global_constants, visiting),
+                                key.span,
+                            ),
+                            Expr::new(
+                                resolve(&value.kind, global_constants, visiting),
+                                value.span,
+                            ),
+                        )
+                    })
+                    .collect(),
+            ),
+            // `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE`: resolved operand by operand and
+            // folded by `literal_default_value`.
+            ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
+                left: Box::new(Expr::new(resolve(&left.kind, global_constants, visiting), left.span)),
+                op: op.clone(),
+                right: Box::new(Expr::new(
+                    resolve(&right.kind, global_constants, visiting),
+                    right.span,
+                )),
+            },
+            ExprKind::Negate(inner) => ExprKind::Negate(Box::new(Expr::new(
+                resolve(&inner.kind, global_constants, visiting),
+                inner.span,
+            ))),
+            ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(Expr::new(
+                resolve(&inner.kind, global_constants, visiting),
+                inner.span,
+            ))),
+            other => other.clone(),
+        }
+    }
+
+    /// Resolves one named constant while guarding the recursive lookup against cycles.
+    fn resolve_name(
+        name: &str,
+        original: &ExprKind,
+        global_constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> ExprKind {
+        let key = name.trim_start_matches('\\');
+        let Some((resolved, _)) = global_constants
+            .get(name)
+            .or_else(|| global_constants.get(key))
+        else {
+            return original.clone();
+        };
+        if !visiting.insert(key.to_string()) {
+            return original.clone();
+        }
+        let result = resolve(resolved, global_constants, visiting);
+        visiting.remove(key);
+        result
+    }
+
+    resolve(expr, global_constants, &mut std::collections::HashSet::new())
+}
+
 /// Converts a supported default expression into a direct storage value.
 pub(crate) fn literal_default_value(
     context: &str,
@@ -164,6 +288,15 @@ pub(crate) fn literal_default_value(
     expr: &ExprKind,
     op_name: &str,
 ) -> Result<LiteralDefaultValue> {
+    // A constant EXPRESSION over integers is as literal as its value: php evaluates
+    // `self::CHECK_A | self::CHECK_B` once, when the class is linked. By the time a default gets
+    // here its class and global constants are already substituted, so what is left to do is the
+    // arithmetic itself.
+    if matches!(expr, ExprKind::BinaryOp { .. } | ExprKind::BitNot(_)) {
+        if let Some(value) = fold_int_constant_expr(expr) {
+            return literal_default_value(context, php_type, &ExprKind::IntLiteral(value), op_name);
+        }
+    }
     if let Some(folded) = fold_named_class_constant(expr) {
         return literal_default_value(context, php_type, &folded, op_name);
     }
@@ -182,6 +315,9 @@ pub(crate) fn literal_default_value(
         if let Some(value) = integer {
             return literal_default_value(context, php_type, &ExprKind::FloatLiteral(value as f64), op_name);
         }
+    }
+    if let Some(folded) = fold_array_union_literal(expr) {
+        return literal_default_value(context, php_type, &folded, op_name);
     }
     match (php_type, expr) {
         (PhpType::Int, ExprKind::IntLiteral(value)) => Ok(LiteralDefaultValue::Int(*value)),
@@ -313,6 +449,38 @@ pub(crate) fn literal_default_value(
                 entries,
             })
         }
+        (PhpType::Iterable, ExprKind::ArrayLiteral(items)) => {
+            let elem_type = PhpType::Mixed;
+            let elements = items
+                .iter()
+                .map(|item| literal_array_element(context, &elem_type, &item.kind, op_name))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::Array {
+                elem_type,
+                elements,
+            })
+        }
+        (PhpType::Iterable, ExprKind::ArrayLiteralAssoc(items)) => {
+            let value_type = PhpType::Mixed;
+            let entries = items
+                .iter()
+                .map(|(key, value_expr)| {
+                    Ok(LiteralAssocEntry {
+                        key: literal_array_key(context, &key.kind, op_name)?,
+                        value: literal_array_element(
+                            context,
+                            &value_type,
+                            &value_expr.kind,
+                            op_name,
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::AssocArray {
+                value_type,
+                entries,
+            })
+        }
         (PhpType::Array(elem_type), ExprKind::ArrayLiteral(items)) => {
             let elem_type = elem_type.codegen_repr();
             let elements = items
@@ -324,18 +492,38 @@ pub(crate) fn literal_default_value(
                 elements,
             })
         }
-        // `public Level $level = Level::Low;` — the enum case singleton, not a literal. See
-        // `LiteralDefaultValue::EnumCase` for why the receiver is taken on shape alone here.
-        (
-            PhpType::Object(_),
-            ExprKind::ScopedConstantAccess {
-                receiver: crate::parser::ast::StaticReceiver::Named(enum_name),
-                name: case_name,
-            },
-        ) => Ok(LiteralDefaultValue::EnumCase {
-            enum_name: enum_name.to_string(),
-            case_name: case_name.clone(),
-        }),
+        // A KEYED literal in a slot whose static type says indexed. The two disagree, and the
+        // literal is the one that knows: a `['kernel.secret' => false, …]` default is a hash at
+        // run time whatever the inferred storage says, and every read of it goes through the
+        // runtime heap kind. Building the hash is what PHP does; refusing to build it made
+        // Symfony's generated container uncompilable over `$loadedDynamicParameters`.
+        //
+        // Restricted to a `mixed` element, which is the only case where the reads are already
+        // dynamic. A precise element type would mean the storage really is indexed and the
+        // disagreement is somewhere else, where a silent hash would be the wrong answer.
+        (PhpType::Array(elem_type), ExprKind::ArrayLiteralAssoc(items))
+            if elem_type.codegen_repr() == PhpType::Mixed =>
+        {
+            let value_type = PhpType::Mixed;
+            let entries = items
+                .iter()
+                .map(|(key, value_expr)| {
+                    Ok(LiteralAssocEntry {
+                        key: literal_array_key(context, &key.kind, op_name)?,
+                        value: literal_array_element(
+                            context,
+                            &value_type,
+                            &value_expr.kind,
+                            op_name,
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::AssocArray {
+                value_type,
+                entries,
+            })
+        }
         _ => Err(unsupported_literal_default(context, php_type, op_name)),
     }
 }
@@ -425,6 +613,22 @@ pub(crate) fn emit_empty_assoc_array_literal_to_result(
 }
 
 /// Emits a boxed PHP null default into the canonical result register.
+/// Loads an enum case's singleton into the integer result register with a reference of its own
+/// (boxed for a `mixed` slot), materializing the case on first use.
+pub(crate) fn emit_enum_case_default_to_result(
+    ctx: &mut FunctionContext<'_>,
+    enum_name: &str,
+    case_name: &str,
+    boxed: bool,
+) {
+    crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+    let case_type = PhpType::Object(enum_name.to_string());
+    abi::emit_incref_if_refcounted(ctx.emitter, &case_type);
+    if boxed {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &case_type);
+    }
+}
+
 pub(crate) fn emit_boxed_null_literal_to_result(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_int_immediate(
         ctx.emitter,
@@ -622,7 +826,103 @@ fn literal_array_element(
         };
     }
     match elem_type.codegen_repr() {
+        PhpType::Array(nested_elem_type) => match expr {
+            ExprKind::ArrayLiteral(items) => {
+                let nested_elem_type = nested_elem_type.codegen_repr();
+                let elements = items
+                    .iter()
+                    .map(|item| {
+                        literal_array_element(context, &nested_elem_type, &item.kind, op_name)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::Array {
+                    elem_type: nested_elem_type,
+                    elements,
+                })
+            }
+            _ => Err(unsupported_literal_default(context, elem_type, op_name)),
+        },
+        PhpType::AssocArray { value, .. } => match expr {
+            ExprKind::ArrayLiteral(items) => {
+                let value_type = value.as_ref().codegen_repr();
+                let entries = items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        Ok(LiteralAssocEntry {
+                            key: LiteralArrayKey::Int(index as i64),
+                            value: literal_array_element(
+                                context,
+                                &value_type,
+                                &item.kind,
+                                op_name,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::AssocArray {
+                    value_type,
+                    entries,
+                })
+            }
+            ExprKind::ArrayLiteralAssoc(items) => {
+                let value_type = value.as_ref().codegen_repr();
+                let entries = items
+                    .iter()
+                    .map(|(key, value)| {
+                        Ok(LiteralAssocEntry {
+                            key: literal_array_key(context, &key.kind, op_name)?,
+                            value: literal_array_element(
+                                context,
+                                &value_type,
+                                &value.kind,
+                                op_name,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::AssocArray {
+                    value_type,
+                    entries,
+                })
+            }
+            _ => Err(unsupported_literal_default(context, elem_type, op_name)),
+        },
         PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => match expr {
+            ExprKind::ArrayLiteral(items) => {
+                let nested_elem_type = PhpType::Mixed;
+                let elements = items
+                    .iter()
+                    .map(|item| {
+                        literal_array_element(context, &nested_elem_type, &item.kind, op_name)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::Array {
+                    elem_type: nested_elem_type,
+                    elements,
+                })
+            }
+            ExprKind::ArrayLiteralAssoc(items) => {
+                let value_type = PhpType::Mixed;
+                let entries = items
+                    .iter()
+                    .map(|(key, value)| {
+                        Ok(LiteralAssocEntry {
+                            key: literal_array_key(context, &key.kind, op_name)?,
+                            value: literal_array_element(
+                                context,
+                                &value_type,
+                                &value.kind,
+                                op_name,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::AssocArray {
+                    value_type,
+                    entries,
+                })
+            }
             ExprKind::IntLiteral(value) => Ok(LiteralArrayElement::Int(*value)),
             ExprKind::BoolLiteral(value) => Ok(LiteralArrayElement::Bool(*value)),
             ExprKind::FloatLiteral(value) => Ok(LiteralArrayElement::Float(*value)),
@@ -832,6 +1132,9 @@ fn append_array_literal_element(
         }
         PhpType::Float => append_float_array_literal_element(ctx),
         PhpType::Str => append_string_array_literal_element(ctx),
+        PhpType::Object(_) => {
+            append_refcounted_array_literal_element(ctx, &value_type.codegen_repr())
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "array default element PHP type {:?}",
@@ -964,17 +1267,17 @@ fn materialize_assoc_literal_value_aarch64(
             ctx.emitter.instruction("mov x4, x2");                              // pass the literal string length as the hash value high word
             Ok(())
         }
-        PhpType::Void | PhpType::Never => {
-            ctx.emitter.instruction("mov x3, xzr");                             // null hash values use a zero low payload word
-            ctx.emitter.instruction("mov x4, xzr");                             // null hash values use a zero high payload word
-            Ok(())
-        }
         // A nested container arrives as an owned heap pointer. `__rt_hash_set` does not retain
         // what it stores -- it only releases what it OVERWRITES -- so handing it the pointer is
         // itself the ownership transfer, and releasing afterwards here would free a live child.
-        PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            ctx.emitter.instruction("mov x3, x0");                              // pass the nested container pointer as the hash value low word
-            ctx.emitter.instruction("mov x4, xzr");                             // container hash values do not use the high payload word
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            ctx.emitter.instruction("mov x3, x0");                              // transfer the owned nested refcounted payload into the hash bucket
+            ctx.emitter.instruction("mov x4, xzr");                             // refcounted hash values use only the low payload word
+            Ok(())
+        }
+        PhpType::Void | PhpType::Never => {
+            ctx.emitter.instruction("mov x3, xzr");                             // null hash values use a zero low payload word
+            ctx.emitter.instruction("mov x4, xzr");                             // null hash values use a zero high payload word
             Ok(())
         }
         other => Err(CodegenIrError::unsupported(format!(
@@ -1010,17 +1313,15 @@ fn materialize_assoc_literal_value_x86_64(
             ctx.emitter.instruction("mov r8, rdx");                             // pass the literal string length as the hash value high word
             Ok(())
         }
+        // A nested container arrives as an owned heap pointer; see the AArch64 twin above.
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            ctx.emitter.instruction("mov rcx, rax");                            // transfer the owned nested refcounted payload into the hash bucket
+            ctx.emitter.instruction("xor r8, r8");                              // refcounted hash values use only the low payload word
+            Ok(())
+        }
         PhpType::Void | PhpType::Never => {
             ctx.emitter.instruction("xor rcx, rcx");                            // null hash values use a zero low payload word
             ctx.emitter.instruction("xor r8, r8");                              // null hash values use a zero high payload word
-            Ok(())
-        }
-        // A nested container arrives as an owned heap pointer. `__rt_hash_set` does not retain
-        // what it stores -- it only releases what it OVERWRITES -- so handing it the pointer is
-        // itself the ownership transfer, and releasing afterwards here would free a live child.
-        PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            ctx.emitter.instruction("mov rcx, rax");                            // pass the nested container pointer as the hash value low word
-            ctx.emitter.instruction("xor r8, r8");                              // container hash values do not use the high payload word
             Ok(())
         }
         other => Err(CodegenIrError::unsupported(format!(
@@ -1057,12 +1358,9 @@ fn materialize_assoc_literal_concrete_value_aarch64(
             ctx.emitter.instruction("mov x4, x2");                              // pass the string length as the Mixed hash value high word
             Ok(())
         }
-        // Mixed-capable hash storage keeps the concrete kind in the entry's TAG word, so a
-        // container is stored as its raw owned pointer under tag 4/5 rather than wrapped in a
-        // Mixed cell -- the same shape a concrete string takes under tag 1.
-        PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            ctx.emitter.instruction("mov x3, x0");                              // pass the nested container pointer as the Mixed hash value low word
-            ctx.emitter.instruction("mov x4, xzr");                             // container Mixed values do not use the high payload word
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            ctx.emitter.instruction("mov x3, x0");                              // transfer the owned nested refcounted payload into Mixed-capable hash storage
+            ctx.emitter.instruction("mov x4, xzr");                             // refcounted Mixed hash values use only the low payload word
             Ok(())
         }
         other => Err(CodegenIrError::unsupported(format!(
@@ -1099,12 +1397,9 @@ fn materialize_assoc_literal_concrete_value_x86_64(
             ctx.emitter.instruction("mov r8, rdx");                             // pass the string length as the Mixed hash value high word
             Ok(())
         }
-        // Mixed-capable hash storage keeps the concrete kind in the entry's TAG word, so a
-        // container is stored as its raw owned pointer under tag 4/5 rather than wrapped in a
-        // Mixed cell -- the same shape a concrete string takes under tag 1.
-        PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            ctx.emitter.instruction("mov rcx, rax");                            // pass the nested container pointer as the Mixed hash value low word
-            ctx.emitter.instruction("xor r8, r8");                              // container Mixed values do not use the high payload word
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            ctx.emitter.instruction("mov rcx, rax");                            // transfer the owned nested refcounted payload into Mixed-capable hash storage
+            ctx.emitter.instruction("xor r8, r8");                              // refcounted Mixed hash values use only the low payload word
             Ok(())
         }
         other => Err(CodegenIrError::unsupported(format!(
@@ -1145,6 +1440,131 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
             other
         ))),
     }
+}
+
+/// Evaluates an integer constant expression built from integer literals with php's integer
+/// operators, or returns `None` when any operand is not an integer literal or the operation
+/// would not stay an integer (overflow, a negative or oversized shift, division).
+fn fold_int_constant_expr(expr: &ExprKind) -> Option<i64> {
+    use crate::parser::ast::BinOp;
+    match expr {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::Negate(inner) => fold_int_constant_expr(&inner.kind)?.checked_neg(),
+        ExprKind::BitNot(inner) => Some(!fold_int_constant_expr(&inner.kind)?),
+        ExprKind::BinaryOp { left, op, right } => {
+            let left = fold_int_constant_expr(&left.kind)?;
+            let right = fold_int_constant_expr(&right.kind)?;
+            match op {
+                BinOp::BitOr => Some(left | right),
+                BinOp::BitAnd => Some(left & right),
+                BinOp::BitXor => Some(left ^ right),
+                BinOp::Add => left.checked_add(right),
+                BinOp::Sub => left.checked_sub(right),
+                BinOp::Mul => left.checked_mul(right),
+                BinOp::ShiftLeft if (0..64).contains(&right) => Some(left << right),
+                BinOp::ShiftRight if (0..64).contains(&right) => Some(left >> right),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Folds `[...] + [...]` over array literals into the one keyed literal php builds when the
+/// class is linked: the left operand's entries in order, then each right entry whose key the
+/// left does not already hold. Symfony's `CurlHttpClient::$emptyDefaults` is
+/// `self::OPTIONS_DEFAULTS + ['auth_ntlm' => null]`; refusing it sent the whole class to the
+/// interpreter. Only string and integer keys are folded, normalized the way php normalizes them
+/// (`"8"` is the integer key 8); any other key leaves the expression alone.
+fn fold_array_union_literal(expr: &ExprKind) -> Option<ExprKind> {
+    use crate::parser::ast::BinOp;
+    let ExprKind::BinaryOp {
+        left,
+        op: BinOp::Add,
+        right,
+    } = expr
+    else {
+        return None;
+    };
+    let left = literal_array_entries(&left.kind)?;
+    let right = literal_array_entries(&right.kind)?;
+    let mut seen: std::collections::HashSet<LiteralArrayKey> =
+        left.iter().map(|(key, _)| key.clone()).collect();
+    let mut entries = Vec::with_capacity(left.len() + right.len());
+    entries.extend(left);
+    for (key, value) in right {
+        if seen.insert(key.clone()) {
+            entries.push((key, value));
+        }
+    }
+    Some(ExprKind::ArrayLiteralAssoc(
+        entries
+            .into_iter()
+            .map(|(key, value)| {
+                let span = value.span;
+                let key = match key {
+                    LiteralArrayKey::Int(index) => ExprKind::IntLiteral(index),
+                    LiteralArrayKey::Str(name) => ExprKind::StringLiteral(name),
+                };
+                (crate::parser::ast::Expr::new(key, span), value)
+            })
+            .collect(),
+    ))
+}
+
+/// The `(normalized key, value)` entries of an array literal operand of `+`, nested unions
+/// included, or `None` when a key is not a plain string or integer literal.
+fn literal_array_entries(
+    expr: &ExprKind,
+) -> Option<Vec<(LiteralArrayKey, crate::parser::ast::Expr)>> {
+    match expr {
+        ExprKind::ArrayLiteral(items) => {
+            if items
+                .iter()
+                .any(|item| matches!(item.kind, ExprKind::Spread(_)))
+            {
+                return None;
+            }
+            Some(
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| (LiteralArrayKey::Int(index as i64), item.clone()))
+                    .collect(),
+            )
+        }
+        ExprKind::ArrayLiteralAssoc(items) => {
+            let mut entries: Vec<(LiteralArrayKey, crate::parser::ast::Expr)> = Vec::new();
+            for (key, value) in items {
+                let key = match &key.kind {
+                    ExprKind::IntLiteral(index) => LiteralArrayKey::Int(*index),
+                    ExprKind::StringLiteral(name) => match canonical_int_key(name) {
+                        Some(index) => LiteralArrayKey::Int(index),
+                        None => LiteralArrayKey::Str(name.clone()),
+                    },
+                    _ => return None,
+                };
+                // A repeated key inside one literal keeps its LAST value at its FIRST position.
+                if let Some(slot) = entries.iter_mut().find(|(seen, _)| *seen == key) {
+                    slot.1 = value.clone();
+                } else {
+                    entries.push((key, value.clone()));
+                }
+            }
+            Some(entries)
+        }
+        ExprKind::BinaryOp { .. } => match fold_array_union_literal(expr)? {
+            folded @ ExprKind::ArrayLiteralAssoc(_) => literal_array_entries(&folded),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// php's integer-string key rule: a decimal integer without leading zeros or `+` is an int key.
+fn canonical_int_key(name: &str) -> Option<i64> {
+    let value: i64 = name.parse().ok()?;
+    (value.to_string() == name).then_some(value)
 }
 
 /// Folds `Foo::class` with a named receiver into the string literal it always is: the name

@@ -9,7 +9,6 @@
 //! Key details:
 //! - Internal types such as Mixed and runtime resources encode codegen/runtime contracts, not just PHP syntax.
 
-use std::collections::HashMap;
 use std::fmt;
 use super::ScalarWidth;
 
@@ -80,6 +79,40 @@ impl std::fmt::Debug for PhpType {
 }
 
 impl PhpType {
+    /// Returns true when this nominal object type denotes PHP's built-in `Closure` class.
+    ///
+    /// Closure values use Elephc's callable descriptor representation even when flow
+    /// narrowing reaches them through an `instanceof Closure` object guard.
+    pub fn is_closure_object(&self) -> bool {
+        matches!(
+            self,
+            PhpType::Object(name)
+                if name.trim_start_matches('\\').eq_ignore_ascii_case("Closure")
+        )
+    }
+
+    /// Returns whether a runtime property name of this type converts to a string the way php's
+    /// `$object->{$name}` does: strings and integers directly, `null`, booleans and floats through
+    /// their string form, and a union only when every member does. Arrays, objects and resources
+    /// are rejected, as php raises on them.
+    pub(crate) fn is_dynamic_property_name(&self) -> bool {
+        match self {
+            PhpType::Str
+            | PhpType::Int
+            | PhpType::Mixed
+            | PhpType::Void
+            // The element of an empty-array literal (`foreach ([] as $column)`): the body is
+            // unreachable at run time, so any name it uses is vacuously valid.
+            | PhpType::Never
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Float
+            | PhpType::TaggedScalar => true,
+            PhpType::Union(members) => members.iter().all(PhpType::is_dynamic_property_name),
+            _ => false,
+        }
+    }
+
     /// Represents PHP's unrestricted array contract with a boxed packed-or-hash payload.
     /// Unlike a concrete storage type, this declaration cannot narrow to one call site's layout.
     pub(crate) fn php_array() -> Self {
@@ -90,6 +123,20 @@ impl PhpType {
     }
 
     /// Identifies the exact non-null PHP array contract, not a union that also permits scalars.
+    /// Returns the representation a `new static` candidate's parameter is compared with.
+    ///
+    /// A declared `array` is the boxed packed-or-hash union, whose representation is `Mixed`; it
+    /// still holds only arrays, so it is compared as one. Otherwise
+    /// `HttpException::fromStatusCode()` planned `new static($statusCode, ...)` against
+    /// `MethodNotAllowedHttpException(array $allow, ...)` and refused the int.
+    pub(crate) fn late_bound_param_storage(&self) -> PhpType {
+        if self.is_php_array() {
+            PhpType::Array(Box::new(PhpType::Mixed))
+        } else {
+            self.codegen_repr()
+        }
+    }
+
     pub(crate) fn is_php_array(&self) -> bool {
         matches!(self, Self::Union(members) if members.len() == 2
             && members.iter().any(|member| matches!(member, Self::Array(value) if **value == Self::Mixed))
@@ -161,6 +208,41 @@ impl PhpType {
             | PhpType::Pointer(_)
             | PhpType::Resource(_) => false,
         }
+    }
+
+    /// True for the type of an EMPTY array literal — an array whose element type is the
+    /// `Never` placeholder, meaning "nothing has ever been stored here".
+    ///
+    /// The distinction matters wherever storage OUTLIVES the expression that typed it. For a
+    /// plain local, `$a = []; $a[] = 'x';` is flow-sensitive and the second statement retypes
+    /// the binding, so `array<never>` is only ever read where it is true. For a `static` local
+    /// the initializer runs on the FIRST call only, while the declaration re-types the name on
+    /// EVERY call — so `array<never>` there is a claim about what an earlier call left behind,
+    /// which the declaration cannot know. `array<never>`'s element slots are zero width, and
+    /// codegen trusts that: `array_shift`/`array_pop` lower "read the removed payload" to
+    /// `mov x11, #0`, producing a silent `NULL` where php returns the element.
+    pub fn is_empty_array_literal(&self) -> bool {
+        match self.codegen_repr() {
+            PhpType::Array(elem) => matches!(elem.codegen_repr(), PhpType::Never | PhpType::Void),
+            PhpType::AssocArray { value, .. } => {
+                matches!(value.codegen_repr(), PhpType::Never | PhpType::Void)
+            }
+            _ => false,
+        }
+    }
+
+    /// The storage an empty-array literal must take when it seeds a slot that outlives the call.
+    ///
+    /// BOXED ELEMENTS, NOT A BOXED SLOT. Widening the whole slot to `Mixed` would put a boxed
+    /// cell in the static's symbol, and a `mixed &$param` argument is then handed that cell as
+    /// its reference — which the callee's `store_ref_cell` releases and replaces without the
+    /// symbol ever learning, turning `sort($staticQueue)` from a stale answer into a DESTROYED
+    /// one. `array<mixed>` keeps the slot a plain container pointer, which is the representation
+    /// `Op::ArrayToMixed` already produces for a static (`local_slot_kind_is_convertible` lists
+    /// `LocalKind::StaticLocal`) and which `static_local_value_type_matches` already accepts an
+    /// `Array(Never)` initializer for.
+    pub fn gradual_empty_array_storage() -> PhpType {
+        PhpType::Array(Box::new(PhpType::Mixed))
     }
 
     /// Size in bytes on the stack.
@@ -238,7 +320,7 @@ impl PhpType {
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
                 | PhpType::Union(_)
-        )
+        ) && !self.is_closure_object()
     }
 
     /// Lower high-level checker-only types to the runtime representation used by codegen.
@@ -259,6 +341,7 @@ impl PhpType {
             PhpType::Union(_) => PhpType::Mixed,
             PhpType::False => PhpType::Bool,
             PhpType::Resource(_) => PhpType::Int,
+            PhpType::Object(_) if self.is_closure_object() => PhpType::Callable,
             PhpType::Never => PhpType::Void, // never should not be materialized; fallback to void sentinel
             _ => self.clone(),
         }
@@ -570,4 +653,7 @@ impl fmt::Display for PhpType {
 }
 
 /// Maps variable names to their resolved types.
-pub type TypeEnv = HashMap<String, PhpType>;
+///
+/// FxHash, not SipHash: environments are probed and cloned per expression in the checker and
+/// were most of its hashing. Nothing reads their iteration order (std's was random per run).
+pub type TypeEnv = crate::fast_hash::FastMap<String, PhpType>;

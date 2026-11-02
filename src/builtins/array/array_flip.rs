@@ -14,6 +14,7 @@
 //! - Declared PHP arrays keep their boxed shape and dispatch on runtime value tags.
 //! - A `mixed` argument or a union with an array member takes the same boxed path: the result
 //!   is the boxed PHP array type, and a non-array payload raises PHP's `TypeError` at run time.
+//!   Gradual inputs retain a gradual result and are validated at runtime.
 //! - Arity (exactly 1 argument) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
 
@@ -55,6 +56,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             key: Box::new(array_key_type_from_value_type(*value)),
             value: key,
         }),
+        PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
         _ => Err(CompileError::new(
             cx.span,
             "array_flip() argument must be array",

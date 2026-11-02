@@ -16,6 +16,9 @@ impl EvalStreamResources {
         if stream_wrappers::is_php_memory_stream(path) {
             return self.open_ephemeral_stream(path, &mode, &[], None, false);
         }
+        if let Some(fd) = stream_wrappers::php_std_stream_fd(path) {
+            return self.open_std_stream(fd, path, &mode);
+        }
         if stream_wrappers::is_data_stream(path) {
             let bytes = stream_wrappers::decode_data_uri(path)?;
             return self.open_ephemeral_stream(path, &mode, &bytes, None, false);
@@ -30,6 +33,20 @@ impl EvalStreamResources {
         let path = stream_wrappers::local_filesystem_path(path)?;
         let file = mode.open(&path).ok()?;
         Some(self.insert(EvalFileStream::new(file, path, mode.label)))
+    }
+
+    /// Opens `php://stdin`, `php://stdout` or `php://stderr` on a duplicate of the descriptor.
+    ///
+    /// A duplicate, so that `fclose()` on the stream never closes the process's own descriptor.
+    /// Monolog's `StreamHandler` opens `php://stderr` in append mode, which is what the Symfony
+    /// demo's production logging does on every request; interpreted, it failed to open and the
+    /// logger threw.
+    fn open_std_stream(&mut self, fd: i32, path: &str, mode: &EvalOpenMode) -> Option<i64> {
+        Some(self.insert(EvalFileStream::new(
+            duplicate_standard_descriptor(fd).ok()?,
+            path.to_string(),
+            mode.label.clone(),
+        )))
     }
 
     /// Opens an anonymous temporary file and returns its resource id.

@@ -226,6 +226,29 @@ pub(super) fn lower_boxed_array_key_sort(
     store_if_result(ctx, inst)
 }
 
+/// Sorts a boxed PHP array by value in place, keeping its keys (`asort()`, `arsort()`).
+///
+/// The same shape as [`lower_boxed_array_key_sort`]: the cell is promoted to a unique hash, whose
+/// entries the value sorter relinks. A declared `array` is boxed, so Twig's
+/// `$ops = array_combine(...); arsort($ops);` reaches this arm.
+pub(super) fn lower_boxed_array_value_sort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    name: &str,
+    helper: &str,
+) -> Result<()> {
+    prepare_boxed_array_receiver(ctx, array, name)?;
+    let arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, arg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
+    require_valid_array_result(ctx, name);
+    abi::emit_reg_move(ctx.emitter, arg, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, helper);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    store_if_result(ctx, inst)
+}
+
 /// Throws before consuming an invalid cell or payload returned by an array runtime helper.
 fn require_valid_array_result(ctx: &mut FunctionContext<'_>, name: &str) {
     let valid = ctx.next_label("array_mutation_valid");

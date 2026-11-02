@@ -222,15 +222,24 @@ pub(super) fn eval_object_method_with_call_user_func_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if let Some(result) = eval_object_method_call_user_func_result(
-        object,
-        method,
-        callback_kind,
-        evaluated_args.clone(),
-        context,
-        values,
-    )? {
-        return Ok(result);
+    // A reflector's methods are answered by the interpreter's reflection layer, which only the
+    // ordinary method dispatch consults; the by-value native path below called the compiled body,
+    // which answers nothing for a reflector the interpreter materialized. Doctrine's Instantiator
+    // calls `[$reflectionClass, 'newInstanceWithoutConstructor']` for every entity it hydrates.
+    let reflector = values.type_tag(object)? == EVAL_TAG_OBJECT
+        && crate::interpreter::statements::runtime_object_class_name(object, values)
+            .is_ok_and(|class| crate::interpreter::reflection::eval_is_reflection_owner_class(&class));
+    if !reflector {
+        if let Some(result) = eval_object_method_call_user_func_result(
+            object,
+            method,
+            callback_kind,
+            evaluated_args.clone(),
+            context,
+            values,
+        )? {
+            return Ok(result);
+        }
     }
     eval_method_call_result_with_evaluated_args(object, method, evaluated_args, context, values)
 }

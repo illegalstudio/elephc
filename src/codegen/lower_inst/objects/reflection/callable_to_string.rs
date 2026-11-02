@@ -244,6 +244,10 @@ pub(super) fn reflection_dump_default_value(default: &ReflectionParameterDefault
             &elephc_builtin_contract::string_literal::literal_bytes(value),
         ),
         ReflectionParameterDefaultValue::Null => String::from("NULL"),
+        // An enum case prints as the qualified case constant.
+        ReflectionParameterDefaultValue::EnumCase { enum_name, case_name } => {
+            format!("\\{}::{}", enum_name.trim_start_matches('\\'), case_name)
+        }
         ReflectionParameterDefaultValue::DeferredError(_)
         | ReflectionParameterDefaultValue::EirHelper(_) => String::new(),
         // Written arguments retain their source order and names independently of the

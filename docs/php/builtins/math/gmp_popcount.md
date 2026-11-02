@@ -2,7 +2,7 @@
 title: "gmp_popcount()"
 description: "Population count of a GMP number."
 sidebar:
-  order: 621
+  order: 634
 ---
 
 ## gmp_popcount()

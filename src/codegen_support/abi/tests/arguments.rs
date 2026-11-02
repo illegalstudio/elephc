@@ -58,9 +58,11 @@ fn test_emit_store_incoming_float_overflow_uses_volatile_scratch() {
     assert!(!out.contains("d15"));
 }
 
-/// Tests that `emit_frame_slot_address` correctly handles offsets larger than
-/// a single immediate instruction can encode by emitting multiple sub instructions
-/// to reach offsets like 5000 on ARM64.
+/// Tests that `emit_frame_slot_address` reaches an offset too large for a single immediate
+/// instruction by materializing the whole distance and applying it with one register-form `sub`,
+/// rather than walking the frame pointer down in 4095-byte steps.
+///
+/// The walk is what made `sub x9, x9, #4095` 11.6% of the Symfony `--web` artifact.
 #[test]
 fn test_emit_frame_slot_address_large_offset() {
     let mut emitter = test_emitter();
@@ -68,10 +70,23 @@ fn test_emit_frame_slot_address_large_offset() {
 
     assert_eq!(
         emitter.output(),
+        concat!("    mov x0, #5000\n", "    sub x0, x29, x0\n")
+    );
+}
+
+/// Tests that an offset past the 16-bit `movz` range still costs one `movk` and one `sub`, so the
+/// far-slot sequence stays constant-size however deep the frame is.
+#[test]
+fn test_emit_frame_slot_address_offset_past_the_movz_range() {
+    let mut emitter = test_emitter();
+    emit_frame_slot_address(&mut emitter, "x9", 300_000);
+
+    assert_eq!(
+        emitter.output(),
         concat!(
-            "    mov x0, x29\n",
-            "    sub x0, x0, #4095\n",
-            "    sub x0, x0, #905\n",
+            "    movz x9, #0x93e0\n",
+            "    movk x9, #0x4, lsl #16\n",
+            "    sub x9, x29, x9\n",
         )
     );
 }
@@ -181,8 +196,8 @@ fn test_emit_store_local_slot_to_symbol_handles_large_string_slot() {
 
     assert!(out.contains("    adrp x9, _static_demo_name@PAGE\n"));
     assert!(out.contains("    add x9, x9, _static_demo_name@PAGEOFF\n"));
-    assert!(out.contains("    mov x9, x29\n"));
-    assert!(out.contains("    sub x9, x9, #4095\n"));
+    assert!(out.contains("    mov x9, #5000\n"));
+    assert!(out.contains("    sub x9, x29, x9\n"));
     assert!(out.contains("    ldr x10, [x9]\n"));
     assert!(out.contains("    ldr x11, [x9]\n"));
     assert!(out.contains("    str x10, [x9]\n"));
@@ -204,10 +219,10 @@ fn test_emit_load_symbol_to_local_slot_handles_large_string_slot() {
     assert!(out.contains("    add x9, x9, _static_demo_name@PAGEOFF\n"));
     assert!(out.contains("    ldr x1, [x9]\n"));
     assert!(out.contains("    ldr x2, [x9, #8]\n"));
-    assert!(out.contains("    mov x10, x29\n"));
-    assert!(out.contains("    sub x10, x10, #4095\n"));
+    assert!(out.contains("    mov x10, #5000\n"));
+    assert!(out.contains("    sub x10, x29, x10\n"));
     assert!(out.contains("    str x1, [x10]\n"));
-    assert!(out.contains("    mov x11, x29\n"));
-    assert!(out.contains("    sub x11, x11, #4095\n"));
+    assert!(out.contains("    mov x11, #4992\n"));
+    assert!(out.contains("    sub x11, x29, x11\n"));
     assert!(out.contains("    str x2, [x11]\n"));
 }

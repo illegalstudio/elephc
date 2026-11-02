@@ -53,6 +53,42 @@ pub(in crate::interpreter) fn eval_builtin_json_encode(
     }
 }
 
+/// What a COMPILED `json_encode()` should encode for an object this interpreter owns.
+///
+/// The compiled encoder walks per-class descriptors, and an object the interpreter declared has
+/// the generic wrapper's: no `jsonSerialize()` and no properties. This answers it the way the
+/// interpreter's own encoder does -- the `jsonSerialize()` result of a `JsonSerializable` (or the
+/// object itself when it hands itself back), otherwise an array of its public properties -- as an
+/// owned value the compiled encoder then encodes.
+pub(crate) fn eval_json_encode_serialized_object(
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if eval_foreach_object_is_a(object, "JsonSerializable", context, values)? {
+        let serialized = eval_method_call_result(object, "jsonSerialize", Vec::new(), context, values)?;
+        let hands_itself_back = values.type_tag(serialized)? == EVAL_TAG_OBJECT
+            && values.object_identity(serialized)? == values.object_identity(object)?;
+        if !hands_itself_back {
+            return Ok(serialized);
+        }
+    }
+    let len = values.object_property_len(object)?;
+    let mut result = values.assoc_new(len)?;
+    for position in 0..len {
+        let key = values.object_property_iter_key(object, position)?;
+        let key_bytes = values.string_bytes(key)?;
+        if key_bytes.contains(&0) {
+            values.release(key)?;
+            continue;
+        }
+        let property = std::str::from_utf8(&key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let element = values.property_get(object, property)?;
+        result = values.array_set(result, key, element)?;
+    }
+    Ok(result)
+}
+
 /// Dispatches by-value `json_encode()` calls after argument binding.
 pub(in crate::interpreter) fn eval_json_encode_values_result(
     evaluated_args: &[RuntimeCellHandle],

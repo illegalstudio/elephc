@@ -92,10 +92,19 @@ pub(super) fn eval_get_mangled_object_vars(
         let reference = (!entry.native).then(|| {
             context.dynamic_property_alias(identity, &entry.storage).cloned()
         }).flatten();
+        // Alias, then overlay, then slot -- the order every other reader uses. The overlay holds
+        // every declared property of an eval object while only the PUBLIC ones are mirrored into
+        // the slots, so the slot alone read `null` for a protected or private value.
+        let overlay = (!entry.native && shared_native_owner.is_none())
+            .then(|| context.dynamic_property_value(identity, &entry.storage))
+            .flatten();
         result.string(&entry.key(), |values| {
             if let Some(reference) = &reference {
                 let value = eval_reference_target_value(reference, context, values)?;
                 return if value.is_borrowed() { values.retain(value) } else { Ok(value) };
+            }
+            if let Some(stored) = overlay {
+                return values.retain(stored);
             }
             // Independent child slots must not select a private native ancestor slot
             // just because the inventory's caller happens to be inside that ancestor.

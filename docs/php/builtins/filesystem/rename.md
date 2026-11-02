@@ -2,13 +2,13 @@
 title: "rename()"
 description: "Renames a file or directory."
 sidebar:
-  order: 301
+  order: 312
 ---
 
 ## rename()
 
 ```php
-function rename(string $from, string $to): bool
+function rename(string $from, string $to, mixed $context = null): bool
 ```
 
 Renames a file or directory.
@@ -16,6 +16,7 @@ Renames a file or directory.
 **Parameters**:
 - `$from` (`string`)
 - `$to` (`string`)
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
 

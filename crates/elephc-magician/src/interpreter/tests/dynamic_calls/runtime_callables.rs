@@ -95,6 +95,28 @@ return call_user_func_array(["KnownClass", "join"], ["left" => "C"]);"#,
     assert_eq!(values.get(result), FakeValue::String("CB".to_string()));
 }
 
+/// Verifies a static call on a class the runtime already has TERMINATES when the method is not
+/// found, instead of retrying the autoload path forever.
+///
+/// The autoload retry answers "loaded" as soon as the target exists, without loading anything, so
+/// for a class the runtime already knows it reported success on every attempt and the dispatcher
+/// re-entered itself on the identical path. That was not a deep recursion but an unbounded one:
+/// it overflowed the stack and ABORTED the whole test process, which is why a failure here is a
+/// returned status and the absence of an abort is the assertion that matters.
+#[test]
+fn execute_program_static_call_on_a_known_class_without_the_method_terminates() {
+    let program =
+        parse_fragment(br#"return KnownClass::not_a_method(1);"#).expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let err = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect_err("a method the class does not have cannot be called");
+
+    assert_eq!(err, EvalStatus::UnsupportedConstruct);
+}
+
 /// Verifies runtime AOT static method fallback honors by-reference parameter metadata.
 #[test]
 fn execute_program_static_runtime_method_hook_rejects_by_ref_temporary_arg() {

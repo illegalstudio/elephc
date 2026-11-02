@@ -70,10 +70,11 @@ namespace App {
     }
 }
 
-/// An enum template's bound rejects the same invalid argument as a class method template.
+/// An enum method's PHPDoc template is not adopted: a violating argument runs as php runs it,
+/// with no fallback note, and the written `id<int>` extension is refused on the enum method.
 #[test]
-fn test_docblock_enum_templates_enforce_bounds() {
-    let source = r#"<?php
+fn test_docblock_enum_templates_tolerate_bound_violations() {
+    let template = r#"<?php
 enum Id {
     case A;
     /**
@@ -83,11 +84,18 @@ enum Id {
      */
     public function id($value) { return $value; }
 }
-Id::A->id("seven");
+echo Id::A->id(ARG);
 "#;
     for flags in [&[][..], &["--strict-php"][..]] {
-        let error = compile_cli_file_with_flags_expect_failure(source, flags);
-        assert!(error.contains("does not satisfy its bound int"), "{error}");
+        for (arg, expected) in [("\"seven\"", "seven"), ("7", "7")] {
+            let source = template.replace("ARG", arg);
+            let notes = compile_cli_file_with_flags_capturing_stderr(&source, flags);
+            assert!(!notes.contains("is compiled with its written types"), "{flags:?}: {notes}");
+            assert_eq!(compile_cli_file_and_run_with_flags(&source, flags), expected, "{flags:?}");
+        }
+        let written = template.replace("id(ARG)", "id<int>(7)");
+        let error = compile_cli_file_with_flags_expect_failure(&written, flags);
+        assert!(error.contains("id<int>"), "{error}");
     }
 }
 
@@ -104,10 +112,11 @@ enum Id {
      */
     public function values($value) { return ["wrong"]; }
 }
-Id::A->values(7);
+echo implode(",", Id::A->values(7));
 "#;
+    // `@return array<T>` names `T` only inside a container, so the written (absent) return type
+    // stays what php reads, and the program runs as php runs it.
     for flags in [&[][..], &["--strict-php"][..]] {
-        let error = compile_cli_file_with_flags_expect_failure(source, flags);
-        assert!(error.contains("array<int>") && error.contains("array<string>"), "{error}");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "wrong");
     }
 }

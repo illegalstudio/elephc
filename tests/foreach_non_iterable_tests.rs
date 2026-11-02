@@ -18,8 +18,8 @@
 //!   The dynamic (`array|false`) form was the field repro: `foreach (opcache_get_configuration()
 //!   ['directives'] as $k => $v)` under `--ini opcache.restrict_api=…`.
 //! - Expected warning texts were captured from reference PHP 8.5.6 with
-//!   `php -d xdebug.mode=off` (Xdebug overloads warning rendering). elephc does not synthesize
-//!   the ` in <file> on line <n>` tail php-src appends, so assertions compare the message BODY.
+//!   `php -d xdebug.mode=off` (Xdebug overloads warning rendering). The
+//!   ` in <file> on line <n>` location is checked against each probe's canonical source path.
 //! - PHP names the offending VALUE, not its declared type: a bool prints `true`/`false`, never
 //!   `bool`. `union_holding_true_names_the_value` and `static_false_and_true_name_the_value`
 //!   pin that, since it is the one case a static type cannot answer on its own.
@@ -150,11 +150,25 @@ fn union_probe(pick_len: usize) -> String {
 fn assert_skipped_with_warning(bin: &Path, type_name: &str) {
     let (stdout, stderr) = run_binary(bin);
     assert_eq!(stdout, "before\nafter\n", "loop body must not run");
+    let source = fs::read_to_string(bin.with_extension("php")).expect("read probe");
+    let line = source
+        .lines()
+        .position(|line| line.trim_start().starts_with("foreach"))
+        .expect("probe has a foreach")
+        + 1;
     assert_eq!(
         stderr,
-        format!("{WARNING_PREFIX}{type_name} given\n"),
-        "runtime warning must match reference PHP's message body"
+        expected_warning(bin, type_name, line),
+        "runtime warning must match reference PHP's message and source location"
     );
+}
+
+fn expected_warning(bin: &Path, type_name: &str, line: usize) -> String {
+    let source = fs::canonicalize(bin.with_extension("php")).expect("canonical probe path");
+    format!(
+        "{WARNING_PREFIX}{type_name} given in {} on line {line}\n",
+        source.display()
+    )
 }
 
 /// Reference (`php -d xdebug.mode=off`, PHP 8.5.6):
@@ -185,6 +199,146 @@ fn static_false_and_true_name_the_value() {
     assert_skipped_with_warning(&false_bin, "false");
     let (true_bin, _) = compile(&dir, &probe("true"), "bool_true_probe");
     assert_skipped_with_warning(&true_bin, "true");
+}
+
+/// A forward method's provisional scalar return must not escape as a loop warning.
+#[test]
+fn forward_method_array_result_compiles_without_scalar_warning() {
+    let dir = make_test_dir("foreach_forward_method");
+    let source = r#"<?php
+class EntrySource {
+    private $entries = ['one', 'two'];
+    public function values() { return $this->entries; }
+}
+function entries(EntrySource $source) { return $source->values(); }
+function walk(EntrySource $source): void {
+    $entries = entries($source);
+    foreach ($entries as $value) { echo $value, "\n"; }
+}
+walk(new EntrySource());
+"#;
+    let (bin, diagnostics) = compile(&dir, source, "forward_method");
+    assert_eq!(
+        diagnostics, "",
+        "provisional method return escaped: {diagnostics}"
+    );
+    let (stdout, stderr) = run_binary(&bin);
+    assert_eq!(stdout, "one\ntwo\n");
+    assert_eq!(stderr, "");
+}
+
+/// Refreshing a loop warning must preserve boxed returns for dynamically supplied values.
+#[test]
+fn forward_method_warning_refresh_preserves_dynamic_return() {
+    let dir = make_test_dir("foreach_dynamic_return");
+    let source = r#"<?php
+class EntrySource {
+    private $entries = ['one', 'two'];
+    public function values() { return $this->entries; }
+}
+function opt($value = null) {
+    $source = new EntrySource();
+    foreach ($source->values() as $entry) { echo $entry, "\n"; }
+    return $value;
+}
+var_dump(opt());
+$callback = 'opt';
+var_dump(call_user_func($callback, 'probe'));
+"#;
+    let (bin, diagnostics) = compile(&dir, source, "dynamic_return");
+    assert_eq!(
+        diagnostics, "",
+        "provisional method return escaped: {diagnostics}"
+    );
+    let (stdout, stderr) = run_binary(&bin);
+    assert_eq!(stdout, "one\ntwo\nNULL\none\ntwo\nstring(5) \"probe\"\n");
+    assert_eq!(stderr, "");
+}
+
+/// Forwarding an untyped array property preserves string keys, snapshots and returned owners.
+#[test]
+fn forwarded_array_property_returns_keep_keys_and_owners() {
+    let dir = make_test_dir("foreach_forwarded_property_owners");
+    let source = r#"<?php
+class EntrySource {
+    private $entries = [];
+    public function put(string $key, string $value): void { $this->entries[$key] = $value; }
+    public function values() { return $this->entries; }
+}
+function entries(EntrySource $source) { return $source->values(); }
+function relay(EntrySource $source) { return entries($source); }
+class ArrayMetadata { const NAME = 'metadata'; }
+function literalRows() { return [new ArrayMetadata()]; }
+$source = new EntrySource();
+$source->put('first', 'one');
+$snapshot = relay($source);
+$source->put('second', 'two');
+foreach ($snapshot as $key => $value) { echo $key, '=', $value, "\n"; }
+$returned = relay($source);
+unset($source);
+foreach ($returned as $key => $value) { echo $key, '=', $value, "\n"; }
+foreach (literalRows() as $metadata) { echo $metadata::NAME, "\n"; }
+"#;
+    let (bin, diagnostics) = compile(&dir, source, "forwarded_property_owners");
+    assert_eq!(diagnostics, "", "unexpected diagnostics: {diagnostics}");
+    let (stdout, stderr) = run_binary(&bin);
+    assert_eq!(stdout, "first=one\nfirst=one\nsecond=two\nmetadata\n");
+    assert_eq!(stderr, "");
+}
+
+/// A constructor's first array write must establish the same ABI as an array default.
+#[test]
+fn null_defaulted_array_property_forwarding_keeps_native_layout() {
+    let dir = make_test_dir("foreach_null_property_forwarding");
+    let source = r#"<?php
+class NullEntrySource {
+    private $entries = null;
+    public function __construct() { $this->entries = ['three', 'four']; }
+    public function values() { return $this->entries; }
+}
+function entries(NullEntrySource $source) { return $source->values(); }
+function walk(NullEntrySource $source): void {
+    $entries = entries($source);
+    foreach ($entries as $value) { echo $value, "\n"; }
+}
+walk(new NullEntrySource());
+"#;
+    let (bin, diagnostics) = compile(&dir, source, "null_property_forwarding");
+    assert_eq!(diagnostics, "", "unexpected diagnostics: {diagnostics}");
+    let (stdout, stderr) = run_binary(&bin);
+    assert_eq!(stdout, "three\nfour\n");
+    assert_eq!(stderr, "");
+}
+
+/// Every forwarding level must receive the settled return, irrespective of map iteration order.
+#[test]
+fn deep_array_property_forwarding_keeps_native_layout() {
+    let dir = make_test_dir("foreach_deep_property_forwarding");
+    let mut source = String::from(r#"<?php
+class EntrySource {
+    private $entries = ['one', 'two'];
+    public function values() { return $this->entries; }
+}
+function entries0(EntrySource $source) { return $source->values(); }
+"#);
+    for index in 1..32 {
+        source.push_str(&format!(
+            "function entries{index}(EntrySource $source) {{ return entries{}($source); }}\n",
+            index - 1,
+        ));
+    }
+    source.push_str(r#"
+function walk(EntrySource $source): void {
+    $entries = entries31($source);
+    foreach ($entries as $value) { echo $value, "\n"; }
+}
+walk(new EntrySource());
+"#);
+    let (bin, diagnostics) = compile(&dir, &source, "deep_property_forwarding");
+    assert_eq!(diagnostics, "", "unexpected diagnostics: {diagnostics}");
+    let (stdout, stderr) = run_binary(&bin);
+    assert_eq!(stdout, "one\ntwo\n");
+    assert_eq!(stderr, "");
 }
 
 /// Reference: `Warning: foreach() argument must be of type array|object, null given`, exit 0.
@@ -302,7 +456,11 @@ fn statements_after_the_loop_still_run() {
     assert_eq!(stdout, "one\ntwo\nthree=7\nfour\n");
     assert_eq!(
         stderr,
-        format!("{WARNING_PREFIX}false given\n{WARNING_PREFIX}int given\n")
+        format!(
+            "{}{}",
+            expected_warning(&bin, "false", 4),
+            expected_warning(&bin, "int", 6)
+        )
     );
 }
 

@@ -18,15 +18,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
         EvaluatedCallable::ForeignContext { callback, owner } => {
-            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_evaluated_callable_with_values(
-                callback,
-                evaluated_args,
-                owner_context,
-                values,
-            )
+            with_foreign_owner_context(owner, context, values, |owner_context, values| {
+                eval_evaluated_callable_with_values(callback, evaluated_args, owner_context, values)
+            })
         }
         EvaluatedCallable::Named { name, .. } => {
             if let Some(closure) = context.closure(name).cloned() {
@@ -64,6 +58,12 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                 values,
             )
         }
+        EvaluatedCallable::NativeDescriptor { descriptor } => eval_native_descriptor_call(
+            *descriptor,
+            positional_args(evaluated_args),
+            context,
+            values,
+        ),
         EvaluatedCallable::ObjectMethod {
             object,
             method,
@@ -88,7 +88,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                 context,
                 values,
             ),
-            None => eval_method_call_result(*object, method, evaluated_args, context, values),
+            None => with_closure_method_scope(bridge_scope.as_deref(), context, |context| {
+                eval_method_call_result(*object, method, evaluated_args, context, values)
+            }),
             }
         }
         EvaluatedCallable::StaticMethod {
@@ -243,15 +245,14 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
         EvaluatedCallable::ForeignContext { callback, owner } => {
-            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_evaluated_callable_with_call_user_func_values(
-                callback,
-                evaluated_args,
-                owner_context,
-                values,
-            )
+            with_foreign_owner_context(owner, context, values, |owner_context, values| {
+                eval_evaluated_callable_with_call_user_func_values(
+                    callback,
+                    evaluated_args,
+                    owner_context,
+                    values,
+                )
+            })
         }
         EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_values(name, evaluated_args, context, values)
@@ -296,6 +297,12 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
                 values,
             )
         }
+        EvaluatedCallable::NativeDescriptor { descriptor } => eval_native_descriptor_call(
+            *descriptor,
+            positional_args(evaluated_args),
+            context,
+            values,
+        ),
         EvaluatedCallable::ObjectMethod {
             object,
             method,
@@ -322,14 +329,16 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
                     values,
                 )
             }
-            None => eval_object_method_with_call_user_func_values(
-                *object,
-                method,
-                EvalObjectCallbackKind::Method,
-                evaluated_args,
-                context,
-                values,
-            ),
+            None => with_closure_method_scope(bridge_scope.as_deref(), context, |context| {
+                eval_object_method_with_call_user_func_values(
+                    *object,
+                    method,
+                    EvalObjectCallbackKind::Method,
+                    evaluated_args,
+                    context,
+                    values,
+                )
+            }),
             }
         }
         EvaluatedCallable::StaticMethod {
@@ -380,15 +389,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
     let evaluated_args = eval_clear_evaluated_arg_ref_targets(evaluated_args);
     match callback {
         EvaluatedCallable::ForeignContext { callback, owner } => {
-            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_evaluated_callable_with_by_value_call_args(
-                callback,
-                evaluated_args,
-                owner_context,
-                values,
-            )
+            with_foreign_owner_context(owner, context, values, |owner_context, values| {
+                eval_evaluated_callable_with_by_value_call_args(
+                    callback,
+                    evaluated_args,
+                    owner_context,
+                    values,
+                )
+            })
         }
         EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_args(name, evaluated_args, context, values)
@@ -432,6 +440,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
                 values,
             )
         }
+        EvaluatedCallable::NativeDescriptor { descriptor } => {
+            eval_native_descriptor_call(*descriptor, evaluated_args, context, values)
+        }
         EvaluatedCallable::ObjectMethod {
             object,
             method,
@@ -458,14 +469,16 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
                     values,
                 )
             }
-            None => eval_object_method_with_call_user_func_args(
-                *object,
-                method,
-                EvalObjectCallbackKind::Method,
-                evaluated_args,
-                context,
-                values,
-            ),
+            None => with_closure_method_scope(bridge_scope.as_deref(), context, |context| {
+                eval_object_method_with_call_user_func_args(
+                    *object,
+                    method,
+                    EvalObjectCallbackKind::Method,
+                    evaluated_args,
+                    context,
+                    values,
+                )
+            }),
             }
         }
         EvaluatedCallable::StaticMethod {
@@ -519,3 +532,41 @@ pub(super) fn eval_clear_evaluated_arg_ref_targets(
         })
         .collect()
 }
+
+/// Calls a compiled callable through its descriptor's own invoker, binding the arguments the way
+/// a direct `$f(...)` on the same value does (surplus positional arguments dropped, defaults
+/// filled, named arguments bound by name).
+fn eval_native_descriptor_call(
+    descriptor: usize,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(decoded) =
+        (unsafe { decode_callable_descriptor(descriptor as *mut std::ffi::c_void) })
+    else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let bound = bind_evaluated_native_function_args(&decoded.function, evaluated_args, context, values)?;
+    eval_native_function_with_values(decoded.function, bound, context, values)
+}
+
+/// Runs an interpreted-method dispatch under the class scope its Closure was created in.
+///
+/// Only a first-class callable of an interpreted method carries a `bridge_scope` without a native
+/// class, and php settles that Closure's access where it was made: a call from any other scope
+/// must still reach a protected or private target. Other callbacks have no scope and run as is.
+pub(super) fn with_closure_method_scope<T>(
+    scope: Option<&str>,
+    context: &mut ElephcEvalContext,
+    call: impl FnOnce(&mut ElephcEvalContext) -> Result<T, EvalStatus>,
+) -> Result<T, EvalStatus> {
+    let Some(scope) = scope else {
+        return call(context);
+    };
+    context.push_class_scope(scope);
+    let result = call(context);
+    context.pop_class_scope();
+    result
+}
+

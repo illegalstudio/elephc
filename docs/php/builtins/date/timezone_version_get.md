@@ -2,7 +2,7 @@
 title: "timezone_version_get()"
 description: "Returns the version of the bundled timezone database."
 sidebar:
-  order: 255
+  order: 266
 ---
 
 ## timezone_version_get()

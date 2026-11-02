@@ -15,6 +15,7 @@ pub(super) fn fake_runtime_exception_like_class(class_name: &str) -> bool {
         "JsonException",
         "ReflectionException",
         "RuntimeException",
+        "LogicException",
         "Error",
         "ArithmeticError",
         "DivisionByZeroError",
@@ -22,6 +23,7 @@ pub(super) fn fake_runtime_exception_like_class(class_name: &str) -> bool {
         "ValueError",
         "TypeError",
         "ArgumentCountError",
+        "UnhandledMatchError",
     ]
     .iter()
     .any(|known| class_name.eq_ignore_ascii_case(known))
@@ -58,11 +60,26 @@ pub(super) fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exc
     {
         return true;
     }
+    // `Generator implements Iterator` (which itself extends `Traversable`) in real PHP; the
+    // interpreter's own eval_generator_new() creates a `Generator`-tagged object regardless of
+    // whether the fake or real backend is asked, so both must answer the same instanceof chain.
+    if class_name.eq_ignore_ascii_case("Generator")
+        && (target_class.eq_ignore_ascii_case("Iterator")
+            || target_class.eq_ignore_ascii_case("Traversable"))
+    {
+        return true;
+    }
     if target_class.eq_ignore_ascii_case("Throwable") {
         return fake_runtime_exception_like_class(class_name);
     }
     if target_class.eq_ignore_ascii_case("Exception") {
-        return ["Exception", "JsonException", "ReflectionException"]
+        return [
+            "Exception",
+            "JsonException",
+            "ReflectionException",
+            "RuntimeException",
+            "LogicException",
+        ]
             .iter()
             .any(|known| class_name.eq_ignore_ascii_case(known));
     }
@@ -75,7 +92,14 @@ pub(super) fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exc
             "ValueError",
             "TypeError",
             "ArgumentCountError",
+            "UnhandledMatchError",
         ]
+            .iter()
+            .any(|known| class_name.eq_ignore_ascii_case(known));
+    }
+    if target_class.eq_ignore_ascii_case("TypeError") {
+        // `ArgumentCountError extends TypeError` in real PHP.
+        return ["TypeError", "ArgumentCountError"]
             .iter()
             .any(|known| class_name.eq_ignore_ascii_case(known));
     }
@@ -83,9 +107,6 @@ pub(super) fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exc
         return ["ArithmeticError", "DivisionByZeroError"]
             .iter()
             .any(|known| class_name.eq_ignore_ascii_case(known));
-    }
-    if target_class.eq_ignore_ascii_case("TypeError") {
-        return class_name.eq_ignore_ascii_case("ArgumentCountError");
     }
     false
 }

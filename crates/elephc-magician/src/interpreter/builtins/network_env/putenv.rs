@@ -82,11 +82,15 @@ fn eval_putenv_host(assignment: &[u8]) -> bool {
                 OsStr::from_bytes(&text[..separator]),
                 OsStr::from_bytes(&text[separator + 1..]),
             );
+            // The eval trace answers from a cached verdict, and this is the only way a running
+            // PHP program can change what the environment says.
+            crate::eval_trace::invalidate();
             true
         }
         None if assignment.contains(&b'=') && cfg!(target_vendor = "apple") => false,
         None => {
             std::env::remove_var(OsStr::from_bytes(text));
+            crate::eval_trace::invalidate();
             true
         }
     }

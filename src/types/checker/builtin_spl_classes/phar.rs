@@ -25,6 +25,29 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
     insert_phar_like_class(class_map, "Phar");
     insert_phar_like_class(class_map, "PharData");
     insert_phar_file_info_class(class_map);
+    insert_phar_exception_class(class_map);
+}
+
+/// Inserts `PharException`, which php's archive operations throw (`extends Exception`).
+fn insert_phar_exception_class(class_map: &mut HashMap<String, FlattenedClass>) {
+    class_map.insert(
+        "PharException".to_string(),
+        FlattenedClass {
+            name: "PharException".to_string(),
+            span: crate::span::Span::dummy(),
+            extends: Some("Exception".to_string()),
+            implements: Vec::new(),
+            is_abstract: false,
+            is_final: false,
+            is_readonly_class: false,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            constants: Vec::new(),
+            used_traits: Vec::new(),
+            trait_aliases: Vec::new(),
+        },
+    );
 }
 
 /// Inserts one PHAR-like archive class with the shared ArrayAccess surface.
@@ -90,6 +113,23 @@ fn phar_properties() -> Vec<ClassProperty> {
 /// Builds the supported constructor, metadata/stub helpers, write helpers, and ArrayAccess methods.
 fn phar_methods() -> Vec<ClassMethod> {
     vec![
+        // The archive the running script was loaded from. A compiled program is never executed
+        // out of a phar, so the answer is php's "not in a phar" one, the empty string, with or
+        // without the `phar://` prefix. psysh's `info()` reports it.
+        class_method_with_body(
+            "running",
+            true,
+            vec![param_default(
+                "returnPhar",
+                TypeExpr::Bool,
+                Expr::new(ExprKind::BoolLiteral(true), crate::span::Span::dummy()),
+            )],
+            Some(TypeExpr::Str),
+            return_body(Expr::new(
+                ExprKind::StringLiteral(String::new()),
+                crate::span::Span::dummy(),
+            )),
+        ),
         method_with_body(
             "__construct",
             vec![param("filename", TypeExpr::Str)],
@@ -182,6 +222,17 @@ fn phar_methods() -> Vec<ClassMethod> {
             vec![param("offset", mixed_type())],
             Some(named_type("PharFileInfo")),
             phar_offset_get_body(),
+        ),
+        // psysh's self-updater extracts the `psysh` phar out of a downloaded tarball.
+        method_with_body(
+            "extractTo",
+            vec![
+                param("directory", TypeExpr::Str),
+                param_default("files", mixed_type(), null_expr()),
+                param_default("overwrite", TypeExpr::Bool, bool_expr(false)),
+            ],
+            Some(TypeExpr::Bool),
+            phar_extract_to_body(),
         ),
         method_with_body(
             "addFromString",
@@ -630,6 +681,136 @@ fn phar_offset_get_body() -> Vec<crate::parser::ast::Stmt> {
         "PharFileInfo",
         vec![phar_entry_url_expr(var_expr("offset"))],
     ))
+}
+
+/// Builds `extractTo()`: copies each requested entry (every entry for `null`) out of the
+/// archive's `phar://` view under `$directory`, creating the parent directories, and throws
+/// php's `PharException` for an existing target without `$overwrite` or a failed write.
+fn phar_extract_to_body() -> Vec<crate::parser::ast::Stmt> {
+    let failure = |reason: Expr| {
+        let head = binary_expr(
+            binary_expr(
+                string_expr("Extraction from phar \""),
+                BinOp::Concat,
+                phar_path_expr(),
+            ),
+            BinOp::Concat,
+            string_expr("\" failed: "),
+        );
+        throw_stmt(new_object_expr(
+            "PharException",
+            vec![binary_expr(head, BinOp::Concat, reason)],
+        ))
+    };
+    let quoted = |value: Expr| {
+        binary_expr(
+            binary_expr(string_expr("\""), BinOp::Concat, value),
+            BinOp::Concat,
+            string_expr("\""),
+        )
+    };
+    let cannot_extract = |tail: &str| {
+        binary_expr(
+            binary_expr(
+                binary_expr(
+                    binary_expr(string_expr("Cannot extract "), BinOp::Concat, quoted(var_expr("name"))),
+                    BinOp::Concat,
+                    string_expr(" to "),
+                ),
+                BinOp::Concat,
+                quoted(var_expr("target")),
+            ),
+            BinOp::Concat,
+            string_expr(tail),
+        )
+    };
+    vec![
+        if_stmt(
+            binary_expr(var_expr("files"), BinOp::StrictEq, null_expr()),
+            vec![assign_stmt("names", phar_entries_expr())],
+            Some(vec![if_stmt(
+                function_call("is_array", vec![var_expr("files")]),
+                vec![assign_stmt("names", var_expr("files"))],
+                Some(vec![assign_stmt(
+                    "names",
+                    expr(ExprKind::ArrayLiteral(vec![cast_expr(CastType::String, var_expr("files"))])),
+                )]),
+            )]),
+        ),
+        assign_stmt(
+            "root",
+            function_call("rtrim", vec![var_expr("directory"), string_expr("/")]),
+        ),
+        foreach_stmt(
+            var_expr("names"),
+            None,
+            "entry",
+            vec![
+                assign_stmt("name", cast_expr(CastType::String, var_expr("entry"))),
+                assign_stmt("source", phar_entry_url_expr(var_expr("name"))),
+                assign_stmt(
+                    "target",
+                    binary_expr(
+                        binary_expr(var_expr("root"), BinOp::Concat, string_expr("/")),
+                        BinOp::Concat,
+                        var_expr("name"),
+                    ),
+                ),
+                if_stmt(
+                    binary_expr(
+                        not_expr(var_expr("overwrite")),
+                        BinOp::And,
+                        function_call("file_exists", vec![var_expr("target")]),
+                    ),
+                    vec![failure(cannot_extract(", path already exists"))],
+                    None,
+                ),
+                if_stmt(
+                    function_call("is_dir", vec![var_expr("source")]),
+                    vec![
+                        if_stmt(
+                            not_expr(function_call("is_dir", vec![var_expr("target")])),
+                            vec![expr_stmt(function_call(
+                                "mkdir",
+                                vec![var_expr("target"), int_expr(0o777), bool_expr(true)],
+                            ))],
+                            None,
+                        ),
+                    ],
+                    Some(vec![
+                        assign_stmt("parent", function_call("dirname", vec![var_expr("target")])),
+                        if_stmt(
+                            not_expr(function_call("is_dir", vec![var_expr("parent")])),
+                            vec![expr_stmt(function_call(
+                                "mkdir",
+                                vec![var_expr("parent"), int_expr(0o777), bool_expr(true)],
+                            ))],
+                            None,
+                        ),
+                        // The entry is read through the `phar://` view, as `PharFileInfo::getContent()` reads it.
+                        assign_stmt("contents", function_call("file_get_contents", vec![var_expr("source")])),
+                        if_stmt(
+                            binary_expr(
+                                binary_expr(var_expr("contents"), BinOp::StrictEq, bool_expr(false)),
+                                BinOp::Or,
+                                binary_expr(
+                                    function_call(
+                                        "file_put_contents",
+                                        vec![var_expr("target"), var_expr("contents")],
+                                    ),
+                                    BinOp::StrictEq,
+                                    bool_expr(false),
+                                ),
+                            ),
+                            vec![failure(cannot_extract(""))],
+                            None,
+                        ),
+                    ]),
+                ),
+            ],
+        ),
+        return_stmt(bool_expr(true)),
+    ]
 }
 
 /// Builds `addFromString()` as a typed `file_put_contents()` archive write.

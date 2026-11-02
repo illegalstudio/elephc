@@ -5,17 +5,18 @@
 //! - `super` and native metadata accessors on `ElephcEvalContext`.
 //!
 //! Key details:
-//! - Empty activation state does not allocate an Rc.
+//! - Empty activation state does not allocate an Arc.
+//! - Shared handles are `Arc` because the process-global AOT snapshot crosses threads.
 //! - Explicit metadata writes detach with copy-on-write; ordinary lookup never clones it.
 
 use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Native metadata that is mutable until frozen or explicitly detached by its context.
 #[derive(Clone)]
 pub(crate) enum SharedNative<T> {
     Local(T),
-    Shared(Rc<T>),
+    Shared(Arc<T>),
 }
 
 impl<T: Default> Default for SharedNative<T> {
@@ -25,17 +26,22 @@ impl<T: Default> Default for SharedNative<T> {
 
 impl<T> SharedNative<T> {
     /// Attaches one already frozen metadata allocation.
-    pub(crate) fn from_shared(value: Rc<T>) -> Self { Self::Shared(value) }
+    pub(crate) fn from_shared(value: Arc<T>) -> Self { Self::Shared(value) }
+
+    /// Reports whether this handle is the very allocation `other` points at.
+    pub(crate) fn shares_with(&self, other: &Arc<T>) -> bool {
+        matches!(self, Self::Shared(value) if Arc::ptr_eq(value, other))
+    }
 }
 
 impl<T: Default> SharedNative<T> {
     /// Freezes local metadata by moving it, without cloning its entries.
-    pub(crate) fn share(&mut self) -> Rc<T> {
+    pub(crate) fn share(&mut self) -> Arc<T> {
         let value = match std::mem::take(self) {
-            Self::Local(value) => Rc::new(value),
+            Self::Local(value) => Arc::new(value),
             Self::Shared(value) => value,
         };
-        *self = Self::Shared(Rc::clone(&value));
+        *self = Self::Shared(Arc::clone(&value));
         value
     }
 }
@@ -52,7 +58,7 @@ impl<T> Deref for SharedNative<T> {
 impl<T: Clone> DerefMut for SharedNative<T> {
     /// Gives an explicit writer private storage while preserving the cached catalog.
     fn deref_mut(&mut self) -> &mut T {
-        match self { Self::Local(value) => value, Self::Shared(value) => Rc::make_mut(value) }
+        match self { Self::Local(value) => value, Self::Shared(value) => Arc::make_mut(value) }
     }
 }
 

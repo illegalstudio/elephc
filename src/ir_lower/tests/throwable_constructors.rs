@@ -140,18 +140,25 @@ $source = 'try { throwEvalGetterException(); } catch (RuntimeException $error) {
 eval($source);
 "#;
     let name = target;
-        let module = lower_source_at_for_target(
-            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
-        );
-        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-        let start = assembly.find("__elephc_eval_builtin_throwable_getprevious:").unwrap();
-        let body = &assembly[start..];
-        let lookup = body.find("__rt_throwable_previous").unwrap();
-        let object_box = body.find("__rt_mixed_from_value").unwrap();
-        let null = body.find("__elephc_eval_builtin_throwable_previous_null:").unwrap();
-        assert!(lookup < object_box && object_box < null, "{name}");
-        assert!(body[null..].contains("__rt_mixed_from_value"), "{name}");
+    let module = lower_source_at_for_target(
+        source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+    );
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    // The bridge body reads the previous slot itself (no `__rt_throwable_previous` lookup any
+    // more) and returns an OWNED Mixed on every arm: a raw object pointer is boxed after its
+    // heap kind is inspected, an already-boxed constructor cell is retained and handed back,
+    // and an empty slot boxes null. x86_64 spells the arm labels with an `_x` suffix.
+    let suffix = if name == "linux-x86_64" { "_x" } else { "" };
+    let start = assembly.find("__elephc_eval_builtin_throwable_getprevious:").unwrap();
+    let body = &assembly[start..];
+    let boxed = body.find(&format!("__elephc_eval_builtin_throwable_getprevious_boxed{suffix}:")).unwrap();
+    let null = body.find(&format!("__elephc_eval_builtin_throwable_getprevious_null{suffix}:")).unwrap();
+    let kind_check = body.find("__rt_heap_kind").unwrap();
+    let object_box = body.find("__rt_mixed_from_value").unwrap();
+    assert!(kind_check < object_box && object_box < boxed, "{name}: the object arm inspects the heap kind, then boxes");
+    assert!(body[boxed..null].contains("__rt_incref"), "{name}: the already-boxed arm hands back a retained cell");
+    assert!(body[null..].contains("__rt_mixed_from_value"), "{name}: the empty arm boxes null");
 }
 
 /// Schedules the expensive eval bridge fixture once per target under the unchanged CI timeout.

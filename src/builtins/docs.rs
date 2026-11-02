@@ -28,6 +28,7 @@ use serde_json::{json, Value};
 fn type_spec_str(ty: &TypeSpec) -> String {
     match ty {
         TypeSpec::Int => "int".to_string(),
+        TypeSpec::NullableInt => "?int".to_string(),
         TypeSpec::Float => "float".to_string(),
         TypeSpec::Str => "string".to_string(),
         TypeSpec::Bool => "bool".to_string(),
@@ -192,9 +193,11 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::PreserveUncoerced => "preserve_uncoerced",
         BuiltinArgumentLowering::MaterializeDefaults => "materialize_defaults",
         BuiltinArgumentLowering::Count => "count",
+        BuiltinArgumentLowering::HtmlEntityDecode => "html_entity_decode",
         BuiltinArgumentLowering::Date => "date",
         BuiltinArgumentLowering::JsonSource => "json_source",
         BuiltinArgumentLowering::Getenv => "getenv",
+        BuiltinArgumentLowering::NullableStringOperands => "nullable_string_operands",
         BuiltinArgumentLowering::PcntlPreserveOmitted => "pcntl_preserve_omitted",
         BuiltinArgumentLowering::PregReplaceCallback => "preg_replace_callback",
         BuiltinArgumentLowering::PositionalRegex => "positional_regex",
@@ -296,7 +299,7 @@ fn build_json(include_internal: bool) -> Value {
             "internal": spec.internal,
             "extension": spec.extension,
             "params": params,
-            "variadic": spec.variadic,
+            "variadic": spec.variadic.map(|variadic| variadic.name),
             "returns": type_spec_str(&spec.returns),
             "by_ref_return": spec.by_ref_return,
             "min_args": spec.min_args,
@@ -447,6 +450,7 @@ mod tests {
             "pcntl_wifstopped",
             "pcntl_wstopsig",
             "pcntl_wtermsig",
+            "posix_kill",
             "posix_setpgid",
             "posix_setsid",
         ]

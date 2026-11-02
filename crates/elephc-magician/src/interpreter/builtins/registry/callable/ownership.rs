@@ -24,6 +24,11 @@ impl ResolvedEvalCallable {
         Self { callable, receiver_owner }
     }
 
+    /// Borrows the normalized callback; the receiver lease stays with this scope.
+    pub(in crate::interpreter) fn callable(&self) -> &EvaluatedCallable {
+        &self.callable
+    }
+
     /// Runs a complete invocation region, then retires its acquired receiver on every status.
     pub(in crate::interpreter) fn with_values<V: RuntimeValueOps>(
         self,
@@ -55,6 +60,16 @@ impl ResolvedEvalCallable {
         let result = probe(&self.callable, context, values);
         let cleanup = self.release(context, values);
         result.and_then(|exists| cleanup.map(|()| exists))
+    }
+
+    /// Runs a validation that yields no value, then retires the receiver on every status.
+    pub(in crate::interpreter) fn with_check<V: RuntimeValueOps>(
+        self, context: &mut ElephcEvalContext, values: &mut V,
+        check: impl FnOnce(&EvaluatedCallable, &mut ElephcEvalContext, &mut V) -> Result<(), EvalStatus>,
+    ) -> Result<(), EvalStatus> {
+        let result = check(&self.callable, context, values);
+        let cleanup = self.release(context, values);
+        result.and(cleanup)
     }
 
     /// Transfers the lease to a transfer frame that performs several callback invocations.

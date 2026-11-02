@@ -9,6 +9,77 @@
 
 use crate::support::*;
 
+/// Verifies `get_debug_type()` names a BOXED callable. A closure or first-class callable reaching
+/// a `mixed` slot is carried as a callable descriptor, a tag `gettype()` already routes to its
+/// object arm and `instanceof \Closure` already answers true for — but which `get_debug_type()`
+/// left out of its dispatch, so it fell through to the null arm and answered "null".
+/// PHP outputs "Closure,object,obj,callable,closure" for both shapes, and keeps naming a string
+/// callable "string" and an array callable "array".
+#[test]
+fn test_get_debug_type_names_a_boxed_callable() {
+    let out = compile_and_run(
+        r#"<?php
+class Svc { public function run(int $n): int { return $n; } }
+function double(int $n): int { return $n * 2; }
+
+function probe(mixed $c): string {
+    return implode(',', [
+        get_debug_type($c),
+        gettype($c),
+        is_object($c) ? 'obj' : 'notobj',
+        is_callable($c) ? 'callable' : 'notcallable',
+        $c instanceof \Closure ? 'closure' : 'notclosure',
+    ]);
+}
+
+echo probe(static fn (int $n): int => $n), '|';
+echo probe(double(...)), '|';
+echo get_debug_type('double'), '|';
+echo get_debug_type([new Svc(), 'run']);
+"#,
+    );
+    assert_eq!(
+        out,
+        "Closure,object,obj,callable,closure|Closure,object,obj,callable,closure|string|array"
+    );
+}
+
+/// Verifies a `callable` value satisfies a `string|array|object` destination. PHP has no
+/// `callable` property type, so code that stores one declares the three shapes a callable can
+/// actually take at run time — Symfony's `ControllerEvent::$controller` is exactly
+/// `private string|array|object $controller;`, written straight from a `callable $controller`
+/// parameter. PHP outputs "Closure=5|Closure=8".
+#[test]
+fn test_callable_satisfies_a_string_array_object_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder {
+    private string|array|object $controller;
+
+    public function __construct(callable $controller) {
+        $this->controller = $controller;
+    }
+
+    public function describe(): string { return get_debug_type($this->controller); }
+
+    public function run(int $n): int {
+        $c = $this->controller;
+
+        return $c($n);
+    }
+}
+
+function double(int $n): int { return $n * 2; }
+
+$closure = new Holder(static fn (int $n): int => $n + 1);
+echo $closure->describe(), '=', $closure->run(4), '|';
+$named = new Holder(double(...));
+echo $named->describe(), '=', $named->run(4);
+"#,
+    );
+    assert_eq!(out, "Closure=5|Closure=8");
+}
+
 // --- Anonymous functions (closures) and arrow functions ---
 
 /// Verifies basic anonymous function creation, assignment to variable, and invocation with one argument.
@@ -72,6 +143,19 @@ echo $calc(5);
     assert_eq!(out, "26");
 }
 
+/// Verifies that untyped closure parameters retain gradual array access semantics.
+#[test]
+fn test_untyped_closure_parameter_supports_array_access() {
+    let out = compile_and_run(
+        r#"<?php
+$classic = function ($value) { return $value[1]; };
+$arrow = fn ($value) => $value[2];
+echo $classic([10, 20, 30]), ":", $arrow([10, 20, 30]);
+"#,
+    );
+    assert_eq!(out, "20:30");
+}
+
 /// Regression for #300: arrow functions capture outer locals by value at definition time.
 #[test]
 fn test_arrow_function_captures_outer_local_by_value() {
@@ -84,6 +168,21 @@ echo $f();
 "#,
     );
     assert_eq!(out, "1");
+}
+
+/// Verifies a local assigned before its first arrow-body read is not captured from the parent scope.
+#[test]
+fn test_arrow_function_assignment_defines_local_before_read() {
+    let out = compile_and_run(
+        r#"<?php
+$format = static fn($name) => match ($name) {
+    'parent' => ($parent = 'base') ? $parent . '!' : 'none',
+    default => 'other',
+};
+echo $format('parent');
+"#,
+    );
+    assert_eq!(out, "base!");
 }
 
 /// Verifies closure with typed parameter, return type annotation, and `use` clause capturing a string variable.
@@ -164,6 +263,104 @@ echo $result[2];
 "#,
     );
     assert_eq!(out, "101102103");
+}
+
+/// Verifies `instanceof Closure` keeps the callable descriptor representation for calls and
+/// callable-typed argument passing after narrowing a union.
+#[test]
+fn test_instanceof_closure_narrowing_remains_callable() {
+    let out = compile_and_run(
+        r#"<?php
+function invoke_narrowed_callable(callable $callback, string $value): string {
+    return $callback($value);
+}
+
+function invoke_closure_or_string(Closure|string $candidate): string {
+    if (!$candidate instanceof Closure) {
+        return $candidate;
+    }
+
+    return $candidate('direct') . ':' . invoke_narrowed_callable($candidate, 'passed');
+}
+
+$callback = static fn (string $value): string => strtoupper($value);
+echo invoke_closure_or_string($callback);
+"#,
+    );
+    assert_eq!(out, "DIRECT:PASSED");
+}
+
+/// Verifies a closure carried by a mixed loader resource remains a PHP `Closure` object.
+#[test]
+fn test_mixed_closure_instanceof_dispatches_delegating_loader() {
+    let out = compile_and_run(
+        r#"<?php
+final class ClosureLoader {
+    public function supports(mixed $resource, ?string $type = null): bool {
+        return $resource instanceof Closure;
+    }
+
+    public function load(mixed $resource, ?string $type = null): string {
+        return $resource();
+    }
+}
+
+final class Resolver {
+    public function __construct(private array $loaders) {}
+
+    public function resolve(mixed $resource, ?string $type = null): object|false {
+        foreach ($this->loaders as $loader) {
+            if ($loader->supports($resource, $type)) {
+                return $loader;
+            }
+        }
+
+        return false;
+    }
+}
+
+final class DelegatingLoader {
+    public function __construct(private Resolver $resolver) {}
+
+    public function load(mixed $resource, ?string $type = null): string {
+        if (false === $loader = $this->resolver->resolve($resource, $type)) {
+            return 'miss';
+        }
+
+        return $loader->load($resource, $type);
+    }
+}
+
+echo (new DelegatingLoader(new Resolver([new ClosureLoader()])))->load(fn (): string => 'ok');
+"#,
+    );
+
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a callable selected from a gradual union is validated and invoked at runtime.
+#[test]
+fn test_gradual_union_callable_invocation() {
+    let out = compile_and_run(
+        r#"<?php
+$candidate = $argc > 0 ? static fn (string $value): string => strtoupper($value) : null;
+echo $candidate('ready');
+"#,
+    );
+    assert_eq!(out, "READY");
+}
+
+/// Verifies a gradual union can supply a runtime-validated spread to an indirect callable.
+#[test]
+fn test_gradual_union_callable_spread() {
+    let out = compile_and_run(
+        r#"<?php
+$callback = static fn (int $left, int $right): int => $left + $right;
+$args = $argc > 0 ? [20, 22] : null;
+echo $callback(...$args);
+"#,
+    );
+    assert_eq!(out, "42");
 }
 
 /// Verifies `array_map` with a closure that captures a variable via `use ($factor)`.
@@ -466,6 +663,23 @@ echo ($use_left ? $left->wrap(...) : $right->wrap(...))(...$args);
         user_asm
     );
     let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies a descriptor call passes through a sole spread stored behind a Mixed array slot.
+#[test]
+fn test_direct_callable_expr_single_mixed_spread_uses_descriptor_invoker() {
+    let out = compile_and_run(
+        r#"<?php
+$add = $argc > 0
+    ? static fn(int $left, int $right): int => $left + $right
+    : static fn(int $left, int $right): int => $left - $right;
+$state = ["callable" => $add, "args" => [20, 22], "marker" => 1];
+$app = $state["callable"];
+$args = $state["args"];
+echo $app(...$args);
+"#,
+    );
+    assert_eq!(out, "42");
 }
 
 /// Verifies direct descriptor calls with positional+spread args build invoker containers.
@@ -959,6 +1173,119 @@ echo $sum;
     assert_eq!(out, "10");
 }
 
+/// Verifies `array_reduce()` with a non-`int` carry and a callback returned from a method, which
+/// is Laravel's middleware `Pipeline::then()`, plus string, array and default-`null` carries.
+///
+/// Three defects stood in the way, all general:
+/// - the checker typed `array_reduce()` as a fixed `int` (the native reducer's register), so
+///   `$pipeline('x')` was refused "not a callable (got Int)";
+/// - a closure RETURNED from a function or method reported its untyped parameters as `int`, so
+///   `array_reduce(…, $this->carry(), $destination)` was refused "callback parameter $stack
+///   expects Int, got Callable", and `$f = mk(); $f("str", 2)` "expects Int, got Str";
+/// - a typed array with a non-`int` carry still took the native integer reducer.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_array_reduce_closure_carry_and_returned_closure_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function mk() { return function ($x, $y) { return "got:" . $x . "/" . $y; }; }
+$f = mk();
+echo $f("str", 2), "\n";
+
+class Pipeline {
+    protected function carry() {
+        return function ($stack, $pipe) {
+            return function ($passable) use ($stack, $pipe) { return $pipe($passable, $stack); };
+        };
+    }
+    public function then(Closure $destination, array $pipes) {
+        $pipeline = array_reduce(array_reverse($pipes), $this->carry(), function ($passable) use ($destination) {
+            return $destination($passable);
+        });
+        return $pipeline('x');
+    }
+}
+$pipes = [fn ($v, $next) => "a(" . $next($v) . ")", fn ($v, $next) => "b(" . $next($v) . ")"];
+echo (new Pipeline())->then(fn ($v) => "dest($v)", $pipes), "\n";
+echo array_reduce(['a', 'b', 'c'], fn ($carry, $v) => $carry . $v, '>'), "|";
+echo json_encode(array_reduce([1, 2, 3], fn ($carry, $v) => [...$carry, $v * 2], [])), "|";
+echo array_reduce([1, 2, 3], fn ($carry, $v) => $carry + $v, 10), "|";
+var_dump(array_reduce([], fn ($carry, $v) => $carry));
+"#,
+    );
+    assert_eq!(out, "got:str/2\na(b(dest(x)))\n>abc|[2,4,6]|16|NULL\n");
+}
+
+/// Verifies closures stored in an array stay callable when the array is read through a `mixed`
+/// parameter.
+///
+/// An array literal of closures was never stamped with the callable element tag (10), so every
+/// `mixed` reader boxed each closure as an int and invoking it fataled "mixed value is not
+/// callable". The boxed-carry `array_reduce()` helper iterates exactly such a parameter.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_closures_in_an_array_stay_callable_through_a_mixed_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function red(mixed $array, callable $cb, mixed $init) {
+    $c = $init;
+    foreach ($array as $v) { $c = $cb($c, $v); }
+    return $c;
+}
+$pipes = [fn ($v) => "a($v)", fn ($v) => "b($v)"];
+echo red($pipes, function ($carry, $pipe) { return $pipe($carry); }, 'x'), "\n";
+function first(mixed $array) { foreach ($array as $v) { return $v; } }
+$f = first($pipes);
+echo $f('y'), "\n";
+echo is_callable(first($pipes)) ? "callable\n" : "not callable\n";
+"#,
+    );
+    assert_eq!(out, "b(a(x))\na(y)\ncallable\n");
+}
+
+/// Verifies a call through a property-held closure is not bound to an unrelated closure literal
+/// lowered earlier in the same function.
+///
+/// Lowering a closure literal parks its static binding for the next consumer, and an arrow
+/// function passed as a method ARGUMENT is never consumed. The `finally` block's
+/// `($this->fin)($this->passable)` then took that stale binding: a direct call to the arrow
+/// function with the other ternary arm's captures, refused only because those captures did not
+/// dominate the call ("UseNotDominated"). This is Laravel's `Pipeline::then()`.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_property_closure_call_does_not_take_a_stale_closure_binding() {
+    let out = compile_and_run(
+        r#"<?php
+class Db { public function transaction(Closure $f) { return "tx(" . $f() . ")"; } }
+class Pipe {
+    public $fin = null;
+    public $tx = 0;
+    public $passable = 'p';
+    public function then(Closure $pipeline) {
+        try {
+            return $this->tx !== 0
+                ? (new Db())->transaction(fn () => $pipeline($this->passable))
+                : $pipeline($this->passable);
+        } finally {
+            if ($this->fin) {
+                ($this->fin)($this->passable);
+            }
+        }
+    }
+}
+$p = new Pipe();
+echo $p->then(fn ($v) => "d($v)"), "\n";
+$p->fin = function ($v) { echo "finally($v)\n"; };
+$p->tx = 1;
+echo $p->then(fn ($v) => "d($v)"), "\n";
+"#,
+    );
+    assert_eq!(out, "d(p)\nfinally(p)\ntx(d(p))\n");
+}
+
 // --- IIFE (Immediately Invoked Function Expression) ---
 
 /// Verifies immediately-invoked anonymous function expression (IIFE) returning a constant.
@@ -1083,6 +1410,40 @@ echo $f();
     assert_eq!(out, "6");
 }
 
+/// Verifies an object-held closure preserves a nested associative map returned from a foreach.
+///
+/// Configuration builders commonly retain normalizer closures and call them later through a
+/// property. The nested assignment and the array return must retain the same map rather than
+/// degrading its child value to null at the callable boundary.
+#[test]
+fn test_object_held_closure_returns_nested_associative_map() {
+    let out = compile_and_run(
+        r#"<?php
+class ClosureMapNormalizer {
+    private \Closure $normalizer;
+
+    public function __construct() {
+        $this->normalizer = static function (array $values): array {
+            foreach ($values as $key => $value) {
+                $values[$key]['services'] = $value;
+            }
+
+            return $values;
+        };
+    }
+
+    public function normalize(array $values): array {
+        return ($this->normalizer)($values);
+    }
+}
+
+$result = (new ClosureMapNormalizer())->normalize(['App\\' => []]);
+echo get_debug_type($result['App\\']['services'] ?? null);
+"#,
+    );
+    assert_eq!(out, "array");
+}
+
 /// Verifies an arrow function defined in a method auto-captures `$this`.
 #[test]
 fn test_arrow_in_method_auto_captures_this() {
@@ -1203,6 +1564,24 @@ echo $g();
     assert_eq!(out, "Hi Ada");
 }
 
+/// A free-function closure whose only `$this` reads sit inside multi-argument `echo` (parsed as a
+/// statement sequence) must still take a bound receiver once `Closure::bind` gives it one.
+#[test]
+fn test_bound_closure_reads_this_inside_multi_argument_echo() {
+    let out = compile_and_run(
+        r#"<?php
+function make(): \Closure { return function () { echo "[", $this->c, "]", $this->p("x"); return 1; }; }
+class R {
+    private string $c = "UTF-8";
+    private function p(string $n): string { return "<" . $n . ">"; }
+    public function run(\Closure $f): void { \Closure::bind($f, $this, R::class)(); }
+}
+(new R())->run(make());
+"#,
+    );
+    assert_eq!(out, "[UTF-8]<x>");
+}
+
 // --- Closure::bind / ->bindTo() rebind a closure's captured $this ---
 
 /// Verifies `$closure->bindTo($newThis)` returns a closure whose `$this` is the
@@ -1294,6 +1673,47 @@ echo $a(), " ", $b();
 "#,
     );
     assert_eq!(out, "42 42");
+}
+
+/// Verifies an explicit null-receiver bind scope controls lexical `self` static-property access.
+#[test]
+fn test_closure_bind_null_receiver_rebinds_static_scope() {
+    let out = compile_and_run(
+        r#"<?php
+final class BoundStaticScope {
+    private static ?array $formats = ["html"];
+
+    public static function reset(): void {
+        $reset = Closure::bind(static fn () => self::$formats = null, null, self::class);
+        $reset();
+    }
+
+    public static function state(): string {
+        return null === self::$formats ? "reset" : "set";
+    }
+}
+BoundStaticScope::reset();
+echo BoundStaticScope::state();
+"#,
+    );
+    assert_eq!(out, "reset");
+}
+
+/// Verifies a null-receiver scope bind preserves ordinary lexical captures.
+#[test]
+fn test_closure_bind_null_receiver_preserves_use_captures() {
+    let out = compile_and_run(
+        r#"<?php
+final class CapturedStaticScope {
+}
+$base = 40;
+$bound = Closure::bind(function () use ($base): int {
+    return $base + 2;
+}, null, CapturedStaticScope::class);
+echo $bound();
+"#,
+    );
+    assert_eq!(out, "42");
 }
 
 /// Verifies every native bind spelling preserves the hidden called-class capture
@@ -2032,6 +2452,31 @@ echo $f->call(new Greeter(), "?");
     assert_eq!(out, "Hi Ada!|Hi Ada?");
 }
 
+/// Verifies a non-static closure created in a static method can receive `$this` when bound later.
+#[test]
+fn test_static_method_returns_bindable_closure_using_this() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticClosureFactory {
+    public static function make(): Closure {
+        return function(string $suffix): string { return $this->label . $suffix; };
+    }
+}
+
+class StaticClosureReceiver {
+    public string $label = "bound";
+}
+
+$closure = StaticClosureFactory::make();
+$bound = $closure->bindTo(new StaticClosureReceiver());
+echo $bound("!");
+echo ":";
+echo $closure->call(new StaticClosureReceiver(), "?");
+"#,
+    );
+    assert_eq!(out, "bound!:bound?");
+}
+
 /// Verifies that `isset($this)` inside a `static` closure evaluates to `false`
 /// because static closures have no `$this` binding (issue #359).
 #[test]
@@ -2123,6 +2568,51 @@ echo $fib(10);
 "#,
     );
     assert_eq!(out, "55");
+}
+
+/// Verifies a closure retains its lexical class for a `self::` static-method call.
+#[test]
+fn test_closure_retains_lexical_class_for_self_static_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+class ClosureStaticMethodOwner {
+    private static function label(): string { return 'owner'; }
+    public static function callback(): Closure { return static fn (): string => self::label(); }
+}
+echo ClosureStaticMethodOwner::callback()();
+"#,
+    );
+    assert_eq!(out, "owner");
+}
+
+/// Verifies a closure retains its lexical class for private `self::$property` access.
+#[test]
+fn test_closure_retains_lexical_class_for_self_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+class ClosureStaticPropertyOwner {
+    private static string $label = 'property';
+    public static function callback(): Closure { return static fn (): string => self::$label; }
+}
+echo ClosureStaticPropertyOwner::callback()();
+"#,
+    );
+    assert_eq!(out, "property");
+}
+
+/// Verifies a closure forwards the defining call's late-static class id to `static::class`.
+#[test]
+fn test_closure_forwards_late_static_class_id() {
+    let out = compile_and_run(
+        r#"<?php
+class ClosureStaticBase {
+    public static function callback(): Closure { return static fn (): string => static::class; }
+}
+class ClosureStaticChild extends ClosureStaticBase {}
+echo ClosureStaticChild::callback()();
+"#,
+    );
+    assert_eq!(out, "ClosureStaticChild");
 }
 
 /// A PHP reference has no type: whatever a closure stores through a `use (&$x)` capture is what
@@ -2229,6 +2719,181 @@ var_dump($plain);
     );
 }
 
+/// A closure that replaces ITSELF through its own by-reference capture, whether the variable is a
+/// plain local or a reference to a fresh array element (`$closure = &$this->optimized[$e][]`, as
+/// Symfony's `EventDispatcher::optimizeListeners()` builds its lazy-listener wrappers).
+///
+/// The self-capture's parameter was typed `callable`, while the cell behind it is a boxed `Mixed`
+/// once the body reassigns it, so the body stored a raw descriptor into the box and the next call
+/// read it as one: a segfault on the first replacement.
+#[test]
+fn test_closure_replaces_itself_through_its_by_ref_capture() {
+    let out = compile_and_run(
+        r#"<?php
+function viaPlainRef(): void {
+    $closure = null;
+    $closure = static function () use (&$closure) {
+        echo "plain in\n";
+        $closure = static function () { echo "plain replaced\n"; };
+    };
+    $closure();
+    $closure();
+}
+function viaArrayElement(): void {
+    $arr = [];
+    $closure = &$arr[];
+    $closure = static function () use (&$closure) {
+        echo "element in\n";
+        $closure = static function () { echo "element replaced\n"; };
+    };
+    ($arr[0])();
+    ($arr[0])();
+}
+viaPlainRef();
+viaArrayElement();
+"#,
+    );
+    assert_eq!(
+        out,
+        "plain in\nplain replaced\nelement in\nelement replaced\n"
+    );
+}
+
+/// Verifies nested closure return records remain visible during array and callback specialization.
+#[test]
+fn test_nested_closure_return_scope_drives_array_and_callback_types() {
+    let out = compile_and_run(
+        r#"<?php
+function relativeParts(string $endPath, string $startPath): string {
+    $splitPath = static function ($path) {
+        $result = [];
+        foreach (explode('/', trim($path, '/')) as $segment) {
+            if ('' !== $segment) {
+                $result[] = $segment;
+            }
+        }
+        return $result;
+    };
+
+    $startPathArr = $splitPath($startPath);
+    $endPathArr = $splitPath($endPath);
+    $index = 0;
+    while (isset($startPathArr[$index]) && isset($endPathArr[$index]) && $startPathArr[$index] === $endPathArr[$index]) {
+        ++$index;
+    }
+    if (1 === count($startPathArr) && '' === $startPathArr[0]) {
+        $depth = 0;
+    } else {
+        $depth = count($startPathArr) - $index;
+    }
+
+    return str_repeat('../', $depth).implode('/', array_slice($endPathArr, $index));
+}
+
+function replacePart(bool $upper, string $part): string {
+    $callback = $upper
+        ? static fn ($matches) => strtoupper($matches[1])
+        : static fn ($matches) => $matches[1];
+
+    return preg_replace_callback('/([a-z]+)/', $callback, $part);
+}
+
+echo relativeParts('/a/b/c', '/a/d').'|'.replacePart(true, 'ab');
+"#,
+    );
+    assert_eq!(out, "../b/c|AB");
+}
+
+/// A closure returning a property of an untyped parameter returns the property's value. The
+/// closure signature typed that return syntactically as `int`, so the body converted the string
+/// on its way out and `array_map(fn ($t) => $t->name, $objects)` produced a list of zeros.
+#[test]
+fn test_closure_returning_property_of_untyped_param_keeps_value() {
+    let out = compile_and_run(
+        r#"<?php
+final class Named { public function __construct(public string $name) {} }
+final class Holder { public ?Named $n = null; }
+$f = fn ($t) => $t->name;
+$g = function ($t) { return $t->name; };
+echo $f(new Named('A')), $g(new Named('B')), "\n";
+echo implode(',', array_map(fn ($t) => $t->name, [new Named('C'), new Named('D')])), "\n";
+$h = new Holder();
+$h->n = new Named('E');
+$prop = 'name';
+echo (fn ($m) => $m?->n?->name)($h), (fn ($t) => $t->$prop)(new Named('F')), "\n";
+"#,
+    );
+    assert_eq!(out, "AB\nC,D\nEF\n");
+}
+
+
+/// A throw inside a first-class callable reaches the compiled `catch`, whatever the callable
+/// names. The descriptor's invoker carries an exception boundary for the interpreter, and it used
+/// to catch for every caller: an AOT `$f()` over `thrower(...)` returned NULL instead.
+#[test]
+fn test_first_class_callable_throw_reaches_compiled_catch() {
+    let out = compile_and_run(
+        r#"<?php
+function thrower(string $n): string { throw new RuntimeException("fn:$n"); }
+class A {
+    public function pub(string $n): string { throw new RuntimeException("pub:$n"); }
+    public static function stat(string $n): string { throw new RuntimeException("stat:$n"); }
+}
+function call(\Closure $f): mixed { return $f('x'); }
+$a = new A();
+foreach ([thrower(...), $a->pub(...), A::stat(...)] as $f) {
+    try { call($f); echo "returned\n"; } catch (RuntimeException $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(out, "fn:x\npub:x\nstat:x\n");
+}
+
+/// `$this->m(...)` binds the method the RECEIVER's class resolves, like `$this->m()` does. It was
+/// bound to the creating class's body, so a subclass override never ran through the callable.
+#[test]
+fn test_this_method_first_class_callable_is_late_bound() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    private ?\Closure $cb = null;
+    protected function getEnv(string $n): string { return "base:$n"; }
+    public function viaFcc(string $n): string { $this->cb ??= $this->getEnv(...); return ($this->cb)($n); }
+}
+class Child extends Base {
+    protected function getEnv(string $n): string { return 'child(' . parent::getEnv($n) . ')'; }
+}
+echo (new Child())->viaFcc('a'), '|', (new Base())->viaFcc('b');
+"#,
+    );
+    assert_eq!(out, "child(base:a)|base:b");
+}
+
+/// A single-expression closure returning a local its own expression assigns keeps the value's
+/// type. Lowering typed that local syntactically as `int` and converted the string on the way
+/// out: Laravel's `is_dir($directory = $this->basePath('.laravel')) ? $directory : ...` bootstrap
+/// path closure returned "0".
+#[test]
+fn test_closure_returning_a_local_assigned_in_its_own_expression() {
+    let out = compile_and_run(
+        r#"<?php
+function g($p) { return "/tmp/x/" . $p; }
+$c = function () { return is_dir($d = g(".laravel")) ? $d : g("bootstrap"); };
+var_dump($c());
+$arrow = fn () => ($x = g("y")) ? $x : 0;
+var_dump($arrow());
+class A {
+    function g($p) { return "/tmp/x/" . $p; }
+    function c() { $c = function () { return is_dir($d = $this->g(".laravel")) ? $d : $this->g("bootstrap"); }; return $c(); }
+}
+var_dump((new A)->c());
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(16) \"/tmp/x/bootstrap\"\nstring(8) \"/tmp/x/y\"\nstring(16) \"/tmp/x/bootstrap\"\n"
+    );
+}
 
 /// Regression for #567: an explicit `null` argument must not close an untyped closure
 /// parameter to null.
@@ -2569,8 +3234,12 @@ echo $a, "|", $b, "|", strlen($a), strlen($b);
     let boxing = invoker
         .find("__rt_heap_alloc")
         .unwrap_or_else(|| panic!("the invoker must box its result:\n{}", invoker));
-    let release = invoker
-        .find("__rt_decref_any")
+    // The releases are inline `__rt_decref_any` calls, or one call into the shared
+    // `_eir_invoker_finish` tail that performs them.
+    let release = ["__rt_decref_any", "_eir_invoker_finish"]
+        .iter()
+        .filter_map(|needle| invoker.find(needle))
+        .min()
         .unwrap_or_else(|| panic!("the invoker must release its retained arguments:\n{}", invoker));
     assert!(
         boxing < release,
@@ -2623,4 +3292,414 @@ echo implode(",", array_map(fn($s) => str_pad($s, 3, "*"), ["a", "bb"])), "\n";
 "#,
     );
     assert_eq!(out, "a**,bb*\n");
+}
+
+/// Verifies a closure that only READS a by-reference capture sees what a sibling closure wrote.
+///
+/// Both closures share `$n`'s reference cell. The reader is built first, so unless the writer's
+/// stores are visible when the reader's capture is typed, the reader keeps the capture-time `int`
+/// representation and reinterprets the writer's boxed value: `null` read back as `int(0)` and an
+/// array as its last element.
+#[test]
+fn test_by_ref_capture_reader_sees_sibling_closure_writes() {
+    let out = compile_and_run(
+        r#"<?php
+function t() {
+    $n = 1;
+    $get = function () use (&$n) { return $n; };
+    $set = function ($v) use (&$n) { $n = $v; };
+    $set(null);
+    var_dump($get());
+    $set([1, 2]);
+    echo json_encode($get()), "\n";
+}
+t();
+"#,
+    );
+    assert_eq!(out, "NULL\n[1,2]\n");
+}
+
+/// A closure stored into a `mixed`-valued associative array is retained by its entry.
+///
+/// `['a' => $closure, 'c' => true]` and `$h['f'] = $closure` on a mixed hash wrote the
+/// descriptor into a tag-10 entry without a retain, while the hash's deep free releases tag-10
+/// entries. When the array died the closure was freed under its owner, and its block was reused
+/// by the next closure allocated, so invoking the kept closure ran THAT closure's body. Symfony's
+/// `OptionsResolver::setDefaults()` takes exactly this shape (lazy-default closures mixed with
+/// scalars): `$closure($this, $value)` ran a normalizer instead of the lazy default.
+/// Expected output is `php -n` 8.5's.
+#[test]
+fn test_closure_in_mixed_hash_survives_the_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Res {
+    public array $lazy = [];
+    public function setDefault(string $option, mixed $value): void {
+        if ($value instanceof \Closure) {
+            $this->lazy[$option] = $value;
+        }
+    }
+}
+function configure(Res $r): void {
+    $a = static fn ($options) => 'A';
+    foreach (['a' => $a, 'c' => true] as $option => $value) {
+        $r->setDefault($option, $value);
+    }
+    $h = [];
+    $h['x'] = 1;
+    $h['f'] = $a;
+    $r->setDefault('f', $h['f']);
+}
+$r = new Res();
+configure($r);
+$other = function ($o) { return "WRONG"; };
+echo ($r->lazy["a"])(1), ($r->lazy["f"])(2), $other(3), "\n";
+unset($r, $other);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "AAWRONG\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// `$closure->call($object)` binds the object's class scope, not only `$this`.
+///
+/// Only `$this` was rebound, so the unscoped body raised "Cannot access private property" on
+/// `$this->n` where php reads it. Expected output is `php -n` 8.5's.
+#[test]
+fn test_closure_call_binds_the_new_this_class_scope() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class CallCounter { private int $n = 41; private function bump(): int { return ++$this->n; } }
+$peek = function () { return $this->n; };
+echo $peek->call(new CallCounter()), "|";
+$bump = function (int $by) { $this->n += $by; return $this->bump(); };
+echo $bump->call(new CallCounter(), 5), "\n";
+unset($peek, $bump);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "41|47\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A closure the interpreter made reports `Closure` from compiled `get_debug_type()`, also in a
+/// body that owns no eval context, and reflection of a compiled closure whose body calls
+/// `func_get_args()` does not list the hidden surplus-argument collector.
+///
+/// The eval closure is carried by a native object whose class id names `stdClass`, which is what
+/// `get_debug_type()` printed; and `new ReflectionFunction($closure)` reported two parameters, the
+/// second `$__elephc_func_args#gen`, and `isVariadic()`. Expected output is `php -n` 8.5's.
+#[test]
+fn test_closure_debug_type_and_reflection_hide_compiler_internals() {
+    let out = compile_and_run(
+        r#"<?php
+$c = eval('return fn () => 9;');
+function debugTypeOf(mixed $v): string { return get_debug_type($v); }
+echo get_debug_type($c), "|", debugTypeOf($c), "|", get_class($c), "\n";
+$h = function ($x) { return func_get_args(); };
+$r = new ReflectionFunction($h);
+echo $r->getNumberOfParameters(), ":", $r->isVariadic() ? "v" : "nv", ":";
+foreach ($r->getParameters() as $p) { echo $p->getName(), ","; }
+echo count($h(1, 2, 3)), "\n";
+"#,
+    );
+    assert_eq!(out, "Closure|Closure|Closure\n1:nv:x,3\n");
+}
+
+/// A closure bound to another object reaches that object's members, private and protected ones
+/// included, when the scope is given as the object's class NAME (`$k::class`, `get_class($k)`)
+/// -- php treats the name and the object the same. The checker refused a method the enclosing
+/// class does not declare, and the run time put a name-scoped closure in the global scope:
+/// Symfony's debug commands call `$this->buildContainer()` through exactly this bind.
+#[test]
+fn test_closure_bound_with_a_class_name_scope_reaches_private_members() {
+    let out = compile_and_run(
+        r#"<?php
+class Kernel {
+    private int $n = 7;
+    protected function buildContainer(): string { return "built"; }
+}
+class Cmd {
+    public function run(Kernel $k): string {
+        $a = \Closure::bind(function () { return $this->buildContainer() . ":" . $this->n; }, $k, $k::class);
+        $b = \Closure::bind(function () { return $this->n; }, $k, get_class($k));
+        return $a() . "|" . $b();
+    }
+}
+echo (new Cmd)->run(new Kernel), "\n";
+"#,
+    );
+    assert_eq!(out, "built:7|7\n");
+}
+
+/// In a closure rebound with `bindTo()` / `Closure::bind()`, `self::class` is the bound SCOPE and
+/// `static::class` the class of the bound `$this` (the scope when there is none); an unbound
+/// closure keeps its lexical class. The closure kept `Describer` for both. Verified against php 8.5.
+#[test]
+fn test_rebound_closure_self_and_static_class_follow_the_bound_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class P {}
+class C extends P {}
+class D extends C {}
+class Describer {
+    public function viaClosure(): \Closure {
+        return fn () => [self::class, static::class, get_parent_class(self::class)];
+    }
+    public static function staticClosure(): \Closure {
+        return static fn () => [self::class, static::class];
+    }
+}
+$d = new Describer();
+$f = $d->viaClosure();
+echo json_encode($f()), "\n";
+echo json_encode($f->bindTo(new D(), C::class)()), "\n";
+echo json_encode($f->bindTo(new D(), D::class)()), "\n";
+echo json_encode(\Closure::bind($d->viaClosure(), new C(), P::class)()[0]), "\n";
+echo json_encode(\Closure::bind($d->viaClosure(), new C(), P::class)()[1]), "\n";
+echo json_encode(\Closure::bind(Describer::staticClosure(), null, C::class)()), "\n";
+echo json_encode(Describer::staticClosure()()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "[\"Describer\",\"Describer\",\"\"]\n",
+            "[\"C\",\"D\",\"P\"]\n",
+            "[\"D\",\"D\",\"C\"]\n",
+            "\"P\"\n",
+            "\"C\"\n",
+            "[\"C\",\"C\"]\n",
+            "[\"Describer\",\"Describer\"]\n",
+        )
+    );
+}
+
+/// `parent::m()` in a closure written in a class with no parent is a non-virtual call to the
+/// method of the bound scope's parent class, with `$this` forwarded -- Symfony's
+/// `Descriptor::getEnvVarsFromDump()` writes `fn ($n) => parent::get($n)` and binds it to a
+/// parameter bag. The backend refused it ("parent static method call outside class with
+/// parent"). A scope with no parent raises php's `Error`. Verified against php 8.5.
+#[test]
+fn test_rebound_closure_parent_call_targets_the_bound_scopes_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public function get(string $n): string { return "P:$n"; } }
+class C extends P { public function get(string $n): string { return "C:$n"; } }
+class D extends C { public function get(string $n): string { return "D:$n"; } }
+class Describer {
+    public function make(C $bag): \Closure {
+        $f = fn (string $name) => parent::get($name);
+        return $f->bindTo($bag, $bag::class);
+    }
+    public function parentCall(): \Closure {
+        return fn (string $name) => parent::get($name);
+    }
+}
+$d = new Describer();
+echo $d->make(new C())('x'), "\n";
+$g = $d->parentCall();
+echo $g->bindTo(new D(), D::class)('a'), "\n";
+echo $g->bindTo(new C(), C::class)('b'), "\n";
+echo \Closure::bind($d->parentCall(), new D(), C::class)('c'), "\n";
+try {
+    echo $g->bindTo(new P(), P::class)('d'), "\n";
+} catch (\Error $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "P:x\n",
+            "C:a\n",
+            "P:b\n",
+            "P:c\n",
+            "Error: Cannot access \"parent\" when current class scope has no parent\n",
+        )
+    );
+}
+
+/// A rebound `parent::m()` compiles when ANOTHER parent class's `m` needs more arguments.
+///
+/// The run-time ladder had an arm for every parent declaring `get`, including one whose `get`
+/// requires two arguments; that arm made the backend refuse the closure (Symfony's
+/// `Descriptor::getContainerEnvVars()` beside `AbstractAdapter::get()`). Expected output is
+/// `php -n` 8.5's.
+#[test]
+fn test_rebound_parent_call_skips_parents_whose_method_cannot_take_the_arguments() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class P { public function get(string $n): string { return "P:$n"; } }
+class C extends P { public function get(string $n): string { return "C:$n"; } }
+class Q { public function get(string $key, callable $cb, ?float $beta = null): string { return "Q:$key"; } }
+class R extends Q {}
+class Describer {
+    public function make(C $bag): \Closure {
+        $f = fn (string $name) => parent::get($name);
+        return $f->bindTo($bag, $bag::class);
+    }
+}
+echo (new Describer())->make(new C())('x'), "\n";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "P:x\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A run-time `Closure::bind` scope read from a GLOBAL variable is borrowed, not released.
+///
+/// `global $kernel` elsewhere gives the top-level `$kernel` global storage, and the bind's scope
+/// argument `$kernel::class` (rewritten to the object) and `$cls` were released after the bind as
+/// if they were temporaries: every bind dropped one reference of the kernel, which was freed
+/// mid-loop. Symfony's `lint:container` binds `buildContainer()` to the kernel exactly this way and
+/// then read freed memory as a service's method calls. Expected output is `php -n` 8.5's.
+#[test]
+fn test_runtime_bind_scope_read_from_a_global_is_not_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Kernel {
+    private int $x = 1;
+    public function __destruct() { echo "kernel gone\n"; }
+    protected function build(): int { return $this->x + 1; }
+}
+function peek(): string { global $kernel; return get_class($kernel); }
+$kernel = new Kernel();
+for ($i = 0; $i < 3; $i++) {
+    $f = \Closure::bind(function () { return $this->build(); }, $kernel, $kernel::class);
+    echo $f(), " ";
+    $cls = $kernel::class;
+    $g = \Closure::bind(function () { return $this->x; }, $kernel, $cls);
+    echo $g(), " ";
+}
+echo peek(), "\n";
+unset($f, $g);
+echo "before unset\n";
+unset($kernel);
+echo "end\n";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "2 1 2 1 2 1 Kernel\nbefore unset\nkernel gone\nend\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An arrow function that defines its own recursive closure compiles and runs.
+///
+/// An arrow function captures every outer variable its body names, and php skips the ones that do
+/// not exist. The body here assigns `$f` itself (`$f = function () use (&$f) {...}`), so `$f` is a
+/// local, not a capture; the checker refused it as "Undefined variable in use(): $f". This is the
+/// shape of Laravel's `Vite::makePreloadTags()`. Expected output is real php 8.5 output.
+#[test]
+fn test_arrow_function_defining_a_recursive_closure_is_not_an_undefined_capture() {
+    let out = compile_and_run(
+        r#"<?php
+$factorial = fn ($n) => ($f = function ($k) use (&$f) { return $k <= 1 ? 1 : $k * $f($k - 1); })($n);
+echo $factorial(5), "\n";
+$items = [3, 4];
+$sums = array_map(fn ($n) => ($g = function ($k) use (&$g) { return $k <= 0 ? 0 : $k + $g($k - 1); })($n), $items);
+echo implode(",", $sums), "\n";
+"#,
+    );
+    assert_eq!(out, "120\n6,10\n");
+}
+
+/// Verifies a closure can capture a function `static` BY REFERENCE: the closure writes the
+/// persistent storage, and the next call of the function sees it. Symfony's
+/// `HttpClientTrait::normalizeBody()` has this shape (`static $cookie;` captured by a recursive
+/// `array_walk_recursive` caster); the backend refused it, which sent `CurlHttpClient` to the
+/// interpreter and forced a second compile of the Symfony demo. Expected output is php 8.5's.
+#[test]
+fn test_closure_captures_a_function_static_by_reference() {
+    let out = compile_and_run(
+        r#"<?php
+function normalize(array $body): array {
+    static $cookie;
+    $streams = [];
+    array_walk_recursive($body, $caster = static function (&$v) use (&$caster, &$streams, &$cookie) {
+        if (is_int($v)) {
+            $cookie = ($cookie ?? 0) + 1;
+            $streams['s' . $cookie] = $v;
+            $v = 's' . $cookie;
+        }
+    });
+    $caster = null;
+    return [$body, $streams, $cookie];
+}
+function tick(): string {
+    static $n = null;
+    $f = static function () use (&$n) { $n = ($n ?? 0) + 1; };
+    $f();
+    $f();
+    return (string) $n;
+}
+echo json_encode(normalize(['a' => 1, 'b' => ['c' => 2, 'd' => 'x']])), "\n";
+echo json_encode(normalize([5])), "\n";
+echo tick(), ",", tick(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "[{\"a\":\"s1\",\"b\":{\"c\":\"s2\",\"d\":\"x\"}},{\"s1\":1,\"s2\":2},2]\n[[\"s3\"],{\"s3\":5},3]\n2,4\n"
+    );
+}
+
+/// A throw out of a closure called through a runtime-bound descriptor unwinds to the caller's
+/// `catch`. The shared invoker entry once wrote its exception-boundary record through `main`'s
+/// frame-base register (x28) instead of the invoker's own frame, so the closure's frame record
+/// linked to a garbage predecessor and the unwinder jumped into it.
+#[test]
+fn test_throw_out_of_a_bound_closure_reaches_the_callers_catch() {
+    let out = compile_and_run(
+        r#"<?php
+class Vault { public string $code = "open"; }
+$peek = function () { throw new Exception("x"); };
+$bound = Closure::bind($peek, new Vault());
+try { $bound(); } catch (Exception $error) { echo "caught|"; }
+$again = Closure::bind($peek, new Vault(), Vault::class);
+try { $again(); } catch (Exception $error) { echo "caught again"; }
+"#,
+    );
+    assert_eq!(out, "caught|caught again");
+}
+
+/// A closure bound to a class scope at compile time still reads that class's private property when
+/// it also carries the hidden runtime-scope capture (it reads `$this->code` outside any class), and
+/// a plain bind keeps denying it.
+#[test]
+fn test_compile_time_scope_variant_keeps_the_hidden_scope_capture() {
+    let out = compile_and_run(
+        r#"<?php
+class Vault { private string $code = "open"; }
+$peek = function () { return $this->code; };
+$scoped = Closure::bind($peek, new Vault(), Vault::class);
+echo $scoped(), "|";
+$rebound = $scoped->bindTo(new Vault(), Vault::class);
+echo $rebound(), "|";
+try { echo Closure::bind($peek, new Vault())(); } catch (Error $error) { echo "denied"; }
+"#,
+    );
+    assert_eq!(out, "open|open|denied");
+}
+
+/// `f()->bindTo($newThis, $scope)` destroys its temporaries in php's order: the scope argument
+/// before the closure that carries the old `$this`.
+#[test]
+fn test_bind_to_on_a_call_result_retires_the_scope_before_the_source_closure() {
+    let out = compile_and_run(
+        r#"<?php
+class V {
+    public function __construct(public string $name) {}
+    public function reader(): callable { return function () { return $this->name; }; }
+    public function __destruct() { echo $this->name, "|"; }
+}
+function reader(): callable { return (new V("old"))->reader(); }
+$x = reader()->bindTo(new V("n"), new V("s"));
+echo "stmt|";
+"#,
+    );
+    assert_eq!(out, "s|old|stmt|n|");
 }

@@ -284,7 +284,11 @@ pub(in crate::interpreter) fn eval_debug_object_class_name(
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     if let Some(identity) = identity {
-        if let Some(class) = context.dynamic_object_class(identity) {
+        // The DECLARING context, not this one: an object that crossed contexts has no class of
+        // its name in the asker's own table, and naming it from the runtime header instead
+        // answered `stdClass` -- which is how an interpreted `serialize()` of a DI-container
+        // resource wrote `O:8:"stdClass":0:{}` into Symfony's routing cache metadata.
+        if let Some((_, class)) = context.dynamic_object_declaring_class(identity) {
             return Ok(class.name().trim_start_matches('\\').to_string());
         }
     }
@@ -307,7 +311,7 @@ pub(in crate::interpreter) fn eval_debug_object_properties(
         return Ok(properties);
     }
     if let Some(identity) = identity {
-        if context.dynamic_object_class(identity).is_some() {
+        if context.dynamic_object_declaring_class(identity).is_some() {
             return eval_debug_dynamic_object_properties(object, identity, class_name, context, values);
         }
     }
@@ -386,6 +390,22 @@ fn eval_debug_info_properties(
     Ok(Some(properties))
 }
 
+/// Returns the class ancestry one dynamic object's declared properties must be read from.
+///
+/// The chain has to come from the context that DECLARED the object. A context that has not
+/// declared a class of that name finds no chain at all, and every declared property disappears
+/// with it -- the object then renders, and SERIALIZES, as if it had none.
+fn eval_debug_object_class_chain(
+    identity: u64,
+    class_name: &str,
+    context: &ElephcEvalContext,
+) -> Vec<std::sync::Arc<EvalClass>> {
+    match context.dynamic_object_declaring_class(identity) {
+        Some((declaring, _)) => declaring.class_chain(class_name),
+        None => context.class_chain(class_name),
+    }
+}
+
 /// Collects eval-declared object properties plus public dynamic properties.
 fn eval_debug_dynamic_object_properties(
     object: RuntimeCellHandle,
@@ -398,7 +418,7 @@ fn eval_debug_dynamic_object_properties(
     let mut storage_keys = HashSet::new();
     let mut emitted_public_names = HashSet::new();
 
-    for class in context.class_chain(class_name) {
+    for class in eval_debug_object_class_chain(identity, class_name, context) {
         for property in class.properties() {
             if property.is_static() {
                 continue;
@@ -411,9 +431,17 @@ fn eval_debug_dynamic_object_properties(
                 continue;
             }
             let alias = context.dynamic_property_alias(identity, &storage_name).cloned();
+            // Alias, then overlay, then slot — the order every other reader uses. The overlay
+            // holds every declared property of an eval object, while only the PUBLIC ones are
+            // mirrored into the slots, so reading the slot alone loses a private or protected
+            // value. `php -n` 8.5.6 prints `[a:Z:private] => 1` and `[b:protected] => 2`, with
+            // their values, for a class carrying both.
             let value = match &alias {
                 Some(target) => eval_reference_target_value(target, context, values)?,
-                None => values.property_get(object, &storage_name)?,
+                None => match context.dynamic_property_value(identity, &storage_name) {
+                    Some(stored) => values.retain(stored)?,
+                    None => values.property_get(object, &storage_name)?,
+                },
             };
             if property.visibility() == EvalVisibility::Public {
                 emitted_public_names.insert(property.name().to_string());

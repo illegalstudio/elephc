@@ -22,11 +22,13 @@ use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     array_access_element_result_type, coerce_array_key_to_int_at_span,
     coerce_container_to_mixed_payload, coerce_to_int_at_span,
-    index_expr_key_type, lower_array_access_from_lowered_receiver,
+    coerce_to_string_at_span, emit_bool_literal,
+    index_expr_key_type, lowered_index_expr_key_type, lower_array_access_from_lowered_receiver,
     lower_by_ref_foreach_element_source, lower_by_ref_foreach_property_source,
     lower_callable_array_for_assignment,
-    lower_array_literal_with_expected_type,
+    lower_array_literal_with_expected_type, lower_array_reference_or_value,
     lower_closure_for_assignment, lower_condition, lower_expr,
+    property_access_expr_type_for_ir, store_value_into_temp,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
     reflection_function_binding_for_expr, reflection_method_binding_for_expr,
     reflection_property_binding_for_expr, static_callable_binding_for_expr,
@@ -42,7 +44,7 @@ use crate::types::{PhpType, ThrowAccessKind};
 mod statement_basics;
 mod local_assignments;
 mod string_append;
-mod conditionals;
+pub(in crate::ir_lower) mod conditionals;
 mod loops;
 mod array_write_core;
 mod buffer_element_updates;
@@ -50,6 +52,7 @@ mod nested_array_writes;
 mod nested_write_guards;
 mod nested_scalar_writes;
 mod static_false_parent;
+mod nested_unset;
 mod array_write_storage;
 mod typed_foreach;
 mod switches;
@@ -60,7 +63,7 @@ mod declarations;
 mod instance_property_writes;
 mod readonly_receiver_guard;
 mod static_property_writes;
-mod property_array_writes;
+pub(in crate::ir_lower) mod property_array_writes;
 pub(crate) mod property_write_receiver;
 mod metadata_control;
 mod nested_append;
@@ -95,7 +98,8 @@ use return_coercions::*;
 use static_property_helpers::*;
 
 pub(crate) use control_exit::{
-    lower_throw_access_error, lower_throw_access_error_expr, lower_throw_access_error_expr_as,
+    lower_throw_access_class_expr, lower_throw_access_error, lower_throw_access_error_expr,
+    lower_throw_access_error_expr_as,
 };
 pub(crate) use control_exit::terminate_return;
 // Shared with `crate::ir_lower::expr::unset`, which needs the same runtime-subclass accessor peel
@@ -115,6 +119,15 @@ pub(crate) use static_property_writes::lower_static_property_array_unset;
 pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,
 };
+pub(in crate::ir_lower) use array_write_core::release_persisted_string_operand;
+pub(in crate::ir_lower) use nested_unset::{
+    lower_nested_local_hash_unset, lower_nested_property_hash_unset,
+    lower_nested_static_property_hash_unset, nested_local_hash_unset_supported,
+    nested_property_hash_unset_supported, nested_static_property_hash_unset_supported,
+};
+pub(in crate::ir_lower) use property_array_writes::release_rewritten_property_value_after_retaining_store;
+pub(in crate::ir_lower) use instance_property_writes::lower_raw_property_assign;
+pub(in crate::ir_lower) use static_property_helpers::{object_property_type, static_property_ref_data, store_static_property};
 pub(crate) use array_write_core::{
     desugared_element_update, lower_array_assign_with_diagnosed_key, ElementUpdate,
 };
@@ -135,9 +148,12 @@ pub(super) use array_write_storage::{
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     let _profile = crate::source::scoped_parse_mode(stmt.profile());
     crate::strict_php::with_source_mode(stmt.source_mode, || {
+        let previous_strict_types =
+            std::mem::replace(&mut ctx.php_strict_types, stmt.strict_types);
         if !ctx.builder.insertion_block_is_terminated() {
             repr_fixpoint::lower_stmt_at_type_fixpoint(ctx, stmt);
         }
+        ctx.php_strict_types = previous_strict_types;
     });
 }
 
@@ -247,11 +263,23 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             once,
             required,
         } => lower_include(ctx, path, *once, *required, stmt.span),
-        StmtKind::IncludeOnceMark { label } => lower_include_once_mark(ctx, label, stmt.span),
-        StmtKind::IncludeOnceGuard { label, body } => {
-            lower_include_once_guard(ctx, label, body, stmt.span);
+        StmtKind::IncludeOnceMark { source_path } => lower_include_once_mark(ctx, source_path, stmt.span),
+        StmtKind::IncludeOnceGuard {
+            source_path,
+            required,
+            body,
+        } => {
+            lower_include_once_guard(ctx, source_path, *required, body, stmt.span);
         }
         StmtKind::Throw(expr) => lower_throw(ctx, expr),
+        // `$obj->prop = &$param` on an escaping by-reference parameter: bind the property to the
+        // caller's cell instead of re-pointing the parameter (`bind_property_to_param_ref_cell`).
+        StmtKind::Synthetic(_)
+            if crate::parser::ast::visit::param_property_reference_pair(stmt).is_some_and(
+                |(object, property, param)| {
+                    ctx.bind_property_to_param_ref_cell(object, property, param, Some(stmt.span))
+                },
+            ) => {}
         // Nested appends are parser-generated read/push/write-back groups. Fuse the recognized
         // shape so a missing inner bucket is auto-vivified and a local bucket can be detached
         // before mutation; every other synthetic group keeps ordinary block lowering.
@@ -282,6 +310,10 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::ExprStmt(expr) => {
             let value = lower_expr(ctx, expr);
             release_expr_statement_result(ctx, value, expr.span);
+            // The checker's twin narrowing (`assert()` throws when false).
+            if let Some(condition) = crate::types::asserted_instanceof_condition(expr) {
+                conditionals::apply_instanceof_branch_narrowing(ctx, condition, true);
+            }
         }
         StmtKind::NamespaceDecl { name: _ } => lower_noop(ctx, stmt.span),
         StmtKind::NamespaceBlock { name: _, body } => lower_block(ctx, body),
@@ -295,6 +327,9 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => lower_noop(ctx, stmt.span),
+        StmtKind::ClassLikeActivate { name, kind, source_path } => {
+            lower_class_like_activation(ctx, name, *kind, source_path, stmt.span);
+        }
         StmtKind::FunctionVariantGroup { name, variants } => {
             lower_function_variant_group(ctx, name, variants, stmt.span);
         }
@@ -304,13 +339,18 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Return(value) => lower_return(ctx, value.as_ref(), stmt.span),
         StmtKind::ConstDecl { name, value } => lower_const_decl(ctx, name, value, stmt.span),
         StmtKind::ListUnpack { vars, value } => lower_list_unpack(ctx, vars, value, stmt.span),
-        StmtKind::Global { vars } => lower_global(ctx, vars),
+        StmtKind::Global { vars } => lower_global(ctx, vars, stmt.span),
         StmtKind::StaticVar { name, init } => lower_static_var(ctx, name, init, stmt.span),
         StmtKind::PropertyAssign {
             object,
             property,
             value,
         } => lower_property_assign(ctx, object, property, value, stmt.span),
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => lower_property_ref_assign(ctx, object, property, source, stmt.span),
         StmtKind::StaticPropertyAssign {
             receiver,
             property,
@@ -327,6 +367,34 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             index,
             value,
         } => lower_static_property_array_assign(ctx, receiver, property, index, value, stmt.span),
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index,
+            source,
+        } => lower_static_property_element_ref_assign(
+            ctx,
+            receiver,
+            property,
+            index,
+            source,
+            stmt.span,
+        ),
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => lower_dynamic_static_property_write(
+            ctx,
+            receiver,
+            property,
+            index.as_ref(),
+            *append,
+            value,
+            stmt.span,
+        ),
         StmtKind::PropertyArrayPush {
             object,
             property,
@@ -338,6 +406,19 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             index,
             value,
         } => lower_property_array_assign(ctx, object, property, index, value, stmt.span),
+    }
+    // The shared termination analysis already proves statically infinite loops without a matching
+    // `break` cannot reach their synthetic exit. Preserve that loop-specific fact in EIR itself.
+    // Relying on branch simplification is insufficient because it deliberately skips any function
+    // with exception handlers; a loop containing `try` would otherwise leave its exit block open
+    // and `terminate_open_block` would fabricate a zero-operand heap return placeholder.
+    if matches!(
+        stmt.kind,
+        StmtKind::While { .. } | StmtKind::DoWhile { .. } | StmtKind::For { .. }
+    ) && crate::termination::stmt_guarantees_termination(stmt)
+        && !ctx.builder.insertion_block_is_terminated()
+    {
+        ctx.builder.terminate(Terminator::Unreachable);
     }
 }
 

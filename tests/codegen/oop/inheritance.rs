@@ -9,6 +9,59 @@
 
 use super::*;
 
+/// Verifies an overriding interface method may add an optional parameter while
+/// preserving calls valid for the parent declaration.
+#[test]
+fn test_interface_override_may_add_optional_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+interface Lookup {
+    public function find(string $key);
+}
+
+interface ConfigurableLookup extends Lookup {
+    public function find(string $key, int $mode = 0);
+}
+
+class MemoryLookup implements ConfigurableLookup {
+    public function find(string $key, int $mode = 0) {
+        return $key . $mode;
+    }
+}
+
+$lookup = new MemoryLookup();
+echo $lookup->find("item");
+"#,
+    );
+    assert_eq!(out, "item0");
+}
+
+/// Verifies a virtual call through an interface preserves the surplus positional
+/// arguments consumed by the concrete implementation's argument introspection.
+#[test]
+fn test_interface_dispatch_propagates_argument_introspection_tail() {
+    let out = compile_and_run(
+        r#"<?php
+interface Invocation {
+    public function countPassed();
+}
+
+class CountingInvocation implements Invocation {
+    public function countPassed() {
+        return func_num_args();
+    }
+}
+
+function invoke(Invocation $target) {
+    return $target->countPassed(10, 20);
+}
+
+echo invoke(new CountingInvocation());
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
 /// Verifies protected member `$value` and protected method `next()` are callable
 /// from public method `reveal()` inside the same class, returning 42.
 #[test]
@@ -346,6 +399,36 @@ echo $child->total() . " " . $child->greet();
     assert_eq!(out, "42 hi!");
 }
 
+/// Verifies explicit ancestor syntax may invoke an inherited instance constructor
+/// while preserving the current child object as `$this`.
+#[test]
+fn test_explicit_ancestor_constructor_binds_current_instance() {
+    let out = compile_and_run(
+        r#"<?php
+class ExplicitAncestorBase {
+    protected string $value = "";
+
+    public function __construct(string $value) {
+        $this->value = $value;
+    }
+}
+
+final class ExplicitAncestorChild extends ExplicitAncestorBase {
+    public function __construct(string $value) {
+        ExplicitAncestorBase::__construct($value);
+    }
+
+    public function value(): string {
+        return $this->value;
+    }
+}
+
+echo (new ExplicitAncestorChild("ok"))->value();
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies protected method `readValue()` and protected property `$value` are accessible
 /// from a subclass via `$this`, returning 42.
 #[test]
@@ -371,6 +454,33 @@ echo $child->reveal();
 "#,
     );
     assert_eq!(out, "42");
+}
+
+/// Verifies a parent scope can access protected instance, static, and method members declared by
+/// a child because PHP grants protected access across both directions of one inheritance family.
+#[test]
+fn test_parent_scope_accesses_child_protected_members() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentBox {
+    public function read(ChildBox $box): string {
+        return $box->value . ":" . ChildBox::$staticValue . ":" . $box->label();
+    }
+}
+
+class ChildBox extends ParentBox {
+    protected string $value = "instance";
+    protected static string $staticValue = "static";
+
+    protected function label(): string {
+        return "method";
+    }
+}
+
+echo (new ParentBox())->read(new ChildBox());
+"#,
+    );
+    assert_eq!(out, "instance:static:method");
 }
 
 /// Verifies first-class callable syntax `MathBox::double(...)` compiles and calls the
@@ -724,4 +834,314 @@ echo $c->value;
 "#,
     );
     assert_eq!(out, "1:3:3");
+}
+
+/// Verifies a nullable base-class receiver dispatches a method declared only by its runtime child.
+#[test]
+fn test_nullable_base_receiver_dispatches_subclass_only_method() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableDispatchBase {}
+
+class NullableDispatchChild extends NullableDispatchBase {
+    public function childOnly(): string {
+        return "child";
+    }
+}
+
+function nullableDispatchFactory(bool $present): ?NullableDispatchBase {
+    return $present ? new NullableDispatchChild() : null;
+}
+
+$value = nullableDispatchFactory(true);
+echo $value->childOnly();
+"#,
+    );
+    assert_eq!(out, "child");
+}
+
+
+/// A parent's PRIVATE members are reachable from the parent's own scope through a receiver typed
+/// as a subclass: PHP resolves `private` by the lexical scope, not by the receiver's class.
+///
+/// Class flattening does not inherit private METHODS into a subclass's table (private properties
+/// it does inherit), so such a call found nothing and the checker refused it with
+/// `Undefined method: ChildCls::secret` where php prints `Sa`.
+#[test]
+fn test_private_member_resolves_in_the_declaring_scope_through_a_subclass_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentCls {
+    private bool $flag = true;
+
+    private function secret(string $s): string
+    {
+        return 'S' . $s;
+    }
+
+    public function viaSelf(): string
+    {
+        $other = new ChildCls();
+        return $other->secret('a') . ':' . ($other->flag ? 'T' : 'F');
+    }
+}
+
+class ChildCls extends ParentCls {}
+
+echo (new ParentCls())->viaSelf();
+"#,
+    );
+    assert_eq!(out, "Sa:T");
+}
+
+/// Verifies an ancestor-typed call reaches an override that declares MORE parameters with the
+/// override's defaults, instead of reading the extra parameters from uninitialized registers.
+///
+/// Symfony's generated container overrides `Container::load(string $file)` as
+/// `load($file, $lazyLoad = true)`, and `Container::make()` calls it through the base type: the
+/// site passed one argument and the override crashed or saw garbage. A class that does not widen
+/// the method keeps the ordinary virtual call.
+#[test]
+fn test_ancestor_typed_call_pads_a_wider_override() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    protected function load(string $file) { return "base:$file"; }
+    public static function make(self $c, string $id) { return $c->load($id); }
+}
+class Child extends Base {
+    protected function load($file, $lazyLoad = true, int $n = 7, ?array $opts = null) {
+        return "child:$file:" . var_export($lazyLoad, true) . ":$n:" . var_export($opts, true);
+    }
+}
+class GrandChild extends Child {}
+class Plain extends Base {}
+echo Base::make(new Child(), 'a'), "|", Base::make(new GrandChild(), 'b'), "|", Base::make(new Plain(), 'c');
+"#,
+    );
+    assert_eq!(out, "child:a:true:7:NULL|child:b:true:7:NULL|base:c");
+}
+
+/// A child may redeclare a PRIVATE parent property with the other staticness: a private member
+/// is not inherited, so `B::$enc` (instance) and `A::$enc` (static) are two properties, and the
+/// same holds the other way round for `$inst`. `symfony/mime`'s `ParameterizedHeader` is this
+/// shape. Expected output is php 8.5's; the build used to fail with "Cannot redeclare static
+/// property as instance property".
+#[test]
+fn test_private_parent_property_may_be_redeclared_with_other_staticness() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static $enc = "s";
+    private $inst = "i";
+    static function g() { return self::$enc; }
+    function h() { return $this->inst; }
+}
+class B extends A {
+    private $enc = "b";
+    private static $inst = "t";
+    function f() { return $this->enc . self::$inst; }
+}
+$b = new B;
+echo A::g(), $b->h(), $b->f(), "\n";
+"#,
+    );
+    assert_eq!(out, "sibt\n");
+}
+
+/// A child that shadows a private parent property with a CLASS-CONSTANT default is validated
+/// like every other property default: the constant is typed once class constants exist. The
+/// shadowing path used the plain validator and read `K::NONE` as a string ("default expects Int,
+/// got Str"), which dropped `symfony/validator`'s `ClassMetadata` from the build. Expected output
+/// is php 8.5's.
+#[test]
+fn test_private_parent_property_shadow_accepts_class_constant_default() {
+    let out = compile_and_run(
+        r#"<?php
+class G { private int $s = K::NONE; function g() { return $this->s; } }
+class C extends G { private int $s = K::CASCADE; function f() { return $this->s; } }
+class K { public const NONE = 1; public const CASCADE = 2; }
+$c = new C;
+echo $c->f(), $c->g(), "\n";
+"#,
+    );
+    assert_eq!(out, "21\n");
+}
+
+/// Verifies that converting an object to string calls the RUNTIME class's `__toString`: the
+/// declared parameter type named a parent whose own `__toString` was called directly, so a
+/// subclass override was silently skipped (`[plain]` for a `Fancy`).
+#[test]
+fn test_string_conversion_calls_the_subclass_tostring_override() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain {
+    public function __toString(): string { return "plain"; }
+}
+class Fancy extends Plain {
+    public function __toString(): string { return "fancy"; }
+}
+function show(Plain $p): string { return "[" . $p . "]"; }
+function cast(Plain $p): string { return (string) $p; }
+echo show(new Plain()), show(new Fancy()), cast(new Fancy());
+"#,
+    );
+    assert_eq!(out, "[plain][fancy]fancy");
+}
+
+/// Verifies that an abstract class whose `__toString` comes only from `\Stringable` converts
+/// through its subclass: the direct call named a method body the abstract class never has, and
+/// the program failed to link.
+#[test]
+fn test_string_conversion_through_an_abstract_stringable_class() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Shape implements \Stringable {
+    abstract public function area(): int;
+}
+class Square extends Shape {
+    public function __construct(private int $side) {}
+    public function area(): int { return $this->side * $this->side; }
+    public function __toString(): string { return "square " . $this->side; }
+}
+function describe(Shape $s): string { return (string) $s . "/" . $s->area(); }
+echo describe(new Square(3));
+"#,
+    );
+    assert_eq!(out, "square 3/9");
+}
+
+/// Verifies an undeclared `__toString()` return type is php's implicit `string`: it satisfies
+/// `Stringable`, a user interface declaring `: string`, and a parent's declared override, and a
+/// returned int is coerced like any `: string` function.
+///
+/// The checker refused all three shapes ("without declaring a compatible return type"), which
+/// is how Laravel's `HtmlString`, `MessageBag`, `ViewErrorBag` and `Stringable` are written, and
+/// each refusal left the class to the interpreter.
+///
+/// Reference value captured from php 8.5.10.
+#[test]
+fn test_undeclared_tostring_return_type_is_implicitly_string() {
+    let out = compile_and_run(
+        r#"<?php
+interface Htmlable { public function toHtml(); }
+interface Renderable { public function __toString(): string; }
+class HtmlString implements Htmlable, Stringable {
+    public function __construct(protected $html = '') {}
+    public function toHtml() { return $this->html; }
+    public function __toString() { return $this->toHtml(); }
+}
+class Bag implements Renderable {
+    public function __toString() { return 'bag'; }
+}
+class Base { public function __toString(): string { return 'base'; } }
+class Child extends Base { public function __toString() { return 'child'; } }
+class Number { public function __toString() { return 5; } }
+echo new HtmlString('<b>x</b>'), "|", new Bag(), "|", new Child(), "|", new Number(), "\n";
+echo (new HtmlString('s')) instanceof Stringable ? "stringable" : "plain", "|";
+echo (new ReflectionMethod('Number', '__toString'))->getReturnType(), "\n";
+"#,
+    );
+    assert_eq!(out, "<b>x</b>|bag|child|5\nstringable|string\n");
+}
+
+/// Untyped members of an override family return in one storage, so a call typed by the base
+/// reads what the override actually returned. A base that only throws was typed `void` while the
+/// override returned a string (Laravel's `Facade::getFacadeAccessor()`), and a base returning a
+/// string with an override returning an int read garbage.
+#[test]
+fn test_untyped_override_family_returns_share_one_storage() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Base {
+    protected static function accessor() { throw new RuntimeException('no accessor'); }
+    protected function name() { throw new RuntimeException('no name'); }
+    protected function v() { return "base"; }
+    protected static function s() { return "base"; }
+    public static function viaStatic() { return 'static:' . static::accessor() . ':' . var_export(static::s(), true); }
+    public function viaThis() { return 'this:' . $this->name() . ':' . var_export($this->v(), true); }
+}
+class Impl extends Base {
+    protected static function accessor() { return 'log'; }
+    protected function name() { return 'impl'; }
+    protected function v() { return 5; }
+    protected static function s() { return 6; }
+}
+class Plain extends Base {
+    protected static function accessor() { return 'plain'; }
+    protected function name() { return 'p'; }
+}
+echo Impl::viaStatic(), " ", (new Impl)->viaThis(), "\n";
+echo Plain::viaStatic(), " ", (new Plain)->viaThis(), "\n";
+"#,
+    );
+    assert_eq!(out, "static:log:6 this:impl:5\nstatic:plain:'base' this:p:'base'\n");
+}
+
+/// A by-name allocation (`new $name`, `new` inside eval) of a class that hides a private
+/// ancestor property runs the ancestor's private-default thunk. That thunk must write the
+/// ancestor's own slots: it lacked a lexical class, so the private names counted as invisible,
+/// the defaults went to a dynamic-property hash the object never had, and the worker segfaulted
+/// (Symfony's `App\Kernel` under `--web`).
+#[test]
+fn test_by_name_allocation_initializes_hidden_private_ancestor_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class K {
+    private ?string $warmupDir = null;
+    private int $requestStackSize = 0;
+    private bool $resetServices = false;
+    public function info(): string {
+        return var_export($this->warmupDir, true) . ' ' . $this->requestStackSize . ' ' . var_export($this->resetServices, true);
+    }
+}
+class AppK extends K {
+    private $requestStackSize = 'mine';
+    public function mine(): string { return (string) $this->requestStackSize; }
+}
+$k = new AppK();
+echo $k->info(), ' ', $k->mine(), "\n";
+$name = 'AppK';
+$e = eval('return new ' . $name . '();');
+echo $e->info(), ' ', $e->mine(), "\n";
+$d = new $name();
+echo $d->info(), ' ', $d->mine(), "\n";
+"#,
+    );
+    assert_eq!(out, "NULL 0 false mine\nNULL 0 false mine\nNULL 0 false mine\n");
+}
+
+/// A builtin parent's return type is TENTATIVE: overriding `DateTime::createFromFormat()`
+/// (`DateTime|false`) with `?static`, as Carbon does, is a deprecation in php, not an error. The
+/// checker refused it and Carbon went to the interpreter. The inherited builtin static method is
+/// reached through `parent::` and through the static callable table, so its body must be lowered
+/// although no `DateTime::createFromFormat()` call names it.
+#[test]
+fn test_override_of_a_builtin_static_method_with_a_tentative_return_type() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class MyDate extends DateTime {
+    #[\ReturnTypeWillChange]
+    public static function createFromFormat($format, $time, $timezone = null): ?static
+    {
+        $parent = parent::createFromFormat($format, $time, $timezone);
+        if ($parent === false) {
+            return null;
+        }
+        return new static('@' . $parent->getTimestamp());
+    }
+    public function format($format): string { return 'my:' . parent::format($format); }
+}
+$d = MyDate::createFromFormat('Y-m-d H:i:s', '2024-02-03 04:05:06', new DateTimeZone('UTC'));
+echo get_class($d), " ", $d->format('Y-m-d'), "|";
+var_dump(MyDate::createFromFormat('Y-m-d', 'nope'));
+$fn = [MyDate::class, 'createFromFormat'];
+echo get_class($fn('Y', '2020')), "|";
+function via_parent(DateTime $x): string { return $x->format('Y'); }
+echo via_parent($d);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "MyDate my:2024-02-03|NULL\nMyDate|my:2024");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

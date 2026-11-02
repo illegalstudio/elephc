@@ -56,7 +56,24 @@ fn parse_fragment_accepts_break_and_continue_source() {
         program.statements(),
         &[EvalStmt::While {
             condition: EvalExpr::LoadVar("flag".to_string()),
-            body: vec![EvalStmt::Continue, EvalStmt::Break],
+            body: vec![EvalStmt::Continue(1), EvalStmt::Break(1)],
+        }]
+    );
+}
+
+/// Verifies parser preserves explicit PHP break and continue nesting levels.
+#[test]
+fn parse_fragment_accepts_multilevel_loop_control_source() {
+    let program = parse_fragment(br#"while ($outer) { while ($inner) { continue 2; } break 3; }"#)
+        .expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::While {
+            condition: EvalExpr::LoadVar("outer".to_string()),
+            body: vec![EvalStmt::While {
+                condition: EvalExpr::LoadVar("inner".to_string()),
+                body: vec![EvalStmt::Continue(2)],
+            }, EvalStmt::Break(3)],
         }]
     );
 }
@@ -91,6 +108,30 @@ fn parse_fragment_accepts_throw_source() {
             )))],
         })]
     );
+}
+/// Verifies `throw` lowers as an expression inside a generated-style match arm.
+#[test]
+fn parse_fragment_accepts_throw_expression_in_match_default() {
+    let program = parse_fragment(
+        br#"return match ($name) {
+    "known" => 1,
+    default => throw new Exception("missing"),
+};"#,
+    )
+    .expect("throw expression should parse");
+
+    let [EvalStmt::Return(Some(EvalExpr::Match {
+        default: Some(default),
+        ..
+    }))] = program.statements()
+    else {
+        panic!("expected a match return expression");
+    };
+    assert!(matches!(
+        default.as_ref(),
+        EvalExpr::Throw(inner)
+            if matches!(inner.as_ref(), EvalExpr::NewObject { class_name, .. } if class_name == "Exception")
+    ));
 }
 /// Verifies try/catch statements lower supported Throwable clauses into EvalIR.
 #[test]
@@ -296,6 +337,20 @@ fn parse_fragment_accepts_unset_source() {
 /// the second too; the lexer now owns the tags, and a `<?php` in code is a syntax error.
 #[test]
 fn parse_fragment_rejects_opening_tag() {
-    assert!(parse_fragment(b"<?php echo 1;").is_err());
+    assert_eq!(
+        parse_fragment_error(b"<?php echo 1;"),
+        Err(EvalParseError::PhpOpenTag)
+    );
     assert!(parse_fragment(b"echo \"<?xml\"; echo 'a<?b';").is_ok());
+}
+
+/// Verifies opening-tag bytes inside PHP literals and comments are valid eval content.
+#[test]
+fn parse_fragment_accepts_open_tag_text_outside_code_position() {
+    parse_fragment(
+        br#"echo 'The "<?php" start tag belongs in an error message.';
+/* <?php is documentation here. */
+echo "done";"#,
+    )
+    .expect("literal and comment text must not be treated as an opening tag");
 }

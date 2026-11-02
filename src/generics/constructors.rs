@@ -41,11 +41,12 @@ fn lift_in(program: &mut [Stmt]) -> bool {
                 if generics.as_ref().is_some_and(|decl| !decl.type_params.is_empty()) {
                     continue;
                 }
-                let (extends_args, interface_args) = generics.take()
-                    .map(|decl| (decl.extends_args, decl.interface_args))
+                let (extends_args, interface_args, doc_annotated) = generics.take()
+                    .map(|decl| (decl.extends_args, decl.interface_args, decl.doc_annotated))
                     .unwrap_or_default();
-                *generics = GenericDecl::new(
+                *generics = GenericDecl::with_origin(
                     std::mem::take(&mut constructor.type_params), extends_args, interface_args,
+                    doc_annotated,
                 );
                 lifted = true;
             }

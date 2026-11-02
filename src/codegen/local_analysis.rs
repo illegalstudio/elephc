@@ -1,6 +1,6 @@
 //! Purpose:
 //! Precomputes local-slot facts consumed repeatedly by EIR assembly lowering.
-//! Tracks explicit stores, ref-cell representation changes, and owned parameter slots.
+//! Tracks local loads and stores, ref-cell representation changes, and owned parameter slots.
 //!
 //! Called from:
 //! - `crate::codegen::context::FunctionContext::new()`.
@@ -24,6 +24,7 @@ use crate::types::PhpType;
 /// Cached local-slot facts for one EIR function.
 pub(super) struct LocalSlotAnalysis {
     stored_slots: HashSet<LocalSlotId>,
+    loaded_slots: HashSet<LocalSlotId>,
     ever_ref_cell_slots: HashSet<LocalSlotId>,
     dynamic_ref_cell_slots: HashSet<LocalSlotId>,
     ref_cell_slots_before_inst: HashSet<(InstId, LocalSlotId)>,
@@ -36,6 +37,7 @@ impl LocalSlotAnalysis {
     pub(super) fn new(function: &Function) -> Self {
         let initially_ref_cell_slots = initially_ref_cell_slots(function);
         let mut stored_slots = HashSet::new();
+        let mut loaded_slots = HashSet::new();
         let mut ever_ref_cell_slots = initially_ref_cell_slots.clone();
         for inst in &function.instructions {
             // `StoreRefCell` can become a raw owning store after a path-local `unset()` changes
@@ -47,9 +49,12 @@ impl LocalSlotAnalysis {
             // dropped the prologue retain on a by-value parameter the abandon then released
             // (`function f($a, int $n) { unset($a); … }` over-released the CALLER's box, and the
             // returned string came back as heap-debug poison bytes).
-            if matches!(inst.op, Op::StoreLocal | Op::StoreRefCell | Op::ZeroLocalSlot) {
-                if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
+            if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
+                if matches!(inst.op, Op::StoreLocal | Op::StoreRefCell | Op::ZeroLocalSlot) {
                     stored_slots.insert(slot);
+                }
+                if matches!(inst.op, Op::LoadLocal | Op::LoadRefCell) {
+                    loaded_slots.insert(slot);
                 }
             }
             // `IterStart` writes a successful getIterator Mixed cell into this
@@ -83,6 +88,7 @@ impl LocalSlotAnalysis {
         let dynamic_ref_cell_slots = dynamic_ref_cell_slots(function, &ever_ref_cell_slots);
         Self {
             stored_slots,
+            loaded_slots,
             ever_ref_cell_slots,
             dynamic_ref_cell_slots,
             ref_cell_slots_before_inst,
@@ -94,6 +100,11 @@ impl LocalSlotAnalysis {
     /// Returns whether this slot receives an owned value via `StoreLocal`.
     pub(super) fn has_store(&self, slot: LocalSlotId) -> bool {
         self.stored_slots.contains(&slot)
+    }
+
+    /// Returns whether this slot is read directly or used as an indirect write destination.
+    pub(super) fn has_load(&self, slot: LocalSlotId) -> bool {
+        self.loaded_slots.contains(&slot)
     }
 
     /// Returns whether any instruction can rewrite this slot to a ref-cell pointer.
@@ -157,7 +168,7 @@ fn ref_cell_target_slot(
             Op::BindRefCellPtr | Op::IterCurrentValueRef,
             Some(Immediate::LocalSlot(slot)),
         ) => Some(*slot),
-        (Op::ClosureCapture, Some(Immediate::I64(1))) => operands
+        (Op::ClosureCapture, Some(Immediate::I64(1) | Immediate::LocalSlot(_))) => operands
             .first()
             .copied()
             .and_then(|value| loaded_local_slot(function, value)),
@@ -368,6 +379,7 @@ fn owned_parameter_slots(
                 && param.php_type.codegen_repr() != PhpType::Mixed;
             (stored_slots.contains(&slot)
                 || ever_ref_cell_slots.contains(&slot)
+                || function.by_ref_argument_param_slots.contains(&slot)
                 || prologue_boxes_owned_mixed
                 || (eval_can_replace_locals && local.kind == crate::ir::LocalKind::PhpLocal))
                 .then_some(slot)
@@ -426,6 +438,41 @@ mod tests {
     use crate::codegen::generate_user_asm_from_ir;
     use crate::codegen::platform::{Arch, Platform, Target};
     use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Module, Ownership};
+
+    /// Verifies a loaded local is tracked even when its value is written back indirectly.
+    #[test]
+    fn loaded_local_without_explicit_store_needs_lifetime_tracking() {
+        let mut function = Function::new(
+            "loaded_local".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        let slot = function.add_local(
+            Some("output".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.emit(
+                Op::LoadLocal,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                IrType::Heap(crate::ir::IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Borrowed,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert!(analysis.has_load(slot));
+        assert!(!analysis.has_store(slot));
+    }
 
     /// Eval replacement requires a by-value parameter owner even without explicit EIR stores.
     #[test]

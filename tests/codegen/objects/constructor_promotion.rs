@@ -275,7 +275,11 @@ $dynamic->value = 7;
 echo $shared, ":", $eager->value;
 "#,
     );
-    assert_eq!(out, "42:42:7:1");
+    assert_eq!(
+        out, "42:42:7:1",
+        "the promoted property must read AND write the caller's value through a cell that \
+         outlived the constructor call, as php does"
+    );
 }
 
 /// THE DYNAMIC-NEW CELL-LIFETIME PIN. `new $cls($holder->n)` passes a PROPERTY, not a local,

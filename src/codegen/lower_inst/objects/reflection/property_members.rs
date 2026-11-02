@@ -402,6 +402,7 @@ pub(super) fn reflection_default_value_to_string(
         ReflectionParameterDefaultValue::Object { .. }
         | ReflectionParameterDefaultValue::DeferredError(_)
         | ReflectionParameterDefaultValue::EirHelper(_)
+        | ReflectionParameterDefaultValue::EnumCase { .. }
         | ReflectionParameterDefaultValue::Array(_)
         | ReflectionParameterDefaultValue::AssocArray(_) => None,
     }

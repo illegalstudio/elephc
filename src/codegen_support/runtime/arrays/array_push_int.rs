@@ -33,6 +33,13 @@ pub fn emit_array_push_int(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_push_int ---");
     emitter.label_global("__rt_array_push_int");
 
+    // -- a destination already promoted to hash storage (an earlier sparse/negative keyed
+    //    write converted it) appends at PHP's next integer key, not the packed length --
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed heap-kind/value_type word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low byte holding the storage kind
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = an earlier write already promoted this destination to a hash
+    emitter.instruction("b.eq __rt_array_push_int_already_hash");               // delegate to __rt_hash_append instead of walking packed storage
+
     // -- split shared arrays before appending in place --
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
@@ -88,6 +95,12 @@ pub fn emit_array_push_int(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate the stack frame
     emitter.instruction("ret");                                                 // return with x0 = new array
+
+    // -- destination already promoted to hash: append at PHP's next integer key --
+    emitter.label("__rt_array_push_int_already_hash");
+    emitter.instruction("mov x3, #0");                                          // homogeneous scalar runtime tag (matches the cleared indexed metadata)
+    emitter.instruction("mov x2, #0");                                          // scalar hash payloads leave the high value word empty
+    emitter.instruction("b __rt_hash_append");                                  // tail-call: insert at max(int keys) + 1, matching PHP's append rule
 }
 
 /// Emits the `__rt_array_push_int` runtime helper for x86_64 (Linux).
@@ -106,6 +119,13 @@ fn emit_array_push_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_push_int ---");
     emitter.label_global("__rt_array_push_int");
+
+    // -- a destination already promoted to hash storage (an earlier sparse/negative keyed
+    //    write converted it) appends at PHP's next integer key, not the packed length --
+    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the packed heap-kind/value_type word
+    emitter.instruction("and r10, 0xff");                                       // isolate the low byte holding the storage kind
+    emitter.instruction("cmp r10, 3");                                          // kind 3 = an earlier write already promoted this destination to a hash
+    emitter.instruction("je __rt_array_push_int_already_hash");                 // delegate to __rt_hash_append instead of walking packed storage
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving indexed-array append spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved scalar payload and array pointer
@@ -149,4 +169,10 @@ fn emit_array_push_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_grow");                                // allocate a larger indexed-array backing store so the append can proceed
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the grown indexed-array pointer before writing the appended scalar slot
     emitter.instruction("jmp __rt_array_push_int_store");                       // append the scalar payload into the grown indexed-array storage
+
+    // -- destination already promoted to hash: append at PHP's next integer key --
+    emitter.label("__rt_array_push_int_already_hash");
+    emitter.instruction("xor edx, edx");                                        // scalar hash payloads leave the high value word empty
+    emitter.instruction("xor ecx, ecx");                                        // homogeneous scalar runtime tag (matches the cleared indexed metadata)
+    emitter.instruction("jmp __rt_hash_append");                                // tail-call: insert at max(int keys) + 1, matching PHP's append rule
 }

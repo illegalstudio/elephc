@@ -1165,6 +1165,9 @@ class XMLWriter {
         }
         // php-src opens the URI through the stream layer in "wb" mode; an unopenable
         // target answers false (the stream layer reports why).
+        if (substr($uri, 0, 7) === "file://") {
+            $uri = substr($uri, 7);
+        }
         $stream = fopen($uri, "wb");
         if ($stream === false) {
             return false;

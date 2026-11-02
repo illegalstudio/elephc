@@ -14,7 +14,8 @@ use crate::codegen_support::platform::Arch;
 
 /// Emits the `__rt_incref` runtime helper.
 ///
-/// Increments the refcount of a heap-allocated value passed in `x0`/`rax`.
+/// Increments the refcount of a heap-allocated value passed in `x0`/`rax`. The pointer is preserved:
+/// callers keep using it after the call without saving it around the helper.
 /// Guards against null pointers, non-heap pointers, persistent storage, and freed blocks
 /// (when heap-debug is enabled). Skips all validation for values outside the managed heap.
 ///
@@ -52,9 +53,9 @@ pub fn emit_incref(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_debug_enabled");
     emitter.instruction("ldr x9, [x9]");                                        // load the heap-debug enabled flag
     emitter.instruction("cbz x9, __rt_incref_checked");                         // skip debug validation when heap-debug mode is disabled
-    emitter.instruction("str x30, [sp, #-16]!");                                // preserve the caller return address before nested validation
+    emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the heap pointer (callers rely on x0 surviving) and the return address
     emitter.instruction("bl __rt_heap_debug_check_live");                       // ensure the referenced heap block still has a live refcount
-    emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller return address after validation
+    emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the heap pointer and the return address after validation
     emitter.label("__rt_incref_checked");
 
     // -- increment refcount --
@@ -89,7 +90,9 @@ fn emit_incref_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the heap-debug enabled flag before mutating the x86_64 refcount
     emitter.instruction("test r11, r11");                                       // is heap-debug live validation enabled for incref?
     emitter.instruction("jz __rt_incref_checked");                              // skip the nested live-check helper when heap-debug mode is disabled
+    crate::codegen_support::abi::emit_push_reg(emitter, "rax");                 // preserve the heap pointer (callers rely on rax surviving) in an aligned slot
     emitter.instruction("call __rt_heap_debug_check_live");                     // ensure the referenced heap block still looks live before incrementing its refcount
+    crate::codegen_support::abi::emit_pop_reg(emitter, "rax");                  // restore the heap pointer after validation
     emitter.label("__rt_incref_checked");
     emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the 32-bit refcount stored in the uniform heap header
     emitter.instruction("add r10d, 1");                                         // increment the refcount for the additional x86_64 heap owner

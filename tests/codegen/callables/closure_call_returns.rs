@@ -327,3 +327,66 @@ var_dump($m("q"));
         "[hello]|[xyz]|5\narray(1) {\n  [0]=>\n  string(1) \"q\"\n}\n"
     );
 }
+
+/// A closure whose body returns an assignment returns the assigned value. Its signature was
+/// typed `int`, so `fn () => $this->value = $r` handed back `int(1)` after an "Object of class Ref
+/// could not be converted to int" warning, and `return $x = $r;` did the same.
+#[test]
+fn test_closure_returning_an_assignment_returns_the_assigned_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Ref { public $id = "x"; }
+class Box { public $value = null; }
+$r = new Ref; $b = new Box;
+$set = fn() => $this->value = $r;
+echo get_class(Closure::bind($set, $b, Box::class)()), "|";
+$plain = function () use ($r) { return $x = $r; };
+echo get_class($plain()), "|";
+$str = fn() => $s = "text";
+echo $str(), "|";
+$n = 1;
+$add = function () use ($n) { return $n += 2; };
+echo $add(), "\n";
+"#,
+    );
+    assert_eq!(out, "Ref|Ref|text|3\n");
+}
+
+/// One `callable` parameter reached by closures of different return types is typed for ALL of
+/// them. Only the call checked last used to decide the body's `$f()` type, so the same
+/// `attempt()` read an object result as a boolean (and a boolean as a float) depending on call
+/// order. Expected output is real php 8.5 output for the same fixture.
+#[test]
+fn test_callable_parameter_joins_the_return_types_of_every_call_site() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class R { public $n = 7; }
+class P {
+    public array $items = [];
+    public function add(R $r): R { $this->items[] = $r; return $r; }
+    public function addBool(R $r): bool { $this->items[] = $r; return true; }
+    public function count(): int { return count($this->items); }
+}
+function attempt(callable $f) { return $f(); }
+$p = new P();
+$a = attempt(fn() => $p->add(new R()));
+var_dump($a instanceof R);
+$b = attempt(fn() => $p->addBool(new R()));
+var_dump($b);
+$d = attempt(function () use ($p) { return $p->add(new R()); });
+var_dump(is_object($d));
+var_dump(attempt(fn() => 5));
+var_dump(attempt(fn() => "s"));
+var_dump(attempt(fn() => [1, 2]));
+var_dump(attempt(fn() => null));
+var_dump(attempt(fn() => 1.5));
+echo $p->count(), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\nbool(true)\nbool(true)\nint(5)\nstring(1) \"s\"\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\nNULL\nfloat(1.5)\n3\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

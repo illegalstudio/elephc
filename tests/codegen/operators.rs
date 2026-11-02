@@ -41,6 +41,20 @@ fn test_division() {
     assert_eq!(out, "42");
 }
 
+/// Verifies arithmetic accepts a nullable numeric operand through boxed runtime dispatch.
+#[test]
+fn test_nullable_float_arithmetic_without_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function offset(?float $value): float {
+    return $value - 1.0;
+}
+echo offset(4.5), ":", offset(null);
+"#,
+    );
+    assert_eq!(out, "3.5:-1");
+}
+
 
 /// Verifies arithmetic with variables: loads two integers from memory and adds them.
 #[test]
@@ -306,6 +320,20 @@ fn test_modulo() {
 fn test_modulo_zero_remainder() {
     let out = compile_and_run("<?php echo 15 % 5;");
     assert_eq!(out, "0");
+}
+
+/// Verifies `%` over a float source has the static integer type that PHP's operand conversion
+/// produces, so its result can bind directly to an `int` parameter.
+#[test]
+fn test_float_modulo_result_binds_to_int_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function takeInt(int $value): int { return $value; }
+function remainder(float $value): int { return takeInt($value % 3); }
+echo remainder(10.5);
+"#,
+    );
+    assert_eq!(out, "1");
 }
 
 
@@ -613,6 +641,28 @@ echo ($i == $m ? "y" : "n"), ($m == $i ? "y" : "n"), ($i == $h["n"] ? "y" : "n")
 "#,
     );
     assert_eq!(out, "yyyn");
+}
+
+/// Regression: a `Mixed` string compared with a generic array element must use PHP's runtime
+/// loose-comparison table rather than coercing both strings to integer zero.
+#[test]
+fn test_loose_eq_mixed_string_and_generic_array_value() {
+    let out = compile_and_run(
+        r#"<?php
+function compareGenericArrayValue(mixed $needle, array $values): string
+{
+    foreach ($values as $value) {
+        return $needle == $value ? 'same' : 'different';
+    }
+
+    return 'empty';
+}
+
+echo compareGenericArrayValue('cache.adapter.system', ['cache.system']), '|';
+echo compareGenericArrayValue('cache.adapter.system', ['cache.adapter.system']);
+"#,
+    );
+    assert_eq!(out, "different|same");
 }
 
 
@@ -1102,6 +1152,161 @@ fn test_angle_not_equal_does_not_capture_spaced_comparisons() {
     assert_eq!(out, "bool(true)\n");
 }
 
+/// Verifies ordered runtime string comparisons use lexicographic PHP byte-string ordering.
+#[test]
+fn test_runtime_ordered_string_comparisons() {
+    let out = compile_and_run(
+        r#"<?php
+function compare_strings(string $left, string $right): void {
+    echo $left < $right ? '1' : '0';
+    echo $left <= $right ? '1' : '0';
+    echo $left > $right ? '1' : '0';
+    echo $left >= $right ? '1' : '0';
+    echo $left <=> $right;
+}
+compare_strings('abc', 'abd');
+echo '|';
+compare_strings('same', 'same');
+"#,
+    );
+    assert_eq!(out, "1100-1|01010");
+}
+
+/// Verifies gradual and cross-type ordered comparisons use PHP's runtime comparison table.
+#[test]
+fn test_runtime_gradual_ordered_comparisons() {
+    let out = compile_and_run(
+        r#"<?php
+function compare_gradual(mixed $left, mixed $right): void {
+    echo $left < $right ? '1' : '0', ':', $left <=> $right;
+}
+compare_gradual('a', 'b');
+echo '|';
+compare_gradual(0, 'a');
+"#,
+    );
+    assert_eq!(out, "1:-1|1:-1");
+}
+
+/// Verifies PHP string `&`, `|`, and `^` operate byte-wise with their distinct length rules,
+/// including a scratch-backed left operand whose right side performs a call.
+#[test]
+fn test_runtime_string_bitwise_operators() {
+    let out = compile_and_run(
+        r#"<?php
+function string_bits(string $left, string $right): void {
+    echo bin2hex($left & $right), ';';
+    echo bin2hex($left | $right), ';';
+    echo bin2hex($left ^ $right);
+}
+function right_bits(): string { return 'xy'; }
+string_bits('ABC', 'xy');
+echo '|';
+string_bits('A', 'xyz');
+echo '|', bin2hex(('A'.'B') | right_bits());
+"#,
+    );
+    assert_eq!(out, "4040;797b43;393b|40;79797a;39|797b");
+}
+
+/// Verifies gradual bitwise operands choose byte-string behavior only when both runtime values
+/// are strings and otherwise follow PHP's integer coercion path.
+#[test]
+fn test_runtime_gradual_bitwise_operators() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_bits(mixed $left, mixed $right): void {
+    var_dump($left & $right);
+    var_dump($left | $right);
+    var_dump($left ^ $right);
+}
+gradual_bits('A', 'x');
+gradual_bits('3', 1);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"@\"\nstring(1) \"y\"\nstring(1) \"9\"\nint(1)\nint(3)\nint(2)\n"
+    );
+}
+
+/// Verifies bitwise and shift operators apply PHP's integer coercion to concrete floats and
+/// boxed numeric unions.
+#[test]
+fn test_runtime_float_bitwise_and_shift_operators() {
+    let out = compile_and_run(
+        r#"<?php
+function numericUnion(bool $fractional): int|float {
+    return $fractional ? 8.9 : 3;
+}
+echo (3.9 & 1), ":", (8.9 >> 1), ":", (1.9 << 2), "|";
+echo (numericUnion(true) >> 1), ":", (numericUnion(false) & 1);
+"#,
+    );
+    assert_eq!(out, "1:4:4|4:1");
+}
+
+/// Verifies PHP byte-string offset assignment uses copy-on-write, relative negative offsets,
+/// positive-offset space extension, numeric string offsets, and the first replacement byte.
+#[test]
+fn test_runtime_string_offset_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+function replacement(): string { return 'YZ'; }
+$value = 'abc';
+$copy = $value;
+$value[1] = 'Z';
+echo $value, '|', $copy;
+$value[-1] = 'Q';
+echo '|', $value;
+$value[5] = replacement();
+echo '|', $value, '|', strlen($value);
+$value['0'] = '!';
+echo '|', $value;
+"#,
+    );
+    assert_eq!(out, "aZc|abc|aZQ|aZQ  Y|6|!ZQ  Y");
+}
+
+/// Verifies a string offset write through a local that is only known as boxed `mixed` (an
+/// untyped parameter, a value that is sometimes `false`) reaches the string, while the same
+/// statement on an array still writes the element.
+///
+/// The write had no lowering for a boxed container holding a string and was dropped silently, so
+/// `function up($s) { $s[0] = 'H'; return $s; }` returned its argument unchanged and
+/// symfony/polyfill-mbstring's `mb_convert_case()` upper-cased nothing. Oracle: php 8.5.
+#[test]
+fn test_string_offset_write_through_a_boxed_mixed_local() {
+    let out = compile_and_run(
+        r#"<?php
+function first($s) { $s[0] = 'H'; return $s; }
+function at($s, $i) { $s[$i] = 'Z'; return $s; }
+function back($s) { $s[-1] = 'Q'; return $s; }
+function wide($s) { $s[5] = 'Q'; return $s; }
+function upper($s) {
+    $map = ['h' => 'H', 'e' => 'E', 'l' => 'L', 'o' => 'O'];
+    $len = strlen($s);
+    $i = 0;
+    while ($i < $len) {
+        $c = substr($s, $i, 1);
+        if (isset($map[$c])) {
+            $n = $i + 1;
+            $u = $map[$c];
+            do {
+                $s[--$n] = $u[0];
+            } while ($n > $i);
+        }
+        $i++;
+    }
+    return $s;
+}
+echo first('hello'), '|', first([1, 2])[0] === 'H' ? 'arr' : 'bad', '|', at('abc', 1), '|', json_encode(at([1, 2], 1));
+echo '|', back('abc'), '|', json_encode(wide('abc')), '|', upper('hello');
+"#,
+    );
+    assert_eq!(out, "Hello|arr|aZc|[1,\"Z\"]|abQ|\"abc  Q\"|HELLO");
+}
+
 
 /// Verifies `<<` with a shift count of 64 or more yields `0` instead of masking the count.
 ///
@@ -1463,6 +1668,25 @@ var_dump($m);
     );
 }
 
+/// Verifies increment accepts a runtime key union whose members are all valid PHP scalar
+/// increment operands and dispatches according to the value returned at runtime.
+#[test]
+fn test_increment_runtime_int_string_key_union() {
+    let out = compile_and_run(
+        r#"<?php
+function findKey(mixed $values): int|string|false {
+    return array_search("needle", $values, true);
+}
+
+$key = findKey(["other", "needle"]);
+if (false !== $key) {
+    echo ++$key;
+}
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
 
 /// Verifies the int/float boundary of a numeric-string increment: a value that still fits
 /// stays an `int`, `PHP_INT_MAX` promotes to `float`, a 20-digit string is already a float,
@@ -1481,6 +1705,85 @@ $d = "9223372036854775807"; $d--; var_dump($d);
         out,
         "int(9223372036854775807)\nfloat(9.223372036854776E+18)\n\
          float(1.0E+20)\nint(9223372036854775806)\n"
+    );
+}
+
+/// Verifies bitwise NOT accepts a boxed `mixed` integer through PHP's integer coercion path.
+#[test]
+fn test_bitwise_not_mixed_integer() {
+    let out = compile_and_run(
+        r#"<?php
+function invert_mixed(mixed $value): int { return ~$value; }
+echo invert_mixed(2);
+"#,
+    );
+    assert_eq!(out, "-3");
+}
+
+/// Verifies a relational comparison against a class constant whose initializer is a NESTED
+/// expression still orders as plain integers.
+///
+/// `const MAX = 16 * 1024 * 1024;` lowers as a runtime-tagged value, so `$n > self::MAX` picks
+/// the runtime relational opcode; constant folding then rewrites the operand to `const_i64
+/// 16777216` and the opcode arrives at the backend with two statically integer operands. That
+/// combination used to abort the whole compile ("php_rel_cmp requires a runtime-tagged operand,
+/// got Int and Int"), which is how `Symfony\Component\Console\Helper\FileInputHelper` refused to
+/// lower. A single-level initializer (`16 * 2`) folds before the comparison is lowered and never
+/// reached this path, which is why the shape needs two multiplications.
+#[test]
+fn test_relational_compare_against_a_folded_class_constant() {
+    let out = compile_and_run(
+        r#"<?php
+class Limits {
+    const MAX = 16 * 1024 * 1024;
+    const MIN = 2 * 3 * 4;
+}
+$n = strlen("abcdef");
+var_dump($n > Limits::MAX);
+var_dump($n < Limits::MAX);
+var_dump($n >= Limits::MIN);
+var_dump($n <= Limits::MIN);
+var_dump(Limits::MIN > $n);
+var_dump(Limits::MIN <= $n);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\n"
+    );
+}
+
+/// Verifies a float or bool operand against a folded integer class constant keeps PHP's rules.
+///
+/// These reach the same backend opcode with no runtime tag left on either side, and they are the
+/// reason the integer fast path is restricted to `int` against `int`: PHP compares `true > 24` as
+/// BOOLEANS (`true > true`, false), so ordering the payloads as integers would answer `true`.
+/// They are ordered by boxing both sides into `Mixed` cells and calling PHP's comparison table.
+#[test]
+fn test_relational_compare_of_bool_and_float_against_a_folded_class_constant() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Limits {
+    const MIN = 2 * 3 * 4;
+}
+$f = sqrt(4.0);
+$b = (bool) strlen("x");
+var_dump($f > Limits::MIN);
+var_dump($f < Limits::MIN);
+var_dump($b > Limits::MIN);
+var_dump($b <= Limits::MIN);
+var_dump(Limits::MIN >= $b);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
     );
 }
 
@@ -1694,6 +1997,28 @@ fn test_underscore_separator_string_uses_numeric_prefix_only() {
 fn test_runtime_non_numeric_string_coerces_to_zero() {
     let out = compile_and_run(r#"<?php $x = $argc > 99 ? "1" : "hi"; var_dump($x + 1);"#);
     assert_eq!(out, "int(1)\n");
+}
+
+/// Unary plus is `$x * 1`: a numeric string becomes an int or float, a bool or null an int, and
+/// it binds like unary minus. Inputs derive from `$argc` so no operand folds at compile time.
+/// Expected output is php 8.5's. Before the fix `+` in prefix position was a parse error.
+#[test]
+fn test_unary_plus_converts_like_multiplication_by_one() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc > 0 ? 5 : 2;
+$s = $argc > 0 ? "7.5" : "1";
+$t = $argc > 0 ? "12" : "1";
+$b = $argc > 0;
+$z = $argc > 5 ? 1 : null;
+var_dump(+$n, +$s, +$t, +$b, +$z, -+$n, +-$n, 2 - +$n, +$n * 3);
+echo random_int(-$n, +$n) <= $n ? "ok" : "no", "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(5)\nfloat(7.5)\nint(12)\nint(1)\nint(0)\nint(-5)\nint(-5)\nint(-3)\nint(15)\nok\n"
+    );
 }
 
 
@@ -2151,4 +2476,28 @@ echo "\n";
         out,
         "1 false,false\n-1 true,true\n0 false,true\n-1 true,true\n-1 true,true\n0 false,true\n0 false,true\n-112\n-1|1|1|-1|0|0|2|\n"
     );
+}
+
+/// A union with an integer member is a gradual bitwise operand. `match (true)` arms do not narrow,
+/// so league/uri's `Option::add(Option|int|null $option)` reached `$this->value | $option` in
+/// its `default` arm with the whole union, and the class was refused.
+#[test]
+fn test_bitwise_or_accepts_a_union_with_an_integer_member() {
+    let out = compile_and_run(
+        r#"<?php
+final class Opt {
+    private function __construct(public readonly int $value) {}
+    public static function new(int $v = 0): self { return new self($v); }
+    public function add(Opt|int|null $option): self {
+        return match (true) {
+            null === $option => $this,
+            $option instanceof self => self::new($this->value | $option->value),
+            default => self::new($this->value | $option),
+        };
+    }
+}
+echo Opt::new(1)->add(2)->add(Opt::new(8))->add(null)->value, "\n";
+"#,
+    );
+    assert_eq!(out, "11\n");
 }

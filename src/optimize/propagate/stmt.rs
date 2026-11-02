@@ -199,14 +199,14 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             let (stmts, next_env) = propagate_block(stmts, env);
             (Stmt::new(StmtKind::Synthetic(stmts), span), next_env)
         }
-        StmtKind::IncludeOnceMark { label } => (
-            Stmt::new(StmtKind::IncludeOnceMark { label }, span),
+        StmtKind::IncludeOnceMark { source_path } => (
+            Stmt::new(StmtKind::IncludeOnceMark { source_path }, span),
             HashMap::new(),
         ),
-        StmtKind::IncludeOnceGuard { label, body } => {
+        StmtKind::IncludeOnceGuard { source_path, required, body } => {
             let (body, _) = propagate_block(body, HashMap::new());
             (
-                Stmt::new(StmtKind::IncludeOnceGuard { label, body }, span),
+                Stmt::new(StmtKind::IncludeOnceGuard { source_path, required, body }, span),
                 HashMap::new(),
             )
         }
@@ -460,6 +460,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         StmtKind::ClassDecl {
             generics,
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -474,6 +475,7 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
                 StmtKind::ClassDecl {
                     generics,
                     name,
+                    doc_comment,
                     extends,
                     implements,
                     is_abstract,
@@ -578,6 +580,28 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
                 next_env,
             )
         }
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => {
+            if let Some(root) = lvalue_root(&source) {
+                mark_reference_volatile(root);
+            }
+            let object = propagate_expr(*object, &env);
+            let source = propagate_expr(source, &env);
+            (
+                Stmt::new(
+                    StmtKind::PropertyRefAssign {
+                        object: Box::new(object),
+                        property,
+                        source,
+                    },
+                    span,
+                ),
+                HashMap::new(),
+            )
+        }
         StmtKind::StaticPropertyAssign {
             receiver,
             property,
@@ -631,6 +655,58 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
                         receiver,
                         property,
                         index,
+                        value,
+                    },
+                    span,
+                ),
+                next_env,
+            )
+        }
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index,
+            source,
+        } => {
+            let index = propagate_expr(index, &env);
+            let source = propagate_expr(source, &env);
+            let next_env = env_after_expr_side_effects(env, &[&index, &source]);
+            (
+                Stmt::new(
+                    StmtKind::StaticPropertyElementRefAssign {
+                        receiver,
+                        property,
+                        index,
+                        source,
+                    },
+                    span,
+                ),
+                next_env,
+            )
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => {
+            let property = propagate_expr(*property, &env);
+            let index = index.map(|index| propagate_expr(index, &env));
+            let value = propagate_expr(value, &env);
+            let mut effect_exprs = vec![&property];
+            if let Some(index) = &index {
+                effect_exprs.push(index);
+            }
+            effect_exprs.push(&value);
+            let next_env = env_after_expr_side_effects(env, &effect_exprs);
+            (
+                Stmt::new(
+                    StmtKind::DynamicStaticPropertyWrite {
+                        receiver,
+                        property: Box::new(property),
+                        index,
+                        append,
                         value,
                     },
                     span,
@@ -703,6 +779,10 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         ),
         StmtKind::ExternClassDecl { name, fields } => (
             Stmt::new(StmtKind::ExternClassDecl { name, fields }, span),
+            env,
+        ),
+        StmtKind::ClassLikeActivate { name, kind, source_path } => (
+            Stmt::new(StmtKind::ClassLikeActivate { name, kind, source_path }, span),
             env,
         ),
         StmtKind::ExternGlobalDecl { name, c_type } => (

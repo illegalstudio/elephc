@@ -14,8 +14,8 @@ use crate::ir::RuntimeCallTarget;
 pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
-    let reset_concat_after_store =
-        inst.span.is_some_and(|span| span.line > 0) && value_is_acquire_of_str_concat(ctx, value)?;
+    let reset_concat_after_store = inst.span.is_some_and(|span| span.line > 0)
+        && value_is_acquire_of_scratch_string(ctx, value)?;
     ctx.store_value_to_local(slot, value)?;
     if reset_concat_after_store {
         reset_concat_to_frame_base(ctx);
@@ -23,8 +23,11 @@ pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instructio
     Ok(())
 }
 
-/// Returns true when a value is `Acquire(StrConcat(...))`, which means storage now owns a heap copy.
-pub(super) fn value_is_acquire_of_str_concat(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+/// Returns true when a value acquires a scratch-backed string that storage has persisted.
+pub(super) fn value_is_acquire_of_scratch_string(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<bool> {
     let Some(acquire_inst) = instruction_for_value(ctx, value)? else {
         return Ok(false);
     };
@@ -34,8 +37,12 @@ pub(super) fn value_is_acquire_of_str_concat(ctx: &FunctionContext<'_>, value: V
     let Some(source) = acquire_inst.operands.first().copied() else {
         return Ok(false);
     };
-    Ok(instruction_for_value(ctx, source)?
-        .is_some_and(|source_inst| source_inst.op == Op::StrConcat))
+    Ok(instruction_for_value(ctx, source)?.is_some_and(|source_inst| {
+        matches!(
+            source_inst.op,
+            Op::StrConcat | Op::StrBitAnd | Op::StrBitOr | Op::StrBitXor | Op::StrSetOffset
+        )
+    }))
 }
 
 /// Returns the instruction that produced an SSA value, or `None` for block parameters.
@@ -236,6 +243,13 @@ pub(super) fn lower_alias_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &I
     }
     let source_offset = ctx.local_offset(source_slot)?;
     let target_offset = ctx.local_offset(target_slot)?;
+    if ctx.local_kind(target_slot)? == LocalKind::RefCell {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, result_reg, source_offset);
+        abi::emit_call_label(ctx.emitter, "__rt_global_ref_cell_incref");
+        abi::store_at_offset(ctx.emitter, result_reg, target_offset);
+        return Ok(());
+    }
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, source_offset);
     abi::store_at_offset_scratch(
@@ -373,7 +387,23 @@ pub(super) fn lower_acquire_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instr
     ctx.load_value_to_reg(captured, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_is_unmanaged_borrow");
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &borrowed);
-    abi::emit_call_label(ctx.emitter, "__rt_borrowed_reference_return_error");
+    // The runtime's message names no function, and in a framework-sized program that left no way
+    // to tell WHICH by-reference return refused. This site knows: allocate the Error, point its
+    // message at a per-function copy that names the function, and throw it.
+    let message = format!(
+        "Cannot return a reference to storage that has no independent reference cell (in {})",
+        ctx.function.name
+    );
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+    abi::emit_call_label(ctx.emitter, "__rt_borrowed_reference_return_error_new");
+    let throwable = abi::int_result_reg(ctx.emitter);
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, scratch, &message_label);
+    abi::emit_store_to_address(ctx.emitter, scratch, throwable, 8);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, message_len as i64);
+    abi::emit_store_to_address(ctx.emitter, scratch, throwable, 16);
+    abi::emit_store_reg_to_symbol(ctx.emitter, throwable, "_exc_value", 0);
+    abi::emit_jump(ctx.emitter, "__rt_throw_current");
     ctx.emitter.label(&borrowed);
     // An active element borrow owns no cell, so this frame leases nothing for it.
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -519,22 +549,50 @@ fn emit_refcounted_local_slot_retirement(
     ty: &PhpType,
 ) -> Result<()> {
     let result = abi::int_result_reg(ctx.emitter);
-    let done = ctx.next_label("release_local_slot_done");
-    abi::load_at_offset(ctx.emitter, result, offset);
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
-    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
-    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-        if mixed_local_slot_is_statically_destructor_free(ctx, slot)? {
-            abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-            ctx.emitter.label(&done);
+    let mixed = matches!(ty, PhpType::Mixed | PhpType::Union(_));
+    // TEMP-AB-SWITCH
+    if std::env::var_os("ELEPHC_NO_RETIRE_HELPER").is_some() {
+        let done = ctx.next_label("release_local_slot_done");
+        abi::load_at_offset(ctx.emitter, result, offset);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        if mixed {
+            if mixed_local_slot_is_statically_destructor_free(ctx, slot)? {
+                abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+                ctx.emitter.label(&done);
+                return Ok(());
+            }
+            emit_mixed_local_slot_retirement(ctx, &done);
             return Ok(());
         }
-        emit_mixed_local_slot_retirement(ctx, &done);
+        abi::emit_decref_preserving_exception(ctx.emitter, ty);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
+        ctx.emitter.label(&done);
         return Ok(());
     }
-    abi::emit_decref_preserving_exception(ctx.emitter, ty);
+    if mixed && mixed_local_slot_is_statically_destructor_free(ctx, slot)? {
+        let done = ctx.next_label("release_local_slot_done");
+        abi::load_at_offset(ctx.emitter, result, offset);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        ctx.emitter.label(&done);
+        return Ok(());
+    }
+    // The shared retirement helpers clear the slot, release its value through the bounded path
+    // and return the newly-caught flag: four instructions here instead of up to twenty.
+    let target = ctx.emitter.target;
+    abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(target, 0), offset);
+    if mixed {
+        abi::emit_call_label(ctx.emitter, "__rt_retire_mixed_slot");
+    } else {
+        let Some(entry) = abi::refcount_release_helper(ty) else {
+            return Ok(());
+        };
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), entry);
+        abi::emit_call_label(ctx.emitter, "__rt_retire_slot");
+    }
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
-    ctx.emitter.label(&done);
     Ok(())
 }
 
@@ -596,10 +654,12 @@ fn mixed_value_is_statically_destructor_free(
     let Some(inst) = instruction_for_value(ctx, value)? else {
         return Ok(false);
     };
-    if super::super::stack_numeric::numeric_value(ctx.function, &ctx.numeric_values, value) {
+    if super::super::stack_numeric::numeric_value(&ctx.numeric_values, value, |values| {
+        ctx.proves_numeric(values)
+    }) {
         return Ok(true);
     }
-    if matches!(inst.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow) {
+    if matches!(inst.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow | Op::ICheckedDiv) {
         return Ok(true);
     }
     if matches!(inst.op, Op::Acquire | Op::Borrow | Op::Move | Op::Cast | Op::MixedBox | Op::MixedClone) {
@@ -744,7 +804,7 @@ fn store_value_to_raw_ref_cell_as(
         ctx.emitter.comment("transfer acquired ref-cell payload into Mixed storage");
         emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
     } else {
-        coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
+        coerce_ref_cell_store_value(ctx, value, &source_ty, &target_ty)?;
     }
     let retires_previous = previous == RefCellStorePrevious::Retire
         && (matches!(target_ty, PhpType::Str | PhpType::Callable) || target_ty.is_refcounted());
@@ -867,6 +927,7 @@ fn pop_ref_cell_store_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
 /// Converts the current result registers to the target shape needed by a ref-cell store.
 pub(super) fn coerce_ref_cell_store_value(
     ctx: &mut FunctionContext<'_>,
+    value: ValueId,
     source_ty: &PhpType,
     target_ty: &PhpType,
 ) -> Result<()> {
@@ -875,7 +936,12 @@ pub(super) fn coerce_ref_cell_store_value(
     let target_ty = target_ty.codegen_repr();
     if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
         // The declared type, so a `?ptr<T>` boxes address 0 as PHP null.
-        emit_box_current_value_as_mixed(ctx.emitter, declared_source_ty);
+        let box_ty = crate::types::mixed_box_php_type(declared_source_ty);
+        if ctx.value_can_own_mixed_box_source(value)? {
+            emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
+        } else {
+            emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        }
         return Ok(());
     }
     if target_ty == PhpType::TaggedScalar {
@@ -965,8 +1031,20 @@ pub(super) fn coerce_ref_cell_store_value(
                 return Ok(());
             }
             PhpType::Str => {
+                // The store consumes the boxed operand like the scalar arms above: cast, then
+                // release the box. A string payload comes back as a fresh persisted copy, so the
+                // box's own string goes with it. Keeping the box leaked it and that copy on every
+                // `$file = $trace[$i]['file']` through a `string &$file` parameter.
                 move_int_result_to_first_arg(ctx);
+                let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+                abi::emit_push_reg(ctx.emitter, arg_reg);
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+                abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+                let result_reg = abi::int_result_reg(ctx.emitter);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+                pop_ref_cell_store_value(ctx, &PhpType::Str);
+                abi::emit_release_temporary_stack(ctx.emitter, 16);
                 return Ok(());
             }
             _ => {}

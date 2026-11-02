@@ -2,7 +2,7 @@
 title: "imageinterlace()"
 description: "Reads or sets whether an image is written interlaced."
 sidebar:
-  order: 522
+  order: 535
 ---
 
 ## imageinterlace()

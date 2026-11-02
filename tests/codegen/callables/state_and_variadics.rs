@@ -170,6 +170,64 @@ counter();
     assert_eq!(implicit, explicit);
 }
 
+/// Verifies untyped static locals preserve null and later heap-backed value representations.
+#[test]
+fn test_static_local_boxes_values_that_change_representation() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticBox {
+    public string $value;
+
+    public function __construct(string $value) {
+        $this->value = $value;
+    }
+}
+
+function cachedCallable(): callable {
+    static $callback;
+    return $callback ??= static fn (): string => 'called';
+}
+
+function cachedObject(): StaticBox {
+    static $object = null;
+    if ($object === null) {
+        $object = new StaticBox('object');
+    }
+    return $object;
+}
+
+function cachedArray(): mixed {
+    static $values = [];
+    if (!$values) {
+        $values = [1, 'two'];
+    }
+    return $values;
+}
+
+$values = cachedArray();
+echo (cachedCallable())(), ':', cachedObject()->value, ':', $values[0], ':', $values[1];
+"#,
+    );
+    assert_eq!(out, "called:object:1:two");
+}
+
+/// Verifies a persistent associative static slot accepts a more precise string-keyed initializer
+/// while retaining the generic associative-array storage representation across calls.
+#[test]
+fn test_static_local_accepts_precise_assoc_initializer() {
+    let out = compile_and_run(
+        r#"<?php
+function offsetFor(string $name): int {
+    static $offsets = ["left" => 3, "right" => 7];
+    return $offsets[$name];
+}
+
+echo offsetFor("left"), ":", offsetFor("right"), ":", offsetFor("left");
+"#,
+    );
+    assert_eq!(out, "3:7:3");
+}
+
 /// Verifies that a static variable inside a closure links and persists across calls.
 #[test]
 fn test_closure_static_local_preserves_value_across_calls() {
@@ -752,6 +810,557 @@ echo count($c);
     assert_eq!(out, "3");
 }
 
+/// Verifies gradual indexed-array values are checked and unboxed before argument unpacking.
+#[test]
+fn test_gradual_array_spread_into_dynamic_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_pair(bool $present): mixed {
+    return $present ? ['left', 'right'] : null;
+}
+
+class GradualSpreadReceiver {
+    public function join(string $left, string $right): string {
+        return $left . ':' . $right;
+    }
+}
+
+$receiver = new GradualSpreadReceiver();
+$method = 'join';
+echo $receiver->{$method}(...gradual_pair(true));
+"#,
+    );
+    assert_eq!(out, "left:right");
+}
+
+/// Verifies a gradual argument container preserves its runtime keys for a known method call.
+#[test]
+fn test_gradual_array_spread_into_known_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_named_pair(bool $present): mixed {
+    return $present ? ['right' => 'R', 'left' => 'L'] : null;
+}
+
+class KnownSpreadReceiver {
+    public function join(string $left, string $right): string {
+        return $left . ':' . $right;
+    }
+}
+
+$receiver = new KnownSpreadReceiver();
+echo $receiver->join(...gradual_named_pair(true));
+"#,
+    );
+    assert_eq!(out, "L:R");
+}
+
+/// Verifies a fixed-ABI parent call expands the caller's runtime argument array.
+#[test]
+fn test_func_get_args_spread_into_parent_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+class SpreadParent {
+    public function join(string $first, ?string $second = null, bool $upper = false): string {
+        $value = $first . ':' . ($second ?? 'none');
+        return $upper ? strtoupper($value) : $value;
+    }
+}
+
+class SpreadChild extends SpreadParent {
+    public function join(string $first, ?string $second = null, bool $upper = false): string {
+        $args = func_get_args();
+        return parent::join(...$args);
+    }
+}
+
+echo (new SpreadChild())->join('left', 'right', true);
+"#,
+    );
+    assert_eq!(out, "LEFT:RIGHT");
+}
+
+/// Verifies that a parent import reached through `func_get_args()` retains a private inherited
+/// directory property when the same loader is held by a typed configurator property.
+#[test]
+fn test_parent_spread_import_retains_inherited_private_loader_directory() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseLoader {
+    private ?string $currentDir = null;
+
+    public function setCurrentDir(string $directory): void {
+        $this->currentDir = $directory;
+    }
+
+    public function import(mixed $resource, ?string $type = null, bool|string $ignoreErrors = false, ?string $source = null, mixed $exclude = null): string {
+        return $this->doImport($resource, $type, $ignoreErrors, $source, $exclude);
+    }
+
+    private function doImport(mixed $resource, ?string $type, bool|string $ignoreErrors, ?string $source, mixed $exclude): string {
+        return $this->currentDir . ':' . $resource;
+    }
+}
+
+class ChildLoader extends BaseLoader {
+    public function import(mixed $resource, ?string $type = null, bool|string $ignoreErrors = false, ?string $source = null, mixed $exclude = null): string {
+        $arguments = func_get_args();
+
+        return parent::import(...$arguments);
+    }
+}
+
+class Configurator {
+    public function __construct(private ChildLoader $loader, private string $path) {}
+
+    public function import(string $resource): string {
+        $this->loader->setCurrentDir(dirname($this->path));
+
+        return $this->loader->import($resource, null, false, $this->path);
+    }
+}
+
+echo (new Configurator(new ChildLoader(), '/project/Kernel/Bundle.php'))->import('Resources/config/services.php');
+"#,
+    );
+    assert_eq!(out, "/project/Kernel:Resources/config/services.php");
+}
+
+/// Verifies that interface resolution and an `instanceof` narrowing preserve the selected
+/// loader instance before a typed configurator forwards a parent spread import.
+#[test]
+fn test_resolved_loader_identity_survives_instanceof_before_parent_spread_import() {
+    let out = compile_and_run(
+        r#"<?php
+interface ResolvedLoaderInterface {}
+
+interface ResolvedLoaderResolverInterface {
+    public function resolve(string $file): ResolvedLoaderInterface;
+}
+
+class ResolvedBaseLoader {
+    private ?string $currentDir = null;
+
+    public function setCurrentDir(string $directory): void {
+        $this->currentDir = $directory;
+    }
+
+    public function import(mixed $resource, ?string $type = null, bool|string $ignoreErrors = false, ?string $source = null, mixed $exclude = null): string {
+        return $this->currentDir . ':' . $resource;
+    }
+}
+
+class ResolvedChildLoader extends ResolvedBaseLoader implements ResolvedLoaderInterface {
+    public function import(mixed $resource, ?string $type = null, bool|string $ignoreErrors = false, ?string $source = null, mixed $exclude = null): string {
+        $arguments = func_get_args();
+
+        return parent::import(...$arguments);
+    }
+}
+
+class ResolvedLoaderResolver implements ResolvedLoaderResolverInterface {
+    public function __construct(private ResolvedChildLoader $loader) {}
+
+    public function resolve(string $file): ResolvedLoaderInterface {
+        return $this->loader;
+    }
+}
+
+class ResolvedConfigurator {
+    public function __construct(private ResolvedChildLoader $loader, private string $path) {}
+
+    public function import(string $resource): string {
+        $this->loader->setCurrentDir(dirname($this->path));
+
+        return $this->loader->import($resource, null, false, $this->path);
+    }
+}
+
+class ResolvedBootstrap {
+    public function __construct(private ResolvedLoaderResolverInterface $resolver) {}
+
+    public function load(string $file): string {
+        $loader = $this->resolver->resolve($file);
+        if (!$loader instanceof ResolvedChildLoader) {
+            return 'unexpected-loader';
+        }
+        $loader->setCurrentDir(dirname($file));
+
+        return (new ResolvedConfigurator($loader, $file))->import('Resources/config/services.php');
+    }
+}
+
+$loader = new ResolvedChildLoader();
+echo (new ResolvedBootstrap(new ResolvedLoaderResolver($loader)))->load('/project/Kernel/Bundle.php');
+"#,
+    );
+    assert_eq!(out, "/project/Kernel:Resources/config/services.php");
+}
+
+/// Verifies a closure argument receives the newly configured loader object without substituting
+/// another resolver-owned instance before it forwards a parent spread import.
+#[test]
+fn test_closure_callback_preserves_resolved_loader_for_parent_spread_import() {
+    let out = compile_and_run(
+        r#"<?php
+interface CallbackLoaderInterface {}
+
+interface CallbackLoaderResolverInterface {
+    public function resolve(string $file): CallbackLoaderInterface;
+}
+
+class CallbackBaseLoader {
+    private ?string $currentDir = null;
+
+    public function setCurrentDir(string $directory): void {
+        $this->currentDir = $directory;
+    }
+
+    public function import(mixed $resource, ?string $type = null, bool|string $ignoreErrors = false, ?string $source = null, mixed $exclude = null): string {
+        return $this->currentDir . ':' . $resource;
+    }
+}
+
+class CallbackChildLoader extends CallbackBaseLoader implements CallbackLoaderInterface {
+    public function import(mixed $resource, ?string $type = null, bool|string $ignoreErrors = false, ?string $source = null, mixed $exclude = null): string {
+        $arguments = func_get_args();
+
+        return parent::import(...$arguments);
+    }
+}
+
+class CallbackLoaderResolver implements CallbackLoaderResolverInterface {
+    public function __construct(private CallbackChildLoader $loader) {}
+
+    public function resolve(string $file): CallbackLoaderInterface {
+        return $this->loader;
+    }
+}
+
+class CallbackConfigurator {
+    public function __construct(private CallbackChildLoader $loader, private string $path) {}
+
+    public function import(string $resource): string {
+        $this->loader->setCurrentDir(dirname($this->path));
+
+        return $this->loader->import($resource, null, false, $this->path);
+    }
+}
+
+class CallbackBootstrap {
+    public function __construct(private CallbackLoaderResolverInterface $resolver) {}
+
+    public function load(Closure $callback, string $file): string {
+        $loader = $this->resolver->resolve($file);
+        if (!$loader instanceof CallbackChildLoader) {
+            return 'unexpected-loader';
+        }
+        $loader->setCurrentDir(dirname($file));
+
+        return $callback(new CallbackConfigurator($loader, $file));
+    }
+}
+
+$loader = new CallbackChildLoader();
+$callback = static fn (CallbackConfigurator $configurator): string => $configurator->import('Resources/config/services.php');
+echo (new CallbackBootstrap(new CallbackLoaderResolver($loader)))->load($callback, '/project/Kernel/Bundle.php');
+"#,
+    );
+    assert_eq!(out, "/project/Kernel:Resources/config/services.php");
+}
+
+/// Verifies captured closure invocation preserves its freshly constructed configurator argument
+/// when the closure also captures an array, an object, and its owning object instance.
+#[test]
+fn test_captured_closure_keeps_configured_loader_for_parent_spread_import() {
+    let out = compile_and_run(
+        r#"<?php
+interface CapturedLoaderInterface {}
+
+interface CapturedLoaderResolverInterface {
+    public function resolve(string $file): CapturedLoaderInterface;
+}
+
+class CapturedContainer {}
+
+class CapturedBaseLoader {
+    private ?string $currentDir = null;
+
+    public function setCurrentDir(string $directory): void {
+        $this->currentDir = $directory;
+    }
+
+    public function import(mixed $resource, ?string $type = null, bool|string $ignoreErrors = false, ?string $source = null, mixed $exclude = null): string {
+        return $this->currentDir . ':' . $resource;
+    }
+}
+
+class CapturedChildLoader extends CapturedBaseLoader implements CapturedLoaderInterface {
+    protected array $instanceof = [];
+
+    public function import(mixed $resource, ?string $type = null, bool|string $ignoreErrors = false, ?string $source = null, mixed $exclude = null): string {
+        $arguments = func_get_args();
+
+        return parent::import(...$arguments);
+    }
+}
+
+class CapturedLoaderResolver implements CapturedLoaderResolverInterface {
+    public function __construct(private CapturedChildLoader $loader) {}
+
+    public function resolve(string $file): CapturedLoaderInterface {
+        return $this->loader;
+    }
+}
+
+class CapturedConfigurator {
+    private array $instanceof;
+
+    public function __construct(
+        private CapturedContainer $container,
+        private CapturedChildLoader $loader,
+        array &$instanceof,
+        private string $path,
+        private string $file,
+        private ?string $env = null,
+    ) {
+        $this->instanceof = &$instanceof;
+    }
+
+    public function import(string $resource): string {
+        $this->loader->setCurrentDir(dirname($this->path));
+
+        return $this->loader->import($resource, null, false, $this->file);
+    }
+}
+
+interface CapturedSubjectInterface {
+    public function loadExtension(array $config, CapturedConfigurator $configurator, CapturedContainer $container): void;
+}
+
+class CapturedSubject implements CapturedSubjectInterface {
+    public function loadExtension(array $config, CapturedConfigurator $configurator, CapturedContainer $container): void {
+        echo $configurator->import('Resources/config/services.php');
+    }
+}
+
+class CapturedBootstrap {
+    private array $instanceof = [];
+
+    public function __construct(
+        private CapturedLoaderResolverInterface $resolver,
+        private CapturedSubjectInterface $subject,
+    ) {}
+
+    public function load(string $file): void {
+        $config = ['environment' => 'dev'];
+        $container = new CapturedContainer();
+        $callback = function (CapturedConfigurator $configurator) use ($config, $container): void {
+            $this->subject->loadExtension($config, $configurator, $container);
+        };
+
+        $this->execute($callback, $container, $file);
+    }
+
+    private function execute(Closure $callback, CapturedContainer $container, string $file): void {
+        $loader = $this->resolver->resolve($file);
+        if (!$loader instanceof CapturedChildLoader) {
+            echo 'unexpected-loader';
+
+            return;
+        }
+        $loader->setCurrentDir(dirname($file));
+        $instanceof = &\Closure::bind(fn &() => $this->instanceof, $loader, $loader)();
+
+        try {
+            $callback(new CapturedConfigurator($container, $loader, $instanceof, $file, $file));
+        } finally {
+            $instanceof = [];
+        }
+    }
+}
+
+$first = new CapturedBootstrap(new CapturedLoaderResolver(new CapturedChildLoader()), new CapturedSubject());
+$second = new CapturedBootstrap(new CapturedLoaderResolver(new CapturedChildLoader()), new CapturedSubject());
+$first->load('/first/Kernel/Bundle.php');
+echo '|';
+$second->load('/second/Kernel/Bundle.php');
+"#,
+    );
+    assert_eq!(
+        out,
+        "/first/Kernel:Resources/config/services.php|/second/Kernel:Resources/config/services.php"
+    );
+}
+
+/// Verifies that `instanceof self` recognises a child loader returned through an interface before
+/// a parent spread import applies its configured relative-resource directory.
+#[test]
+fn test_parent_import_instanceof_self_accepts_interface_resolved_child_loader() {
+    let out = compile_and_run(
+        r#"<?php
+interface InterfaceResolvedLoader {}
+
+interface InterfaceResolvedLoaderResolver {
+    public function resolve(mixed $resource): InterfaceResolvedLoader;
+}
+
+class InterfaceResolvedParentLoader {
+    private ?string $currentDir = null;
+    private InterfaceResolvedLoaderResolver $resolver;
+
+    public function setResolver(InterfaceResolvedLoaderResolver $resolver): void {
+        $this->resolver = $resolver;
+    }
+
+    public function setCurrentDir(string $directory): void {
+        $this->currentDir = $directory;
+    }
+
+    public function resolve(mixed $resource, ?string $type = null): InterfaceResolvedLoader {
+        return $this->resolver->resolve($resource);
+    }
+
+    public function import(mixed $resource, ?string $type = null, bool $ignoreErrors = false, ?string $sourceResource = null, string|array|null $exclude = null): string {
+        return $this->doImport($resource, $type);
+    }
+
+    private function doImport(mixed $resource, ?string $type): string {
+        $loader = $this->resolve($resource, $type);
+        if (!$loader instanceof self) {
+            return 'not-self';
+        }
+        if (null !== $this->currentDir) {
+            $resource = $this->currentDir . '/' . $resource;
+        }
+
+        return $loader->load($resource, $type);
+    }
+
+    public function load(mixed $resource, ?string $type = null): string {
+        return $resource;
+    }
+}
+
+class InterfaceResolvedIntermediateLoader extends InterfaceResolvedParentLoader {}
+
+class InterfaceResolvedChildLoader extends InterfaceResolvedIntermediateLoader implements InterfaceResolvedLoader {
+    public function import(mixed $resource, ?string $type = null, bool|string $ignoreErrors = false, ?string $sourceResource = null, $exclude = null): string {
+        $arguments = func_get_args();
+
+        return parent::import(...$arguments);
+    }
+}
+
+class InterfaceResolvedResolver implements InterfaceResolvedLoaderResolver {
+    public function __construct(private InterfaceResolvedLoader $loader) {}
+
+    public function resolve(mixed $resource): InterfaceResolvedLoader {
+        return $this->loader;
+    }
+}
+
+$loader = new InterfaceResolvedChildLoader();
+$loader->setResolver(new InterfaceResolvedResolver($loader));
+$loader->setCurrentDir('/project/Kernel');
+echo $loader->import('Resources/config/services.php', null, false, '/project/Kernel/Bundle.php', null);
+"#,
+    );
+    assert_eq!(out, "/project/Kernel/Resources/config/services.php");
+}
+
+/// Verifies interface dispatch selects `supports()` rather than `load()` while a parent private
+/// import helper resolves a descendant loader and forwards its complete runtime argument list.
+#[test]
+fn test_interface_loader_supports_dispatch_keeps_parent_relative_import_path() {
+    let out = compile_and_run(
+        r#"<?php
+interface DispatchLoaderInterface {
+    public function load(mixed $resource, ?string $type = null): mixed;
+    public function supports(mixed $resource, ?string $type = null): bool;
+}
+
+class DispatchLoaderResolver {
+    public function __construct(private DispatchLoaderInterface $loader) {}
+
+    public function resolve(mixed $resource, ?string $type = null): DispatchLoaderInterface|false {
+        if ($this->loader->supports($resource, $type)) {
+            return $this->loader;
+        }
+
+        return false;
+    }
+}
+
+abstract class DispatchParentLoader implements DispatchLoaderInterface {
+    private DispatchLoaderResolver $resolver;
+    private string $currentDir = '';
+
+    public function setResolver(DispatchLoaderResolver $resolver): void {
+        $this->resolver = $resolver;
+    }
+
+    public function setCurrentDir(string $directory): void {
+        $this->currentDir = $directory;
+    }
+
+    public function resolve(mixed $resource, ?string $type = null): DispatchLoaderInterface|false {
+        if ($this->supports($resource, $type)) {
+            return $this;
+        }
+
+        return $this->resolver->resolve($resource, $type);
+    }
+
+    public function import(mixed $resource, ?string $type = null, bool $ignoreErrors = false, ?string $sourceResource = null, string|array|null $exclude = null): mixed {
+        return $this->doImport($resource, $type, $ignoreErrors, $sourceResource, $exclude);
+    }
+
+    private function doImport(mixed $resource, ?string $type, bool $ignoreErrors, ?string $sourceResource, string|array|null $exclude): mixed {
+        $loader = $this->resolve($resource, $type);
+        if (false === $loader) {
+            return 'not-resolved';
+        }
+        if ('' !== $this->currentDir) {
+            $resource = $this->currentDir . '/' . $resource;
+        }
+
+        return $loader->load($resource, $type);
+    }
+}
+
+class DispatchChildLoader extends DispatchParentLoader {
+    public function import(mixed $resource, ?string $type = null, bool|string $ignoreErrors = false, ?string $sourceResource = null, $exclude = null): mixed {
+        $arguments = func_get_args();
+
+        return parent::import(...$arguments);
+    }
+
+    public function load(mixed $resource, ?string $type = null): mixed {
+        echo 'load:' . $resource . ';';
+
+        return 'loaded';
+    }
+
+    public function supports(mixed $resource, ?string $type = null): bool {
+        echo 'supports:' . $resource . ';';
+
+        return true;
+    }
+}
+
+$loader = new DispatchChildLoader();
+$loader->setResolver(new DispatchLoaderResolver($loader));
+$loader->setCurrentDir('/project/Kernel');
+echo $loader->import('Resources/config/services.php', null, false, '/project/Kernel/Bundle.php', null);
+"#,
+    );
+    assert_eq!(
+        out,
+        "supports:Resources/config/services.php;load:/project/Kernel/Resources/config/services.php;loaded"
+    );
+}
+
 /// Regression for #354: spread of an associative array into a new array literal flattens its
 /// string-keyed entries instead of inserting the source as a single nested value.
 #[test]
@@ -774,6 +1383,21 @@ $b = [...$a];
 foreach ($b as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
 "#);
     assert_eq!(out, "[0:a][x:b]");
+}
+
+/// Verifies array unpack accepts Traversable sources, reindexing integer keys and preserving strings.
+#[test]
+fn test_spread_iterable_mixed_keys() {
+    let out = compile_and_run(r#"<?php
+function values(): iterable {
+    yield 7 => 'a';
+    yield 'x' => 'b';
+    yield 3 => 'c';
+}
+$spread = ['z', ...values()];
+foreach ($spread as $key => $value) { echo '[' . $key . ':' . $value . ']'; }
+"#);
+    assert_eq!(out, "[0:z][1:a][x:b][2:c]");
 }
 
 /// Regression for #354: later spread operands overwrite earlier ones on string-key collision.
@@ -852,6 +1476,27 @@ echo sum(1, 2, 3, 4);
 "#,
     );
     assert_eq!(out, "10");
+}
+
+/// Verifies a typed method variadic preserves its integer element type through `foreach`.
+#[test]
+fn test_typed_method_variadic_foreach_keeps_element_type() {
+    let out = compile_and_run(
+        r#"<?php
+class VariadicCodePointProbe {
+    public static function fold(int ...$codes): int {
+        $sum = 0;
+        foreach ($codes as $code) {
+            $code %= 100;
+            $sum += $code;
+        }
+        return $sum;
+    }
+}
+echo VariadicCodePointProbe::fold(101, 202, 303);
+"#,
+    );
+    assert_eq!(out, "6");
 }
 
 /// Verifies a typed `string ...$parts` variadic joins its string arguments.
@@ -1126,4 +1771,72 @@ echo $total, "\n";
     assert!(out.success, "stderr: {}", out.stderr);
     assert_eq!(out.stdout, "10060\n");
     assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies a callable can be narrowed against an unrelated interface without backend refusal.
+#[test]
+fn test_callable_parameter_supports_object_interface_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+interface HandlerMarker {}
+
+function selectHandler(callable $candidate): ?HandlerMarker {
+    return $candidate instanceof HandlerMarker ? $candidate : null;
+}
+
+$selected = selectHandler(static function (): void {});
+echo $selected === null ? "none" : "handler";
+"#,
+    );
+    assert_eq!(out, "none");
+}
+
+/// By-value parameters that receive reference markers (`call_user_func_array($f, [&$a])`) get the
+/// referenced value: a raw string, an array, a boxed object, and named entries. The conversion
+/// is the shared `__rt_invoker_ref_cell_to_mixed` helper rather than per-argument inline code.
+#[test]
+fn test_invoker_by_value_parameters_read_reference_markers() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function twice(int $x): int { return $x * 2; }
+function label(string $s, $m): string { return $s . ':' . (is_array($m) ? count($m) : $m); }
+function label2(string $s, $m): string { return $s . "=" . $m; }
+$a = 5;
+$s = "abc" . mt_rand(1, 1);
+$m = [1, 2, 3];
+$o = new stdClass();
+$o->v = 7;
+for ($i = 0; $i < 2; $i++) {
+    echo call_user_func_array('twice', [&$a]), "|";
+    echo call_user_func_array('label', [&$s, &$m]), "|";
+    $mixed = $i ? $o : 'x';
+    echo call_user_func_array(fn($v) => is_object($v) ? $v->v : $v, [&$mixed]), "|";
+    echo call_user_func_array('label2', ['m' => &$a, 's' => &$s]), "\n";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "10|abc1:3|x|abc1=5\n10|abc1:3|7|abc1=5\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A `mixed` value bound to a `callable` parameter is NORMALIZED, so every callable spelling it
+/// can hold reaches the callee as a working descriptor, and the normalized descriptor is released
+/// after each call. A bare unbox read a boxed `null` as a descriptor and segfaulted, and leaked
+/// one block per call for a boxed closure.
+#[test]
+fn test_mixed_argument_bound_to_a_callable_parameter_is_normalized_and_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class K { function m($x) { return "m$x"; } }
+function call(callable $c, $a) { return $c($a); }
+function forward(mixed $v, $a) { return call($v, $a); }
+echo forward("strtoupper", "ab"), "|", forward([new K, "m"], 1), "|", forward(fn($x) => $x * 2, 4), "\n";
+for ($i = 0; $i < 20; $i++) { forward(fn($x) => $x, 1); forward("strrev", "xy"); }
+echo "ok";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "AB|m1|8\nok");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

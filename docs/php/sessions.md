@@ -431,10 +431,11 @@ standalone server binary.
   text (e.g. `session_start(): Ignoring session_start() because a session is already
   active`, `session_id(): Session ID cannot be changed when a session is active`) to
   the worker's stderr via `trigger_error()`. `error_log()` and `trigger_error()` are
-  available under `--web`: `trigger_error()` renders `"<Prefix>: <message>"` to stderr,
-  and `error_log()` supports the stderr channel (`message_type` 0) and file appends
-  (`message_type` 3); the mail channel (`message_type` 1) is unsupported and returns
-  `false`. There is no `error_reporting`/`display_errors` layer, so these messages are
+  available in EVERY SAPI, not just `--web`: `trigger_error()` renders
+  `"<Prefix>: <message>"` to stderr, and `error_log()` supports the stderr channel
+  (`message_type` 0) and file appends (`message_type` 3); the mail channel
+  (`message_type` 1) is unsupported and returns `false`. There is no
+  `error_reporting`/`display_errors` layer, so these messages are
   always written. PHP's "headers already sent" warning genuinely cannot occur because
   output is buffered until the request completes.
 

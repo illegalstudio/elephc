@@ -139,6 +139,7 @@ pub(crate) use host_directory_process::{
     lower_gethostbyaddr, lower_getprotobyname, lower_getprotobynumber, lower_getservbyname,
     lower_getservbyport, lower_opendir, lower_readdir, lower_closedir,
     lower_rewinddir, lower_popen, lower_pclose, lower_fsockopen,
+    lower_elephc_stream_fd, lower_elephc_fd_to_stream,
     lower_file, lower_realpath, lower_realpath_cache_get, lower_realpath_cache_size,
 };
 pub(crate) use phar_write::{

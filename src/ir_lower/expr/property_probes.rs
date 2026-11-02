@@ -30,8 +30,17 @@ pub(super) fn property_can_be_uninitialized(
     property: &str,
 ) -> bool {
     let object_ty = ctx.builder.value_php_type(object);
-    let Some(class_name) = property_probe_object_class(&object_ty) else {
+    // A statically-null receiver has no slot to probe; the plain read answers null for it.
+    if matches!(object_ty, PhpType::Void) {
         return false;
+    }
+    let Some(class_name) = property_probe_object_class(&object_ty) else {
+        // No single receiver class to name a slot in: an untyped parameter, a `mixed` local, a
+        // union of two classes. `Op::PropInitialized` dispatches on the runtime class instead and
+        // answers "initialized" for every shape it cannot settle, so the ordinary read still
+        // happens wherever it used to. Turning this away sent `$untyped->typedProp ?? "d"` to the
+        // plain read, which fatals where PHP answers the default.
+        return !matches!(object_ty.codegen_repr(), PhpType::Object(_));
     };
     let Some(info) = ctx.classes.get(class_name) else {
         return false;
@@ -180,7 +189,9 @@ pub(super) fn lower_initialized_property_value(
         crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
         unboxed
     } else { object };
-    let read_value = lower_property_get_from_value(ctx, read_object, property, Op::PropGet, expr);
+    let read_value = super::property_access::lower_initialized_slot_read_in_mode(
+        ctx, read_object, property, PropertyFetchMode::Coalesce, expr,
+    );
     // Both arms store into one Mixed temporary, so a slot that is not already boxed has to be.
     let read_value = if matches!(
         ctx.builder.value_php_type(read_value.value).codegen_repr(),

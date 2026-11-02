@@ -90,7 +90,7 @@ pub(super) fn acquire_callback_descriptor(
             callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
         }
         _ => {
-            ctx.shared.callable_argument_normalizer = true;
+            ctx.shared.require_callable_argument_normalizer();
             abi::emit_temporary_stack_address(ctx.emitter, result, 32);
             abi::emit_call_label(ctx.emitter, callable_argument_normalizer::CALLABLE_ARGUMENT_NORMALIZER);
         }

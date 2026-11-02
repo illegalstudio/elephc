@@ -9,7 +9,7 @@
 //! Key details:
 //! - User functions, builtins, externs, and callable aliases must share the same argument semantics.
 
-mod call_validation;
+pub(super) mod call_validation;
 mod param_binding;
 mod reference_outputs;
 mod array_push_values;

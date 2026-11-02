@@ -207,7 +207,7 @@ const PCRE2_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 2_792_969,
         body_limit: 32 * 1024 * 1024,
     },
-    recipe_revision: 7,
+    recipe_revision: 12,
     dependencies: &[],
     supported_targets: TARGETS,
     ordered_link_outputs: PCRE2_ARCHIVES,
@@ -503,6 +503,33 @@ mod tests {
         assert_eq!(version.source.sha256, "c08ae2388ef333e8403e670ad70c0a11f1eed021fd88308d7e02f596fcd9dc16");
         assert_eq!(version.ordered_link_outputs, PCRE2_ARCHIVES);
         assert_eq!(version.supported_targets, TARGETS);
+    }
+
+    /// The PHP-visible `PCRE_VERSION` constants must describe the PCRE2 that is actually linked.
+    ///
+    /// A compiled binary has no shared libpcre2 to interrogate at run time, so
+    /// `crates/elephc-builtin-contract/src/catalog_constants.rs` bakes the three PCRE constants in,
+    /// and the only value that is not a fiction is the pinned tarball's. A program branching on
+    /// the version -- `symfony/polyfill-intl-grapheme` selects `\X` at
+    /// `(float) PCRE_VERSION >= 10.44` -- would otherwise be told about a library that is not in
+    /// the binary. Bumping this catalogue entry without bumping the constants fails here.
+    #[test]
+    fn pcre_version_constant_matches_the_pinned_native_dependency() {
+        let pinned = version("pcre2", None).expect("catalogue entry").version;
+        let constant = elephc_builtin_contract::constants()
+            .iter()
+            .find(|constant| constant.name == "PCRE_VERSION")
+            .expect("PCRE_VERSION is a predefined constant");
+        let elephc_builtin_contract::ConstValue::Str(reported) = constant.value else {
+            panic!("PCRE_VERSION must be a string, as php's is");
+        };
+        let (number, _date) = reported
+            .split_once(' ')
+            .unwrap_or_else(|| panic!("PCRE_VERSION {reported:?} has no release date"));
+        assert_eq!(
+            number, pinned,
+            "PCRE_VERSION {reported:?} describes a different PCRE2 than the pinned {pinned}"
+        );
     }
 
     /// Verifies the official zlib source identity and static archive contract.

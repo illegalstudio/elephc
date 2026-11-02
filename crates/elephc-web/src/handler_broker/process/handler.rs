@@ -92,10 +92,13 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
     if seconds > 0 {
         libc::alarm(seconds);
     }
+    crate::request_env::capture_baseline();
     handler();
     if seconds > 0 {
         libc::alarm(0);
     }
+    // A pool child serves many requests: undo this one's putenv()s, as php does.
+    crate::request_env::restore_baseline();
     // Unconditional and idempotent, as in the default worker: a request that
     // started no slice ends none, and consecutive profiled requests stay
     // separate captures. A pool child serves many requests, so leaving a slice

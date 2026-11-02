@@ -14,8 +14,8 @@ const PREG_REPLACE_NMATCH: usize = 100;
 
 /// __rt_preg_replace: replace all regex matches in subject string.
 /// Input:  x1=pattern ptr, x2=pattern len, x3=replacement ptr, x4=replacement len,
-///         x5=subject ptr, x6=subject len
-/// Output: x1=result ptr, x2=result len
+///         x5=subject ptr, x6=subject len, x7=replacement limit
+/// Output: x1=result ptr, x2=result len, x3=replacement count
 pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     let cap = emitter.concat_capacity;
     if emitter.target.arch == Arch::X86_64 {
@@ -33,7 +33,9 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     let replacement_len_off = replacement_ptr_off + 8;
     let subject_ptr_off = replacement_len_off + 8;
     let subject_len_off = subject_ptr_off + 8;
-    let flags_off = subject_len_off + 8;
+    let limit_off = subject_len_off + 8;
+    let count_off = limit_off + 8;
+    let flags_off = count_off + 8;
     let pattern_cstr_off = flags_off + 8;
     let subject_cstr_off = pattern_cstr_off + 8;
     let output_start_off = subject_cstr_off + 8;
@@ -61,6 +63,8 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x4, [sp, #{}]", replacement_len_off));    // replacement len
     emitter.instruction(&format!("str x5, [sp, #{}]", subject_ptr_off));        // subject ptr
     emitter.instruction(&format!("str x6, [sp, #{}]", subject_len_off));        // subject len
+    emitter.instruction(&format!("str x7, [sp, #{}]", limit_off));              // replacement limit
+    emitter.instruction(&format!("str xzr, [sp, #{}]", count_off));             // initialize replacement count
 
     // -- strip delimiters from pattern --
     emitter.instruction("bl __rt_preg_strip");                                  // → x1, x2, x3=flags
@@ -106,6 +110,8 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
 
     // -- replacement loop --
     emitter.label("__rt_preg_replace_loop");
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", limit_off));              // reload replacement limit
+    emitter.instruction("cbz x9, __rt_preg_replace_tail");                      // limit zero copies the remaining subject unchanged
     emitter.instruction(&format!("ldr x1, [sp, #{}]", current_pos_off));        // current pos
     emitter.instruction("ldrb w9, [x1]");                                       // check for end
     emitter.instruction("cbz w9, __rt_preg_replace_done");                      // end of string
@@ -113,8 +119,10 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
     emitter.instruction(&format!("mov x2, #{}", PREG_REPLACE_NMATCH));          // capture full match plus replacement backreference groups
     emitter.instruction(&format!("add x3, sp, #{}", match_pairs_off));          // receive fixed signed-64-bit offset pairs
-    emitter.instruction("mov x4, #0");                                          // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize all requested pairs
+    emitter.instruction("mov x4, x1");                                          // the search cursor inside the whole subject
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off)); // pass the WHOLE subject so lookbehind and anchors see what precedes the cursor
+    emitter.instruction(&format!("ldr x5, [sp, #{}]", subject_len_off)); // pass the whole subject length as the search end
+    emitter.instruction("bl __rt_pcre2_exec_at");                               // match from the cursor; pairs come back relative to it
     emitter.instruction("cbnz x0, __rt_preg_replace_tail");                     // no more matches, copy rest
 
     // -- copy text before match (rm_so bytes) --
@@ -164,6 +172,22 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("cmp x14, x2");                                         // replacement ended after marker ?
     emitter.instruction("b.ge __rt_preg_replace_repl_literal");                 // yes → keep marker literal
     emitter.instruction("ldrb w15, [x1, x14]");                                 // load potential group digit
+    // -- `\\` and `\$` are escapes: php replaces the backslash with the byte after it, so a
+    //    replacement written `'\\\\'` in PHP source produces ONE backslash (php_pcre_replace_impl).
+    //    Symfony's OutputFormatter::escape() relies on it; without it every escaped `<` gained a
+    //    second backslash and the console printed its style tags literally. --
+    emitter.instruction("cmp w13, #92");                                        // is the marker a backslash?
+    emitter.instruction("b.ne __rt_preg_replace_not_escape");                   // `$` never escapes
+    emitter.instruction("cmp w15, #92");                                        // `\\` escapes a backslash
+    emitter.instruction("b.eq __rt_preg_replace_escape");
+    emitter.instruction("cmp w15, #36");                                        // `\$` escapes a dollar
+    emitter.instruction("b.ne __rt_preg_replace_not_escape");
+    emitter.label("__rt_preg_replace_escape");
+    emitter.instruction("strb w15, [x11]");                                     // write the escaped byte alone
+    emitter.instruction("add x11, x11, #1");                                    // advance output
+    emitter.instruction("add x12, x12, #2");                                    // consume the backslash and the escaped byte
+    emitter.instruction("b __rt_preg_replace_repl_copy");                       // continue scanning
+    emitter.label("__rt_preg_replace_not_escape");
     emitter.instruction("sub w15, w15, #48");                                   // convert ASCII digit to group index
     emitter.instruction("cmp w15, #9");                                         // is it 0..9 ?
     emitter.instruction("b.hi __rt_preg_replace_repl_literal");                 // no → keep marker literal
@@ -212,6 +236,15 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     // -- advance past match --
     emitter.label("__rt_preg_replace_advance");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save output write pos
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", count_off));              // reload completed replacement count
+    emitter.instruction("add x9, x9, #1");                                      // count this completed replacement
+    emitter.instruction(&format!("str x9, [sp, #{}]", count_off));              // publish updated replacement count
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", limit_off));              // reload replacement limit
+    emitter.instruction("cmp x9, #0");                                          // negative limits remain unlimited
+    emitter.instruction("b.le __rt_preg_replace_limit_ready");                  // keep unlimited limit unchanged
+    emitter.instruction("sub x9, x9, #1");                                      // consume one allowed replacement
+    emitter.instruction(&format!("str x9, [sp, #{}]", limit_off));              // save remaining replacement limit
+    emitter.label("__rt_preg_replace_limit_ready");
     emitter.instruction(&format!("ldr x9, [sp, #{}]", match_pairs_off + 8));    // load full-match signed-64-bit end
     emitter.instruction("cmp x9, #0");                                          // zero-length match ?
     emitter.instruction("b.gt __rt_preg_replace_advance_ok");                   // non-empty match advances by rm_eo
@@ -259,26 +292,42 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_overflow");
     emitter.instruction("b __rt_concat_overflow");                              // report the oversized result and terminate
 
-    // -- failure: PHP returns null for an invalid pattern --
+    // -- the removed /e modifier is rejected like a failed compile --
     emitter.label("__rt_preg_replace_bad_pattern");
-    emitter.instruction("b __rt_preg_replace_fail");                            // the /e modifier is rejected like a failed compile
+    emitter.instruction("b __rt_preg_replace_fail");                            // same failure path as a pattern PCRE2 cannot compile
+
+    // -- failure: the subject, unchanged, but as a COPY in concat scratch like every other --
+    // -- result: returning the subject itself made the result alias an argument, so the --
+    // -- caller could never release a subject it owned for the call --
     emitter.label("__rt_preg_replace_fail");
-    abi::emit_load_int_immediate(emitter, "x1", crate::codegen_support::sentinels::NULL_SENTINEL);
-    emitter.instruction("mov x2, #0");                                          // null has no payload bytes
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // current concat-buffer offset
+    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    emitter.instruction("add x11, x11, x10");                                   // x11 = where the copy starts
+    emitter.instruction(&format!("ldr x13, [sp, #{}]", subject_ptr_off));       // subject bytes
+    emitter.instruction(&format!("ldr x14, [sp, #{}]", subject_len_off));       // subject length
+    abi::emit_load_int_immediate(emitter, "x12", cap as i64);                   // load the shared scratch capacity
+    emitter.instruction("cmp x10, x12");                                        // is the concat offset already outside the arena?
+    emitter.instruction("b.hi __rt_preg_replace_overflow");                     // fail closed instead of copying past the arena
+    emitter.instruction("sub x12, x12, x10");                                   // remaining bytes before the arena end
+    emitter.instruction("cmp x14, x12");                                        // does the subject copy still fit?
+    emitter.instruction("b.hi __rt_preg_replace_overflow");                     // fail closed instead of copying past the arena
+    emitter.instruction("mov x12, #0");                                         // copy index
+    emitter.label("__rt_preg_replace_fail_copy");
+    emitter.instruction("cmp x12, x14");                                        // every subject byte copied?
+    emitter.instruction("b.hs __rt_preg_replace_fail_copied");
+    emitter.instruction("ldrb w15, [x13, x12]");                                // load one subject byte
+    emitter.instruction("strb w15, [x11, x12]");                                // append it to the scratch result
+    emitter.instruction("add x12, x12, #1");
+    emitter.instruction("b __rt_preg_replace_fail_copy");
+    emitter.label("__rt_preg_replace_fail_copied");
+    emitter.instruction("add x10, x10, x14");                                   // the copy now belongs to the concat buffer
+    emitter.instruction("str x10, [x9]");                                       // publish the advanced concat offset
+    emitter.instruction("mov x1, x11");                                         // result pointer
+    emitter.instruction("mov x2, x14");                                         // result length
 
     emitter.label("__rt_preg_replace_ret");
-    abi::emit_load_int_immediate(emitter, "x9", crate::codegen_support::sentinels::NULL_SENTINEL);
-    emitter.instruction("cmp x1, x9");                                          // did the replacement fail and produce PHP null?
-    emitter.instruction("b.eq __rt_preg_replace_box_null");                     // box a null Mixed cell on the failure path
-    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the replacement string for the Mixed result contract
-    emitter.instruction("b __rt_preg_replace_boxed");                           // return the boxed result
-    emitter.label("__rt_preg_replace_box_null");
-    emitter.instruction("mov x0, #8");                                          // runtime tag 8 = null
-    emitter.instruction("mov x1, #0");                                          // null has no low payload word
-    emitter.instruction("mov x2, #0");                                          // null has no high payload word
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the null result
-    emitter.label("__rt_preg_replace_boxed");
+    emitter.instruction(&format!("ldr x3, [sp, #{}]", count_off));              // return completed replacement count beside string result
     emitter.instruction(&format!("add x9, sp, #{}", save_off));                 // compute save-slot address beyond ARM64 pair-load range
     emitter.instruction("ldp x29, x30, [x9]");                                  // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", stack_size));               // deallocate stack frame
@@ -288,8 +337,9 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
 /// x86_64 Linux-specific implementation of `__rt_preg_replace`.
 ///
 /// Inputs (System V AMD64 ABI): rdi=pattern ptr, rsi=pattern len,
-///   rdx=replacement ptr, rcx=replacement len, r8=subject ptr, r9=subject len
-/// Outputs: rax=result ptr, rdx=result len
+///   rdx=replacement ptr, rcx=replacement len, r8=subject ptr, r9=subject len;
+///   the internal helper convention carries the replacement limit in r10.
+/// Outputs: rax=result ptr, rdx=result len, rcx=replacement count
 ///
 /// On regex compilation failure, returns the original subject unchanged.
 /// Handles backreference expansion (`$0`..`$99`, `\0`..`\99`) in replacement strings.
@@ -306,7 +356,9 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     let replacement_len_off = replacement_ptr_off + 8;
     let subject_ptr_off = replacement_len_off + 8;
     let subject_len_off = subject_ptr_off + 8;
-    let flags_off = subject_len_off + 8;
+    let limit_off = subject_len_off + 8;
+    let count_off = limit_off + 8;
+    let flags_off = count_off + 8;
     let pattern_cstr_off = flags_off + 8;
     let subject_cstr_off = pattern_cstr_off + 8;
     let output_start_off = subject_cstr_off + 8;
@@ -328,6 +380,8 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", replacement_len_off)); // preserve the elephc replacement length across regex helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", subject_ptr_off)); // preserve the elephc subject pointer across regex helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", subject_len_off)); // preserve the elephc subject length across regex helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", limit_off));  // preserve the caller-provided replacement limit
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", count_off));    // initialize completed replacement count
     emitter.instruction("mov rax, rdi");                                        // move the elephc pattern pointer into the delimiter-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move the elephc pattern length into the delimiter-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and gather supported regex flags from the pattern literal
@@ -363,6 +417,8 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_pos_off)); // initialize the current subject cursor from the start of the null-terminated subject string
 
     emitter.label("__rt_preg_replace_loop_linux_x86_64");
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", limit_off));    // check whether the caller allowed another replacement
+    emitter.instruction("je __rt_preg_replace_tail_linux_x86_64");              // limit zero copies the remaining subject unchanged
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_pos_off)); // reload the current subject C-string cursor before the next regexec() probe
     emitter.instruction("movzx r9d, BYTE PTR [rsi]");                           // stop the replacement loop once the current subject cursor reaches the trailing null terminator
     emitter.instruction("test r9d, r9d");                                       // treat the terminating null byte as the end-of-subject condition
@@ -370,8 +426,10 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
     emitter.instruction(&format!("mov edx, {}", PREG_REPLACE_NMATCH));          // capture full match plus replacement backreference groups
     emitter.instruction(&format!("lea rcx, [rsp + {}]", match_pairs_off));      // receive fixed signed-64-bit offset pairs
-    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize all requested pairs
+    emitter.instruction("mov r8, rsi");                                         // the search cursor inside the whole subject
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the WHOLE subject so lookbehind and anchors see what precedes the cursor
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", subject_len_off)); // pass the whole subject length as the search end
+    emitter.instruction("call __rt_pcre2_exec_at");                             // match from the cursor; pairs come back relative to it
     emitter.instruction("test eax, eax");                                       // did regexec() find another match at or after the current cursor?
     emitter.instruction("jnz __rt_preg_replace_tail_linux_x86_64");             // copy the remaining subject tail once regexec() reports no further matches
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", match_pairs_off)); // load full-match signed-64-bit start
@@ -422,6 +480,19 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, rdx");                                        // replacement ended after marker ?
     emitter.instruction("jge __rt_preg_replace_repl_literal_linux_x86_64");     // yes → keep marker literal
     emitter.instruction("movzx r9d, BYTE PTR [rax + r10]");                     // load potential group digit
+    // -- `\\` and `\$` are escapes; see the AArch64 variant --
+    emitter.instruction("cmp r8b, 92");                                         // is the marker a backslash?
+    emitter.instruction("jne __rt_preg_replace_not_escape_linux_x86_64");       // `$` never escapes
+    emitter.instruction("cmp r9d, 92");                                         // `\\` escapes a backslash
+    emitter.instruction("je __rt_preg_replace_escape_linux_x86_64");
+    emitter.instruction("cmp r9d, 36");                                         // `\$` escapes a dollar
+    emitter.instruction("jne __rt_preg_replace_not_escape_linux_x86_64");
+    emitter.label("__rt_preg_replace_escape_linux_x86_64");
+    emitter.instruction("mov BYTE PTR [r11], r9b");                             // write the escaped byte alone
+    emitter.instruction("add r11, 1");                                          // advance output
+    emitter.instruction("add rcx, 2");                                          // consume the backslash and the escaped byte
+    emitter.instruction("jmp __rt_preg_replace_repl_copy_linux_x86_64");        // continue scanning
+    emitter.label("__rt_preg_replace_not_escape_linux_x86_64");
     emitter.instruction("sub r9d, 48");                                         // convert ASCII digit to group index
     emitter.instruction("cmp r9d, 9");                                          // is it 0..9 ?
     emitter.instruction("ja __rt_preg_replace_repl_literal_linux_x86_64");      // no → keep marker literal
@@ -467,6 +538,11 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_replace_advance_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // preserve the updated replacement output write cursor before advancing the subject cursor
+    emitter.instruction(&format!("add QWORD PTR [rsp + {}], 1", count_off));    // count the completed replacement
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", limit_off));    // negative replacement limits remain unlimited
+    emitter.instruction("jle __rt_preg_replace_limit_ready_linux_x86_64");      // keep an unlimited limit unchanged
+    emitter.instruction(&format!("sub QWORD PTR [rsp + {}], 1", limit_off));    // consume one allowed replacement
+    emitter.label("__rt_preg_replace_limit_ready_linux_x86_64");
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", match_pairs_off + 8)); // load full-match signed-64-bit end
     emitter.instruction("cmp r9, 0");                                           // detect zero-length regex matches so the replacement loop still makes forward progress
     emitter.instruction("jg __rt_preg_replace_advance_ok_linux_x86_64");        // trust rm_eo directly when the regex consumed at least one byte
@@ -509,27 +585,40 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_overflow_linux_x86_64");
     emitter.instruction("jmp __rt_concat_overflow");                            // report the oversized result and terminate
 
+    // -- the removed /e modifier is rejected like a failed compile --
     emitter.label("__rt_preg_replace_bad_pattern_linux_x86_64");
-    emitter.instruction("jmp __rt_preg_replace_fail_linux_x86_64");             // the /e modifier is rejected like a failed compile
+    emitter.instruction("jmp __rt_preg_replace_fail_linux_x86_64");             // same failure path as a pattern PCRE2 cannot compile
+
+    // A failed call returns the subject unchanged, as a COPY in concat scratch: returning the
+    // subject itself made the result alias an argument the caller then could not release.
     emitter.label("__rt_preg_replace_fail_linux_x86_64");
-    abi::emit_load_int_immediate(emitter, "rax", crate::codegen_support::sentinels::NULL_SENTINEL);
-    emitter.instruction("xor edx, edx");                                        // null has no payload bytes
+    abi::emit_symbol_address(emitter, "r9", "_concat_off");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // current concat-buffer offset
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
+    emitter.instruction("add r11, r10");                                        // r11 = where the copy starts
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_ptr_off)); // subject bytes
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // subject length, also the result length
+    abi::emit_load_int_immediate(emitter, "rax", cap as i64);                   // load the shared scratch capacity
+    emitter.instruction("cmp r10, rax");                                        // is the concat offset already outside the arena?
+    emitter.instruction("ja __rt_preg_replace_overflow_linux_x86_64");          // fail closed instead of copying past the arena
+    emitter.instruction("sub rax, r10");                                        // remaining bytes before the arena end
+    emitter.instruction("cmp rdx, rax");                                        // does the subject copy still fit?
+    emitter.instruction("ja __rt_preg_replace_overflow_linux_x86_64");          // fail closed instead of copying past the arena
+    emitter.instruction("xor r8d, r8d");                                        // copy index
+    emitter.label("__rt_preg_replace_fail_copy_linux_x86_64");
+    emitter.instruction("cmp r8, rdx");                                         // every subject byte copied?
+    emitter.instruction("jae __rt_preg_replace_fail_copied_linux_x86_64");
+    emitter.instruction("movzx eax, BYTE PTR [rsi + r8]");                      // load one subject byte
+    emitter.instruction("mov BYTE PTR [r11 + r8], al");                         // append it to the scratch result
+    emitter.instruction("add r8, 1");
+    emitter.instruction("jmp __rt_preg_replace_fail_copy_linux_x86_64");
+    emitter.label("__rt_preg_replace_fail_copied_linux_x86_64");
+    emitter.instruction("add r10, rdx");                                        // the copy now belongs to the concat buffer
+    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the advanced concat offset
+    emitter.instruction("mov rax, r11");                                        // result pointer
 
     emitter.label("__rt_preg_replace_ret_linux_x86_64");
-    abi::emit_load_int_immediate(emitter, "r8", crate::codegen_support::sentinels::NULL_SENTINEL);
-    emitter.instruction("cmp rax, r8");                                         // did the replacement fail and produce PHP null?
-    emitter.instruction("je __rt_preg_replace_box_null_linux_x86_64");          // box a null Mixed cell on the failure path
-    emitter.instruction("mov rdi, rax");                                        // low payload = string pointer
-    emitter.instruction("mov rsi, rdx");                                        // high payload = string length
-    emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
-    emitter.instruction("call __rt_mixed_from_value");                          // box the replacement string for the Mixed result contract
-    emitter.instruction("jmp __rt_preg_replace_boxed_linux_x86_64");            // return the boxed result
-    emitter.label("__rt_preg_replace_box_null_linux_x86_64");
-    emitter.instruction("xor edi, edi");                                        // null has no low payload word
-    emitter.instruction("xor esi, esi");                                        // null has no high payload word
-    emitter.instruction("mov rax, 8");                                          // runtime tag 8 = null
-    emitter.instruction("call __rt_mixed_from_value");                          // box the null result
-    emitter.label("__rt_preg_replace_boxed_linux_x86_64");
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", count_off));  // return completed replacement count beside string result
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release the opaque-handle, fixed-pair, and replacement spill storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the regex-replace helper completes
     emitter.instruction("ret");                                                 // return the preg_replace() string result in rax/rdx

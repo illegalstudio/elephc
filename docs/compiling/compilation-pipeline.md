@@ -128,6 +128,36 @@ Physical source (.php or .lfc)
   [`--strict-locals`](cli-reference.md#strict-locals-mode) an incompatible
   local retype is a compile error instead.
 
+### Class files left to the runtime autoloader
+
+php parses a class file only when something asks for the class; a closed-world
+compile takes every class the program can reach, including ones a request never
+touches. So when the program loads PHP at run time (it registers an autoloader,
+as every Composer application does), a class file elephc cannot compile yet is
+**handed back to the runtime autoloader** instead of failing the build. Its
+classes are then included at run time and executed by the embedded interpreter,
+exactly as php would load them. Each hand-back is reported:
+
+```text
+warning: autoload: '…/vendor/foo/Bar.php':134:26 could not be parsed (…); its classes are not compiled and are loaded at run time by the autoloader instead
+warning: autoload: '…/vendor/foo/Baz.php' is not compiled (<first checker error>); its classes are loaded at run time by the autoloader instead
+warning: autoload: '…/vendor/foo/Qux.php' is not compiled (the backend cannot lower `Qux::m`: …); …
+```
+
+- It applies to files the autoload pass loaded for a class and to classes an
+  `opcache.preload` file named; the entry program, its static includes and
+  Composer's eager `files` still fail the build.
+- A file is handed back when the parser refuses it, when the checker raises an
+  error inside one of its classes, or when the backend cannot lower one of its
+  bodies. A class extending, implementing or using a handed-back class follows
+  it, since a compiled class cannot inherit from one the runtime supplies.
+- A backend refusal is found after the checker has accepted the program, so the
+  compiler then runs again once with those files handed back from the start
+  (`note: recompiling with N class file(s) left to the runtime autoloader`).
+- Interpreted classes run slower than compiled ones. The warnings are the list
+  of what elephc does not compile yet, ranked by how much of the program sits
+  behind each one.
+
 ## Middle: AST optimization
 
 The AST optimizer runs PHP-preserving rewrites that are naturally expressed over

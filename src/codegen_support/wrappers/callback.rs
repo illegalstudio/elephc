@@ -14,6 +14,8 @@ use crate::codegen_support::platform::Arch;
 use crate::types::PhpType;
 
 mod descriptor;
+#[cfg(test)]
+mod tests;
 
 use super::{DeferredCallbackWrapper, DeferredExternCallbackTrampoline};
 
@@ -34,9 +36,19 @@ pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCal
 
     let target_visible_arg_types = wrapper_target_visible_arg_types(wrapper);
     let arg_types = wrapper_arg_types(wrapper);
-    let slot_count = arg_types.len().max(1);
-    let frame_size = align16(slot_count * 16 + 32);
+    let arg_slot_count = arg_types.len().max(1);
+    let cleanup_count = mixed_to_string_cleanup_count(
+        &wrapper.visible_arg_types,
+        &target_visible_arg_types,
+    );
+    let frame_size = align16((arg_slot_count + cleanup_count) * 16 + 32);
     let saved_callee_offset = frame_size - 32;
+    let cleanup_offsets = callback_string_cleanup_offsets(
+        emitter,
+        frame_size,
+        arg_slot_count,
+        cleanup_count,
+    );
 
     emitter.blank();
     emitter.comment(&format!("callback wrapper: {}", wrapper.label));
@@ -63,9 +75,11 @@ pub(crate) fn emit_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCal
         &target_visible_arg_types,
         &wrapper.capture_types,
         frame_size,
+        &cleanup_offsets,
     );
     abi::emit_call_reg(emitter, "x19");
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the adapted callback returns
+    emit_release_callback_string_conversions(emitter, &cleanup_offsets);
 
     emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_callee_offset)); // restore wrapper callee-saved registers
     abi::emit_frame_restore(emitter, frame_size);
@@ -90,10 +104,20 @@ pub(crate) fn emit_extern_callback_trampoline(
 fn emit_x86_64_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCallbackWrapper) {
     let target_visible_arg_types = wrapper_target_visible_arg_types(wrapper);
     let arg_types = wrapper_arg_types(wrapper);
-    let slot_count = arg_types.len().max(1);
-    let frame_size = align16(slot_count * 16 + 48);
-    let saved_callback_offset = slot_count * 16 + 16;
-    let saved_env_offset = slot_count * 16 + 24;
+    let arg_slot_count = arg_types.len().max(1);
+    let cleanup_count = mixed_to_string_cleanup_count(
+        &wrapper.visible_arg_types,
+        &target_visible_arg_types,
+    );
+    let frame_size = align16((arg_slot_count + cleanup_count) * 16 + 48);
+    let saved_callback_offset = (arg_slot_count + cleanup_count) * 16 + 16;
+    let saved_env_offset = (arg_slot_count + cleanup_count) * 16 + 24;
+    let cleanup_offsets = callback_string_cleanup_offsets(
+        emitter,
+        frame_size,
+        arg_slot_count,
+        cleanup_count,
+    );
 
     emitter.blank();
     emitter.comment(&format!("callback wrapper: {}", wrapper.label));
@@ -120,9 +144,11 @@ fn emit_x86_64_callback_wrapper(emitter: &mut Emitter, wrapper: &DeferredCallbac
         &wrapper.visible_arg_types,
         &target_visible_arg_types,
         &wrapper.capture_types,
+        &cleanup_offsets,
     );
     abi::emit_call_reg(emitter, "r12");
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop stack-passed closure arguments after the adapted callback returns
+    emit_release_callback_string_conversions(emitter, &cleanup_offsets);
 
     abi::load_at_offset(emitter, "r13", saved_env_offset);
     abi::load_at_offset(emitter, "r12", saved_callback_offset);
@@ -146,6 +172,38 @@ fn wrapper_target_visible_arg_types(wrapper: &DeferredCallbackWrapper) -> Vec<Ph
         .target_visible_arg_types
         .clone()
         .unwrap_or_else(|| wrapper.visible_arg_types.clone())
+}
+
+/// Counts visible callback arguments whose runtime Mixed value is converted into an
+/// independently owned string for a statically typed target parameter.
+fn mixed_to_string_cleanup_count(
+    incoming_visible_arg_types: &[PhpType],
+    target_visible_arg_types: &[PhpType],
+) -> usize {
+    incoming_visible_arg_types
+        .iter()
+        .zip(target_visible_arg_types.iter())
+        .filter(|(incoming_ty, target_ty)| {
+            incoming_ty.codegen_repr() == PhpType::Mixed
+                && target_ty.codegen_repr() == PhpType::Str
+        })
+        .count()
+}
+
+/// Returns frame-relative slots used to retain converted string pointers until the
+/// adapted callback has returned and no longer borrows those strings.
+fn callback_string_cleanup_offsets(
+    emitter: &Emitter,
+    frame_size: usize,
+    arg_slot_count: usize,
+    cleanup_count: usize,
+) -> Vec<usize> {
+    (0..cleanup_count)
+        .map(|cleanup_idx| match emitter.target.arch {
+            Arch::AArch64 => frame_size - 16 - (arg_slot_count + cleanup_idx) * 16,
+            Arch::X86_64 => frame_arg_slot_offset(arg_slot_count + cleanup_idx),
+        })
+        .collect()
 }
 
 /// Returns the ABI register name that holds the incoming environment pointer (the closure
@@ -284,6 +342,7 @@ fn materialize_spilled_args_for_callback(
     target_visible_arg_types: &[PhpType],
     capture_types: &[PhpType],
     frame_size: usize,
+    cleanup_offsets: &[usize],
 ) -> usize {
     let arg_types = callback_target_arg_types(target_visible_arg_types, capture_types);
     push_spilled_args_as_call_temporaries(
@@ -292,6 +351,7 @@ fn materialize_spilled_args_for_callback(
         target_visible_arg_types,
         capture_types,
         frame_size,
+        cleanup_offsets,
     );
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, &arg_types, 0);
     abi::materialize_outgoing_args(emitter, &assignments)
@@ -306,7 +366,9 @@ fn push_spilled_args_as_call_temporaries(
     target_visible_arg_types: &[PhpType],
     capture_types: &[PhpType],
     frame_size: usize,
+    cleanup_offsets: &[usize],
 ) {
+    let mut cleanup_idx = 0;
     for (idx, (incoming_ty, target_ty)) in incoming_visible_arg_types
         .iter()
         .zip(target_visible_arg_types.iter())
@@ -314,8 +376,24 @@ fn push_spilled_args_as_call_temporaries(
     {
         let slot_offset = idx * 16;
         let frame_slot_offset = frame_size - 16 - slot_offset;
-        push_aarch64_visible_arg_as_target(emitter, frame_slot_offset, incoming_ty, target_ty);
+        let cleanup_offset = if incoming_ty.codegen_repr() == PhpType::Mixed
+            && target_ty.codegen_repr() == PhpType::Str
+        {
+            let offset = cleanup_offsets.get(cleanup_idx).copied();
+            cleanup_idx += 1;
+            offset
+        } else {
+            None
+        };
+        push_aarch64_visible_arg_as_target(
+            emitter,
+            frame_slot_offset,
+            incoming_ty,
+            target_ty,
+            cleanup_offset,
+        );
     }
+    debug_assert_eq!(cleanup_idx, cleanup_offsets.len());
     for (capture_idx, ty) in capture_types.iter().enumerate() {
         let idx = incoming_visible_arg_types.len() + capture_idx;
         let slot_offset = idx * 16;
@@ -331,6 +409,7 @@ fn materialize_spilled_args_for_callback_x86_64(
     incoming_visible_arg_types: &[PhpType],
     target_visible_arg_types: &[PhpType],
     capture_types: &[PhpType],
+    cleanup_offsets: &[usize],
 ) -> usize {
     let arg_types = callback_target_arg_types(target_visible_arg_types, capture_types);
     push_spilled_args_as_call_temporaries_x86_64(
@@ -338,6 +417,7 @@ fn materialize_spilled_args_for_callback_x86_64(
         incoming_visible_arg_types,
         target_visible_arg_types,
         capture_types,
+        cleanup_offsets,
     );
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, &arg_types, 0);
     abi::materialize_outgoing_args(emitter, &assignments)
@@ -351,18 +431,70 @@ fn push_spilled_args_as_call_temporaries_x86_64(
     incoming_visible_arg_types: &[PhpType],
     target_visible_arg_types: &[PhpType],
     capture_types: &[PhpType],
+    cleanup_offsets: &[usize],
 ) {
+    let mut cleanup_idx = 0;
     for (idx, (incoming_ty, target_ty)) in incoming_visible_arg_types
         .iter()
         .zip(target_visible_arg_types.iter())
         .enumerate()
     {
         let slot_offset = frame_arg_slot_offset(idx);
-        push_x86_64_visible_arg_as_target(emitter, slot_offset, incoming_ty, target_ty);
+        let cleanup_offset = if incoming_ty.codegen_repr() == PhpType::Mixed
+            && target_ty.codegen_repr() == PhpType::Str
+        {
+            let offset = cleanup_offsets.get(cleanup_idx).copied();
+            cleanup_idx += 1;
+            offset
+        } else {
+            None
+        };
+        push_x86_64_visible_arg_as_target(
+            emitter,
+            slot_offset,
+            incoming_ty,
+            target_ty,
+            cleanup_offset,
+        );
     }
+    debug_assert_eq!(cleanup_idx, cleanup_offsets.len());
     for (capture_idx, ty) in capture_types.iter().enumerate() {
         let idx = incoming_visible_arg_types.len() + capture_idx;
         push_x86_64_prepared_arg(emitter, frame_arg_slot_offset(idx), ty);
+    }
+}
+
+/// Releases string allocations produced while adapting boxed Mixed callback arguments.
+/// All possible result registers are preserved because the wrapper deliberately has no
+/// knowledge of the adapted callback's return type.
+fn emit_release_callback_string_conversions(emitter: &mut Emitter, cleanup_offsets: &[usize]) {
+    if cleanup_offsets.is_empty() {
+        return;
+    }
+
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(emitter, "x0", "x1");
+            abi::emit_push_reg(emitter, "x2");
+            abi::emit_push_float_reg(emitter, "d0");
+            for offset in cleanup_offsets {
+                abi::load_at_offset(emitter, "x0", *offset);
+                abi::emit_call_label(emitter, "__rt_heap_free_safe"); // release a persisted callback string while ignoring shared scratch results
+            }
+            abi::emit_pop_float_reg(emitter, "d0");
+            abi::emit_pop_reg(emitter, "x2");
+            abi::emit_pop_reg_pair(emitter, "x0", "x1");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");
+            abi::emit_push_float_reg(emitter, "xmm0");
+            for offset in cleanup_offsets {
+                abi::load_at_offset(emitter, "rax", *offset);
+                abi::emit_call_label(emitter, "__rt_heap_free_safe"); // release a persisted callback string while ignoring shared scratch results
+            }
+            abi::emit_pop_float_reg(emitter, "xmm0");
+            abi::emit_pop_reg_pair(emitter, "rax", "rdx");
+        }
     }
 }
 
@@ -384,6 +516,7 @@ fn push_aarch64_visible_arg_as_target(
     frame_slot_offset: usize,
     incoming_ty: &PhpType,
     target_ty: &PhpType,
+    cleanup_offset: Option<usize>,
 ) {
     if incoming_ty.codegen_repr() == target_ty.codegen_repr() {
         push_aarch64_prepared_arg(emitter, frame_slot_offset, target_ty);
@@ -410,6 +543,11 @@ fn push_aarch64_visible_arg_as_target(
         }
         PhpType::Str => {
             abi::emit_call_label(emitter, "__rt_mixed_cast_string"); // cast boxed callback argument to string for the target closure
+            abi::store_at_offset(
+                emitter,
+                "x1",
+                cleanup_offset.expect("Mixed-to-string callback conversions need cleanup storage"),
+            );
             abi::emit_push_reg_pair(emitter, "x1", "x2"); // push the converted string callback argument
         }
         PhpType::Void | PhpType::Never => {}
@@ -446,6 +584,7 @@ fn push_x86_64_visible_arg_as_target(
     slot_offset: usize,
     incoming_ty: &PhpType,
     target_ty: &PhpType,
+    cleanup_offset: Option<usize>,
 ) {
     if incoming_ty.codegen_repr() == target_ty.codegen_repr() {
         push_x86_64_prepared_arg(emitter, slot_offset, target_ty);
@@ -472,6 +611,11 @@ fn push_x86_64_visible_arg_as_target(
         }
         PhpType::Str => {
             abi::emit_call_label(emitter, "__rt_mixed_cast_string"); // cast boxed callback argument to string for the target closure
+            abi::store_at_offset(
+                emitter,
+                "rax",
+                cleanup_offset.expect("Mixed-to-string callback conversions need cleanup storage"),
+            );
             abi::emit_push_reg_pair(emitter, "rax", "rdx"); // push the converted string callback argument
         }
         PhpType::Void | PhpType::Never => {}

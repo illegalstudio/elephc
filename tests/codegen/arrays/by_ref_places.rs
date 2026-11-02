@@ -64,6 +64,38 @@ echo implode(",", $b->items);
     assert_eq!(out, "1,2,3|3,2,1");
 }
 
+/// A hash handed to a `mixed` by-reference parameter comes back as a packed list when the
+/// callee reassigns it one -- the gradual `sort()` does exactly that -- and the caller's hash
+/// storage must receive a hash. The payload used to be stored as it was, so the next hash walk
+/// read an indexed array as a hash: `rsort()` after `sort()` faulted (SIGBUS) on a string-keyed
+/// local and on an untyped property alike.
+#[test]
+fn test_hash_passed_to_mixed_ref_parameter_is_written_back_as_a_hash() {
+    let out = compile_and_run(
+        r#"<?php
+function relist(mixed &$x): void { $x = array_values($x); }
+$m = ['x' => 3, 'y' => 'b', 'z' => 1.5];
+sort($m);
+echo implode(",", $m), "|";
+rsort($m);
+echo implode(",", $m), "\n";
+class B { public $items = ['b' => 2, 'a' => 1]; }
+$b = new B();
+sort($b->items);
+rsort($b->items);
+echo implode(",", $b->items), "\n";
+$h = ['k' => 1, 'j' => 2];
+relist($h);
+relist($h);
+var_dump($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.5,3,b|b,3,1.5\n2,1\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n"
+    );
+}
+
 /// The whole structural-mutator family on one instance property: push, pop, shift, unshift,
 /// and splice each have to observe and update the same property storage in sequence.
 #[test]
@@ -194,6 +226,43 @@ echo implode(",", $b->items);
     assert_eq!(out, "1,2,3");
 }
 
+/// A sort through an untyped (Mixed) middle link of a property chain writes the sorted array
+/// back to a declared `array` property, instead of sorting a copy and dropping it.
+#[test]
+fn test_sort_through_mixed_link_of_typed_property_chain() {
+    let out = compile_and_run(
+        r#"<?php
+class TypedSortInner { public array $items = [3, 1, 2]; }
+class TypedSortOuter { public $inner; public function __construct() { $this->inner = new TypedSortInner(); } }
+$o = new TypedSortOuter();
+sort($o->inner->items);
+echo implode(",", $o->inner->items), "|";
+rsort($o->inner->items);
+echo implode(",", $o->inner->items);
+"#,
+    );
+    assert_eq!(out, "1,2,3|3,2,1");
+}
+
+/// A top-level variable that a function declares `global` lives in program-global storage, and
+/// a by-reference `mixed` parameter receives that storage, not a copy: `sort()` (lowered through
+/// a by-reference prelude helper) and a user function both write through.
+#[test]
+fn test_by_ref_mixed_argument_writes_through_global_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function append_nine(mixed &$x): void { $x[] = 9; }
+$reader = function () { global $a; return $a; };
+$a = [3, 1, 2];
+sort($a);
+echo implode(",", $a), "|";
+append_nine($a);
+echo implode(",", $reader()), "|", (int) in_array(9, $a);
+"#,
+    );
+    assert_eq!(out, "1,2,3|1,2,3,9|1");
+}
+
 /// A two-link property chain (`$outer->inner->items`), so the receiver resolution walks more
 /// than one property hop before it finds the array storage.
 #[test]
@@ -322,4 +391,78 @@ echo implode(",", $b->items);
 "#,
     );
     assert_eq!(out, "7,3,2,1,0");
+}
+
+/// Verifies a gradual by-reference local receiver is normalized and mutated.
+#[test]
+fn test_array_unshift_mutates_mixed_receiver_places() {
+    let out = compile_and_run(
+        r#"<?php
+function prepend(mixed &$values): int {
+    return array_unshift($values, 'first', 'second');
+}
+$local = ['tail'];
+echo prepend($local), ':', implode(',', $local);
+"#,
+    );
+    assert_eq!(out, "3:first,second,tail");
+}
+
+/// Verifies a gradual receiver backed by associative storage preserves string keys and
+/// renumbers existing integer keys after prepending.
+#[test]
+fn test_array_unshift_mutates_mixed_assoc_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+function prependAssoc(mixed &$values): int {
+    return array_unshift($values, 'first');
+}
+$local = ['name' => 'tail', 2 => 'two'];
+echo prependAssoc($local), ':';
+foreach ($local as $key => $value) {
+    echo $key, '=', $value, ';';
+}
+"#,
+    );
+    assert_eq!(out, "3:0=first;name=tail;1=two;");
+}
+
+/// Verifies an array-valued element reached through a declared property is adapted through a
+/// writable temporary and published back after a by-reference mutation.
+#[test]
+fn test_array_unshift_mutates_gradual_property_element_place() {
+    let out = compile_and_run(
+        r#"<?php
+class GroupBox {
+    public array $groups = [];
+}
+
+function prependGroup(GroupBox $box, string $name): int {
+    return array_unshift($box->groups[$name], 'first');
+}
+
+$box = new GroupBox();
+$box->groups['main'] = ['tail'];
+echo prependGroup($box, 'main'), ':', implode(',', $box->groups['main']);
+"#,
+    );
+    assert_eq!(out, "2:first,tail");
+}
+
+/// Verifies a variadic spread after a by-reference property does not suppress place write-back.
+#[test]
+fn test_array_unshift_property_with_variadic_spread() {
+    let out = compile_and_run(
+        r#"<?php
+class SpreadArrayBox {
+    public array $values = ['tail'];
+}
+function prependSpread(SpreadArrayBox $box, array $extra): int {
+    return array_unshift($box->values, 'first', ...$extra);
+}
+$box = new SpreadArrayBox();
+echo prependSpread($box, ['second', 'third']), ':', implode(',', $box->values);
+"#,
+    );
+    assert_eq!(out, "4:first,second,third,tail");
 }

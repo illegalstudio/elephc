@@ -2,7 +2,7 @@
 title: "imagecreatefromwebp()"
 description: "Creates an image from a WebP file."
 sidebar:
-  order: 502
+  order: 515
 ---
 
 ## imagecreatefromwebp()

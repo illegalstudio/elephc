@@ -40,52 +40,75 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
         .map(|(name, info)| (name.clone(), info.class_id))
         .collect();
     sorted_classes.sort_by_key(|(_, class_id)| std::cmp::Reverse(*class_id));
+    // A chain longer than the class table can only be a malformed cycle.
+    let hop_limit = checker.classes.len() + 1;
 
     for (class_name, _) in sorted_classes {
-        let Some(class_info) = checker.classes.get(&class_name).cloned() else {
+        // Only the class's own return types and parent are read, so only they are copied: this
+        // cloned the WHOLE class (method declarations with their bodies), and then the whole
+        // parent again per method per hop, the checker's largest copy on a Symfony build.
+        let Some(class_info) = checker.classes.get(&class_name) else {
             continue;
         };
+        let parent = class_info.parent.clone();
+        let instance_returns: Vec<(String, PhpType)> = class_info
+            .methods
+            .iter()
+            .map(|(method, sig)| (method.clone(), sig.return_type.clone()))
+            .collect();
+        let static_returns: Vec<(String, PhpType)> = class_info
+            .static_methods
+            .iter()
+            .map(|(method, sig)| (method.clone(), sig.return_type.clone()))
+            .collect();
 
-        for (method_name, sig) in &class_info.methods {
-            let mut parent_name = class_info.parent.clone();
+        for (method_name, return_type) in &instance_returns {
+            let mut parent_name = parent.clone();
+            let mut hops = 0usize;
             while let Some(name) = parent_name {
-                let Some(parent_info) = checker.classes.get(&name).cloned() else {
-                    break;
-                };
-                if !parent_info.methods.contains_key(method_name) {
+                hops += 1;
+                if hops > hop_limit {
                     break;
                 }
+                let Some(parent_info) = checker.classes.get_mut(&name) else {
+                    break;
+                };
                 if parent_info.method_impl_classes.contains_key(method_name) {
                     break;
                 }
-                if let Some(parent_mut) = checker.classes.get_mut(&name) {
-                    if let Some(parent_sig) = parent_mut.methods.get_mut(method_name) {
-                        parent_sig.return_type = sig.return_type.clone();
-                    }
+                let Some(parent_sig) = parent_info.methods.get_mut(method_name) else {
+                    break;
+                };
+                // A DECLARED return stays the declared one: reflection and the eval
+                // bridge read it, and covariant implementors narrow it freely.
+                if !parent_sig.declared_return {
+                    parent_sig.return_type = return_type.clone();
                 }
                 parent_name = parent_info.parent.clone();
             }
         }
 
-        for (method_name, sig) in &class_info.static_methods {
-            let mut parent_name = class_info.parent.clone();
+        for (method_name, return_type) in &static_returns {
+            let mut parent_name = parent.clone();
+            let mut hops = 0usize;
             while let Some(name) = parent_name {
-                let Some(parent_info) = checker.classes.get(&name).cloned() else {
+                hops += 1;
+                if hops > hop_limit {
+                    break;
+                }
+                let Some(parent_info) = checker.classes.get_mut(&name) else {
                     break;
                 };
-                if !parent_info.static_methods.contains_key(method_name) {
+                if parent_info.static_method_impl_classes.contains_key(method_name) {
                     break;
                 }
-                if parent_info
-                    .static_method_impl_classes
-                    .contains_key(method_name)
-                {
+                let Some(parent_sig) = parent_info.static_methods.get_mut(method_name) else {
                     break;
-                }
-                if let Some(parent_mut) = checker.classes.get_mut(&name) {
-                    if let Some(parent_sig) = parent_mut.static_methods.get_mut(method_name) {
-                        parent_sig.return_type = sig.return_type.clone();
-                    }
+                };
+                // A DECLARED return stays the declared one: reflection and the eval
+                // bridge read it, and covariant implementors narrow it freely.
+                if !parent_sig.declared_return {
+                    parent_sig.return_type = return_type.clone();
                 }
                 parent_name = parent_info.parent.clone();
             }
@@ -188,6 +211,8 @@ pub(crate) fn build_enum_info(
         }
         None => None,
     };
+
+    validate_enum_interfaces(name, implements, resolved_backing.is_some(), span, checker)?;
 
     let mut seen_case_names = HashSet::new();
     for interface in implements {
@@ -294,6 +319,17 @@ pub(crate) fn build_enum_info(
         checker,
         next_class_id,
     )?;
+    // Trait flattening appends the imported methods after the enum's own, and php binds them
+    // after `cases`/`from`/`tryFrom` too: `getMethods()` lists own, built-in, then trait methods.
+    if let (Some(imported), Some(info)) = (
+        user_methods.get(declared_methods.len()..).filter(|imported| !imported.is_empty()),
+        checker.classes.get_mut(name),
+    ) {
+        let imported: Vec<String> = imported.iter().map(|method| method.name.clone()).collect();
+        info.reflection_methods
+            .retain(|method| !imported.contains(method));
+        info.reflection_methods.extend(imported);
+    }
     // PHP keeps cases and constants in one table, in declaration order: `case B; const X;
     // case A;` reflects as B, X, A. The parser keeps them in two lists, so their source spans
     // are what interleaves them back.
@@ -385,11 +421,11 @@ pub(crate) fn insert_enum_metadata(
         &mut property_reference_slots,
     );
 
-    let mut static_methods = HashMap::new();
+    let mut static_methods = crate::fast_hash::FastMap::default();
     let mut late_static_static_method_returns = HashMap::new();
-    let mut static_method_visibilities = HashMap::new();
-    let mut static_method_declaring_classes = HashMap::new();
-    let mut static_method_impl_classes = HashMap::new();
+    let mut static_method_visibilities = crate::fast_hash::FastMap::default();
+    let mut static_method_declaring_classes = crate::fast_hash::FastMap::default();
+    let mut static_method_impl_classes = crate::fast_hash::FastMap::default();
     let mut abstract_static_methods = HashSet::new();
     static_methods.insert(
         "cases".to_string(),
@@ -449,12 +485,12 @@ pub(crate) fn insert_enum_metadata(
 
     // User-declared enum methods. Enum cases are singleton objects, so instance methods dispatch
     // on the case like a class. Lexical hints resolve to the enum while return `static` is retained.
-    let mut methods = HashMap::new();
+    let mut methods = crate::fast_hash::FastMap::default();
     let mut late_static_method_returns = HashMap::new();
     let mut method_decls = Vec::new();
-    let mut method_visibilities = HashMap::new();
-    let mut method_declaring_classes = HashMap::new();
-    let mut method_impl_classes = HashMap::new();
+    let mut method_visibilities = crate::fast_hash::FastMap::default();
+    let mut method_declaring_classes = crate::fast_hash::FastMap::default();
+    let mut method_impl_classes = crate::fast_hash::FastMap::default();
     let mut abstract_methods = HashSet::new();
     let mut final_methods = HashSet::new();
     let mut final_static_methods = HashSet::new();
@@ -528,6 +564,10 @@ pub(crate) fn insert_enum_metadata(
     // Bind lexical receivers in both direct and imported constants before their values
     // are read outside enum scope, using the same normalization as ordinary classes.
     let mut constants = HashMap::new();
+    let constant_order = user_constants
+        .iter()
+        .map(|constant| constant.name.clone())
+        .collect();
     let mut constant_types = HashMap::new();
     let mut constant_visibilities = HashMap::new();
     let mut final_constants = HashSet::new();
@@ -568,24 +608,28 @@ pub(crate) fn insert_enum_metadata(
         .chain(std::iter::once("UnitEnum".to_string()))
         .chain(backing_type.as_ref().map(|_| "BackedEnum".to_string()))
         .collect();
-    let mut interfaces = declared_interfaces.clone();
-    let mut index = 0;
-    while index < interfaces.len() {
-        if let Some(interface) = checker.interfaces.get(&interfaces[index]) {
-            for parent in &interface.parents {
-                if !interfaces.contains(parent) {
-                    interfaces.push(parent.clone());
-                }
-            }
-        }
-        index += 1;
+    let interfaces = enum_interface_names(implements, backing_type.is_some(), checker);
+    // php lists `name` before a backed enum's `value`; the slots keep `value` first (see above).
+    let mut reflection_properties: Vec<String> =
+        properties.iter().map(|(name, _)| name.clone()).collect();
+    reflection_properties.sort_by_key(|property| property != "name");
+    // php registers the enum's own methods, then `cases` (and `from`/`tryFrom` for a backed
+    // enum). A parsed enum's trait methods move after those in `build_enum_info`.
+    let mut reflection_methods: Vec<String> =
+        user_methods.iter().map(|method| method.name.clone()).collect();
+    reflection_methods.push("cases".to_string());
+    if backing_type.is_some() {
+        reflection_methods.push("from".to_string());
+        reflection_methods.push("tryFrom".to_string());
     }
+    let property_slot_declaring_classes = properties.iter().map(|_| name.to_string()).collect();
 
     checker.classes.insert(
         name.to_string(),
         ClassInfo {
             class_id: *next_class_id,
             declaration_span,
+            doc_comment: None,
             is_internal,
             parent: None,
             is_abstract: false,
@@ -596,7 +640,7 @@ pub(crate) fn insert_enum_metadata(
             clone_override_property_storage: false,
             scope_dynamic_property_storage: false,
             constants,
-            constant_order: user_constants.iter().map(|constant| constant.name.clone()).collect(),
+            constant_order,
             constant_deprecations: user_constants
                 .iter()
                 .filter_map(|constant| {
@@ -630,12 +674,17 @@ pub(crate) fn insert_enum_metadata(
             property_declared_slots,
             final_properties,
             readonly_properties,
+            backed_hooked_properties: HashSet::new(),
             reference_properties,
             owned_reference_properties: HashSet::new(),
             promoted_properties: HashSet::new(),
             property_reference_slots,
+            property_slot_declaring_classes,
+            property_owned_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
             abstract_property_hooks: HashMap::new(),
+            reflection_properties,
+            reflection_methods,
             property_hooks: HashMap::new(),
             static_properties: Vec::new(),
             static_defaults: Vec::new(),
@@ -680,6 +729,105 @@ pub(crate) fn insert_enum_metadata(
     Ok(())
 }
 
+/// Validates PHP's reserved enum-interface rules before enum metadata is registered.
+fn validate_enum_interfaces(
+    enum_name: &str,
+    implements: &[crate::names::Name],
+    is_backed: bool,
+    span: crate::span::Span,
+    checker: &Checker,
+) -> Result<(), CompileError> {
+    for interface in implements {
+        let interface_name = interface.as_str();
+        let interface_key = php_symbol_key(interface_name);
+        if interface_key == php_symbol_key("UnitEnum")
+            || interface_key == php_symbol_key("BackedEnum")
+        {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Enum {} cannot explicitly implement interface {}",
+                    enum_name, interface_name
+                ),
+            ));
+        }
+        if !is_backed && checker.interface_extends_interface(interface_name, "BackedEnum") {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Non-backed enum {} cannot implement interface BackedEnum",
+                    enum_name
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Returns an enum's explicit, implicit, and inherited interfaces in PHP-visible order.
+fn enum_interface_names(
+    implements: &[crate::names::Name],
+    is_backed: bool,
+    checker: &Checker,
+) -> Vec<String> {
+    let explicit = implements
+        .iter()
+        .map(|interface| canonical_interface_name(checker, interface.as_str()))
+        .collect::<Vec<_>>();
+    let mut interfaces = explicit.clone();
+    push_unique_interface_name("UnitEnum", &mut interfaces);
+    if is_backed {
+        push_unique_interface_name("BackedEnum", &mut interfaces);
+    }
+    for interface_name in &explicit {
+        append_interface_parents(interface_name, checker, &mut interfaces);
+    }
+    interfaces
+}
+
+/// Resolves one interface name to the declaration's canonical spelling.
+fn canonical_interface_name(checker: &Checker, interface_name: &str) -> String {
+    // Same predicate, no lowercased `String` per interface: `php_symbol_key` is the ASCII
+    // fold, and this runs once per parent hop of a recursive interface walk.
+    checker
+        .interfaces
+        .keys()
+        .find(|candidate| candidate.eq_ignore_ascii_case(interface_name))
+        .cloned()
+        .unwrap_or_else(|| interface_name.to_string())
+}
+
+/// Appends the transitive parents of one enum interface without duplicates.
+fn append_interface_parents(
+    interface_name: &str,
+    checker: &Checker,
+    interfaces: &mut Vec<String>,
+) {
+    let canonical = canonical_interface_name(checker, interface_name);
+    let Some(interface) = checker.interfaces.get(&canonical) else {
+        return;
+    };
+    let parents = interface.parents.clone();
+    for parent in parents {
+        let parent = canonical_interface_name(checker, &parent);
+        if push_unique_interface_name(&parent, interfaces) {
+            append_interface_parents(&parent, checker, interfaces);
+        }
+    }
+}
+
+/// Adds one interface name when no PHP-case-insensitive equivalent is present.
+fn push_unique_interface_name(interface_name: &str, interfaces: &mut Vec<String>) -> bool {
+    if interfaces
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(interface_name))
+    {
+        return false;
+    }
+    interfaces.push(interface_name.to_string());
+    true
+}
+
 /// Appends one synthetic public readonly enum case property to class metadata.
 fn push_enum_readonly_property(
     property: &str,
@@ -707,3 +855,55 @@ fn push_enum_readonly_property(
     readonly_properties.insert(property);
     property_reference_slots.push(false);
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::types::PhpType;
+
+    fn checked(source: &str) -> crate::types::CheckResult {
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let program = crate::name_resolver::resolve(program).expect("resolve");
+        crate::types::check(&program).expect("check")
+    }
+
+    /// The propagation itself, on a class table set up by hand: an undeclared abstract method
+    /// takes its implementation's return type through every parent without its own body, and a
+    /// declared one keeps its declaration.
+    #[test]
+    fn abstract_returns_take_the_implementations_type() {
+        let check = checked(
+            "<?php abstract class A { abstract public function make(); abstract public function name(): int|string; }
+            abstract class B extends A {}
+            class C extends B { public function make(): int { return 42; } public function name(): int { return 1; } }
+            echo (new C())->make(), (new C())->name();",
+        );
+        let target = crate::codegen::platform::Target::parse("macos-aarch64").expect("target");
+        let mut checker = super::super::super::Checker::new(target);
+        for name in ["A", "B", "C"] {
+            let mut info = check.classes.get(name).expect(name).clone();
+            if name == "C" {
+                info.methods.get_mut("make").expect("C::make").return_type = PhpType::Int;
+            } else {
+                info.method_impl_classes.clear();
+                for sig in info.methods.values_mut() {
+                    if !sig.declared_return {
+                        sig.return_type = PhpType::Mixed;
+                    }
+                }
+            }
+            checker.classes.insert(name.to_string(), info);
+        }
+        super::propagate_abstract_return_types(&mut checker);
+        for parent in ["A", "B"] {
+            let info = checker.classes.get(parent).expect(parent);
+            assert_eq!(info.methods.get("make").map(|sig| &sig.return_type), Some(&PhpType::Int), "{parent}");
+            assert_ne!(
+                info.methods.get("name").map(|sig| &sig.return_type),
+                Some(&PhpType::Int),
+                "{parent} keeps its declaration"
+            );
+        }
+    }
+}
+

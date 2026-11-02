@@ -11,6 +11,7 @@
 //!   is an object pointer, and every read of the same case returns the same one.
 
 use crate::codegen::abi;
+use crate::codegen_support;
 use crate::ir::Instruction;
 
 use super::super::context::FunctionContext;
@@ -52,9 +53,9 @@ pub(super) fn lower_scoped_constant_get(
             // failing shape was `f(D::Ascending)` through a typed parameter followed
             // by a `D::Descending` read.
             //
-            // Over-retaining is the safe direction here: the case is a
-            // process-lifetime singleton owned by its slot, so an extra reference
-            // only guarantees what should already be true — it can never be freed.
+            // The enum lowering marks this reference Owned, so ordinary temporary
+            // retirement balances this retain while the singleton slot keeps its
+            // own reference until terminal script cleanup.
             abi::emit_incref_if_refcounted(
                 ctx.emitter,
                 &crate::types::PhpType::Object(class_name.clone()),
@@ -65,10 +66,17 @@ pub(super) fn lower_scoped_constant_get(
     if builtins::has_eval_context(ctx) {
         return builtins::lower_eval_class_constant_fetch(ctx, inst, &class_name, &constant_name);
     }
-    Err(CodegenIrError::unsupported(format!(
-        "scoped constant {}::{}",
-        class_name, constant_name
-    )))
+    emit_unknown_class_fatal(ctx, &class_name);
+    store_if_result(ctx, inst)
+}
+
+/// Emits PHP's runtime fatal for a scoped constant whose receiver class was unavailable during
+/// closed-world compilation, preserving lazy class resolution for paths that never execute.
+fn emit_unknown_class_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) {
+    let message = format!("Fatal error: Uncaught Error: Class \"{}\" not found\n", class_name);
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+    codegen_support::emit_write_literal_stderr(ctx.emitter, &message_label, message_len);
+    abi::emit_exit(ctx.emitter, 1);
 }
 
 /// Resolves the string immediate `Enum::Case` attached to a scoped constant read.

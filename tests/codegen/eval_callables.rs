@@ -13,7 +13,42 @@
 //!   container of only the supplied arguments, while a method bridge is called directly with one
 //!   argument per physical parameter, hidden slots included.
 
-use crate::support::{compile_and_run, compile_and_run_capture, compile_and_run_with_regex};
+use crate::support::{
+    compile_and_run, compile_and_run_capture, compile_and_run_with_heap_debug,
+    compile_and_run_with_regex,
+};
+
+/// Interpreted object-method callable arrays release the receiver their array read retained.
+///
+/// Normalizing `[$t, 'm']` reads the receiver out of the array with one owned reference, which
+/// the dispatch then dropped: `$cb(7)`, `call_user_func()` (positional and named), and
+/// `call_user_func_array()` each leaked one 48-byte box per call while `$t->m(7)` stayed clean.
+#[test]
+fn test_eval_object_callable_arrays_release_their_receiver_after_the_call() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+eval('
+class LeakProbe { public function m($v) { return $v * 2; } }
+$t = new LeakProbe();
+$sum = 0;
+for ($i = 0; $i < 40; $i++) {
+    $cb = [$t, "m"];
+    $sum += $cb(1);
+    $sum += call_user_func([$t, "m"], 1);
+    $sum += call_user_func([$t, "m"], v: 1);
+    $sum += call_user_func_array([$t, "m"], [1]);
+}
+echo $sum, "\n";
+');
+"#,
+    );
+    assert_eq!(out.stdout, "320\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "callable-array receivers leaked:\n{}",
+        out.stderr
+    );
+}
 
 /// Verifies eval string and first-class AOT function callables preserve by-ref writeback.
 #[test]
@@ -1919,6 +1954,117 @@ return implode("|", $out);');
     );
 }
 
+/// An eval closure with a boolean result can be retained by an AOT object property and invoked
+/// after the eval frame returns, covering callable descriptor metadata across that ownership edge.
+#[test]
+fn test_eval_bool_closure_stored_in_aot_property_invokes_after_eval_returns() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalBoolValidator {
+    private ?\Closure $validator = null;
+    public function setValidator(?\Closure $validator): void { $this->validator = $validator; }
+    public function validate(array $values): bool { return ($this->validator)($values); }
+}
+$validator = new EvalBoolValidator();
+eval('class EvalBoolValidatorFactory { public function register(EvalBoolValidator $validator): void { $validator->setValidator(static fn (array $values): bool => !in_array("blocked", $values, true)); } }');
+$factory = eval('return new EvalBoolValidatorFactory();');
+$factory->register($validator);
+echo $validator->validate(['ready']) ? 'yes' : 'no';
+"#,
+    );
+
+    assert_eq!(out, "yes");
+}
+
+/// Multiple Eval closures with different return types remain callable after an AOT builder stores
+/// them in separate Closure-typed properties and the declaring eval frame has returned.
+#[test]
+fn test_eval_bool_and_array_closures_survive_aot_builder_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalClosureBuilder {
+    private ?\Closure $predicate = null;
+    private ?\Closure $normalizer = null;
+    public function setCallbacks(\Closure $predicate, \Closure $normalizer): void {
+        $this->predicate = $predicate;
+        $this->normalizer = $normalizer;
+    }
+    public function normalize(array $values): array {
+        if (!($this->predicate)($values)) {
+            return [];
+        }
+        return ($this->normalizer)($values);
+    }
+}
+$builder = new EvalClosureBuilder();
+eval('class EvalClosureBuilderFactory { public function configure(EvalClosureBuilder $builder): void { $builder->setCallbacks(static fn (array $values): bool => !in_array("blocked", $values, true), static fn (array $values): array => array_merge(["default"], $values)); } }');
+$factory = eval('return new EvalClosureBuilderFactory();');
+$factory->configure($builder);
+echo implode(",", $builder->normalize(["ready"]));
+"#,
+    );
+
+    assert_eq!(out, "default,ready");
+}
+
+/// Eval closures returned from a builder method and stored in an AOT array remain callable during
+/// later array traversal, covering the callback-array path used by normalizers and validators.
+#[test]
+fn test_eval_closures_stored_in_aot_array_invoke_after_eval_returns() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalClosureList {
+    private array $callbacks = [];
+    public function add(\Closure $callback): void { $this->callbacks[] = $callback; }
+    public function validate(array $values): bool {
+        foreach ($this->callbacks as $callback) {
+            if (!$callback($values)) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+$list = new EvalClosureList();
+eval('class EvalClosureListFactory { public function configure(EvalClosureList $list): void { $list->add(static fn (array $values): bool => !in_array("blocked", $values, true)); $list->add(static fn (array $values): bool => is_array($values)); } }');
+$factory = eval('return new EvalClosureListFactory();');
+$factory->configure($list);
+echo $list->validate(['ready']) ? 'yes' : 'no';
+"#,
+    );
+
+    assert_eq!(out, "yes");
+}
+
+/// Mirrors the nullable Closure parameter and stored-predicate flow of a generic fluent builder.
+#[test]
+fn test_eval_closure_through_nullable_aot_builder_parameter_invokes_after_eval_returns() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalNullableClosureBuilder {
+    public ?\Closure $ifPart = null;
+    public string $allowedTypes = '';
+    public function ifTrue(?\Closure $closure = null): static {
+        $this->ifPart = $closure ?? static fn ($value) => true === $value;
+        $this->allowedTypes = $closure ? '*' : 'bool';
+        return $this;
+    }
+    public function evaluate(mixed $value): bool { return ($this->ifPart)($value); }
+}
+$builder = new EvalNullableClosureBuilder();
+eval('class EvalNullableClosureFactory { public function configure(EvalNullableClosureBuilder $builder): void { $builder->ifTrue(static fn (array $values): bool => !in_array("blocked", $values, true)); } }');
+$factory = eval('return new EvalNullableClosureFactory();');
+$factory->configure($builder);
+echo ($builder->evaluate(['ready']) ? 'yes' : 'no') . ':';
+$defaultBuilder = new EvalNullableClosureBuilder();
+$defaultBuilder->ifTrue(null);
+echo $defaultBuilder->evaluate(true) ? 'yes' : 'no';
+"#,
+    );
+
+    assert_eq!(out, "yes:yes");
+}
+
 /// Verifies eval dynamic callable descriptors preserve AOT caller by-ref variables.
 #[test]
 fn test_eval_dynamic_callable_params_write_back_aot_by_ref_args() {
@@ -1998,6 +2144,34 @@ return $box->value . "|" . $box->apply($callback, 4) . "|" .
         out,
         "string:ctor:string:ctor|string:method:string:method|string:static:string:static"
     );
+}
+
+/// Verifies a Throwable from a dynamic eval callable crosses an AOT method and native catch.
+#[test]
+fn test_eval_dynamic_callable_throwable_crosses_aot_method_to_native_catch() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_dynamic_callable_throwing_aot(): int {
+    throw new RuntimeException("eval callable boom");
+}
+
+class EvalDynamicCallableThrowableBridgeBox {
+    public function invoke(callable $callback): int {
+        return $callback();
+    }
+}
+
+$box = new EvalDynamicCallableThrowableBridgeBox();
+try {
+    eval('return $box->invoke("eval_dynamic_callable_throwing_aot");');
+    echo "bad";
+} catch (RuntimeException $caught) {
+    echo get_class($caught) . ":" . $caught->getMessage();
+}
+"#,
+    );
+
+    assert_eq!(out, "RuntimeException:eval callable boom");
 }
 
 /// Verifies `Closure::call()` rebinds method closures but passes later args by value.
@@ -2273,6 +2447,77 @@ echo $invoke($b, 5) . ":" . gettype($b) . ":" . $b;');
     assert_eq!(out, "25:integer:25|29:integer:29");
 }
 
+/// Verifies eval receives a boxed concrete object from an AOT method declared with an interface return.
+#[test]
+fn test_eval_aot_method_interface_return_boxes_concrete_object() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalAotReturnContract {}
+
+class EvalAotReturnConcrete implements EvalAotReturnContract {
+    public function marker(): string {
+        return "ok";
+    }
+}
+
+class EvalAotReturnOwner {
+    public function resolve(): EvalAotReturnContract {
+        return new EvalAotReturnConcrete();
+    }
+}
+
+echo eval('$owner = new EvalAotReturnOwner();
+$value = $owner->resolve();
+echo $value instanceof EvalAotReturnContract ? $value->marker() : "bad";');
+"#,
+    );
+
+    assert_eq!(out, "ok");
+}
+
+/// Verifies eval adapts a reflected callable before an AOT interface-returning method uses it.
+#[test]
+fn test_eval_aot_reflected_callable_method_returns_interface_object() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalReflectionResolver {
+    public function resolve(): string;
+}
+
+class EvalReflectionClosureResolver implements EvalReflectionResolver {
+    public function __construct(
+        private readonly Closure $callable,
+        private readonly Closure $arguments,
+    ) {}
+
+    public function resolve(): string {
+        return ($this->callable)(...($this->arguments)());
+    }
+}
+
+class EvalReflectionRuntime {
+    public function getResolver(
+        callable $callable,
+        ?ReflectionFunction $reflector = null,
+    ): EvalReflectionResolver {
+        $callable = $callable(...);
+        $reflector ??= new ReflectionFunction($callable);
+        $parameters = [];
+        $arguments = function () use ($parameters): array { return $parameters; };
+
+        return new EvalReflectionClosureResolver($callable, $arguments);
+    }
+}
+
+echo eval('$runtime = new EvalReflectionRuntime();
+$callback = static function (): string { return "ok"; };
+echo $runtime->getResolver($callback)->resolve();');
+"#,
+    );
+
+    assert_eq!(out, "ok");
+}
+
 /// Verifies first-class eval method closures bind inherited method targets to subclasses.
 #[test]
 fn test_eval_first_class_closure_bind_accepts_inherited_eval_method_targets() {
@@ -2475,6 +2720,30 @@ return is_null(Closure::bind($eval, null, "EvalBindFromCallableScopeBox")) ? "f"
     assert_eq!(out, "A:x|A:y|a|b|E:u|E:v|e|f");
 }
 
+/// Verifies an eval Closure crossing an AOT callable parameter retains Reflection metadata.
+#[test]
+fn test_eval_callable_adapter_reflection_parameters_keep_concrete_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalCallableReflectionProbe {
+    public function inspect(callable $callable, ?ReflectionFunction $reflector = null): void {
+        $reflection = $reflector ?? new ReflectionFunction($callable);
+        $parameters = $reflection->getParameters();
+        echo count($parameters) . ':';
+        foreach ($parameters as $parameter) {
+            echo $parameter->getType()->getName();
+        }
+    }
+}
+
+$runtime = eval('return new EvalCallableReflectionProbe();');
+$callback = eval('return static function (array $context): object { return new stdClass(); };');
+$runtime->inspect($callback);
+"#,
+    );
+    assert_eq!(out, "1:array");
+}
+
 /// Verifies ReflectionFunction reports retained metadata for Closure callables.
 #[test]
 fn test_eval_reflection_function_reports_from_callable_closure_metadata() {
@@ -2547,6 +2816,184 @@ aot-method:EvalReflectClosureMetaAotBox:EvalReflectClosureMetaAotBox:EvalReflect
 eval-method:EvalReflectClosureMetaEvalBox:EvalReflectClosureMetaEvalBox:EvalReflectClosureMetaEvalBox:s|\
 aot-invoke:EvalReflectClosureMetaAotBox:EvalReflectClosureMetaAotBox:EvalReflectClosureMetaAotBox:s|\
 eval-static:null:EvalReflectClosureMetaEvalBox:EvalReflectClosureMetaEvalBox:S"
+    );
+}
+
+
+/// An eval subclass that redeclares an inherited property default is seen with that default by
+/// its compiled parent's methods, which read the native slot. Symfony's interpreted
+/// `CheckTypeDeclarationsPass` redeclares `$skipScalars = true` over the compiled
+/// `AbstractRecursivePass`, whose `processValue()` kept reading `false`.
+#[test]
+fn test_eval_subclass_redeclared_default_reaches_compiled_parent() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Base {
+    protected bool $flag = false;
+    protected ?string $name = null;
+    public function show(): string { return var_export($this->flag, true) . ',' . var_export($this->name, true); }
+}
+if (false) { new class extends Base {}; }
+eval('class Child extends Base { protected bool $flag = true; protected ?string $name = "child"; }');
+echo (new Child())->show();
+"#,
+    );
+    assert_eq!(out, "true,'child'");
+}
+
+/// A throw inside a compiled first-class callable called from eval code still reaches the
+/// interpreted `catch`: the invoker's boundary applies when the interpreter is the caller.
+#[test]
+fn test_eval_catches_throw_from_compiled_first_class_callable() {
+    let out = compile_and_run(
+        r#"<?php
+class NotFound extends InvalidArgumentException {}
+function thrower(string $n): string { throw new NotFound("nf:$n"); }
+$GLOBALS['f'] = thrower(...);
+eval('try { ($GLOBALS["f"])("x"); echo "no throw"; } catch (NotFound $e) { echo "caught ", $e->getMessage(); }');
+"#,
+    );
+    assert_eq!(out, "caught nf:x");
+}
+
+/// Every interpreted spelling that reaches a compiled callable descriptor keeps a throw catchable
+/// by the interpreted `try`, while a compiled `$f()` over the same descriptor still unwinds to
+/// its compiled `catch`. The descriptor invoker consumes the interpreter's boundary request: it
+/// was raised but never read, so the throw unwound natively past the eval and died uncaught.
+#[test]
+fn test_eval_catches_throw_from_compiled_callable_descriptors() {
+    let out = compile_and_run(
+        r#"<?php
+class NotFoundAgain extends InvalidArgumentException {}
+function thrower_again(string $n): string { throw new NotFoundAgain("nf:$n"); }
+$g = thrower_again(...);
+$h = fn ($n) => thrower_again($n);
+eval('try { $g("b"); echo "no throw"; } catch (NotFoundAgain $e) { echo "caught ", $e->getMessage(), "|"; }');
+eval('try { call_user_func($g, "c"); echo "no throw"; } catch (NotFoundAgain $e) { echo "caught ", $e->getMessage(), "|"; }');
+eval('try { $h("d"); echo "no throw"; } catch (NotFoundAgain $e) { echo "caught ", $e->getMessage(), "|"; }');
+try { $g("e"); } catch (NotFoundAgain $e) { echo "compiled ", $e->getMessage(), "|"; }
+eval('try { try { $g("f"); } finally { echo "finally|"; } } catch (Exception $e) { echo "outer ", $e->getMessage(); }');
+"#,
+    );
+    assert_eq!(
+        out,
+        "caught nf:b|caught nf:c|caught nf:d|compiled nf:e|finally|outer nf:f"
+    );
+}
+
+/// A function declared inside `if (!function_exists(...))` is callable from eval under its public
+/// name once its declaration ran, and one whose guard stayed false does not exist for eval, which
+/// may then declare the name itself.
+#[test]
+fn test_eval_callback_builtins_take_compiled_closures() {
+    // A compiled closure reaches interpreted code as its callable descriptor. Only `$f()` knew
+    // that shape; every callback builtin normalized it by its string form, found no function of
+    // that name, and refused it -- Laravel's interpreted `Arr::map()` is `array_map($callback,
+    // $array, $keys)` over a compiled closure.
+    let out = compile_and_run(
+        r#"<?php
+$inc = fn ($v) => $v + 1;
+$cmp = function ($a, $b) { return $a <=> $b; };
+$pair = fn ($v, $k) => "$k=$v";
+$named = fn (int $a, int $b = 10) => $a * $b;
+eval('echo implode(",", array_map($inc, [1, 2])), "\n";
+$list = [3, 1, 2];
+usort($list, $cmp);
+echo implode(",", $list), "\n";
+echo implode(",", array_map($pair, ["x" => 1, "y" => 2], ["x", "y"])), "\n";
+echo call_user_func($inc, 4), " ", call_user_func_array($named, [2]), " ", call_user_func_array($named, ["b" => 3, "a" => 2]), "\n";
+var_dump(is_callable($inc));');
+"#,
+    );
+    assert_eq!(out, "2,3\n1,2,3\nx=1,y=2\n5 20 6\nbool(true)\n");
+}
+
+#[test]
+fn test_eval_passes_surplus_arguments_to_compiled_closures_and_functions() {
+    // php hands a user function or closure surplus positional arguments without complaint;
+    // Laravel's `Arr::mapWithKeys()` calls every callback as `$callback($value, $key)`, and a
+    // compiled one-parameter closure was refused outright when interpreted code called it.
+    let out = compile_and_run(
+        r#"<?php
+class M { public $p = "x"; function run() { $f = function ($package) { return [$this->p . $package => 1]; }; return eval('return $f("a", "b");'); } }
+var_dump((new M)->run());
+function one($a) { return "one:$a"; }
+$g = fn ($v) => "g:$v";
+eval('echo $g(1, 2), " ", one(3, 4), "\n";');
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [\"xa\"]=>\n  int(1)\n}\ng:1 one:3\n");
+}
+
+#[test]
+fn test_eval_calls_conditionally_declared_compiled_function() {
+    let out = compile_and_run(
+        r#"<?php
+if (!function_exists('cond_value')) {
+    function cond_value($value, ...$args) { return $value instanceof Closure ? $value(...$args) : $value; }
+}
+if (function_exists('strlen') === false) {
+    function strlen_never($x) { return -1; }
+}
+echo cond_value(3), "|";
+eval('echo cond_value(5), "|", cond_value(fn () => 6), "|", cond_value(fn ($a) => $a * 2, 7), "|";');
+eval('echo function_exists("strlen_never") ? "declared" : "absent", "|";');
+eval('function strlen_never($x) { return "eval"; } echo strlen_never(1);');
+"#,
+    );
+    assert_eq!(out, "3|5|6|14|absent|eval");
+}
+
+/// An interpreted callable handed to a compiled `Closure`/`callable` parameter becomes a
+/// descriptor at the bridge: closures, function names, array and static-string callables, through
+/// a variadic spread, and through a `mixed` parameter narrowed by `instanceof Closure`.
+#[test]
+fn test_eval_callables_reach_compiled_callable_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function call_typed(Closure $value) { return $value(); }
+function call_callable(callable $value) { return $value(); }
+function call_spread($value, ...$args) { return $value(...$args); }
+function call_narrowed($value) { return $value instanceof Closure ? $value() : $value; }
+function named_five() { return 5; }
+class Box { public function nine() { return 9; } public static function ten() { return 10; } }
+echo call_spread(fn () => 1), call_narrowed(2), "|";
+eval('echo call_typed(fn () => 3), call_callable(function () { return 4; }), "|";');
+eval('echo call_spread(fn ($a) => $a + 1, 4), call_spread(fn () => 6), "|";');
+eval('echo call_narrowed(fn () => 7), call_narrowed(8), "|";');
+eval('echo call_callable("named_five"), call_callable([new Box(), "nine"]), call_callable("Box::ten"), "|";');
+eval('function ev_fn() { return "e"; } echo call_callable("ev_fn");');
+"#,
+    );
+    assert_eq!(out, "12|34|56|78|5910|e");
+}
+
+/// Named arguments to a method of an object the compiled site cannot type (an eval-declared
+/// class, or any receiver typed only `object`) bind by name at run time instead of by position.
+#[test]
+fn test_named_args_bind_by_name_on_open_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvBuilder {
+    public function withRouting(?Closure $using = null, array|string|null $web = null, ?string $commands = null, ?string $health = null, string $apiPrefix = "api") {
+        return ($using === null ? "null" : "closure") . "|" . var_export($web, true) . "|" . var_export($commands, true) . "|" . var_export($health, true) . "|" . $apiPrefix;
+    }
+}');
+class Local { public function withRouting($a = 1, $web = 2, $health = 3) { return "$a/$web/$health"; } }
+function via_object(object $o) { return $o->withRouting(health: 'H', web: 'W'); }
+$cls = 'EvBuilder';
+$b = new $cls();
+echo $b->withRouting(web: 'w.php', commands: 'c.php', health: '/up'), "\n";
+echo $b->withRouting(null, 'x', health: '/h'), "\n";
+echo via_object($b), "\n";
+echo via_object(new Local()), "\n";
+$m = $argc > 5 ? $b : new Local();
+echo $m->withRouting(health: 'h2'), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "null|'w.php'|'c.php'|'/up'|api\nnull|'x'|NULL|'/h'|api\nnull|'W'|NULL|'H'|api\n1/W/H\n1/2/h2\n"
     );
 }
 

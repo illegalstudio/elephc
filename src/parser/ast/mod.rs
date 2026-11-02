@@ -14,6 +14,7 @@ mod operators;
 mod oop;
 mod stmt;
 mod types;
+pub(crate) mod visit;
 
 pub use expr::{
     is_compound_assignment_self_read, is_compound_property_assignment_self_read, ArrayEntry,
@@ -28,7 +29,7 @@ pub use oop::{
     Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl,
     PropertyHooks, TraitAdaptation, TraitUse, Visibility,
 };
-pub use stmt::{CatchClause, Program, Stmt, StmtKind, UseItem, UseKind};
+pub use stmt::{CatchClause, ClassLikeKind, Program, Stmt, StmtKind, UseItem, UseKind};
 pub use types::{GenericDecl, TypeExpr, TypeParam, Variance};
 
 /// Name prefix of the temporary a nested append (`$a[$k][] = $v`) reads its bucket into.
@@ -44,6 +45,14 @@ pub use types::{GenericDecl, TypeExpr, TypeParam, Variance};
 /// here is unaffected by that suffix.
 pub const NESTED_APPEND_TEMP_PREFIX: &str = "__elephc_napp_";
 
+/// Name prefix of the hidden local `$values[$key] = &$object->property` binds to the property's
+/// reference cell before storing that local's reference into the array element.
+///
+/// The parser mints it in `stmt::assign::postfix::parse_complex_ref_assignment`, and the checker
+/// recognizes it to refuse the shape: an array element that aliases a typed property cell is not
+/// something the native backend lays out (the element read back null), so the class that writes it
+/// is handed to the runtime autoloader (or the build is refused) instead of miscompiling.
+pub const ARRAY_PROPERTY_REF_TEMP_PREFIX: &str = "__elephc_refsrc_";
 /// Attribute the include rewrite puts on the `break` an included file's `return` becomes.
 ///
 /// `resolver::engine_includes::confine_nested_returns` turns each `return` of an included file

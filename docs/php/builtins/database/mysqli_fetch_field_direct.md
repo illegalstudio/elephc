@@ -2,7 +2,7 @@
 title: "mysqli_fetch_field_direct()"
 description: "Returns metadata for one column of a result by index."
 sidebar:
-  order: 123
+  order: 134
 ---
 
 ## mysqli_fetch_field_direct()

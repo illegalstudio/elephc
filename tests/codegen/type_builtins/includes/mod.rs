@@ -11,5 +11,7 @@ use super::*;
 
 mod basic;
 mod discovery;
+mod declaration_activation;
 mod function_variants;
 mod paths_and_errors;
+mod native_eval_once;

@@ -23,7 +23,7 @@ pub(super) fn prescan(checker: &mut Checker, program: &Program) {
         pending.retain(|(name, value)| {
             if checker.constants.contains_key(*name) { return false; }
             if !known_tree(checker, value) { return true; }
-            if let Ok(ty) = checker.infer_type(value, &TypeEnv::new()) {
+            if let Ok(ty) = checker.infer_type(value, &TypeEnv::default()) {
                 checker.constants.insert((*name).clone(), ty);
                 return false;
             }

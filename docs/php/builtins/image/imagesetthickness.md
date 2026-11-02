@@ -2,7 +2,7 @@
 title: "imagesetthickness()"
 description: "Sets the line thickness used by subsequent drawing."
 sidebar:
-  order: 539
+  order: 552
 ---
 
 ## imagesetthickness()

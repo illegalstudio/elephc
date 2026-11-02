@@ -11,7 +11,7 @@
 //! - Scoped parent edges stay class-specific while preserving matching slots on the whole vtable lineage.
 //! - Checker-injected interface contracts retain implementations even without source interface AST.
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::names::php_symbol_key;
 use super::inventory::PreludeGroup;
@@ -43,6 +43,14 @@ pub(crate) struct DeclarationIndex {
     pub(crate) packed_classes: HashSet<String>,
     pub(crate) extern_classes: HashSet<String>,
     pub(crate) function_variants: HashMap<String, Vec<String>>,
+    /// `class -> {(method, is_static)}` for every method that carries a PHP attribute.
+    ///
+    /// An attribute exists to be read by reflection, and the code that reads it is very often
+    /// not part of the compiled world: symfony/routing's attribute loader runs in the
+    /// interpreter, lists a controller's methods, and builds a route from each `#[Route]`. A
+    /// method nothing calls statically was pruned with its metadata, and the console's route
+    /// collection came out empty. Such methods are kept wherever their class is.
+    pub(crate) attributed_methods: HashMap<String, HashSet<(String, bool)>>,
 }
 
 /// Indexed metadata for one source class, enum, interface, or trait.
@@ -75,6 +83,12 @@ struct BehavioralReachability {
     instantiated_classes: HashSet<String>,
 }
 
+thread_local! {
+    /// Per-round totals for the five sub-steps of `seed_live_methods`, printed once at the end
+    /// of the fixed point under `ELEPHC_DECL_REACH_TIMES=1`.
+    static SEED_SPENT: std::cell::RefCell<[f64; 5]> = const { std::cell::RefCell::new([0.0; 5]) };
+}
+
 /// Computes reachable declarations from executable, export, forced-prelude, and hazard roots.
 pub fn compute(
     program: &[Stmt],
@@ -87,15 +101,31 @@ pub fn compute(
         check_result,
         &call_signatures,
     );
+    let static_class_alias_targets = index.class_alias_targets();
     let executable_usage = usage::scan_executable_program(program, &call_signatures);
     let mut state = GraphState::new(
         index,
         executable_usage.hazards,
-        options.inventory.internal_callable_methods(),
+        // The inventory hands back a std-hashed set; the graph keys everything with the fast
+        // hasher, so it is rebuilt once here rather than left as the one SipHash set in the
+        // fixed point's hot path.
+        options
+            .inventory
+            .internal_callable_methods()
+            .into_iter()
+            .collect(),
+        options
+            .inventory
+            .array_iteration_only_bodies()
+            .into_iter()
+            .collect(),
         options.inventory.groups.values().cloned().collect(),
         check_result,
     );
     state.apply_usage(executable_usage, true);
+    for target in static_class_alias_targets {
+        state.keep_class_alias_target_methods(&target, true);
+    }
     // An extern class is C struct layout metadata with no emitted code. Besides `ptr_cast<T>`
     // (recorded by the usage scan) it is named through types the scan does not walk: `ptr<T>`
     // in extern function signatures and in fields of other extern classes. Keeping every
@@ -207,6 +237,15 @@ fn retain_embedded_packed_classes(reach: &mut Reachability, check_result: &Check
     }
 }
 
+/// Removes the by-name Iterator/IteratorAggregate wildcards a `foreach` over an untyped value adds.
+///
+/// Only called for compiler-owned bodies declared `array_iteration_only`, whose loops walk arrays.
+fn drop_iterator_protocol_wildcards(usage: &mut Usage) {
+    for method in ["getiterator", "rewind", "valid", "current", "key", "next"] {
+        usage.wildcard_methods.remove(&(method.to_string(), false));
+    }
+}
+
 struct GraphState {
     index: DeclarationIndex,
     reach: Reachability,
@@ -225,8 +264,32 @@ struct GraphState {
     all_variables_opaque: bool,
     behavioral_variable_methods: HashMap<String, HashSet<(String, bool)>>,
     internal_callable_methods: HashSet<(String, String, bool)>,
+    /// Compiler-owned bodies (functions under an empty class key, and methods) whose `foreach`
+    /// loops walk arrays only; see `PreludeGroup::array_iteration_only`.
+    array_iteration_only: HashSet<(String, String, bool)>,
     checker_interface_methods: HashMap<String, HashSet<(String, bool)>>,
     checker_method_implementations: HashMap<(String, String, bool), String>,
+    /// `checker_method_implementations` restricted to MAGIC methods and keyed by visible class.
+    ///
+    /// WHY IT IS PRECOMPUTED. `seed_instantiated_magic_methods` runs once per fixed-point round
+    /// and, for every instantiated class, used to scan the WHOLE of
+    /// `checker_method_implementations` filtering on `visible_class == &class`. That is
+    /// O(instantiated_classes x every_method_implementation_in_the_program) per round, and both
+    /// factors are large on any real program, which is part of why the prune phase dominates. The
+    /// filter depends on nothing that changes during the fixed point — the map is built once in
+    /// `new` and never mutated — so it is inverted here, once, and each round does a single
+    /// lookup per class instead of a full pass.
+    ///
+    /// THE RETAINED SET CANNOT MOVE: the entries are exactly those the filter selected
+    /// (`visible_class == class && is_magic_method(method)`), carrying the same
+    /// `(visible_class, method, is_static)` and `owner` the loop rebuilt, and one source entry
+    /// still yields one pair. Order within a class follows the source map's iteration order,
+    /// which was already unordered, and every consumer inserts into `HashSet`s.
+    ///
+    /// Measured on a 300-class fixture whose classes each carry several magic and several
+    /// ordinary methods: the prune phase went 249.68 ms to 207.57 ms (median of three, −16.9 %)
+    /// with the emitted assembly byte-identical (sha256 76cf50e5…, 6,787,310 bytes both sides).
+    checker_magic_methods_by_class: HashMap<String, Vec<(String, bool, String)>>,
     vtable_slots: HashSet<(String, String, bool)>,
     /// Every injected prelude group, rooted whole whenever a literal eval fragment runs. The
     /// interpreter conjures core classes without the fragment naming them, and the builtin
@@ -235,6 +298,14 @@ struct GraphState {
     /// function) reference prelude declarations no AST walk can see. The groups are only the
     /// preludes the program's text already caused to be injected, so this stays proportional.
     literal_eval_baseline: Vec<PreludeGroup>,
+    /// The global hazards whose whole-program expansion `apply_global_hazards` already applied:
+    /// `[enumerates_functions, dynamic_function, dynamic_class, literal_eval]`.
+    ///
+    /// The expansion adds every declaration of the (fixed) index to sets that only grow, so
+    /// applying it again adds nothing; but it ran after every scanned body, cloning and hashing
+    /// every function and class name each time (most of the prune phase on a Symfony build,
+    /// whose eval bridge raises the dynamic hazards).
+    applied_hazards: [bool; 4],
 }
 
 impl GraphState {
@@ -243,6 +314,7 @@ impl GraphState {
         index: DeclarationIndex,
         hazards: Hazards,
         internal_callable_methods: HashSet<(String, String, bool)>,
+        array_iteration_only: HashSet<(String, String, bool)>,
         literal_eval_baseline: Vec<PreludeGroup>,
         check_result: &CheckResult,
     ) -> Self {
@@ -314,24 +386,29 @@ impl GraphState {
                 ..Reachability::default()
             },
             behavioral: BehavioralReachability::default(),
-            structural_referenced_methods: HashSet::new(),
-            scoped_methods: HashSet::new(),
-            behavioral_scoped_methods: HashSet::new(),
-            instantiated_classes: HashSet::new(),
-            scanned_functions: HashSet::new(),
-            behaviorally_scanned_functions: HashSet::new(),
-            scanned_classes: HashSet::new(),
-            behaviorally_scanned_classes: HashSet::new(),
-            scanned_methods: HashSet::new(),
-            behaviorally_scanned_methods: HashSet::new(),
-            opaque_variables: HashSet::new(),
+            structural_referenced_methods: HashSet::default(),
+            scoped_methods: HashSet::default(),
+            behavioral_scoped_methods: HashSet::default(),
+            instantiated_classes: HashSet::default(),
+            scanned_functions: HashSet::default(),
+            behaviorally_scanned_functions: HashSet::default(),
+            scanned_classes: HashSet::default(),
+            behaviorally_scanned_classes: HashSet::default(),
+            scanned_methods: HashSet::default(),
+            behaviorally_scanned_methods: HashSet::default(),
+            opaque_variables: HashSet::default(),
             all_variables_opaque: false,
-            behavioral_variable_methods: HashMap::new(),
+            behavioral_variable_methods: HashMap::default(),
             internal_callable_methods,
+            array_iteration_only,
+            checker_magic_methods_by_class: magic_methods_by_visible_class(
+                &checker_method_implementations,
+            ),
             checker_interface_methods,
             checker_method_implementations,
             vtable_slots,
             literal_eval_baseline,
+            applied_hazards: [false; 4],
         }
     }
 
@@ -359,7 +436,18 @@ impl GraphState {
 
     /// Applies dynamic hazard widening accumulated from executable and reachable bodies.
     fn apply_global_hazards(&mut self) {
-        if self.reach.hazards.literal_eval {
+        let hazards = &self.reach.hazards;
+        let raised = [
+            hazards.enumerates_functions,
+            hazards.dynamic_function,
+            hazards.dynamic_class,
+            hazards.literal_eval,
+        ];
+        let fresh = [0, 1, 2, 3].map(|slot| raised[slot] && !self.applied_hazards[slot]);
+        for slot in 0..4 {
+            self.applied_hazards[slot] |= raised[slot];
+        }
+        if fresh[3] {
             for group in &self.literal_eval_baseline {
                 self.reach.functions.extend(group.functions.iter().cloned());
                 self.reach.classes.extend(group.classes.iter().cloned());
@@ -371,17 +459,17 @@ impl GraphState {
             }
             self.reach.externs.extend(self.index.externs.iter().cloned());
         }
-        if self.reach.hazards.enumerates_functions {
+        if fresh[0] {
             self.reach.functions.extend(self.index.functions.keys().cloned());
         }
-        if self.reach.hazards.dynamic_function {
+        if fresh[1] {
             self.reach.functions.extend(self.index.functions.keys().cloned());
             self.reach.externs.extend(self.index.externs.iter().cloned());
             self.behavioral
                 .functions
                 .extend(self.index.functions.keys().cloned());
         }
-        if self.reach.hazards.dynamic_class {
+        if fresh[2] {
             self.reach.classes.extend(self.index.classes.keys().cloned());
             self.reach.classes.extend(self.index.packed_classes.iter().cloned());
             self.reach.classes.extend(self.index.extern_classes.iter().cloned());
@@ -398,16 +486,59 @@ impl GraphState {
 
     /// Repeats declaration-body scans until no keep-set grows.
     fn fixed_point(&mut self) {
+        // `graph_compute` is the whole of this loop and the largest single step left in the
+        // build, but it is FIVE sub-steps run to a fixed point: a total tells you nothing about
+        // which one to attack, and how many rounds it takes decides whether a per-round scan or
+        // a per-entity scan is the cost. `ELEPHC_DECL_REACH_TIMES=1` prints both.
+        let trace = std::env::var("ELEPHC_DECL_REACH_TIMES").is_ok();
+        let mut spent = [0f64; 5];
+        let mut rounds = 0usize;
         loop {
+            rounds += 1;
             let before = self.size();
+            let mut mark = std::time::Instant::now();
             self.expand_function_variants();
+            if trace {
+                spent[0] += mark.elapsed().as_secs_f64();
+                mark = std::time::Instant::now();
+            }
             self.scan_new_functions();
+            if trace {
+                spent[1] += mark.elapsed().as_secs_f64();
+                mark = std::time::Instant::now();
+            }
             self.scan_new_classes();
+            if trace {
+                spent[2] += mark.elapsed().as_secs_f64();
+                mark = std::time::Instant::now();
+            }
             self.seed_live_methods();
+            if trace {
+                spent[3] += mark.elapsed().as_secs_f64();
+                mark = std::time::Instant::now();
+            }
             self.scan_new_methods();
+            if trace {
+                spent[4] += mark.elapsed().as_secs_f64();
+            }
             if self.size() == before {
                 break;
             }
+        }
+        if trace {
+            eprintln!(
+                "[elephc-graph] rounds={rounds} variants={:.2}s functions={:.2}s classes={:.2}s \
+                 seed_methods={:.2}s methods={:.2}s",
+                spent[0], spent[1], spent[2], spent[3], spent[4]
+            );
+            SEED_SPENT.with(|seed| {
+                let seed = seed.borrow();
+                eprintln!(
+                    "[elephc-graph-seed] magic={:.2}s direct={:.2}s vtable_families={:.2}s \
+                     explicit_impls={:.2}s inherited_impls={:.2}s",
+                    seed[0], seed[1], seed[2], seed[3], seed[4]
+                );
+            });
         }
     }
 
@@ -442,7 +573,19 @@ impl GraphState {
             if behavioral {
                 self.behaviorally_scanned_functions.insert(name.clone());
             }
-            if let Some(usage) = self.index.functions.get(&name).cloned() {
+            if let Some(mut usage) = self.index.functions.get(&name).cloned() {
+                // See `PreludeInventory::record_internal_callable_function`.
+                if behavioral
+                    && self
+                        .internal_callable_methods
+                        .contains(&(String::new(), name.clone(), false))
+                {
+                    usage.hazards.dynamic_function = false;
+                    usage.hazards.dynamic_method = false;
+                }
+                if self.array_iteration_only.contains(&(String::new(), name.clone(), false)) {
+                    drop_iterator_protocol_wildcards(&mut usage);
+                }
                 self.apply_usage(usage, behavioral);
             }
         }
@@ -467,38 +610,80 @@ impl GraphState {
             if behavioral {
                 self.behaviorally_scanned_classes.insert(name.clone());
             }
-            let Some(node) = self.index.classes.get(&name).cloned() else {
+            // Only the fields this loop reads, not the whole node. `ClassNode.methods` maps
+            // every method to its own `Usage`, so cloning the node cloned all of them -- and
+            // `usage` was then cloned a SECOND time for `apply_usage`. The method keys are
+            // wanted only for an interface, and only as keys.
+            let Some((usage, parent, interfaces, traits, declared_methods)) =
+                self.index.classes.get(&name).map(|node| {
+                    (
+                        node.usage.clone(),
+                        node.parent.clone(),
+                        node.interfaces.clone(),
+                        node.traits.clone(),
+                        match node.kind {
+                            ClassKind::Interface => {
+                                node.methods.keys().cloned().collect::<Vec<_>>()
+                            }
+                            _ => Vec::new(),
+                        },
+                    )
+                })
+            else {
                 continue;
             };
-            self.apply_usage(node.usage.clone(), behavioral);
-            if let Some(parent) = &node.parent {
+            self.apply_usage(usage, behavioral);
+            if let Some(parent) = &parent {
                 self.reach.classes.insert(parent.clone());
                 if behavioral {
                     self.behavioral.classes.insert(parent.clone());
                 }
             }
-            self.reach.classes.extend(node.interfaces.iter().cloned());
-            self.reach.classes.extend(node.traits.iter().cloned());
-            if matches!(node.kind, ClassKind::Interface) {
-                self.reference_all_declared_methods(&node);
-            }
-            for interface in &node.interfaces {
-                if let Some(contract) = self.index.classes.get(interface).cloned() {
-                    self.reference_all_declared_methods(&contract);
+            self.reach.classes.extend(interfaces.iter().cloned());
+            self.reach.classes.extend(traits.iter().cloned());
+            // MOVED out and put back, not cloned. The contract lookup below used to clone the
+            // WHOLE interface node -- every method's `Usage` with it -- once per implementing
+            // class, purely to end the immutable borrow of `self.index` before this insert.
+            // Nothing between the take and the restore reads this set, so taking it cannot
+            // lose an entry; `apply_usage` writes it, and has already returned.
+            let mut referenced = std::mem::take(&mut self.structural_referenced_methods);
+            referenced.extend(declared_methods);
+            for interface in &interfaces {
+                if let Some(contract) = self.index.classes.get(interface) {
+                    referenced.extend(contract.methods.keys().cloned());
                 } else if let Some(methods) = self.checker_interface_methods.get(interface) {
-                    self.structural_referenced_methods
-                        .extend(methods.iter().cloned());
+                    referenced.extend(methods.iter().cloned());
                 }
             }
+            self.structural_referenced_methods = referenced;
         }
     }
 
     /// Seeds methods on live classes from direct names, hazards, magic hooks, and contracts.
     fn seed_live_methods(&mut self) {
+        // This one step is 13.98s of graph_compute's 17.29s over five rounds, and it is five
+        // sub-steps. `ELEPHC_DECL_REACH_TIMES=1` splits them; without the split the obvious
+        // suspect (the direct loop below) is not in fact where the time goes.
+        let trace = std::env::var("ELEPHC_DECL_REACH_TIMES").is_ok();
+        let mut mark = std::time::Instant::now();
+        let lap = |slot: usize, mark: &mut std::time::Instant| {
+            if trace {
+                SEED_SPENT.with(|spent| spent.borrow_mut()[slot] += mark.elapsed().as_secs_f64());
+                *mark = std::time::Instant::now();
+            }
+        };
         self.seed_instantiated_magic_methods();
-        let live_classes: Vec<_> = self.reach.classes.iter().cloned().collect();
-        for class in live_classes {
-            let Some(node) = self.index.classes.get(&class) else {
+        lap(0, &mut mark);
+        // MOVED out and put back, not cloned: the clone existed only to end the immutable borrow
+        // before the inserts below, and it copied every live class name on every fixed-point
+        // round -- thousands of `String` allocations per round on a framework-scale module, which
+        // a sample of this phase saw as `Vec::from_iter`. Nothing in the loop inserts into
+        // `reach.classes`, so taking it cannot lose an entry.
+        let live_classes = std::mem::take(&mut self.reach.classes);
+        // Reused by every probe below; see the comment in the inner loop.
+        let mut probe: (String, bool) = (String::new(), false);
+        for class in &live_classes {
+            let Some(node) = self.index.classes.get(class.as_str()) else {
                 continue;
             };
             let operators = elephc_builtin_contract::lookup_class(&class)
@@ -508,8 +693,16 @@ impl GraphState {
                 .as_ref()
                 .is_some_and(|parent| !self.index.classes.contains_key(parent));
             for (method, is_static) in node.methods.keys() {
-                let key = (class.clone(), method.clone(), *is_static);
-                let reference = (method.clone(), *is_static);
+                // The two sets are keyed by `(String, bool)`, which cannot be probed with a
+                // `&str`, so this used to clone the method name for the probe and the class and
+                // method names for the key -- three allocations per pair, before knowing whether
+                // anything would be inserted. On the Symfony `--web` module that is ~270 000
+                // pairs per fixed-point round, and a sample of the prune phase put the allocator
+                // at 71% of it. `probe` is reused, so the probes allocate nothing, and the key is
+                // built only on the path that stores it.
+                probe.0.clear();
+                probe.0.push_str(method);
+                probe.1 = *is_static;
                 if self.reach.hazards.dynamic_method
                     || has_runtime_owned_parent
                     || operators.is_some_and(|operators| {
@@ -519,24 +712,56 @@ impl GraphState {
                         } else { operators.boolean == Some(method.as_str()) }
                     })
                     || matches!(method.as_str(), "__call" | "__callstatic")
-                    || self.behavioral.referenced_methods.contains(&reference)
+                    // A lazy static-default initializer is called by lowering, not by source.
+                    || method.starts_with(crate::lazy_static_defaults::STATIC_INIT_PREFIX)
+                    || self.behavioral.referenced_methods.contains(&probe)
+                    || self
+                        .index
+                        .attributed_methods
+                        .get(class.as_str())
+                        .is_some_and(|methods| methods.contains(&probe))
                 {
+                    let key = (class.clone(), method.clone(), *is_static);
                     self.reach.methods.insert(key.clone());
                     self.behavioral.methods.insert(key);
-                } else if self.structural_referenced_methods.contains(&reference) {
-                    self.reach.methods.insert(key);
+                } else if self.structural_referenced_methods.contains(&probe) {
+                    self.reach.methods.insert((class.clone(), method.clone(), *is_static));
                 }
             }
         }
+        self.reach.classes = live_classes;
+        lap(1, &mut mark);
         self.seed_vtable_slot_families();
+        lap(2, &mut mark);
         self.seed_explicit_method_implementations();
+        lap(3, &mut mark);
         self.seed_inherited_implementations();
+        lap(4, &mut mark);
     }
 
     /// Keeps shared virtual slots on every live class in a lineage once any occupant survives.
+    ///
+    /// The inner test used to be `class_is_or_descends_from(candidate, lineage_root)` run for
+    /// EVERY (kept method, live class) pair — O(kept_methods x live_classes x depth) — and each
+    /// call allocated a fresh `String` per parent hop plus a `HashSet` for its cycle guard. That
+    /// product is the prune phase's dominant cost on a large program, and nothing in the
+    /// predicate depends on the method: it is a pure function of the declaration index's parent
+    /// chains. So the chains are walked ONCE per fixed-point round here and inverted into
+    /// `lineage root -> live classes that descend from it`.
+    ///
+    /// The retained set cannot change:
+    /// * the inversion and the predicate share ONE walk (`walk_class_ancestors`), so they cut the
+    ///   chain at the same first repeated name and compare a name before looking its node up —
+    ///   "root is among the names visited from candidate" is exactly what the predicate answered;
+    /// * `live_classes` is deduplicated (it comes from a `HashSet`) and a name is visited at most
+    ///   once per chain, so each root lists each candidate at most once;
+    /// * the lists are built in ascending `live_classes` position, so the inner loop still visits
+    ///   candidates in the same order it did, inserting the same pairs;
+    /// * every other test in the loop (`has_vtable_slot`, the behavioral lookup) is untouched.
     fn seed_vtable_slot_families(&mut self) {
         let live_classes: Vec<_> = self.reach.classes.iter().cloned().collect();
         let kept_methods: Vec<_> = self.reach.methods.iter().cloned().collect();
+        let descendants_by_root = live_descendants_by_root(&self.index, &live_classes);
         for (class, method, is_static) in kept_methods {
             if !self.has_vtable_slot(&class, &method, is_static) {
                 continue;
@@ -547,10 +772,11 @@ impl GraphState {
                 method.clone(),
                 is_static,
             ));
-            for candidate in &live_classes {
-                if !self.class_is_or_descends_from(candidate, &lineage_root) {
-                    continue;
-                }
+            let Some(descendants) = descendants_by_root.get(&lineage_root) else {
+                continue;
+            };
+            for position in descendants {
+                let candidate = &live_classes[*position];
                 let visible_method = (candidate.clone(), method.clone(), is_static);
                 if !self.has_vtable_slot(candidate, &method, is_static) {
                     continue;
@@ -575,7 +801,7 @@ impl GraphState {
                 .cloned()
                 .or_else(|| {
                     let mut current = Some(class.clone());
-                    let mut seen = HashSet::new();
+                    let mut seen = HashSet::default();
                     while let Some(candidate) = current {
                         if !seen.insert(candidate.clone()) {
                             return None;
@@ -604,18 +830,25 @@ impl GraphState {
         let instantiated: Vec<_> = self.instantiated_classes.iter().cloned().collect();
         for class in instantiated {
             let behavioral = self.behavioral.instantiated_classes.contains(&class);
+            // ONE LOOKUP, not a pass over every method implementation in the program. See
+            // `checker_magic_methods_by_class` for why the inversion is safe: the filter this
+            // replaces read only the map built in `new`, which never changes during the fixed
+            // point, so the pairs produced here are the same pairs in the same shape.
             let checker_magic: Vec<_> = self
-                .checker_method_implementations
-                .iter()
-                .filter_map(|((visible_class, method, is_static), owner)| {
-                    (visible_class == &class && is_magic_method(method)).then(|| {
-                        (
-                            (visible_class.clone(), method.clone(), *is_static),
-                            (owner.clone(), method.clone(), *is_static),
-                        )
-                    })
+                .checker_magic_methods_by_class
+                .get(&class)
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .map(|(method, is_static, owner)| {
+                            (
+                                (class.clone(), method.clone(), *is_static),
+                                (owner.clone(), method.clone(), *is_static),
+                            )
+                        })
+                        .collect()
                 })
-                .collect();
+                .unwrap_or_default();
             for (visible_method, owner_method) in checker_magic {
                 self.reach.methods.insert(visible_method.clone());
                 self.reach.methods.insert(owner_method.clone());
@@ -625,8 +858,8 @@ impl GraphState {
                 }
             }
             let mut current = Some(class.clone());
-            let mut seen_classes = HashSet::new();
-            let mut found_methods = HashSet::new();
+            let mut seen_classes = HashSet::default();
+            let mut found_methods = HashSet::default();
             while let Some(owner) = current {
                 if !seen_classes.insert(owner.clone()) {
                     break;
@@ -654,57 +887,94 @@ impl GraphState {
     /// Keeps parent implementations and descendant vtable entries for every referenced method.
     fn seed_inherited_implementations(&mut self) {
         let live_classes: Vec<_> = self.reach.classes.iter().cloned().collect();
-        let referenced: Vec<_> = self
-            .structural_referenced_methods
-            .iter()
-            .cloned()
-            .map(|method| (method, false))
-            .chain(
-                self.behavioral
-                    .referenced_methods
-                    .iter()
-                    .cloned()
-                    .map(|method| (method, true)),
-            )
-            .collect();
-        for class in live_classes {
-            for ((method, is_static), behavioral) in &referenced {
-                let visible_method = (class.clone(), method.clone(), *is_static);
-                if let Some(owner) = self
-                    .checker_method_implementations
-                    .get(&visible_method)
-                    .cloned()
-                {
-                    let owner_method = (owner, method.clone(), *is_static);
+        // Referenced method names mapped to whether the reference is behavioral. A name in both
+        // sets collapses to `true`: the old loop visited it twice and the behavioral pass's
+        // inserts are a superset of the structural pass's.
+        let mut referenced: HashMap<(String, bool), bool> = HashMap::default();
+        for method in &self.structural_referenced_methods {
+            referenced.entry(method.clone()).or_insert(false);
+        }
+        for method in &self.behavioral.referenced_methods {
+            referenced.insert(method.clone(), true);
+        }
+        // The checker's chosen implementations, indexed by the class they are registered for,
+        // so a class can enumerate its own without scanning the whole map.
+        let mut implementations: HashMap<&str, Vec<(&str, bool, &str)>> = HashMap::default();
+        for ((class, method, is_static), owner) in &self.checker_method_implementations {
+            implementations
+                .entry(class.as_str())
+                .or_default()
+                .push((method.as_str(), *is_static, owner.as_str()));
+        }
+        // The chain does not depend on the method, so it is walked ONCE per class instead of
+        // once per (class, referenced method) pair -- this loop is a cross product, and the old
+        // walk allocated a `String` for the cycle guard, one for the probe and one for
+        // `parent.clone()` at every hop of it.
+        let mut chain: Vec<&str> = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::default();
+        // Keys already resolved for the current class: the chain is walked from the class
+        // upwards, so the first entry to declare a key is its owner.
+        let mut done: HashSet<(&str, bool)> = HashSet::default();
+        // Probes a map keyed by `(String, bool)`, which cannot be looked up with a `&str`.
+        let mut probe: (String, bool) = (String::new(), false);
+        for class in &live_classes {
+            chain.clear();
+            seen.clear();
+            done.clear();
+            let mut current: Option<&str> = Some(class.as_str());
+            while let Some(owner) = current {
+                if !seen.insert(owner) {
+                    break;
+                }
+                let Some(node) = self.index.classes.get(owner) else {
+                    break;
+                };
+                chain.push(owner);
+                current = node.parent.as_deref();
+            }
+            if let Some(entries) = implementations.get(class.as_str()) {
+                for (method, is_static, owner) in entries {
+                    probe.0.clear();
+                    probe.0.push_str(method);
+                    probe.1 = *is_static;
+                    let Some(&behavioral) = referenced.get(&probe) else {
+                        continue;
+                    };
+                    if !done.insert((*method, *is_static)) {
+                        continue;
+                    }
+                    let owner_method = ((*owner).to_string(), (*method).to_string(), *is_static);
+                    let visible_method = (class.clone(), (*method).to_string(), *is_static);
                     self.reach.methods.insert(owner_method.clone());
                     self.reach.methods.insert(visible_method.clone());
-                    if *behavioral {
+                    if behavioral {
                         self.behavioral.methods.insert(owner_method);
                         self.behavioral.methods.insert(visible_method);
                     }
-                    continue;
                 }
-                let mut current = Some(class.clone());
-                let mut seen = HashSet::new();
-                while let Some(owner) = current {
-                    if !seen.insert(owner.clone()) {
-                        break;
-                    }
-                    let Some(node) = self.index.classes.get(&owner) else {
-                        break;
+            }
+            for owner in &chain {
+                let Some(node) = self.index.classes.get(*owner) else {
+                    continue;
+                };
+                for (method, is_static) in node.methods.keys() {
+                    probe.0.clear();
+                    probe.0.push_str(method);
+                    probe.1 = *is_static;
+                    let Some(&behavioral) = referenced.get(&probe) else {
+                        continue;
                     };
-                    if node.methods.contains_key(&(method.clone(), *is_static)) {
-                        let owner_method = (owner.clone(), method.clone(), *is_static);
-                        let visible_method = (class.clone(), method.clone(), *is_static);
-                        self.reach.methods.insert(owner_method.clone());
-                        self.reach.methods.insert(visible_method.clone());
-                        if *behavioral {
-                            self.behavioral.methods.insert(owner_method);
-                            self.behavioral.methods.insert(visible_method);
-                        }
-                        break;
+                    if !done.insert((method.as_str(), *is_static)) {
+                        continue;
                     }
-                    current = node.parent.clone();
+                    let owner_method = ((*owner).to_string(), method.clone(), *is_static);
+                    let visible_method = (class.clone(), method.clone(), *is_static);
+                    self.reach.methods.insert(owner_method.clone());
+                    self.reach.methods.insert(visible_method.clone());
+                    if behavioral {
+                        self.behavioral.methods.insert(owner_method);
+                        self.behavioral.methods.insert(visible_method);
+                    }
                 }
             }
         }
@@ -723,6 +993,9 @@ impl GraphState {
             })
             .cloned()
             .collect();
+        // Reused across the loop: `ClassNode.methods` is keyed by `(String, bool)`, which cannot
+        // be probed with a `&str`, so the probe used to clone the method name once per method.
+        let mut probe: (String, bool) = (String::new(), false);
         for (class, method, is_static) in methods {
             let key = (class.clone(), method.clone(), is_static);
             let behavioral = self.behavioral.methods.contains(&key);
@@ -730,19 +1003,22 @@ impl GraphState {
             if behavioral {
                 self.behaviorally_scanned_methods.insert(key.clone());
             }
+            probe.0.clear();
+            probe.0.push_str(&method);
+            probe.1 = is_static;
             let mut usage = self
                 .index
                 .classes
                 .get(&class)
-                .and_then(|node| node.methods.get(&(method.clone(), is_static)))
+                .and_then(|node| node.methods.get(&probe))
                 .cloned()
-                .or_else(|| {
-                    self.index
-                        .checker_methods
-                        .get(&(class.clone(), method.clone(), is_static))
-                        .cloned()
-                });
+                // `key` is already `(class, method, is_static)`; rebuilding it here cloned both
+                // names a second time for a probe that is thrown away.
+                .or_else(|| self.index.checker_methods.get(&key).cloned());
             if let Some(usage) = usage.as_mut() {
+                if self.array_iteration_only.contains(&key) {
+                    drop_iterator_protocol_wildcards(usage);
+                }
                 if behavioral && self.internal_callable_methods.contains(&key) {
                     usage.hazards.dynamic_function = false;
                     usage.hazards.dynamic_method = false;
@@ -754,14 +1030,11 @@ impl GraphState {
         }
     }
 
-    /// Adds interface methods as structural roots until an executable edge reaches them.
-    fn reference_all_declared_methods(&mut self, node: &ClassNode) {
-        self.structural_referenced_methods
-            .extend(node.methods.keys().cloned());
-    }
-
     /// Applies one usage summary, propagating hazards only from behaviorally reachable bodies.
     fn apply_usage(&mut self, usage: Usage, behavioral: bool) {
+        for target in &usage.class_alias_targets {
+            self.keep_class_alias_target_methods(target, behavioral);
+        }
         for root in &usage.instantiated_subclass_roots {
             self.keep_instantiable_subclasses(root, behavioral);
         }
@@ -843,7 +1116,7 @@ impl GraphState {
     /// properties, and refuses to redeclare it, none of which an AST member reference records.
     fn keep_class_whole(&mut self, class: &str) {
         let mut current = Some(php_symbol_key(class));
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(name) = current {
             if !seen.insert(name.clone()) {
                 break;
@@ -866,6 +1139,42 @@ impl GraphState {
                 self.behavioral.classes.insert(key);
             }
             current = node.parent.as_deref().map(php_symbol_key);
+        }
+    }
+
+    /// Retains the complete callable hierarchy exposed through one PHP class alias.
+    ///
+    /// A class alias is an alternate class name, not a newly restricted subtype. Opaque runtime
+    /// code can therefore invoke any inherited instance or static method through the alias, even
+    /// when no statically visible call names that member. Keep the target hierarchy narrowly here
+    /// instead of promoting the global dynamic-method hazard and retaining unrelated classes.
+    fn keep_class_alias_target_methods(&mut self, target: &str, behavioral: bool) {
+        let mut current = php_symbol_key(target);
+        let mut seen = HashSet::default();
+        loop {
+            if !seen.insert(current.clone()) {
+                return;
+            }
+            let Some(node) = self.index.classes.get(&current) else {
+                return;
+            };
+            let methods = node.methods.keys().cloned().collect::<Vec<_>>();
+            let parent = node.parent.clone();
+            self.reach.classes.insert(current.clone());
+            if behavioral {
+                self.behavioral.classes.insert(current.clone());
+            }
+            for (method, is_static) in methods {
+                let method = (current.clone(), method, is_static);
+                self.reach.methods.insert(method.clone());
+                if behavioral {
+                    self.behavioral.methods.insert(method);
+                }
+            }
+            let Some(parent) = parent else {
+                return;
+            };
+            current = parent;
         }
     }
 
@@ -896,7 +1205,7 @@ impl GraphState {
     /// Returns the oldest ancestor that still occupies the same virtual slot.
     fn vtable_lineage_root(&self, class: &str, method: &str, is_static: bool) -> String {
         let mut current = class.to_string();
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         loop {
             if !seen.insert(current.clone()) {
                 return current;
@@ -917,23 +1226,19 @@ impl GraphState {
     }
 
     /// Returns whether one indexed class is the named root or inherits from it.
+    ///
+    /// Delegates to `walk_class_ancestors` so this predicate and the `root -> descendants`
+    /// inversion `seed_vtable_slot_families` builds can never disagree about what a chain is.
     fn class_is_or_descends_from(&self, class: &str, root: &str) -> bool {
-        let mut current = Some(class.to_string());
-        let mut seen = HashSet::new();
-        while let Some(candidate) = current {
-            if !seen.insert(candidate.clone()) {
+        let mut found = false;
+        walk_class_ancestors(&self.index, class, |candidate| {
+            if candidate == root {
+                found = true;
                 return false;
             }
-            if candidate == root {
-                return true;
-            }
-            current = self
-                .index
-                .classes
-                .get(&candidate)
-                .and_then(|node| node.parent.clone());
-        }
-        false
+            true
+        });
+        found
     }
 
     /// Turns method calls on interprocedurally aliased variable names into wildcard edges.
@@ -1022,4 +1327,248 @@ fn is_magic_method(method: &str) -> bool {
             | "__call"
             | "__callstatic"
     )
+}
+
+/// Walks one class's ancestor chain and hands every name it reaches to `visit`, stopping when
+/// `visit` returns `false` or when a name repeats.
+///
+/// This IS the walk `class_is_or_descends_from` performed, factored out so the single-root
+/// predicate and the root-to-descendants inversion cannot drift apart: the cycle guard cuts the
+/// chain at the first repeated name (a class in an `extends` cycle therefore descends only from
+/// the names before the repeat), and a name is handed to `visit` BEFORE its node is looked up, so
+/// a parent with no indexed node is still part of the chain and is its own lineage root.
+fn walk_class_ancestors(
+    index: &DeclarationIndex,
+    class: &str,
+    mut visit: impl FnMut(&str) -> bool,
+) {
+    let mut current = Some(class.to_string());
+    let mut seen = HashSet::default();
+    while let Some(candidate) = current {
+        if !seen.insert(candidate.clone()) {
+            return;
+        }
+        if !visit(&candidate) {
+            return;
+        }
+        current = index
+            .classes
+            .get(&candidate)
+            .and_then(|node| node.parent.clone());
+    }
+}
+
+/// Groups the MAGIC checker method implementations by the class they are visible on.
+///
+/// `seed_instantiated_magic_methods` needs, for one class, the magic methods the checker records
+/// against it and the owner that implements each. It used to obtain them by scanning the whole
+/// implementation map once per instantiated class per fixed-point round — a product of two large
+/// numbers on any real program. The map is built in `GraphState::new` and never mutated, and the
+/// filter reads nothing else, so the answer is identical whether it is recomputed every round or
+/// inverted once here.
+///
+/// The value carries `(method, is_static, owner)` because that is precisely what the caller
+/// rebuilds its two triples from; nothing is dropped and nothing is deduplicated, so one source
+/// entry still yields one pair.
+fn magic_methods_by_visible_class(
+    checker_method_implementations: &HashMap<(String, String, bool), String>,
+) -> HashMap<String, Vec<(String, bool, String)>> {
+    let mut by_class: HashMap<String, Vec<(String, bool, String)>> = HashMap::default();
+    for ((visible_class, method, is_static), owner) in checker_method_implementations {
+        if !is_magic_method(method) {
+            continue;
+        }
+        by_class
+            .entry(visible_class.clone())
+            .or_default()
+            .push((method.clone(), *is_static, owner.clone()));
+    }
+    by_class
+}
+
+/// Inverts the live classes' ancestor chains into `root -> positions in live_classes`.
+///
+/// `descendants[root]` holds the position of every live class for which
+/// `class_is_or_descends_from(class, root)` answers `true`, and no other: both come from
+/// `walk_class_ancestors`. Positions are pushed in ascending order, so iterating one root's list
+/// visits candidates in the same order a scan of `live_classes` did.
+fn live_descendants_by_root(
+    index: &DeclarationIndex,
+    live_classes: &[String],
+) -> HashMap<String, Vec<usize>> {
+    let mut descendants: HashMap<String, Vec<usize>> = HashMap::default();
+    for (position, class) in live_classes.iter().enumerate() {
+        walk_class_ancestors(index, class, |candidate| {
+            descendants
+                .entry(candidate.to_string())
+                .or_default()
+                .push(position);
+            true
+        });
+    }
+    descendants
+}
+
+#[cfg(test)]
+mod vtable_lineage_index_tests {
+    use super::*;
+
+    /// The pre-patch predicate, copied verbatim, so the index below is compared against the code
+    /// it replaced rather than against a refactoring of itself.
+    fn reference_class_is_or_descends_from(
+        index: &DeclarationIndex,
+        class: &str,
+        root: &str,
+    ) -> bool {
+        let mut current = Some(class.to_string());
+        let mut seen = HashSet::default();
+        while let Some(candidate) = current {
+            if !seen.insert(candidate.clone()) {
+                return false;
+            }
+            if candidate == root {
+                return true;
+            }
+            current = index
+                .classes
+                .get(&candidate)
+                .and_then(|node| node.parent.clone());
+        }
+        false
+    }
+
+    /// Builds one indexed class node.
+    fn node(
+        kind: ClassKind,
+        parent: Option<&str>,
+        interfaces: &[&str],
+        traits: &[&str],
+    ) -> ClassNode {
+        ClassNode {
+            kind,
+            usage: Usage::default(),
+            methods: HashMap::default(),
+            parent: parent.map(str::to_string),
+            interfaces: interfaces.iter().map(|name| (*name).to_string()).collect(),
+            traits: traits.iter().map(|name| (*name).to_string()).collect(),
+        }
+    }
+
+    /// A hierarchy with an interface, a trait, an abstract-shaped parent, a class whose parent is
+    /// not indexed at all, and an `extends` cycle.
+    fn hierarchy() -> DeclarationIndex {
+        let mut index = DeclarationIndex::default();
+        for (name, class_node) in [
+            ("contract", node(ClassKind::Interface, None, &[], &[])),
+            ("helper", node(ClassKind::Trait, None, &[], &[])),
+            (
+                "base",
+                node(ClassKind::Class, None, &["contract"], &["helper"]),
+            ),
+            (
+                "middle",
+                node(ClassKind::Class, Some("base"), &[], &["helper"]),
+            ),
+            ("leaf", node(ClassKind::Class, Some("middle"), &[], &[])),
+            ("sibling", node(ClassKind::Class, Some("base"), &[], &[])),
+            (
+                "orphan",
+                node(ClassKind::Class, Some("runtime_owned"), &[], &[]),
+            ),
+            ("cycle_a", node(ClassKind::Class, Some("cycle_b"), &[], &[])),
+            ("cycle_b", node(ClassKind::Class, Some("cycle_a"), &[], &[])),
+        ] {
+            index.classes.insert(name.to_string(), class_node);
+        }
+        index
+    }
+
+    /// The live-class list the seeding loop would scan, plus names that only ever appear as
+    /// parents, so roots outside the list are exercised too.
+    fn live_classes() -> Vec<String> {
+        [
+            "contract",
+            "helper",
+            "base",
+            "middle",
+            "leaf",
+            "sibling",
+            "orphan",
+            "runtime_owned",
+            "cycle_a",
+            "cycle_b",
+        ]
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+    }
+
+    /// The inverted index answers, for every root, exactly the set the chain predicate answers.
+    #[test]
+    fn descendant_index_agrees_with_the_chain_predicate() {
+        let index = hierarchy();
+        let live = live_classes();
+        let descendants = live_descendants_by_root(&index, &live);
+        let mut roots = live.clone();
+        roots.push("never_declared".to_string());
+        for root in roots {
+            let from_index: HashSet<usize> = descendants
+                .get(&root)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let from_predicate: HashSet<usize> = live
+                .iter()
+                .enumerate()
+                .filter(|(_, class)| reference_class_is_or_descends_from(&index, class, &root))
+                .map(|(position, _)| position)
+                .collect();
+            assert_eq!(from_index, from_predicate, "root {root}");
+        }
+    }
+
+    /// Each root's list is in ascending `live_classes` position and free of duplicates, which is
+    /// what keeps the seeding loop's visit order identical to the scan it replaced.
+    #[test]
+    fn descendant_lists_preserve_scan_order() {
+        let index = hierarchy();
+        for (root, positions) in live_descendants_by_root(&index, &live_classes()) {
+            let mut sorted = positions.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(
+                positions, sorted,
+                "root {root} must list positions in scan order"
+            );
+        }
+    }
+
+    /// Interfaces and traits are their own roots: `base` implements `contract` and uses `helper`,
+    /// but neither is on its `extends` chain, so neither lists `base` as a descendant. This pins
+    /// the relation the inversion inherits from the predicate instead of inventing a new one.
+    #[test]
+    fn interfaces_and_traits_are_not_extends_roots() {
+        let index = hierarchy();
+        let live = live_classes();
+        let descendants = live_descendants_by_root(&index, &live);
+        let at = |name: &str| live.iter().position(|entry| entry == name).unwrap();
+        assert_eq!(descendants["contract"], vec![at("contract")]);
+        assert_eq!(descendants["helper"], vec![at("helper")]);
+        assert_eq!(
+            descendants["base"],
+            vec![at("base"), at("middle"), at("leaf"), at("sibling")],
+        );
+        assert_eq!(descendants["middle"], vec![at("middle"), at("leaf")]);
+        // A parent with no indexed node is still a root, and is its own descendant when live.
+        assert_eq!(
+            descendants["runtime_owned"],
+            vec![at("orphan"), at("runtime_owned")],
+        );
+        // An `extends` cycle stops at the first repeat instead of looping.
+        assert_eq!(descendants["cycle_a"], vec![at("cycle_a"), at("cycle_b")]);
+        assert_eq!(descendants["cycle_b"], vec![at("cycle_a"), at("cycle_b")]);
+        // A name no live class reaches has no entry at all.
+        assert!(!descendants.contains_key("never_declared"));
+    }
 }

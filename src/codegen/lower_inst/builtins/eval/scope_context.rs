@@ -200,13 +200,27 @@ pub(super) fn ensure_eval_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Uses the main eval scope as global storage, or allocates a distinct function-global scope.
+/// Ensures a persistent eval global-scope exists and stores its handle in scratch.
+///
+/// At true program top level (`is_main`) the calling scope IS the global scope: nothing tells
+/// them apart the way a function's locals differ from the program's real globals. Reusing the
+/// SAME persistent scope object `ensure_eval_scope` already ensures -- rather than the ordinarily
+/// separate one this function allocates -- means a dynamically included or eval'd fragment's own
+/// top-level names (never known to the AOT compiler, e.g. a dynamically selected vendor file) and
+/// the native globals `flush_eval_global_scope`/`reload_eval_global_scope` sync into this handle
+/// by name land in the SAME place. `context.global_scope_ptr()` (installed from this handle by
+/// `set_eval_context_global_scope`) is what `$GLOBALS`, `global $x;`, and php's auto-global
+/// superglobals resolve through from inside a function or method the fragment declares, so both
+/// halves must agree on which object that is. Non-`is_main` call sites (eval()/include() written
+/// inside a PHP function) keep the separate object: there, the calling scope is that function's
+/// own locals, not the program's real global scope.
 pub(super) fn ensure_eval_global_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
     if ctx.is_main {
-        // Top-level eval declarations and `global` inside eval functions share storage.
-        // Only EvalScope owns this handle; leave EvalGlobalScope null to avoid double-free.
+        ensure_eval_scope(ctx)?;
+        let slot = eval_scope_slot(ctx)?;
+        let offset = ctx.local_offset(slot)?;
         let result_reg = abi::int_result_reg(ctx.emitter);
-        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_SCOPE_HANDLE_OFFSET);
+        abi::load_at_offset(ctx.emitter, result_reg, offset);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_GLOBAL_SCOPE_HANDLE_OFFSET);
         return Ok(());
     }
@@ -274,9 +288,93 @@ pub(super) fn set_eval_context_global_scope(ctx: &mut FunctionContext<'_>) {
     emit_eval_status_check(ctx);
 }
 
+/// Returns whether this body is a closure whose scope `Closure::bind` may set at run time.
+pub(in crate::codegen) fn has_runtime_closure_scope(ctx: &FunctionContext<'_>) -> bool {
+    ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL).is_some()
+}
+
+/// Leaves this frame's EFFECTIVE class scope name in `ptr_reg`/`len_reg` (empty = global scope).
+///
+/// That is `fallback` -- the frame's lexical class, as each caller spells it -- unless the body is
+/// a closure carrying the hidden scope capture (`crate::names::CLOSURE_SCOPE_LOCAL`) and
+/// `Closure::bind` stamped it:
+/// - a positive stamp is a compiled class id plus one, named by `_class_name_entries`;
+/// - a negative stamp is an interned `[name_ptr, name_len]` record with bit 63 set, made by
+///   `__elephc_eval_scope_name_token` for a scope class only the interpreter declared.
+///
+/// Every bridge that hands the interpreter a calling scope reads it here: with the lexical class
+/// alone, a closure bound to an interpreted class wrote that class's private properties "from
+/// global scope" and was refused. Clobbers x10-x12 on AArch64 and r10/r11 on x86_64.
+pub(in crate::codegen) fn emit_effective_scope_name(
+    ctx: &mut FunctionContext<'_>,
+    fallback: &str,
+    ptr_reg: &str,
+    len_reg: &str,
+) -> Result<()> {
+    let (fallback_label, fallback_len) = ctx.data.add_string(fallback.as_bytes());
+    let Some(slot) = ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL) else {
+        abi::emit_symbol_address(ctx.emitter, ptr_reg, &fallback_label);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, fallback_len as i64);
+        return Ok(());
+    };
+    let offset = ctx.local_offset(slot)?;
+    let lexical = ctx.next_label("effective_scope_lexical");
+    let interpreted = ctx.next_label("effective_scope_interpreted");
+    let done = ctx.next_label("effective_scope_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::load_at_offset(ctx.emitter, "x12", offset);
+            ctx.emitter.instruction(&format!("cbz x12, {lexical}"));             // never rebound: the lexical scope
+            ctx.emitter.instruction(&format!("tbnz x12, #63, {interpreted}"));   // bit 63: an interned interpreter class name
+            ctx.emitter.instruction("sub x12, x12, #1");                          // undo the +1 encoding: the bound class id
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_name_count", 0);
+            ctx.emitter.instruction("cmp x12, x10");                             // an id past the table names nothing
+            ctx.emitter.instruction(&format!("b.hs {lexical}"));                // keep the lexical scope
+            abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
+            ctx.emitter.instruction("add x11, x11, x12, lsl #4");                // select the 16-byte class-name row
+            ctx.emitter.instruction(&format!("ldr {ptr_reg}, [x11]"));          // bound class name pointer
+            ctx.emitter.instruction(&format!("ldr {len_reg}, [x11, #8]"));      // bound class name length
+            ctx.emitter.instruction(&format!("b {done}"));                      // scope ready
+            ctx.emitter.label(&interpreted);
+            ctx.emitter.instruction("and x12, x12, #0x7fffffffffffffff");        // strip the marker: the name record address
+            ctx.emitter.instruction(&format!("ldr {ptr_reg}, [x12]"));           // interned name pointer
+            ctx.emitter.instruction(&format!("ldr {len_reg}, [x12, #8]"));       // interned name length
+            ctx.emitter.instruction(&format!("b {done}"));                      // scope ready
+        }
+        Arch::X86_64 => {
+            abi::load_at_offset(ctx.emitter, "r10", offset);
+            ctx.emitter.instruction("test r10, r10");                           // never rebound?
+            ctx.emitter.instruction(&format!("jz {lexical}"));                  // the lexical scope
+            ctx.emitter.instruction(&format!("js {interpreted}"));              // bit 63: an interned interpreter class name
+            ctx.emitter.instruction("sub r10, 1");                              // undo the +1 encoding: the bound class id
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_class_name_count", 0);
+            ctx.emitter.instruction("cmp r10, r11");                            // an id past the table names nothing
+            ctx.emitter.instruction(&format!("jae {lexical}"));                 // keep the lexical scope
+            abi::emit_symbol_address(ctx.emitter, "r11", "_class_name_entries");
+            ctx.emitter.instruction("shl r10, 4");                              // 16-byte class-name rows
+            ctx.emitter.instruction("add r11, r10");                            // select the bound class's row
+            ctx.emitter.instruction(&format!("mov {ptr_reg}, QWORD PTR [r11]")); // bound class name pointer
+            ctx.emitter.instruction(&format!("mov {len_reg}, QWORD PTR [r11 + 8]")); // bound class name length
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // scope ready
+            ctx.emitter.label(&interpreted);
+            ctx.emitter.instruction("btr r10, 63");                             // strip the marker: the name record address
+            ctx.emitter.instruction(&format!("mov {ptr_reg}, QWORD PTR [r10]")); // interned name pointer
+            ctx.emitter.instruction(&format!("mov {len_reg}, QWORD PTR [r10 + 8]")); // interned name length
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // scope ready
+        }
+    }
+    ctx.emitter.label(&lexical);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &fallback_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, fallback_len as i64);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
 /// Enters the current AOT method's class scope in the eval context, if any.
 pub(super) fn push_eval_context_class_scope(ctx: &mut FunctionContext<'_>) -> Result<bool> {
-    let Some(class_name) = current_eval_method_class(ctx).map(str::to_string) else {
+    let class_name = current_eval_method_class(ctx).map(str::to_string);
+    let Some(class_name) = class_name.or_else(|| has_runtime_closure_scope(ctx).then(String::new))
+    else {
         return Ok(false);
     };
     emit_eval_called_class_name_result(ctx, &class_name)?;
@@ -284,17 +382,13 @@ pub(super) fn push_eval_context_class_scope(ctx: &mut FunctionContext<'_>) -> Re
     abi::emit_store_to_sp(ctx.emitter, called_ptr_reg, EVAL_CALLED_CLASS_PTR_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, called_len_reg, EVAL_CALLED_CLASS_LEN_OFFSET);
     load_eval_context_to_arg(ctx, 0);
-    let (class_label, class_len) = ctx.data.add_string(class_name.as_bytes());
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        &class_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 2),
-        class_len as i64,
-    );
+    let target = ctx.emitter.target;
+    emit_effective_scope_name(
+        ctx,
+        &class_name,
+        abi::int_arg_reg_name(target, 1),
+        abi::int_arg_reg_name(target, 2),
+    )?;
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 3),
@@ -315,33 +409,145 @@ pub(super) fn push_eval_context_class_scope(ctx: &mut FunctionContext<'_>) -> Re
 }
 
 /// Leaves a pushed eval class scope while preserving the original eval status.
+///
+/// The status is parked in `EVAL_STATUS_SAVE_OFFSET` rather than the generic temp cell: a caller
+/// that boxed a statically typed receiver left that box's only pointer in
+/// `EVAL_TEMP_CELL_OFFSET` and still owes it a release once the status has been checked, so
+/// borrowing that slot here would silently drop the box and strand its object reference.
 pub(super) fn pop_eval_context_class_scope(ctx: &mut FunctionContext<'_>, pushed: bool) {
     if !pushed {
         return;
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
     load_eval_context_to_arg(ctx, 0);
     let symbol = ctx
         .emitter
         .target
         .extern_symbol("__elephc_eval_context_pop_class_scope");
     abi::emit_call_label(ctx.emitter, &symbol);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
 }
 
-/// Returns the lexical class encoded in the current EIR method name.
+/// Publishes this compiled frame's lexical class for one bridge call that carries no context.
+///
+/// The owned-receiver path hands the bridge a NULL caller context on purpose -- the owner
+/// context decides dispatch -- and a body with no eval context local of its own cannot forward
+/// scopes at all. The interpreter then read no calling scope and refused a protected override
+/// "from global scope", which is how `Twig\Template::yield()` calling `$this->doDisplay()`
+/// died. Publishing the lexical class costs two calls and needs neither a context nor a wider
+/// method-call ABI.
+///
+/// Returns whether anything was pushed, for [`pop_native_caller_class`].
+pub(super) fn push_native_caller_class(ctx: &mut FunctionContext<'_>) -> Result<bool> {
+    let class_name = current_eval_method_class(ctx).map(str::to_string);
+    let Some(class_name) = class_name.or_else(|| has_runtime_closure_scope(ctx).then(String::new))
+    else {
+        return Ok(false);
+    };
+    let target = ctx.emitter.target;
+    emit_effective_scope_name(
+        ctx,
+        &class_name,
+        abi::int_arg_reg_name(target, 0),
+        abi::int_arg_reg_name(target, 1),
+    )?;
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_push_native_caller_class");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(true)
+}
+
+/// Drops the published lexical class, preserving the status the bridge call just returned.
+///
+/// The status is parked in `EVAL_STATUS_SAVE_OFFSET` for the same reason
+/// [`pop_eval_context_class_scope`] parks it there: the generic temp cell may still hold a box
+/// this frame owes a release.
+pub(super) fn pop_native_caller_class(ctx: &mut FunctionContext<'_>, pushed: bool) {
+    if !pushed {
+        return;
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_pop_native_caller_class");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
+}
+
+/// Returns the lexical class encoded in the current EIR callable name.
 pub(super) fn current_eval_method_class<'a>(ctx: &'a FunctionContext<'_>) -> Option<&'a str> {
-    ctx.function
-        .flags
-        .is_method
-        .then(|| {
-            ctx.function
-                .name
-                .rsplit_once("::")
-                .map(|(class_name, _)| class_name)
-        })
-        .flatten()
+    current_eval_function_class(ctx.function)
+}
+
+/// Returns the PHP lexical class of a callable body, including a synthetic closure.
+pub(super) fn current_eval_function_class(function: &crate::ir::Function) -> Option<&str> {
+    function
+        .name
+        .rsplit_once("::")
+        .map(|(class_name, _)| class_name)
+        .or(function.lexical_class.as_deref())
+}
+
+/// Returns the physical source file that owns a compiled callable body.
+///
+/// A module has one entry path, but included declarations and class-scoped closures retain their
+/// own source identities. Eval/include bridges must use the body's source so relative includes,
+/// magic constants, and diagnostics keep PHP's file-local semantics.
+pub(super) fn eval_source_path_for_function<'a>(
+    module: &'a crate::ir::Module,
+    function: &crate::ir::Function,
+) -> Option<&'a str> {
+    if let Some(class_name) = current_eval_function_class(function) {
+        if let Some(path) = module
+            .declared_class_source_files
+            .get(&crate::names::php_symbol_key(class_name.trim_start_matches('\\')))
+        {
+            return Some(path);
+        }
+    }
+    module
+        .declared_function_source_files
+        .get(&crate::names::php_symbol_key(&function.name))
+        .map(String::as_str)
+        .or(module.source_path.as_deref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::platform::Target;
+    use crate::ir::{Function, IrType, Module};
+    use crate::types::PhpType;
+
+    #[test]
+    fn synthetic_closure_keeps_its_lexical_class_for_eval_scope() {
+        let mut closure = Function::new("{closure:Owner:0}".to_string(), IrType::Void, PhpType::Void);
+        closure.lexical_class = Some("Owner".to_string());
+
+        assert_eq!(current_eval_function_class(&closure), Some("Owner"));
+    }
+
+    #[test]
+    fn eval_source_path_prefers_lexical_class_declaration_file() {
+        let mut module = Module::new(Target::detect_host());
+        module.source_path = Some("/entry.php".to_string());
+        module.declared_class_source_files.insert(
+            crate::names::php_symbol_key("Owner"),
+            "/included/Owner.php".to_string(),
+        );
+        let mut closure = Function::new("{closure:Owner:0}".to_string(), IrType::Void, PhpType::Void);
+        closure.lexical_class = Some("Owner".to_string());
+
+        assert_eq!(
+            eval_source_path_for_function(&module, &closure),
+            Some("/included/Owner.php")
+        );
+    }
 }
 
 /// Materializes the runtime called-class name for eval `static::` resolution.
@@ -452,7 +658,7 @@ pub(super) fn emit_eval_static_string_result(ctx: &mut FunctionContext<'_>, byte
 }
 
 #[cfg(test)]
-mod tests {
+mod scalar_proof_tests {
     use super::emit_branch_if_mixed_numeric_scalar;
     use crate::codegen_support::{emit::Emitter, platform::Target};
 

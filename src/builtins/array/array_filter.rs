@@ -5,6 +5,7 @@
 //! - The shared builtin registry's checker, EIR and callable consumers.
 //!
 //! Key details:
+//! - The PHP golden signature is `optional(&["array","callback","mode"], 1, &[null, 0])`.
 //! - Omitted/null callbacks remove empty values; filtering preserves PHP keys and value types.
 //! - Result storage is boxed because indexed inputs may acquire holes or retain string keys.
 //! - The PHP golden signature is `optional(&["array","callback","mode"], 1, &[null, 0])`.
@@ -61,3 +62,4 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     super::predicate::check_callback(cx, &types)?;
     Ok(PhpType::php_array())
 }
+

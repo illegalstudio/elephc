@@ -19,10 +19,12 @@ pub(in crate::interpreter) fn eval_persistent_variable_reference(
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if !values.supports_persistent_references() { return Ok(None); }
     let target = scope.reference_target(local).cloned().unwrap_or_else(|| EvalReferenceTarget::Variable {
-        scope: scope as *mut ElephcEvalScope, name: local.to_string(),
+        scope: crate::scope::EvalScopeRef::new(scope), name: local.to_string(),
     });
     let reference = match persistent_reference_target(target)? {
         EvalReferenceTarget::Variable { scope: target_scope, name } => {
+            let target_scope = unsafe { target_scope.live_mut() }
+                .map_or(std::ptr::null_mut(), |live| live as *mut ElephcEvalScope);
             promote_array_reference_variable(target_scope, &name, context, values)?
         },
         EvalReferenceTarget::Cell { cell } if values.is_reference(cell)? => cell,
@@ -77,8 +79,8 @@ pub(in crate::interpreter) fn persistent_reference_target(mut target: EvalRefere
     loop {
         match target {
             EvalReferenceTarget::Variable { scope, ref name } => {
-                if !seen.insert((scope as usize, name.clone())) { return Err(EvalStatus::RuntimeFatal); }
-                let source = unsafe { scope.as_ref() }.ok_or(EvalStatus::RuntimeFatal)?;
+                if !seen.insert((scope.id(), name.clone())) { return Err(EvalStatus::RuntimeFatal); }
+                let source = unsafe { scope.live_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
                 let Some(parent) = source.reference_target(name).cloned() else { return Ok(target); };
                 target = parent;
             },

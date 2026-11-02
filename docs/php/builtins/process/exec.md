@@ -2,19 +2,21 @@
 title: "exec()"
 description: "Executes an external program and returns the last line of output."
 sidebar:
-  order: 825
+  order: 859
 ---
 
 ## exec()
 
 ```php
-function exec(string $command): string
+function exec(string $command, array $output = null, int $result_code = null): string
 ```
 
 Executes an external program and returns the last line of output.
 
 **Parameters**:
 - `$command` (`string`)
+- `$output` (`array`), passed by reference, default `null`, optional
+- `$result_code` (`int`), passed by reference, default `null`, optional
 
 **Returns**: `string`
 

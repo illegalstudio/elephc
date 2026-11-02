@@ -61,5 +61,6 @@ pub(crate) fn emit_pcntl_data() -> String {
     out.push_str(".globl __rt_pcntl_signal_next_fn\n__rt_pcntl_signal_next_fn:\n    .quad 0\n");
     out.push_str(".globl __rt_pcntl_dispatch_begin_fn\n__rt_pcntl_dispatch_begin_fn:\n    .quad 0\n");
     out.push_str(".globl __rt_pcntl_dispatch_end_fn\n__rt_pcntl_dispatch_end_fn:\n    .quad 0\n");
+    out.push_str(".globl __rt_pcntl_pending_ptr\n__rt_pcntl_pending_ptr:\n    .quad 0\n");
     out
 }

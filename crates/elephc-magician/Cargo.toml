@@ -37,12 +37,15 @@ elephc-tokenizer-engine = { path = "../elephc-tokenizer-engine" }
 elephc-generics = { path = "../elephc-generics" }
 elephc-builtin-contract = { path = "../elephc-builtin-contract" }
 elephc-crypto = { path = "../elephc-crypto" }
+elephc-highlight = { path = "../elephc-highlight" }
 elephc-iconv = { path = "../elephc-iconv" }
 elephc-phar = { path = "../elephc-phar" }
 elephc-pcntl = { path = "../elephc-pcntl" }
+elephc-proc = { path = "../elephc-proc" }
 flate2 = "1"
 inventory = "0.3"
 libc = "0.2"
+rustc-hash = "1.1"
 # `rc` is required: a cached script segment holds its bytes and its parsed program
 # behind `Arc`, which serde only (de)serializes with that feature on.
 serde = { version = "1", features = ["derive", "rc"] }

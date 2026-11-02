@@ -16,7 +16,7 @@ use crate::types::traits::FlattenedClass;
 
 use super::super::super::Checker;
 use super::super::validation::{
-    build_method_sig, declaration_is_source, matches_global_builtin_attribute,
+    build_method_sig, matches_global_builtin_attribute, method_contract_is_source,
     validate_override_signature, visibility_rank,
 };
 use super::state::ClassBuildState;
@@ -148,7 +148,7 @@ fn apply_static_method(
         let parent_is_source = state
             .static_method_declaring_classes
             .get(&method_key)
-            .is_none_or(|owner| declaration_is_source(checker, owner));
+            .is_none_or(|owner| method_contract_is_source(checker, owner, &method_key, true));
         validate_override_signature(
             checker,
             class,
@@ -242,6 +242,7 @@ fn apply_instance_method(
     let internal_exception_override = injected_exception_final_override(class, method, &method_key);
     let inherited_declaring_class = state.method_declaring_classes.get(&method_key).cloned();
     let mut sig = build_method_sig(checker, method, &class.name)?;
+    demote_array_access_offset_get_reference(class, &method_key, &mut sig);
     let serializable = state.interfaces.iter().chain(class.implements.iter()).any(|name|
         name.eq_ignore_ascii_case("Serializable") || checker.interface_extends_interface(name, "Serializable"));
     if serializable && method_key == "unserialize"
@@ -294,7 +295,7 @@ fn apply_instance_method(
             let parent_is_source = state
                 .method_declaring_classes
                 .get(&method_key)
-                .is_none_or(|owner| declaration_is_source(checker, owner));
+                .is_none_or(|owner| method_contract_is_source(checker, owner, &method_key, false));
             validate_override_signature(
                 checker,
                 class,
@@ -318,6 +319,34 @@ fn apply_instance_method(
                 class.name, method.name
             ),
         ));
+    }
+    // A constructor is not an override. PHP exempts `__construct` from signature
+    // compatibility entirely — `validate_override_signature` returns early for it above — and
+    // nothing ever enters a constructor through an ancestor's entry point: `new C(...)` calls
+    // C's, `parent::__construct(...)` calls the parent's. Adopting ancestor storage here would
+    // stamp the parent's parameter TYPES onto an untyped child parameter, which PHP reads as
+    // `mixed`: `Twig\Node::__construct(array $nodes = [], ...)` turned every
+    // `ConstantExpression::__construct($value, int $lineno)` call into "parameter $value
+    // expects Array(Mixed)".
+    // A BUILTIN ancestor's declaration is not adopted: an untyped override of
+    // `DateTime::add(DateInterval $interval)` (Carbon's `add($unit, $value = 1, ...)`) is called
+    // directly with strings and ints, which the adopted `DateInterval` storage refused, and the
+    // whole Carbon class was left to the interpreter. Ancestor-typed sites still reach such an
+    // override with the right representation through the class-id ladder
+    // (`override_arity::wider_override_classes`, `stores_site_params_differently`).
+    let ancestor_is_source = state
+        .method_declaring_classes
+        .get(&method_key)
+        .is_none_or(|owner| method_contract_is_source(checker, owner, &method_key, false));
+    if method_key != "__construct" && ancestor_is_source {
+        if let Some(parent_sig) = state.method_sigs.get(&method_key) {
+            adopt_ancestor_parameter_storage(&mut sig, parent_sig);
+            adopt_ancestor_return_storage(&mut sig, parent_sig);
+        }
+    } else if method_key != "__construct" {
+        if let Some(parent_sig) = state.method_sigs.get(&method_key) {
+            widen_undeclared_override_parameters(&mut sig, parent_sig);
+        }
     }
     state.method_sigs.insert(method_key.clone(), sig);
     if let Some(return_type) = method
@@ -481,4 +510,134 @@ fn missing_override_target(class: &FlattenedClass, method: &ClassMethod) -> Comp
             class.name, method.name
         ),
     )
+}
+
+/// Gives an override the RETURN storage of the ancestor its vtable slot belongs to.
+///
+/// The return-side twin of [`adopt_ancestor_parameter_storage`]. A virtual call typed against the
+/// ancestor reads the result in the ancestor's representation, but PHP lets an override NARROW its
+/// return type, and the override's frame returned in its own: `FileLoader::import()` calls
+/// `$loader->load()` on a receiver typed `FileLoader`, whose `load()` comes from
+/// `LoaderInterface::load(): mixed`, and the routing `YamlFileLoader::load(): RouteCollection`
+/// answered with a raw object pointer where a boxed cell belongs -- read back as `null`. Every
+/// route file imported through a glob vanished.
+///
+/// Covariance is what makes the wider storage safe: whatever the override returns satisfies the
+/// ancestor's declaration too. The cost is precision for a caller typed at the override itself,
+/// which now sees the ancestor's type. Only a change of REPRESENTATION is adopted; a narrowing that
+/// keeps the storage (`?Foo` to `Foo`, one object type to another) is left exactly as declared.
+fn adopt_ancestor_return_storage(
+    sig: &mut crate::types::FunctionSig,
+    ancestor: &crate::types::FunctionSig,
+) {
+    if !ancestor.declared_return || sig.by_ref_return != ancestor.by_ref_return {
+        return;
+    }
+    let ancestor_repr = ancestor.return_type.codegen_repr();
+    if !matches!(ancestor_repr, crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)) {
+        return;
+    }
+    if sig.return_type.codegen_repr() == ancestor_repr {
+        return;
+    }
+    sig.return_type = ancestor.return_type.clone();
+}
+
+/// Gives an override's UNDECLARED parameters the storage the ancestor declared for them.
+///
+/// A virtual call site is typed against the ancestor: `$container->load($file)` on a receiver
+/// typed `Container` materializes whatever `Container::load(string $file)` declares — a raw
+/// string. If the override writes `load($file)` with no type, its own frame expects a boxed
+/// `mixed`, and the raw string arrives where a cell pointer belongs. Symfony's generated DI
+/// container is exactly this pair, and the argument came back EMPTY: every service lookup asked
+/// the container to `require` a file whose name it had lost.
+///
+/// PHP's contravariance is what makes adopting the ancestor's type safe: an override may only
+/// WIDEN a parameter, so every value that can reach it already satisfies the ancestor's
+/// declaration. Only undeclared parameters are touched — an override that declares its own type
+/// has already been checked against the ancestor by `validate_override_signature`, and its
+/// declaration is the one its body was checked against.
+///
+/// An ancestor's VARIADIC parameter is never adopted: its storage is the packed array of every
+/// surplus argument, not the value of the override's parameter at that position. Twig's
+/// `Node::getAttribute(string $name)` reads `func_get_arg(1)`, so it carries the hidden variadic
+/// tail in position 1, and a trait override `getAttribute($name, $default = null)` took that
+/// array storage for `$default`.
+fn adopt_ancestor_parameter_storage(
+    sig: &mut crate::types::FunctionSig,
+    ancestor: &crate::types::FunctionSig,
+) {
+    for (index, (name, ancestor_ty)) in ancestor.params.iter().enumerate() {
+        if ancestor.variadic.as_deref() == Some(name.as_str()) {
+            break;
+        }
+        if sig.declared_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        if !ancestor.declared_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some((_, param_ty)) = sig.params.get_mut(index) else {
+            continue;
+        };
+        *param_ty = ancestor_ty.clone();
+        // Marked DECLARED as well: the storage is now the ancestor's contract, and an
+        // undeclared parameter is otherwise promoted to a boxed cell by the gradual-storage
+        // pass — which would put the mismatch straight back.
+        if let Some(declared) = sig.declared_params.get_mut(index) {
+            *declared = true;
+        }
+    }
+}
+
+/// Declares `mixed` every untyped override parameter whose BUILTIN ancestor declares a type.
+///
+/// The parameter is reached both by direct calls on the subclass (Carbon's `add('day', 3)`) and,
+/// through the class-id ladder, by sites typed against the builtin (`DateTime::add($interval)`).
+/// Inferring it from the direct calls alone fabricated `string`, and the `DateInterval` branch
+/// of the same body was refused. PHP reads an untyped parameter as `mixed`, which holds both.
+fn widen_undeclared_override_parameters(
+    sig: &mut crate::types::FunctionSig,
+    ancestor: &crate::types::FunctionSig,
+) {
+    for (index, (name, _)) in ancestor.params.iter().enumerate() {
+        if ancestor.variadic.as_deref() == Some(name.as_str()) {
+            break;
+        }
+        if sig.declared_params.get(index).copied().unwrap_or(true)
+            || !ancestor.declared_params.get(index).copied().unwrap_or(false)
+            || sig.ref_params.get(index).copied().unwrap_or(false)
+        {
+            continue;
+        }
+        if let Some((_, param_ty)) = sig.params.get_mut(index) {
+            *param_ty = crate::types::PhpType::Mixed;
+        }
+        if let Some(declared) = sig.declared_params.get_mut(index) {
+            *declared = true;
+        }
+    }
+}
+
+/// Returns `&offsetGet()` of an `ArrayAccess` class by value.
+///
+/// `ArrayAccess::offsetGet()` is declared by value, and every `$obj[$k]` read dispatches through
+/// that contract; a reference-returning implementation (Monolog's `LogRecord::&offsetGet()`)
+/// would hand those call sites a reference cell where they expect the value, which the method
+/// ABI adapter cannot bridge. Compiling the implementation by value keeps every read correct;
+/// only writes through the returned reference (`$rec['extra']['k'] = …`) stay local.
+fn demote_array_access_offset_get_reference(
+    class: &FlattenedClass,
+    method_key: &str,
+    sig: &mut crate::types::FunctionSig,
+) {
+    if sig.by_ref_return
+        && method_key == "offsetget"
+        && class
+            .implements
+            .iter()
+            .any(|name| name.trim_start_matches('\\').eq_ignore_ascii_case("ArrayAccess"))
+    {
+        sig.by_ref_return = false;
+    }
 }

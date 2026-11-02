@@ -34,6 +34,7 @@ pub(super) fn emit(emitter: &mut Emitter, cleanup: Scope) {
         emitter.instruction("str x10, [sp]");                                   // preserve traversal before a destructor changes allocator state
         emitter.instruction("ldr w10, [x9, #4]");                               // inspect whether this captured block is still live
         emitter.instruction("cbz w10, __rt_gc_collect_cycles_destruct_loop");   // skip storage already released by another destructor
+        crate::codegen_support::runtime::arrays::gc_collect_cycles::emit_skip_parked_block(emitter, "w10", "__rt_gc_collect_cycles_destruct_loop");
         emitter.instruction("ldr x10, [x9, #8]");                               // read the current kind and original scan metadata
         emitter.instruction("and x11, x10, #0xff");                             // isolate the heap kind independently from GC marks
         emitter.instruction("cmp x11, #4");                                     // only object payloads carry PHP destructor methods
@@ -58,6 +59,7 @@ pub(super) fn emit(emitter: &mut Emitter, cleanup: Scope) {
         emitter.instruction("mov QWORD PTR [rbp - 24], r9");                    // retain traversal across arbitrary destructor allocations
         emitter.instruction("cmp DWORD PTR [r8 + 4], 0");                       // determine whether this captured allocation is still live
         emitter.instruction("je __rt_gc_collect_cycles_destruct_loop");         // another destructor may already have released this storage
+        crate::codegen_support::runtime::arrays::gc_collect_cycles::emit_skip_parked_block_x86(emitter, "DWORD PTR [r8 + 4]", "__rt_gc_collect_cycles_destruct_loop");
         emitter.instruction("mov r9, QWORD PTR [r8 + 8]");                      // inspect heap kind and the current scan's membership bits
         emitter.instruction("mov r10, r9");                                     // preserve metadata while isolating the object heap kind
         emitter.instruction("and r10, 0xff");                                   // ignore marks and the x86_64 heap magic word
@@ -98,6 +100,11 @@ fn emit_rescan(emitter: &mut Emitter) {
     emitter.instruction(if arm { "ldr w10, [x9]" } else { "mov r9d, DWORD PTR [r8]" });// preserve the next block position before clearing metadata
     emitter.instruction(if arm { "ldr w11, [x9, #4]" } else { "cmp DWORD PTR [r8 + 4], 0" });// distinguish live objects and containers from freed allocations
     emitter.instruction(if arm { "cbz w11, __rt_gc_collect_cycles_rescan_next" } else { "je __rt_gc_collect_cycles_rescan_next" });// keep free-list links untouched
+    if arm {
+        crate::codegen_support::runtime::arrays::gc_collect_cycles::emit_skip_parked_block(emitter, "w11", "__rt_gc_collect_cycles_rescan_next");
+    } else {
+        crate::codegen_support::runtime::arrays::gc_collect_cycles::emit_skip_parked_block_x86(emitter, "DWORD PTR [r8 + 4]", "__rt_gc_collect_cycles_rescan_next");
+    }
     if arm {
         emitter.instruction("ldr x11, [x9, #8]");                               // read kind, candidate, and stale incoming-edge metadata
         emitter.instruction("and x12, x11, #0xff");                             // distinguish object destructor state from ordinary container counts

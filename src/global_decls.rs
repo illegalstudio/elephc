@@ -49,7 +49,64 @@ use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 pub(crate) fn collect_global_var_names(statements: &[Stmt]) -> HashSet<String> {
     let mut names = HashSet::new();
     collect_in_body(statements, &mut names);
+    if declared_bodies_run_dynamic_php(statements) {
+        // A function or method that runs `eval()` or a runtime `include` executes PHP text this
+        // walk cannot see, and that text may write `global $g` (or `$GLOBALS['g']`) for ANY
+        // top-level name. A top-level variable that stays in main's frame slot is invisible to
+        // it: `function h() { eval('global $g; $g = 7;'); }` changed a global main never read.
+        // Every name the top level spells is program-global storage then, as in php.
+        // Compiler-internal names (`$__elephc_body_len` in the web request prelude, generated
+        // temporaries) are not PHP variables: no PHP text can name them, and promoting them to
+        // boxed global storage erased the types their builtins require
+        // (`__elephc_ptr_read_string(..., $__elephc_body_len)` refused a Mixed length).
+        names.extend(
+            crate::prelude_prune::usage::collect(&top_level_code(statements))
+                .variables
+                .into_iter()
+                .filter(|name| {
+                    !name.starts_with("__elephc") && !crate::names::is_generated_local_name(name)
+                }),
+        );
+    }
     names
+}
+
+/// Returns whether a named function or a class-like method body runs PHP text unknown at compile
+/// time (`eval`, or an `include`/`require` of a computed path).
+fn declared_bodies_run_dynamic_php(statements: &[Stmt]) -> bool {
+    let runs_dynamic = |body: &[Stmt]| {
+        // Only code that can EXECUTE text: `introspects` also covers computed-name probes
+        // (`function_exists($f)`), which reach no variable.
+        let usage = crate::prelude_prune::usage::collect(body);
+        usage.references("eval") || usage.includes_runtime_php
+    };
+    statements.iter().any(|stmt| match &stmt.kind {
+        StmtKind::FunctionDecl { body, .. } => runs_dynamic(body),
+        StmtKind::ClassDecl { methods, .. }
+        | StmtKind::EnumDecl { methods, .. }
+        | StmtKind::TraitDecl { methods, .. } => {
+            methods.iter().any(|method| runs_dynamic(&method.body))
+        }
+        _ => false,
+    })
+}
+
+/// Returns the top-level statements that run in the global scope (every declaration removed).
+fn top_level_code(statements: &[Stmt]) -> Vec<Stmt> {
+    statements
+        .iter()
+        .filter(|stmt| {
+            !matches!(
+                stmt.kind,
+                StmtKind::FunctionDecl { .. }
+                    | StmtKind::ClassDecl { .. }
+                    | StmtKind::EnumDecl { .. }
+                    | StmtKind::TraitDecl { .. }
+                    | StmtKind::InterfaceDecl { .. }
+            )
+        })
+        .cloned()
+        .collect()
 }
 
 /// Recursively scans statement bodies for `global` declarations.
@@ -217,6 +274,11 @@ fn collect_in_stmt(stmt: &Stmt, names: &mut HashSet<String>) {
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. }
+        // Statement kinds with no walked children here. A `global` reaches the others only
+        // through a closure body or an assignment prelude, which the arms above already cover.
+        | StmtKind::PropertyRefAssign { .. }
+        | StmtKind::StaticPropertyElementRefAssign { .. }
+        | StmtKind::DynamicStaticPropertyWrite { .. }
         // Leaves: no sub-statements and no sub-expressions.
         | StmtKind::Return(None)
         | StmtKind::Break(_)
@@ -226,7 +288,8 @@ fn collect_in_stmt(stmt: &Stmt, names: &mut HashSet<String>) {
         | StmtKind::UseDecl { .. }
         // Variant groups/marks carry function NAMES; the bodies live in their own `FunctionDecl`s.
         | StmtKind::FunctionVariantGroup { .. }
-        | StmtKind::FunctionVariantMark { .. } => {}
+        | StmtKind::FunctionVariantMark { .. }
+        | StmtKind::ClassLikeActivate { .. } => {}
     }
 }
 
@@ -347,6 +410,13 @@ fn collect_in_expr(expr: &Expr, names: &mut HashSet<String>) {
                 collect_in_expr(key, names);
                 collect_in_expr(value, names);
             }
+        }
+        ExprKind::ArrayReference(inner)
+        | ExprKind::DynamicScopedConstantAccess { receiver: inner, .. } => {
+            collect_in_expr(inner, names);
+        }
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            collect_in_expr(property, names);
         }
         ExprKind::ArrayLiteralMixed(entries) => {
             for entry in entries {

@@ -90,7 +90,9 @@ pub(in crate::types::checker) fn record_property_unset_destination(
         // The backend represents every union through the Mixed runtime-class ladder, whose
         // candidate table currently covers every user class. Match that reachability here so an
         // unrelated untyped candidate cannot retain a refined shape and reject the whole ladder.
-        PhpType::Union(_) | PhpType::Mixed => {
+        // A receiver typed only `object` names no class either: the backend sends it through the
+        // same runtime-class ladder, so every class's untyped slot is reachable from it.
+        PhpType::Union(_) | PhpType::Mixed | PhpType::Object(_) => {
             checker
                 .property_unset_destinations
                 .sites

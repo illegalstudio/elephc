@@ -23,6 +23,8 @@ builtin! {
 
 /// Returns `Array<Str>` reflecting that `scandir` yields directory entry names.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    cx.checker.infer_type(&cx.args[0], cx.env)?;
+    for arg in cx.args {
+        cx.checker.infer_type(arg, cx.env)?;
+    }
     Ok(PhpType::Array(Box::new(PhpType::Str)))
 }

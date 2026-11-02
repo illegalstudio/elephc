@@ -287,6 +287,130 @@ pub(crate) fn emit_gen_accessors(emitter: &mut Emitter) {
     emit_gen_delegate_arm64(emitter);
 }
 
+// ── Interpreted-generator probe shared by both architectures ──────────────
+
+/// Protocol opcodes the `__rt_gen_*` probes pass to the eval bridge.
+///
+/// The interpreter reads these back in `crates/elephc-magician/src/ffi/generator_protocol.rs`;
+/// the numbering is ABI, so the two lists move together.
+const GEN_PROTOCOL_OP_CURRENT: i64 = 0;
+const GEN_PROTOCOL_OP_KEY: i64 = 1;
+const GEN_PROTOCOL_OP_VALID: i64 = 2;
+const GEN_PROTOCOL_OP_NEXT: i64 = 3;
+const GEN_PROTOCOL_OP_REWIND: i64 = 4;
+const GEN_PROTOCOL_OP_SEND: i64 = 5;
+const GEN_PROTOCOL_OP_THROW: i64 = 6;
+const GEN_PROTOCOL_OP_GET_RETURN: i64 = 7;
+
+/// Emits the ARM64 eval-ownership probe that fronts one `__rt_gen_*` helper.
+///
+/// A `Generator` the INTERPRETER created is an ordinary `Generator` object whose fiber
+/// fields (the state at `FIBER_STATE_OFFSET`, the yield slots at 184..224) were never
+/// filled: its execution state is an `EvalGeneratorFrame` in the eval context instead.
+/// Driving one through the fiber path therefore starts a coroutine that has no stack and
+/// reads yield slots holding unrelated object storage — measured as a `ret` into a two-byte
+/// address, and as `__rt_mixed_unbox` on a non-pointer during `foreach`. The probe answers
+/// first, and only for identities an eval context registered as a generator, so a program
+/// with no interpreted generator keeps exactly its previous behavior.
+///
+/// The generator must already be cached in `gen_reg`, and `arg_reg` names the borrowed cell
+/// `send()`/`throw()` deliver (`None` for the argument-less steps). On a hit the boxed or
+/// scalar answer is left in the result register and control jumps to `done_label`; on a miss
+/// control falls through to the native body with every input register intact.
+fn arm64_eval_generator_probe(
+    emitter: &mut Emitter,
+    tag: &str,
+    op: i64,
+    gen_reg: &str,
+    arg_reg: Option<&str>,
+    done_label: &str,
+) {
+    let native = format!("__rt_gen_{}_eval_native", tag);
+    let miss = format!("__rt_gen_{}_eval_miss", tag);
+    let thrown = format!("__rt_gen_{}_eval_thrown", tag);
+    crate::codegen_support::abi::emit_symbol_address(
+        emitter,
+        "x9",
+        "_elephc_eval_generator_protocol_fn",
+    );
+    emitter.instruction("ldr x9, [x9]");                                        // x9 = optional eval generator-protocol callback
+    emitter.instruction(&format!("cbz x9, {}", native));                        // no interpreter linked → drive the fiber natively
+    emitter.instruction("sub sp, sp, #16");                                     // reserve the callback's single out-word slot
+    emitter.instruction(&format!("mov x0, {}", gen_reg));                       // x0 = the generator object under test
+    emitter.instruction(&format!("mov x1, #{}", op));                           // x1 = protocol opcode
+    match arg_reg {
+        Some(arg_reg) => emitter.instruction(&format!("mov x2, {}", arg_reg)),  // x2 = the borrowed sent value or Throwable
+        None => emitter.instruction("mov x2, xzr"),                             // argument-less protocol steps pass null
+    }
+    emitter.instruction("mov x3, sp");                                          // x3 = where the callback writes its answer
+    emitter.instruction("blr x9");                                              // ask the interpreter whether it owns this generator
+    emitter.instruction(&format!("cbz x0, {}", miss));                          // a native generator keeps the fiber path
+    emitter.instruction("cmp x0, #2");                                          // answer 2 means a Throwable escaped this step
+    emitter.instruction(&format!("b.eq {}", thrown));                           // publish it through the native unwinder
+    emitter.instruction("ldr x0, [sp]");                                        // load the answer the interpreter wrote
+    emitter.instruction("add sp, sp, #16");                                     // release the out-word slot
+    emitter.instruction(&format!("b {}", done_label));                          // skip the fiber body entirely
+    emitter.label(&thrown);
+    emitter.instruction("ldr x0, [sp]");                                        // load the boxed Throwable the interpreter handed back
+    emitter.instruction("add sp, sp, #16");                                     // release the out-word slot before unwinding
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the Throwable object payload
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x1", "_exc_value", 0);
+    emitter.instruction("bl __rt_throw_current");                               // enter the native Throwable unwinder
+    emitter.label(&miss);
+    emitter.instruction("add sp, sp, #16");                                     // release the out-word slot before the native body
+    emitter.label(&native);
+}
+
+/// Emits the x86_64 eval-ownership probe that fronts one `__rt_gen_*` helper.
+///
+/// See `arm64_eval_generator_probe` for why the probe exists and what it guarantees.
+fn x86_eval_generator_probe(
+    emitter: &mut Emitter,
+    tag: &str,
+    op: i64,
+    gen_reg: &str,
+    arg_reg: Option<&str>,
+    done_label: &str,
+) {
+    let native = format!("__rt_gen_{}_eval_native_x86", tag);
+    let miss = format!("__rt_gen_{}_eval_miss_x86", tag);
+    let thrown = format!("__rt_gen_{}_eval_thrown_x86", tag);
+    crate::codegen_support::abi::emit_symbol_address(
+        emitter,
+        "r10",
+        "_elephc_eval_generator_protocol_fn",
+    );
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // r10 = optional eval generator-protocol callback
+    emitter.instruction("test r10, r10");                                       // is the interpreter linked into this program?
+    emitter.instruction(&format!("jz {}", native));                             // no interpreter linked → drive the fiber natively
+    emitter.instruction("sub rsp, 16");                                         // reserve the callback's single out-word slot
+    emitter.instruction(&format!("mov rdi, {}", gen_reg));                      // rdi = the generator object under test
+    emitter.instruction(&format!("mov esi, {}", op));                           // esi = protocol opcode
+    match arg_reg {
+        Some(arg_reg) => emitter.instruction(&format!("mov rdx, {}", arg_reg)), // rdx = the borrowed sent value or Throwable
+        None => emitter.instruction("xor edx, edx"),                            // argument-less protocol steps pass null
+    }
+    emitter.instruction("mov rcx, rsp");                                        // rcx = where the callback writes its answer
+    emitter.instruction("call r10");                                            // ask the interpreter whether it owns this generator
+    emitter.instruction("test rax, rax");                                       // did the interpreter answer for this generator?
+    emitter.instruction(&format!("jz {}", miss));                               // a native generator keeps the fiber path
+    emitter.instruction("cmp rax, 2");                                          // answer 2 means a Throwable escaped this step
+    emitter.instruction(&format!("je {}", thrown));                             // publish it through the native unwinder
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // load the answer the interpreter wrote
+    emitter.instruction("add rsp, 16");                                         // release the out-word slot
+    emitter.instruction(&format!("jmp {}", done_label));                        // skip the fiber body entirely
+    emitter.label(&thrown);
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // load the boxed Throwable the interpreter handed back
+    emitter.instruction("add rsp, 16");                                         // release the out-word slot before unwinding
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the Throwable object payload
+    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "rdi", "_exc_value", 0);
+    emitter.instruction("call __rt_throw_current");                             // enter the native Throwable unwinder
+    emitter.instruction("ud2");                                                 // defensive trap: the unwinder never returns, so the thrown path must not fall into the miss path's slot release
+    emitter.label(&miss);
+    emitter.instruction("add rsp, 16");                                         // release the out-word slot before the native body
+    emitter.label(&native);
+}
+
 // ── ARM64 accessor prologue/epilogue helpers ──────────────────────────────
 
 /// Emits the ARM64 accessor prologue: 32-byte frame, save fp/lr + x19, cache
@@ -348,9 +472,12 @@ fn emit_gen_current_arm64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_current ---");
     emitter.label_global("__rt_gen_current");
     arm64_acc_prologue1(emitter);
+    let done = "__rt_gen_current_eval_done";
+    arm64_eval_generator_probe(emitter, "current", GEN_PROTOCOL_OP_CURRENT, "x19", None, done);
     arm64_ensure_started(emitter, "current");
     emitter.instruction(&format!("ldr x0, [x19, #{}]", GEN_LAST_VALUE_OFFSET)); // load the boxed most-recent yield value
     emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference
+    emitter.label(done);
     arm64_acc_epilogue1(emitter);
 }
 
@@ -361,9 +488,12 @@ fn emit_gen_key_arm64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_key ---");
     emitter.label_global("__rt_gen_key");
     arm64_acc_prologue1(emitter);
+    let done = "__rt_gen_key_eval_done";
+    arm64_eval_generator_probe(emitter, "key", GEN_PROTOCOL_OP_KEY, "x19", None, done);
     arm64_ensure_started(emitter, "key");
     emitter.instruction(&format!("ldr x0, [x19, #{}]", GEN_LAST_KEY_OFFSET));   // load the boxed most-recent yield key
     emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference
+    emitter.label(done);
     arm64_acc_epilogue1(emitter);
 }
 
@@ -374,10 +504,13 @@ fn emit_gen_valid_arm64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_valid ---");
     emitter.label_global("__rt_gen_valid");
     arm64_acc_prologue1(emitter);
+    let done = "__rt_gen_valid_eval_done";
+    arm64_eval_generator_probe(emitter, "valid", GEN_PROTOCOL_OP_VALID, "x19", None, done);
     arm64_ensure_started(emitter, "valid");
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = current generator state
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // has the generator finished?
     emitter.instruction("cset x0, ne");                                         // x0 = 1 while the generator can still produce values
+    emitter.label(done);
     arm64_acc_epilogue1(emitter);
 }
 
@@ -388,6 +521,14 @@ fn emit_gen_next_arm64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_next ---");
     emitter.label_global("__rt_gen_next");
     arm64_acc_prologue1(emitter);
+    arm64_eval_generator_probe(
+        emitter,
+        "next",
+        GEN_PROTOCOL_OP_NEXT,
+        "x19",
+        None,
+        "__rt_gen_next_done",
+    );
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = generator state
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_NOT_STARTED));      // has the generator started yet?
     emitter.instruction("b.ne __rt_gen_next_resume");                           // started generators advance through resume
@@ -413,6 +554,14 @@ fn emit_gen_send_arm64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_send ---");
     emitter.label_global("__rt_gen_send");
     arm64_acc_prologue2(emitter);
+    arm64_eval_generator_probe(
+        emitter,
+        "send",
+        GEN_PROTOCOL_OP_SEND,
+        "x19",
+        Some("x20"),
+        "__rt_gen_send_done",
+    );
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = generator state
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_NOT_STARTED));      // not yet started?
     emitter.instruction("b.ne __rt_gen_send_resume");                           // started generators skip the implicit first start
@@ -448,6 +597,14 @@ fn emit_gen_throw_arm64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_throw ---");
     emitter.label_global("__rt_gen_throw");
     arm64_acc_prologue2(emitter);
+    arm64_eval_generator_probe(
+        emitter,
+        "throw",
+        GEN_PROTOCOL_OP_THROW,
+        "x19",
+        Some("x20"),
+        "__rt_gen_throw_done",
+    );
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = generator state
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_NOT_STARTED));      // not yet started?
     emitter.instruction("b.ne __rt_gen_throw_inject");                          // started generators skip the implicit first start
@@ -480,7 +637,10 @@ fn emit_gen_rewind_arm64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_rewind ---");
     emitter.label_global("__rt_gen_rewind");
     arm64_acc_prologue1(emitter);
+    let done = "__rt_gen_rewind_eval_done";
+    arm64_eval_generator_probe(emitter, "rewind", GEN_PROTOCOL_OP_REWIND, "x19", None, done);
     arm64_ensure_started(emitter, "rewind");
+    emitter.label(done);
     arm64_acc_epilogue1(emitter);
 }
 
@@ -490,8 +650,22 @@ fn emit_gen_get_return_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_get_return ---");
     emitter.label_global("__rt_gen_get_return");
-    emitter.instruction(&format!("ldr x0, [x0, #{}]", GEN_RETURN_VALUE_OFFSET)); // load the boxed body return value
-    emitter.instruction("b __rt_incref");                                       // tail-call incref so the caller owns a fresh reference
+    // The probe needs a frame (it calls out), so this helper takes the shared accessor
+    // prologue rather than tail-calling `__rt_incref` straight from the caller's frame.
+    arm64_acc_prologue1(emitter);
+    let done = "__rt_gen_get_return_eval_done";
+    arm64_eval_generator_probe(
+        emitter,
+        "get_return",
+        GEN_PROTOCOL_OP_GET_RETURN,
+        "x19",
+        None,
+        done,
+    );
+    emitter.instruction(&format!("ldr x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)); // load the boxed body return value
+    emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference
+    emitter.label(done);
+    arm64_acc_epilogue1(emitter);
 }
 
 // ── x86_64 accessor prologue/epilogue helpers ─────────────────────────────
@@ -552,9 +726,19 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_current ---");
     emitter.label_global("__rt_gen_current");
     x86_acc_prologue1(emitter);
+    let current_done = "__rt_gen_current_eval_done_x86";
+    x86_eval_generator_probe(
+        emitter,
+        "current",
+        GEN_PROTOCOL_OP_CURRENT,
+        "r12",
+        None,
+        current_done,
+    );
     x86_ensure_started(emitter, "current");
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_LAST_VALUE_OFFSET)); // load the boxed most-recent yield value
     emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference
+    emitter.label(current_done);
     x86_acc_epilogue1(emitter);
 
     // key
@@ -562,9 +746,12 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_key ---");
     emitter.label_global("__rt_gen_key");
     x86_acc_prologue1(emitter);
+    let key_done = "__rt_gen_key_eval_done_x86";
+    x86_eval_generator_probe(emitter, "key", GEN_PROTOCOL_OP_KEY, "r12", None, key_done);
     x86_ensure_started(emitter, "key");
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_LAST_KEY_OFFSET)); // load the boxed most-recent yield key
     emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference
+    emitter.label(key_done);
     x86_acc_epilogue1(emitter);
 
     // valid
@@ -572,11 +759,14 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_valid ---");
     emitter.label_global("__rt_gen_valid");
     x86_acc_prologue1(emitter);
+    let valid_done = "__rt_gen_valid_eval_done_x86";
+    x86_eval_generator_probe(emitter, "valid", GEN_PROTOCOL_OP_VALID, "r12", None, valid_done);
     x86_ensure_started(emitter, "valid");
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = current generator state
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_TERMINATED));       // has the generator finished?
     emitter.instruction("setne al");                                            // al = 1 while the generator can still produce values
     emitter.instruction("movzx rax, al");                                       // widen the boolean to the integer result register
+    emitter.label(valid_done);
     x86_acc_epilogue1(emitter);
 
     // next
@@ -584,6 +774,14 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_next ---");
     emitter.label_global("__rt_gen_next");
     x86_acc_prologue1(emitter);
+    x86_eval_generator_probe(
+        emitter,
+        "next",
+        GEN_PROTOCOL_OP_NEXT,
+        "r12",
+        None,
+        "__rt_gen_next_done",
+    );
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = generator state
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_NOT_STARTED));      // has the generator started yet?
     emitter.instruction("jne __rt_gen_next_resume");                            // started generators advance through resume
@@ -606,6 +804,14 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_send ---");
     emitter.label_global("__rt_gen_send");
     x86_acc_prologue2(emitter);
+    x86_eval_generator_probe(
+        emitter,
+        "send",
+        GEN_PROTOCOL_OP_SEND,
+        "r12",
+        Some("r13"),
+        "__rt_gen_send_done",
+    );
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = generator state
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_NOT_STARTED));      // not yet started?
     emitter.instruction("jne __rt_gen_send_resume");                            // started generators skip the implicit first start
@@ -636,6 +842,14 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_throw ---");
     emitter.label_global("__rt_gen_throw");
     x86_acc_prologue2(emitter);
+    x86_eval_generator_probe(
+        emitter,
+        "throw",
+        GEN_PROTOCOL_OP_THROW,
+        "r12",
+        Some("r13"),
+        "__rt_gen_throw_done",
+    );
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = generator state
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_NOT_STARTED));      // not yet started?
     emitter.instruction("jne __rt_gen_throw_inject");                           // started generators skip the implicit first start
@@ -666,15 +880,39 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: __rt_gen_rewind ---");
     emitter.label_global("__rt_gen_rewind");
     x86_acc_prologue1(emitter);
+    let rewind_done = "__rt_gen_rewind_eval_done_x86";
+    x86_eval_generator_probe(
+        emitter,
+        "rewind",
+        GEN_PROTOCOL_OP_REWIND,
+        "r12",
+        None,
+        rewind_done,
+    );
     x86_ensure_started(emitter, "rewind");
+    emitter.label(rewind_done);
     x86_acc_epilogue1(emitter);
 
     // getReturn
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_get_return ---");
     emitter.label_global("__rt_gen_get_return");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", GEN_RETURN_VALUE_OFFSET)); // load the boxed body return value
-    emitter.instruction("jmp __rt_incref");                                     // tail-call incref so the caller owns a fresh reference
+    // The probe needs a frame (it calls out), so this helper takes the shared accessor
+    // prologue rather than tail-calling `__rt_incref` straight from the caller's frame.
+    x86_acc_prologue1(emitter);
+    let get_return_done = "__rt_gen_get_return_eval_done_x86";
+    x86_eval_generator_probe(
+        emitter,
+        "get_return",
+        GEN_PROTOCOL_OP_GET_RETURN,
+        "r12",
+        None,
+        get_return_done,
+    );
+    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_RETURN_VALUE_OFFSET)); // load the boxed body return value
+    emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference
+    emitter.label(get_return_done);
+    x86_acc_epilogue1(emitter);
 }
 
 /// `__rt_gen_delegate(inner) -> mixed` — drives an inner Generator on behalf of

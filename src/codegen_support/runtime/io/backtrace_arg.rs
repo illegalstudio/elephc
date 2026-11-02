@@ -480,3 +480,150 @@ mod tests {
         );
     }
 }
+
+/// Emits `__rt_backtrace_print_frame` for the active target.
+///
+/// `debug_print_backtrace()` renders `#<index> <file>(<line>): <name>(<args>)\n` for one frame.
+/// The five inputs are the zero-based index, a `{ptr, len}` file record, the call-site line, a
+/// `{ptr, len}` record of the callable's display name, and the frame's boxed-Mixed argument array
+/// (or zero when arguments are suppressed). Each AOT frame reader used to carry its own copy of
+/// this renderer, about 180 instructions in every function that can appear in a trace.
+///
+/// The array is borrowed: the caller releases it.
+pub(crate) fn emit_backtrace_print_frame(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: backtrace_print_frame ---");
+    emitter.label_global("__rt_backtrace_print_frame");
+    let aarch64 = emitter.target.arch != Arch::X86_64;
+    // Frame words: index, file record, line, name record, args array, next argument index.
+    if aarch64 {
+        emitter.instruction("sub sp, sp, #64");                                 // reserve the frame state and linkage
+        emitter.instruction("stp x29, x30, [sp, #48]");                         // preserve frame linkage and the return address
+        emitter.instruction("add x29, sp, #48");                                // establish a stable helper frame
+        emitter.instruction("stp x0, x1, [sp]");                                // save the index and the file record
+        emitter.instruction("stp x2, x3, [sp, #16]");                           // save the line and the name record
+        emitter.instruction("stp x4, xzr, [sp, #32]");                          // save the argument array and start the argument index at zero
+    } else {
+        emitter.instruction("push rbp");                                        // preserve the caller frame pointer
+        emitter.instruction("mov rbp, rsp");                                    // establish a stable helper frame
+        emitter.instruction("sub rsp, 48");                                     // reserve the frame state, keeping the stack 16-byte aligned
+        emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                    // save the index
+        emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                   // save the file record
+        emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                   // save the line
+        emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                   // save the name record
+        emitter.instruction("mov QWORD PTR [rbp - 40], r8");                    // save the argument array
+        emitter.instruction("mov QWORD PTR [rbp - 48], 0");                     // start the argument index at zero
+    }
+    // Slot accessors for the two arches: the same logical word lives at a different address.
+    let slot = |n: usize| -> String {
+        if aarch64 {
+            format!("[sp, #{}]", n * 8)
+        } else {
+            format!("QWORD PTR [rbp - {}]", (n + 1) * 8)
+        }
+    };
+    let write_static = |emitter: &mut Emitter, label: &str, len: usize| {
+        if aarch64 {
+            abi::emit_symbol_address(emitter, "x0", label);
+            emitter.instruction(&format!("mov x1, #{len}"));                    // length of the fixed text
+            emitter.instruction("bl __rt_stdout_write");                        // write the fixed text
+        } else {
+            abi::emit_symbol_address(emitter, "rdi", label);
+            emitter.instruction(&format!("mov rsi, {len}"));                    // length of the fixed text
+            emitter.instruction("call __rt_stdout_write");                      // write the fixed text
+        }
+    };
+    let write_int = |emitter: &mut Emitter, word: usize| {
+        if aarch64 {
+            emitter.instruction(&format!("ldr x0, {}", slot(word)));            // load the integer to render
+            emitter.instruction("bl __rt_itoa");                                // x1/x2 = decimal byte pair
+            emitter.instruction("mov x0, x1");                                  // stdout pointer argument
+            emitter.instruction("mov x1, x2");                                  // stdout length argument
+            emitter.instruction("bl __rt_stdout_write");                        // write the digits
+        } else {
+            emitter.instruction(&format!("mov rax, {}", slot(word)));           // load the integer to render
+            emitter.instruction("call __rt_itoa");                              // rax/rdx = decimal byte pair
+            emitter.instruction("mov rdi, rax");                                // stdout pointer argument
+            emitter.instruction("mov rsi, rdx");                                // stdout length argument
+            emitter.instruction("call __rt_stdout_write");                      // write the digits
+        }
+    };
+    let write_record = |emitter: &mut Emitter, word: usize| {
+        if aarch64 {
+            emitter.instruction(&format!("ldr x9, {}", slot(word)));            // load the {ptr, len} record
+            emitter.instruction("ldp x0, x1, [x9]");                            // load its pointer and length
+            emitter.instruction("bl __rt_stdout_write");                        // write the recorded bytes
+        } else {
+            emitter.instruction(&format!("mov r10, {}", slot(word)));           // load the {ptr, len} record
+            emitter.instruction("mov rdi, QWORD PTR [r10]");                    // load its pointer
+            emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                // load its length
+            emitter.instruction("call __rt_stdout_write");                      // write the recorded bytes
+        }
+    };
+    write_static(emitter, "_bt_frame_hash", 1);
+    write_int(emitter, 0);
+    write_static(emitter, "_bt_frame_space", 1);
+    write_record(emitter, 1);
+    write_static(emitter, "_bt_frame_open", 1);
+    write_int(emitter, 2);
+    write_static(emitter, "_bt_frame_mid", 3);
+    write_record(emitter, 3);
+    write_static(emitter, "_bt_frame_open", 1);
+    // Arguments: stop at the end of the array; a zero array has none.
+    if aarch64 {
+        emitter.instruction(&format!("ldr x9, {}", slot(4)));                   // load the argument array
+        emitter.instruction("cbz x9, __rt_bt_frame_close");                     // suppressed arguments print as ()
+        emitter.label("__rt_bt_frame_loop");
+        emitter.instruction(&format!("ldr x9, {}", slot(4)));                   // reload the argument array
+        emitter.instruction(&format!("ldr x10, {}", slot(5)));                  // reload the next argument index
+        emitter.instruction("ldr x11, [x9]");                                   // load the number of collected arguments
+        emitter.instruction("cmp x10, x11");                                    // were all arguments printed?
+        emitter.instruction("b.ge __rt_bt_frame_close");                        // stop after the last argument
+        emitter.instruction("cbz x10, __rt_bt_frame_first");                    // the first argument has no separator
+    } else {
+        emitter.instruction(&format!("mov r9, {}", slot(4)));                   // load the argument array
+        emitter.instruction("test r9, r9");                                     // is the argument array absent?
+        emitter.instruction("jz __rt_bt_frame_close_x");                        // suppressed arguments print as ()
+        emitter.label("__rt_bt_frame_loop_x");
+        emitter.instruction(&format!("mov r9, {}", slot(4)));                   // reload the argument array
+        emitter.instruction(&format!("mov r10, {}", slot(5)));                  // reload the next argument index
+        emitter.instruction("cmp r10, QWORD PTR [r9]");                         // were all arguments printed?
+        emitter.instruction("jge __rt_bt_frame_close_x");                       // stop after the last argument
+        emitter.instruction("test r10, r10");                                   // is this the first argument?
+        emitter.instruction("jz __rt_bt_frame_first_x");                        // the first argument has no separator
+    }
+    write_static(emitter, "_bt_frame_sep", 2);
+    if aarch64 {
+        emitter.label("__rt_bt_frame_first");
+        emitter.instruction(&format!("ldr x9, {}", slot(4)));                   // reload the argument array
+        emitter.instruction(&format!("ldr x10, {}", slot(5)));                  // reload the argument index
+        emitter.instruction("add x9, x9, #24");                                 // advance past the array header to the boxed cells
+        emitter.instruction("ldr x0, [x9, x10, lsl #3]");                       // load the borrowed boxed argument
+        emitter.instruction("bl __rt_backtrace_print_arg");                     // render it in debug_print_backtrace's compact form
+        emitter.instruction(&format!("ldr x10, {}", slot(5)));                  // reload the argument index
+        emitter.instruction("add x10, x10, #1");                                // account for the printed argument
+        emitter.instruction(&format!("str x10, {}", slot(5)));                  // keep the advanced index
+        emitter.instruction("b __rt_bt_frame_loop");                            // render the next argument
+        emitter.label("__rt_bt_frame_close");
+    } else {
+        emitter.label("__rt_bt_frame_first_x");
+        emitter.instruction(&format!("mov r9, {}", slot(4)));                   // reload the argument array
+        emitter.instruction(&format!("mov r10, {}", slot(5)));                  // reload the argument index
+        emitter.instruction("mov rax, QWORD PTR [r9 + r10 * 8 + 24]");          // load the borrowed boxed argument
+        emitter.instruction("call __rt_backtrace_print_arg");                   // render it in debug_print_backtrace's compact form
+        emitter.instruction(&format!("mov r10, {}", slot(5)));                  // reload the argument index
+        emitter.instruction("add r10, 1");                                      // account for the printed argument
+        emitter.instruction(&format!("mov {}, r10", slot(5)));                  // keep the advanced index
+        emitter.instruction("jmp __rt_bt_frame_loop_x");                        // render the next argument
+        emitter.label("__rt_bt_frame_close_x");
+    }
+    write_static(emitter, "_bt_frame_end", 2);
+    if aarch64 {
+        emitter.instruction("ldp x29, x30, [sp, #48]");                         // restore frame linkage and the return address
+        emitter.instruction("add sp, sp, #64");                                 // release the frame state
+        emitter.instruction("ret");                                             // return to the frame reader
+    } else {
+        emitter.instruction("leave");                                           // release the frame state and restore the caller frame pointer
+        emitter.instruction("ret");                                             // return to the frame reader
+    }
+}

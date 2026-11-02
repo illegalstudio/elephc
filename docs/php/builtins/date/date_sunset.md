@@ -2,7 +2,7 @@
 title: "date_sunset()"
 description: "Returns the sunset time for a day and location. Deprecated since PHP 8.1."
 sidebar:
-  order: 214
+  order: 225
 ---
 
 ## date_sunset()

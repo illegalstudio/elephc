@@ -11,7 +11,7 @@ use super::program_usage::{collect_required_class_names, collect_required_class_
 use super::{dynamic_new, reflection};
 use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::types::ClassInfo;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Returns the class names a program's emitted metadata can reach. Starts from required
 /// classes, adds the throwable hierarchy a runtime helper can materialize, reflection
@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 /// so the two never disagree about what a helper can throw, not because both are load-bearing.
 pub(super) fn collect_emitted_class_names(
     program: &Program,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> HashSet<String> {
     let mut names = collect_required_class_names(program);
     if names.contains("Fiber") {
@@ -132,7 +132,7 @@ pub(super) fn collect_emitted_class_names(
 /// all-or-nothing (`types::checker::builtin_spl_classes::program_may_reference_spl` decides it
 /// for the entire surface at once), so a single hit means the family is there. The three names
 /// are the containers whose runtime helpers actually read `_spl_*_class_id`.
-fn spl_surface_is_present(classes: &HashMap<String, ClassInfo>) -> bool {
+fn spl_surface_is_present(classes: &crate::fast_hash::FastMap<String, ClassInfo>) -> bool {
     ["SplDoublyLinkedList", "SplFixedArray", "IteratorIterator"]
         .iter()
         .any(|name| classes.contains_key(*name))
@@ -144,7 +144,7 @@ fn spl_surface_is_present(classes: &HashMap<String, ClassInfo>) -> bool {
 /// tables are complete.
 fn expand_emitted_class_dependencies(
     names: &mut HashSet<String>,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) {
     loop {
         let mut changed = false;
@@ -179,7 +179,7 @@ fn expand_emitted_class_dependencies(
 /// Adds every concrete class that an internal dynamic object factory can instantiate.
 fn collect_dynamic_object_factory_classes(
     stmts: &[Stmt],
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     names: &mut HashSet<String>,
 ) {
     for stmt in stmts {
@@ -190,7 +190,7 @@ fn collect_dynamic_object_factory_classes(
 /// Adds dynamic factory class dependencies found in a statement.
 fn collect_dynamic_object_factory_classes_in_stmt(
     stmt: &Stmt,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     names: &mut HashSet<String>,
 ) {
     match &stmt.kind {
@@ -296,6 +296,7 @@ fn collect_dynamic_object_factory_classes_in_stmt(
         | StmtKind::Return(Some(expr))
         | StmtKind::ArrayPush { value: expr, .. }
         | StmtKind::PropertyAssign { value: expr, .. }
+        | StmtKind::PropertyRefAssign { source: expr, .. }
         | StmtKind::PropertyArrayPush { value: expr, .. }
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. } => {
@@ -306,6 +307,10 @@ fn collect_dynamic_object_factory_classes_in_stmt(
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             collect_dynamic_object_factory_classes_in_expr(index, classes, names);
             collect_dynamic_object_factory_classes_in_expr(value, classes, names);
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            collect_dynamic_object_factory_classes_in_expr(index, classes, names);
+            collect_dynamic_object_factory_classes_in_expr(source, classes, names);
         }
         StmtKind::NestedArrayAssign { target, value } => {
             collect_dynamic_object_factory_classes_in_expr(target, classes, names);
@@ -318,7 +323,7 @@ fn collect_dynamic_object_factory_classes_in_stmt(
 /// Adds dynamic factory class dependencies found in an expression.
 fn collect_dynamic_object_factory_classes_in_expr(
     expr: &Expr,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     names: &mut HashSet<String>,
 ) {
     match &expr.kind {
@@ -489,7 +494,7 @@ fn collect_dynamic_object_factory_classes_in_expr(
 /// Adds every known class that can satisfy an internal dynamic factory parent constraint.
 fn collect_dynamic_factory_descendants(
     required_parent: &str,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     names: &mut HashSet<String>,
 ) {
     for class_name in classes.keys() {
@@ -503,7 +508,7 @@ fn collect_dynamic_factory_descendants(
 fn emitted_class_descends_from(
     class_name: &str,
     required_parent: &str,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> bool {
     let mut current = Some(class_name);
     while let Some(name) = current {

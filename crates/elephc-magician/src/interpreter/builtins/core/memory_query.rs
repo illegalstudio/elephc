@@ -50,6 +50,14 @@ pub(super) fn from_values(
             );
         }
     }
-    // A supported scalar call reaches this branch only when the runtime capability is absent.
-    values.runtime_builtin_call(id, args)?.ok_or(EvalStatus::UnsupportedConstruct)
+    // The byte count comes from the adapter's heap counters (`_gc_live` / `_gc_peak` /
+    // `_heap_off`), the same words the compiled lowering reads; `$real_usage` is read for
+    // php weak-mode truthiness.
+    let real_usage = match args.first() {
+        Some(&flag) => values.truthy(flag)?,
+        None => false,
+    };
+    let peak = id == RuntimeBuiltinId::MemoryGetPeakUsage;
+    let bytes = values.memory_usage_bytes(peak, real_usage)?;
+    values.int(bytes)
 }

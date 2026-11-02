@@ -11,6 +11,41 @@
 
 use super::*;
 
+/// Returns the `crate::preg_array_prelude` helper a statically bound replacement builtin needs,
+/// when its operands may be arrays or it passes `$flags`.
+///
+/// The positional operands php reads as pattern, replacement and subject are 0, 1 and 2 for
+/// `preg_replace()`, and 0 and 2 for `preg_replace_callback()`, whose sixth operand is `$flags`.
+fn preg_array_helper_for_callable(
+    ctx: &LoweringContext<'_, '_>,
+    function_name: &str,
+    args: &[Expr],
+) -> Option<&'static str> {
+    let key = php_symbol_key(function_name.trim_start_matches('\\'));
+    let (helper, operands): (&'static str, &[usize]) = match key.as_str() {
+        "preg_replace" => (crate::preg_array_prelude::PREG_REPLACE_FULL_NAME, &[0, 1, 2]),
+        "preg_replace_callback" => {
+            (crate::preg_array_prelude::PREG_REPLACE_CALLBACK_FULL_NAME, &[0, 2])
+        }
+        _ => return None,
+    };
+    if args
+        .iter()
+        .any(|arg| is_spread_arg(arg) || matches!(arg.kind, ExprKind::NamedArg { .. }))
+    {
+        return None;
+    }
+    let flagged = key == "preg_replace_callback" && args.len() == 6;
+    let may_be_array = operands.iter().any(|index| {
+        args.get(*index).is_some_and(|arg| {
+            crate::types::checker::builtins::preg_operand_may_be_array(
+                &materialized_expr_type_for_merge(ctx, arg).codegen_repr(),
+            )
+        })
+    });
+    (flagged || may_be_array).then_some(helper)
+}
+
 /// Returns whether `lower_static_callable_call` can lower this binding without descriptor state.
 ///
 /// `LoadRefCell` is the conservative source marker for a capture whose stable cell is not
@@ -38,14 +73,49 @@ pub(super) fn static_callable_call_lowers_directly(
     }
 }
 
-/// Lowers one resolved static callable target to the corresponding EIR call opcode.
+/// Returns whether a statically bound builtin lowers a runtime unpack itself and has no
+/// descriptor invoker: the class-introspection builtins.
+pub(super) fn static_target_plans_its_own_spreads(target: &StaticCallableBinding) -> bool {
+    matches!(
+        target,
+        StaticCallableBinding::Builtin(name)
+            if matches!(
+                php_symbol_key(name.trim_start_matches('\\')).as_str(),
+                "get_class_vars" | "get_class_methods"
+            )
+    )
+}
+
+/// Returns whether a direct static-callable call can bind these arguments: a spread whose
+/// elements are not known at compile time needs the descriptor path.
+pub(super) fn static_callable_call_accepts_args(callback_args: &[Expr]) -> bool {
+    !(callback_args.iter().any(is_spread_arg) && !has_static_call_spread_args(callback_args))
+}
+
 pub(super) fn lower_static_callable_call(
     ctx: &mut LoweringContext<'_, '_>,
     target: StaticCallableBinding,
     callback_args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    if !static_callable_call_lowers_directly(ctx, &target) {
+    // `get_class_vars()`/`get_class_methods()` have no descriptor invoker to fall back to (they
+    // answer from compile-time metadata and the calling scope), and their own lowering plans a
+    // runtime unpack itself: `call_user_func('get_class_vars', ...$names)` reached the
+    // descriptor path and died with "Call to undefined function <dynamic>()".
+    if let StaticCallableBinding::Builtin(function_name) = &target {
+        if static_target_plans_its_own_spreads(&target)
+            && !static_callable_call_accepts_args(callback_args)
+        {
+            if let Some(value) =
+                lower_class_introspection(ctx, function_name, callback_args, expr)
+            {
+                return Some(value);
+            }
+        }
+    }
+    if !static_callable_call_accepts_args(callback_args)
+        || !static_callable_call_lowers_directly(ctx, &target)
+    {
         return None;
     }
     if !crate::ir_lower::loop_closures::direct_call_is_eligible(ctx, &target, callback_args, expr.span) {
@@ -122,8 +192,48 @@ pub(super) fn lower_static_callable_call(
             Some(call)
         }
         StaticCallableBinding::Builtin(function_name) => {
+            // The array and `$flags` forms of the replacement builtins live in
+            // `crate::preg_array_prelude`, exactly as for a direct call
+            // (`compat_preludes::lower_backend_gap_builtin_shape`). No checker entry names this
+            // call, so the operands' own types decide: `call_user_func_array('preg_replace',
+            // ['/e/', 'E', ['a' => 'hello']])` reached the native runtime with a hash subject.
+            if let Some(helper) = preg_array_helper_for_callable(ctx, &function_name, callback_args) {
+                return Some(lower_function_call(
+                    ctx,
+                    &crate::names::Name::unqualified(helper),
+                    callback_args,
+                    expr,
+                ));
+            }
             if let Some(value) =
                 lower_class_introspection(ctx, &function_name, callback_args, expr)
+            {
+                return Some(value);
+            }
+            // The internal-pointer builtins carry their cursor through a lowering of their own
+            // (`array_pointer_semantics`), not through the generic runtime-signature call this
+            // path emits: `array_map('current', $rows)` (Doctrine's Paginator) produced a
+            // one-operand `ArrayPtrValue` call the validator rejects. The direct-call lowering
+            // is the one that knows the contract, so the callable form takes it.
+            if matches!(
+                php_symbol_key(function_name.trim_start_matches('\\')).as_str(),
+                "current" | "key" | "reset" | "end" | "next" | "prev" | "pos"
+            ) && callback_args.len() == 1
+            {
+                return Some(lower_function_call(
+                    ctx,
+                    &crate::names::Name::unqualified(
+                        php_symbol_key(function_name.trim_start_matches('\\')),
+                    ),
+                    callback_args,
+                    expr,
+                ));
+            }
+            // `$f = 'array_merge'; $f([1], ['a' => 2])` takes the same key-aware prelude a direct
+            // call does. The native packed helpers only copy indexed slots, so a keyed or boxed
+            // operand reached them and the backend refused "array_merge for PHP type AssocArray".
+            if let Some(value) =
+                compat_preludes::lower_gradual_array_merge(ctx, &function_name, callback_args, expr)
             {
                 return Some(value);
             }
@@ -275,6 +385,13 @@ pub(super) fn resolve_static_string_callable(
     if let Some(function_name) = lookup_folded_name(ctx.functions.keys(), callback) {
         return Some(StaticCallableBinding::UserFunction(function_name));
     }
+    // A PHP function alias held in a string (`$f = "sizeof"`) names its canonical builtin, as the
+    // name resolver already rewrites a direct `sizeof(...)` call.
+    if let Some(function_name) = crate::name_resolver::canonical_function_alias(callback)
+        .and_then(canonical_builtin_function_name)
+    {
+        return Some(StaticCallableBinding::Builtin(function_name));
+    }
     None
 }
 
@@ -369,7 +486,7 @@ pub(super) fn closure_bind_property_return_type(
 }
 
 /// Lowers `Closure::bind(fn &() => $this->prop, $newThis, scope)()` as a direct call to the
-/// closure with `$newThis` boxed as its `$this` capture.
+/// closure with `$newThis` as its typed `$this` capture.
 ///
 /// `Closure::bind` rebinds the closure's receiver; invoking the result through the generic
 /// runtime descriptor invoker boxes the closure's return value as Mixed, which cannot carry a
@@ -510,13 +627,24 @@ pub(super) fn build_bound_closure_binding(
     let ExprKind::StaticMethodCall { args: bind_args, .. } = &callee.kind else {
         return None;
     };
+    let bind_args = &*crate::types::call_args::closure_bind_args_with_object_scope(bind_args);
     let closure_lit = bind_args.first()?;
     let new_this = bind_args.get(1)?.clone();
     // Lower the closure literal to obtain its static binding (function name + captures). The
     // bound property's type reaches the body, so the closure's own `return $this->prop` is
     // lowered against that representation instead of the untyped `Mixed` its `Mixed` `$this`
     // would otherwise infer.
-    let original = lower_bound_this_closure_literal(ctx, closure_lit, &result_type)?;
+    // In the bind's scope, exactly as the generic `Closure::bind` lowering does: the body's
+    // member accesses resolve their visibility against it. Lowered in the enclosing scope,
+    // Symfony's `Kernel::registerContainerConfiguration()` binding
+    // `fn &() => $this->instanceof` to its loader raised "Cannot access protected property".
+    let saved_class = ctx.current_class.clone();
+    if let Some(scope) = super::static_method_calls::closure_bind_scope_class(ctx, bind_args) {
+        ctx.current_class = Some(scope);
+    }
+    let original = lower_bound_this_closure_literal(ctx, closure_lit, &result_type);
+    ctx.current_class = saved_class;
+    let original = original?;
     let Some(StaticCallableBinding::Closure {
         name,
         signature,
@@ -531,7 +659,12 @@ pub(super) fn build_bound_closure_binding(
         && (ctx.local_slots.contains_key(crate::names::CALLED_CLASS_ID_LOCAL)
             || ctx.local_slots.contains_key("this"));
     let expected_capture_count = 1 + usize::from(forwards_called_class);
-    if captures.len() != expected_capture_count {
+    // One more, always LAST: the hidden runtime-scope capture a classless closure that reaches
+    // `$this->prop` carries (`closures::closure_needs_runtime_scope_capture`). Refusing it lowered
+    // the literal here AND again on the generic path, and the generic copy's `Mixed` result
+    // could not alias the typed property.
+    let has_scope_capture = captures.len() == expected_capture_count + 1;
+    if captures.len() != expected_capture_count && !has_scope_capture {
         return None;
     }
     // Published before the operand roots, so the descriptor this builds is reachable from the
@@ -543,9 +676,12 @@ pub(super) fn build_bound_closure_binding(
     // The scope argument is still a PHP expression, even though this specialization already
     // knows the property layout. Evaluate it once in source order and keep its owner through
     // descriptor construction, just like the receiver argument.
+    let mut scope_value = None;
     let scope_owner = bind_args.get(2).and_then(|scope| {
         let value = lower_expr(ctx, scope);
-        root_owned_call_operand(ctx, value, scope.span).1
+        let (value, owner) = root_owned_call_operand(ctx, value, scope.span);
+        scope_value = Some((value, scope.span));
+        owner
     });
     // Acquire before boxing so the box owns a reference of its own: the rooted receiver is still
     // owned by its operand-owner slot, which is retired separately below.
@@ -565,6 +701,37 @@ pub(super) fn build_bound_closure_binding(
         by_ref_local: None,
     }];
     bound_captures.extend(captures.into_iter().skip(1));
+    // The descriptor is built here rather than by `closure_bind`, so the scope is stamped here:
+    // the class id plus one, `0` (unchanged) when no compiled class has the name.
+    if has_scope_capture {
+        if let Some((scope, span)) = scope_value.filter(|(scope, _)| {
+            matches!(
+                ctx.builder.value_php_type(scope.value).codegen_repr(),
+                PhpType::Str | PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
+            )
+        }) {
+            let class_id = ctx.emit_value(
+                Op::ClassNameToId,
+                vec![scope.value],
+                None,
+                PhpType::Int,
+                Op::ClassNameToId.default_effects(),
+                Some(span),
+            );
+            let one = super::indexed_array_literals::emit_i64_at_span(ctx, 1, span);
+            let stamped = ctx.emit_value(
+                Op::IAdd,
+                vec![class_id.value, one.value],
+                None,
+                PhpType::Int,
+                Op::IAdd.default_effects(),
+                Some(span),
+            );
+            if let Some(last) = bound_captures.last_mut() {
+                last.value = stamped.value;
+            }
+        }
+    }
     let bound_operands = bound_captures
         .iter()
         .map(|capture| capture.value)
@@ -646,7 +813,7 @@ pub(super) fn instance_callable_object_class(
 }
 
 /// Resolves one instance-call receiver class and whether its expression may produce `null`.
-pub(super) fn instance_callable_object_class_and_nullability(
+pub(crate) fn instance_callable_object_class_and_nullability(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
 ) -> Option<(String, bool)> {
@@ -705,6 +872,22 @@ pub(super) fn instance_callable_object_class_and_nullability(
             let result = assignment_result_expr(value, result_target.as_deref(), prelude);
             return instance_callable_object_class_and_nullability(ctx, result);
         }
+        // `Enum::Case` is the enum's singleton, exactly as `lower_scoped_constant` lowers it.
+        // Without this arm the syntactic fallback guessed `int`, so `Kind::Int->value` in an
+        // array literal typed a string-backed value as int and stored its string POINTER
+        // (`['integer' => Kind::Int->value]` printed `4321534512`).
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            let class_name = super::scoped_values::scoped_constant_receiver_name(ctx, receiver);
+            let class_name = class_name.trim_start_matches('\\');
+            let is_case = ctx
+                .enums
+                .get(class_name)
+                .is_some_and(|enum_info| enum_info.cases.iter().any(|case| &case.name == name));
+            if !is_case {
+                return None;
+            }
+            PhpType::Object(class_name.to_string())
+        }
         _ => infer_expr_type_syntactic(object),
     };
     let (class_name, nullable) = singular_object_class(&object_type)?;
@@ -726,10 +909,13 @@ pub(super) fn lookup_folded_name<'a, I>(names: I, requested: &str) -> Option<Str
 where
     I: IntoIterator<Item = &'a String>,
 {
-    let requested = php_symbol_key(requested);
+    // Folding both sides through `php_symbol_key` allocated a lowercased `String` for EVERY
+    // candidate in the table, on every lookup, and this runs against the whole class, function
+    // and extern-function tables per string-callable site. The ASCII fold is byte-wise, so the
+    // comparison below is the same predicate with nothing allocated.
     names
         .into_iter()
-        .find(|candidate| php_symbol_key(candidate) == requested)
+        .find(|candidate| candidate.eq_ignore_ascii_case(requested))
         .cloned()
 }
 

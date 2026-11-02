@@ -53,19 +53,104 @@ pub(super) fn emit_static_closure_descriptor(
     let invoker_label = emit_runtime_callable_invoker_in_class(
         ctx, &signature, &captures, owns_string_return, true, default_scope.as_deref(),
     );
+    let php_source = closure_php_source(ctx, closure);
+    let mut invocation = callable_descriptor::CallableDescriptorInvocation::new(
+        callable_descriptor::CallableDescriptorShape::Closure,
+    );
+    let php_name = match php_source {
+        Some(source) => {
+            invocation.aux_name = Some(format!(
+                "{}:{}:{}",
+                source.start_line, source.end_line, source.file
+            ));
+            source.name
+        }
+        None => closure
+            .display_name
+            .clone()
+            .unwrap_or_else(|| closure.name.clone()),
+    };
     callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &function_symbol(&closure.name),
-        Some(&closure.name),
+        Some(&php_name),
         callable_descriptor::CALLABLE_DESC_KIND_CLOSURE,
         Some(&signature),
         &captures,
         &captures,
-        callable_descriptor::CallableDescriptorInvocation::new(
-            callable_descriptor::CallableDescriptorShape::Closure,
-        ),
+        invocation,
         Some(&invoker_label),
     )
+}
+
+/// php's name and source range for one closure literal.
+pub(in crate::codegen::lower_inst) struct ClosurePhpSource {
+    /// `{closure:SCOPE:LINE}`, as `ReflectionFunction::getName()` and stack frames spell it.
+    pub(in crate::codegen::lower_inst) name: String,
+    pub(in crate::codegen::lower_inst) file: String,
+    pub(in crate::codegen::lower_inst) start_line: u32,
+    pub(in crate::codegen::lower_inst) end_line: u32,
+}
+
+/// Resolves php's `{closure:SCOPE:LINE}` name and line range for a closure literal.
+///
+/// SCOPE is the declaring body: `Class::method()` or `function()` inside a named body, the
+/// enclosing closure's own name inside a closure, and the file at the top level. The descriptor
+/// carried the compiler's `__eir_closure_*` symbol instead, which `ReflectionFunction::getName()`
+/// reported, with no lines at all. Synthesized closures (no recorded origin, or a prelude's
+/// synthetic line) keep the internal name.
+pub(in crate::codegen::lower_inst) fn closure_php_source(
+    ctx: &FunctionContext<'_>,
+    closure: &crate::ir::Function,
+) -> Option<ClosurePhpSource> {
+    let mut chain = Vec::new();
+    let mut current = closure;
+    loop {
+        let origin = current.closure_origin.as_ref()?;
+        if !origin.span.is_from_source() {
+            return None;
+        }
+        chain.push(origin);
+        if chain.len() > 64 {
+            return None;
+        }
+        match ctx
+            .module
+            .closures
+            .iter()
+            .find(|function| function.name == origin.owner)
+        {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    let innermost = chain.first()?;
+    let outermost = chain.last()?;
+    let file = ctx
+        .span_source_file(Some(innermost.span))
+        .map(str::to_string)
+        .or_else(|| ctx.module.source_path.clone())
+        .unwrap_or_default();
+    let outer_file = ctx
+        .span_source_file(Some(outermost.span))
+        .map(str::to_string)
+        .or_else(|| ctx.module.source_path.clone())
+        .unwrap_or_default();
+    let owner = outermost.owner.trim_start_matches('\\');
+    let mut name = if owner == "main" || owner.is_empty() {
+        outer_file
+    } else {
+        format!("{}()", owner)
+    };
+    for origin in chain.iter().rev() {
+        name = format!("{{closure:{}:{}}}", name, origin.span.line);
+    }
+    Some(ClosurePhpSource {
+        name,
+        file,
+        start_line: innermost.span.line,
+        end_line: innermost.span.end_line.max(innermost.span.line),
+    })
 }
 
 /// Returns the hidden closure capture params from the tail of the EIR closure ABI.
@@ -97,6 +182,13 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
     let total_bytes =
         callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + captures.len() * 16;
+    // `nested_call_reg` is x19 / r12, both CALLEE-SAVED, and an ordinary compiled function's
+    // prologue saves neither. Holding the descriptor there across the allocation and the capture
+    // stores therefore returned to the caller with its own x19 destroyed. Compiled-to-compiled
+    // calls survived that by luck; the eval bridge does not, because its caller is Rust, and a
+    // static method returning a closure to interpreted code — Symfony's
+    // `HtmlErrorRenderer::isDebug(): \Closure` — corrupted the interpreter instead.
+    abi::emit_push_reg(ctx.emitter, descriptor_reg);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
     crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // a PHP Closure is an object: draw its handle from the object pool
@@ -154,6 +246,9 @@ pub(super) fn emit_runtime_closure_descriptor_with_captures(
         ctx.emitter
             .instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the runtime closure descriptor pointer
     }
+    // Restored only after the descriptor has been moved into the result register, so the caller's
+    // callee-saved value comes back and the closure still leaves in `result_reg`.
+    abi::emit_pop_reg(ctx.emitter, descriptor_reg);
     Ok(())
 }
 
@@ -232,9 +327,7 @@ fn capture_operand_needs_guard_cleanup(
     if ctx.value_can_transfer_ownership_to_consumer(operand)? {
         return Ok(true);
     }
-    Ok(ctx.function.instructions.iter().any(|inst| {
-        inst.op == Op::Release && inst.operands.first().copied() == Some(operand)
-    }))
+    Ok(ctx.value_uses().is_released(operand))
 }
 
 /// Returns whether a by-reference closure capture replaces a caller-owned local value.

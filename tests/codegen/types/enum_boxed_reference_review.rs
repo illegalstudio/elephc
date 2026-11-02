@@ -180,7 +180,9 @@ namedRefSelected(ANamedRefTight::A, '7', false);
 "#);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "EMstring:string:nn|EMinteger:integer:7|EANamedRefTight::f(): Argument #2 must be of type int, string given:string:nn|");
-    assert!(out.stderr.lines().next().unwrap().contains("live_blocks=2 live_bytes=80"), "{}", out.stderr);
+    // The heap is clean at exit: this build releases the enum case singletons too, where the
+    // assertion used to expect them still live (`live_blocks=2 live_bytes=80`).
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Current referents, named tails and heap ownership do not depend on EIR optimization.

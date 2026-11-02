@@ -1,6 +1,6 @@
 //! Purpose:
-//! End-to-end codegen tests for intersection type syntax (`A&B`). elephc parses the syntax and
-//! types the value as its first listed member.
+//! End-to-end codegen tests for intersection and DNF type syntax (`A&B`, `(A&B)|null`). elephc
+//! parses the syntax and types an intersection value as its first listed member.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -46,6 +46,28 @@ fn test_intersection_return_type() {
         ",
     );
     assert_eq!(out, "9");
+}
+
+/// Verifies that a nullable DNF parameter compiles, accepts an intersection implementor, and
+/// remains usable through the first intersection member.
+#[test]
+fn test_nullable_dnf_intersection_param() {
+    let out = compile_and_run(
+        "<?php
+        interface Identified { public function id(): int; }
+        interface Named { public function label(): string; }
+        class Entity implements Identified, Named {
+            public function id(): int { return 11; }
+            public function label(): string { return \"entity\"; }
+        }
+        function take((Identified&Named)|null $x): int {
+            if ($x === null) { return 0; }
+            return $x->id();
+        }
+        echo take(new Entity()), '|', take(null);
+        ",
+    );
+    assert_eq!(out, "11|0");
 }
 
 /// Verifies that a by-reference parameter (`&$x`) is unaffected by intersection parsing.

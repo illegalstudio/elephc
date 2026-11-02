@@ -75,5 +75,8 @@ pub(in crate::interpreter) fn eval_unary_path_bool_result(
         "rmdir" => std::fs::remove_dir(path).is_ok(),
         _ => return Err(EvalStatus::RuntimeFatal),
     };
+    if name != "chdir" {
+        values.filesystem_paths_changed();
+    }
     values.bool_value(ok)
 }

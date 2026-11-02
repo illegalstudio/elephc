@@ -29,15 +29,42 @@ pub(super) fn lower_builtin_throwable_new(
     // exception synthesized by an optimizer pass, say) degrades to zero rather than to a guess.
     // Injected prelude code has a synthetic span; php attributes those throws to the user call
     // site published in `_php_diagnostic_line` before entering the prelude helper.
-    let creation_line = inst.span.map_or(0, |span| span.line);
+    let creation_line = inst.span.map_or(0, |span| span.source_line());
     let runtime_line = inst.span.is_some_and(|span| !span.is_from_source());
-    emit_throwable_allocation(ctx, class_id, creation_line, runtime_line);
+    emit_throwable_allocation(ctx, &class_name, class_id, creation_line, runtime_line);
     preserve_throwable_for_init(ctx);
     emit_throwable_message_fields(ctx, inst.operands.first().copied())?;
     emit_throwable_code_field(ctx, inst.operands.get(1).copied())?;
     emit_throwable_previous_field(ctx, inst.operands.get(2).copied())?;
     restore_throwable_after_init(ctx);
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    emit_throwable_trace_capture(ctx, object_reg);
     store_if_result(ctx, inst)
+}
+
+/// Records the frames live at this `new` as the Throwable's `getTrace()`.
+///
+/// PHP fills a Throwable's trace when the object is created, not when it is thrown. The frames
+/// come from the interpreter when one is running, and otherwise from the compiled activation
+/// chain, which only has frame readers that materialize a frame in a module that can read a trace
+/// (`frame::module_materializes_backtrace`); every other module emits nothing here and keeps the
+/// declared empty trace (its print-only readers would write `#-1 ...` to stdout). `object_reg` survives the call.
+pub(super) fn emit_throwable_trace_capture(ctx: &mut FunctionContext<'_>, object_reg: &str) {
+    if !ctx.module.required_runtime_features.eval_bridge
+        && !crate::codegen::frame::module_materializes_backtrace(ctx.module)
+    {
+        return;
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    if object_reg != result_reg {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("mov x0, {}", object_reg)), // pass the Throwable to the trace helper
+            Arch::X86_64 => ctx.emitter.instruction(&format!("mov rax, {}", object_reg)), // pass the Throwable to the trace helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_capture_trace");
+    abi::emit_pop_reg(ctx.emitter, object_reg);
 }
 
 /// Returns true for builtin classes that share PHP's compact Throwable payload.
@@ -108,8 +135,59 @@ fn throwable_inherits_only_builtin_storage_and_constructor(class_info: &ClassInf
             .is_none_or(|owner| is_builtin_throwable_payload_class(owner))
 }
 
-/// Compact Throwable payload bytes: class_id + message(16) + code(16) + previous(16).
-const THROWABLE_COMPACT_PAYLOAD_SIZE: u64 = 56;
+/// Initializes the inherited builtin Throwable fields for a lexical parent constructor call.
+pub(in crate::codegen::lower_inst) fn try_lower_builtin_throwable_parent_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    impl_class: &str,
+    method_name: &str,
+    this_slot: LocalSlotId,
+) -> Result<bool> {
+    if method_name != "__construct" || !is_builtin_throwable_payload_class(impl_class) {
+        return Ok(false);
+    }
+    if inst.operands.len() > 3 {
+        return Err(CodegenIrError::unsupported(format!(
+            "{}::__construct with {} EIR operands",
+            impl_class,
+            inst.operands.len()
+        )));
+    }
+
+    ctx.load_local_to_result(this_slot)?;
+    preserve_throwable_for_init(ctx);
+    emit_throwable_message_fields(ctx, inst.operands.first().copied())?;
+    emit_throwable_code_field(ctx, inst.operands.get(1).copied())?;
+    emit_release_constructed_previous(ctx);
+    emit_throwable_previous_field(ctx, inst.operands.get(2).copied())?;
+    restore_throwable_after_init(ctx);
+    super::super::store_call_result(ctx, inst, &PhpType::Void)?;
+    Ok(true)
+}
+
+/// Releases the value an already-allocated object holds in its `previous` slot before the
+/// parent constructor overwrites it.
+///
+/// A subclass with its own constructor is allocated through the generic object path, which
+/// seeds the `?Throwable $previous` property with a boxed null. Overwriting that slot without a
+/// release leaked one box per constructed exception (every Twig and Symfony exception with a
+/// constructor). `__rt_decref_any` ignores null and non-heap words.
+fn emit_release_constructed_previous(ctx: &mut FunctionContext<'_>) {
+    let offset = crate::codegen_support::throwable_layout::PREVIOUS_OFFSET;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [sp]");                            // reload the Throwable being constructed
+            ctx.emitter.instruction(&format!("ldr x0, [x9, #{}]", offset));     // load the previous slot's current owner
+            ctx.emitter.instruction(&format!("str xzr, [x9, #{}]", offset));    // clear the slot before releasing what it held
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                // reload the Throwable being constructed
+            ctx.emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", offset)); // load the previous slot's current owner
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", offset)); // clear the slot before releasing what it held
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");                      // release the default (or earlier) previous value
+}
 
 /// Stamps ordinary Throwable metadata outside every PHP-visible property slot.
 pub(super) fn emit_regular_throwable_creation_line(
@@ -124,7 +202,7 @@ pub(super) fn emit_regular_throwable_creation_line(
     let creation_line = ctx.function.value(source).and_then(|value| {
         let ValueDef::Instruction { inst, .. } = value.def else { return None };
         ctx.function.instruction(inst)?.span
-    }).map_or(0, |span| span.line);
+    }).map_or(0, |span| span.source_line());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_int_immediate(ctx.emitter, "x9", i64::from(creation_line));
@@ -144,19 +222,25 @@ pub(super) fn emit_regular_throwable_creation_line(
 /// instruction carried no span. PHP records the line where a Throwable is CONSTRUCTED, not where
 /// it is thrown — `$e = new RuntimeException(...)` on line 2 followed by `throw $e;` on line 5
 /// reports line 2 — so the value belongs here rather than on the throw terminator.
+///
+/// The payload size comes from [`crate::types::object_payload_size`], the same authority that
+/// builds `_class_object_payload_sizes`, so the dynamic-property tail this class owns is reserved
+/// here and zeroed by the allocator instead of being read past the payload at free time.
 pub(super) fn emit_throwable_allocation(
     ctx: &mut FunctionContext<'_>,
+    class_name: &str,
     class_id: u64,
     creation_line: u32,
     runtime_line: bool,
 ) {
+    let class_info = ctx.module.class_infos.values()
+        .find(|info| info.class_id == class_id)
+        .expect("Throwable allocation requires class metadata");
+    let payload_size = crate::types::object_payload_size(class_name, class_info);
+    crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, payload_size);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            // -- allocate and stamp the compact Throwable payload --
-            ctx.emitter.instruction(                                            // allocate enough storage for every compact Throwable field
-                &format!("mov x0, #{}", THROWABLE_COMPACT_PAYLOAD_SIZE)
-            );                                                                  // request compact Throwable payload storage
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            // -- stamp the complete declared Throwable payload --
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks runtime object payloads
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the Throwable payload
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
@@ -167,15 +251,11 @@ pub(super) fn emit_throwable_allocation(
             } else {
                 emit_throwable_creation_line_aarch64(ctx, "x0", "x9", creation_line);
             }
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null until constructor init
+            ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null until constructor init
         }
         Arch::X86_64 => {
-            // -- allocate and stamp the compact Throwable payload --
-            ctx.emitter.instruction(                                            // allocate enough storage for every compact Throwable field
-                &format!("mov rax, {}", THROWABLE_COMPACT_PAYLOAD_SIZE)
-            );                                                                  // request compact Throwable payload storage
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(                                   // preserve the x86_64 heap marker when selecting the Throwable kind
+            // -- stamp the complete declared Throwable payload --
+            ctx.emitter.instruction(&format!(
                 "mov r10, 0x{:x}",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(6)
             ));                                                                 // materialize the x86_64 Throwable heap kind word
@@ -188,8 +268,20 @@ pub(super) fn emit_throwable_allocation(
             } else {
                 emit_throwable_creation_line_x86_64(ctx, "rax", creation_line);
             }
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null until constructor init
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null until constructor init
         }
+    }
+    // The allocation stamped the entry file; `new` written in an included or autoloaded file
+    // names that file instead (both are static data, so nothing is released).
+    if let Some(path) = ctx.span_source_file(ctx.current_instruction_span()).map(str::to_string) {
+        let (label, len) = ctx.data.add_string(path.as_bytes());
+        let object_reg = abi::int_result_reg(ctx.emitter);
+        crate::codegen_support::throwable_layout::emit_store_static_file(
+            ctx.emitter,
+            object_reg,
+            &label,
+            len,
+        );
     }
 }
 
@@ -199,7 +291,10 @@ fn emit_throwable_runtime_line_aarch64(
     payload_reg: &str,
     scratch_reg: &str,
 ) {
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, "_php_diagnostic_line", 0);
+    // `prepare_call_site` publishes one `{file descriptor, line}` record through `php_site`.
+    let site = abi::php_site_symbol(&ctx.emitter.target);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, &site, 0);
+    ctx.emitter.instruction(&format!("ldr {scratch_reg}, [{scratch_reg}, #8]")); // the published site's line
     ctx.emitter.instruction(&format!(                                           // record the caller's source line for a prelude-synthesized throwable
         "str {}, [{}, #{}]",
         scratch_reg, payload_reg, THROWABLE_CREATION_LINE_OFFSET
@@ -212,7 +307,9 @@ fn emit_throwable_runtime_line_x86_64(
     payload_reg: &str,
     scratch_reg: &str,
 ) {
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, "_php_diagnostic_line", 0);
+    let site = abi::php_site_symbol(&ctx.emitter.target);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, &site, 0);
+    ctx.emitter.instruction(&format!("mov {scratch_reg}, QWORD PTR [{scratch_reg} + 8]")); // the published site's line
     ctx.emitter.instruction(&format!(                                           // record the caller's source line for a prelude-synthesized throwable
         "mov QWORD PTR [{} + {}], {}",
         payload_reg, THROWABLE_CREATION_LINE_OFFSET, scratch_reg
@@ -269,6 +366,49 @@ pub(super) fn restore_throwable_after_init(ctx: &mut FunctionContext<'_>) {
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
 }
 
+/// Stamps the construction site after ordinary inherited property defaults.
+pub(super) fn emit_throwable_creation_site(
+    ctx: &mut FunctionContext<'_>,
+    object_reg: &str,
+    creation_line: u32,
+) {
+    // Inside the shared `new $class(...)` helper the `new` was written at the CALLING site, which
+    // published its file and line (`outlined_dynamic_new::emit_outlined_dynamic_new_call`).
+    if super::super::outlined_dynamic_new::inside_dynamic_new_ctor_helper(ctx) {
+        use crate::codegen_support::throwable_layout::{
+            emit_replace_initial_file_from_site, DYNAMIC_NEW_SITE_BYTES, DYNAMIC_NEW_SITE_SYMBOL,
+        };
+        ctx.data.add_comm(DYNAMIC_NEW_SITE_SYMBOL.to_string(), DYNAMIC_NEW_SITE_BYTES);
+        emit_replace_initial_file_from_site(ctx.emitter, object_reg);
+        let scratch = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, DYNAMIC_NEW_SITE_SYMBOL, 16);
+        abi::emit_store_to_address(
+            ctx.emitter,
+            scratch,
+            object_reg,
+            crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET as usize,
+        );
+        emit_throwable_trace_capture(ctx, object_reg);
+        return;
+    }
+    // `getFile()` names the file the `new` was written in: an included or autoloaded class file
+    // has its own, and only the entry file's code uses `_script_source_file`.
+    let file = ctx
+        .span_source_file(ctx.current_instruction_span())
+        .map(str::to_string)
+        .map(|path| ctx.data.add_string(path.as_bytes()));
+    crate::codegen_support::throwable_layout::emit_replace_initial_file_with(
+        ctx.emitter,
+        object_reg,
+        file.as_ref().map(|(label, len)| (label.as_str(), *len)),
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_throwable_creation_line_aarch64(ctx, object_reg, "x9", creation_line),
+        Arch::X86_64 => emit_throwable_creation_line_x86_64(ctx, object_reg, creation_line),
+    }
+    emit_throwable_trace_capture(ctx, object_reg);
+}
+
 /// Writes the message pointer and length into the compact Throwable payload.
 pub(super) fn emit_throwable_message_fields(
     ctx: &mut FunctionContext<'_>,
@@ -286,7 +426,13 @@ pub(super) fn emit_throwable_message_fields_aarch64(
     message: Option<ValueId>,
 ) -> Result<()> {
     if let Some(message) = message {
-        ctx.load_string_value_to_regs(message, "x1", "x2")?;
+        crate::codegen::lower_inst::builtins::strings::load_value_as_string_to_regs(
+            ctx,
+            message,
+            "Throwable message",
+            "x1",
+            "x2",
+        )?;
         abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     } else {
         emit_empty_string_to_regs(ctx, "x1", "x2");
@@ -303,7 +449,13 @@ pub(super) fn emit_throwable_message_fields_x86_64(
     message: Option<ValueId>,
 ) -> Result<()> {
     if let Some(message) = message {
-        ctx.load_string_value_to_regs(message, "rax", "rdx")?;
+        crate::codegen::lower_inst::builtins::strings::load_value_as_string_to_regs(
+            ctx,
+            message,
+            "Throwable message",
+            "rax",
+            "rdx",
+        )?;
         abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     } else {
         emit_empty_string_to_regs(ctx, "rax", "rdx");
@@ -359,7 +511,7 @@ pub(super) fn emit_throwable_code_field_x86_64(
     Ok(())
 }
 
-/// Writes PHP's `$previous` object pointer into the compact Throwable payload at offset 40.
+/// Writes PHP's `$previous` object pointer into its declared Throwable property slot.
 pub(super) fn emit_throwable_previous_field(
     ctx: &mut FunctionContext<'_>,
     previous: Option<ValueId>,
@@ -390,11 +542,11 @@ pub(super) fn emit_throwable_previous_field_aarch64(
         ctx.emitter.instruction("mov x0, xzr");                                 // compact payload stores raw null, not the in-band sentinel
         ctx.emitter.label(&store_label);
         ctx.emitter.instruction("ldr x9, [sp]");                                // reload the saved Throwable object for previous initialization
-        ctx.emitter.instruction("str x0, [x9, #40]");                           // store Throwable previous pointer
+        ctx.emitter.instruction(&format!("str x0, [x9, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // store Throwable previous pointer
     } else {
         // -- initialize an omitted previous Throwable --
         ctx.emitter.instruction("ldr x9, [sp]");                                // reload the saved Throwable object for previous initialization
-        ctx.emitter.instruction("str xzr, [x9, #40]");                          // previous defaults to null
+        ctx.emitter.instruction(&format!("str xzr, [x9, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
     }
     Ok(())
 }
@@ -420,11 +572,11 @@ pub(super) fn emit_throwable_previous_field_x86_64(
         ctx.emitter.instruction("xor rax, rax");                                // compact payload stores raw null, not the in-band sentinel
         ctx.emitter.label(&store_label);
         ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the saved Throwable object for previous initialization
-        ctx.emitter.instruction("mov QWORD PTR [r11 + 40], rax");               // store Throwable previous pointer
+        ctx.emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // store Throwable previous pointer
     } else {
         // -- initialize an omitted previous Throwable --
         ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                    // reload the saved Throwable object for previous initialization
-        ctx.emitter.instruction("mov QWORD PTR [r11 + 40], 0");                 // previous defaults to null
+        ctx.emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
     }
     Ok(())
 }

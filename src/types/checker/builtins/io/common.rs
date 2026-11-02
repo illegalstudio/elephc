@@ -44,7 +44,9 @@ pub(crate) fn ensure_stream_resource(
 ///
 /// Returns true if `checker.type_accepts(expected, actual)` is true, if `actual` is `Mixed`,
 /// or if `actual` is a `Union` containing at least one resource-accepting member while all
-/// members are either resource-accepting or `Bool`. Called only by `ensure_stream_resource`.
+/// members are either resource-accepting, `Bool` or `null` (php raises its TypeError at run time;
+/// VarDumper's `AbstractDumper::dump($data, $output = null)` passes `resource|bool|null`).
+/// Called only by `ensure_stream_resource`.
 fn stream_arg_accepts(checker: &Checker, expected: &PhpType, actual: &PhpType) -> bool {
     if checker.type_accepts(expected, actual) || matches!(actual, PhpType::Mixed) {
         return true;
@@ -58,7 +60,7 @@ fn stream_arg_accepts(checker: &Checker, expected: &PhpType, actual: &PhpType) -
                 .iter()
                 .all(|member| {
                     checker.type_accepts(expected, member)
-                        || matches!(member, PhpType::Bool | PhpType::False)
+                        || matches!(member, PhpType::Bool | PhpType::False | PhpType::Void)
                 });
             has_resource && only_resource_or_false
         }

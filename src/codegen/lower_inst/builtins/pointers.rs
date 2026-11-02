@@ -126,6 +126,7 @@ pub(crate) fn lower_elephc_callable_ptr(
                 value,
                 "__elephc_callable_ptr",
                 false,
+                crate::strict_php::is_enabled(),
             )?;
         }
         PhpType::Str => {
@@ -182,12 +183,39 @@ pub(crate) fn lower_elephc_normalize_callable(
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Callable);
         }
         PhpType::Mixed | PhpType::Union(_) => {
+            // A boxed null keeps being null. An untyped parameter the checker specialized to
+            // `callable` from another call site still receives null from this one (Laravel's
+            // `Arr::sort($array, $callback = null)` forwards it to `Collection::sortBy()`), and
+            // PHP hands it over untouched; normalizing it fataled "mixed value is not callable".
+            let null_label = ctx.next_label("normalize_callable_null");
+            let done_label = ctx.next_label("normalize_callable_done");
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #8");                      // is the boxed value php null?
+                    abi::emit_branch_if_equal_wide(ctx.emitter, &null_label);   // null stays the callable null sentinel
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 8");                      // is the boxed value php null?
+                    ctx.emitter.instruction(&format!("je {}", null_label));     // null stays the callable null sentinel
+                }
+            }
             super::super::callables::emit_runtime_mixed_callable_descriptor_value(
                 ctx,
                 value,
                 "__elephc_normalize_callable",
                 true,
+                crate::strict_php::is_enabled(),
             )?;
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&null_label);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                crate::codegen_support::sentinels::NULL_SENTINEL,
+            );
+            ctx.emitter.label(&done_label);
         }
         PhpType::Str => {
             let result_reg = abi::int_result_reg(ctx.emitter).to_string();

@@ -118,6 +118,22 @@ pub enum RuntimeCallTarget {
     WriteDiagnostic,
     /// Tests whether a pinned Mixed cell still has an owner besides the pending write.
     MixedCellHasOtherOwner,
+    /// Executes a runtime include/require through the Magician bridge while
+    /// sharing the caller's materialized PHP scope.
+    DynamicInclude {
+        /// Whether a previously included canonical path should be skipped.
+        once: bool,
+        /// Whether a missing path is a fatal require rather than a warning-only include.
+        required: bool,
+        /// Whether strict PHP is active at the physical include call site.
+        strict_php: bool,
+        /// Whether the include was written as a STATEMENT, so nothing reads what it evaluates to.
+        ///
+        /// Only then may the runtime skip a source the compiler already included: php hands back
+        /// the file's `return` value, and `if (true === (require_once __DIR__.'/autoload.php'))`
+        /// and `$routes = require $dump;` are both real code that reads it.
+        value_discarded: bool,
+    },
     /// Borrows a boxed PHP array and returns an independently owned hash for literal unpacking.
     /// Rejects non-array values without mutating the original cell or its payload.
     ArrayUnpackToHash,
@@ -130,6 +146,21 @@ pub enum RuntimeCallTarget {
     /// Creates an independently mutable boxed Mixed cell from one stored
     /// Mixed cell while retaining its tag-4/tag-5 payload ownership.
     MixedCellClone,
+    /// Enters or leaves PHP's QUIET property fetch for the operand of `isset`, `empty` or `??`.
+    ///
+    /// Compiled code reaching an EVAL-OWNED object's property goes through the bridge, and the
+    /// bridge raises for an uninitialized typed property unless the mode is on. The interpreter
+    /// sets it around its own operands; this is the same door for the compiled side, and the
+    /// depth behind it is thread-local so one chain crossing between the two sees one mode.
+    ///
+    /// PHP fixes the quiet fetch at COMPILE time -- it propagates down property and dim fetch
+    /// nodes and never into a call -- so this is emitted only around operands whose whole chain
+    /// is a property/dim walk. That keeps "does not cross a call" without a barrier at every
+    /// compiled call site.
+    EvalQuietPropertyFetch {
+        /// Whether this enters the scope (true) or leaves it (false).
+        enter: bool,
+    },
     /// Registers an owner after the supplied guard (zero means chain head), returning its guard token.
     ExceptionGuardOwned,
     /// Removes an owned-value guard without releasing the value on the normal path.
@@ -227,6 +258,12 @@ impl RuntimeCallTarget {
             | RuntimeCallTarget::MixedCellHasOtherOwner => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)], result: IrType::I64,
             }),
+            RuntimeCallTarget::DynamicInclude { .. } => {
+                Some(RuntimeCallSignature::Polymorphic {
+                    min_operands: 1,
+                    max_operands: Some(1),
+                })
+            }
             RuntimeCallTarget::MixedCellPromoteToHash(_)
             | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
             | RuntimeCallTarget::ArrayUnpackToHash => {
@@ -239,6 +276,12 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Heap(IrHeapKind::Mixed),
             }),
+            RuntimeCallTarget::EvalQuietPropertyFetch { .. } => {
+                Some(RuntimeCallSignature::Polymorphic {
+                    min_operands: 0,
+                    max_operands: Some(0),
+                })
+            }
             RuntimeCallTarget::ExceptionGuardOwned => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 2,
                 max_operands: Some(2),
@@ -317,6 +360,26 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::MixedArrayCellHasLiveOwner => "array.mixed_cell_has_live_owner",
             RuntimeCallTarget::WriteDiagnostic => "diagnostic.write",
             RuntimeCallTarget::MixedCellHasOtherOwner => "mixed.has_other_owner",
+            RuntimeCallTarget::DynamicInclude {
+                once: false,
+                required: false,
+                ..
+            } => "include.dynamic",
+            RuntimeCallTarget::DynamicInclude {
+                once: true,
+                required: false,
+                ..
+            } => "include.dynamic_once",
+            RuntimeCallTarget::DynamicInclude {
+                once: false,
+                required: true,
+                ..
+            } => "require.dynamic",
+            RuntimeCallTarget::DynamicInclude {
+                once: true,
+                required: true,
+                ..
+            } => "require.dynamic_once",
             RuntimeCallTarget::ArrayUnpackToHash => "array.unpack_to_hash",
             RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {
                 "array.mixed_cell_promote_to_hash_ksort"
@@ -331,6 +394,8 @@ impl RuntimeCallTarget {
                 "array.mixed_cell_promote_attached_to_hash"
             }
             RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",
+            RuntimeCallTarget::EvalQuietPropertyFetch { enter: true } => "eval.quiet_fetch_enter",
+            RuntimeCallTarget::EvalQuietPropertyFetch { enter: false } => "eval.quiet_fetch_leave",
             RuntimeCallTarget::ExceptionGuardOwned => "exception.guard_owned",
             RuntimeCallTarget::ExceptionUnguardOwned => "exception.unguard_owned",
             RuntimeCallTarget::ExceptionUpdateArrayGuard => "exception.update_array_guard",

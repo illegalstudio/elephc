@@ -10,7 +10,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Instruction, ValueId};
+use crate::ir::{Instruction, IrType, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -34,6 +34,11 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
     value: ValueId,
     op_name: &str,
 ) -> Result<()> {
+    // The storage decides first: an inline nullable integer can carry a PHP type (an `int|null`
+    // union) whose match arm below would treat the tag/payload pair as a boxed Mixed cell.
+    if ctx.value_ir_type(value)? == IrType::TaggedScalar {
+        return emit_tagged_scalar_truthiness(ctx, value);
+    }
     match ctx.raw_value_php_type(value)? {
         // A packed record address (buffer element or nested record) is one pointer word, and so
         // is a `?ptr<T>` (null is 0); its union must not reach the Mixed cell arm below. A buffer
@@ -70,7 +75,7 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
         }
-        PhpType::Resource(_) => {
+        PhpType::Packed(_) | PhpType::Resource(_) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
         }
         other => {
@@ -205,7 +210,17 @@ pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId)
             emit_int_result_null_sentinel_bool(ctx);
             Ok(())
         }
-        PhpType::Int | PhpType::Callable => {
+        // A callable slot is a descriptor pointer, never the in-band sentinel, and a missed
+        // `callable` element read returns the sentinel under every null representation (only
+        // Int reads widen to `TaggedScalar`). Answering "never null" under the tagged
+        // representation made `static::$resolvers[$driver] ?? null` take the value branch and
+        // hand back a truthy null descriptor (Laravel's `Connection::getResolver()`).
+        PhpType::Callable => {
+            ctx.load_value_to_result(value)?;
+            emit_int_result_null_sentinel_bool(ctx);
+            Ok(())
+        }
+        PhpType::Int => {
             if crate::codegen::sentinels::null_repr_is_tagged() {
                 abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
                 return Ok(());
@@ -503,4 +518,64 @@ pub(super) fn emit_string_truthiness(ctx: &mut FunctionContext<'_>, value: Value
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen::generate_user_asm_from_ir;
+    use crate::codegen::platform::{AppleVariant, Arch, Platform, Target};
+    use crate::ir::{Builder, Function, Immediate, IrHeapKind, IrType, Module, Op, Ownership, Terminator};
+    use crate::types::PhpType;
+
+    /// Raw object slots can carry a null miss marker, independently of the target ABI.
+    #[test]
+    fn object_truthiness_checks_null_on_every_supported_target() {
+        let targets = [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target { platform: Platform::MacOS, arch: Arch::AArch64, apple_variant: AppleVariant::IOS },
+            Target { platform: Platform::MacOS, arch: Arch::AArch64, apple_variant: AppleVariant::IOSSimulator },
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ];
+        for target in targets {
+            for op in [Op::IsTruthy, Op::Cast] {
+                let mut module = Module::new(target);
+                let mut function = Function::new("main".to_string(), IrType::I64, PhpType::Bool);
+                function.flags.is_main = true;
+                {
+                    let mut builder = Builder::new(&mut function);
+                    let entry = builder.create_named_block("entry", vec![]);
+                    builder.set_entry(entry);
+                    builder.position_at_end(entry);
+                    let object = builder.emit(
+                        Op::ConstNull, vec![], None, IrType::Heap(IrHeapKind::Object),
+                        PhpType::Object("stdClass".to_string()), Ownership::NonHeap,
+                    ).unwrap();
+                    let immediate = (op == Op::Cast).then_some(Immediate::CastTarget(IrType::I64));
+                    let truthy = builder.emit(
+                        op, vec![object], immediate, IrType::I64, PhpType::Bool, Ownership::NonHeap,
+                    ).unwrap();
+                    builder.terminate(Terminator::Return { value: Some(truthy) });
+                }
+                module.add_function(function);
+                let asm = generate_user_asm_from_ir(&module, false, false).unwrap();
+                // The null check on a raw object slot is spelled `object_truthy_null` / `object_truthy_done`
+                // now (it used to be a `*_is_null_container` stem); the contract is the same: a null
+                // pointer reaches the falsy arm without being dereferenced.
+                assert!(asm.contains("object_truthy_null"), "{target:?} {op:?}: {asm}");
+                // Truthiness is no longer computed as "is null" then inverted (`eor x0, x0, #1`):
+                // the null arm and the non-null arm each materialize their own result, so both
+                // constants must be produced.
+                let (truthy, falsy) = match target.arch {
+                    Arch::AArch64 => ("mov x0, #1", "mov x0, #0"),
+                    Arch::X86_64 => ("mov rax, 1", "xor eax, eax"),
+                };
+                assert!(asm.contains(truthy), "{target:?} {op:?}: missing the truthy arm: {asm}");
+                assert!(
+                    asm.contains(falsy) || asm.contains(&falsy.replace("xor eax, eax", "mov rax, 0")),
+                    "{target:?} {op:?}: missing the falsy arm: {asm}"
+                );
+            }
+        }
+    }
 }

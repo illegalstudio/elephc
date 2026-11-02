@@ -494,6 +494,12 @@ fn eval_pcntl_dispatch_masked_snapshot(
         } else {
             entry.context
         };
+        // The handler runs on its owner context, and the runtime hooks must answer for that
+        // context too: left bound to the dispatching one, `new RuntimeException(...)` inside a
+        // detached handler could not initialize the exception and the throw surfaced as
+        // "unsupported Throw statement" (see `with_foreign_owner_context`).
+        let rebound = (owner_context != current_context)
+            .then(|| values.rebind_context(owner_context as *const ElephcEvalContext));
         let result = unsafe {
             eval_call_user_func_with_values(
                 vec![callback, signal, info],
@@ -501,6 +507,9 @@ fn eval_pcntl_dispatch_masked_snapshot(
                 values,
             )
         };
+        if let Some(previous) = rebound {
+            values.rebind_context(previous);
+        }
         let result = match result {
             Ok(result) => values.release(result),
             Err(status) => {

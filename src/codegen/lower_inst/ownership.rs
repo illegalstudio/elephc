@@ -36,16 +36,17 @@ pub(super) fn lower_push_call_operand_owner(ctx: &mut FunctionContext<'_>, inst:
     );
     let callable = !holds_reference_cell
         && ctx.local_php_type(slot)?.codegen_repr() == PhpType::Callable;
-    let address = abi::tertiary_scratch_reg(ctx.emitter);
+    // The owner address is formed directly in the helper's owner-argument register.
+    let address = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_frame_slot_address(ctx.emitter, address, offset);
-    abi::emit_push_call_operand_owner(ctx.emitter, address, callable);
+    abi::emit_push_call_operand_owner_call(ctx.emitter, address, callable);
     Ok(())
 }
 
 /// Removes the innermost operand scope before the owning slot is retired normally.
 pub(super) fn lower_pop_call_operand_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::expect_local_slot(inst)?;
-    abi::emit_pop_call_operand_owner(ctx.emitter);
+    abi::emit_pop_call_operand_owner_call(ctx.emitter);
     Ok(())
 }
 
@@ -452,7 +453,7 @@ fn runtime_call_discards_string_argument(inst: &Instruction) -> bool {
 /// only frees plausible live heap blocks, so it safely handles the zero-length owned
 /// strings that `__rt_str_persist` now allocates as independent blocks. The previous
 /// `cbz len` guard skipped them and leaked every owned empty string on reassignment.
-fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
+pub(super) fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
     let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {

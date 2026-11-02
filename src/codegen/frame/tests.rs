@@ -11,7 +11,9 @@
 use super::*;
 use crate::codegen::generate_user_asm_from_ir;
 use crate::codegen::platform::{Arch, Platform, Target};
-use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Module, Ownership, Terminator};
+use crate::ir::{
+    Builder, FunctionParam, IrHeapKind, IrType, LocalKind, Module, Op, Ownership, Terminator,
+};
 use crate::types::FunctionSig;
 
 /// Plain programs skip the clock read, while timing metrics and eval keep it enabled.
@@ -262,10 +264,13 @@ fn aarch64_prologue_saves_all_parameters_before_runtime_calls() {
         Platform::Linux,
         Arch::AArch64,
     ));
+    // Shared helpers (`_eir_shared_static_throw`) print before the fixture and contain their own
+    // `__rt_str_persist` calls, so only the fixture's prologue is searched.
+    let body = asm.find("param $label").expect("the fixture's prologue");
     let later_param = asm
         .find("param $value from x2")
         .expect("AArch64 fixture should receive the later Mixed parameter in x2");
-    let persist = asm
+    let persist = body + asm[body..]
         .find("bl __rt_str_persist")
         .expect("owned string parameter should be persisted");
 
@@ -280,10 +285,13 @@ fn x86_64_prologue_saves_all_parameters_before_runtime_calls() {
         Platform::Linux,
         Arch::X86_64,
     ));
+    // Only the fixture's prologue is searched: shared helpers print first and call
+    // `__rt_str_persist` themselves.
+    let body = asm.find("param $label").expect("the fixture's prologue");
     let later_param = asm
         .find("param $value from rdx")
         .expect("x86_64 fixture should receive the later Mixed parameter in rdx");
-    let persist = asm
+    let persist = body + asm[body..]
         .find("call __rt_str_persist")
         .expect("owned string parameter should be persisted");
 
@@ -312,6 +320,7 @@ fn owned_string_parameter_is_persisted_once() {
     }
 }
 
+
 /// Verifies callable prologues use only the stack-pointer guard and do not add
 /// process-global byte accounting calls on function entry or return.
 #[test]
@@ -323,6 +332,58 @@ fn callable_frames_do_not_emit_a_second_stack_budget_guard() {
         let asm = owned_string_then_mixed_prologue_asm(target);
         assert!(asm.contains("call-stack overflow guard"), "{target:?}: {asm}");
         assert!(!asm.contains("recursion_stack_bytes"), "{target:?}: {asm}");
+    }
+}
+
+/// Nullable nominal guards forward a local owner; concrete guards retain a new payload owner.
+#[test]
+fn nominal_return_guard_transfers_only_forwarded_boxed_local() {
+    for (return_ty, expected_transfer) in [
+        (PhpType::Union(vec![PhpType::Object("Value".into()), PhpType::Void]), true),
+        (PhpType::Object("Value".into()), false),
+    ] {
+        let return_ir = if expected_transfer {
+            IrType::Heap(IrHeapKind::Mixed)
+        } else {
+            IrType::Heap(IrHeapKind::Object)
+        };
+        let mut function = Function::new("guarded_return".into(), return_ir, return_ty.clone());
+        let slot = function.add_local(
+            Some("value".into()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let result = {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let source = builder.emit_load_local(slot, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+            let result = builder.emit(
+                Op::RuntimeCall,
+                vec![source],
+                Some(Immediate::NominalObject {
+                    target: crate::ir::DataId::from_raw(0),
+                    boundary: crate::ir::NominalObjectBoundary::Return,
+                }),
+                return_ir,
+                return_ty,
+                Ownership::MaybeOwned,
+            ).unwrap();
+            builder.terminate(Terminator::Return { value: Some(result) });
+            result
+        };
+        let target = Target::new(Platform::Linux, Arch::X86_64);
+        let module = Module::new(target);
+        let layout = layout_for_function(&function, target, false, false, false);
+        let mut emitter = Emitter::new(target);
+        let mut data = crate::codegen_support::data_section::DataSection::new();
+        let mut shared = crate::codegen::shared_state::SharedCodegenState::for_module(&module);
+        let ctx = FunctionContext::new(
+            &module, &function, &mut emitter, &mut data, &mut shared, layout, false, false, false, None,
+        );
+        assert_eq!(return_cleanup_skip_slot(&ctx, result), expected_transfer.then_some(slot));
     }
 }
 
@@ -353,8 +414,16 @@ fn concrete_arrays_are_boxed_before_entering_php_array_union_storage() {
 
         let asm = generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        // Shared helpers print first and box values themselves; count only the fixture's body.
+        let marker = "@fn name=store_local_array";
+        let start = asm.find(marker).unwrap_or_else(|| panic!("{name}: fixture function missing"));
+        let body = &asm[start..];
+        let end = body.find("@endfn name=store_local_array").unwrap_or(body.len());
+        // A concrete array is boxed by the kind-aware `__rt_mixed_from_array_kind` (it used to be
+        // the generic `__rt_mixed_from_value`); the rule is still exactly one boxing helper call.
         assert_eq!(
-            asm.matches("__rt_mixed_from_value").count(),
+            body[..end].matches("__rt_mixed_from_value").count()
+                + body[..end].matches("__rt_mixed_from_array_kind").count(),
             1,
             "{name}: a raw php-array union store must box its concrete source\n{asm}"
         );

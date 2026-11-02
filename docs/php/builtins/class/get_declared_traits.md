@@ -2,7 +2,7 @@
 title: "get_declared_traits()"
 description: "Returns an array of all declared traits."
 sidebar:
-  order: 93
+  order: 104
 ---
 
 ## get_declared_traits()

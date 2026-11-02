@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - The initial schema pass cannot reliably resolve inheritance or interface relationships.
-//! - Direct scoped-constant method defaults and Object-to-Object pairs are revisited.
+//! - Direct scoped-constant declaration defaults and Object-to-Object pairs are revisited.
 //! - Directly declared instance and static property defaults are revisited here too, on the same
 //!   rule: enum cases do not exist while class schemas are built, so `public Level $l =
 //!   Level::Low;` is judged once they do (issue #566). It changes WHEN a default is checked,
@@ -234,7 +234,10 @@ fn validate_class_defaults(checker: &mut Checker, class_name: &str, errors: &mut
     let Some(class_info) = checker.classes.get(class_name).cloned() else {
         return;
     };
+    // A property default resolves `self::` against its own class, as a parameter default does.
+    let previous_class = checker.current_class.replace(class_name.to_string());
     validate_class_property_defaults(checker, class_name, &class_info, errors);
+    checker.current_class = previous_class;
 
     for method in &class_info.method_decls {
         let method_key = php_symbol_key(&method.name);

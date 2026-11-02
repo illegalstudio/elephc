@@ -95,3 +95,28 @@ foreach ((new Box)->items() as $k => $v) { echo "$k:$v "; }
     );
     assert_eq!(out, "0:1 1:2 ");
 }
+
+/// Verifies an assignment inside a yielded operand is visible to the rest of that operand.
+///
+/// Every compiled Twig template filters a value this way
+/// (`yield (($tmp = f()) && $tmp instanceof Markup ? (string) $tmp : $tmp)`); the checker used to
+/// infer the yielded operand without its assignment effects and refused the read of `$tmp` as an
+/// undefined variable, which stopped symfony/demo's preload build. Expected output from php 8.5.
+#[test]
+fn test_yield_operand_assignment_is_visible_to_the_same_operand() {
+    let out = compile_and_run(
+        r#"<?php
+class Markup { public function __toString(): string { return "m"; } }
+class Rt { public function isRtl(): bool { return true; } public function title(): Markup { return new Markup(); } }
+class Tpl {
+    public function display(Rt $rt): iterable {
+        yield (((($tmp = $rt->isRtl()) && $tmp instanceof Markup ? (string) $tmp : $tmp)) ? ("rtl") : ("ltr"));
+        yield "|";
+        yield (($tmp = $rt->title()) && $tmp instanceof Markup ? (string) $tmp : $tmp);
+    }
+}
+foreach ((new Tpl())->display(new Rt()) as $chunk) { echo $chunk; }
+"#,
+    );
+    assert_eq!(out, "rtl|m");
+}

@@ -70,7 +70,7 @@ pub(super) struct ExceptionHierarchy {
 impl ExceptionHierarchy {
     /// Builds authoritative hierarchy facts from type-checker metadata.
     pub(super) fn from_type_metadata(
-        classes: &HashMap<String, ClassInfo>,
+        classes: &crate::fast_hash::FastMap<String, ClassInfo>,
         interfaces: &HashMap<String, InterfaceInfo>,
         declared_classes: HashSet<String>,
     ) -> Self {

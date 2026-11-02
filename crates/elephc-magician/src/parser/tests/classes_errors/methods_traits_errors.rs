@@ -23,7 +23,7 @@ fn parse_fragment_accepts_abstract_and_final_class_members() {
     .expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ClassDecl(EvalClass::with_modifiers(
+        &[EvalStmt::class_decl(EvalClass::with_modifiers(
             "DynEvalAbstract",
             true,
             false,
@@ -247,7 +247,7 @@ class DynEvalUsesTrait {
                     }))]
                 )],
             )),
-            EvalStmt::ClassDecl(EvalClass::with_modifiers_and_traits(
+            EvalStmt::class_decl(EvalClass::with_modifiers_and_traits(
                 "DynEvalUsesTrait",
                 false,
                 false,
@@ -295,25 +295,36 @@ trait DynEvalOuterTrait {
 #[test]
 fn parse_fragment_rejects_new_without_class_name() {
     assert_eq!(
-        parse_fragment(b"return new ();"),
+        parse_fragment_error(b"return new ();"),
         Err(EvalParseError::UnexpectedToken)
     );
 }
-/// Verifies unsupported expression keywords report the unsupported construct status.
+/// Verifies `yield` parses in expression position, where it used to be refused outright.
+///
+/// `return yield 1;` is legal PHP inside a generator, and it is how a generator returns what
+/// `send()` passed in: `php -n` 8.5.6 on `function g() { return yield 1; }` reports `1` from
+/// `current()` and then `S` from `getReturn()` after `send("S")`. The parser used to answer
+/// `UnsupportedConstruct` for the whole shape.
+///
+/// PHP also rejects a `yield` that is not inside a function, with
+/// `Fatal error: The "yield" expression can only be used inside a function`. That check needs
+/// function context this fragment parser does not track, so it is not enforced here yet.
 #[test]
-fn parse_fragment_rejects_expression_keywords_as_unsupported_constructs() {
-    for source in [b"return yield 1;" as &[u8]] {
-        assert_eq!(
-            parse_fragment(source),
-            Err(EvalParseError::UnsupportedConstruct)
-        );
-    }
+fn parse_fragment_accepts_yield_in_expression_position() {
+    let program = parse_fragment(b"return yield 1;").expect("fragment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::Call {
+            name: "__elephc_eval_yield".to_string(),
+            args: vec![EvalCallArg::positional(EvalExpr::Const(EvalConst::Int(1)))],
+        }))]
+    );
 }
 /// Verifies malformed statements report parse errors instead of partial IR.
 #[test]
 fn parse_fragment_rejects_missing_semicolon() {
     assert_eq!(
-        parse_fragment(b"$x = 1"),
+        parse_fragment_error(b"$x = 1"),
         Err(EvalParseError::ExpectedSemicolon)
     );
 }

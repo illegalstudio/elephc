@@ -38,17 +38,51 @@ pub(super) fn lower_stdclass_prop_set(
     Ok(())
 }
 
-/// Lowers a named property write through the runtime Mixed object-property setter.
+/// Lowers a named property write through declared-class dispatch for a boxed Mixed receiver.
 pub(super) fn lower_mixed_prop_set(
     ctx: &mut FunctionContext<'_>,
     object: ValueId,
     value: ValueId,
     property: &str,
+    inst: &Instruction,
 ) -> Result<()> {
-    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    lower_mixed_prop_set_excluding(ctx, object, value, property, inst, &[])
+}
+
+/// [`lower_mixed_prop_set`] for a miss path: `answered` are class ids an earlier ladder of the SAME
+/// site already matched and wrote, so none of them can reach this one and their arms are left out.
+///
+/// The named-write ladder falls back here for the classes it did not answer. Re-emitting every
+/// declared owner's arm (a typed-slot guard each) behind it doubled the site for classes that can
+/// never arrive. Whether the declared ladder is used at all is still decided on the FULL candidate
+/// set, so a receiver of an unrelated class keeps reaching the same "undeclared property" fatal.
+pub(super) fn lower_mixed_prop_set_excluding(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    value: ValueId,
+    property: &str,
+    inst: &Instruction,
+    answered: &[u64],
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?;
+    let candidates = declared_mixed_property_slot_candidates(ctx, property, inst)?
+        .into_iter()
+        .filter(|candidate| {
+            ensure_property_value_supported(ctx, &candidate.slot, value, &value_ty, inst).is_ok()
+        })
+        .collect::<Vec<_>>();
+    if !candidates.is_empty() {
+        let candidates = candidates
+            .into_iter()
+            .filter(|candidate| !answered.contains(&candidate.class_id))
+            .collect::<Vec<_>>();
+        return lower_declared_mixed_prop_set(ctx, object, value, property, inst, candidates);
+    }
+    let value_ty = value_ty.codegen_repr();
     materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     let (label, len) = ctx.data.add_string(property.as_bytes());
+    let done = emit_eval_owner_mixed_prop_set_probe(ctx, object, &label, len)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(object, "x0")?;
@@ -64,6 +98,309 @@ pub(super) fn lower_mixed_prop_set(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_property_set");
+    if let Some(done) = done {
+        ctx.emitter.label(&done);
+    }
+    Ok(())
+}
+
+/// Hands a literal-name write on a boxed receiver to Magician when an eval context owns it.
+///
+/// An eval-declared object is carried by a stdClass runtime object, but its declared properties
+/// live in the interpreter's own storage, which is what every read consults. The plain
+/// `__rt_mixed_property_set` wrote into the carrier's hash instead, so `$o->count = 5` on an
+/// eval-declared object was lost and the next read answered the class default. The runtime-name
+/// path already asks `__elephc_eval_dynamic_object_property_set` first; this is the same probe
+/// for a name known at compile time.
+///
+/// Expects the boxed value cell on the top of the temporary stack and leaves it there for the
+/// plain path, which then pops it as before. Returns the label that ends the whole write when the
+/// probe was emitted, `None` in a module that cannot run eval.
+fn emit_eval_owner_mixed_prop_set_probe(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    name_label: &str,
+    name_len: usize,
+) -> Result<Option<String>> {
+    if !crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(
+        ctx.module,
+    ) {
+        return Ok(None);
+    }
+    let plain = ctx.next_label("eval_owner_prop_set_plain");
+    let plain_reserved = ctx.next_label("eval_owner_prop_set_plain_reserved");
+    let raise = ctx.next_label("eval_owner_prop_set_raise");
+    let done = ctx.next_label("eval_owner_prop_set_done");
+    let target = ctx.emitter.target;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, result_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &plain);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_if_mixed_unboxed_not_object(ctx, &plain);
+    // Frame from here: [sp] Throwable out slot, [sp+16] the value cell pushed by the caller.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    let (arg0, arg1, arg2, arg3, arg4, arg5) = (
+        abi::int_arg_reg_name(target, 0),
+        abi::int_arg_reg_name(target, 1),
+        abi::int_arg_reg_name(target, 2),
+        abi::int_arg_reg_name(target, 3),
+        abi::int_arg_reg_name(target, 4),
+        abi::int_arg_reg_name(target, 5),
+    );
+    let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(target);
+    if payload_reg != arg0 {
+        abi::emit_reg_move(ctx.emitter, arg0, payload_reg);
+    }
+    // php decides visibility from the WRITING function's lexical class; a free function has none.
+    let scope = ctx.function.lexical_class.clone().unwrap_or_default();
+    abi::emit_symbol_address(ctx.emitter, arg1, name_label);
+    abi::emit_load_int_immediate(ctx.emitter, arg2, name_len as i64);
+    abi::emit_temporary_stack_address(ctx.emitter, arg3, 0);
+    // A closure `Closure::bind` rebound at run time writes under its BOUND scope instead.
+    crate::codegen::lower_inst::builtins::eval::emit_effective_scope_name(ctx, &scope, arg4, arg5)?;
+    let symbol = target.extern_symbol("__elephc_eval_dynamic_object_property_set");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &plain_reserved);
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, #2"));          // did Magician hand back a Throwable instead of writing?
+            ctx.emitter.instruction(&format!("b.eq {raise}"));                  // raise it after unwinding the temporary blocks
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, 2"));           // did Magician hand back a Throwable instead of writing?
+            ctx.emitter.instruction(&format!("je {raise}"));                    // raise it after unwinding the temporary blocks
+        }
+    }
+    // Written by the owner: the value cell is ours to release, and the plain path is skipped.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&raise);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match target.arch {
+        Arch::AArch64 => abi::emit_store_reg_to_symbol(ctx.emitter, "x1", "_exc_value", 0),
+        Arch::X86_64 => abi::emit_store_reg_to_symbol(ctx.emitter, "rdi", "_exc_value", 0),
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+
+    ctx.emitter.label(&plain_reserved);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    ctx.emitter.label(&plain);
+    Ok(Some(done))
+}
+
+/// Lowers a named property write through PHP's bare `object` pseudo-type.
+///
+/// The receiver is an unboxed object payload whose concrete class remains runtime-only. Dispatch
+/// therefore mirrors generic property reads, while candidate collection excludes declared slots
+/// that cannot accept the replacement value.
+pub(super) fn lower_generic_object_prop_set(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    value: ValueId,
+    property: &str,
+    inst: &Instruction,
+) -> Result<()> {
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    lower_generic_object_prop_set_from_loaded_object(ctx, value, property, inst)
+}
+
+/// Dispatches a named property write after the raw object payload is in the result register.
+fn lower_generic_object_prop_set_from_loaded_object(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    property: &str,
+    inst: &Instruction,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?;
+    let candidates = declared_mixed_property_slot_candidates(ctx, property, inst)?
+        .into_iter()
+        .filter(|candidate| {
+            ensure_property_value_supported(ctx, &candidate.slot, value, &value_ty, inst).is_ok()
+        })
+        .collect::<Vec<_>>();
+    let miss_label = ctx.next_label("generic_object_prop_set_miss");
+    let done_label = ctx.next_label("generic_object_prop_set_done");
+    let stdclass_label = ctx.next_label("generic_object_prop_set_stdclass");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "generic_object_prop_set_{}",
+                label_fragment(&candidate.slot.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    let class_ids = candidates.iter().map(|candidate| candidate.class_id).collect::<Vec<_>>();
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &class_ids,
+        &match_labels,
+        &stdclass_label,
+        &miss_label,
+    );
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_reg_move(ctx.emitter, base_reg, abi::int_result_reg(ctx.emitter));
+        emit_property_store(ctx, value, &candidate.slot, base_reg)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&stdclass_label);
+    emit_stdclass_set_from_loaded_object(ctx, value, property)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&miss_label);
+    let message = format!(
+        "Fatal error: Cannot write undeclared property ${} through an object receiver\n",
+        property
+    );
+    emit_fatal_message(ctx, message.as_bytes());
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Dispatches a named Mixed-receiver property write across every declared owner of that slot.
+fn lower_declared_mixed_prop_set(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    value: ValueId,
+    property: &str,
+    inst: &Instruction,
+    candidates: Vec<MixedPropertyCandidate>,
+) -> Result<()> {
+    let null_label = ctx.next_label("mixed_prop_set_null");
+    let miss_label = ctx.next_label("mixed_prop_set_miss");
+    let done_label = ctx.next_label("mixed_prop_set_done");
+    let stdclass_label = ctx.next_label("mixed_prop_set_stdclass");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_prop_set_{}",
+                label_fragment(&candidate.slot.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_object_payload_or_null(ctx, &null_label);
+    let class_ids = candidates.iter().map(|candidate| candidate.class_id).collect::<Vec<_>>();
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &class_ids,
+        &match_labels,
+        &stdclass_label,
+        &miss_label,
+    );
+
+    let value_ty = ctx.value_php_type(value)?;
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        ensure_property_value_supported(ctx, &candidate.slot, value, &value_ty, inst)?;
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_reg_move(ctx.emitter, base_reg, result_reg);
+        emit_property_store(ctx, value, &candidate.slot, base_reg)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&stdclass_label);
+    emit_mixed_stdclass_set_after_eval_probe(ctx, object, value, property)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&miss_label);
+    let message = format!(
+        "Fatal error: Cannot write undeclared property ${} through a mixed receiver\n",
+        property
+    );
+    emit_fatal_message(ctx, message.as_bytes());
+
+    ctx.emitter.label(&null_label);
+    emit_property_assign_on_null_fatal(ctx, property);
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// The stdClass arm of a declared-slot ladder, which an eval-declared object also lands in.
+///
+/// An eval-declared object is carried by a stdClass runtime object, so a name some COMPILED
+/// class declares -- `class` is one of `ReflectionProperty`'s -- sent `$o->class = 'A'` on an
+/// interpreted `Definition` straight into the carrier's hash, where no reader ever looks: the
+/// write was lost. The interpreter is asked first, exactly as in [`lower_mixed_prop_set`].
+fn emit_mixed_stdclass_set_after_eval_probe(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    value: ValueId,
+    property: &str,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let (label, len) = ctx.data.add_string(property.as_bytes());
+    let done = emit_eval_owner_mixed_prop_set_probe(ctx, object, &label, len)?;
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // the stdClass object pointer
+            abi::emit_pop_reg(ctx.emitter, "x3");
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            // `__rt_mixed_unbox` already left the object pointer in rdi.
+            abi::emit_pop_reg(ctx.emitter, "rcx");
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_set");
+    if let Some(done) = done {
+        ctx.emitter.label(&done);
+    }
+    Ok(())
+}
+
+/// Stores a boxed value into a stdClass whose raw object pointer is in the result register.
+fn emit_stdclass_set_from_loaded_object(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    property: &str,
+) -> Result<()> {
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let (label, len) = ctx.data.add_string(property.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x3");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "rcx");
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_set");
     Ok(())
 }
 
@@ -164,7 +501,7 @@ fn emit_dynamic_plan_write(
                 inst.span.map_or(0, |span| span.line),
             )
         }
-        PropertyRuntimeAction::MagicGet => Err(CodegenIrError::invalid_module(
+        PropertyRuntimeAction::MagicGet | PropertyRuntimeAction::DynamicHashThenMagicGet { .. } => Err(CodegenIrError::invalid_module(
             "property write resolved to a magic getter",
         )),
         PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
@@ -508,6 +845,9 @@ pub(super) fn lower_nullable_prop_set(
     class_name: &str,
     property: &str,
 ) -> Result<()> {
+    if class_name.trim_start_matches('\\').is_empty() {
+        return lower_nullable_generic_object_prop_set(ctx, inst, object, value, property);
+    }
     let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
     ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
@@ -516,6 +856,28 @@ pub(super) fn lower_nullable_prop_set(
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     emit_nullable_receiver_object_payload(ctx, object, &null_label, base_reg)?;
     emit_hook_aware_property_store(ctx, value, &slot, base_reg)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&null_label);
+    emit_property_assign_on_null_fatal(ctx, property);
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Lowers a nullable bare-object property write through concrete runtime class dispatch.
+fn lower_nullable_generic_object_prop_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    value: ValueId,
+    property: &str,
+) -> Result<()> {
+    let null_label = ctx.next_label("nullable_generic_prop_set_null");
+    let done_label = ctx.next_label("nullable_generic_prop_set_done");
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
+    lower_generic_object_prop_set_from_loaded_object(ctx, value, property, inst)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);

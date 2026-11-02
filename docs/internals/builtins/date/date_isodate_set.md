@@ -2,7 +2,7 @@
 title: "date_isodate_set() - internals"
 description: "Compiler internals for date_isodate_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 206
+  order: 217
 ---
 
 ## `date_isodate_set()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:1039](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L1039) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:1152](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L1152) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

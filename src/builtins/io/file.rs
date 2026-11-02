@@ -5,9 +5,9 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - PHP's signature is `file(string $filename, int $flags = 0, $context = null)`; elephc declares
-//!   `filename` and `flags`. The stream-context parameter is not modelled, so it is left out
-//!   rather than accepted and ignored.
+//! - PHP's signature is `file(string $filename, int $flags = 0, $context = null)`. A call passing
+//!   `$context` is lowered to `stream_args_prelude`'s helper, which evaluates it and reads with the
+//!   default context (psysh's Hoa files pass theirs through).
 //! - `flags` is an ordinary run-time integer bitmask (`FILE_USE_INCLUDE_PATH`,
 //!   `FILE_IGNORE_NEW_LINES`, `FILE_SKIP_EMPTY_LINES`), NOT a shape-changing literal: the result
 //!   is `Array<Str>` for every flag combination, so it does not need to be known at compile time.

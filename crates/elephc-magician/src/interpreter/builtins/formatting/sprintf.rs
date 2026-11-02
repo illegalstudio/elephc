@@ -73,12 +73,38 @@ pub(in crate::interpreter) fn eval_sprintf_bytes(
             continue;
         }
 
+        // `%n$...` names its argument (1-based) and leaves the sequential cursor alone, as
+        // php-src's `php_formatted_print` does: `sprintf('%1$s %1$s', $x)` repeats `$x`.
+        let digits_end = index
+            + format[index..]
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+        let named = if digits_end > index && format.get(digits_end) == Some(&b'$') {
+            let (number, _) = eval_parse_sprintf_number(format, index)?;
+            index = digits_end + 1;
+            match number {
+                Some(number) if number > 0 => Some(number - 1),
+                _ => {
+                    return eval_throw_builtin_value_error(
+                        "Argument number specifier must be greater than zero and less than 2147483647",
+                        context,
+                        values,
+                    )
+                }
+            }
+        } else {
+            None
+        };
         let (spec, next_index) = eval_parse_sprintf_spec(format, index)?;
         index = next_index;
-        let Some(arg) = args.get(arg_index).copied() else {
+        let position = named.unwrap_or(arg_index);
+        let Some(arg) = args.get(position).copied() else {
             return Err(EvalStatus::RuntimeFatal);
         };
-        arg_index += 1;
+        if named.is_none() {
+            arg_index += 1;
+        }
         let bytes = eval_format_sprintf_arg(spec, arg, context, values)?;
         output.extend_from_slice(&bytes);
     }

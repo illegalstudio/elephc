@@ -10,6 +10,28 @@
 
 use super::*;
 
+/// Verifies object-syntax first-class callables can target an accessible static method.
+#[test]
+fn test_object_syntax_first_class_callable_to_static_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Formatter {
+    private static function normalize(string $value): string {
+        return strtoupper($value);
+    }
+
+    public function run(): string {
+        $normalize = $this->NoRmAlIzE(...);
+        return $normalize('ok');
+    }
+}
+
+echo (new Formatter())->run();
+"#,
+    );
+    assert_eq!(out, "OK");
+}
+
 /// Tests an instance method captured as a first-class callable is passed to `call_user_func`
 /// and the captured receiver is correctly bound on invocation.
 #[test]
@@ -826,7 +848,7 @@ foreach ($values as $value) {
 }
 "#,
     );
-    assert_eq!(out, "321");
+    assert_eq!(out, "231");
 }
 
 /// Tests an instance method captured as a first-class callable and passed to `uasort`, verifying
@@ -897,7 +919,7 @@ foreach ($uasorted as $value) {
 }
 "#,
     );
-    assert_eq!(out, "321:321:321");
+    assert_eq!(out, "321:231:321");
 }
 
 /// Tests a static method using late static binding passed to `array_reduce` inside a static
@@ -1000,7 +1022,7 @@ echo "|";
 ChildCallbacks::run();
 "#,
     );
-    assert_eq!(out, "23:11,12,:321:321:321|43:21,22,:123:123:123");
+    assert_eq!(out, "23:11,12,:321:231:321|43:21,22,:123:132:123");
 }
 
 /// Tests an instance method first-class callable invoked immediately via an expression call
@@ -1210,5 +1232,80 @@ foreach ($uasorted as $value) {
 }
 "#,
     );
-    assert_eq!(out, "34:23:11,12,:321:321:321");
+    assert_eq!(out, "34:23:11,12,:321:231:321");
+}
+
+/// Verifies an interface-typed receiver resolves a first-class method callable through the
+/// concrete implementor selected by the runtime class id.
+#[test]
+fn test_first_class_callable_interface_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+interface ValueResolverInterface {
+    public function resolveValue(string $value): string;
+}
+
+final class PrefixValueResolver implements ValueResolverInterface {
+    public function resolveValue(string $value): string {
+        return "resolved:" . $value;
+    }
+}
+
+function invokeResolver(ValueResolverInterface $resolver): string {
+    $callable = $resolver->resolveValue(...);
+    return $callable("ok");
+}
+
+echo invokeResolver(new PrefixValueResolver());
+"#,
+    );
+    assert_eq!(out, "resolved:ok");
+}
+
+/// Verifies a literal `[Class::class, 'method']` callback reaches a private or protected static
+/// method visible from the calling class, in every invoke-only callback builtin.
+///
+/// php resolves a callable array against the calling scope. The array form went to the runtime
+/// callable table, which lists public methods only, so `preg_replace_callback(...,
+/// [__CLASS__, 'helper'], ...)` failed with "callable array did not resolve to an invokable
+/// target" (the shape `symfony/polyfill-mbstring` uses for title case), and the sort builtins
+/// refused a callable array at compile time even for a public method. `title()` takes an
+/// untyped subject, which routes through the gradual `preg_replace_callback` helper.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_class_string_callable_arrays_reach_scoped_static_methods() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+final class Words {
+    public static function run(string $s): void {
+        $a = [3, 1, 2];
+        usort($a, [__CLASS__, 'cmp']);
+        echo implode(",", $a), "|";
+        echo implode(",", array_map([self::class, 'dbl'], $a)), "|";
+        echo implode(",", array_filter($a, [Words::class, 'odd'])), "|";
+        echo preg_replace_callback('/\b\w/', [__CLASS__, 'up'], $s), "\n";
+    }
+    public static function title($s) {
+        return preg_replace_callback('/\b\w/', [__CLASS__, 'up'], $s);
+    }
+    private static function cmp($x, $y) { return $x <=> $y; }
+    private static function dbl($x) { return $x * 2; }
+    private static function odd($x) { return $x % 2 === 1; }
+    private static function up($m) { return strtoupper($m[0]); }
+}
+class Base {
+    protected static function twice($x) { return $x * 2; }
+}
+class Child extends Base {
+    public static function run(): void {
+        echo implode(",", array_map([parent::class, 'twice'], [1, 2])), "\n";
+    }
+}
+Words::run("hello world");
+echo Words::title("foo bar"), "\n";
+Child::run();
+"#,
+    );
+    assert_eq!(out, "1,2,3|2,4,6|1,3|Hello World\nFoo Bar\n2,4\n");
 }

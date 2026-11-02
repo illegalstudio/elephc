@@ -56,6 +56,11 @@ pub(crate) fn scope_entry_abi_flags(entry: ScopeEntry) -> u32 {
     if flags.ownership == ScopeCellOwnership::Owned {
         abi_flags |= SCOPE_FLAG_OWNED;
     }
+    abi_flags |= match flags.native_binding {
+        crate::scope::NativeScopeBinding::Value => 0,
+        crate::scope::NativeScopeBinding::ReferenceCell => crate::abi::SCOPE_FLAG_NATIVE_REF,
+        crate::scope::NativeScopeBinding::GlobalName => crate::abi::SCOPE_FLAG_NATIVE_GLOBAL,
+    };
     abi_flags
 }
 
@@ -125,4 +130,32 @@ pub(crate) unsafe fn abi_data_bytes(data_ptr: *const u8, data_len: u64) -> Resul
     let len = usize::try_from(data_len).map_err(|_| EvalStatus::RuntimeFatal)?;
     if len == 0 { return Ok(Vec::new()); }
     Ok(unsafe { slice::from_raw_parts(data_ptr, len) }.to_vec())
+}
+
+/// Announces one bridge entry point, so a fatal is always preceded by the call that raised it.
+///
+/// A refusal can happen in a region that emits nothing: a Symfony request ended in 527 consecutive
+/// `object_is_a` lines and then a fatal, with the failing call somewhere between them and no line
+/// to name it. Every `__elephc_eval_*` symbol announces itself here, and the last line before a
+/// fatal is then the call that failed rather than the last call that happened to be instrumented.
+///
+/// It is a level of its own because it is loud -- a request makes hundreds of thousands of bridge
+/// calls -- so `ELEPHC_EVAL_TRACE=1` keeps the readable phase trace, and `ffi` or `all` adds this.
+pub(crate) fn trace_eval_ffi_entry(symbol: &str) {
+    if !crate::eval_trace::ffi_enabled() {
+        return;
+    }
+    eprintln!("[elephc-eval-trace] phase=ffi_entry symbol={symbol}");
+}
+
+/// Reads an object's runtime class name for a diagnostic, giving nothing up if it cannot.
+#[cfg(not(test))]
+pub(crate) fn eval_object_class_name_for_diagnostic(
+    object: RuntimeCellHandle,
+    values: &mut impl crate::interpreter::RuntimeValueOps,
+) -> Option<String> {
+    let handle = values.object_class_name(object).ok()?;
+    let bytes = values.string_bytes(handle).ok();
+    let _ = values.release(handle);
+    bytes.and_then(|bytes| String::from_utf8(bytes).ok())
 }

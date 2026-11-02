@@ -99,6 +99,9 @@ pub(in crate::interpreter) struct EvalParamSpec {
     pub(in crate::interpreter) default: Option<EvalBuiltinDefaultValue>,
     /// Whether this parameter must bind to caller storage.
     pub(in crate::interpreter) by_ref: bool,
+    /// Whether the contract declares this parameter `string`, so an object argument is
+    /// converted through `__toString()` before the implementation sees it.
+    pub(in crate::interpreter) string_param: bool,
 }
 
 /// Magician-specific implementation binding submitted by one builtin home file.
@@ -177,7 +180,7 @@ impl EvalBuiltinSpec {
             .map(|param| param.name)
             .collect::<Vec<_>>();
         if let Some(variadic) = signature.variadic {
-            param_names.push(variadic);
+            param_names.push(variadic.name);
         }
         let mut by_ref_params = signature
             .params
@@ -185,8 +188,8 @@ impl EvalBuiltinSpec {
             .filter(|param| param.by_ref)
             .map(|param| param.name)
             .collect::<Vec<_>>();
-        if contract.variadic_by_ref {
-            by_ref_params.extend(signature.variadic);
+        if let Some(variadic) = signature.variadic.filter(|variadic| variadic.is_by_reference()) {
+            by_ref_params.push(variadic.name);
         }
         let by_ref_params = by_ref_params.into_boxed_slice();
         let php_arity = EvalBuiltinArity::for_signature(
@@ -197,8 +200,11 @@ impl EvalBuiltinSpec {
         );
         let execution = eval_execution(contract).unwrap_or_else(|| {
             panic!(
-                "eval builtin binding for {} from {} must reference an eval-supported shared contract",
-                contract.name, binding.home_file
+                "eval builtin binding for {} from {} must reference an eval-supported shared \
+                 contract, but its contract routes to {:?}",
+                contract.name,
+                binding.home_file,
+                elephc_builtin_contract::eval_support(contract)
             )
         });
 
@@ -207,7 +213,7 @@ impl EvalBuiltinSpec {
             area: binding.area,
             param_names: param_names.into_boxed_slice(),
             params,
-            variadic: signature.variadic,
+            variadic: signature.variadic.map(|variadic| variadic.name),
             by_ref_params,
             required_param_count: signature.required_param_count,
             source_arguments: binding.source_arguments,
@@ -277,6 +283,11 @@ impl EvalBuiltinSpec {
         self.by_ref_params.as_ref()
     }
 
+    /// Returns whether any fixed parameter is declared `string`.
+    pub(in crate::interpreter) fn has_string_param(&self) -> bool {
+        self.params.iter().any(|param| param.string_param)
+    }
+
     /// Returns the default value for one PHP parameter slot.
     pub(in crate::interpreter) fn default_value(
         &self,
@@ -292,6 +303,7 @@ fn eval_param_spec(param: ParamSpec) -> EvalParamSpec {
         name: param.name,
         default: param.default.map(eval_default_value),
         by_ref: param.by_ref,
+        string_param: matches!(param.ty, elephc_builtin_contract::TypeSpec::Str),
     }
 }
 

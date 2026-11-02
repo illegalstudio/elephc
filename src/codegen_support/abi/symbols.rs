@@ -12,7 +12,7 @@ use crate::codegen_support::NULL_SENTINEL;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::types::PhpType;
 
-use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
+use super::calls::{emit_call_label, emit_call_reg, emit_pop_reg, emit_push_reg};
 use super::frame::{emit_load_from_address, emit_reg_move, emit_store_to_address};
 #[cfg(test)]
 use super::frame::{load_at_offset_scratch, store_at_offset_scratch};
@@ -23,6 +23,18 @@ use super::registers::{
     symbol_scratch_reg,
 };
 use super::values::{emit_decref_if_refcounted, emit_load_int_immediate};
+
+/// Calls a named target without relying on AArch64's direct `bl` displacement range.
+pub fn emit_call_label_long_range(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let scratch = symbol_scratch_reg(emitter);
+            emit_symbol_address(emitter, scratch, label);
+            emit_call_reg(emitter, scratch);
+        }
+        Arch::X86_64 => emit_call_label(emitter, label),
+    }
+}
 
 /// Stores a local variable from its frame slot into a static/global symbol.
 /// Loads the value from `offset` relative to the frame pointer, then writes it
@@ -212,6 +224,12 @@ pub fn emit_load_symbol_to_reg(emitter: &mut Emitter, reg: &str, symbol: &str, b
     }
     match emitter.target.arch {
         Arch::AArch64 => {
+            if byte_offset == 0 && lo12_foldable_register(reg, symbol) {
+                // The low 12 bits ride in the load itself: two instructions instead of three.
+                emitter.adrp("x9", symbol);                                     // load the page of the requested symbol storage
+                emitter.ldr_lo12(reg, "x9", symbol);                            // load the payload through the page offset folded into the load
+                return;
+            }
             emit_symbol_address(emitter, "x9", symbol);
             if byte_offset == 0 {
                 emitter.instruction(&format!("ldr {}, [x9]", reg));             // load the symbol payload directly from its base address
@@ -278,6 +296,12 @@ pub fn emit_store_reg_to_symbol(
     match emitter.target.arch {
         Arch::AArch64 => {
             let scratch = if reg == "x9" { "x10" } else { "x9" };
+            if byte_offset == 0 && lo12_foldable_register(reg, symbol) {
+                // The low 12 bits ride in the store itself: two instructions instead of three.
+                emitter.adrp(scratch, symbol);                                  // load the page of the requested symbol storage
+                emit_str_lo12(emitter, reg, scratch, symbol);                   // store the payload through the page offset folded into the store
+                return;
+            }
             emit_symbol_address(emitter, scratch, symbol);
             if byte_offset == 0 {
                 emitter.instruction(&format!("str {}, [{}]", reg, scratch));    // store the register payload directly into the symbol base slot
@@ -496,6 +520,10 @@ pub fn emit_store_result_to_symbol(
         emit_store_callable_result_to_symbol(emitter, symbol, release_previous);
         return;
     }
+    if release_previous && ty.is_refcounted() {
+        emit_store_refcounted_result_to_symbol(emitter, symbol, &ty);
+        return;
+    }
     if release_previous {
         if matches!(ty, PhpType::Str) {
             let (ptr_reg, len_reg) = string_result_regs(emitter);
@@ -519,7 +547,7 @@ pub fn emit_store_result_to_symbol(
                     emitter.instruction(&format!("pop {}", ptr_reg));           // restore the incoming string pointer result after the release helper call
                 }
             }
-        } else if ty.is_refcounted() {
+        } else if ty.is_refcounted() || matches!(ty, PhpType::Callable) {
             let result = int_result_reg(emitter);
             emit_push_reg(emitter, result);
             emit_load_symbol_to_reg(emitter, int_result_reg(emitter), symbol, 0);
@@ -559,6 +587,23 @@ pub fn emit_store_result_to_symbol(
     }
 }
 
+/// Overwrites a symbol-backed refcounted slot (object, array, `Mixed`, ...) publish-before-retire,
+/// the order php's assignment uses: the new value is in the slot before the old one is released.
+/// Releasing the old value can run a destructor that stores into this same slot
+/// (`static::$shared = ...` from `__destruct`); retiring first let the store that resumed after
+/// it overwrite the destructor's value, so php's `99` read as `2` and the lost value's refcount
+/// went bad.
+fn emit_store_refcounted_result_to_symbol(emitter: &mut Emitter, symbol: &str, ty: &PhpType) {
+    let result_reg = int_result_reg(emitter);
+    let previous_reg = secondary_scratch_reg(emitter);
+    emit_load_symbol_to_reg(emitter, previous_reg, symbol, 0); // capture the previous value before the slot is overwritten
+    emit_store_reg_to_symbol(emitter, result_reg, symbol, 0); // publish the replacement so the slot owns it before any destructor runs
+    emit_push_reg(emitter, result_reg); // preserve the published value across the aligned release call
+    emit_reg_move(emitter, result_reg, previous_reg); // move the previous value into the release argument register
+    emit_decref_if_refcounted(emitter, ty); // retire the previous value after its replacement is published
+    emit_pop_reg(emitter, result_reg); // restore the published value after the release
+}
+
 /// Overwrites a symbol-backed callable descriptor slot with the current result descriptor.
 ///
 /// Callable descriptors are refcounted through `__rt_callable_descriptor_release`, but that
@@ -588,4 +633,54 @@ fn emit_store_callable_result_to_symbol(emitter: &mut Emitter, symbol: &str, rel
     emit_reg_move(emitter, result_reg, previous_reg); // move the previous descriptor into the release-helper argument register
     emit_call_label(emitter, "__rt_callable_descriptor_release"); // retire the previous descriptor after its replacement is already published
     emit_pop_reg(emitter, result_reg); // restore the published descriptor result after the release call
+}
+
+/// The C name of the published source-site record: a pointer to `{file descriptor, line}`.
+///
+/// It is the one runtime data symbol Rust code reads (`elephc-magician`'s `compiled_site` FFI
+/// declares `static php_site`), so its definition and every assembly reference must spell the
+/// C symbol the target's ABI makes of that name: `_php_site` on Mach-O, `php_site` on ELF. A
+/// literal `_php_site` linked on Apple only; Linux left Magician's `php_site` undefined.
+pub(crate) const PHP_SITE_C_NAME: &str = "php_site";
+
+/// The assembly symbol of the published source-site record for `target`.
+pub(crate) fn php_site_symbol(target: &crate::codegen_support::platform::Target) -> String {
+    target.extern_symbol(PHP_SITE_C_NAME)
+}
+
+/// Symbols whose storage is known to be 8-byte aligned, so a 64-bit access can carry the
+/// `symbol@PAGEOFF` immediate itself.
+///
+/// The immediate of an AArch64 `ldr`/`str x` is scaled by the access size, so a symbol whose low
+/// bits are not a multiple of 8 is silently read from the wrong address once the linker truncates
+/// the page offset (the old `add` form tolerated it). Most fixed-data symbols are `.comm ..., 8, 3`
+/// or `.p2align 3` and qualify; others are bare `.quad` labels placed wherever the previous data
+/// ended (`_php_error_reporting`), and folding those broke diagnostics. So this is an explicit list
+/// of the hot symbols, not a rule.
+fn symbol_is_8_byte_aligned(symbol: &str) -> bool {
+    symbol.strip_prefix('_').unwrap_or(symbol) == PHP_SITE_C_NAME
+        || matches!(
+        symbol,
+        "_exc_call_frame_top"
+            | "_exc_handler_top"
+            | "_exc_value"
+            | "_concat_off"
+            | "_stack_limit"
+    ) || symbol.starts_with("_eir_global_")
+}
+
+/// Whether a load or store of `reg` at `symbol` can fold the page offset into the instruction:
+/// an X or D register (scaled by 8) on a symbol known to be 8-byte aligned.
+fn lo12_foldable_register(reg: &str, symbol: &str) -> bool {
+    (reg.starts_with('x') || reg.starts_with('d')) && symbol_is_8_byte_aligned(symbol)
+}
+
+/// Emits `str reg, [base, symbol@PAGEOFF]` (macOS) or `str reg, [base, :lo12:symbol]` (Linux).
+fn emit_str_lo12(emitter: &mut Emitter, reg: &str, base: &str, symbol: &str) {
+    match emitter.platform {
+        crate::codegen::platform::Platform::MacOS => {
+            emitter.instruction(&format!("str {}, [{}, {}@PAGEOFF]", reg, base, symbol)) // store through the macOS page offset relocation
+        }
+        _ => emitter.instruction(&format!("str {}, [{}, :lo12:{}]", reg, base, symbol)), // store through the ELF low-12 relocation
+    }
 }

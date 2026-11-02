@@ -25,6 +25,7 @@ pub(super) fn lower_assignment_expr(
     if let Some(result) = lower_weak_map_incdec_expression(ctx, target, value, result_target, prelude, expr) {
         return result;
     }
+    let terminated_prelude_result = (!prelude.is_empty()).then(|| lower_null(ctx, expr));
     let key_already_diagnosed = compound_array_key_diagnosed_in_prelude(target, value, prelude, expr.span);
     // A `++`/`--` of a scalar buffer element takes over after the prelude has stabilized its
     // receiver and key, at the element read; any other container continues below as written.
@@ -47,12 +48,40 @@ pub(super) fn lower_assignment_expr(
             }
         }
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
+        if ctx.builder.insertion_block_is_terminated() {
+            return terminated_prelude_result
+                .expect("non-empty assignment prelude has an unreachable result placeholder");
+        }
+    }
+    if let (
+        ExprKind::Variable(target_name),
+        ExprKind::Variable(value_name),
+        [Stmt {
+            kind: StmtKind::RefAssign {
+                target: ref_target,
+                ..
+            },
+            ..
+        }],
+    ) = (&target.kind, &value.kind, prelude)
+    {
+        if target_name == value_name && target_name == ref_target {
+            return ctx.load_local(target_name, Some(expr.span));
+        }
+    }
+    // `$object->$name = &$value` (the parser's desugar) is a statement: its marker value is only
+    // ever lowered by the property write itself.
+    if let (ExprKind::DynamicPropertyAccess { object, property }, ExprKind::ArrayReference(_)) =
+        (&target.kind, &value.kind)
+    {
+        lower_dynamic_property_assign(ctx, object, property, value, expr.span);
+        return lower_null(ctx, expr);
     }
     let target = compound_receiver.as_ref().map(|receiver| &receiver.target).unwrap_or(target);
     if let Some(temp_name) = conditional_value_temp {
         if let Some(result) = lower_conditional_non_local_null_coalesce_assignment(
             ctx,
-            temp_name,
+            Some(temp_name),
             target,
             value,
             result_target,
@@ -118,6 +147,9 @@ pub(super) fn lower_assignment_expr(
         .and_then(|_| callable_array.as_ref().map(|assignment| assignment.value))
         .or_else(|| assigned_name.and_then(|name| lower_closure_for_assignment(ctx, name, value)))
         .unwrap_or_else(|| lower_expr(ctx, value));
+    if ctx.builder.insertion_block_is_terminated() {
+        return lowered;
+    }
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
         let lowered = if ctx.integer_local_declarations.contains(name) {
@@ -175,6 +207,9 @@ pub(super) fn lower_assignment_expr(
     } else {
         lower_non_local_assignment_write_with_diagnosed_key(ctx, target, value, expr.span, key_already_diagnosed);
     }
+    if ctx.builder.insertion_block_is_terminated() {
+        return result;
+    }
     if let Some(result_target) = result_target {
         let result = lower_expr(ctx, result_target);
         finish_static_compound_receiver(ctx, compound_receiver, expr.span);
@@ -185,9 +220,9 @@ pub(super) fn lower_assignment_expr(
 }
 
 /// Lowers a non-local `??=` assignment expression with lazy RHS evaluation.
-pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
+pub(in crate::ir_lower) fn lower_conditional_non_local_null_coalesce_assignment(
     ctx: &mut LoweringContext<'_, '_>,
-    temp_name: &str,
+    temp_name: Option<&str>,
     target: &Expr,
     value: &Expr,
     _result_target: Option<&Expr>,
@@ -213,8 +248,19 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
         Op::IsNull.default_effects(),
         Some(expr.span),
     );
-    let result_type = null_coalesce_result_type(ctx, current.value, default);
-    ctx.declare_owned_hidden_temp_with_name(temp_name, result_type.clone());
+    let result_type = non_local_null_coalesce_result_type(ctx, target, current.value, default);
+    // The result must remain live independently of the target write. In particular, boxing a
+    // refcounted result for a gradual property consumes its source reference, so a one-shot owned
+    // temp would leave the later assignment-expression result dangling. An ordinary retaining
+    // local gives the target store and the expression result distinct references.
+    let temp_name = temp_name
+        .map(str::to_owned)
+        .unwrap_or_else(|| ctx.declare_synthetic_php_local(result_type.clone()));
+    ctx.declare_local_with_kind(
+        &temp_name,
+        result_type.clone(),
+        crate::ir::LocalKind::PhpLocal,
+    );
     let assign_block = ctx.builder.create_named_block("coalesce_assign.default", Vec::new());
     let keep_block = ctx.builder.create_named_block("coalesce_assign.value", Vec::new());
     let merge = ctx.builder.create_named_block("coalesce_assign.merge", Vec::new());
@@ -227,19 +273,32 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     });
 
     ctx.builder.position_at_end(assign_block);
-    // The target was read once, before the branch, to decide which way to go. The keep path
-    // adopts that value; THIS path discards it, so it has to be released here or it leaks one
-    // block per execution — a leak the old over-release used to cancel, which is why the two
-    // defects hid each other.
-    crate::ir_lower::ownership::release_if_owned(ctx, current, Some(expr.span));
-    store_expr_into_temp(ctx, temp_name, result_type.clone(), default, expr.span);
+    // NO release of `current` here, deliberately. Upstream released it on this path, paired with
+    // its own one-shot `take_owned_temp` result storage: under that design the pre-branch read
+    // owned a reference this path discards, and dropping the release leaked a block per
+    // execution. This branch replaced that storage with an ordinary retaining local (see the
+    // comment above `temp_name`), and under THAT design the read is not an owned temporary —
+    // adding the release over-releases it. Measured, not reasoned: with the release in place
+    // `return $box->name ??= 'fallback';` on a `?Box` receiver returned eight poison bytes
+    // (`codegen::objects::property_access::mutations::test_null_coalesce_assignment_on_nullable_object_receiver`),
+    // and removing it makes that test pass with the `runtime_gc` coalesce heap tests still clean.
+    super::lazy_branches::store_branch_expr_into_temp(
+        ctx,
+        &temp_name,
+        result_type.clone(),
+        default,
+        expr.span,
+    );
     // A `throw` default of a buffer target (`$o->buf ??= throw ...`) ends the branch inside
     // `store_expr_into_temp`: nothing is left to write, and nothing may be emitted after it.
     if !ctx.builder.insertion_block_is_terminated() {
-        let temp_value = Expr::new(ExprKind::Variable(temp_name.to_string()), expr.span);
+        let temp_value = Expr::new(ExprKind::Variable(temp_name.clone()), expr.span);
         // The write BORROWS the temporary: `array_set` takes its own reference by retaining, and
         // the slot keeps hers for the merge below to hand to the consumer. One store, one owned
-        // load (the merge's) per execution.
+        // load — the merge's — per execution.
+        //
+        // Narrowing this to element writes only was tried and MEASURED not to matter: the poison
+        // bytes the nullable-receiver test saw came from the release above, not from this scope.
         // The insert converts a float key again: PHP's probe and its insert are separate
         // accesses, and each reports the deprecation.
         ctx.with_borrowed_write_operand(|ctx| {
@@ -249,11 +308,38 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(keep_block);
-    store_value_into_temp(ctx, temp_name, result_type, current, expr.span);
+    store_value_into_temp(ctx, &temp_name, result_type, current, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    Some(take_owned_temp(ctx, temp_name, expr.span))
+    Some(ctx.load_local(&temp_name, Some(expr.span)))
+}
+
+/// Chooses storage for a non-local `??=` expression while preserving a concrete property ABI.
+///
+/// An uninitialized typed property first materializes as boxed null so its lazy read can avoid a
+/// typed-property error. When the assignment target itself has concrete object storage, keeping
+/// the merge in that storage lets both branches cross the same property and fluent-call boundary
+/// without reinterpreting a Mixed cell as an object pointer.
+fn non_local_null_coalesce_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    target: &Expr,
+    current: crate::ir::ValueId,
+    default: &Expr,
+) -> PhpType {
+    let merged = null_coalesce_result_type(ctx, current, default);
+    let ExprKind::PropertyAccess { object, property } = &target.kind else {
+        return merged;
+    };
+    let Some(property_type) = property_access_expr_type_for_ir(ctx, object, property) else {
+        return merged;
+    };
+    let property_type = property_type.codegen_repr();
+    if matches!(property_type, PhpType::Object(_)) {
+        property_type
+    } else {
+        merged
+    }
 }
 
 /// Lowers a statement-level `$place[$key] ??= $default` the way PHP executes it.
@@ -500,12 +586,36 @@ pub(super) fn non_local_assignment_stmt_kind(target: &Expr, value: &Expr) -> Opt
 }
 
 /// Lowers a runtime-name property write (`$object->{$property} = $value`).
-pub(super) fn lower_dynamic_property_assign(
+pub(crate) fn lower_dynamic_property_assign(
     ctx: &mut LoweringContext<'_, '_>,
     object: &Expr,
     property: &Expr,
     value: &Expr,
     span: Span,
+) {
+    lower_dynamic_property_assign_with(ctx, object, property, value, span, false);
+}
+
+/// Lowers `$object->property = $value` whose property only a class EXTENDING the receiver's static
+/// class declares: the receiver is boxed so the store resolves the name against the run-time class.
+pub(crate) fn lower_descendant_property_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &Expr,
+    value: &Expr,
+    span: Span,
+) {
+    lower_dynamic_property_assign_with(ctx, object, property, value, span, true);
+}
+
+/// The shared body of [`lower_dynamic_property_assign`] and [`lower_descendant_property_assign`].
+fn lower_dynamic_property_assign_with(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &Expr,
+    value: &Expr,
+    span: Span,
+    box_receiver: bool,
 ) {
     let (mut receiver, property, value) = if is_static_property_write_chain(object) {
         let property = lower_expr(ctx, property);
@@ -517,7 +627,9 @@ pub(super) fn lower_dynamic_property_assign(
         let guarded_property = ctx.emit_value(Op::Borrow, vec![property.value], None, PhpType::Str,
             Op::Borrow.default_effects(), Some(span));
         ctx.builder.set_value_ownership(guarded_property.value, Ownership::Borrowed);
-        let value = lower_expr(ctx, value);
+        // `$object->$name = &$value` stores the marker over `$value`'s reference cell, as an
+        // array element does; any other value lowers exactly as `lower_expr` would.
+        let value = assoc_array_literals::lower_array_reference_or_value(ctx, value);
         let value = ctx.borrow_write_operand_if_needed(value, span);
         let mut receiver = lower_static_property_write_chain_with_operands(
             ctx, object, &[guarded_property.value, value.value], span);
@@ -525,12 +637,20 @@ pub(super) fn lower_dynamic_property_assign(
         (receiver, property, value)
     } else {
         let object = lower_member_receiver_at_span(ctx, object, span);
+        // A property only a class EXTENDING the receiver's static class declares is stored
+        // through the boxed receiver, so the store resolves the name against the run-time class;
+        // a bare `object`, an interface or an uncompiled class needs the same box.
+        let object = if box_receiver {
+            ctx.box_value_as_mixed(object, PhpType::Mixed, Some(span))
+        } else {
+            property_access::box_generic_object_for_dynamic_property(ctx, object, span)
+        };
         let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
         let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));
         let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
-        let value = lower_expr(ctx, value);
+        let value = assoc_array_literals::lower_array_reference_or_value(ctx, value);
         unpin_in_flight_owners(ctx, property_pins, span);
         (receiver, property, ctx.borrow_write_operand_if_needed(value, span))
     };
@@ -577,7 +697,10 @@ pub(super) fn lower_dynamic_property_assign(
     );
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     if owns_value { crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span)); }
-    if ctx.value_is_owning_temporary(property) {
+    // The name is a string cast out of a boxed `Mixed` name (`coerce_runtime_property_name`): an
+    // owning temporary nobody else retires. A read and an `unset` release it after their
+    // instruction; the write leaked the name's string copy on every `$o->{$mixedName} = $v`.
+    if ctx.value_needs_release_after_use(property) {
         crate::ir_lower::ownership::release_if_owned(ctx, property, Some(span));
     }
     receiver.finish(ctx, span);

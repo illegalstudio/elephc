@@ -2,7 +2,7 @@
 title: "preg_match() - internals"
 description: "Compiler internals for preg_match(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 836
+  order: 870
 ---
 
 ## `preg_match()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_match.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -28,7 +28,7 @@ sidebar:
 - **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_match(string $pattern, string $subject, array $matches = null): int|false
+function preg_match(string $pattern, string $subject, array $matches = null, int $flags = 0, int $offset = 0): int|false
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–3 arguments (1 optional).
+- **Arity**: takes 2–5 arguments (3 optional).
 - **By-reference parameters**: `$matches`.
 
 ## Eval interpreter (magician)
@@ -52,7 +52,6 @@ function preg_match(string $pattern, string $subject, array $matches = null): in
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
 - **Adapter reason**: `by-reference-or-lvalue`.
-- **Eval signature compatibility**: `additional-optional-parameters`.
 - **Dispatch hooks**: `direct`, `values`
 - **By-reference parameters**: `$matches`.
 

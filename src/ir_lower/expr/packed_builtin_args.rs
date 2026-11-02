@@ -30,7 +30,14 @@ pub(super) fn lower_packed_builtin_call(
     let plan = crate::types::call_args::plan_call_args(sig, args, expr.span, true, false).ok()?;
     for arg in &plan.source_args {
         match &arg.kind {
-            ExprKind::Spread(inner) => { indexed_spread_source_type(ctx, inner)?; }
+            // Only a real indexed array is packed here. The shared classifier also admits the
+            // gradual shapes (mixed, callable, iterable), which the general spread path
+            // normalizes through `__rt_mixed_spread_array`; `append_spread` walks an array only.
+            ExprKind::Spread(inner) => {
+                if !matches!(indexed_spread_source_type(ctx, inner)?, PhpType::Array(_)) {
+                    return None;
+                }
+            }
             ExprKind::NamedArg { .. } => return None,
             _ => {},
         }

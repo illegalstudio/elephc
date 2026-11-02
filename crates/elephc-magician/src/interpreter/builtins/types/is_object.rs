@@ -36,5 +36,7 @@ pub(in crate::interpreter) fn eval_is_object_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let tag = values.type_tag(value)?;
-    values.bool_value(tag == EVAL_TAG_OBJECT)
+    // A compiled closure or first-class callable crosses the ABI as a callable descriptor; php
+    // sees a `Closure` instance.
+    values.bool_value(tag == EVAL_TAG_OBJECT || tag == EVAL_TAG_CALLABLE)
 }

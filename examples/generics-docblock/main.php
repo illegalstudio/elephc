@@ -1,127 +1,20 @@
 <?php
 
-// The same generics, written as PHPStan annotations.
+// Generics written as PHPStan annotations: function-level and method-level `@template`.
 //
 // Every line of this file is valid PHP: the type parameters live in comments. Run it with
-// `php main.php` and it works; compile it with elephc and it monomorphizes, producing one
-// class per type argument exactly as `class Box<T>` does in the native syntax.
+// `php main.php` and it works; compile it with elephc and each call is specialized to the
+// types it is given, exactly as `function id<T>(T $v): T` does in the native syntax.
 //
-// `examples/generics/` shows the native surface, which is more direct and cannot run on
-// php-src. This one trades that directness for portability.
+// Only FUNCTION and METHOD templates are read. A `@template` above a CLASS, an interface or a
+// trait (and its `@extends` / `@implements`) is left alone, because php knows one class under
+// its written name: `class_exists('Box')`, `new $class` and `get_class()` must keep working.
+// A class that needs a real type parameter uses the native syntax (`class Box<T>`, see
+// `examples/generics/`), which cannot run on php-src.
 
 /**
- * A container that keeps whatever it was given, at that type.
- *
- * `@template` declares the parameter, `@var` types the property, and `@param`/`@return` type
- * the members. Only an annotation MENTIONING `T` is read as a declaration — `@param int $n`
- * in this class would stay the ordinary PHPStan annotation it is anywhere else.
- *
- * @template T
- */
-class Box
-{
-    /** @var T */
-    private $value;
-
-    /** @param T $value */
-    public function __construct($value)
-    {
-        $this->value = $value;
-    }
-
-    /** @return T */
-    public function get()
-    {
-        return $this->value;
-    }
-
-    /** @param T $value */
-    public function set($value): void
-    {
-        $this->value = $value;
-    }
-
-    // No type parameter is mentioned, so this is left exactly as written.
-    public function describe(string $prefix): string
-    {
-        return $prefix;
-    }
-}
-
-/**
- * A promoted constructor parameter is one declaration in the source and two in the AST — the
- * parameter and the property. Both are retyped, or the class would disagree with itself.
- *
- * @template T
- */
-final class Pair
-{
-    /**
-     * @param T $first
-     * @param T $second
-     */
-    public function __construct(private $first, private $second) {}
-
-    /** @return T */
-    public function first()
-    {
-        return $this->first;
-    }
-
-    /** @return T */
-    public function second()
-    {
-        return $this->second;
-    }
-}
-
-/**
- * An interface is a template too, and `@extends` is how one names the instantiation it
- * inherits — the interface's `extends` list is where elephc records those arguments.
- *
- * @template T
- */
-interface Reader
-{
-    /** @return T */
-    public function read();
-}
-
-/**
- * `@implements Reader<T>` passes this class's own parameter through to the interface.
- *
- * @template T
- * @implements Reader<T>
- */
-abstract class Holder implements Reader
-{
-    /** @param T $slot */
-    public function __construct(protected $slot) {}
-
-    /** @return T */
-    public function read()
-    {
-        return $this->slot;
-    }
-}
-
-/**
- * A class with no type parameters of its own still names what it inherits. Naming someone
- * else's instantiation is not the same as declaring a parameter.
- *
- * @extends Holder<int>
- * @implements Reader<int>
- */
-final class IntHolder extends Holder
-{
-    public function doubled(): int
-    {
-        return $this->read() * 2;
-    }
-}
-
-/**
- * The function surface, for comparison: it reads the same annotations into the same fields.
+ * The function surface: `@template` declares the parameter, `@param` and `@return` type the
+ * signature. Only an annotation MENTIONING `T` is read as a declaration.
  *
  * @template T
  * @param array<T> $items
@@ -132,7 +25,18 @@ function firstOf(array $items)
     return $items[0];
 }
 
-// A method can declare its own template without making its class generic.
+/**
+ * A bound and a default are read too: `T of Countable`, `U = string`.
+ *
+ * @template T of Countable
+ * @param T $items
+ */
+function size($items): int
+{
+    return count($items);
+}
+
+// A class that is NOT generic: a method can still declare its own template.
 class Identity
 {
     /**
@@ -143,6 +47,22 @@ class Identity
     public function copy($value)
     {
         return $value;
+    }
+
+    /**
+     * @template T
+     * @param T ...$values
+     * @return T
+     */
+    public static function first(...$values)
+    {
+        return $values[0];
+    }
+
+    // No type parameter is mentioned, so this is left exactly as written.
+    public function describe(string $prefix): string
+    {
+        return $prefix;
     }
 }
 
@@ -159,38 +79,13 @@ enum IdentityCase
     public function copy($value) { return $value; }
 }
 
-// A constructor template gives promoted properties concrete storage at each new expression.
-class Value
-{
-    /**
-     * @template T
-     * @param T $value
-     */
-    public function __construct(public $value) {}
-}
-
-$number = new Box(41);
-$number->set($number->get() + 1);
-$word = new Box('hi');
-
-echo $number->get(), '|', $word->get(), '|', $word->describe('ok'), "\n";
-
-$ints = new Pair(3, 4);
-$words = new Pair('a', 'b');
-
-echo $ints->first() + $ints->second(), '|', $words->first() . $words->second(), "\n";
-
-$held = new IntHolder(21);
-
-echo $held->doubled(), '|', $held->read(), "\n";
 echo firstOf([10, 20]), '|', firstOf(['x', 'y']), "\n";
-echo (new Identity())->copy(7), '|', IdentityCase::One->copy('seven'), "\n";
-$constructedNumber = new Value(7);
-$constructedText = new Value('eight');
-echo $constructedNumber->value + 1, '|', strtoupper($constructedText->value), "\n";
+echo size([1, 2, 3]), '|', size(new ArrayObject([1, 2])), "\n";
 
-// One divergence is worth knowing about, and it is monomorphization rather than this surface:
-// the template does not exist at runtime. Under php-src `Box` is an ordinary class; compiled by
-// elephc only `Box<int>` and `Box<string>` exist, and `class_exists('Box')` is false. Native
-// `class Box<T>` behaves the same way.
-echo get_class($number), '|', get_class($word), '|', get_class($ints), "\n";
+$identity = new Identity();
+echo $identity->copy(7), '|', $identity->copy('seven'), '|', $identity->describe('ok'), "\n";
+echo Identity::first(3, 4), '|', Identity::first('a', 'b'), "\n";
+echo IdentityCase::One->copy(8), '|', IdentityCase::One->copy('eight'), "\n";
+
+// The class keeps its written name: php and elephc agree, and `class_exists` finds it.
+echo get_class($identity), '|', var_export(class_exists('Identity'), true), "\n";

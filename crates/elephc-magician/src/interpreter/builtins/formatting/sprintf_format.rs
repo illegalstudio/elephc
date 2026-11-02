@@ -22,6 +22,7 @@ pub(in crate::interpreter) fn eval_parse_sprintf_spec(
         force_sign: false,
         space_sign: false,
         zero_pad: false,
+        padding: None,
         alternate: false,
         width: None,
         precision: None,
@@ -34,6 +35,11 @@ pub(in crate::interpreter) fn eval_parse_sprintf_spec(
             b' ' => spec.space_sign = true,
             b'0' => spec.zero_pad = true,
             b'#' => spec.alternate = true,
+            // php's custom padding flag: the byte after the quote pads the field.
+            b'\'' if index + 1 < format.len() => {
+                index += 1;
+                spec.padding = Some(format[index]);
+            }
             _ => break,
         }
         index += 1;
@@ -288,11 +294,37 @@ pub(in crate::interpreter) fn eval_sprintf_apply_width(
         return bytes;
     }
     let pad_len = width - bytes.len();
+    if let Some(padding) = spec.padding {
+        if spec.left_align {
+            bytes.extend(std::iter::repeat_n(padding, pad_len));
+            return bytes;
+        }
+    }
+    // A custom `'0` on a number pads after the sign, like the `0` flag; any other custom byte
+    // is prepended as it is.
+    if let Some(padding) = spec.padding.filter(|padding| *padding != b'0' || !numeric) {
+        let mut output = Vec::with_capacity(width);
+        output.extend(std::iter::repeat_n(padding, pad_len));
+        output.append(&mut bytes);
+        return output;
+    }
+    // The `0` flag on `%s` pads with zeros on whichever side the alignment says: php's
+    // `sprintf('%02s', 0)` is "00", which Carbon's `create()` relies on to build "12:00:00".
+    if spec.zero_pad && !numeric {
+        if spec.left_align {
+            bytes.extend(std::iter::repeat_n(b'0', pad_len));
+            return bytes;
+        }
+        let mut output = Vec::with_capacity(width);
+        output.extend(std::iter::repeat_n(b'0', pad_len));
+        output.append(&mut bytes);
+        return output;
+    }
     if spec.left_align {
         bytes.extend(std::iter::repeat_n(b' ', pad_len));
         return bytes;
     }
-    if numeric && spec.zero_pad && spec.precision.is_none() {
+    if numeric && (spec.zero_pad || spec.padding == Some(b'0')) && spec.precision.is_none() {
         let prefix_len = eval_sprintf_zero_pad_prefix_len(&bytes);
         let mut output = Vec::with_capacity(width);
         output.extend_from_slice(&bytes[..prefix_len]);

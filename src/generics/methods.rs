@@ -150,6 +150,15 @@ pub fn instantiate(
     let mut names: HashMap<(String, Span), String> = HashMap::new();
     for (site, selected) in &requested.sites {
         if selected.len() > 1 {
+            // A PHPDoc template is tolerant: when its all-`mixed` instantiation is among the
+            // candidates, that one is the erased reading php itself runs, correct for every
+            // argument the other candidates were bound from (Symfony's
+            // `DeepCloner::deepClone()`, reached as `deepClone<ChildDefinition>` and
+            // `deepClone<mixed>`). Written generic syntax keeps the refusal below.
+            if let Some(erased) = doc_template_erased_candidate(templates, selected) {
+                names.insert(site.clone(), erased);
+                continue;
+            }
             // Same position, same enclosing name, two different methods. Renaming it to either
             // one compiles a program that calls the wrong method at one of the two places it
             // appears, and nothing afterwards could notice — the AST would name a method that
@@ -190,6 +199,29 @@ pub fn instantiate(
         crate::magic_constants::walker::walk_program(program, &mut pass),
         added,
     ))
+}
+
+/// The all-`mixed` instantiation of a PHPDoc method template, when a site selected it among others.
+fn doc_template_erased_candidate(
+    templates: &HashMap<(String, String), MethodTemplate>,
+    selected: &BTreeSet<String>,
+) -> Option<String> {
+    let mixed = TypeExpr::Named(crate::names::Name::unqualified("mixed"));
+    templates
+        .values()
+        .filter(|template| {
+            !template.type_params.is_empty()
+                && template.type_params.iter().all(|param| param.doc_annotated)
+        })
+        .map(|template| {
+            let bindings: Bindings = template
+                .type_params
+                .iter()
+                .map(|param| (param.name.clone(), mixed.clone()))
+                .collect();
+            instantiated_name(&template.declared_method, &bindings)
+        })
+        .find(|erased| selected.contains(erased))
 }
 
 /// Adds one instantiated method to its class, and reports whether it was new.

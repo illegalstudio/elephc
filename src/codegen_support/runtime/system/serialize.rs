@@ -28,13 +28,14 @@
 //!   slot's high word holds `UNINITIALIZED_TYPED_PROPERTY_SENTINEL`) and counts only the rest,
 //!   as PHP does; an unset `Closure` property therefore serializes instead of throwing.
 
+use crate::codegen_support::sentinels::emit_deref_reference_property_slot;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::CLOSURE_CLASS_NAME;
 use crate::codegen_support::sentinels::{
     emit_branch_if_null_container, emit_resolve_tagged_scalar_property_tag,
-    UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    emit_resolve_prop_desc_tag, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
 };
 
 mod magic_result;
@@ -117,6 +118,25 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // save the value tag across helper calls
     emitter.instruction("str x1, [sp, #24]");                                   // save the low payload word across helper calls
     emitter.instruction("str x2, [sp, #32]");                                   // save the high payload word across helper calls
+
+    // -- an array tag says which storage the COMPILER expected, not which one exists --
+    // A declared `array $p` property carries the indexed tag in its descriptor row forever, but
+    // the array it holds becomes hash storage the moment a string key is written. Reading a hash
+    // through the indexed reader emitted `a:1:{i:0;i:5;}` for `['kernel.debug' => true]` — the
+    // header word read as a count and the storage kind read as the first element. Classify the
+    // pointer instead, here, so every caller of this helper is corrected at once.
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the value tag
+    emitter.instruction("cmp x0, #4");                                          // only the two array tags need classifying
+    emitter.instruction("b.lt __rt_serialize_value_storage_ready");                 // scalars keep their tag
+    emitter.instruction("cmp x0, #5");                                          // objects and boxes dispatch on their own tag
+    emitter.instruction("b.gt __rt_serialize_value_storage_ready");                 // leave every other tag alone
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the container pointer is the low payload word
+    emitter.instruction("bl __rt_heap_kind");                                   // 2 = indexed array, 3 = hash, 0 = not a heap pointer
+    emitter.instruction("cmp x0, #3");                                          // is the live storage hash-backed?
+    emitter.instruction("b.ne __rt_serialize_value_storage_ready");                 // anything else keeps the descriptor's tag
+    emitter.instruction("mov x0, #5");                                          // runtime value tag 5 = hash-backed array
+    emitter.instruction("str x0, [sp, #16]");                                   // dispatch on the storage that actually exists
+    emitter.label("__rt_serialize_value_storage_ready");
 
     // -- remember where this value starts in the output stream (an offset: growth relocates it) --
     emitter.instruction("bl __rt_ser_tell");                                    // x0 = bytes already in the stream
@@ -417,6 +437,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate the digit-helper frame
     emitter.instruction("ret");                                                 // return with digits appended
+    emitter.label("__rt_serialize_uint_overflow");
+    emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 
     // -- __rt_serialize_indexed_array: append a:n:{ i:K;<v>... } for a tag-4 array --
     emitter.blank();
@@ -587,6 +609,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the append frame
     emitter.instruction("ret");                                                 // return with the bytes appended
+    emitter.label("__rt_concat_append_overflow");
+    emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 
     // -- __rt_ser_hoist_tail(x0=body_start, x1=tail_start, both stream offsets): move the bytes
     //    appended since tail_start (at most 32, such as an object's `<count>:{` header) in front
@@ -657,6 +681,33 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // set the frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer
+    // An object the INTERPRETER built carries the `stdClass` class id and an empty property hash,
+    // because its declared properties live in the eval context's overlay. Rendering it from the
+    // header below produced `O:8:"stdClass":0:{}`, which is what Symfony's AOT-compiled
+    // `ConfigCache::write()` wrote into its routing cache metadata. The hook answers null for
+    // every object the interpreter does NOT own, so a native object costs one registry probe.
+    // The output is a stream addressed by offset, so interpreted code that builds strings
+    // meanwhile cannot land inside it.
+    emit_symbol_address(emitter, "x9", "_elephc_eval_serialize_object_fn");
+    emitter.instruction("ldr x9, [x9]");                                        // load the eval object-rendering callback, if one is installed
+    emitter.instruction("cbz x9, __rt_serialize_object_native");                // without the bridge every object is a native one
+    emitter.instruction("ldr x0, [sp, #0]");                                    // pass the raw object pointer, which is its eval identity
+    emitter.instruction("blr x9");                                              // ask the interpreter to render this object
+    emitter.instruction("cbz x0, __rt_serialize_object_native");                // not eval-owned: keep the header-driven rendering
+    emitter.instruction("str x0, [sp, #56]");                                   // save the boxed fragment while unboxing it
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the fragment's tag and payload words
+    emitter.instruction("cmp x0, #1");                                          // runtime tag 1 is a string payload
+    emitter.instruction("b.ne __rt_serialize_object_eval_release");             // anything else is not a fragment to append
+    emitter.instruction("mov x0, x1");                                          // string bytes pointer
+    emitter.instruction("mov x1, x2");                                          // string byte length
+    emitter.instruction("bl __rt_ser_append");                                  // copy the rendered fragment into the output stream
+    emitter.label("__rt_serialize_object_eval_release");
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the boxed fragment to give it back
+    emitter.instruction("bl __rt_decref_mixed");                                // release the fragment the callback handed over
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate the object frame
+    emitter.instruction("ret");                                                 // return with the interpreter's rendering appended
+    emitter.label("__rt_serialize_object_native");
     emitter.instruction("bl __rt_ser_tell");                                    // x0 = stream offset where this object starts
     emitter.instruction("str x0, [sp, #56]");                                   // retain the prefix start if an invalid sleep return serializes as null
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
@@ -742,6 +793,25 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with the object appended
 
     emitter.label("__rt_serialize_object_default");
+    // A stdClass keeps every property in the per-instance hash after its class id: it has no
+    // declared rows, so the row walk below wrote `O:8:"stdClass":0:{}` and dropped them all.
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the class id
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_stdclass_class_id", 0);
+    emitter.instruction("cmp x1, x10");                                         // is the object a stdClass?
+    emitter.instruction("b.ne __rt_serialize_object_declared");                 // declared classes walk their property rows
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the stdClass object
+    emitter.instruction("ldr x0, [x10, #8]");                                   // its dynamic-property hash
+    emitter.instruction("cbz x0, __rt_serialize_object_stdclass_empty");        // a stdClass that never allocated its hash
+    emitter.instruction("bl __rt_serialize_hash_body");                         // emit <count>:{<key><value>...} from the hash
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate the object frame
+    emitter.instruction("ret");                                                 // return with the stdClass appended
+    emitter.label("__rt_serialize_object_stdclass_empty");
+    emit_append_literal_aarch64(emitter, &[b'0', b':', b'{', b'}'], "an empty stdClass body");
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate the object frame
+    emitter.instruction("ret");                                                 // return with the empty stdClass appended
+    emitter.label("__rt_serialize_object_declared");
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the class id
     emit_symbol_address(emitter, "x9", "_class_serprop_ptrs");
     emitter.instruction("ldr x13, [x9, x1, lsl #3]");                           // property-info table pointer
@@ -801,6 +871,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x7, x7, x9");                                      // address of the property slot
     emitter.instruction("ldr x1, [x7]");                                        // value low payload word
     emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
+    emit_deref_reference_property_slot(emitter, "x10", "x1", "x2", "x9");
+    emit_resolve_prop_desc_tag(emitter, "x10", "x2", "x9");
     emitter.instruction("mov x0, x10");                                         // value tag
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_serialize_value");                             // append the serialized property value
@@ -902,6 +974,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x7, x7, x9");                                      // address of the property slot
     emitter.instruction("ldr x1, [x7]");                                        // value low payload word
     emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
+    emit_deref_reference_property_slot(emitter, "x10", "x1", "x2", "x9");
+    emit_resolve_prop_desc_tag(emitter, "x10", "x2", "x9");
     emitter.instruction("mov x0, x10");                                         // value tag
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_serialize_value");                             // append the serialized property value
@@ -962,6 +1036,12 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the reference index
     emitter.instruction("bl __rt_serialize_uint");                              // append the index digits
     emit_append_literal_aarch64(emitter, &[b';'], "the back-reference terminator");
+    // The back-reference is itself a value php numbers, so the index after it belongs to
+    // whatever follows: a second shared object was otherwise written as `r:4` for php's `r:5`.
+    emit_symbol_address(emitter, "x9", "_ser_value_counter");
+    emitter.instruction("ldr x10, [x9]");                                       // load the running value counter
+    emitter.instruction("add x10, x10, #1");                                    // the r: value takes the next index
+    emitter.instruction("str x10, [x9]");                                       // publish the advanced counter
     emitter.instruction("mov x0, #1");                                          // signal: r:<index>; emitted
     emitter.instruction("b __rt_serialize_obj_ref_ret");                        // return to the caller
     emitter.label("__rt_serialize_obj_ref_new");
@@ -1123,6 +1203,21 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the value tag across helper calls
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the low payload word across helper calls
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the high payload word across helper calls
+
+    // -- an array tag says which storage the COMPILER expected, not which one exists --
+    // See the AArch64 sibling: a declared `array $p` keeps the indexed tag in its descriptor row
+    // even after a string key promotes the array to hash storage.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the value tag
+    emitter.instruction("cmp rdi, 4");                                          // only the two array tags need classifying
+    emitter.instruction("jl __rt_serialize_value_storage_ready_linux_x86_64");      // scalars keep their tag
+    emitter.instruction("cmp rdi, 5");                                          // objects and boxes dispatch on their own tag
+    emitter.instruction("jg __rt_serialize_value_storage_ready_linux_x86_64");      // leave every other tag alone
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the container pointer is the low payload word
+    emitter.instruction("call __rt_heap_kind");                                 // 2 = indexed array, 3 = hash, 0 = not a heap pointer
+    emitter.instruction("cmp rax, 3");                                          // is the live storage hash-backed?
+    emitter.instruction("jne __rt_serialize_value_storage_ready_linux_x86_64");     // anything else keeps the descriptor's tag
+    emitter.instruction("mov QWORD PTR [rbp - 24], 5");                         // runtime value tag 5 = hash-backed array
+    emitter.label("__rt_serialize_value_storage_ready_linux_x86_64");
 
     // -- remember where this value starts in the output stream (an offset: growth relocates it) --
     emitter.instruction("call __rt_ser_tell");                                  // rax = bytes already in the stream
@@ -1391,6 +1486,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // deallocate the digit-helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with digits appended
+    emitter.label("__rt_serialize_uint_overflow");
+    emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline cross-atom safe
 
     // -- __rt_serialize_indexed_array: append a:n:{ i:K;<v>... } for a tag-4 array --
     emitter.blank();
@@ -1559,6 +1656,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release the append slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with the bytes appended
+    emitter.label("__rt_concat_append_overflow");
+    emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline cross-atom safe
 
     // -- __rt_ser_hoist_tail(rdi=body_start, rsi=tail_start, both stream offsets): move the bytes
     //    appended since tail_start (at most 32, such as an object's `<count>:{` header) in front
@@ -1629,6 +1728,30 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the object frame
     emitter.instruction("sub rsp, 64");                                         // reserve frame slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer
+    // See the ARM64 body: an object the INTERPRETER built carries `stdClass` in its header and
+    // nothing in its property hash, so rendering it from the header produced
+    // `O:8:"stdClass":0:{}`. The hook answers null for every object it does not own.
+    emit_symbol_address(emitter, "r10", "_elephc_eval_serialize_object_fn");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the eval object-rendering callback, if one is installed
+    emitter.instruction("test r10, r10");                                       // without the bridge every object is a native one
+    emitter.instruction("jz __rt_serialize_object_native_x");                   // keep the header-driven rendering
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the raw object pointer, which is its eval identity
+    emitter.instruction("call r10");                                            // ask the interpreter to render this object
+    emitter.instruction("test rax, rax");                                       // did the interpreter own this object?
+    emitter.instruction("jz __rt_serialize_object_native_x");                   // not eval-owned: keep the header-driven rendering
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the boxed fragment while unboxing it
+    emitter.instruction("mov rdi, rax");                                        // pass the boxed fragment for unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // rax = concrete tag, rdi = value_lo, rsi = value_hi
+    emitter.instruction("cmp rax, 1");                                          // runtime tag 1 is a string payload
+    emitter.instruction("jne __rt_serialize_object_eval_release_x");            // anything else is not a fragment to append
+    emitter.instruction("call __rt_ser_append");                                // copy the rendered fragment into the output stream
+    emitter.label("__rt_serialize_object_eval_release_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the boxed fragment to give it back
+    emitter.instruction("call __rt_decref_mixed");                              // release the fragment the callback handed over
+    emitter.instruction("mov rsp, rbp");                                        // release the object frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return with the interpreter's rendering appended
+    emitter.label("__rt_serialize_object_native_x");
     emitter.instruction("call __rt_ser_tell");                                  // rax = stream offset where this object starts
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // retain the prefix start if an invalid sleep return serializes as null
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
@@ -1715,6 +1838,25 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with the object appended
 
     emitter.label("__rt_serialize_object_default");
+    // A stdClass keeps its properties in the per-instance hash (see the AArch64 body).
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // class id
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);
+    emitter.instruction("cmp rcx, r10");                                        // is the object a stdClass?
+    emitter.instruction("jne __rt_serialize_object_declared_x");                // declared classes walk their property rows
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the stdClass object
+    emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // its dynamic-property hash
+    emitter.instruction("test rax, rax");                                       // a stdClass that never allocated its hash?
+    emitter.instruction("jz __rt_serialize_object_stdclass_empty_x");           // zero properties
+    emitter.instruction("call __rt_serialize_hash_body");                       // emit <count>:{<key><value>...} from the hash
+    emitter.instruction("add rsp, 64");                                         // deallocate the object frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return with the stdClass appended
+    emitter.label("__rt_serialize_object_stdclass_empty_x");
+    emit_append_literal_x86_64(emitter, &[b'0', b':', b'{', b'}'], "an empty stdClass body");
+    emitter.instruction("add rsp, 64");                                         // deallocate the object frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return with the empty stdClass appended
+    emitter.label("__rt_serialize_object_declared_x");
     emit_symbol_address(emitter, "r10", "_class_serprop_ptrs");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // class id
     emitter.instruction("shl rcx, 3");                                          // class_id * 8 (pointer stride)
@@ -1777,6 +1919,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rcx, r8");                                         // address of the property slot
     emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
+    emit_deref_reference_property_slot(emitter, "r9", "rsi", "rdx", "rax");
+    emit_resolve_prop_desc_tag(emitter, "r9", "rdx", "rax");
     emitter.instruction("mov rdi, r9");                                         // value tag
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_serialize_value");                           // append the serialized property value
@@ -1878,6 +2022,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rcx, r8");                                         // address of the property slot
     emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
+    emit_deref_reference_property_slot(emitter, "r9", "rsi", "rdx", "rax");
+    emit_resolve_prop_desc_tag(emitter, "r9", "rdx", "rax");
     emitter.instruction("mov rdi, r9");                                         // value tag
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_serialize_value");                           // append the serialized property value
@@ -1937,6 +2083,9 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the reference index
     emitter.instruction("call __rt_serialize_uint");                            // append the index digits (value in rax)
     emit_append_literal_x86_64(emitter, &[b';'], "the back-reference terminator");
+    // The back-reference is itself a value php numbers (see the AArch64 helper).
+    emit_symbol_address(emitter, "r9", "_ser_value_counter");
+    emitter.instruction("add QWORD PTR [r9], 1");                               // the r: value takes the next index
     emitter.instruction("mov rax, 1");                                          // signal: r:<index>; emitted
     emitter.instruction("jmp __rt_serialize_obj_ref_ret");                      // return to the caller
     emitter.label("__rt_serialize_obj_ref_new");

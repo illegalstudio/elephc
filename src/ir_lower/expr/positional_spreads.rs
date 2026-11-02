@@ -44,6 +44,22 @@ pub(super) fn lower_positional_spread_args_with_signature(
         return None;
     }
 
+    // A variadic-only callee whose collector is `iterable` takes a keyed source as a HASH tail
+    // (`collect(...$args)` forwarding a relay's own `...$args`). This path slices the source as an
+    // indexed array, which reads a hash's buckets as slots, so the generic tail builder (it
+    // spreads each source by its runtime shape) lowers that call instead.
+    if regular_param_count == 0
+        && super::variadic_args::variadic_param_is_iterable(sig)
+        && !super::variadic_args::variadic_param_is_by_ref(sig)
+        && indexed_spread_source_type(ctx, inner).is_some_and(|ty| match &ty {
+            PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
+            PhpType::Iterable | PhpType::Mixed | PhpType::Union(_) => true,
+            _ => false,
+        })
+    {
+        return None;
+    }
+
     let mut operands = Vec::with_capacity(regular_param_count);
     for (index, arg) in args[..spread_idx].iter().enumerate() {
         let previous = capture_output.filter(|(output, _)| *output == index && !capture_values)
@@ -58,9 +74,47 @@ pub(super) fn lower_positional_spread_args_with_signature(
         }
     }
 
-    let spread_type = indexed_spread_source_type(ctx, inner)?;
+    let source_ty = indexed_spread_source_type(ctx, inner)?;
+    // A `callable` source is a DESCRIPTOR, not an array. Boxing it hands the element reads to the
+    // gradual path, which rebuilds slot 0 (the bound receiver) and slot 1 (the bare method name)
+    // from the descriptor. The two steps an array source needs are skipped deliberately:
+    // `narrow_gradual_indexed_spread_source` would unbox it as runtime tag 4 and read a
+    // descriptor as an array, and the min-length guard would call `ArrayLen` on it — a
+    // callable array is exactly two elements by construction, so there is nothing to check.
+    let callable_source = matches!(source_ty, PhpType::Callable);
+    // An `iterable` is a bare list-or-hash pointer; boxing it records which, so the gradual
+    // narrowing below takes it like any `mixed` source.
+    let iterable_source = matches!(source_ty, PhpType::Iterable);
+    // An `array<T>` with a concrete element type was inferred from a list and has integer keys.
+    // `array<mixed>` is what a bare `array` DECLARATION types as, and that value may be a hash
+    // at run time: `function f(array $args) { return new $c(...$args); }` handed a
+    // `['b' => 'n']` bound nothing by name. So it takes the named probe like any gradual source.
+    let may_carry_names = !matches!(
+        &source_ty,
+        PhpType::Array(element) if element.codegen_repr() != PhpType::Mixed
+    );
     let spread = lower_expr(ctx, inner);
+    // Box a `callable` source so the narrowing below sees a gradual value, then let that
+    // narrowing MATERIALIZE it: `__rt_mixed_spread_array` turns a callable descriptor into a real
+    // two-element array. Handing the boxed descriptor downstream instead left the hidden variadic
+    // tail slicing a descriptor, and the callee's own `count()` then received null.
+    // A source that may carry names AND is already a hash (a property or call declared to return
+    // an associative array) is boxed too: the narrowing below lists a typed hash through
+    // `array_values()`, which is right for a positional spread but threw away the string keys
+    // the per-parameter name probes read. That is `ReflectionAttribute::newInstance()`'s
+    // `new $this->__name(...$this->__args)` over a run-time materialized attribute: with
+    // `#[Route('/p', name: 'n', requirements: [...])]` the values landed in declaration order
+    // (`'n'` in the `requirements` array slot), a TypeError, and `debug:router` lost the route.
+    let keyed_hash_source = may_carry_names
+        && ctx.builder.value_type(spread.value) == IrType::Heap(IrHeapKind::Hash);
+    let spread = if callable_source || iterable_source || keyed_hash_source {
+        ctx.box_value_as_mixed(spread, PhpType::Mixed, Some(args[spread_idx].span))
+    } else {
+        spread
+    };
+    let spread = narrow_gradual_indexed_spread_source(ctx, spread, args[spread_idx].span);
     let spread = root_evaluated_call_argument(ctx, spread, inner.span);
+    let spread_type = ctx.builder.value_php_type(spread.value);
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
     store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
     let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
@@ -80,21 +134,41 @@ pub(super) fn lower_positional_spread_args_with_signature(
     for param_idx in first_spread_param_idx..regular_param_count {
         let element_idx = param_idx - first_spread_param_idx;
         let default = sig.defaults.get(param_idx).and_then(|default| default.as_ref());
+        // Unpacking is decided PER KEY at runtime: a string key names a parameter, an integer key
+        // fills the next position, in the same array. This module is chosen whenever the source's
+        // type is `array`/`mixed` -- which a function declared `: array` satisfies whatever keys
+        // it returns -- so reading positionally ONLY dropped every name the source carried.
+        //
+        // MEASURED: `new Target(...namedArgs())`, where `namedArgs(): array` returns
+        // `['name' => 'fromCall', 'description' => 'desc']`, left both parameters at their
+        // defaults while php bound both. That is `ReflectionAttribute::newInstance()`'s
+        // `new $this->__name(...$this->__args)`, so every `#[AsCommand(name: 'x')]` was
+        // constructed empty and Symfony's console reported
+        // `AsCommand::__construct(): Argument #1 ($name) must be of type string, array given`.
+        //
+        // The element builders ask for the name first and fall back to the position, so a packed
+        // list still reads exactly as it did.
+        // Only pay for the named probe when the source COULD carry names. A packed `array<T>`
+        // cannot, and asking anyway added an `array_key_exists` call and a ternary to every spread
+        // parameter in the program -- 26 MB of extra assembly on the Symfony build.
+        let param_name = may_carry_names
+            .then(|| sig.params.get(param_idx).map(|(name, _)| name.as_str()))
+            .flatten();
         let expr = if let Some(default) = default {
             if element_idx < required_len {
                 spread_element_expr_for_ir(
                     &spread_expr,
                     element_idx,
-                    None,
-                    false,
+                    param_name,
+                    may_carry_names,
                     args[spread_idx].span,
                 )
             } else {
                 spread_element_or_default_expr_for_ir(
                     &spread_expr,
                     element_idx,
-                    None,
-                    false,
+                    param_name,
+                    may_carry_names,
                     default.clone(),
                     args[spread_idx].span,
                 )
@@ -103,8 +177,8 @@ pub(super) fn lower_positional_spread_args_with_signature(
             spread_element_expr_for_ir(
                 &spread_expr,
                 element_idx,
-                None,
-                false,
+                param_name,
+                may_carry_names,
                 args[spread_idx].span,
             )
         };
@@ -225,13 +299,27 @@ fn lower_positional_spread_tail(
     let source = lower_expr(ctx, spread);
     let offset = emit_i64_at_span(ctx, offset as i64, span);
     let target = crate::ir::RuntimeFnId::ArraySlice;
+    // The slice copies the SOURCE's slot layout. A gradual source (a declared `: array` return,
+    // `array<mixed>` after the merge) holds boxed slots that the slice cannot narrow into a typed
+    // variadic's raw ones, so it keeps the source layout and the parameter coercion converts it.
+    let expected = variadic_array_type(sig);
+    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    let result_ty = match (&source_ty, expected.codegen_repr()) {
+        (PhpType::Array(source_elem), PhpType::Array(expected_elem))
+            if source_elem.codegen_repr() == PhpType::Mixed
+                && expected_elem.codegen_repr() != PhpType::Mixed =>
+        {
+            source_ty.clone()
+        }
+        _ => expected,
+    };
     ctx.emit_value(
         Op::RuntimeCall,
         vec![source.value, offset.value],
         Some(Immediate::RuntimeCall(
             crate::ir::RuntimeCallTarget::Function(target),
         )),
-        variadic_array_type(sig),
+        result_ty,
         target.effects(),
         Some(span),
     )
@@ -346,10 +434,33 @@ pub(super) fn indexed_spread_source_type(
         ExprKind::ArrayAccess { .. } | ExprKind::ErrorSuppress(_) => {
             spread_source_storage_type_for_ir(ctx, expr)
         }
+        // A property read is GRADUAL for this decision. The syntactic fallback below cannot see a
+        // declared property type, so `...$this->controller` used to leave the spread path
+        // entirely and lower as a single operand -- a hard `OperandCountMismatch` at compile
+        // time. Treating it as gradual routes it through `__rt_mixed_spread_array`, which passes
+        // a real array through, rebuilds a callable descriptor's two elements, and answers null
+        // for anything else so the length guard raises PHP's own unpack error.
+        ExprKind::PropertyAccess { .. }
+        | ExprKind::NullsafePropertyAccess { .. }
+        | ExprKind::DynamicPropertyAccess { .. } => PhpType::Mixed,
         _ => array_literal_element_type_for_ir(ctx, expr),
     }
     .codegen_repr();
-    if matches!(ty, PhpType::Array(_)) {
+    // `Callable` joins the gradual shapes: its slot holds a descriptor, and a descriptor built
+    // from PHP's `[$object, 'method']` syntax rebuilds both elements on demand (see
+    // `lower_mixed_callable_slot_or_array_get`). The caller boxes it so those reads take the
+    // gradual path.
+    // `Iterable` too: a variadic parameter that received a named argument is typed so (its
+    // storage may be a list or a hash). Left out, `new $class(...$args)` over it took the generic
+    // runtime-container path, which bound no named key and returned no object.
+    if matches!(
+        ty,
+        PhpType::Array(_)
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Callable
+            | PhpType::Iterable
+    ) {
         Some(ty)
     } else {
         None

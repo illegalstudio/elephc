@@ -81,10 +81,17 @@ pub(in crate::parser::stmt) fn parse_class_decl(
 
     expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of class")?;
 
+    // php's `ReflectionClass::getEndLine()` is the line the closing brace sits on, and the
+    // declaration span carried only the `class` keyword's line in both slots, so every compiled
+    // class reported a one-line body. The brace was just consumed, so its span is the one behind
+    // the cursor.
+    let span = close_brace_span(tokens, *pos, span);
+
     Ok(Stmt::new(
         StmtKind::ClassDecl {
             name,
             generics,
+            doc_comment: None,
             extends,
             implements,
             is_abstract,
@@ -97,6 +104,19 @@ pub(in crate::parser::stmt) fn parse_class_decl(
         },
         span,
     ))
+}
+
+/// Widens a declaration span to end at the closing brace the parser has just consumed.
+pub(super) fn close_brace_span(tokens: &[SpannedToken], pos: usize, span: Span) -> Span {
+    let Some(close) = pos.checked_sub(1).and_then(|index| tokens.get(index)) else {
+        return span;
+    };
+    Span {
+        line: span.line,
+        col: span.col,
+        end_line: close.1.span.end_line.max(span.line),
+        end_col: close.1.span.end_col,
+    }
 }
 
 /// Parses an anonymous class expression `new class [(args)] [extends P] [implements I...] { body }`.
@@ -173,6 +193,7 @@ pub(crate) fn parse_anonymous_class(
         StmtKind::ClassDecl {
             name: name.clone(),
             generics,
+            doc_comment: None,
             extends,
             implements,
             is_abstract: false,

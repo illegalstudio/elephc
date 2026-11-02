@@ -9,6 +9,10 @@
 //!   dispatch for `Mixed` receivers.
 //!
 //! Key details:
+//! - The dispatch, acceptance checks, diagnostics and refusals are emitted ONCE per declared type
+//!   in a shared helper (`outlined`, which documents the key and the calling convention); the
+//!   site keeps only the arms that build a replacement value. This file holds the plan of what
+//!   each runtime tag means for a declared type, and the building blocks both halves use.
 //! - The guard runs BEFORE the destination is touched: it only reads the boxed value, so a
 //!   rejected assignment leaves the previous slot contents owned and intact. Every diagnostic
 //!   the guard emits (the precision deprecations) is likewise emitted before the store, which
@@ -36,6 +40,10 @@
 //!   the parsed value. Its (tag, value, status) result is the very triple `__rt_mixed_from_value`
 //!   consumes, so the selected member is boxed from the value the classifier already parsed and
 //!   the string is never scanned twice.
+
+mod outlined;
+
+pub(in crate::codegen) use outlined::emit_pending_property_guard_helpers;
 
 use super::*;
 use crate::codegen::lower_inst::runtime_class_messages;
@@ -126,12 +134,18 @@ struct ObjectPlan {
     /// Runtime class ids publishing `__toString`, which a `string` destination accepts by
     /// calling it. Empty for every destination that is not string-shaped.
     stringable: Vec<u64>,
+    /// The declared class names, asked of the eval bridge first: an object the interpreter built
+    /// carries a generic header no class id above matches.
+    class_names: Vec<String>,
 }
 
 impl ObjectPlan {
     /// Returns true when no object of any class can satisfy the declared type.
     fn rejects_every_class(&self) -> bool {
-        !self.any_class && self.accepted.is_empty() && self.stringable.is_empty()
+        !self.any_class
+            && self.accepted.is_empty()
+            && self.stringable.is_empty()
+            && self.class_names.is_empty()
     }
 }
 
@@ -229,20 +243,52 @@ pub(super) fn emit_false_slot_mixed_guard(
 /// Returns the label the caller must emit AFTER its own value materialization, when the
 /// guard produced coercion arms that bypass it. Falling through means the value is accepted
 /// as-is and the ordinary conversion path applies.
+///
+/// The tag dispatch, the acceptance checks, the diagnostics and the refusals live in ONE shared
+/// helper per declared type; see the `outlined` module for the calling convention. What stays
+/// here is only what has to know the site: producing a replacement value for the arms PHP
+/// coerces, which releases the site's own source box.
 pub(super) fn emit_mixed_property_type_guard(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     slot: &PropertySlot,
-) -> Result<Option<String>> {    let Some(actions) = plan_tag_actions(ctx, slot)? else {
+) -> Result<Option<String>> {
+    let Some(actions) = plan_tag_actions(ctx, slot)? else {
         return Ok(None);
     };
     if actions.iter().all(|action| matches!(action, TagAction::Accept)) {
         return Ok(None);
     }
+    outlined::emit_outlined_guard(ctx, value, slot, &actions)
+}
+
+/// Returns true when the arm produces a replacement value instead of only judging the source.
+///
+/// Those arms stay at the site: the replacement is stored in the slot's own representation and
+/// the source box is released according to the SITE's ownership of it, neither of which a shared
+/// body can know.
+fn produces_value(action: &TagAction) -> bool {
+    match action {
+        TagAction::NumericStringIntOrFloat | TagAction::CoerceScalar { .. } => true,
+        TagAction::ObjectClasses(plan) => !plan.stringable.is_empty(),
+        _ => false,
+    }
+}
+
+/// Emits the part of the guard that produces a replacement value, at the site.
+///
+/// The shared helper has already decided that the source is acceptable and answered "coerce"; this
+/// re-reads the tag and runs only the arms that build a value. An arm the helper settles on its own
+/// (accept, refuse) is never reached, so it falls to `accept_label` without code of its own.
+fn emit_coercion_arms(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    slot: &PropertySlot,
+    actions: &[TagAction],
+    accept_label: &str,
+    done_label: &str,
+) -> Result<()> {
     let fragment = label_fragment(&slot.property);
-    let accept_label = ctx.next_label(&format!("typed_prop_accept_{}", fragment));
-    let done_label = ctx.next_label(&format!("typed_prop_coerced_{}", fragment));
-    let unknown_label = ctx.next_label(&format!("typed_prop_reject_{}", fragment));
     let arm_labels = RUNTIME_TAGS
         .iter()
         .map(|(tag, name)| ctx.next_label(&format!("typed_prop_{}_{}_{}", fragment, tag, name)))
@@ -251,52 +297,35 @@ pub(super) fn emit_mixed_property_type_guard(
     load_value_to_first_int_arg(ctx, value)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let tag_reg = abi::int_result_reg(ctx.emitter);
-    for ((tag, _), label) in RUNTIME_TAGS.iter().zip(arm_labels.iter()) {
-        super::super::enums::emit_mixed_tag_branch(ctx, tag_reg, i64::from(*tag), label);
+    for (((tag, _), label), action) in RUNTIME_TAGS.iter().zip(arm_labels.iter()).zip(actions.iter())
+    {
+        if produces_value(action) {
+            super::super::enums::emit_mixed_tag_branch(ctx, tag_reg, i64::from(*tag), label);
+        }
     }
-    abi::emit_jump(ctx.emitter, &unknown_label);
+    abi::emit_jump(ctx.emitter, accept_label);
 
-    let mut needs_done_label = false;
     for (((tag, type_name), label), action) in
         RUNTIME_TAGS.iter().zip(arm_labels.iter()).zip(actions.iter())
     {
+        if !produces_value(action) {
+            continue;
+        }
         ctx.emitter.label(label);
         match action {
-            TagAction::Accept => abi::emit_jump(ctx.emitter, &accept_label),
-            // An object is refused BY CLASS even when no class could have satisfied the
-            // declared type: php-src always prints the runtime class here, so `int $n = new T()`
-            // reports `T`, never the word `object`.
-            TagAction::Reject if *tag == OBJECT_TAG => emit_object_property_type_error(ctx, slot),
-            // php-src names a refused bool BY VALUE, `true` or `false`, never `bool`, the same
-            // way `count()`'s refusal does.
-            TagAction::Reject if *tag == BOOL_TAG => emit_bool_property_type_error(ctx, slot),
-            TagAction::Reject => emit_property_type_error(ctx, slot, type_name),
-            TagAction::AcceptIntoInt => {
-                let refuse_label =
-                    ctx.next_label(&format!("typed_prop_{}_refused_{}", fragment, type_name));
-                emit_int_destination_diagnostics(ctx, *tag, &refuse_label);
-                abi::emit_jump(ctx.emitter, &accept_label);
-                ctx.emitter.label(&refuse_label);
-                emit_property_type_error(ctx, slot, type_name);
-            }
-            TagAction::NumericString => {
-                emit_numeric_string_check(ctx.emitter, &accept_label);
-                emit_property_type_error(ctx, slot, type_name);
-            }
             TagAction::NumericStringIntOrFloat => {
                 let refuse_label =
                     ctx.next_label(&format!("typed_prop_{}_refused_{}", fragment, type_name));
                 emit_classified_numeric_string_member(ctx, value, slot, &refuse_label)?;
-                needs_done_label = true;
-                abi::emit_jump(ctx.emitter, &done_label);
+                abi::emit_jump(ctx.emitter, done_label);
                 ctx.emitter.label(&refuse_label);
                 emit_property_type_error(ctx, slot, type_name);
             }
-            TagAction::ObjectClasses(plan) => {
-                if emit_object_plan(ctx, value, slot, plan, &accept_label, &done_label)? {
-                    needs_done_label = true;
-                }
-                emit_object_property_type_error(ctx, slot);
+            TagAction::ObjectClasses(_) => {
+                // The helper only answers "coerce" for an object whose class publishes
+                // `__toString`, so the call below is the whole arm.
+                emit_stringable_object_value(ctx, value, slot)?;
+                abi::emit_jump(ctx.emitter, done_label);
             }
             TagAction::CoerceScalar {
                 target,
@@ -317,7 +346,7 @@ pub(super) fn emit_mixed_property_type_guard(
                     match fallback {
                         Some(next) => {
                             emit_coerced_property_value(ctx, value, slot, next)?;
-                            abi::emit_jump(ctx.emitter, &done_label);
+                            abi::emit_jump(ctx.emitter, done_label);
                         }
                         None => emit_property_type_error(ctx, slot, type_name),
                     }
@@ -330,66 +359,30 @@ pub(super) fn emit_mixed_property_type_guard(
                     ctx.emitter.label(&coerce_label);
                 }
                 emit_coerced_property_value(ctx, value, slot, target)?;
-                needs_done_label = true;
-                abi::emit_jump(ctx.emitter, &done_label);
+                abi::emit_jump(ctx.emitter, done_label);
             }
+            _ => unreachable!("only value-producing arms are emitted here"),
         }
     }
-
-    // An unbox result outside the known tag table is not a PHP value this property can hold.
-    ctx.emitter.label(&unknown_label);
-    emit_property_type_error(ctx, slot, "object");
-    ctx.emitter.label(&accept_label);
-    Ok(needs_done_label.then_some(done_label))
+    Ok(())
 }
 
-/// Emits the accepted-class comparisons for one object arm.
+/// Converts a `Stringable` object to the string a `string`-accepting slot stores.
 ///
-/// Returns whether a `__toString` arm was emitted, which is the only path here that produces
-/// the stored value itself and therefore needs the caller's shared done label.
-fn emit_object_plan(
+/// PHP calls `__toString` for a string destination. The call can throw, and when it does the
+/// unwinder takes over before anything below runs, so the destination still holds the value
+/// it held before the assignment started.
+fn emit_stringable_object_value(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     slot: &PropertySlot,
-    plan: &ObjectPlan,
-    accept_label: &str,
-    done_label: &str,
-) -> Result<bool> {
-    if plan.any_class {
-        abi::emit_jump(ctx.emitter, accept_label);
-        return Ok(false);
-    }
-    if plan.accepted.is_empty() && plan.stringable.is_empty() {
-        return Ok(false);
-    }
-    let stringify_label = ctx.next_label(&format!(
-        "typed_prop_{}_tostring",
-        label_fragment(&slot.property)
-    ));
-    emit_accept_object_classes(ctx.emitter, &plan.accepted, accept_label);
-    if plan.stringable.is_empty() {
-        return Ok(false);
-    }
-    emit_accept_object_classes(ctx.emitter, &plan.stringable, &stringify_label);
-    let rejected_label = ctx.next_label(&format!(
-        "typed_prop_{}_tostring_rejected",
-        label_fragment(&slot.property)
-    ));
-    abi::emit_jump(ctx.emitter, &rejected_label);
-
-    // PHP calls `__toString` for a string destination. The call can throw, and when it does the
-    // unwinder takes over before anything below runs, so the destination still holds the value
-    // it held before the assignment started.
-    ctx.emitter.label(&stringify_label);
+) -> Result<()> {
     super::super::conversions::emit_mixed_string_context_result(ctx, value)?;
     emit_persist_and_release_tostring_result(ctx);
     if slot.php_type.codegen_repr() != PhpType::Str {
         emit_box_persisted_string_and_release(ctx);
     }
-    emit_release_untransferred_source_box(ctx, value, slot)?;
-    abi::emit_jump(ctx.emitter, done_label);
-    ctx.emitter.label(&rejected_label);
-    Ok(true)
+    emit_release_untransferred_source_box(ctx, value, slot)
 }
 
 /// Persists the `__toString` result into the slot's own storage and releases the call's own.
@@ -612,16 +605,31 @@ pub(in crate::codegen) fn emit_string_into_int_diagnostics(
     ctx: &mut FunctionContext<'_>,
     caller_refuse_label: &str,
 ) {
-    let numeric_label = ctx.next_label("typed_prop_string_numeric");
-    let refuse_label = ctx.next_label("typed_prop_string_refused");
-    let exact_label = ctx.next_label("typed_prop_string_exact");
-    let accept_label = ctx.next_label("typed_prop_string_accepted");
     let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
-    let (string_ptr_reg, string_len_reg) = abi::string_result_regs(ctx.emitter);
+    let (string_ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     if string_ptr_reg != payload_reg {
         ctx.emitter
             .instruction(&format!("mov {}, {}", string_ptr_reg, payload_reg)); // move the unboxed string pointer into the numeric-scan input register
     }
+    emit_string_result_into_int_or_jump(ctx, caller_refuse_label);
+}
+
+/// Converts the string in the string-result registers to an int under php's implicit
+/// int-coercion rules, leaving it in the int-result register, or jumps to `caller_refuse_label`
+/// for a non-numeric or out-of-range string. A fractional one prints php's float-string
+/// precision deprecation first.
+///
+/// The original string bytes have to survive the conversion because PHP quotes them verbatim
+/// in the deprecation, so the pointer/length pair is saved before `__rt_str_to_number` runs.
+pub(in crate::codegen::lower_inst) fn emit_string_result_into_int_or_jump(
+    ctx: &mut FunctionContext<'_>,
+    caller_refuse_label: &str,
+) {
+    let numeric_label = ctx.next_label("typed_prop_string_numeric");
+    let refuse_label = ctx.next_label("typed_prop_string_refused");
+    let exact_label = ctx.next_label("typed_prop_string_exact");
+    let accept_label = ctx.next_label("typed_prop_string_accepted");
+    let (string_ptr_reg, string_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_reserve_temporary_stack(ctx.emitter, STRING_TO_INT_FRAME_BYTES);
     abi::emit_store_to_sp(ctx.emitter, string_ptr_reg, STRING_TO_INT_PTR_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, string_len_reg, STRING_TO_INT_LEN_OFFSET);
@@ -655,6 +663,7 @@ pub(in crate::codegen) fn emit_string_into_int_diagnostics(
     emit_truncation_is_exact_jump(ctx, STRING_TO_INT_VALUE_OFFSET, &exact_label);
     emit_float_string_precision_deprecation(ctx);
     ctx.emitter.label(&exact_label);
+    // The deprecation clobbers the int-result register; the truncated value is in the frame.
     abi::emit_load_temporary_stack_slot(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
@@ -778,22 +787,6 @@ fn emit_property_type_error(ctx: &mut FunctionContext<'_>, slot: &PropertySlot, 
         )
     };
     super::super::exceptions::emit_type_error(ctx, &message);
-}
-
-/// Throws the property `TypeError` for a bool source, naming it BY VALUE.
-///
-/// php-src prints `true` or `false` here, never `bool`, which is the same rule its `count()`
-/// refusal follows. The value is still in the unbox payload register at the arm's entry, so the
-/// two messages are chosen by a single branch on it.
-fn emit_bool_property_type_error(ctx: &mut FunctionContext<'_>, slot: &PropertySlot) {
-    let true_label = ctx.next_label("typed_prop_bool_true");
-    let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_reg_move(ctx.emitter, result_reg, payload_reg); // read the unboxed bool payload here
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &true_label);
-    emit_property_type_error(ctx, slot, "false");
-    ctx.emitter.label(&true_label);
-    emit_property_type_error(ctx, slot, "true");
 }
 
 /// Throws the same `TypeError` for an object, naming the class the value actually holds.
@@ -942,6 +935,7 @@ fn iterable_actions(ctx: &FunctionContext<'_>) -> Vec<TagAction> {
         4 | 5 => TagAction::Accept,
         6 => TagAction::ObjectClasses(ObjectPlan {
             accepted: class_ids.clone(),
+            class_names: traversable.to_vec(),
             ..ObjectPlan::default()
         }),
         _ => TagAction::Reject,
@@ -949,12 +943,15 @@ fn iterable_actions(ctx: &FunctionContext<'_>) -> Vec<TagAction> {
 }
 
 /// The bare `object` type accepts every object and refuses every non-object.
+///
+/// Runtime tag 10 is a callable descriptor -- a `Closure` -- which is an object too.
 fn any_object_actions() -> Vec<TagAction> {
     actions_for(|tag| match tag {
         6 => TagAction::ObjectClasses(ObjectPlan {
             any_class: true,
             ..ObjectPlan::default()
         }),
+        10 => TagAction::Accept,
         _ => TagAction::Reject,
     })
 }
@@ -962,31 +959,46 @@ fn any_object_actions() -> Vec<TagAction> {
 /// Class-typed properties accept the runtime classes that satisfy the declared class list.
 fn object_actions(ctx: &FunctionContext<'_>, class_names: &[String]) -> Vec<TagAction> {
     let class_ids = compatible_class_ids(ctx, class_names);
+    let closure = accepts_closure(class_names);
     actions_for(|tag| match tag {
         6 => TagAction::ObjectClasses(ObjectPlan {
             accepted: class_ids.clone(),
+            class_names: class_names.to_vec(),
             ..ObjectPlan::default()
         }),
+        10 if closure => TagAction::Accept,
         _ => TagAction::Reject,
     })
 }
 
+/// Whether a declared class list admits a `Closure`, which the runtime carries as a callable
+/// descriptor (tag 10) rather than as an object of a compiled class.
+fn accepts_closure(class_names: &[String]) -> bool {
+    class_names.iter().any(|name| name.trim_start_matches('\\').eq_ignore_ascii_case("Closure"))
+}
+
 /// Collects the runtime class ids in this module that satisfy any of the declared classes.
 fn compatible_class_ids(ctx: &FunctionContext<'_>, class_names: &[String]) -> Vec<u64> {
-    let mut ids = ctx
-        .module
-        .class_infos
-        .iter()
-        .filter(|(name, _)| {
-            class_names
+    // Every class of the program is tested against the declared list, and a guard asks again at
+    // each arm of each dynamic property write: remembered per list (see `type_is_a_memo`).
+    ctx.shared
+        .compatible_class_ids_memoized(class_names, || {
+            let mut ids = ctx
+                .module
+                .class_infos
                 .iter()
-                .any(|declared| object_type_is_a(ctx, name, declared))
+                .filter(|(name, _)| {
+                    class_names
+                        .iter()
+                        .any(|declared| object_type_is_a(ctx, name, declared))
+                })
+                .map(|(_, class_info)| class_info.class_id)
+                .collect::<Vec<_>>();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
         })
-        .map(|(_, class_info)| class_info.class_id)
-        .collect::<Vec<_>>();
-    ids.sort_unstable();
-    ids.dedup();
-    ids
+        .to_vec()
 }
 
 /// Collects the runtime class ids publishing a no-argument `__toString`.
@@ -995,7 +1007,7 @@ fn compatible_class_ids(ctx: &FunctionContext<'_>, class_names: &[String]) -> Ve
 /// accepts is exactly a class that ladder can convert.
 fn stringable_class_ids(ctx: &FunctionContext<'_>) -> Result<Vec<u64>> {
     let mut ids = super::super::method_dispatch::mixed_method_candidates(ctx, "__toString", 1)?
-        .into_iter()
+        .iter()
         .map(|candidate| candidate.class_id)
         .collect::<Vec<_>>();
     ids.sort_unstable();
@@ -1063,6 +1075,7 @@ fn union_actions(
         any_class: has(&MemberKind::AnyObject),
         accepted: class_ids,
         stringable,
+        class_names: object_names.clone(),
     };
     // PHP's weak-mode union resolution prefers an exact member, then coerces in int, float,
     // string, bool order among the members the union actually declares.
@@ -1104,6 +1117,9 @@ fn union_actions(
         4 | 5 if has(&MemberKind::Array) => TagAction::Accept,
         6 if !object_plan.rejects_every_class() => TagAction::ObjectClasses(object_plan.clone()),
         8 if has(&MemberKind::Null) => TagAction::Accept,
+        // A `Closure` is an object: Symfony's `ControllerEvent::$controller` is
+        // `object|array|string`, and every closure controller was refused with a TypeError.
+        10 if has(&MemberKind::AnyObject) || accepts_closure(&object_names) => TagAction::Accept,
         _ => TagAction::Reject,
     })))
 }

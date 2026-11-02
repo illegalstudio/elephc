@@ -86,6 +86,9 @@ pub enum NameKind {
     FullyQualified,
 }
 
+/// Compiler-private call name used after the resolver preserves a runtime include.
+pub const DYNAMIC_INCLUDE_FUNCTION: &str = "__elephc_dynamic_include";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// PHP name with resolution context stored alongside its text parts.
 ///
@@ -358,6 +361,20 @@ pub fn is_generated_local_name(name: &str) -> bool {
 /// the bottom of this module pin the two spellings in step, and this is the single definition
 /// every EIR producer and every backend exact-name lookup shares, so they cannot drift apart.
 pub const CALLED_CLASS_ID_LOCAL: &str = "__elephc_called_class_id#gen";
+
+/// Storage name of the hidden capture that carries a closure's RUNTIME-bound scope.
+///
+/// `Closure::bind()` / `bindTo()` accept a scope that is only a string or object at run time, and
+/// the compiled body cannot be cloned per class. A closure whose body addresses properties by a
+/// runtime name therefore captures one extra `Int`: `0` means "no runtime scope was bound, use the
+/// lexical one", any other value is the bound class id plus one. `__rt_closure_set_scope` writes it
+/// into a freshly bound descriptor and the property-access gate in
+/// `crate::codegen::lower_inst::objects::closure_scope_gate` reads it. Always the LAST capture, and
+/// marked generated so `get_defined_vars()` and eval scope synchronization never see it.
+///
+/// Spelled as a literal like [`CALLED_CLASS_ID_LOCAL`]; the unit test below pins the spelling, and
+/// `__rt_closure_set_scope` matches the name's bytes, so the two must change together.
+pub const CLOSURE_SCOPE_LOCAL: &str = "__elephc_closure_scope#gen";
 
 /// Storage name of the eval scope handle threaded into a scope-aware AOT eval fragment.
 ///
@@ -878,6 +895,24 @@ pub fn function_symbol(name: &str) -> String {
     format!("_fn_{}", mangle_fqn(name))
 }
 
+/// The PHP prelude function `__rt_diag_warning` calls to offer an engine-raised diagnostic to a
+/// `set_error_handler()` callback.
+///
+/// Named here rather than spelled at each use because three unrelated places have to agree on
+/// it: the prelude that DECLARES it, `ir_lower` which decides the runtime feature bit from
+/// whether it survived pruning, and the runtime emitter that calls `function_symbol` on it.
+pub const DIAG_RENDER_FUNCTION: &str = "__elephc_diag_render";
+
+/// The nullary PHP prelude function every process-exit site calls to run the
+/// `register_shutdown_function()` queue.
+///
+/// Named here for the same reason as [`DIAG_RENDER_FUNCTION`]: three unrelated places have to
+/// agree on it — `error_handling_prelude` which DECLARES it, `codegen::lower_inst::builtins::
+/// system::lower_exit` and `codegen::frame::emit_main_epilogue` which call `function_symbol` on
+/// it, and `codegen::context` which decides from the surviving function list whether the call
+/// has a target at all.
+pub const SHUTDOWN_RUN_FUNCTION: &str = "__elephc_shutdown_run";
+
 /// Returns the variant-active dispatch helper symbol for a given PHP function name.
 ///
 /// Format: `_fn_variant_active_<mangled_fqn>`. Used for functions with conditional
@@ -1007,11 +1042,30 @@ pub fn enum_case_symbol(enum_name: &str, case_name: &str) -> String {
     join_php_symbol("_enum_case", &[enum_name, case_name])
 }
 
+/// Returns the request-active binding cell for one compiled class-like symbol.
+///
+/// The kind is part of the cell identity because PHP maintains distinct class,
+/// interface, trait and enum namespaces. This is storage identity only: the
+/// zero-initialized cell does not make the declaration active.
+pub fn classlike_activation_symbol(
+    kind: crate::parser::ast::ClassLikeKind,
+    name: &str,
+) -> String {
+    let kind = match kind {
+        crate::parser::ast::ClassLikeKind::Class => "class",
+        crate::parser::ast::ClassLikeKind::Interface => "interface",
+        crate::parser::ast::ClassLikeKind::Trait => "trait",
+        crate::parser::ast::ClassLikeKind::Enum => "enum",
+    };
+    let name = php_symbol_key(name.trim_start_matches('\\'));
+    join_php_symbol("_classlike_active", &[kind, &name])
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         generated_local_name, is_generated_local_name, synthetic_place_local_name,
-        CALLED_CLASS_ID_LOCAL, EVAL_AOT_SCOPE_LOCAL, GENERATED_LOCAL_MARKER,
+        CALLED_CLASS_ID_LOCAL, CLOSURE_SCOPE_LOCAL, EVAL_AOT_SCOPE_LOCAL, GENERATED_LOCAL_MARKER,
         SYNTHETIC_PLACE_LOCAL_STEM,
     };
 
@@ -1052,7 +1106,13 @@ mod tests {
             generated_local_name("__elephc_called_class_id")
         );
         assert_eq!(EVAL_AOT_SCOPE_LOCAL, generated_local_name("__eir_eval_scope"));
-        for name in [CALLED_CLASS_ID_LOCAL, EVAL_AOT_SCOPE_LOCAL] {
+        assert_eq!(
+            CLOSURE_SCOPE_LOCAL,
+            generated_local_name("__elephc_closure_scope")
+        );
+        // `__rt_closure_set_scope` matches this exact 26-byte spelling.
+        assert_eq!(CLOSURE_SCOPE_LOCAL.len(), 26);
+        for name in [CALLED_CLASS_ID_LOCAL, EVAL_AOT_SCOPE_LOCAL, CLOSURE_SCOPE_LOCAL] {
             assert!(is_generated_local_name(name), "{name}");
         }
         // The unmarked spellings are what PHP source could write, and they stay visible.

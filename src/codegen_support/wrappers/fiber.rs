@@ -88,6 +88,7 @@ fn emit_aarch64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     let loop_label = format!("{}_copy_args", label);
     let copy_done_label = format!("{}_args_done", label);
     let return_label = format!("{}_return", label);
+    let pending_label = format!("{}_pending_throw", label);
 
     emitter.blank();
     emitter.comment(&format!("fiber descriptor invoker wrapper: {}", label));
@@ -113,6 +114,7 @@ fn emit_aarch64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emit_box_descriptor_start_arg_array(emitter, "x22", "x1");
 
     emitter.instruction("mov x25, x1");                                         // keep the boxed argument array alive across the descriptor invocation
+    park_pending_exception(emitter, "x9", AARCH64_PARKED_EXCEPTION_OFFSET);
     emitter.instruction("mov x0, x25");                                         // protect the argument container across suspended exceptional unwinding
     runtime::exception_guards::guard(emitter, 64, 112);
     emitter.instruction("mov x0, x20");                                         // pass callable descriptor as invoker argument 1
@@ -124,8 +126,15 @@ fn emit_aarch64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     runtime::exception_guards::unguard(emitter, 64, 112);
     emitter.instruction("mov x0, x25");                                         // move the boxed argument container into the decref helper input
     emitter.instruction("bl __rt_decref_mixed");                                // release the temporary boxed argument container
+    restore_parked_exception_or_branch(emitter, "x9", AARCH64_PARKED_EXCEPTION_OFFSET, &pending_label);
     emitter.instruction("mov x0, x24");                                         // restore the callback return value for __rt_fiber_entry
     emitter.instruction(&format!("b {}", return_label));                        // skip the missing-invoker diagnostic path
+
+    emitter.label(&pending_label);
+    chain_parked_exception(emitter, "x0", "x1", AARCH64_PARKED_EXCEPTION_OFFSET);
+    emit_aarch64_descriptor_wrapper_restores(emitter);
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_jump(emitter, "__rt_throw_current");
 
     emitter.label(&missing_label);
     runtime::exception_guards::unguard(emitter, 64, 112);
@@ -137,12 +146,70 @@ fn emit_aarch64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emitter.instruction("brk #0xfffe");                                         // defensive trap: the throw helper must not return
 
     emitter.label(&return_label);
+    emit_aarch64_descriptor_wrapper_restores(emitter);
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_return(emitter);
+}
+
+/// Restores the callee-saved registers the ARM64 descriptor-invoker wrapper preserved.
+fn emit_aarch64_descriptor_wrapper_restores(emitter: &mut Emitter) {
     emitter.instruction("ldr x25, [sp, #48]");                                  // restore the caller's x25 register
     emitter.instruction("ldp x23, x24, [sp, #32]");                             // restore loop/index scratch callee-saved registers
     emitter.instruction("ldp x21, x22, [sp, #16]");                             // restore count/array callee-saved registers
     emitter.instruction("ldp x19, x20, [sp, #0]");                              // restore Fiber/descriptor callee-saved registers
-    abi::emit_frame_restore(emitter, frame_size);
-    abi::emit_return(emitter);
+}
+
+/// Frame-pointer-relative slots holding the exception pending before the invocation. Both sit in
+/// the 144-byte frames below, clear of the registers each wrapper saves and of the
+/// exceptional-owner guard record (`runtime::exception_guards::guard(emitter, 64, 112)`).
+const AARCH64_PARKED_EXCEPTION_OFFSET: usize = 16;
+const X86_64_PARKED_EXCEPTION_OFFSET: usize = 56;
+
+/// Frame-pointer-relative slots of the x86_64 wrapper's preserved callee-saved registers.
+const X86_64_SAVED_FIBER_OFFSET: usize = 16;
+const X86_64_SAVED_DESCRIPTOR_OFFSET: usize = 24;
+const X86_64_SAVED_COUNT_OFFSET: usize = 32;
+const X86_64_SAVED_ARRAY_OFFSET: usize = 40;
+const X86_64_SAVED_ARGBOX_OFFSET: usize = 48;
+
+/// Parks `_exc_value` in a frame slot and clears it for the descriptor invocation.
+///
+/// A bounded invoker -- an instance-method descriptor the interpreter may call inside its own
+/// `try` -- catches the callee's throw and RETURNS null with the Throwable left in `_exc_value`.
+/// Clearing it first is what tells that throw apart from an exception already pending.
+fn park_pending_exception(emitter: &mut Emitter, scratch: &str, offset: usize) {
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_exc_value", 0);
+    abi::store_at_offset(emitter, scratch, offset);
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+}
+
+/// Branches to `pending_label` when the invocation left a throw pending; otherwise puts the
+/// parked exception back.
+fn restore_parked_exception_or_branch(
+    emitter: &mut Emitter,
+    scratch: &str,
+    offset: usize,
+    pending_label: &str,
+) {
+    abi::emit_load_symbol_to_reg(emitter, scratch, "_exc_value", 0);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbnz {}, {}", scratch, pending_label)); // a bounded invoker returned with the callee's throw pending
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {}, {}", scratch, scratch));     // did a bounded invoker return with the callee's throw pending?
+            emitter.instruction(&format!("jnz {}", pending_label));             // rethrow it instead of returning its null result
+        }
+    }
+    abi::load_at_offset(emitter, scratch, offset);
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_value", 0);
+}
+
+/// Chains the parked exception under the pending throw, as `__rt_callable_invoke_owned_args` does.
+fn chain_parked_exception(emitter: &mut Emitter, newest: &str, older: &str, offset: usize) {
+    abi::emit_load_symbol_to_reg(emitter, newest, "_exc_value", 0);
+    abi::load_at_offset(emitter, older, offset);
+    abi::emit_call_label(emitter, "__rt_exception_chain");
 }
 
 /// Allocates the Mixed-pointer argument array used by an ARM64 descriptor invoker.
@@ -195,26 +262,22 @@ fn emit_box_descriptor_start_arg_array(emitter: &mut Emitter, source_reg: &str, 
 /// Emits the x86_64 descriptor-invoker Fiber wrapper.
 fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     let frame_size = 144;
-    let saved_fiber_offset = 16;
-    let saved_descriptor_offset = 24;
-    let saved_count_offset = 32;
-    let saved_array_offset = 40;
-    let saved_argbox_offset = 48;
     let missing_label = format!("{}_missing_invoker", label);
     let loop_label = format!("{}_copy_args", label);
     let copy_done_label = format!("{}_args_done", label);
     let return_label = format!("{}_return", label);
+    let pending_label = format!("{}_pending_throw", label);
 
     emitter.blank();
     emitter.comment(&format!("fiber descriptor invoker wrapper: {}", label));
     emitter.raw(".align 16");
     emitter.label_global(label);
     abi::emit_frame_prologue(emitter, frame_size);
-    abi::store_at_offset(emitter, "r12", saved_fiber_offset);
-    abi::store_at_offset(emitter, "r13", saved_descriptor_offset);
-    abi::store_at_offset(emitter, "r14", saved_count_offset);
-    abi::store_at_offset(emitter, "r15", saved_array_offset);
-    abi::store_at_offset(emitter, "rbx", saved_argbox_offset);
+    abi::store_at_offset(emitter, "r12", X86_64_SAVED_FIBER_OFFSET);
+    abi::store_at_offset(emitter, "r13", X86_64_SAVED_DESCRIPTOR_OFFSET);
+    abi::store_at_offset(emitter, "r14", X86_64_SAVED_COUNT_OFFSET);
+    abi::store_at_offset(emitter, "r15", X86_64_SAVED_ARRAY_OFFSET);
+    abi::store_at_offset(emitter, "rbx", X86_64_SAVED_ARGBOX_OFFSET);
 
     emitter.instruction("mov r12, rdi");                                        // r12 = Fiber object passed by __rt_fiber_entry
     emitter.instruction(&format!(
@@ -230,6 +293,7 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emit_box_descriptor_start_arg_array(emitter, "r15", "rsi");
 
     emitter.instruction("mov rbx, rsi");                                        // keep the boxed argument array alive across the descriptor invocation
+    park_pending_exception(emitter, "r10", X86_64_PARKED_EXCEPTION_OFFSET);
     emitter.instruction("mov rax, rbx");                                        // protect the boxed argument owner while the callback is parked
     runtime::exception_guards::guard(emitter, 64, 112);
     emitter.instruction("mov rdi, r13");                                        // pass callable descriptor as invoker argument 1
@@ -242,8 +306,15 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     runtime::exception_guards::unguard(emitter, 64, 112);
     emitter.instruction("mov rax, rbx");                                        // move the boxed argument container into the decref helper input
     emitter.instruction("call __rt_decref_mixed");                              // release the temporary boxed argument container
+    restore_parked_exception_or_branch(emitter, "r10", X86_64_PARKED_EXCEPTION_OFFSET, &pending_label);
     emitter.instruction("mov rax, r15");                                        // restore the callback return value for __rt_fiber_entry
     emitter.instruction(&format!("jmp {}", return_label));                      // skip the missing-invoker diagnostic path
+
+    emitter.label(&pending_label);
+    chain_parked_exception(emitter, "rax", "rdi", X86_64_PARKED_EXCEPTION_OFFSET);
+    emit_x86_64_descriptor_wrapper_restores(emitter);
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_jump(emitter, "__rt_throw_current");
 
     emitter.label(&missing_label);
     runtime::exception_guards::unguard(emitter, 64, 112);
@@ -255,13 +326,18 @@ fn emit_x86_64_descriptor_invoker_wrapper(emitter: &mut Emitter, label: &str) {
     emitter.instruction("ud2");                                                 // defensive trap: the throw helper must not return
 
     emitter.label(&return_label);
-    abi::load_at_offset(emitter, "rbx", saved_argbox_offset);
-    abi::load_at_offset(emitter, "r15", saved_array_offset);
-    abi::load_at_offset(emitter, "r14", saved_count_offset);
-    abi::load_at_offset(emitter, "r13", saved_descriptor_offset);
-    abi::load_at_offset(emitter, "r12", saved_fiber_offset);
+    emit_x86_64_descriptor_wrapper_restores(emitter);
     abi::emit_frame_restore(emitter, frame_size);
     abi::emit_return(emitter);
+}
+
+/// Restores the callee-saved registers the x86_64 descriptor-invoker wrapper preserved.
+fn emit_x86_64_descriptor_wrapper_restores(emitter: &mut Emitter) {
+    abi::load_at_offset(emitter, "rbx", X86_64_SAVED_ARGBOX_OFFSET);
+    abi::load_at_offset(emitter, "r15", X86_64_SAVED_ARRAY_OFFSET);
+    abi::load_at_offset(emitter, "r14", X86_64_SAVED_COUNT_OFFSET);
+    abi::load_at_offset(emitter, "r13", X86_64_SAVED_DESCRIPTOR_OFFSET);
+    abi::load_at_offset(emitter, "r12", X86_64_SAVED_FIBER_OFFSET);
 }
 
 /// Allocates the Mixed-pointer argument array used by an x86_64 descriptor invoker.

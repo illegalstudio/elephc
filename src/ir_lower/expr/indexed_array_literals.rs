@@ -44,7 +44,7 @@ pub(super) fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Ex
                 };
                 if matches!(
                     ctx.builder.value_php_type(source.value).codegen_repr(),
-                    PhpType::AssocArray { .. } | PhpType::Mixed
+                    PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Object(_) | PhpType::Mixed
                 ) {
                     any_assoc_spread = true;
                 }
@@ -52,7 +52,7 @@ pub(super) fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Ex
                 lowered.push(SpreadItem::Spread(source));
             }
             _ => {
-                let value = lower_expr(ctx, item);
+                let value = lower_array_reference_or_value(ctx, item);
                 let value = retype_pointer_literal_value(ctx, value, pointer_elem.as_ref(), item.span);
                 let value = root_array_literal_item(ctx, value, item.span, &mut roots);
                 lowered.push(SpreadItem::Element(value));
@@ -257,16 +257,21 @@ pub(super) fn lower_array_literal_without_spread(
         Op::ArrayNew.default_effects(),
         Some(expr.span),
     );
-    let owner = crate::ir_lower::function::contains_deferred_error(expr)
-        .then(|| publish_constructed_container(ctx, array, expr.span));
+    // The literal is the only owner of the elements already pushed, so an element expression
+    // that throws (`[1, bad()]`) would strand it. Publish it in an unwind-visible slot for the
+    // construction when any element can throw; plain literals keep the direct SSA form.
+    let owner = (crate::ir_lower::function::contains_deferred_error(expr)
+        || items.iter().any(crate::optimize::expr_may_throw))
+    .then(|| publish_constructed_container(ctx, array, expr.span));
     for item in items {
-        let value = lower_expr(ctx, item);
+        let value = lower_array_reference_or_value(ctx, item);
         let value = coerce_array_literal_element_to_storage_type(ctx, value, elem_ty.as_ref(), item);
-        let array = owner.map(|slot| load_published_container(ctx, slot, result_ty.clone(), item.span))
+        let target = owner
+            .map(|slot| load_published_container(ctx, slot, result_ty.clone(), item.span))
             .unwrap_or(array);
         ctx.emit_void(
             Op::ArrayPush,
-            vec![array.value, value.value],
+            vec![target.value, value.value],
             None,
             Op::ArrayPush.default_effects(),
             Some(item.span),
@@ -317,7 +322,15 @@ pub(super) fn lower_array_literal_as_indexed_from_lowered(
     lowered: &[SpreadItem],
     expr: &Expr,
 ) -> LoweredValue {
-    let array_ty = array_literal_type_for_ir(ctx, items, expr);
+    // The static prediction looks at the spread's CHECKED type, while this path was chosen from the
+    // LOWERED sources, which are all list-shaped. doctrine/dbal's
+    // `[$first, ...array_values($others)]` over an `array` parameter predicts an associative
+    // result for `array_values()` and lowers it to a list, so a predicted hash would be filled by
+    // `array_push` (an `OperandTypeMismatch`) and refuse the whole class.
+    let array_ty = match array_literal_type_for_ir(ctx, items, expr) {
+        PhpType::AssocArray { value, .. } => PhpType::Array(Box::new(value.codegen_repr())),
+        other => other,
+    };
     let elem_ty = indexed_array_literal_element_type(&array_ty);
     let array = ctx.emit_value(
         Op::ArrayNew,
@@ -441,8 +454,11 @@ pub(super) fn lower_mixed_array_literal(
                     Op::HashSet.default_effects(),
                     Some(span),
                 );
+                super::assoc_array_literals::release_string_after_hash_insert(ctx, value, span);
                 if let Some(owner) = key_owner {
                     retire_owned_call_operand(ctx, owner, span);
+                } else {
+                    super::assoc_array_literals::release_key_after_hash_insert(ctx, key, span);
                 }
             }
             ArrayEntry::Value(value) => {
@@ -525,19 +541,25 @@ pub(super) fn assoc_array_literal_type_from_entries(
 }
 
 /// Lowers a single already-lowered spread operand into a hash destination, handling both
-/// associative and indexed source storage. Associative sources flatten directly through
-/// `__rt_hash_spread`; indexed sources are first promoted to hash storage so the same
-/// reindexing path applies.
+/// associative and indexed source storage. PHP array mutators can reindex an associative
+/// runtime value without changing the caller's static array contract, so every array operand
+/// passes through `ArrayToHash`; codegen reuses an actual hash or promotes an indexed value
+/// according to its runtime heap kind.
 pub(super) fn lower_hash_spread_into_hash_from_value(
     ctx: &mut LoweringContext<'_, '_>,
     hash: LoweredValue,
     source: LoweredValue,
     span: crate::span::Span,
 ) {
-    let source_is_hash = matches!(
-        ctx.builder.value_php_type(source.value).codegen_repr(),
-        PhpType::AssocArray { .. }
-    );
+    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    // A `mixed` source (an untyped method's result: `[...$parser->getWarnings(), ...$this->w]`)
+    // has no static array layout for `ArrayToHash` to convert, so it goes through the runtime
+    // iterator like any other value whose shape is only known when it arrives.
+    if matches!(source_ty, PhpType::Iterable | PhpType::Object(_) | PhpType::Mixed) {
+        lower_iterable_spread_into_hash(ctx, hash, source, span);
+        return;
+    }
+    let source_is_hash = matches!(source_ty, PhpType::AssocArray { .. });
     let spread_source = if source_is_hash {
         source
     } else {
@@ -597,8 +619,107 @@ pub(super) fn lower_hash_spread_into_hash_from_value(
     }
 }
 
+/// Materializes an iterable into keyed hash storage before applying PHP array-unpack semantics.
+fn lower_iterable_spread_into_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    hash: LoweredValue,
+    source: LoweredValue,
+    span: crate::span::Span,
+) {
+    let materialized = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(0)),
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+        Op::HashNew.default_effects(),
+        Some(span),
+    );
+    // `IterStart` carries its state slot and optional `getIterator()` owner in its immediate;
+    // a bare instruction fails EIR validation (`MissingImmediate { expected: "iter_start
+    // metadata" }`) for `[...$iterable]`.
+    let (iterator, iterator_owner, _) = ctx.emit_iter_start(source, false, span);
+    let header = ctx
+        .builder
+        .create_named_block("iterable.spread.next", Vec::new());
+    let body = ctx
+        .builder
+        .create_named_block("iterable.spread.body", Vec::new());
+    let exit = ctx
+        .builder
+        .create_named_block("iterable.spread.exit", Vec::new());
+    ctx.builder.terminate(Terminator::Br {
+        target: header,
+        args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(header);
+    let has_next = ctx.emit_value(
+        Op::IterNext,
+        vec![iterator.value],
+        None,
+        PhpType::Bool,
+        Op::IterNext.default_effects(),
+        Some(span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: has_next.value,
+        then_target: body,
+        then_args: Vec::new(),
+        else_target: exit,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(body);
+    let key = ctx.emit_value(
+        Op::IterCurrentKey,
+        vec![iterator.value],
+        None,
+        PhpType::Mixed,
+        Op::IterCurrentKey.default_effects(),
+        Some(span),
+    );
+    let value = ctx.emit_value(
+        Op::IterCurrentValue,
+        vec![iterator.value],
+        None,
+        PhpType::Mixed,
+        Op::IterCurrentValue.default_effects(),
+        Some(span),
+    );
+    ctx.emit_void(
+        Op::HashSet,
+        vec![materialized.value, key.value, value.value],
+        None,
+        Op::HashSet.default_effects(),
+        Some(span),
+    );
+    ctx.builder.terminate(Terminator::Br {
+        target: header,
+        args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(exit);
+    ctx.emit_void(
+        Op::HashSpread,
+        vec![hash.value, materialized.value],
+        None,
+        Op::HashSpread.default_effects(),
+        Some(span),
+    );
+    crate::ir_lower::ownership::release_if_owned(ctx, materialized, Some(span));
+    if let Some(slot) = iterator_owner {
+        ctx.retire_iter_start_owner(slot, span);
+    }
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+}
+
 /// Lowers an indexed-array spread by appending each source element to the destination.
-pub(super) fn lower_indexed_array_spread_into_array(
+pub(crate) fn lower_indexed_array_spread_into_array(
     ctx: &mut LoweringContext<'_, '_>,
     array: LoweredValue,
     source: LoweredValue,
@@ -606,9 +727,14 @@ pub(super) fn lower_indexed_array_spread_into_array(
     span: crate::span::Span,
 ) {
     let source_elem_ty = match ctx.builder.value_php_type(source.value).codegen_repr() {
-        PhpType::Array(elem_ty) => elem_ty.codegen_repr(),
+        // An empty literal (`$w = [];`) has no element type yet; nothing is read from it, but the
+        // read still needs a pushable one.
+        PhpType::Array(elem_ty) if !matches!(elem_ty.codegen_repr(), PhpType::Void | PhpType::Never) => {
+            elem_ty.codegen_repr()
+        }
         _ => PhpType::Mixed,
     };
+    let source = narrow_gradual_indexed_spread_source(ctx, source, span);
     let len = ctx.emit_value(
         Op::ArrayLen,
         vec![source.value],
@@ -650,6 +776,27 @@ pub(super) fn lower_indexed_array_spread_into_array(
         Op::ArrayGet.default_effects(),
         Some(span),
     );
+    // A variadic tail's container type is the callee's, not the source's: `f($s, ...$ints)` into
+    // a `mixed` tail must box each int (it pushed the raw word, which read back as an empty
+    // string). An array literal's container type is derived from the source, so this is a no-op
+    // there.
+    let value = match container_elem_ty {
+        Some(elem) => {
+            let value = crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+                ctx,
+                value,
+                elem,
+                Some(span),
+            );
+            super::variadic_args::coerce_variadic_tail_value(
+                ctx,
+                value,
+                &PhpType::Array(Box::new(elem.clone())),
+                span,
+            )
+        }
+        None => value,
+    };
     ctx.emit_void(
         Op::ArrayPush,
         vec![array.value, value.value],
@@ -674,6 +821,106 @@ pub(super) fn lower_indexed_array_spread_into_array(
     if ctx.value_is_owning_temporary(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
+}
+
+/// Unboxes a gradual spread source after checking that its active runtime value is indexed-array storage.
+pub(super) fn narrow_gradual_indexed_spread_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    // A Traversable (a generator, an `iterable` return) unpacks the values it yields, in order:
+    // `iterator_to_array($source, false)` is that list. Doctrine's inflector spreads generators
+    // into variadic constructors (`new Patterns(...Uninflected::getSingular())`); the spread loop
+    // read the object as an array and the lowering was refused.
+    if matches!(source_ty, PhpType::Object(_) | PhpType::Iterable) {
+        let keep_keys = ctx.emit_value(
+            Op::ConstBool,
+            Vec::new(),
+            Some(Immediate::Bool(false)),
+            PhpType::Bool,
+            Op::ConstBool.default_effects(),
+            Some(span),
+        );
+        let list = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![source.value, keep_keys.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::IteratorToArray,
+            ))),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            crate::ir::RuntimeFnId::IteratorToArray.effects(),
+            Some(span),
+        );
+        if ctx.value_is_owning_temporary(source) {
+            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+        }
+        return list;
+    }
+    // A hash spreads its values in order (string keys only matter in a call's named spread, which
+    // does not come here). The indexed loop below reads slots, so the hash is listed first:
+    // Doctrine DBAL's `[$first, ...array_values($others)]` over a variadic reached it typed as a
+    // hash and the lowering was refused, which cost the Symfony demo a second compile.
+    let hash_value = match &source_ty {
+        PhpType::AssocArray { value, .. } => Some(value.as_ref().clone()),
+        PhpType::Array(element)
+            if ctx.builder.value_type(source.value) == IrType::Heap(crate::ir::IrHeapKind::Hash) =>
+        {
+            Some(element.as_ref().clone())
+        }
+        _ => None,
+    };
+    if let Some(value) = hash_value {
+        let value = Box::new(value);
+        let list = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![source.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::ArrayValues,
+            ))),
+            PhpType::Array(value),
+            crate::ir::RuntimeFnId::ArrayValues.effects(),
+            Some(span),
+        );
+        if ctx.value_is_owning_temporary(source) {
+            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+        }
+        return list;
+    }
+    if !matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return source;
+    }
+    // Replace a callable descriptor with a boxed array FIRST, then unbox exactly as before.
+    //
+    // A `callable` slot holds a DESCRIPTOR, not the `[$object, 'method']` array the caller wrote,
+    // so `...$callable` had nothing to unpack. `__rt_mixed_spread_array` is Mixed -> Mixed and
+    // touches ONLY that shape, which is what keeps `MixedUnbox` in charge of everything it always
+    // did: the tag guard, PHP's "Only arrays and Traversables can be unpacked" message, and the
+    // invoker clone it makes for an `array<mixed>` result. Replacing the unbox outright dropped
+    // that clone and broke a gradual spread into a dynamic method call.
+    let materialized = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![source.value],
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::MixedSpreadArray),
+        )),
+        PhpType::Mixed,
+        crate::ir::RuntimeFnId::MixedSpreadArray.effects(),
+        Some(span),
+    );
+    let narrowed = ctx.emit_value(
+        Op::MixedUnbox,
+        vec![materialized.value],
+        Some(Immediate::I64(4)),
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        Op::MixedUnbox.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+    narrowed
 }
 
 /// Emits an integer constant at a specific source span.
@@ -991,6 +1238,7 @@ pub(super) fn array_literal_element_type_for_ir(
     }
     match &item.kind {
         ExprKind::Null | ExprKind::Throw(_) => PhpType::Mixed,
+        ExprKind::ArrayReference(_) => PhpType::Mixed,
         ExprKind::Cast {
             target: CastType::Array,
             expr: inner,
@@ -1051,20 +1299,27 @@ pub(super) fn array_literal_element_type_for_ir(
                 .and_then(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
         }
-        ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
-        ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
-            ctx,
-            object,
-            property,
-        )
-        .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+        // An index or property read the lowering cannot RESOLVE is unknown, and unknown is
+        // `Mixed` — the representation that holds whatever arrives. The syntactic pre-pass answers
+        // `Int` for anything it does not recognise, which as a storage stamp makes the backend read
+        // a boxed pointer as an integer. Symfony's twig-bridge built
+        // `[$view->vars['id'], $view->vars['name']]` over a `FormView` absent from the closed world
+        // and got `array<int>` over elements the same IR typed `mixed`.
+        ExprKind::ArrayAccess { array, .. } => {
+            array_access_expr_value_type_for_ir(ctx, array).unwrap_or(PhpType::Mixed)
+        }
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .map(ir_array_storage_type)
+                .unwrap_or(PhpType::Mixed)
+        }
         // A static buffer or pointer slot holds a raw word the syntactic `int` would cast.
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_word_type(ctx, receiver, property, item)
                 .map(ir_array_storage_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
         }
+        ExprKind::ErrorSuppress(inner) => array_literal_element_type_for_ir(ctx, inner),
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
     }
 }
@@ -1094,6 +1349,63 @@ pub(super) fn spread_storage_probe_element_type(storage: &PhpType) -> PhpType {
         PhpType::Array(elem) => elem.codegen_repr(),
         PhpType::AssocArray { value, .. } => value.codegen_repr(),
         _ => PhpType::Mixed,
+    }
+}
+
+/// Returns the type of `Class::NAME` as an array element, from the constant's own declaration.
+///
+/// The syntactic pre-pass answers `Str` for EVERY scoped constant -- right for `Foo::class`, wrong
+/// for `Foo::BAR = 1` -- and this literal path fell through to it, so `[O::A, O::B]` over integer
+/// constants was stamped `array<string>` and each element converted with `i_to_str`. MEASURED
+/// against php 8.5.10: `var_dump([O::A])` printed `string(1) "1"`, and
+/// `in_array(2, [self::N, self::R], true)` answered false. Symfony's `InputOption::__construct()`
+/// asks exactly that of its mode flags and deprecated every console option on every run.
+///
+/// `static::` is late-bound and a constant whose value is not statically typeable is unknown;
+/// both answer `None`, which the caller turns into `Mixed` -- the representation that holds
+/// whatever arrives.
+pub(super) fn scoped_constant_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &crate::parser::ast::StaticReceiver,
+    name: &str,
+    depth: usize,
+) -> Option<PhpType> {
+    use crate::parser::ast::StaticReceiver;
+    if depth > 8 {
+        return None;
+    }
+    let class_name = match receiver {
+        // A generic receiver is instantiated into an ordinary named one before type checking;
+        // a template has no class to reach through.
+        StaticReceiver::Generic(_) => unreachable!(
+            "StaticReceiver::Generic must be instantiated by generics::classes"
+        ),
+        StaticReceiver::Named(class_name) => class_name.as_str().trim_start_matches('\\').to_string(),
+        StaticReceiver::Self_ => ctx.current_class.clone()?,
+        StaticReceiver::Parent => ctx
+            .current_class
+            .as_deref()
+            .and_then(|current| ctx.classes.get(current))
+            .and_then(|info| info.parent.clone())?,
+        StaticReceiver::Static => return None,
+    };
+    if let Some(enum_info) = ctx.enums.get(&class_name) {
+        if enum_info.cases.iter().any(|case| case.name == name) {
+            return Some(PhpType::Object(class_name));
+        }
+    }
+    let value = ctx.scoped_constant_value(&class_name, name)?;
+    match &value.kind {
+        ExprKind::ScopedConstantAccess {
+            receiver: inner_receiver,
+            name: inner_name,
+        } => scoped_constant_type_for_ir(ctx, inner_receiver, inner_name, depth + 1),
+        ExprKind::IntLiteral(_) => Some(PhpType::Int),
+        ExprKind::FloatLiteral(_) => Some(PhpType::Float),
+        ExprKind::StringLiteral(_) => Some(PhpType::Str),
+        ExprKind::BoolLiteral(_) => Some(PhpType::Bool),
+        ExprKind::ClassConstant { .. } => Some(PhpType::Str),
+        _ => None,
     }
 }
 
@@ -1199,7 +1511,7 @@ pub(super) fn builtin_call_result_type_for_ir(
     if span.line == 0 {
         return None;
     }
-    let checked = ctx.builtin_call_types.get(&span).cloned()?;
+    let checked = ctx.builtin_call_type_at(span).cloned()?;
     // A pointer result (`ptr_null()`, or `array_pop` of pointers, unboxed to its word after the
     // call) is stored as the pointer word, not boxed into a `mixed` slot; a buffer handle from
     // `array_pop` of buffers is stored as its word the same way.

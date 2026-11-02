@@ -17,6 +17,7 @@ mod function;
 pub(crate) mod function_variants;
 mod instr;
 mod module;
+mod source_units;
 mod pcntl_runtime;
 pub(crate) mod parameter_roots;
 mod print;
@@ -37,21 +38,27 @@ pub use builder::Builder;
 pub(crate) use builder::local_load_types_share_storage;
 pub(crate) use builder::local_load_coercion_owns_result;
 pub use effects::Effects;
+pub(crate) use function::ValueUseCounts;
+#[cfg(test)]
+pub(crate) use function::VALUE_USE_COUNTINGS;
 pub use function::{
-    Function, FunctionFlags, FunctionId, FunctionParam, LocalKind, LocalSlot,
+    ClosureOrigin, Function, FunctionFlags, FunctionId, FunctionParam, LocalKind, LocalSlot,
     LocalSlotId,
 };
 pub use instr::{
     BuiltinId, CheckedNumericChainImmediate, CmpPredicate, CoreBuiltinOp, GcControlOp, Immediate,
-    InstId, Instruction, IterStartMetadata, MixedNumericOp, Op, PassOrigin, PhpTypePredicate,
-    PropertyFetchMode, RuntimeId,
+    IncludeFrameImmediate, InstId, Instruction, IterStartMetadata, MixedNumericOp,
+    NominalObjectBoundary, Op, PassOrigin,
+    PhpTypePredicate, PropertyFetchMode, RuntimeId,
 };
 pub use module::{
-    ClassTable, CloneOverrideApplicator, ClosureScopeVariant, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl,
+    ClassTable, CloneOverrideApplicator, ClosedInclude, ClosedIncludeKind, ClosureScopeVariant,
+    ConstScalar, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, IncludeUnit,
     InterfaceTable, Module, PackedLayoutTable, TraitMethodInfo,
 };
 pub use pcntl_runtime::{PcntlRuntime, PcntlTargetSupport};
 pub use print::{print_function, print_module};
+pub use source_units::{SourceCatalog, SourceId};
 pub use runtime_call::{
     ArrayKeySort, RuntimeArgumentLayout, RuntimeCallSignature, RuntimeCallTarget, UnaryStringRuntime,
 };

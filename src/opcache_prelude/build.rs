@@ -869,6 +869,41 @@ pub(crate) fn restricted_invalidate_decl(warning: Stmt) -> Stmt {
         .build()
 }
 
+/// The statements answering `opcache_compile_file()` for a path outside the compiled manifest.
+///
+/// Normally the runtime tier (the interpreter) compiles the file into its cache. A closed-world
+/// build has no runtime tier: compiling a file ahead of its use is meaningless there, so a
+/// readable file answers `true` (reference PHP answers `true` for any file it can read) and an
+/// unreadable one warns exactly as the runtime tier does and answers `false`.
+fn runtime_compile_return() -> Vec<Stmt> {
+    if !crate::closed_world::is_enabled() {
+        return vec![s_return(e_binop(
+            e_call("__elephc_opcache_rt_compile", vec![e_var("filename")]),
+            BinOp::StrictNotEq,
+            e_int(0),
+        ))];
+    }
+    let warning = e_binop(
+        e_binop(
+            e_str("Warning: opcache_compile_file(): Failed opening '"),
+            BinOp::Concat,
+            e_var("filename"),
+        ),
+        BinOp::Concat,
+        e_str("' for inclusion\n"),
+    );
+    vec![
+        s_if(
+            e_call("is_file", vec![e_var("filename")]),
+            vec![s_return(e_bool(true))],
+            vec![],
+            None,
+        ),
+        s_expr(e_call("fwrite", vec![e_const("STDERR"), warning])),
+        s_return(e_bool(false)),
+    ]
+}
+
 /// `opcache_compile_file($filename)`: `true` for a manifest member (already compiled into the
 /// binary), `false` otherwise, and an engine-level notice on the disabled path.
 pub(crate) fn compile_file_decl(enabled: bool, manifest_paths: Expr) -> Stmt {
@@ -917,11 +952,7 @@ pub(crate) fn compile_file_decl(enabled: bool, manifest_paths: Expr) -> Stmt {
     //
     // `$filename`, not `$path`, in both arms: the warning names the path as the caller spelled
     // it, as reference does, and the bridge canonicalizes it for the cache key itself.
-    body.extend(path_normalization_stmts_with_fallback(vec![s_return(e_binop(
-        e_call("__elephc_opcache_rt_compile", vec![e_var("filename")]),
-        BinOp::StrictNotEq,
-        e_int(0),
-    ))]));
+    body.extend(path_normalization_stmts_with_fallback(runtime_compile_return()));
     // OUTSIDE THE MANIFEST IS NOT A REFUSAL. A file the binary did not compile in can still
     // be compiled into the runtime tier, which is exactly what `opcache_compile_file()` is
     // for — reference PHP answers `true` for any file it can read and parse. Refusing every
@@ -929,11 +960,7 @@ pub(crate) fn compile_file_decl(enabled: bool, manifest_paths: Expr) -> Stmt {
     // compiling at all.
     body.push(s_if(
         e_not(in_manifest(manifest_paths)),
-        vec![s_return(e_binop(
-            e_call("__elephc_opcache_rt_compile", vec![e_var("filename")]),
-            BinOp::StrictNotEq,
-            e_int(0),
-        ))],
+        runtime_compile_return(),
         vec![],
         None,
     ));

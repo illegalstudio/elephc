@@ -250,6 +250,43 @@ echo $x;
     assert_eq!(out, "5:5");
 }
 
+/// Verifies `??=` neither evaluates nor type-checks an unreachable fallback as an ordinary
+/// local reassignment when the current value is statically non-null.
+#[test]
+fn test_null_coalesce_assignment_skips_unreachable_type_changing_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+function fallback(): float {
+    echo "unreachable";
+    return 2.5;
+}
+$value = 5;
+echo ($value ??= fallback());
+echo ":";
+echo gettype($value);
+"#,
+    );
+    assert_eq!(out, "5:integer");
+}
+
+/// Verifies a nullable callable local becomes non-null after `??=` and can satisfy a callable
+/// return contract for both the existing-value and fallback paths.
+#[test]
+fn test_null_coalesce_assignment_removes_nullable_callable_arm() {
+    let out = compile_and_run(
+        r#"<?php
+function ensure(?callable $callback): callable {
+    $callback ??= fn(): string => "fallback";
+    return $callback;
+}
+echo ensure(null)();
+echo ":";
+echo ensure(fn(): string => "given")();
+"#,
+    );
+    assert_eq!(out, "fallback:given");
+}
+
 /// Verifies array-element assignment is an expression returning the assigned value.
 /// Fixture: `$items = [1, 2]; echo ($items[1] = 9);` expects both echo and `$items[1]` to be 9.
 #[test]
@@ -330,6 +367,27 @@ echo count($result) . ":" . count($items[0]);
 "#,
     );
     assert_eq!(out, "0:0");
+}
+
+/// Verifies a `Mixed` value installed by associative `??=` remains independently owned by the
+/// hash when the assignment expression temporary is reused and released by later expressions.
+#[test]
+fn test_assoc_null_coalesce_assignment_preserves_mixed_value_across_later_write() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$_SERVER = [];
+$_ENV = [];
+if (is_string($_SERVER['APP_RUNTIME_OPTIONS'] ??= $_ENV['APP_RUNTIME_OPTIONS'] ?? [])) {}
+$_SERVER['APP_RUNTIME'] ??= 'App\\Runtime\\WebRuntime';
+$_SERVER['APP_RUNTIME_OPTIONS'] += ['project_dir' => '/tmp'];
+echo $_SERVER['APP_RUNTIME_OPTIONS']['project_dir'];
+echo '|';
+echo $_SERVER['APP_RUNTIME'];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "/tmp|App\\Runtime\\WebRuntime");
+    assert_eq!(out.stderr, "");
 }
 
 /// Verifies object property assignment with compound `+=` returns the new value.
@@ -534,4 +592,46 @@ fn test_undefined_var_null_coalesce_equals_expression() {
 fn test_undefined_var_star_equals() {
     let out = compile_and_run(r#"<?php $w *= 5; echo $w;"#);
     assert_eq!(out, "0");
+}
+
+/// An untyped array property is stored as a hash after EIR normalization, and every read must
+/// use that storage. The checker's flow-recorded `array<int>` for the read overrode it, so an
+/// append read the hash as a packed list (`0,10,1` for `2,4,9`) and a compound assignment printed
+/// an address.
+#[test]
+fn test_untyped_array_property_reads_match_its_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public $items = [2, 4]; }
+$b = new Box();
+$b->items[] = 9;
+echo implode(',', $b->items), "|";
+$c = new Box();
+echo ($c->items[1] *= 3), ":", $c->items[1];
+"#,
+    );
+    assert_eq!(out, "2,4,9|12:12");
+}
+
+/// Copying a boxed `mixed` value into a local copies the value, not the cell: a later element
+/// write through either name must leave the other untouched.
+#[test]
+fn test_copied_mixed_value_is_detached_from_later_element_writes() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public $items = [];
+    public function grow(): array {
+        $old = $this->items;
+        $this->items[] = 'x';
+        return $old;
+    }
+}
+function g(mixed $m): int { $copy = $m; $m[] = 1; return count($copy); }
+function h(mixed $m): int { $copy = $m; $m['k'] = 1; return count($copy); }
+$b = new Box();
+echo count($b->grow()), ':', count($b->items), '|', g([]), h(['a' => 0]);
+"#,
+    );
+    assert_eq!(out, "0:1|01");
 }

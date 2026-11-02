@@ -2,7 +2,7 @@
 title: "gmp_or() - internals"
 description: "Compiler internals for gmp_or(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 618
+  order: 631
 ---
 
 ## `gmp_or()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_or.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_or.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

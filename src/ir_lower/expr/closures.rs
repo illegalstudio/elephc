@@ -11,6 +11,151 @@
 
 use super::*;
 use crate::names::CALLED_CLASS_ID_LOCAL as CALLED_CLASS_ID_CAPTURE;
+use crate::names::CLOSURE_SCOPE_LOCAL as CLOSURE_SCOPE_CAPTURE;
+
+/// Returns whether a closure's property accesses depend on a scope that may be bound at run time.
+///
+/// Two shapes qualify. A body that addresses properties by a runtime name (`$o->$name`) cannot be
+/// specialized per scope at compile time: the hydrator shape
+/// `Closure::bind(static function ($o, $props) { foreach ($props as $n => $v) { $o->$n = $v; } },
+/// null, $class)` is rebound to a class that only exists as a string at run time. And a closure
+/// written outside any class that reaches a member of any object, `$this` included
+/// (`static function ($o) { $o->secret = 1; }`), borrows whatever scope its `bind` names.
+/// Those closures get the hidden scope capture [`CLOSURE_SCOPE_CAPTURE`], which
+/// `__rt_closure_set_scope` fills in when `bind`/`bindTo` names a scope and the property-access gate
+/// and the eval bridges consult.
+///
+/// The walk reaches closures nested in the body too, so it over-approximates (a nested closure's
+/// access counts for the outer closure as well), which only costs one unused `Int` capture.
+fn closure_needs_runtime_scope_capture(
+    ctx: &LoweringContext<'_, '_>,
+    body: &[crate::parser::ast::Stmt],
+) -> bool {
+    use crate::parser::ast::visit::{walk_nodes, Node};
+    use crate::parser::ast::StmtKind;
+    let outside_class = ctx.current_class.is_none();
+    // `parent::m()` in a closure whose class has no parent can only mean the parent of the scope
+    // a later bind gives it (see `lower_scoped_parent_call`).
+    let parentless_class = ctx
+        .current_class
+        .as_ref()
+        .and_then(|class| ctx.classes.get(class))
+        .is_some_and(|info| info.parent.is_none());
+    // Inside a class, a `$this->p` the class neither declares nor serves can only be meant for
+    // the object a later `call()`/`bind()` gives the closure, and php checks its visibility
+    // against THAT scope: Laravel's `Signals` reads and writes `$this->signalHandlers` through
+    // `(fn () => …)->call($this->registry)`, a private property of Symfony's `SignalRegistry`.
+    let foreign_this_member = |object: &Expr, property: &str| {
+        matches!(object.kind, ExprKind::This)
+            && ctx
+                .current_class
+                .as_ref()
+                .and_then(|class| ctx.classes.get(class))
+                .is_some_and(|info| {
+                    info.visible_property(property).is_none()
+                        && !info.methods.contains_key("__get")
+                        && !info.methods.contains_key("__set")
+                        && !info.allow_dynamic_properties
+                })
+    };
+    let mut needs = false;
+    walk_nodes(body, &mut |node| {
+        needs |= match node {
+            Node::Expr(expr) => match &expr.kind {
+                ExprKind::DynamicPropertyAccess { .. }
+                | ExprKind::NullsafeDynamicPropertyAccess { .. } => true,
+                ExprKind::PropertyAccess { object, property }
+                    if !outside_class && foreign_this_member(object, property) =>
+                {
+                    true
+                }
+                // `self::class` is the bound scope and `static::class` the bound `$this`'s class,
+                // so both read what a rebind stamps into the scope capture.
+                ExprKind::ClassConstant {
+                    receiver: StaticReceiver::Self_ | StaticReceiver::Static,
+                } => !outside_class,
+                ExprKind::StaticMethodCall {
+                    receiver: StaticReceiver::Parent,
+                    ..
+                } => parentless_class,
+                // `$this->p` included: outside a class the closure has no lexical scope, so a
+                // `$this` member is reachable only through the scope a later bind gives it
+                // (Symfony's `RedisTrait` binds `function () { return $this->options; }` to an
+                // object), and without a bind php refuses a private one.
+                ExprKind::PropertyAccess { .. } | ExprKind::NullsafePropertyAccess { .. } => {
+                    outside_class
+                }
+                _ => false,
+            },
+            Node::Stmt(stmt) => match &stmt.kind {
+                StmtKind::PropertyAssign { object, property, .. }
+                    if !outside_class && foreign_this_member(object, property) =>
+                {
+                    true
+                }
+                kind => {
+                    outside_class
+                        && matches!(
+                            kind,
+                            StmtKind::PropertyAssign { .. }
+                                | StmtKind::PropertyArrayPush { .. }
+                                | StmtKind::PropertyArrayAssign { .. }
+                                | StmtKind::PropertyRefAssign { .. }
+                        )
+                }
+            },
+        };
+    });
+    needs
+}
+
+/// Returns whether a closure body reads the receiver it is BOUND to without naming `$this`.
+///
+/// `static::class` is the class of the bound `$this`, and `parent::m()` in a closure written in a
+/// parentless class forwards `$this` to the method of the bound scope's parent. Such a closure
+/// needs the receiver captured so a rebind has one to fill.
+fn closure_reads_bound_receiver_implicitly(
+    ctx: &LoweringContext<'_, '_>,
+    body: &[crate::parser::ast::Stmt],
+) -> bool {
+    use crate::parser::ast::visit::{walk_nodes, Node};
+    let Some(info) = ctx
+        .local_slots
+        .contains_key("this")
+        .then(|| ctx.current_class.as_ref().and_then(|class| ctx.classes.get(class)))
+        .flatten()
+    else {
+        return false;
+    };
+    let parentless = info.parent.is_none();
+    let parent_info = info.parent.as_ref().and_then(|parent| ctx.classes.get(parent));
+    let mut found = false;
+    walk_nodes(body, &mut |node| {
+        found |= matches!(
+            node,
+            Node::Expr(expr) if match &expr.kind {
+                ExprKind::ClassConstant { receiver: StaticReceiver::Static } => true,
+                ExprKind::StaticMethodCall { receiver: StaticReceiver::Parent, method, .. } => {
+                    // `fn () => parent::push($job)` in a subclass forwards `$this` to the parent's
+                    // INSTANCE method (illuminate/queue `DeferredQueue::push()`); the closure has to
+                    // capture the receiver, or the call has no `this` to forward.
+                    parentless
+                        || parent_info.is_some_and(|parent| {
+                            let key = php_symbol_key(method);
+                            parent.methods.contains_key(&key)
+                                && !parent.static_methods.contains_key(&key)
+                        })
+                }
+                ExprKind::StaticMethodCall { receiver: StaticReceiver::Self_, method, .. } => {
+                    let key = php_symbol_key(method);
+                    info.methods.contains_key(&key) && !info.static_methods.contains_key(&key)
+                }
+                _ => false,
+            }
+        );
+    });
+    found
+}
 
 /// Lowers a closure expression into a callable descriptor backed by an EIR closure function.
 pub(super) fn lower_closure(
@@ -173,7 +318,8 @@ pub(super) fn lower_closure_with_context(
     let with_this;
     let captures: &[String] = if !is_static
         && !captures.iter().any(|name| name == "this")
-        && crate::types::checker::closure_body_uses_this(body)
+        && (crate::types::checker::closure_body_uses_this(body)
+            || closure_reads_bound_receiver_implicitly(ctx, body))
     {
         with_this = captures
             .iter()
@@ -191,10 +337,17 @@ pub(super) fn lower_closure_with_context(
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
         let (captured, php_type) = if capture == "this" && !ctx.local_slots.contains_key("this") {
-            // Top-level closure: no enclosing `$this`. Start with a null receiver
-            // that `Closure::bind` overwrites; `Mixed` so members dispatch at
-            // runtime against the bound object's class.
-            (lower_null(ctx, expr), PhpType::Mixed)
+            // Top-level closure, or one written in a STATIC method: no enclosing `$this`. Start
+            // with a null receiver that `Closure::bind` overwrites; `Mixed` so members dispatch
+            // at runtime against the bound object's class. The null is boxed like any `Mixed`
+            // capture: a raw null word read back as a cell pointer crashed
+            // `isset($this) ? $this : new static()` in a closure a static method returns
+            // (Carbon's `Mixin::loadMixinTrait()`).
+            let null = lower_null(ctx, expr);
+            (
+                ctx.box_value_as_mixed(null, PhpType::Mixed, Some(expr.span)),
+                PhpType::Mixed,
+            )
         } else if capture == "this" && ctx.local_type("this").codegen_repr() != PhpType::Mixed {
             // Every method-defined closure can later reach `Closure::bind`, including after its
             // descriptor escapes through a handler or another runtime owner. Box `$this` to the
@@ -210,11 +363,38 @@ pub(super) fn lower_closure_with_context(
                 PhpType::Mixed,
             )
         } else {
+            // Whether this name's cell, if it has one, is one only closure captures made. A name
+            // that already SHARES a cell -- a by-reference `foreach` value, `$a = &$b`, a by-ref
+            // parameter, `global` -- had that cell's representation fixed when it was bound, and
+            // re-promoting it into a fresh `Mixed` cell detached the closure from the variable
+            // it captured: every closure built in `foreach ($l as &$listener)` then saw some other
+            // iteration's value (Symfony's `EventDispatcher::optimizeListeners()`), and a write
+            // through it never reached the array. Asked before this capture rebinds the name.
+            let capture_owned_cell =
+                !ctx.is_ref_bound_local(capture) || ctx.is_capture_bound_local(capture);
+            // A sibling closure that writes the same reference counts too: a reader captured
+            // first would otherwise keep the raw capture-time representation the writer's
+            // `Mixed` stores are then reinterpreted through (`$set(null)` read back as `0`).
             let widens_by_ref_capture = by_ref
+                && capture_owned_cell
                 && self_ref_callable_capture != Some(capture.as_str())
-                && (body_contains_eval || body_writes_local(body, capture));
+                && (body_contains_eval
+                    || body_writes_local(body, capture)
+                    || ctx.is_ref_capture_written_local(capture));
+            let shares_existing_cell = by_ref
+                && !capture_owned_cell
+                && self_ref_callable_capture != Some(capture.as_str());
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
-                Some(PhpType::Callable)
+                // Recursive call resolution is seeded separately in the closure body. The hidden
+                // capture parameter must instead keep the backing cell's PHYSICAL representation:
+                // a reference stored in an array, or one the body reassigns, owns a Mixed box even
+                // though the recursive local is logically callable. Typed `Callable`, the body
+                // stored a raw descriptor into that box -- Symfony's
+                // `EventDispatcher::optimizeListeners()` (`$closure = &$this->optimized[...][]`,
+                // then `($closure = $listener(...))` inside the closure) died on every request.
+                Some(ctx.ref_cell_capture_storage_type(capture))
+            } else if shares_existing_cell {
+                Some(ctx.ref_cell_capture_storage_type(capture))
             } else if widens_by_ref_capture {
                 // A PHP reference has no type: whatever the closure stores through it is what
                 // the caller reads back. The cell used to carry the type the variable happened
@@ -244,7 +424,11 @@ pub(super) fn lower_closure_with_context(
         let immediate = by_ref.then_some(Immediate::I64(1));
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
         if by_ref {
+            let capture_made_cell = !ctx.is_ref_bound_local(capture);
             ctx.mark_ref_bound_local(capture);
+            if capture_made_cell {
+                ctx.mark_capture_bound_local(capture);
+            }
         } else {
             by_value_capture_views.push(captured);
         }
@@ -286,6 +470,28 @@ pub(super) fn lower_closure_with_context(
             false,
         ));
     }
+    // A closure that addresses properties by a runtime name may be rebound to a scope that is only
+    // a string at run time. The scope rides along as one more capture, always the LAST one, which
+    // `__rt_closure_set_scope` rewrites in a bound copy. `0` means "never rebound at run time".
+    if closure_needs_runtime_scope_capture(ctx, body)
+        && !capture_params
+            .iter()
+            .any(|(name, _, _)| name == CLOSURE_SCOPE_CAPTURE)
+    {
+        let unbound = lower_int_literal(ctx, 0, expr);
+        ctx.emit_void(
+            Op::ClosureCapture,
+            vec![unbound.value],
+            None,
+            Op::ClosureCapture.default_effects(),
+            Some(expr.span),
+        );
+        captured_values.push(ClosureCapture {
+            value: unbound.value,
+            by_ref_local: None,
+        });
+        capture_params.push((CLOSURE_SCOPE_CAPTURE.to_string(), PhpType::Int, false));
+    }
     let signature_capture_params = capture_params
         .iter()
         .map(|(name, php_type, by_ref)| {
@@ -303,6 +509,9 @@ pub(super) fn lower_closure_with_context(
         crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
     let source_is_generator = ctx.closure_generator_spans.contains(&expr.span);
+    // `static function`/`static fn` closures do not bind `$this`; php reports their trace frames
+    // as static (`::`) even inside an instance method, so the flag belongs on the body itself.
+    let is_static = matches!(&expr.kind, ExprKind::Closure { is_static: true, .. });
     let signature = if contextual_arg_types.is_empty() && bound_this_context.is_none() {
         function::lower_closure_function(
             ctx,
@@ -316,6 +525,7 @@ pub(super) fn lower_closure_with_context(
             &signature_capture_params,
             self_ref_callable_capture,
             by_ref_return,
+            is_static,
             loop_storage_scope,
             source_is_generator,
         )
@@ -334,19 +544,22 @@ pub(super) fn lower_closure_with_context(
             bound_this_context,
             self_ref_callable_capture,
             by_ref_return,
+            is_static,
             loop_storage_scope,
             source_is_generator,
         )
     };
+    ctx.set_closure_origin(&name, expr.span);
     let data = ctx.intern_string(&name);
     let return_alias = crate::types::summarize_callable_return_alias(
         params
             .iter()
-            .map(|(name, hint, _, _)| (name.as_str(), hint.as_ref())),
+            .map(|(name, hint, _, by_ref)| (name.as_str(), hint.as_ref(), *by_ref)),
         variadic,
         by_ref_return,
         // Closures keep the conservative summary.
         None,
+        params.iter().any(|(_, _, _, by_ref)| *by_ref) || variadic_by_ref,
         body,
     );
     let closure_operands = captured_values
@@ -393,7 +606,7 @@ pub(super) fn lower_closure_with_context(
 /// than a silent "not written". That polarity is the whole point: a missed write leaves the cell
 /// narrowly typed and silently reinterprets whatever is stored through it — the exact defect
 /// this gate exists to prevent — while a spurious true only widens a cell that did not need it.
-pub(super) fn body_writes_local(body: &[Stmt], name: &str) -> bool {
+pub(crate) fn body_writes_local(body: &[Stmt], name: &str) -> bool {
     body.iter().any(|stmt| stmt_writes_local(stmt, name))
 }
 
@@ -415,7 +628,9 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
         StmtKind::Global { vars } => vars.iter().any(|var| var == name),
         // `$name = &$x` rebinds the name; `$x = &$name` aliases it, and the alias can be stored
         // through afterwards, so either side counts.
-        StmtKind::RefAssign { target, source } => target == name || expr_writes_local(source, name),
+        StmtKind::RefAssign { target, source } => {
+            target == name || expr_is_variable(source, name) || expr_writes_local(source, name)
+        }
         StmtKind::Foreach { array, key_var, value_var, body, .. } => {
             value_var == name
                 || key_var.as_deref() == Some(name)
@@ -435,12 +650,34 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
             expr_writes_local(index, name) || expr_writes_local(value, name)
         }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_writes_local(index, name)
+                || expr_is_variable(source, name)
+                || expr_writes_local(source, name)
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_writes_local(property, name)
+                || index
+                    .as_ref()
+                    .is_some_and(|index| expr_writes_local(index, name))
+                || expr_writes_local(value, name)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_writes_local(target, name) || expr_writes_local(value, name)
         }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_writes_local(object, name) || expr_writes_local(value, name)
+        }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            expr_writes_local(object, name)
+                || expr_is_variable(source, name)
+                || expr_writes_local(source, name)
         }
         StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
             expr_writes_local(condition, name)
@@ -498,6 +735,7 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => false,
     }
 }
@@ -563,6 +801,9 @@ fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         ExprKind::InstanceOf { value, target } => {
             expr_writes_local(value, name) || instance_of_target_writes_local(target, name)
         }
+        ExprKind::ArrayReference(inner) => {
+            expr_is_variable(inner, name) || expr_writes_local(inner, name)
+        }
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
@@ -609,6 +850,12 @@ fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         ExprKind::DynamicPropertyAccess { object, property }
         | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
             expr_writes_local(object, name) || expr_writes_local(property, name)
+        }
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_writes_local(property, name)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            expr_writes_local(receiver, name)
         }
         ExprKind::FirstClassCallable(target) => callable_target_writes_local(target, name),
         ExprKind::Yield { key, value } => {
@@ -714,10 +961,24 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
             expr_contains_eval_call(index) || expr_contains_eval_call(value)
         }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_contains_eval_call(index) || expr_contains_eval_call(source)
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_contains_eval_call(property)
+                || index.as_ref().is_some_and(expr_contains_eval_call)
+                || expr_contains_eval_call(value)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_contains_eval_call(target) || expr_contains_eval_call(value)
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_contains_eval_call(object) || expr_contains_eval_call(value)
         }
@@ -757,7 +1018,9 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
                 })
                 || default.as_ref().is_some_and(|body| body_contains_eval_call(body))
         }
-        StmtKind::Include { path, .. } => expr_contains_eval_call(path),
+        // A resolver-preserved include/require executes through Magician and may declare PHP
+        // functions even when its path expression contains no literal `eval()` call.
+        StmtKind::Include { .. } => true,
         StmtKind::Synthetic(body)
         | StmtKind::NamespaceBlock { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. } => body_contains_eval_call(body),
@@ -801,15 +1064,18 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::ExternGlobalDecl { .. } => false,
     }
 }
 
 /// Returns true when an expression contains an `eval(...)` call.
-pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
+pub(crate) fn expr_contains_eval_call(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::FunctionCall { name, args } => {
-            is_eval_call_name(name) || args.iter().any(expr_contains_eval_call)
+            is_eval_call_name(name)
+                || name.as_str() == crate::names::DYNAMIC_INCLUDE_FUNCTION
+                || args.iter().any(expr_contains_eval_call)
         }
         ExprKind::BinaryOp { left, right, .. } => {
             expr_contains_eval_call(left) || expr_contains_eval_call(right)
@@ -818,6 +1084,7 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
             expr_contains_eval_call(value) || instance_of_target_contains_eval_call(target)
         }
         ExprKind::Negate(expr)
+        | ExprKind::ArrayReference(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
@@ -924,6 +1191,12 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => false,
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_contains_eval_call(property)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            expr_contains_eval_call(receiver)
+        }
     }
 }
 

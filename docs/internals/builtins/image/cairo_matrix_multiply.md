@@ -2,7 +2,7 @@
 title: "cairo_matrix_multiply() - internals"
 description: "Compiler internals for cairo_matrix_multiply(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 426
+  order: 439
 ---
 
 ## `cairo_matrix_multiply()` - internals

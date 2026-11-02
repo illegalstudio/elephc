@@ -27,6 +27,26 @@ impl Checker {
             ExprKind::FunctionCall { name, args } => {
                 let name = name.as_str().to_string();
                 let args = args.clone();
+                self.record_method_exists_capability_guard(&name, &args);
+                if name == crate::names::DYNAMIC_INCLUDE_FUNCTION {
+                    if args.len() != 3 {
+                        return Err(CompileError::new(
+                            expr.span,
+                            "Internal dynamic include expects path, once, and required operands",
+                        ));
+                    }
+                    self.infer_type(&args[0], env)?;
+                    for flag in &args[1..] {
+                        let flag_ty = self.infer_type(flag, env)?;
+                        if !matches!(flag_ty, PhpType::Bool | PhpType::False) {
+                            return Err(CompileError::new(
+                                flag.span,
+                                "Internal dynamic include flags must be boolean literals",
+                            ));
+                        }
+                    }
+                    return Ok(PhpType::Mixed);
+                }
                 let call_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
                 let references_pcntl_constant = matches!(call_key.as_str(), "defined" | "constant")
                     && args.first().is_some_and(|arg| {
@@ -52,7 +72,10 @@ impl Checker {
                     return self.check_extern_function_call(name.as_str(), &args, expr.span, env);
                 }
                 if let Some(ty) = self.check_builtin(name.as_str(), &args, expr.span, env)? {
-                    self.builtin_call_types.insert(expr.span, ty.clone());
+                    self.builtin_call_types.insert(
+                        (self.current_loop_storage_scope.clone(), expr.span),
+                        ty.clone(),
+                    );
                     return Ok(ty);
                 }
                 self.check_function_call(name.as_str(), &args, expr.span, env)
@@ -82,6 +105,10 @@ impl Checker {
                 let ty = self.infer_type(inner, env)?;
                 if let Some(class) = crate::types::object_operators::operator_class(&ty) {
                     return Ok(PhpType::Object(class.name.to_string()));
+                }
+                // php complements a string byte by byte (brick/math's `BigInteger::fromBytes()`).
+                if ty == PhpType::Str {
+                    return Ok(PhpType::Str);
                 }
                 if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
                     return Ok(PhpType::Mixed);
@@ -152,13 +179,27 @@ impl Checker {
                 {
                     self.require_builtin_library("elephc_pcntl");
                 }
-                self.constants
-                    .get(name.as_str())
-                    .cloned()
-                    .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
-                    .ok_or_else(|| {
-                        CompileError::new(expr.span, &format!("Undefined constant: {}", name))
-                    })
+                // php's fallback for an unqualified name in a namespace is the global constant.
+                if let Some(ty) = self.constants.get(name.as_str()).or_else(|| {
+                    name.function_fallback()
+                        .and_then(|global| self.constants.get(global))
+                }) {
+                    return Ok(ty.clone());
+                }
+                // A name nothing in the closed world defines is not a compile error: php looks it
+                // up when the expression executes. A file the program loads at run time may define
+                // it (a Composer `files` polyfill handed to the runtime defines `IDNA_DEFAULT`
+                // behind `if (!defined(...))`), and otherwise the read throws `Error: Undefined
+                // constant`. Lowering picks the runtime fetch or the throwing lookup, by the
+                // global form it looks the name up under.
+                if !self.eval_barrier_active {
+                    let looked_up = name
+                        .function_fallback()
+                        .map(|global| global.trim_start_matches('\\'))
+                        .unwrap_or(constant_name);
+                    self.record_undefined_constant_read(looked_up, expr.span);
+                }
+                Ok(PhpType::Mixed)
             }
             ExprKind::FirstClassCallable(target) => {
                 self.infer_first_class_callable_target(target, expr.span, env)?;
@@ -171,7 +212,7 @@ impl Checker {
                 variadic_type,
                 return_type,
                 body,
-                is_arrow: _,
+                is_arrow,
                 is_static,
                 captures,
                 capture_refs,
@@ -180,6 +221,9 @@ impl Checker {
                 if *is_static {
                     body_must_not_use_this(body, expr.span)?;
                 }
+                let captures = &crate::types::checker::callables::closure_captures_for_check(
+                    *is_arrow, captures, capture_refs, env,
+                );
                 self.infer_closure_type(
                     params,
                     variadic,
@@ -236,10 +280,27 @@ impl Checker {
                 ))
             }
             ExprKind::Clone(inner) => {
+                // A non-public `__clone` is php's RUNTIME Error ("Call to private method
+                // C::__clone() from global scope"), catchable like any other; the backend's clone
+                // hook dispatch raises it. Refusing the program here made that catch unwritable.
                 let ty = self.infer_type(inner, env)?;
-                match ty.codegen_repr() {
-                    PhpType::Object(class_name) => Ok(PhpType::Object(class_name)),
-                    PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+                match &ty {
+                    PhpType::Object(_) => Ok(ty),
+                    // A Closure value is a callable descriptor here; `clone $closure` is a
+                    // fresh Closure that keeps `$this`, scope and captures (lowered as a
+                    // null-receiver rebind).
+                    PhpType::Callable => Ok(PhpType::Callable),
+                    PhpType::Union(_)
+                        if crate::types::checker::type_compat::type_is_gradual_object_family(
+                            &ty,
+                        ) =>
+                    {
+                        Ok(ty)
+                    }
+                    PhpType::Mixed => Ok(PhpType::Mixed),
+                    other if matches!(other.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) => {
+                        Ok(PhpType::Mixed)
+                    }
                     _ => Err(CompileError::new(expr.span, "clone requires an object value")),
                 }
             }
@@ -252,18 +313,13 @@ impl Checker {
                 // The unpack-after-named shape is syntactic in
                 // PHP, so it is still rejected without a known constructor.
                 self.require_no_spread_after_named_args(args, "Dynamic constructor")?;
-                for arg in args {
-                    let value = match &arg.kind {
-                        ExprKind::NamedArg { value, .. } => value.as_ref(),
-                        _ => arg,
-                    };
-                    if matches!(value.kind, ExprKind::ArrayAccess { .. }) {
-                        return Err(CompileError::new(
-                            value.span,
-                            "Dynamic constructor cannot bind an array element by reference because its runtime signature is unknown",
-                        ));
-                    }
-                }
+                // The runtime class is unknown, so an array-element argument binds by value, as php
+                // does for every constructor that does not take that position by reference.
+                // Refusing the whole file because SOME unrelated class of the closed world has a
+                // by-reference constructor parameter (Symfony's RedisTrait `new $sentinelClass(
+                // $host, $port, $params['timeout'])` meets `SessionBagProxy::__construct`) deferred
+                // it to the runtime autoloader. An element handed to a constructor that really
+                // takes a reference is the only shape that loses its alias.
                 // No constructor signature means no parameter binding modes either, so every
                 // argument is conservatively reference-aliased — see
                 // `Checker::record_unresolved_callee_argument_aliases`.
@@ -306,6 +362,9 @@ impl Checker {
             ExprKind::StaticPropertyAccess { receiver, property } => {
                 self.infer_static_property_access_type(receiver, property, expr, env)
             }
+            ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+                self.infer_dynamic_static_property_access_type(receiver, property, expr, env)
+            }
             ExprKind::MethodCall {
                 object,
                 method,
@@ -326,7 +385,7 @@ impl Checker {
                 method,
                 args,
             } => self.infer_static_method_call_type(receiver, method, args, expr, env),
-            ExprKind::This => self.infer_this_type(expr),
+            ExprKind::This => self.infer_this_type(expr, env),
             ExprKind::PtrCast {
                 target_type,
                 expr: inner,
@@ -337,11 +396,17 @@ impl Checker {
             }
             ExprKind::ObjectClassName { object } => {
                 let object_type = self.infer_type(object, env)?;
+                // A closure is an object of class `Closure`: `$closure::class` is "Closure".
                 let object_only = match &object_type {
-                    PhpType::Object(_) => true,
+                    PhpType::Object(_) | PhpType::Mixed | PhpType::Callable => true,
                     PhpType::Union(members) => {
                         !members.is_empty()
-                            && members.iter().all(|member| matches!(member, PhpType::Object(_)))
+                            && members.iter().any(|member| {
+                                matches!(
+                                    member,
+                                    PhpType::Object(_) | PhpType::Mixed | PhpType::Callable
+                                )
+                            })
                     }
                     _ => false,
                 };
@@ -355,6 +420,9 @@ impl Checker {
             }
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 self.infer_scoped_constant_access(receiver, name, expr)
+            }
+            ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+                self.infer_dynamic_scoped_constant_access(receiver, name, expr, env)
             }
             ExprKind::NewScopedObject { receiver, args } => {
                 // A receiver written `Box<int>::of()` names `Box` until instantiation renames
@@ -417,30 +485,17 @@ impl Checker {
             }
             ExprKind::YieldFrom(inner) => {
                 let inner_ty = self.infer_type(inner, env)?;
-                // `yield from` over an array is desugared by EIR lowering into an
-                // iterator loop that re-yields every key/value pair, and that loop
-                // handles indexed and keyed literals alike (`lower_yield_from_array`
-                // dispatches on `Array` *and* `AssocArray`). Accept a keyed literal
-                // (`[5 => "x", "s" => "y"]`, `[$i * 10 => "L"]`) the same way an
-                // indexed one is accepted; PHP accepts both.
-                let supported = match &inner.kind {
-                    // A mixed literal lowers to the same `AssocArray`, so the loop that
-                    // re-yields its pairs handles it exactly as it handles a keyed one.
-                    ExprKind::ArrayLiteral(_)
-                    | ExprKind::ArrayLiteralAssoc(_)
-                    | ExprKind::ArrayLiteralMixed(_) => true,
-                    ExprKind::FunctionCall { .. } | ExprKind::Variable(_) => {
-                        matches!(inner_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
-                            || self
-                                .type_accepts(&PhpType::Object("Generator".to_string()), &inner_ty)
-                    }
-                    _ => false,
-                };
+                // Arrays, mixed-key literals and non-Generator Traversables are re-yielded through
+                // the ordinary iterator protocol. A concrete Generator keeps its dedicated
+                // delegation path so sent values and its return value are forwarded exactly as
+                // PHP requires.
+                let supported = matches!(inner.kind, ExprKind::ArrayLiteralMixed(_))
+                    || self.yield_from_source_supported(&inner_ty);
                 if !supported {
                     return Err(CompileError::new(
                         inner.span,
                         &format!(
-                            "yield from expects an array literal or Generator, got {}",
+                            "yield from expects an array or Traversable, got {}",
                             inner_ty
                         ),
                     ));
@@ -451,6 +506,36 @@ impl Checker {
                 unreachable!("MagicConstant must be lowered before type inference")
             }
             _ => unreachable!("basic expression routed to call/object inference"),
+        }
+    }
+
+    /// Records a read of a constant nothing defines (`name` without a leading `\`).
+    ///
+    /// php compiles the read and throws `Error: Undefined constant "NAME"` when it runs, which a
+    /// `defined('NAME') && NAME` guard never reaches; lowering emits that runtime lookup. The
+    /// warning (once per name) keeps a misspelt constant visible at build time.
+    pub(crate) fn record_undefined_constant_read(&mut self, name: &str, span: crate::span::Span) {
+        if self.undefined_constant_reads.insert(name.to_string()) {
+            self.warnings.push(crate::errors::CompileWarning::new(
+                span,
+                &format!("Undefined constant: {} (reading it throws Error at runtime)", name),
+            ));
+        }
+    }
+
+    /// Returns whether a static or gradual value can carry a valid `yield from` source.
+    fn yield_from_source_supported(&self, ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Mixed => {
+                true
+            }
+            PhpType::Union(members) => members
+                .iter()
+                .any(|member| self.yield_from_source_supported(member)),
+            _ => {
+                self.type_accepts(&PhpType::Object("Generator".to_string()), ty)
+                    || self.type_accepts(&PhpType::Object("Traversable".to_string()), ty)
+            }
         }
     }
 
@@ -531,6 +616,15 @@ impl Checker {
             PhpType::AssocArray { value, .. } => Ok(*value),
             PhpType::Mixed => Ok(PhpType::Mixed),
             ty if ty.is_php_array() => Ok(PhpType::Mixed),
+            // Gradual and iterable sources are unpacked through the runtime iterator protocol.
+            PhpType::Iterable | PhpType::Union(_) => Ok(PhpType::Mixed),
+            // `callable` is a PREDICATE, not a storage shape: the value behind it may be the
+            // two-element `[$object, 'method']` array PHP unpacks. EIR lowering rebuilds both
+            // elements from the descriptor, so the element type is gradual.
+            PhpType::Callable => Ok(PhpType::Mixed),
+            PhpType::Object(name) if self.object_type_implements_iterable(&name) => {
+                Ok(PhpType::Mixed)
+            }
             ty if allow_traversable && self.descriptor_spread_source_may_be_traversable(&ty) => {
                 Ok(PhpType::Mixed)
             }

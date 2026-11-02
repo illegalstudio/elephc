@@ -2,19 +2,20 @@
 title: "passthru()"
 description: "Executes an external program and passes its output directly."
 sidebar:
-  order: 827
+  order: 861
 ---
 
 ## passthru()
 
 ```php
-function passthru(string $command): void
+function passthru(string $command, int $result_code = null): void
 ```
 
 Executes an external program and passes its output directly.
 
 **Parameters**:
 - `$command` (`string`)
+- `$result_code` (`int`), passed by reference, default `null`, optional
 
 **Returns**: `void`
 

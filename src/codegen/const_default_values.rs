@@ -49,7 +49,7 @@ pub(in crate::codegen) const MAX_CONST_DEFAULT_DEPTH: usize =
     crate::types::signatures::COMPACT_NATIVE_DEFAULT_MAX_DEPTH;
 
 /// One fully resolved PHP default value.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(in crate::codegen) enum ConstDefaultValue {
     Scalar {
         kind: i64,
@@ -64,21 +64,21 @@ pub(in crate::codegen) enum ConstDefaultValue {
 }
 
 /// One element of an array-valued resolved default.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(in crate::codegen) struct ConstDefaultArrayElement {
     pub(in crate::codegen) key: Option<ConstDefaultArrayKey>,
     pub(in crate::codegen) default: ConstDefaultValue,
 }
 
 /// Static PHP array key retained for an array-valued resolved default.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(in crate::codegen) enum ConstDefaultArrayKey {
     Int(i64),
     String(String),
 }
 
 /// One constructor argument of an object-valued resolved default.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(in crate::codegen) struct ConstDefaultObjectArg {
     pub(in crate::codegen) name: Option<String>,
     pub(in crate::codegen) default: ConstDefaultValue,

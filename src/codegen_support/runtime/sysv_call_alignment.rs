@@ -51,7 +51,7 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     //    8 bytes off. Every callee here is hand-written assembly that touches only integer
     //    registers, so nothing observes it. The fix is a `sub rsp, 8` / `add rsp, 8` pair
     //    around each call, which is why these are cheap but not free: several are hot leaves.
-    ("__rt_hash_key_hash", "frameless: calls __rt_hash_fnv1a, integer-only assembly"),
+    ("__rt_hash_key_hash", "frameless: calls __rt_hash_bytes, integer-only assembly"),
     ("__rt_hash_key_eq", "frameless: calls __rt_str_eq, integer-only assembly"),
     ("__rt_mixed_is_empty", "frameless: calls __rt_mixed_unbox, integer-only assembly"),
     ("__rt_ftoa_repr", "frameless: calls __rt_float_window, an integer-only leaf"),
@@ -286,6 +286,9 @@ fn walk(
         match mnemonic {
             "push" | "pushfq" => work.push((index + 1, offset - 8)),
             "pop" | "popfq" => work.push((index + 1, offset + 8)),
+            // `leave` is `mov rsp, rbp` followed by `pop rbp`, so it restores the offset the
+            // frame was opened at. Without it the walk carries the frame past every epilogue
+            // written this way and reports the helper as reaching a line at two offsets.
             "leave" => work.push((index + 1, 0)),
             "ret" | "hlt" | "ud2" | "iret" => {}
             "call" => {

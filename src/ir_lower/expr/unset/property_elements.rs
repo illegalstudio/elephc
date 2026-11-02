@@ -109,6 +109,15 @@ fn unset_receiver_declared_property_type(
     if nullable {
         return None;
     }
+    // `$this` of a closure that `Closure::bind()` may rebind is runtime-shaped (a boxed `mixed`),
+    // not an object of the lexical class: the slot fetch below needs a concrete receiver, and the
+    // lexical class's layout is wrong for another bound object. That receiver keeps the generic
+    // property path, which resolves the slot from the runtime class.
+    if matches!(object.kind, ExprKind::This)
+        && !matches!(ctx.local_type("this").codegen_repr(), PhpType::Object(_))
+    {
+        return None;
+    }
     let class_info = ctx.classes.get(class_name.as_str())?;
     if !property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
         return None;

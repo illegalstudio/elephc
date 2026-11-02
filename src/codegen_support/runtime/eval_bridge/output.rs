@@ -120,9 +120,9 @@ fn body(emitter: &mut Emitter) {
 /// Reloads the request address retained across setjmp and arbitrary PHP callbacks.
 fn request(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::AArch64 {
-        emitter.instruction("ldr x9, [sp, #224]");                              // recover the caller-owned request pointer
+        emitter.instruction(&format!("ldr x9, [sp, #{}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET));                              // recover the caller-owned request pointer
     } else {
-        emitter.instruction("mov r11, QWORD PTR [rsp + 224]");                  // recover request storage after native calls clobber volatile registers
+        emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET));                  // recover request storage after native calls clobber volatile registers
     }
 }
 

@@ -2,7 +2,7 @@
 title: "xmlwriter_flush() - internals"
 description: "Compiler internals for xmlwriter_flush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1115
+  order: 1175
 ---
 
 ## `xmlwriter_flush()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1466](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1466) (`xmlwriter_flush`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`:1476](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1476) (`xmlwriter_flush`)
 - **Function symbol**: `xmlwriter_flush()`
 
 

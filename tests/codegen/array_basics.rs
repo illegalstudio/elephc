@@ -117,6 +117,21 @@ fn test_string_indexing_last_valid_index() {
     assert_eq!(out, "c");
 }
 
+/// Verifies string-offset reads dispatch correctly when the receiver uses a boxed union.
+#[test]
+fn test_string_indexing_boxed_union_preserves_large_and_negative_offsets() {
+    let out = compile_and_run(
+        r#"<?php
+function readAt(string|false $value, int $offset): string {
+    return $value[$offset];
+}
+$value = str_repeat("a", 1137) . "=";
+echo readAt($value, 1137) . readAt($value, -1) . "[" . readAt($value, 2000) . "]";
+"#,
+    );
+    assert_eq!(out, "==[]");
+}
+
 /// Verifies array assign.
 #[test]
 fn test_array_assign() {
@@ -646,6 +661,73 @@ echo $out;
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
 
+/// Verifies a widened associative array returned through chained unions stays live for a
+/// generic-array foreach consumer after the callee has released its temporary inputs.
+#[test]
+fn test_chained_assoc_array_union_return_reaches_generic_foreach_consumer() {
+    let out = compile_and_run(
+        r#"<?php
+function kernel_parameters(?string $logDir, ?string $shareDir): array {
+    return [
+        'kernel.project_dir' => '/app',
+        'kernel.environment' => 'dev',
+        'kernel.runtime_environment' => 'runtime',
+        'kernel.runtime_mode' => 'web',
+        'kernel.runtime_mode.web' => true,
+        'kernel.runtime_mode.cli' => false,
+        'kernel.runtime_mode.worker' => 1,
+        'kernel.debug' => false,
+        'kernel.build_dir' => '/app/build',
+        'kernel.cache_dir' => '/app/cache',
+        'kernel.bundles' => [],
+        'kernel.bundles_metadata' => [],
+        'kernel.container_class' => 'Container',
+        '.kernel.config_dir' => '/app/config',
+        '.kernel.bundles_definition' => [],
+        '.container.known_envs' => ['dev'],
+        'kernel.charset' => 'UTF-8',
+    ] + (null !== $logDir ? ['kernel.logs_dir' => $logDir] : [])
+      + (null !== $shareDir ? ['kernel.share_dir' => $shareDir] : []);
+}
+
+function read_kernel_debug(array $parameters): string {
+    foreach ($parameters as $name => $value) {
+        if ('kernel.debug' === $name) {
+            return $value ? 'true' : 'false';
+        }
+    }
+
+    return 'missing';
+}
+
+echo read_kernel_debug(kernel_parameters(null, null));
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies array_merge accepts hash-backed arrays recovered from gradual static-property
+/// element reads, overwrites string keys, and renumbers integer keys like PHP.
+#[test]
+fn test_array_merge_gradual_static_property_elements() {
+    let out = compile_and_run(
+        r#"<?php
+class GradualMergeStore {
+    private static array $rows = [];
+
+    public static function run(): void {
+        self::$rows['left'] = ['name' => 'left', 7 => 'a'];
+        self::$rows['right'] = ['name' => 'right', 9 => 'b'];
+        $merged = array_merge(self::$rows['left'], self::$rows['right']);
+        echo $merged['name'] . ':' . $merged[0] . ':' . $merged[1];
+    }
+}
+GradualMergeStore::run();
+"#,
+    );
+    assert_eq!(out, "right:a:b");
+}
+
 /// Verifies array access on function call result.
 #[test]
 fn test_array_access_on_function_call_result() {
@@ -665,6 +747,23 @@ echo getColor()[1];
 fn test_foreach_int() {
     let out = compile_and_run("<?php $a = [1, 2, 3]; foreach ($a as $v) { echo $v; }");
     assert_eq!(out, "123");
+}
+
+/// Foreach writes complex key and value lvalues before executing each iteration body.
+#[test]
+fn test_foreach_property_key_and_value_targets() {
+    let out = compile_and_run(
+        "<?php
+        class ForeachTarget {
+            public string $key = '';
+            public int $value = 0;
+        }
+        $target = new ForeachTarget();
+        foreach (['first' => 1, 'second' => 2] as $target->key => $target->value) {
+        }
+        echo $target->key, ':', $target->value;",
+    );
+    assert_eq!(out, "second:2");
 }
 
 /// Verifies foreach value by reference mutates indexed array.
@@ -960,27 +1059,30 @@ foreach ($a as $v) { echo var_export($v, true), ","; }
     assert_eq!(mixed, "2,'9',10,");
 }
 
-/// Verifies Mixed sorting rejects nested arrays instead of silently treating them as equal.
+/// Verifies Mixed sorting orders nested arrays instead of silently treating them as equal.
 ///
-/// `__rt_php_compare` currently implements full PHP ordering only for scalars and
-/// null. The sort guard must inspect the whole array before mutation so even a
-/// single unsupported value produces an explicit runtime diagnostic.
+/// `__rt_php_compare` implements full PHP ordering only for scalars and null, so a list holding
+/// arrays goes through the gradual sort prelude (`__elephc_sort_mixed_compare`), which orders
+/// them as php does: by element count, then element by element. php 8.5 prints
+/// `[[],[1],[2]]|[[2],[1],[]]`. This test used to pin a runtime refusal
+/// (`sort_rejects_runtime_typed_non_scalar_elements`); the gradual sort that replaced the
+/// refusal left the arrays UNSORTED.
 #[test]
-fn sort_rejects_runtime_typed_non_scalar_elements() {
-    let error = compile_and_run_expect_failure(
+fn sort_orders_runtime_typed_array_elements_like_php() {
+    let out = compile_and_run(
         r#"<?php
 $decoded = json_decode("[[2],[1],[]]", true);
 $values = [];
 foreach ($decoded as $value) {
     $values[] = $value;
 }
+$descending = $values;
 sort($values);
+rsort($descending);
+echo json_encode($values), "|", json_encode($descending);
 "#,
     );
-    assert!(
-        error.contains("sorting Mixed arrays containing non-scalar values is not supported"),
-        "unexpected runtime diagnostic: {error}"
-    );
+    assert_eq!(out, "[[],[1],[2]]|[[2],[1],[]]");
 }
 
 /// Verifies array keys.
@@ -1048,6 +1150,146 @@ echo isset($map["missing"]);
     // `isset` is a bool: echoing `false` yields "" (not "0"), matching PHP.
     // Set/false sequence T,F,F,T,T,F renders as "1","","","1","1","" = "111".
     assert_eq!(out, "111");
+}
+
+/// Verifies `isset()` on a subscript of a CALL RESULT, for every call spelling.
+///
+/// The receiver's type is invisible before lowering — a user call is typed `int` syntactically —
+/// so this shape used to be refused by the native probe and lowered as read-then-test. That read
+/// releases the call's temporary array before the backend re-probes the read's producer, so the
+/// probe called `__rt_hash_get` on freed storage and answered "missing" for keys that were
+/// present. Symfony's `isset(static::getProvidedTypes()[$prefix])` is exactly this shape: it made
+/// every `%env(bool:...)%` placeholder in a compiled prod container fail with
+/// `Unsupported env var prefix "bool"`.
+#[test]
+fn test_isset_on_call_result_subscript() {
+    let out = compile_and_run(
+        r#"<?php
+function makeArray(): array
+{
+    return ['bool' => 'yes', 'nul' => null];
+}
+
+class Holder
+{
+    public static function stat(): array
+    {
+        return makeArray();
+    }
+
+    public function inst(): array
+    {
+        return makeArray();
+    }
+
+    public function late(string $prefix): bool
+    {
+        return isset(static::stat()[$prefix]);
+    }
+}
+
+$h = new Holder();
+$key = 'bool';
+$fn = 'makeArray';
+echo isset(makeArray()['bool']) ? 'y' : 'n';
+echo isset(makeArray()[$key]) ? 'y' : 'n';
+echo isset(Holder::stat()[$key]) ? 'y' : 'n';
+echo isset($h->inst()[$key]) ? 'y' : 'n';
+echo isset($fn()[$key]) ? 'y' : 'n';
+echo $h->late($key) ? 'y' : 'n';
+echo isset(makeArray()['missing']) ? 'y' : 'n';
+echo isset(makeArray()['nul']) ? 'y' : 'n';
+"#,
+    );
+    assert_eq!(out, "yyyyyynn");
+}
+
+/// Verifies a list, a string and a `mixed` receiver behave the same way through a call result.
+///
+/// Each lowers to a different producer (`ArrayGet`, `StrCharAt`, a runtime read), and every one
+/// of them is re-probed by the backend, so the call-result release has to be safe for all three.
+#[test]
+fn test_isset_on_call_result_subscript_non_hash_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+function makeList(): array
+{
+    return ['a', 'b', 'c'];
+}
+
+function makeStr(): string
+{
+    return 'abc';
+}
+
+function makeMixed(): mixed
+{
+    return ['k' => 'v', 'nul' => null];
+}
+
+$i = 1;
+echo isset(makeList()[1]) ? 'y' : 'n';
+echo isset(makeList()[$i]) ? 'y' : 'n';
+echo isset(makeList()[9]) ? 'y' : 'n';
+echo isset(makeStr()[2]) ? 'y' : 'n';
+echo isset(makeStr()[9]) ? 'y' : 'n';
+echo isset(makeStr()[-1]) ? 'y' : 'n';
+echo isset(makeMixed()['k']) ? 'y' : 'n';
+echo isset(makeMixed()['zz']) ? 'y' : 'n';
+echo isset(makeMixed()['nul']) ? 'y' : 'n';
+echo isset(makeMixed()['k'][0]) ? 'y' : 'n';
+"#,
+    );
+    assert_eq!(out, "yynynyynny");
+}
+
+/// Verifies `isset()` on an `ArrayAccess` object returned by a call asks `offsetExists()`.
+///
+/// PHP never answers `isset($obj[$k])` with `offsetGet()`, and an implementation is free to make
+/// the two observably different — here `offsetExists()` echoes. The receiver is a call, so the
+/// class cannot be named from the expression shape and the dispatch has to be decided from the
+/// lowered value instead.
+#[test]
+fn test_isset_on_call_result_array_access_object_calls_offset_exists() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements ArrayAccess
+{
+    private array $items = ['k' => 'v'];
+
+    public function offsetExists(mixed $offset): bool
+    {
+        echo "[exists $offset]";
+        return isset($this->items[$offset]);
+    }
+
+    public function offsetGet(mixed $offset): mixed
+    {
+        echo "[get $offset]";
+        return $this->items[$offset] ?? null;
+    }
+
+    public function offsetSet(mixed $offset, mixed $value): void
+    {
+        $this->items[$offset] = $value;
+    }
+
+    public function offsetUnset(mixed $offset): void
+    {
+        unset($this->items[$offset]);
+    }
+}
+
+function makeBag(): Bag
+{
+    return new Bag();
+}
+
+echo isset(makeBag()['k']) ? 'y' : 'n';
+echo isset(makeBag()['zz']) ? 'y' : 'n';
+"#,
+    );
+    assert_eq!(out, "[exists k]y[exists zz]n");
 }
 
 /// Verifies unset multiple variables.
@@ -1330,6 +1572,26 @@ fn test_array_values() {
 fn test_die() {
     let out = compile_and_run("<?php echo \"before\"; die(); echo \"after\";");
     assert_eq!(out, "before");
+}
+
+/// `exit` and `die` without parentheses end the script like their call forms, and a branch
+/// ending in one is terminal for narrowing. Both were read as the undefined constant `exit`:
+/// the script threw instead of stopping, and `$u` stayed `mixed|false` after the guard, so
+/// indexing it was refused at compile time.
+#[test]
+fn test_bare_exit_and_die_end_the_script_and_narrow_the_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function check(mixed $u): string { if ($u === false) { die; } return $u[0]; }
+echo check(["a"]), "|";
+$u = unserialize('a:1:{i:0;s:1:"x";}');
+if ($u === false) { echo "false"; exit; }
+echo $u[0], "|";
+EXIT;
+echo "after";
+"#,
+    );
+    assert_eq!(out, "a|x|");
 }
 
 // --- Nested control flow ---
@@ -1897,4 +2159,520 @@ echo $sargs[0];
 "#,
     );
     assert_eq!(out, "4|3|[1,2,3]|7");
+}
+
+/// Verifies `isset()` and a plain read evaluate every dim operand even when an outer level is
+/// missing or null, and that a local assigned there keeps its value. Symfony's
+/// `PhpDumper::generateProxyClasses` reads `$class` right after
+/// `isset($seen[$group][$class = $def->getClass()][...])`.
+#[test]
+fn test_isset_evaluates_dims_past_a_missing_level() {
+    let out = compile_and_run(
+        r#"<?php
+function f(string $s): string { echo "f($s) "; return $s; }
+function probe(array $a): void {
+    var_dump(isset($a['x'][$c = f('c')][$t = f('t')]));
+    echo $c, $t, "\n";
+}
+probe([]);
+probe(['x' => ['c' => []]]);
+$n = null;
+var_dump(isset($n[$d = f('d')]));
+echo $d, "\n";
+$seen = [];
+foreach (['A', 'B', 'A'] as $name) {
+    if (isset($seen[true][$class = strtolower($name)])) {
+        continue;
+    }
+    $seen[true][$class] = true;
+    echo $class;
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "f(c) f(t) bool(false)\nct\nf(c) f(t) bool(false)\nct\nf(d) bool(false)\nd\nab\n"
+    );
+}
+
+/// Verifies `isset()` and `??` on a string held in a `mixed` value answer false past either end.
+/// The quiet runtime read returned an empty string there, so `isset($value[strlen($value)])`
+/// was true -- `PhpDumper::export()` then appended `.''` to every exported path.
+#[test]
+fn test_isset_on_a_mixed_string_offset_respects_its_length() {
+    let out = compile_and_run(
+        r#"<?php
+function probe(mixed $v, int $i): string { return var_export(isset($v[$i]), true) . ($v[$i] ?? 'D'); }
+echo probe('abc', 2), probe('abc', 3), probe('abc', -3), probe('abc', -4), probe('', 0);
+"#,
+    );
+    assert_eq!(out, "truecfalseDtrueafalseDfalseD");
+}
+
+/// Verifies nested associative unsets write a COW-split child back into its indexed parent.
+///
+/// The sibling source hash must retain both removed keys, and addressing a missing outer index
+/// must stay a no-op instead of autovivifying a new parent element.
+#[test]
+fn test_unset_nested_assoc_child_preserves_cow_and_missing_parent() {
+    let out = compile_and_run(
+        r#"<?php
+function cleanTrace(mixed $trace): mixed {
+    unset($trace[0]["args"], $trace[0]["object"]);
+    $before = count($trace);
+    unset($trace[3]["missing"]);
+    echo ":" . $before . "=" . count($trace);
+    return $trace;
+}
+$shared = ["args" => [1, 2], "object" => "obj", "keep" => "yes"];
+$trace = cleanTrace([$shared]);
+echo isset($trace[0]["args"]) ? "1" : "0";
+echo isset($trace[0]["object"]) ? "1" : "0";
+echo ":" . $trace[0]["keep"] . ":";
+echo isset($shared["args"]) ? "1" : "0";
+echo isset($shared["object"]) ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, ":1=100:yes:11");
+}
+
+/// Verifies nested associative unset writes a COW-relocated root back through a by-ref parameter.
+#[test]
+fn test_unset_nested_assoc_through_by_ref_parameter_preserves_cow() {
+    let out = compile_and_run(
+        r#"<?php
+function stripDefaults(array &$content): void {
+    unset($content['services']['_defaults']);
+}
+$sharedServices = ['_defaults' => ['autowire' => true], 'keep' => 'yes'];
+$content = ['services' => $sharedServices];
+$copy = $content;
+stripDefaults($content);
+echo isset($content['services']['_defaults']) ? '1' : '0';
+echo ':' . $content['services']['keep'] . ':';
+echo isset($copy['services']['_defaults']) ? '1' : '0';
+echo isset($sharedServices['_defaults']) ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "0:yes:11");
+}
+
+/// Verifies a two-level unset rooted at a gradual instance property writes the COW result back.
+#[test]
+fn test_unset_nested_gradual_instance_property_preserves_cow() {
+    let out = compile_and_run(
+        r#"<?php
+class TraceState {
+    private mixed $started;
+
+    public function __construct(mixed $started) { $this->started = $started; }
+
+    public function drop(string $id): void {
+        unset($this->started[$id]["out"]);
+        unset($this->started["missing"]["out"]);
+    }
+
+    public function values(): mixed { return $this->started; }
+}
+$shared = ["out" => "payload", "keep" => "yes"];
+$state = new TraceState(["job" => $shared]);
+$state->drop("job");
+$values = $state->values();
+echo isset($values["job"]["out"]) ? "1" : "0";
+echo ":" . $values["job"]["keep"] . ":";
+echo isset($shared["out"]) ? "1" : "0";
+echo ":" . count($values);
+"#,
+    );
+    assert_eq!(out, "0:yes:1:1");
+}
+
+/// Verifies a two-level unset rooted at a gradual static property writes the COW result back.
+#[test]
+fn test_unset_nested_gradual_static_property_preserves_cow() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticTraceState {
+    private static mixed $started;
+
+    public static function initialize(mixed $started): void { self::$started = $started; }
+    public static function drop(string $id): void {
+        unset(self::$started[$id]['out']);
+        unset(self::$started['missing']['out']);
+    }
+    public static function values(): mixed { return self::$started; }
+}
+$shared = ['out' => 'payload', 'keep' => 'yes'];
+StaticTraceState::initialize(['job' => $shared]);
+StaticTraceState::drop('job');
+$values = StaticTraceState::values();
+echo isset($values['job']['out']) ? '1' : '0';
+echo ':' . $values['job']['keep'] . ':';
+echo isset($shared['out']) ? '1' : '0';
+echo ':' . count($values);
+"#,
+    );
+    assert_eq!(out, "0:yes:1:1");
+}
+
+/// Verifies a three-level cookie-map unset writes every COW-split child back through a
+/// declared generic `array` property whose runtime storage has been promoted to a hash.
+#[test]
+fn test_unset_three_level_declared_array_property_preserves_cow() {
+    let out = compile_and_run(
+        r#"<?php
+class HeaderCookies {
+    protected array $cookies = [];
+
+    public function set(string $domain, string $path, string $name, string $value): void {
+        $this->cookies[$domain][$path][$name] = $value;
+    }
+
+    public function remove(string $domain, string $path, string $name): void {
+        unset($this->cookies[$domain][$path][$name]);
+    }
+
+    public function all(): array { return $this->cookies; }
+}
+
+$headers = new HeaderCookies();
+$headers->set('example.test', '/', 'drop', 'payload');
+$headers->set('example.test', '/', 'keep', 'yes');
+$before = $headers->all();
+$headers->remove('example.test', '/', 'drop');
+$after = $headers->all();
+echo isset($after['example.test']['/']['drop']) ? '1' : '0';
+echo ':' . $after['example.test']['/']['keep'];
+echo ':' . (isset($before['example.test']['/']['drop']) ? '1' : '0');
+echo ':' . count($after['example.test']['/']);
+echo ':' . count($after);
+"#,
+    );
+    assert_eq!(out, "0:yes:1:1:1");
+}
+
+/// Verifies all three unset keys retain PHP source-order evaluation when the outer parent is
+/// absent, without autovivifying the empty root array.
+#[test]
+fn test_unset_three_level_missing_parent_evaluates_all_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function outerKey(): string { echo 'o'; return 'missing'; }
+function middleKey(): string { echo 'm'; return 'path'; }
+function leafKey(): string { echo 'l'; return 'name'; }
+$values = [];
+unset($values[outerKey()][middleKey()][leafKey()]);
+echo ':' . count($values);
+"#,
+    );
+    assert_eq!(out, "oml:0");
+}
+
+/// Verifies `unset` dispatches a declared static WeakMap subscript to `offsetUnset`.
+#[test]
+fn test_unset_static_weak_map_entry_dispatches_array_access() {
+    let out = compile_and_run(
+        r#"<?php
+class ActiveObjects {
+    private static WeakMap $entries;
+    public static function run(): void {
+        self::$entries = new WeakMap();
+        $object = new stdClass();
+        self::$entries[$object] = true;
+        unset(self::$entries[$object]);
+        echo count(self::$entries);
+    }
+}
+ActiveObjects::run();
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+/// Verifies static indexed, associative, and nullable-array properties are sparsified and written
+/// back when one of their elements is unset.
+#[test]
+fn test_unset_static_property_array_elements() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticUnsetBox {
+    public static array $indexed = ['a', 'b', 'c'];
+    public static array $assoc = ['keep' => 1, 'drop' => 2];
+    public static ?array $nullable = null;
+    public static function run(): void {
+        self::$nullable = ['left' => 3, 'right' => 4];
+        unset(self::$indexed[1]);
+        unset(self::$assoc['drop']);
+        unset(self::$nullable['right']);
+    }
+}
+StaticUnsetBox::run();
+foreach (StaticUnsetBox::$indexed as $k => $v) { echo "$k=$v "; }
+echo '|';
+foreach (StaticUnsetBox::$assoc as $k => $v) { echo "$k=$v "; }
+echo '|';
+foreach (StaticUnsetBox::$nullable as $k => $v) { echo "$k=$v "; }
+"#,
+    );
+    assert_eq!(out, "0=a 2=c |keep=1 |left=3 ");
+}
+
+/// Verifies unsetting an element of an untyped local or static that still holds null is a silent
+/// no-op, as in PHP, instead of the gradual array boundary's "must be of type array" TypeError.
+/// An untyped `protected static $cache;` cleared before anything was stored is the usual shape.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_unset_element_of_a_null_gradual_value_is_a_no_op() {
+    let out = compile_and_run(
+        r#"<?php
+function drop($a, $k) {
+    unset($a[$k]);
+    return $a;
+}
+echo json_encode(drop(null, 'k')), "\n";
+echo json_encode(drop(['k' => 1, 'j' => 2], 'k')), "\n";
+echo json_encode(drop([1, 2, 3], 1)), "\n";
+class Resolved {
+    protected static $instances;
+    public static function forget($k) { unset(static::$instances[$k]); }
+    public static function put($k) { static::$instances[$k] = 1; }
+    public static function dump() { return json_encode(static::$instances); }
+}
+Resolved::forget('x');
+echo Resolved::dump(), "\n";
+Resolved::put('x');
+Resolved::put('y');
+Resolved::forget('x');
+echo Resolved::dump(), "\n";
+"#,
+    );
+    assert_eq!(out, "null\n{\"j\":2}\n{\"0\":1,\"2\":3}\nnull\n{\"y\":1}\n");
+}
+
+/// Verifies a boxed `Mixed` needle compares against concrete integer-array elements with PHP's
+/// loose and strict rules by boxing each element at the comparison boundary.
+#[test]
+fn test_in_array_mixed_needle_over_integer_array() {
+    let out = compile_and_run(
+        r#"<?php
+function picked(mixed $value): mixed { return $value; }
+var_dump(in_array(picked(2), [1, 2, 3], true));
+var_dump(in_array(picked("2"), [1, 2, 3], true));
+var_dump(in_array(picked("2"), [1, 2, 3]));
+var_dump(in_array(picked(false), [0, 1]));
+var_dump(in_array(picked(true), [0]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\n"
+    );
+}
+
+/// Verifies a by-value `foreach` over a hash hands the loop variable its own cell: writes and
+/// nested unsets through it must not reach the iterated array (Symfony's CachePoolPass unsets
+/// tag attributes on its copy of `findTaggedServiceIds()`), and a literal built from a nested
+/// read of it keeps the read's type (it was stamped `array<string, int>` and read back `0`).
+#[test]
+fn test_foreach_over_hash_value_writes_stay_in_the_loop_copy() {
+    let out = compile_and_run(
+        r#"<?php
+function tag_source(): array { return ['p' => [['reset' => 'reset', 'n' => 'x']]]; }
+$all = tag_source();
+foreach ($all as $tags) { $tags[0] = 'W'; }
+echo json_encode($all), "\n";
+$all = tag_source();
+foreach ($all as $tags) { unset($tags[0]['n']); }
+echo json_encode($all), "\n";
+$all = tag_source();
+foreach ($all as $tags) {
+    foreach (['reset', 'n'] as $attr) {
+        if ('reset' === $attr) { $kept = ['method' => $tags[0][$attr]]; }
+        unset($tags[0][$attr]);
+    }
+    echo json_encode($kept), " ", json_encode($all), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"p\":[{\"reset\":\"reset\",\"n\":\"x\"}]}\n{\"p\":[{\"reset\":\"reset\",\"n\":\"x\"}]}\n{\"method\":\"reset\"} {\"p\":[{\"reset\":\"reset\",\"n\":\"x\"}]}\n"
+    );
+}
+
+/// Verifies a by-value `mixed` parameter is the callee's own copy: a recursive walk that writes
+/// `$value[$k]` must not rewrite the caller's element, so the caller sees the change and stores
+/// it (Symfony's `AbstractRecursivePass::processValue()` resolving nested placeholders).
+#[test]
+fn test_recursive_mixed_param_writes_do_not_reach_the_caller() {
+    let out = compile_and_run(
+        r#"<?php
+function resolve_placeholders(mixed $value): mixed {
+    if (is_array($value)) {
+        foreach ($value as $k => $v) {
+            if ($v !== $p = resolve_placeholders($v)) { $value[$k] = $p; }
+        }
+        return $value;
+    }
+    return $value === '%p%' ? 'R' : $value;
+}
+$args = [0 => 'a', 2 => ['cache_dir' => '%p%'], 3 => [['%p%']]];
+echo json_encode(resolve_placeholders($args)), " ", json_encode($args), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"0\":\"a\",\"2\":{\"cache_dir\":\"R\"},\"3\":[[\"R\"]]} {\"0\":\"a\",\"2\":{\"cache_dir\":\"%p%\"},\"3\":[[\"%p%\"]]}\n"
+    );
+}
+
+// --- Long-form `array(...)` literal ---
+
+/// Verifies `isset($mixed[$k])` on an `ArrayAccess` object whose class is known only at run time
+/// asks `offsetExists()`, never `offsetGet()`.
+///
+/// The quiet read behind a boxed receiver called `offsetGet()`, which a container implements by
+/// RESOLVING the key: Laravel's `isset(static::$app[$name])` answered true for a binding that
+/// does not exist, so `Date` never installed its default factory.
+///
+/// Oracle: `php 8.5.10`.
+#[test]
+fn test_isset_on_a_boxed_array_access_receiver_asks_offset_exists() {
+    let out = compile_and_run(
+        r#"<?php
+class Box implements ArrayAccess {
+    public function offsetExists($key): bool { echo "[exists $key]"; return $key === 'yes'; }
+    public function offsetGet($key): mixed { return "got $key"; }
+    public function offsetSet($key, $value): void {}
+    public function offsetUnset($key): void {}
+}
+abstract class Facade {
+    protected static $app;
+    protected static $resolved = [];
+    public static function setApp($app) { static::$app = $app; }
+    protected static function probe($name) {
+        return (isset(static::$resolved[$name]) ? "r" : "-")
+            . (isset(static::$app, static::$app[$name]) ? "A" : "a")
+            . (isset(static::$app[$name]) ? "B" : "b");
+    }
+}
+class DateF extends Facade {
+    public static function run($name) { return static::probe($name); }
+}
+DateF::setApp(new Box());
+echo DateF::run('date'), " ", DateF::run('yes'), "\n";
+"#,
+    );
+    assert_eq!(out, "[exists date][exists date]-ab [exists yes][exists yes]-AB\n");
+}
+
+/// A nested literal that mixes a concatenation with call results frees every call string.
+///
+/// `ok($i)` is inlined at the call site, so its string reaches the outer array literal through the
+/// inliner's continuation parameter instead of a call result. The Mixed element box must still take
+/// that string over; otherwise each iteration strands the callee's copy. The loop is scaled so a
+/// per-iteration leak cannot hide behind a value that is still live at exit.
+#[test]
+fn test_nested_array_literal_mixing_concat_and_call_results_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function ok(int $i): string { return 'v' . $i; }
+for ($i = 0; $i < 40; $i++) {
+    $q = [ok($i), ['x' . $i, ok($i)], ok($i + 1)];
+}
+echo count($q), "|", $q[0], "|", $q[1][0], "|", $q[1][1], "|", $q[2], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3|v39|x39|v39|v40\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Heap payloads are only 8-byte aligned, so the heap-debug insertion-order walk must accept
+/// persisted string keys of every length instead of reporting a corrupted chain.
+#[test]
+fn test_heap_debug_accepts_odd_length_string_hash_keys() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$lit = ["x" => "az"];
+echo $lit["x"], "|";
+$a = [];
+for ($n = 1; $n <= 24; $n++) {
+    $k = str_repeat("k", $n * $argc);
+    $a[$k] = $n;
+}
+$sum = 0;
+for ($n = 1; $n <= 24; $n++) {
+    $sum += $a[str_repeat("k", $n * $argc)];
+}
+echo count($a), "|", $sum;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "az|24|300");
+    assert!(
+        !out.stderr.contains("insertion order left the table"),
+        "hash chain verifier faulted: {}",
+        out.stderr
+    );
+}
+
+/// Regression: `array_push` on an untyped property declared in a parent class must not hit the
+/// "preflighted native array place must be addressable" panic; the preflight and the receiver
+/// preparation agree that a Mixed slot takes the value path.
+#[test]
+fn test_array_push_untyped_inherited_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Node { protected $nodes; public function __construct(array $nodes = []) { $this->nodes = $nodes; } public function count(): int { return count($this->nodes); } public function keys(): string { return implode(",", $this->nodes); } }
+class Arr extends Node { public function add(int $k, int $v): void { array_push($this->nodes, $k, $v); } }
+$a = new Arr([]);
+$a->add(7, 1);
+$a->add(8, 2);
+echo $a->count(), "|", $a->keys(), "\n";
+"#,
+    );
+    assert_eq!(out, "4|7,1,8,2\n");
+}
+
+/// `isset($a[(string) $k])` with a mixed `$k` (every `foreach` key is `int|string`) allocates the
+/// cast key; the probe only reads it and must release it. Each such `isset()` leaked one string,
+/// which every DOM `loadHTML()` with an attribute paid through its valueless-attribute check.
+/// The expected output is php 8.5's own.
+#[test]
+fn test_isset_releases_a_key_cast_from_a_mixed_value() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$seen = ['a' => 1, '7' => 2];
+$hits = 0;
+for ($i = 0; $i < 40; $i++) {
+    foreach (['a' => 1, 7 => 2, 'b' => 3] as $key => $_) {
+        if (isset($seen[(string) $key])) {
+            $hits++;
+        }
+    }
+}
+$hash = ['x' => true];
+$mixed = $argc > 5 ? 3 : 'x';
+for ($i = 0; $i < 40; $i++) {
+    if (isset($hash[(string) $mixed])) {
+        $hits++;
+    }
+}
+echo $hits, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "120\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "isset() leaked its cast key: {}",
+        out.stderr
+    );
 }

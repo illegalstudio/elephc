@@ -1,0 +1,6 @@
+[native]
+schema = 1
+
+[native.dependencies]
+pcre2 = "10.47"
+libmagic = "5.46"

@@ -19,5 +19,24 @@ docs/superpowers/
 /bundle.tar.gz
 /bundle.tar.bz2
 
+# Framework fixtures: only their README is tracked. The application itself (its code, its
+# configuration, `vendor/`, `var/`) is the framework's, and is recreated locally by following
+# that README. Its build output is never committed either: a single `.s` for the Symfony app is
+# over a gigabyte, and one once reached 109 MB in a commit and blocked every push to GitHub.
+/examples/symfony-app/*
+!/examples/symfony-app/README.md
+/examples/symfony-demo/*
+!/examples/symfony-demo/README.md
+/examples/laravel-app/*
+!/examples/laravel-app/README.md
+
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Kage repository memory: the verified packets are committed and shared, every
+# other entry (indexes, code graph, structural/observation caches, daemon and
+# store state, reports) is local and regenerable (run `kage refresh`).
+.agent_memory/*
+!.agent_memory/packets/
+.agent_memory/packets/*
+!.agent_memory/packets/*.md

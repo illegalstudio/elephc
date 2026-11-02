@@ -2,7 +2,7 @@
 title: "array_intersect_key()"
 description: "Computes the intersection of arrays using keys for comparison."
 sidebar:
-  order: 18
+  order: 22
 ---
 
 ## array_intersect_key()

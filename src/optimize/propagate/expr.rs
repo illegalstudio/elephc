@@ -94,6 +94,12 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(propagate_expr(*inner, env))),
+        ExprKind::ArrayReference(inner) => {
+            if let Some(root) = lvalue_root(&inner) {
+                super::stmt::mark_reference_volatile(root);
+            }
+            ExprKind::ArrayReference(Box::new(propagate_expr(*inner, env)))
+        }
         ExprKind::Not(inner) => ExprKind::Not(Box::new(propagate_expr(*inner, env))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(propagate_expr(*inner, env))),
         ExprKind::Throw(inner) => ExprKind::Throw(Box::new(propagate_expr(*inner, env))),
@@ -299,6 +305,12 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 property: Box::new(propagate_expr(*property, env)),
             }
         }
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver,
+                property: Box::new(propagate_expr(*property, env)),
+            }
+        }
         ExprKind::NullsafePropertyAccess { object, property } => {
             ExprKind::NullsafePropertyAccess {
                 object: Box::new(propagate_expr(*object, env)),
@@ -387,6 +399,12 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         },
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+            ExprKind::DynamicScopedConstantAccess {
+                receiver: Box::new(propagate_expr(*receiver, env)),
+                name,
+            }
         }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,

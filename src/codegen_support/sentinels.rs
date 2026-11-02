@@ -59,6 +59,11 @@ pub fn set_null_repr(repr: NullRepr) {
     NULL_REPR.with(|cell| cell.set(repr));
 }
 
+/// Returns the null representation installed for the compilation on this thread.
+pub(crate) fn null_repr() -> NullRepr {
+    NULL_REPR.with(|cell| cell.get())
+}
+
 /// Returns true when the active compilation uses the tagged null representation.
 pub(crate) fn null_repr_is_tagged() -> bool {
     NULL_REPR.with(|cell| cell.get()) == NullRepr::Tagged
@@ -89,7 +94,12 @@ pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
 /// tag, so readers that see only the container (`json_encode`, `var_dump`, mixed reads) show a 0
 /// word as PHP null and any other word as its integer address. Boxing normalizes it, so a mixed
 /// cell never carries it; typed pointer reads ignore it and load the raw word.
-pub(crate) const POINTER_ARRAY_VALUE_TYPE: i64 = 13;
+///
+/// This is 14, not 13: tag 13 is `ARRAY_LOCAL_REF_CELL_TAG`, the box tag of an array element that
+/// is a PHP reference. `__rt_mixed_from_value` normalizes THIS tag to null/int while boxing, so
+/// sharing the number made every local reference marker box as an integer (the address of its
+/// cell) and every read of `[&$x]` print a pointer. Keep the two apart.
+pub(crate) const POINTER_ARRAY_VALUE_TYPE: i64 = 14;
 
 /// Rewrites a `POINTER_ARRAY_VALUE_TYPE` tag in `tag_reg` to the PHP value its word stands for.
 ///
@@ -146,6 +156,55 @@ pub(crate) const TAGGED_SCALAR_PROPERTY_TAG: u64 = 12;
 /// with a tag bit.
 pub(crate) const SERPROP_FALSE_ONLY_BIT: u64 = 1 << 11;
 
+/// Flag OR-ed into a class property descriptor's value tag when the slot is REFERENCE-BOUND.
+///
+/// A property that took part in `$r = &$o->p` stores a pointer to a managed reference cell
+/// instead of the value, and the cell holds the value in the DECLARED type's representation
+/// (`{payload, high word}` at offsets 0 and 8). The descriptor used to say `7` (Mixed) for such
+/// a slot, so every object walker (`(array)`, `get_object_vars`, `foreach`, `var_export`,
+/// `var_dump`, `print_r`, `serialize`, `json_encode`) read the cell pointer as a boxed Mixed
+/// and saw garbage: `(array) $o` answered `null` for the property and `var_export` printed an
+/// empty object. The descriptor now carries the declared type's real tag plus this flag, and a
+/// walker folds it out with [`emit_deref_reference_property_slot`] right after loading the row.
+/// It sits above the runtime value tag range (0-12), like [`TAGGED_SCALAR_PROPERTY_TAG`].
+pub(crate) const REFERENCE_PROPERTY_TAG_FLAG: u64 = 0x100;
+
+/// Replaces a reference-bound slot's words with the value its cell holds.
+///
+/// `tag_reg` holds the descriptor tag, `lo_reg`/`hi_reg` the slot's two words as loaded, and
+/// `tmp_reg` is any free register. A descriptor tag without [`REFERENCE_PROPERTY_TAG_FLAG`]
+/// passes through untouched, so a walker runs this right after loading a row and keeps its
+/// existing `(tag, low word, high word)` dispatch. Run it BEFORE
+/// [`emit_resolve_tagged_scalar_property_tag`]: a `?int` reference cell carries its runtime tag
+/// in the cell's high word.
+pub(crate) fn emit_deref_reference_property_slot(
+    emitter: &mut Emitter,
+    tag_reg: &str,
+    lo_reg: &str,
+    hi_reg: &str,
+    tmp_reg: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("tbz {}, #8, 1f", tag_reg));           // a plain slot keeps its own words
+            emitter.instruction(&format!("and {}, {}, #0xff", tag_reg, tag_reg)); // fold the reference flag out of the descriptor tag
+            emitter.instruction(&format!("mov {}, {}", tmp_reg, lo_reg));       // the slot's low word is the reference-cell pointer
+            emitter.instruction(&format!("ldr {}, [{}]", lo_reg, tmp_reg));     // load the cell's payload word
+            emitter.instruction(&format!("ldr {}, [{}, #8]", hi_reg, tmp_reg)); // load the cell's high word
+            emitter.label("1");
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {}, 0x100", tag_reg));           // is this a reference-bound slot?
+            emitter.instruction("jz 1f");                                       // a plain slot keeps its own words
+            emitter.instruction(&format!("and {}, 0xff", tag_reg));             // fold the reference flag out of the descriptor tag
+            emitter.instruction(&format!("mov {}, {}", tmp_reg, lo_reg));       // the slot's low word is the reference-cell pointer
+            emitter.instruction(&format!("mov {}, QWORD PTR [{}]", lo_reg, tmp_reg)); // load the cell's payload word
+            emitter.instruction(&format!("mov {}, QWORD PTR [{} + 8]", hi_reg, tmp_reg)); // load the cell's high word
+            emitter.label("1");
+        }
+    }
+}
+
 /// Uniform low-byte heap kinds shared by allocation producers, ownership dispatchers and GC.
 ///
 /// These values describe top-level managed allocations. They are unrelated to Mixed runtime
@@ -164,8 +223,37 @@ pub(crate) const REFERENCE_CELL_HEAP_KIND: u32 = 8;
 /// Heap-owned callable descriptor with typed capture metadata.
 pub(crate) const CALLABLE_HEAP_KIND: u32 = 9;
 
+/// Payload bytes of a managed reference cell: `value@0`, `inner_tag@8`, canary`@16`.
+pub(crate) const REFERENCE_CELL_PAYLOAD_BYTES: i64 = 24;
+
+/// Byte offset of a managed reference cell's canary word.
+pub(crate) const REFERENCE_CELL_CANARY_OFFSET: i64 = 16;
+
+/// Key of the canary word every managed reference cell carries at `+16`: the cell's own address
+/// XOR this key. `__rt_reference_cell_owner` proves an address is an exact live cell by this word
+/// in O(1); it used to walk the heap from its start to the address, which was a fifth of a
+/// compiled Symfony request. An interior word cannot spell a function of its own address by
+/// accident, and `__rt_heap_free` clears the word, so stale storage never keeps it. The top bit is
+/// set so the stored word never reads as a heap or user-space pointer to the cycle collector.
+pub(crate) const REFERENCE_CELL_CANARY_KEY: u64 = 0xC311_5EF0_A7D1_9B3D;
+
+/// Stores the canary of the just-allocated managed reference cell in `cell_reg`, using `scratch`.
+pub(crate) fn emit_store_reference_cell_canary(emitter: &mut Emitter, cell_reg: &str, scratch: &str) {
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, scratch, REFERENCE_CELL_CANARY_KEY as i64);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("eor {scratch}, {scratch}, {cell_reg}")); // derive the canary from the cell's own address
+            emitter.instruction(&format!("str {scratch}, [{cell_reg}, #{REFERENCE_CELL_CANARY_OFFSET}]")); // publish the exact-cell proof the owner check reads
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("xor {scratch}, {cell_reg}"));         // derive the canary from the cell's own address
+            emitter.instruction(&format!("mov QWORD PTR [{cell_reg} + {REFERENCE_CELL_CANARY_OFFSET}], {scratch}")); // publish the exact-cell proof the owner check reads
+        }
+    }
+}
+
 /// The complete registered top-level heap-kind namespace.
-const MANAGED_HEAP_KINDS: [u32; 9] = [
+const MANAGED_HEAP_KINDS: [u32; 10] = [
     STRING_HEAP_KIND,
     ARRAY_HEAP_KIND,
     HASH_HEAP_KIND,
@@ -175,6 +263,7 @@ const MANAGED_HEAP_KINDS: [u32; 9] = [
     CONCAT_TEMP_HEAP_KIND,
     REFERENCE_CELL_HEAP_KIND,
     CALLABLE_HEAP_KIND,
+    GLOBAL_REF_CELL_HEAP_KIND as u32,
 ];
 
 /// Reject duplicate heap-kind registrations at compile time. The reference-cell allocator
@@ -192,6 +281,28 @@ const _: () = {
         left += 1;
     }
 };
+
+/// Folds the tagged-scalar marker out of a just-loaded property descriptor row.
+///
+/// Same operation as [`emit_resolve_tagged_scalar_property_tag`]; `_scratch_reg` is accepted for
+/// the older call shape and is not needed.
+pub(crate) fn emit_resolve_prop_desc_tag(
+    emitter: &mut Emitter,
+    tag_reg: &str,
+    hi_reg: &str,
+    _scratch_reg: &str,
+) {
+    emit_resolve_tagged_scalar_property_tag(emitter, tag_reg, hi_reg);
+}
+
+
+/// Heap kind stamped on a request-lifetime global reference cell.
+///
+/// The uniform dispatcher intentionally treats this private kind as opaque; the owning global
+/// slot and tag-12 array markers release it through `__rt_global_ref_cell_decref`. It must not
+/// reuse `REFERENCE_CELL_HEAP_KIND` (8), which the dispatcher releases as a managed cell, nor
+/// `CALLABLE_HEAP_KIND` (9).
+pub(crate) const GLOBAL_REF_CELL_HEAP_KIND: u8 = 10;
 
 /// Returns the register holding a tagged scalar's tag word; the payload word lives in the
 /// integer result register. AArch64: `x1`. x86_64: `rdx` (mirrors the `Str` second word).
@@ -386,6 +497,25 @@ pub(crate) fn emit_float_result_bits_to_int_result(emitter: &mut Emitter) {
 /// through [`x86_64_heap_kind_word`] instead of hand-typing the concatenated immediate.
 pub(crate) const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
+/// Value written into a heap block's REFCOUNT word while the block sits on the ordered free
+/// list or in a small bin, on every target.
+///
+/// A parked block used to be marked by a refcount of ZERO, which a live block being released
+/// also carries — so nothing could tell "this block is already free" from "this block is being
+/// freed now". Detecting a double free therefore meant SCANNING the bin chain for the block on
+/// every small free, and that scan is what `--web`'s heap guard does. Measured on the compiled
+/// Symfony fixture it was **76.3% of `__rt_heap_free`'s self time and ~13% of the whole
+/// request**, because the chain grows with every small block the request frees.
+///
+/// An explicit mark answers the same question with one compare. It is also a STRONGER
+/// validation than `refcount == 0` for the allocator's reuse check: arbitrary bytes that happen
+/// to land inside the arena are far less likely to spell this value than to be zero.
+///
+/// The value must not be reachable as a real refcount. Refcounts are small and bit 31 is the
+/// destruction-in-progress flag, so a count near 0x72EE_F2EE is unreachable in a 8 MB arena
+/// where every live block needs at least 16 bytes.
+pub(crate) const HEAP_FREE_REFCOUNT_MARK: u32 = 0xF2EE_F2EE;
+
 /// Builds the full x86_64 heap-header kind word: magic in the high 32 bits and `low_bits`
 /// in the low 32 bits. `low_bits` is the packed kind/COW/value_type field (plain kinds such
 /// as `1`/`4`/`5`/`6`, or wider encodings such as `0x8003` / `0x80ff` / `0x8702`). Pass `0`
@@ -397,11 +527,10 @@ pub(crate) fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
     (X86_64_HEAP_MAGIC_HI32 << 32) | u64::from(low_bits)
 }
 
-/// Byte offset of the creation line inside the 56-byte compact Throwable payload.
+/// Byte offset of the ordinary declared Throwable line property.
 ///
-/// The payload is `class_id@0`, `message ptr@8`, `message len@16`, `code@24`, `previous@40`;
-/// offset 32 was the one word never written, so the line fits without growing the allocation or
-/// disturbing any existing reader.
+/// Keeping this separate from the code property's high word makes protected
+/// property writes, reflection, intrinsic getters and generated errors agree.
 ///
 /// PHP records the line where a Throwable is CONSTRUCTED, so every emitter that allocates this
 /// payload must write the slot — `__rt_heap_alloc` recycles blocks without zeroing them, and an
@@ -409,7 +538,7 @@ pub(crate) fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
 /// know the line write `0`, which the readers treat as "origin unknown" and omit.
 ///
 /// Read by `Throwable::getLine()` in `lower_inst.rs` and by `__rt_report_uncaught_exception`.
-pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = 32;
+pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = super::throwable_layout::LINE_OFFSET as u64;
 
 /// Marks a creation line as belonging to tokenizer input with an explicitly empty filename.
 /// Normal source spans are u32, so their creation-line values never set this bit.

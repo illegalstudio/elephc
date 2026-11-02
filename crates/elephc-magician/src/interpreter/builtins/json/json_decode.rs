@@ -251,12 +251,7 @@ pub(super) fn eval_throw_json_exception(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     context.set_json_error(code, message.to_string());
-    let exception = values.new_object("JsonException")?;
-    let message = values.string(message)?;
-    let code = values.int(code)?;
-    values.construct_object(exception, vec![message, code])?;
-    context.set_pending_throw(exception);
-    Err(EvalStatus::UncaughtThrowable)
+    eval_throw_builtin_exception_with_code("JsonException", message, code, context, values)
 }
 
 /// Maps eval JSON parser failures to PHP `JSON_ERROR_*` codes and messages.

@@ -2,7 +2,7 @@
 title: "mkdir() - internals"
 description: "Compiler internals for mkdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 293
+  order: 304
 ---
 
 ## `mkdir()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/mkdir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/mkdir.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,10 +25,10 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function mkdir(string $directory, int $permissions = 511, bool $recursive = false): bool
+function mkdir(string $directory, int $permissions = 511, bool $recursive = false, mixed $context = null): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–3 arguments (2 optional).
+- **Arity**: takes 1–4 arguments (3 optional).
 
 ## Eval interpreter (magician)
 

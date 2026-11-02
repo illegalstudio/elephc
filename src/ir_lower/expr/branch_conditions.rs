@@ -69,12 +69,27 @@ fn lower_condition_tree(
                 if is_and { else_target } else { rhs }, continuations,
             );
             ctx.builder.position_at_end(rhs);
+            // The right operand only runs once the left has decided: `!$r instanceof C || $r->p`
+            // reaches `$r->p` having PROVED the receiver. `lower_logical_binary` narrows there,
+            // and a condition lowered through this tree must too, or `$request->command` is read
+            // through the declared (wider) class and refused as a missing property.
+            let saved_types = ctx.local_types_snapshot();
+            crate::ir_lower::stmt::conditionals::apply_instanceof_branch_narrowing(
+                ctx, left, is_and,
+            );
             lower_condition_tree(ctx, right, then_target, else_target, continuations);
+            super::unary_logic::join_short_circuit_operand_types(ctx, saved_types);
         }
         ExprKind::Not(inner) =>
             lower_condition_tree(ctx, inner, else_target, then_target, continuations),
         _ => {
             let value = lower_expr_inner(ctx, condition);
+            // A condition that never completes (`if (exit())`, `if (throw ...)`) already ended its
+            // block; the arms behind it are unreachable and take no branch from it.
+            if ctx.builder.insertion_block_is_terminated() {
+                ctx.expression_depth -= 1;
+                return;
+            }
             let value = ctx.truthy_consuming(value, Some(condition.span));
             ctx.builder.terminate(Terminator::CondBr {
                 cond: value.value,

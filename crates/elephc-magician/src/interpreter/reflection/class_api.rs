@@ -11,6 +11,72 @@
 
 use super::*;
 
+/// Handles lazy parent and constructor queries for eval-owned ReflectionClass objects.
+pub(in crate::interpreter) fn eval_reflection_class_lazy_relation_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    #[cfg(not(test))]
+    context.sync_global_eval_classes();
+    let Some(reflected_name) = context
+        .eval_reflection_class_name(identity)
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    match method_name.to_ascii_lowercase().as_str() {
+        "getconstructor" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            eval_reflection_constructor_object_result(
+                EVAL_REFLECTION_OWNER_CLASS,
+                &reflected_name,
+                true,
+                context,
+                values,
+            )
+            .map(Some)
+        }
+        "getparentclass" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            let parent_class_name =
+                match eval_reflection_class_like_attributes(&reflected_name, context) {
+                    Some(metadata) => metadata.parent_class_name,
+                    None => eval_reflection_aot_parent_class_name(&reflected_name, values)?,
+                };
+            eval_reflection_related_class_result(
+                EVAL_REFLECTION_OWNER_CLASS,
+                parent_class_name.as_deref(),
+                false,
+                context,
+                values,
+            )
+            .map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Handles `ReflectionClass::getName()` from the class identity retained by the eval bridge.
+pub(in crate::interpreter) fn eval_reflection_class_name_result(
+    identity: u64,
+    method_name: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !method_name.eq_ignore_ascii_case("getName") {
+        return Ok(None);
+    }
+    let Some(reflected_name) = context.eval_reflection_class_name(identity) else {
+        return Ok(None);
+    };
+    eval_reflection_bind_no_args(evaluated_args)?;
+    values.string(reflected_name).map(Some)
+}
+
 /// Handles eval-backed `ReflectionClass::implementsInterface()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_implements_interface_result(
     identity: u64,
@@ -30,6 +96,7 @@ pub(in crate::interpreter) fn eval_reflection_class_implements_interface_result(
     };
     let args = bind_evaluated_function_args(&[String::from("interface")], evaluated_args)?;
     let interface_name = eval_reflection_string_arg(args[0], values)?;
+    let _ = crate::interpreter::eval_spl_autoload_class(&interface_name, context, values)?;
     if !eval_reflection_interface_exists(&interface_name, context, values)? {
         if eval_reflection_non_interface_exists(&interface_name, context, values)? {
             return eval_throw_reflection_exception(
@@ -81,6 +148,7 @@ pub(in crate::interpreter) fn eval_reflection_class_is_subclass_of_result(
     };
     let args = bind_evaluated_function_args(&[String::from("class")], evaluated_args)?;
     let target_name = eval_reflection_string_arg(args[0], values)?;
+    let _ = crate::interpreter::eval_spl_autoload_class(&target_name, context, values)?;
     if !eval_reflection_class_like_exists(&target_name, context)
         && !values.class_exists(&target_name)?
         && !eval_runtime_interface_exists(&target_name, values)?
@@ -106,6 +174,11 @@ pub(in crate::interpreter) fn eval_reflection_class_is_subclass_of_result(
         values.release(reflected_class)?;
         result
     };
+    if crate::eval_trace::enabled() {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_is_subclass_of reflected={reflected_name:?} target={target_name:?} result={result}"
+        );
+    }
     values.bool_value(result).map(Some)
 }
 
@@ -154,12 +227,21 @@ pub(in crate::interpreter) fn eval_reflection_class_source_location_result(
     let Some(reflected_name) = context.eval_reflection_class_name(identity) else {
         return Ok(None);
     };
-    let (source_file, source_location) =
-        if let Some(metadata) = eval_reflection_class_like_attributes(reflected_name, context) {
-            (None, metadata.source_location)
-        } else {
-            eval_reflection_aot_class_source_metadata(reflected_name, values)?
-        };
+    let (aot_source_file, aot_source_location) =
+        eval_reflection_aot_class_source_metadata(reflected_name, values)?;
+    // Interpreted declarations record their own file when they execute. AOT declarations use the
+    // class-name keyed source table; the module entry path is not a substitute for a declaration
+    // path (for example, a bundle's getPath() reflects on its concrete class).
+    let eval_metadata = eval_reflection_class_like_attributes(reflected_name, context);
+    let eval_source_file = eval_metadata
+        .as_ref()
+        .and_then(|_| context.class_source_file(reflected_name))
+        .map(str::to_string);
+    let source_file = eval_source_file.or(aot_source_file);
+    let source_location = eval_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.source_location)
+        .or(aot_source_location);
     eval_reflection_source_location_result(
         method_key.as_str(),
         source_file.as_deref(),
@@ -171,20 +253,25 @@ pub(in crate::interpreter) fn eval_reflection_class_source_location_result(
 }
 
 /// Returns AOT source-file and line metadata for a generated ReflectionClass.
-fn eval_reflection_aot_class_source_metadata(
+pub(super) fn eval_reflection_aot_class_source_metadata(
     class_name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(Option<String>, Option<EvalSourceLocation>), EvalStatus> {
-    let Some(flags) = values.reflection_class_flags(class_name.trim_start_matches('\\'))? else {
-        return Ok((None, None));
+    let class_name = class_name.trim_start_matches('\\');
+    let class_flags = values.reflection_class_flags(class_name)?;
+    let source_file = match values.reflection_class_source_file(class_name)? {
+        Some(source_file) => Some(source_file),
+        None
+            if class_flags.is_some_and(|flags| {
+                flags & EVAL_REFLECTION_CLASS_FLAG_INTERNAL == 0
+            }) =>
+        {
+            values.reflection_source_file()?
+        }
+        None => None,
     };
-    let Some(source_location) = eval_reflection_aot_class_source_location_from_flags(flags) else {
-        return Ok((None, None));
-    };
-    let Some(source_file) = values.reflection_source_file()? else {
-        return Ok((None, None));
-    };
-    Ok((Some(source_file), Some(source_location)))
+    let source_location = class_flags.and_then(eval_reflection_aot_class_source_location_from_flags);
+    Ok((source_file, source_location))
 }
 
 /// Decodes AOT ReflectionClass source lines packed into high flag bits.
@@ -211,14 +298,45 @@ pub(in crate::interpreter) fn eval_reflection_class_basic_metadata_result(
     else {
         return Ok(None);
     };
-    let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) else {
-        return Ok(None);
-    };
     let method_key = method_name.to_ascii_lowercase();
+    let metadata = eval_reflection_class_like_attributes(&reflected_name, context);
+    if metadata.is_none() {
+        // No eval context DECLARED this class, which is the normal case for a class the compiler
+        // produced and for a builtin. The facts still exist -- the generated program publishes
+        // them through the reflection hooks -- but only `getDocComment()` ever asked, so every
+        // other scalar answered "not handled" and the bridge turned that into an anonymous fatal.
+        // Symfony's `ContainerBuilder` reflects on compiled classes while it tracks resources, so
+        // this was the cold path's next stop after the backtrace work.
+        return eval_reflection_runtime_class_scalar_result(
+            &reflected_name,
+            method_key.as_str(),
+            evaluated_args,
+            values,
+        );
+    }
+    let metadata = metadata.expect("class reflection metadata was checked above");
     match method_key.as_str() {
         "getname" => {
             eval_reflection_bind_no_args(evaluated_args)?;
             values.string(&metadata.resolved_name).map(Some)
+        }
+        "getdoccomment" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            if crate::eval_trace::enabled() {
+                let preview = metadata.doc_comment.as_deref().map(|doc_comment| {
+                    doc_comment.chars().take(160).collect::<String>()
+                });
+                eprintln!(
+                    "[elephc-eval-trace] phase=reflection_doc_comment class={:?} present={} len={} preview={preview:?}",
+                    metadata.resolved_name,
+                    metadata.doc_comment.is_some(),
+                    metadata.doc_comment.as_ref().map_or(0, String::len),
+                );
+            }
+            match metadata.doc_comment {
+                Some(doc_comment) => values.string(&doc_comment).map(Some),
+                None => values.bool_value(false).map(Some),
+            }
         }
         "getshortname" => {
             eval_reflection_bind_no_args(evaluated_args)?;
@@ -386,6 +504,91 @@ fn eval_reflection_class_flag_result(
     values.bool_value(flags & flag != 0).map(Some)
 }
 
+/// Answers one `ReflectionClass` scalar from the generated program's own reflection metadata.
+///
+/// Used when no eval context declared the class. The flag word is the same one the eval path
+/// builds by hand, so the member-to-bit mapping is shared; the name-derived members need no
+/// metadata at all, and the interface list is already an array the runtime hands back.
+fn eval_reflection_runtime_class_scalar_result(
+    reflected_name: &str,
+    method_key: &str,
+    evaluated_args: Vec<EvaluatedCallArg>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if method_key == "getdoccomment" {
+        eval_reflection_bind_no_args(evaluated_args)?;
+        return match values.reflection_class_doc_comment(reflected_name)? {
+            Some(doc_comment) => values.string(&doc_comment).map(Some),
+            None => values.bool_value(false).map(Some),
+        };
+    }
+    let canonical = values
+        .reflection_canonical_class_name(reflected_name)?
+        .unwrap_or_else(|| reflected_name.to_string());
+    let canonical = canonical.trim_start_matches('\\').to_string();
+    match method_key {
+        "getname" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            return values.string(&canonical).map(Some);
+        }
+        "getshortname" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            let short = canonical.rsplit('\\').next().unwrap_or(&canonical).to_string();
+            return values.string(&short).map(Some);
+        }
+        "getnamespacename" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            let namespace = canonical
+                .rsplit_once('\\')
+                .map_or(String::new(), |(namespace, _)| namespace.to_string());
+            return values.string(&namespace).map(Some);
+        }
+        "innamespace" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            return values.bool_value(canonical.contains('\\')).map(Some);
+        }
+        "getinterfacenames" => {
+            eval_reflection_bind_no_args(evaluated_args)?;
+            return values.reflection_class_interface_names(&canonical).map(Some);
+        }
+        _ => {}
+    }
+    let flag = match method_key {
+        "isfinal" => EVAL_REFLECTION_CLASS_FLAG_FINAL,
+        "isabstract" => EVAL_REFLECTION_CLASS_FLAG_ABSTRACT,
+        "isinterface" => EVAL_REFLECTION_CLASS_FLAG_INTERFACE,
+        "istrait" => EVAL_REFLECTION_CLASS_FLAG_TRAIT,
+        "isenum" => EVAL_REFLECTION_CLASS_FLAG_ENUM,
+        "isreadonly" => EVAL_REFLECTION_CLASS_FLAG_READONLY,
+        "isanonymous" => EVAL_REFLECTION_CLASS_FLAG_ANONYMOUS,
+        "isinstantiable" => EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE,
+        "iscloneable" => EVAL_REFLECTION_CLASS_FLAG_CLONEABLE,
+        "isiterable" | "isiterateable" => EVAL_REFLECTION_CLASS_FLAG_ITERABLE,
+        "isinternal" => EVAL_REFLECTION_CLASS_FLAG_INTERNAL,
+        "isuserdefined" => EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED,
+        _ => return Ok(None),
+    };
+    // The AOT answer the reflector was built from, not the raw published word: that word has no
+    // enum bit and marks an enum instantiable and cloneable like any final class.
+    let flags = match eval_reflection_aot_class_flags(&canonical, values)? {
+        Some((flags, _)) => flags,
+        None => match values.reflection_class_flags(&canonical)? {
+            Some(flags) => flags,
+            None => return Ok(None),
+        },
+    };
+    if flag == EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED {
+        // The generated program publishes flags only for the classes it compiled FROM SOURCE, so
+        // reaching here at all means the class is user-defined unless it is marked internal. The
+        // flag word itself does not carry the bit, and answering from the bit gave `false` for
+        // every compiled class.
+        eval_reflection_bind_no_args(evaluated_args)?;
+        let internal = flags & EVAL_REFLECTION_CLASS_FLAG_INTERNAL != 0;
+        return values.bool_value(!internal).map(Some);
+    }
+    eval_reflection_class_flag_result(flags, flag, evaluated_args, values)
+}
+
 /// Handles eval-backed `ReflectionClass::hasMethod()` calls.
 pub(in crate::interpreter) fn eval_reflection_class_has_method_result(
     identity: u64,
@@ -405,17 +608,50 @@ pub(in crate::interpreter) fn eval_reflection_class_has_method_result(
     };
     let args = bind_evaluated_function_args(&[String::from("name")], evaluated_args)?;
     let requested_name = eval_reflection_string_arg(args[0], values)?;
-    let exists =
-        if let Some(metadata) = eval_reflection_class_like_attributes(&reflected_name, context) {
-            metadata
-                .method_names
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(&requested_name))
+    let exists = if eval_reflection_is_builtin_closure(&reflected_name, context) {
+        eval_reflection_builtin_closure_method_metadata(&requested_name).is_some()
+    } else if let Some(metadata) =
+        eval_reflection_class_like_attributes(&reflected_name, context)
+    {
+        let declared = metadata
+            .method_names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&requested_name));
+        if declared {
+            true
+        } else if let Some(parent) = context.class_native_parent_name(&reflected_name) {
+            eval_reflection_aot_method_exists_in_ancestry(&parent, &requested_name, values)?
         } else {
-            eval_reflection_aot_method_metadata_if_exists(&reflected_name, &requested_name, values)?
-                .is_some()
-        };
+            false
+        }
+    } else {
+        eval_reflection_aot_method_exists_in_ancestry(&reflected_name, &requested_name, values)?
+    };
+    if crate::eval_trace::enabled() {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_has_method reflected={reflected_name:?} method={requested_name:?} result={exists}"
+        );
+    }
     values.bool_value(exists).map(Some)
+}
+
+/// Returns whether a compiled class or one of its compiled ancestors declares a method.
+///
+/// A class's AOT method table omits the PRIVATE methods its ancestors declare, which php still
+/// reports: `hasMethod()` is true for them, as `new ReflectionMethod()` finds them.
+fn eval_reflection_aot_method_exists_in_ancestry(
+    class_name: &str,
+    method_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let mut owner = Some(class_name.to_string());
+    while let Some(current) = owner {
+        if eval_reflection_aot_method_metadata_if_exists(&current, method_name, values)?.is_some() {
+            return Ok(true);
+        }
+        owner = eval_reflection_aot_parent_class_name(&current, values)?;
+    }
+    Ok(false)
 }
 
 /// Handles eval-backed `ReflectionClass::hasProperty()` and inherited `ReflectionObject` calls.
@@ -466,6 +702,7 @@ pub(in crate::interpreter) fn eval_reflection_class_has_property_result(
             let dynamic_exists = eval_reflection_object_dynamic_property_exists(
                 dynamic_object,
                 &property_name,
+                context,
                 values,
             );
             values.release(dynamic_object)?;
@@ -603,6 +840,12 @@ pub(in crate::interpreter) fn eval_reflection_class_get_relation_objects_result(
     } else {
         return Ok(None);
     };
+    if crate::eval_trace::enabled() {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_class_relations_start method={method_name:?} identity={identity} args={}",
+            evaluated_args.len()
+        );
+    }
     if !evaluated_args.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
@@ -624,7 +867,12 @@ pub(in crate::interpreter) fn eval_reflection_class_get_relation_objects_result(
         } else {
             eval_reflection_aot_class_trait_names(&reflected_name, values)?
         };
-    eval_reflection_class_object_map_result(&names, context, values).map(Some)
+    if crate::eval_trace::enabled() {
+        eprintln!(
+            "[elephc-eval-trace] phase=reflection_class_relations reflected={reflected_name:?} kind={relation_kind} names={names:?}"
+        );
+    }
+    eval_reflection_class_object_map_result(&names, Some(relation_kind), context, values).map(Some)
 }
 
 /// Handles eval-backed `ReflectionClass::getTraitAliases()` calls.
@@ -738,7 +986,9 @@ pub(in crate::interpreter) fn eval_reflection_class_get_default_properties_resul
         return Ok(None);
     };
     let property_names = eval_reflection_default_property_names(&reflected_name, context, values)?;
-    let mut defaults = Vec::new();
+    // php lists the static defaults first, then the instance ones, each in reflection order.
+    let mut statics = Vec::new();
+    let mut instance = Vec::new();
     for name in property_names {
         let Some(member) =
             eval_reflection_default_property_metadata(&reflected_name, &name, context, values)?
@@ -753,11 +1003,18 @@ pub(in crate::interpreter) fn eval_reflection_class_get_default_properties_resul
             // Check retained errors before skipping missing values or allocating the result.
             return super::super::throwables::eval_throw_error(&message, context, values);
         }
-        if member.default_value.is_some() { defaults.push((name, member)); }
+        if member.default_value.is_none() {
+            continue;
+        }
+        if member.is_static {
+            statics.push((name, member));
+        } else {
+            instance.push((name, member));
+        }
     }
-    let mut result = values.assoc_new(defaults.len())?;
+    let mut result = values.assoc_new(statics.len() + instance.len())?;
     let outcome = (|| {
-        for (name, member) in defaults {
+        for (name, member) in statics.into_iter().chain(instance) {
             let default = member.default_value.as_ref().ok_or(EvalStatus::RuntimeFatal)?;
             let value = eval_reflection_member_default_value(&member, default, context, values)?;
             let key = match values.string(&name) {

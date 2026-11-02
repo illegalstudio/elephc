@@ -352,18 +352,76 @@ pub(in crate::types::checker) fn reserve_scope_dynamic_property_storage(checker:
 /// can miss every declared slot, and same-pair `__set` reentry creates dynamic storage.
 fn target_classes(checker: &Checker, targets: &ScopeDynamicMutationTargets) -> Vec<String> {
     let mut names = BTreeSet::new();
+    // Many sites share a receiver class: its family (the class and its subclasses) is found once
+    // instead of once per site, and from a children index built once instead of asking
+    // `is_subclass_of` of every class per family (the top checker frame on Symfony).
+    let mut families: crate::fast_hash::FastMap<&str, Vec<&String>> = Default::default();
+    let mut index = None;
     for site in &targets.sites {
-        for (candidate, _) in checker.classes.iter() {
-            if candidate != &site.class_name && !checker.is_subclass_of(candidate, &site.class_name)
-            {
-                continue;
-            }
+        let family = families.entry(site.class_name.as_str()).or_insert_with(|| {
+            index.get_or_insert_with(|| ClassChildren::of(checker)).family(checker, &site.class_name)
+        });
+        for candidate in family.iter().copied() {
             if site_needs_storage_on_class(checker, site, candidate) {
                 names.insert(candidate.clone());
             }
         }
     }
     names.into_iter().collect()
+}
+
+/// Each class name's direct children, by the parent `Checker::is_subclass_of` follows: the
+/// complete class's parent when it has one, else the declared one.
+struct ClassChildren<'c> {
+    children: crate::fast_hash::FastMap<&'c str, Vec<&'c str>>,
+}
+
+impl<'c> ClassChildren<'c> {
+    fn of(checker: &'c Checker) -> Self {
+        #[cfg(test)]
+        CLASS_CHILDREN_INDEXES.with(|count| count.set(count.get() + 1));
+        let mut children: crate::fast_hash::FastMap<&'c str, Vec<&'c str>> = Default::default();
+        let names = checker.classes.keys().chain(checker.declared_class_parents.keys());
+        let mut seen = crate::fast_hash::FastSet::default();
+        for name in names {
+            if !seen.insert(name.as_str()) {
+                continue;
+            }
+            let parent = match checker.classes.get(name) {
+                Some(class) if class.parent.is_some() => class.parent.as_deref(),
+                _ => checker.declared_class_parents.get(name).and_then(|parent| parent.as_deref()),
+            };
+            if let Some(parent) = parent {
+                children.entry(parent).or_default().push(name.as_str());
+            }
+        }
+        Self { children }
+    }
+
+    /// The complete classes that are `root` or inherit from it: what filtering `classes` by
+    /// `== root || is_subclass_of(_, root)` keeps, in `classes` iteration order.
+    fn family(&self, checker: &'c Checker, root: &str) -> Vec<&'c String> {
+        let mut reached = crate::fast_hash::FastSet::default();
+        let mut stack = vec![root];
+        while let Some(name) = stack.pop() {
+            for &child in self.children.get(name).into_iter().flatten() {
+                if reached.insert(child) {
+                    stack.push(child);
+                }
+            }
+        }
+        checker
+            .classes
+            .keys()
+            .filter(|candidate| candidate.as_str() == root || reached.contains(candidate.as_str()))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Children indexes `target_classes` built on this test thread.
+    pub(crate) static CLASS_CHILDREN_INDEXES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Returns whether php would really create a dynamic property for this SITE on this CLASS.
@@ -440,4 +498,47 @@ fn reserve_property_hash_storage(checker: &mut Checker, class_name: &str) {
         return;
     }
     info.scope_dynamic_property_storage = true;
+}
+
+#[cfg(test)]
+mod class_children_tests {
+    use super::*;
+
+    /// The children index answers what filtering every class by `is_subclass_of` answered, for
+    /// every root of a hierarchy mixing complete classes, a parent known only by declaration and
+    /// a malformed declared cycle.
+    #[test]
+    fn class_family_matches_the_subclass_filter() {
+        let source = "<?php class A {} class B extends A {} class C extends B {} class D extends A {} class E {} class F extends E {}";
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let target = crate::codegen::platform::Target::parse("macos-aarch64").expect("target");
+        let checked = crate::types::checker::check_types(&program, target).expect("check");
+        let mut checker = Checker::new(target);
+        checker.classes = checked.classes.into_iter().collect();
+        let mut g = checker.classes.get("A").expect("A").clone();
+        g.parent = None;
+        checker.classes.insert("G".to_string(), g);
+        // G's parent is only declared, through a class that never completed.
+        checker.declared_class_parents.insert("G".to_string(), Some("Pending".to_string()));
+        checker.declared_class_parents.insert("Pending".to_string(), Some("C".to_string()));
+        checker.declared_class_parents.insert("Loop1".to_string(), Some("Loop2".to_string()));
+        checker.declared_class_parents.insert("Loop2".to_string(), Some("Loop1".to_string()));
+        let index = ClassChildren::of(&checker);
+        for root in ["A", "B", "C", "D", "E", "F", "G", "Pending", "Loop1", "Missing"] {
+            let mut indexed: Vec<&str> = index.family(&checker, root).into_iter().map(String::as_str).collect();
+            let mut filtered: Vec<&str> = checker
+                .classes
+                .keys()
+                .filter(|candidate| candidate.as_str() == root || checker.is_subclass_of(candidate, root))
+                .map(String::as_str)
+                .collect();
+            indexed.sort_unstable();
+            filtered.sort_unstable();
+            assert_eq!(indexed, filtered, "family of {root}");
+        }
+        let mut family_of_a: Vec<&str> = index.family(&checker, "A").into_iter().map(String::as_str).collect();
+        family_of_a.sort_unstable();
+        assert_eq!(family_of_a, ["A", "B", "C", "D", "G"], "G reaches A through its declared parent");
+    }
 }

@@ -282,7 +282,8 @@ function inspectMixedThrowableOwners(mixed $error): int {
     $trace = $error->getTrace();
     $rendered = $error->__toString();
     $empty = $error->getTraceAsString();
-    return strlen($message) + strlen($rendered) + count($trace)
+    // The rendered string names the script's file; subtract it so the total is path-independent.
+    return strlen($message) + strlen($rendered) - strlen($file) + count($trace)
         + strlen($empty) + (strlen($file) > 0 ? 1 : 0);
 }
 $total = 0;
@@ -294,7 +295,8 @@ for ($i = 0; $i < 12; $i++) {
 echo $total;
 "#);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "180", "{}", out.stderr);
+    // php: 12 x (7 message + 48 rendered-without-file + 0 frames + 9 "#0 {main}" + 1).
+    assert_eq!(out.stdout, "780", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

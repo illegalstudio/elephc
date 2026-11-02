@@ -52,14 +52,24 @@ fn test_identity_fold_preserves_operand_side_effects() {
     assert_eq!(out, "x3");
 }
 
-/// Regression: PHP's `/` is float-producing even on two int operands (it lowers to a
-/// float-typed `idiv`), so `$x / 1` must NOT be folded to its I64 operand — doing so
-/// reinterprets the integer bits when the result is consumed as a float. `var_dump`
-/// must report a float, exactly as the unoptimized path does.
+/// Regression: `$x / 1` must NOT be folded to its I64 operand — PHP's `/` on two ints yields
+/// an int only when the division is exact, so the result is a boxed int-or-float and folding
+/// reinterprets its bits. `var_dump($argc / 1)` and `var_dump(($argc + 2) / 2)` print what
+/// php prints: `int(1)` and `float(1.5)`.
 #[test]
-fn test_identity_div_one_keeps_float_type() {
-    let out = compile_and_run("<?php var_dump($argc / 1);");
-    assert_eq!(out, "float(1)\n");
+fn test_identity_div_one_keeps_php_division_type() {
+    let out = compile_and_run("<?php var_dump($argc / 1); var_dump(($argc + 2) / 2);");
+    assert_eq!(out, "int(1)\nfloat(1.5)\n");
+}
+
+/// Regression: a `bool` shares `i64` storage with an `int`, and folding `$b * 1`, `1 * $b` or
+/// `$b + 0` to the operand made the result keep the operand's PHP type: `var_dump` printed
+/// `bool(true)` where php prints `int(1)`. The fold now also requires the PHP types to agree.
+/// `--no-ir-opt` always printed php's answer.
+#[test]
+fn test_identity_fold_keeps_arithmetic_result_type_for_bool_operand() {
+    let out = compile_and_run("<?php $b = $argc > 0; var_dump($b * 1, 1 * $b, $b + 0, $b * 2);");
+    assert_eq!(out, "int(1)\nint(1)\nint(1)\nint(2)\n");
 }
 
 /// Regression (the dangerous manifestation): a folded `$x / 1` feeding a float

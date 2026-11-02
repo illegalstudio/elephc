@@ -1,0 +1,58 @@
+---
+title: "preg_quote() - internals"
+description: "Compiler internals for preg_quote(): lowering path, type checks, and runtime helpers."
+sidebar:
+  order: 1022
+---
+
+## `preg_quote()` - internals
+
+## Where it lives
+
+- **Signature**: [`src/builtins/string/preg_quote.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/preg_quote.rs)
+- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
+
+
+### Lowering notes
+
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.preg_quote` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
+
+## Semantic descriptor
+
+- **Target strategy**: `runtime_call`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `independent`
+- **Effects**: `static (0 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `dynamic_target`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: `runtime.preg_quote`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
+
+## Signature summary
+
+```php
+function preg_quote(string $str, string $delimiter = null): string
+```
+
+## What the type checker enforces
+
+- **Arity**: takes 1–2 arguments (1 optional).
+
+## Eval interpreter (magician)
+
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/preg_quote.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/preg_quote.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Dispatch hooks**: `direct`, `values`
+
+## Cross-references
+
+- [User reference for `preg_quote()`](../../../php/builtins/string/preg_quote.md)

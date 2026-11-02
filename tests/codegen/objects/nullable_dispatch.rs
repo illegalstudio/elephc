@@ -1,5 +1,6 @@
 //! Purpose:
-//! Integration or regression tests for end-to-end codegen coverage of object nullable object dispatch, including method call on nullable object parameter, property access on nullable object parameter, and nullable object property round trip through typed field.
+//! Integration or regression tests for end-to-end codegen coverage of nullable object dispatch and
+//! nullable scalar values that cross typed calls or array-mediated control flow.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -90,6 +91,172 @@ if ($b->h instanceof Holder) {
 "#,
     );
     assert_eq!(out, "via-box");
+}
+
+/// Verifies a nullable string declared by an ancestor is unboxed before it crosses a typed
+/// instance-method argument boundary on a concrete descendant.
+#[test]
+fn test_inherited_nullable_string_property_passes_as_typed_method_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class PathLocator {
+    public function locate(string $resource, ?string $currentDirectory = null): string {
+        return ($currentDirectory ?? 'missing') . '/' . $resource;
+    }
+}
+
+class PathLoaderBase {
+    private ?string $currentDirectory = null;
+
+    public function setCurrentDirectory(string $currentDirectory): void {
+        $this->currentDirectory = $currentDirectory;
+    }
+
+    private function importRelative(PathLocator $locator, string $resource): string {
+        return $locator->locate($resource, $this->currentDirectory);
+    }
+
+    public function import(PathLocator $locator, string $resource): string {
+        return $this->importRelative($locator, $resource);
+    }
+}
+
+class PathLoader extends PathLoaderBase {}
+
+$loader = new PathLoader();
+$loader->setCurrentDirectory('/fixture/config');
+echo $loader->import(new PathLocator(), 'services.php');
+"#,
+    );
+    assert_eq!(out, "/fixture/config/services.php");
+}
+
+/// Verifies an inherited nullable string retains its Mixed layout when inserted into an initially
+/// empty `array<mixed>` and later read by `foreach`.
+///
+/// The array's static element type alone does not establish the physical runtime layout of a
+/// default empty property. `array_unshift()` must therefore normalize the array before writing a
+/// boxed nullable value, or the loop will interpret its pointer as an integer string.
+#[test]
+fn test_inherited_nullable_string_survives_array_unshift_and_foreach() {
+    let out = compile_and_run(
+        r#"<?php
+class ArrayPathLocator {
+    private array $paths = [];
+
+    public function locate(string $resource, ?string $currentDirectory = null): string {
+        $paths = $this->paths;
+        if (null !== $currentDirectory) {
+            array_unshift($paths, $currentDirectory);
+        }
+
+        foreach ($paths as $path) {
+            return $path . '/' . $resource;
+        }
+
+        return 'missing';
+    }
+}
+
+class ArrayPathLoaderBase {
+    private ?string $currentDirectory = null;
+
+    public function setCurrentDirectory(string $currentDirectory): void {
+        $this->currentDirectory = $currentDirectory;
+    }
+
+    private function importRelative(ArrayPathLocator $locator, string $resource): string {
+        return $locator->locate($resource, $this->currentDirectory);
+    }
+
+    public function import(ArrayPathLocator $locator, string $resource): string {
+        return $this->importRelative($locator, $resource);
+    }
+}
+
+class ArrayPathLoader extends ArrayPathLoaderBase {}
+
+$loader = new ArrayPathLoader();
+$loader->setCurrentDirectory('/fixture/config');
+echo $loader->import(new ArrayPathLocator(), 'services.php');
+"#,
+    );
+    assert_eq!(out, "/fixture/config/services.php");
+}
+
+/// Verifies a nullable object parameter is materialized correctly through a `??=` merge.
+///
+/// The parameter arrives in boxed union storage. Once the non-null branch has won, the merge
+/// result is a concrete object and must not retain the outer Mixed cell as though it were the
+/// object's pointer. A later typed call must receive the original object instance.
+#[test]
+fn test_nullable_named_object_param_null_coalesce_merge_materializes_for_typed_call() {
+    let out = compile_and_run(
+        r#"<?php
+class CoalesceState {
+    public function value(): string { return 'ok'; }
+}
+
+class CoalesceConsumer {
+    public static function read(?CoalesceState $state): string {
+        return $state->value();
+    }
+
+    public static function resolve(?CoalesceState $state): string {
+        $state ??= new CoalesceState();
+
+        return self::read($state);
+    }
+}
+
+echo CoalesceConsumer::resolve(new CoalesceState()), ':', CoalesceConsumer::resolve(null);
+"#,
+    );
+    assert_eq!(out, "ok:ok");
+}
+
+/// Verifies a nullable nominal parameter remains borrowed while a child constructor delegates it.
+///
+/// The parent constructor retains the nullable value in its typed property. The child-side
+/// nominal guard must therefore not release the original Mixed cell after the call: a later
+/// property replacement would otherwise free already-reused storage.
+#[test]
+fn test_nullable_nominal_parent_constructor_parameter_keeps_its_boxed_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+interface ParentLink {}
+
+class Root implements ParentLink {}
+
+class BaseNode {
+    protected ?ParentLink $parent;
+
+    public function __construct(?ParentLink $parent = null) {
+        $this->parent = $parent;
+    }
+}
+
+class ChildNode extends BaseNode {
+    public function __construct(?ParentLink $parent = null) {
+        parent::__construct($parent);
+    }
+
+    public function setParent(ParentLink $parent): void {
+        $this->parent = $parent;
+    }
+
+    public function hasParent(): bool {
+        return $this->parent instanceof ParentLink;
+    }
+}
+
+$child = new ChildNode();
+$child->setParent(new Root());
+echo $child->hasParent() ? 'ok' : 'bad';
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
 }
 
 /// Tests `?->{expr}?->prop` nullsafe dynamic property chain with a declared
@@ -392,4 +559,53 @@ echo 'after';
     assert_eq!(out.stdout,
         format!("{}after", "Attempt to assign property \"msg\" on null|".repeat(8)));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Tests that a spread argument reaches a method called on a boxed (retyped, conditionally
+/// assigned) receiver as the arguments it holds, not as one array operand.
+///
+/// `$object` is re-bound to another class inside the `if`, so its slot is a boxed cell and the
+/// call goes through the boxed-receiver path. `$object->deprecate($k, ...$rest)` counts two
+/// arguments against a three-parameter method, which dropped the signature and handed the spread
+/// array to the dispatch as a single plain operand; the call then died with "Call to a member
+/// function deprecate() on null". Symfony's `debug:container --parameters` is this shape.
+#[test]
+fn test_spread_argument_reaches_method_on_boxed_receiver_in_loop() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bag {
+    public array $deprecated = [];
+    public function deprecate(string $name, string $package, string $version, string $message = 'm'): void
+    {
+        $this->deprecated[$name] = [$package, $version, $message];
+    }
+}
+class Builder {
+    public function nothing(): int { return 0; }
+}
+function run(int $mode, array $source): string {
+    $object = new Builder();
+    if ($mode > 0) {
+        $object = new Bag();
+        foreach ($source as $k => $rest) {
+            $object->deprecate($k, ...$rest);
+        }
+        $object->deprecate('lit', ...['pkg', '9.9']);
+    }
+    return json_encode($object instanceof Bag ? $object->deprecated : []);
+}
+echo run($argc, ['a' => ['p1', '1.0'], 'b' => ['p2', '2.0', 'custom']]), "\n";
+echo run($argc - 1, []), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"a\":[\"p1\",\"1.0\",\"m\"],\"b\":[\"p2\",\"2.0\",\"custom\"],\"lit\":[\"pkg\",\"9.9\",\"m\"]}\n[]\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
 }

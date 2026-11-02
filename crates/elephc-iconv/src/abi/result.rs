@@ -26,6 +26,8 @@ pub const KIND_TRUE: i64 = 3;
 pub const KIND_ARRAY: i64 = 4;
 /// The call must throw `iconv_strpos()`'s out-of-range `$offset` `ValueError`.
 pub const KIND_OFFSET_VALUE_ERROR: i64 = 5;
+/// The call must throw a `ValueError` whose message is the `bytes` payload.
+pub const KIND_VALUE_ERROR: i64 = 6;
 
 /// Everything one iconv operation reports back to its caller.
 #[repr(C)]
@@ -34,7 +36,7 @@ pub struct IconvResultBlock {
     pub kind: i64,
     /// Integer payload for `KIND_INT`.
     pub int_value: i64,
-    /// Owned payload for `KIND_STRING` and `KIND_ARRAY`.
+    /// Owned payload for `KIND_STRING` and `KIND_ARRAY`, or the message for `KIND_VALUE_ERROR`.
     pub bytes: *mut u8,
     /// Length of `bytes`.
     pub len: u64,

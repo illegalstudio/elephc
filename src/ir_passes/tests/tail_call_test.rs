@@ -288,3 +288,30 @@ fn tail_call_keeps_cleanup_in_forwarded_blocks() {
     validate_module(&module).unwrap();
     assert!(!eliminate_tail_recursion(&mut module));
 }
+
+/// A user `function main()` and the entry function share the name `main`; only the user
+/// function is a call target. The name table used to keep the LAST function carrying a name, the
+/// entry, so the user's own tail call looked like a call to the entry and the entry looked
+/// self-recursive: the entry was rewritten into a loop and the user function kept its call.
+#[test]
+fn tail_call_resolves_main_to_the_user_function_not_the_entry() {
+    let mut module = Module::new(Target::new(Platform::Linux, Arch::X86_64));
+    let user = tail_function(&mut module, "main", "main", 1);
+    module.add_function(user);
+    let mut entry = tail_function(&mut module, "main", "main", 1);
+    entry.flags.is_main = true;
+    module.add_function(entry);
+    assert!(eliminate_tail_recursion(&mut module));
+    validate_module(&module).unwrap();
+    let user = &module.functions[0];
+    let entry = &module.functions[1];
+    assert!(!user.flags.is_main && entry.flags.is_main);
+    assert!(
+        user.instructions.iter().all(|inst| inst.op != Op::Call),
+        "the user function's self tail call becomes a loop"
+    );
+    assert!(
+        entry.instructions.iter().any(|inst| inst.op == Op::Call),
+        "the entry calls the user function and is never rewritten as recursive"
+    );
+}

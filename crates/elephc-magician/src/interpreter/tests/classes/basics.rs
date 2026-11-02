@@ -428,3 +428,51 @@ return $box["y"];"#,
     );
     assert_eq!(values.get(result), FakeValue::String("vy".to_string()));
 }
+
+/// Verifies every property-mutation form writes what `php -n` 8.5.6 writes.
+///
+/// `php -n` 8.5.6 prints `2;2ab;7;9;b!;99;100;101;z;2;20;` for this fragment. The parser's IR
+/// SHAPE for these changed — a plain `$this->x = ...` now arrives as an assignment EXPRESSION
+/// rather than a dedicated statement — and the parser tests that pinned the old shape went red
+/// without anything saying whether the behaviour still held. This asserts the behaviour, so the
+/// shape is free to change again and this test still means something.
+///
+/// One form is MISSING from the fragment on purpose: `P::$$prop = 30;`, the unbraced
+/// variable-variable static property name, which the parser refuses with `ExpectedVariable` while
+/// php accepts it and prints `30`. The braced `P::${$prop}` form parses. That refusal is the next
+/// commit; writing it here now would only pin the fragment that cannot run.
+#[test]
+fn execute_program_writes_every_property_mutation_form() {
+    let program = parse_fragment(
+        br#"class P {
+    public $x = 1;
+    public $arr = [];
+    public static $s = 10;
+    public function run($name) {
+        $this->x = $this->x + 1; echo $this->x; echo ";";
+        $this->arr[] = "a"; $this->arr["k"] = "b";
+        echo count($this->arr); echo $this->arr[0]; echo $this->arr["k"]; echo ";";
+        $this->x += 5; echo $this->x; echo ";";
+        $this->x++; ++$this->x; echo $this->x; echo ";";
+        $this->arr["k"] .= "!"; echo $this->arr["k"]; echo ";";
+        $this->{$name} = 99; echo $this->x; echo ";";
+        $this->{$name} += 1; echo $this->x; echo ";";
+        $this->{$name}++; echo $this->x; echo ";";
+        $this->arr[$name] = "z"; echo $this->arr[$name]; echo ";";
+        unset($this->arr["k"]); echo count($this->arr); echo ";";
+    }
+}
+(new P())->run('x');
+$c = 'P';
+$c::$s = 20; echo P::$s; echo ";";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "2;2ab;7;9;b!;99;100;101;z;2;20;");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}

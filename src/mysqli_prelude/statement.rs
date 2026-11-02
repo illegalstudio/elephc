@@ -269,6 +269,32 @@ class mysqli_stmt {
         }
     }
 
+    public function result_metadata(): mysqli_result|false {
+        if ($this->stmt < 0) {
+            $this->syntheticFailure(2050, "mysqli_stmt object is already closed", "HY000");
+            return false;
+        }
+        $_cols = elephc_pdo_column_count($this->stmt);
+        if ($_cols <= 0) {
+            return false;
+        }
+        $_names = [];
+        $_tables = [];
+        $_natives = [];
+        $_flags = [];
+        $_lens = [];
+        $_decimals = [];
+        for ($_i = 0; $_i < $_cols; $_i++) {
+            $_names[] = elephc_pdo_column_name($this->stmt, $_i);
+            $_tables[] = elephc_pdo_column_table_name($this->stmt, $_i);
+            $_natives[] = elephc_pdo_column_native_type($this->stmt, $_i);
+            $_flags[] = elephc_pdo_column_flags($this->stmt, $_i);
+            $_lens[] = elephc_pdo_column_len($this->stmt, $_i);
+            $_decimals[] = elephc_pdo_column_precision($this->stmt, $_i);
+        }
+        return mysqli_result::__elephcFromDrain([], 0, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
+    }
+
     public function get_result(): mysqli_result|false {
         if ($this->stmt < 0) {
             $this->syntheticFailure(2050, "mysqli_stmt object is already closed", "HY000");

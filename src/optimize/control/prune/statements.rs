@@ -305,6 +305,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         StmtKind::ClassDecl {
             generics,
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -324,6 +325,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
                 kind: StmtKind::ClassDecl {
                     generics,
                     name,
+                    doc_comment,
                     extends,
                     implements,
                     is_abstract,

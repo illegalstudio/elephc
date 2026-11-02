@@ -64,8 +64,10 @@ impl Checker {
                     Ok(PhpType::Mixed)
                 } else if **elem_ty == PhpType::Never {
                     // Never is the element type of an empty indexed array, not a non-returning
-                    // read. Nested write-back may still autovivify that selected slot.
-                    Ok(PhpType::Void)
+                    // read. Nested write-back may still autovivify that selected slot. A plain read
+                    // is `mixed`: a missing offset yields null, and later writes can also populate
+                    // the same runtime container.
+                    Ok(if for_write { PhpType::Void } else { PhpType::Mixed })
                 } else {
                     Ok(*elem_ty.clone())
                 }
@@ -77,6 +79,11 @@ impl Checker {
             PhpType::Object(class_name) => {
                 if self.object_type_implements_interface(class_name, "ArrayAccess") {
                     Ok(self.array_access_offset_get_type(class_name))
+                } else if self.object_type_may_gain_array_access(class_name) {
+                    // The static type (a contract, a non-final base) does not say whether the
+                    // object behind it is indexable; lowering reads it through the same boxed
+                    // run-time dispatch a `mixed` receiver uses.
+                    Ok(PhpType::Mixed)
                 } else {
                     Err(CompileError::new(expr.span, "Cannot index non-array"))
                 }
@@ -103,6 +110,8 @@ impl Checker {
                                 // String key on indexed array: PHP promotes
                                 // to hash at runtime; element may be Mixed.
                                 result_members.push(PhpType::Mixed);
+                            } else if matches!(elem_ty.as_ref(), PhpType::Never) {
+                                result_members.push(if for_write { PhpType::Void } else { PhpType::Mixed });
                             } else {
                                 result_members.push(*elem_ty.clone());
                             }
@@ -119,6 +128,9 @@ impl Checker {
                                 saw_indexable_member = true;
                                 result_members
                                     .push(self.array_access_offset_get_type(class_name));
+                            } else if self.object_type_may_gain_array_access(class_name) {
+                                saw_indexable_member = true;
+                                result_members.push(PhpType::Mixed);
                             }
                         }
                         PhpType::Buffer(elem_ty) => {
@@ -177,6 +189,12 @@ impl Checker {
             // "undefined index" warning behavior for this very
             // common idiom (e.g. `json_decode($json, true)["k"]`).
             PhpType::Mixed => Ok(PhpType::Mixed),
+            // A variadic that received named arguments is typed `iterable` (its storage is a list
+            // or a hash). Refusing the read here failed the specialized re-check silently and left
+            // the first pass's `int` placeholder as the function's return type: Laravel's
+            // `literal(...$arguments)` returned `$arguments[0]` as an int and cast its `(object)`
+            // result to one.
+            PhpType::Iterable => Ok(PhpType::Mixed),
             // Only a writable chain may promote false/null at an already selected array slot.
             // Index expressions and ordinary reads never inherit this allowance.
             PhpType::Bool | PhpType::False | PhpType::Void

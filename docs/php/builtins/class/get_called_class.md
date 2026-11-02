@@ -2,7 +2,7 @@
 title: "get_called_class()"
 description: "Returns the late-static-binding class name."
 sidebar:
-  order: 87
+  order: 98
 ---
 
 ## get_called_class()

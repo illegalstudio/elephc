@@ -2,7 +2,7 @@
 title: "idate() - internals"
 description: "Compiler internals for idate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 230
+  order: 241
 ---
 
 ## `idate()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:800](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L800) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`:910](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L910) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

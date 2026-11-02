@@ -17,12 +17,14 @@
 //! - Incomplete objects use class id `-2` and own their original class name at
 //!   offsets 8/16 plus an opaque boxed-Mixed property hash at offset 24.
 
+use crate::codegen_support::sentinels::emit_deref_reference_property_slot;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::{
-    emit_branch_if_null_container, emit_resolve_tagged_scalar_property_tag, NULL_SENTINEL,
+    emit_branch_if_null_container, emit_resolve_prop_desc_tag,
+    emit_resolve_tagged_scalar_property_tag, NULL_SENTINEL,
 };
 
 /// Emits `__rt_object_to_hash(object, cast_mode, scope_class_id)` for the active target.
@@ -181,6 +183,23 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x14, [sp, #64]");                                  // save the property-key length slot across nested runtime calls
     emitter.instruction("str x15, [sp, #72]");                                  // save the property-storage offset slot across nested runtime calls
     emitter.instruction("str x16, [sp, #80]");                                  // save the property runtime-tag slot across nested runtime calls
+    // A scoped projection keeps the FIRST row under one bare name: a private ancestor slot
+    // a descendant hides comes first in the layout, and php resolves the name to it.
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload cast mode before the duplicate-name check
+    emitter.instruction("cbnz x9, __rt_object_to_hash_row_unique");             // casts keep every mangled key, which never collide
+    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the object pointer
+    emitter.instruction("ldr x11, [x11]");                                      // load the object's dense class id
+    abi::emit_symbol_address(emitter, "x10", "_class_hidden_private_slot_flags");
+    emitter.instruction("ldr x10, [x10, x11, lsl #3]");                         // does this class hide a private ancestor slot?
+    emitter.instruction("cbz x10, __rt_object_to_hash_row_unique");             // no hidden slot, so no bare name can repeat
+    emitter.instruction("ldr x0, [sp, #16]");                                   // pass the result hash
+    emitter.instruction("ldr x1, [sp, #56]");                                   // pass the bare property-key pointer
+    emitter.instruction("ldr x2, [sp, #64]");                                   // pass the bare property-key length
+    emitter.instruction("bl __rt_hash_get");                                    // x0 = 1 when an earlier row already claimed the name
+    emitter.instruction("cbnz x0, __rt_object_to_hash_next");                   // the scope's own private property keeps the name
+    emitter.instruction("ldr x15, [sp, #72]");                                  // restore the property-storage offset after the lookup
+    emitter.instruction("ldr x16, [sp, #80]");                                  // restore the property runtime tag after the lookup
+    emitter.label("__rt_object_to_hash_row_unique");
     emitter.instruction("ldr x17, [sp, #0]");                                   // load the object pointer slot for `ldr x17, [sp, #0]`
     emitter.instruction("add x17, x17, x15");                                   // derive the current descriptor/property offset with `add x17, x17, x15`
     emitter.instruction("ldr x1, [x17]");                                       // load the current object/descriptor operand for `ldr x1, [x17]`
@@ -190,18 +209,26 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "x10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp x2, x10");                                         // evaluate `cmp x2, x10` before selecting the projection branch
     emitter.instruction("b.eq __rt_object_to_hash_next");                       // skip or advance the current property via `__rt_object_to_hash_next`
+    emit_deref_reference_property_slot(emitter, "x16", "x1", "x2", "x9");
+    emit_resolve_prop_desc_tag(emitter, "x16", "x2", "x9");
     emitter.instruction("mov x0, x16");                                         // prepare the projection argument or result with `mov x0, x16`
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
-    // -- a Mixed slot that holds no cell (implicit or explicit null) projects canonical null --
-    emitter.instruction("cmp x0, #7");                                          // does the slot hold a boxed Mixed cell pointer?
-    emitter.instruction("b.ne __rt_object_to_hash_box");                        // other tags box their payload directly
+    // A Mixed-typed slot (`array`, `?string`, `mixed`, any union) holds a BOX. Passing the box to
+    // `__rt_mixed_from_value` as tag 7 wraps it in a second Mixed cell, which every reader of the
+    // projected hash then saw as null: `(array) $o` and `get_object_vars()` answered `null` for
+    // each such property. Hand over the concrete value instead.
+    // A Mixed slot that holds no cell (implicit or explicit null) projects canonical null.
+    emitter.instruction("cmp x0, #7");                                          // does the slot hold a boxed Mixed?
+    emitter.instruction("b.ne 4f");                                             // typed payloads are boxed as they are
     emit_branch_if_null_container(emitter, "x1", "x9", "__rt_object_to_hash_null_slot");
-    emitter.instruction("b __rt_object_to_hash_box");                           // a live cell boxes as before
+    emitter.instruction("mov x0, x1");                                          // the slot's box becomes the unbox input
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = concrete tag, x1/x2 = payload words
+    emitter.instruction("b 4f");                                                // a live cell is boxed from its concrete value
     emitter.label("__rt_object_to_hash_null_slot");
     emitter.instruction("mov x0, #8");                                          // runtime tag 8 = canonical PHP null
     abi::emit_load_int_immediate(emitter, "x1", NULL_SENTINEL);                 // null payload uses the shared in-band sentinel
     emitter.instruction("mov x2, #0");                                          // null carries no high payload word
-    emitter.label("__rt_object_to_hash_box");
+    emitter.label("4");
     emitter.instruction("bl __rt_mixed_from_value");                            // call `__rt_mixed_from_value` with the prepared projection arguments
     emitter.instruction("mov x3, x0");                                          // prepare the projection argument or result with `mov x3, x0`
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the result-hash slot for `ldr x0, [sp, #16]`
@@ -413,6 +440,24 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 72], r13");                       // save the property-key length slot across nested runtime calls
     emitter.instruction("mov QWORD PTR [rbp - 80], r14");                       // save the property-storage offset slot across nested runtime calls
     emitter.instruction("mov QWORD PTR [rbp - 88], r15");                       // save the property runtime-tag slot across nested runtime calls
+    // A scoped projection keeps the FIRST row under one bare name: a private ancestor slot
+    // a descendant hides comes first in the layout, and php resolves the name to it.
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // casts keep every mangled key, which never collide
+    emitter.instruction("jne __rt_object_to_hash_row_unique_x");                // skip the duplicate-name check for casts
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the object pointer
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the object's dense class id
+    emitter.instruction("lea r11, [rip + _class_hidden_private_slot_flags]");   // materialize the hidden-private-slot flag table
+    emitter.instruction("cmp QWORD PTR [r11 + r10 * 8], 0");                    // does this class hide a private ancestor slot?
+    emitter.instruction("je __rt_object_to_hash_row_unique_x");                 // no hidden slot, so no bare name can repeat
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the result hash
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // pass the bare property-key pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // pass the bare property-key length
+    emitter.instruction("call __rt_hash_get");                                  // rax = 1 when an earlier row already claimed the name
+    emitter.instruction("test rax, rax");                                       // did the name resolve to an earlier row?
+    emitter.instruction("jnz __rt_object_to_hash_next_x");                      // the scope's own private property keeps the name
+    emitter.instruction("mov r14, QWORD PTR [rbp - 80]");                       // restore the property-storage offset after the lookup
+    emitter.instruction("mov r15, QWORD PTR [rbp - 88]");                       // restore the property runtime tag after the lookup
+    emitter.label("__rt_object_to_hash_row_unique_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the object pointer slot for `mov r10, QWORD PTR [rbp - 8]`
     emitter.instruction("add r10, r14");                                        // derive the current descriptor/property offset with `add r10, r14`
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the current object/descriptor operand for `mov rdi, QWORD PTR [r10]`
@@ -420,18 +465,24 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp rsi, r11");                                        // evaluate `cmp rsi, r11` before selecting the projection branch
     emitter.instruction("je __rt_object_to_hash_next_x");                       // skip or advance the current property via `__rt_object_to_hash_next_x`
+    emit_deref_reference_property_slot(emitter, "r15", "rdi", "rsi", "rax");
+    emit_resolve_prop_desc_tag(emitter, "r15", "rsi", "rax");
     emitter.instruction("mov rax, r15");                                        // prepare the projection argument or result with `mov rax, r15`
     emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
-    // -- a Mixed slot that holds no cell (implicit or explicit null) projects canonical null --
-    emitter.instruction("cmp rax, 7");                                          // does the slot hold a boxed Mixed cell pointer?
-    emitter.instruction("jne __rt_object_to_hash_box_x");                       // other tags box their payload directly
+    // A Mixed-typed slot holds a BOX; hand `__rt_mixed_from_value` the concrete value instead of
+    // wrapping the box in a second Mixed cell (see the AArch64 arm). A slot that holds no cell
+    // (implicit or explicit null) projects canonical null.
+    emitter.instruction("cmp rax, 7");                                          // does the slot hold a boxed Mixed?
+    emitter.instruction("jne 4f");                                              // typed payloads are boxed as they are
     emit_branch_if_null_container(emitter, "rdi", "r11", "__rt_object_to_hash_null_slot_x");
-    emitter.instruction("jmp __rt_object_to_hash_box_x");                       // a live cell boxes as before
+    emitter.instruction("mov rax, rdi");                                        // the slot's box becomes the unbox input
+    emitter.instruction("call __rt_mixed_unbox");                               // rax = concrete tag, rdi/rsi = payload words
+    emitter.instruction("jmp 4f");                                              // a live cell is boxed from its concrete value
     emitter.label("__rt_object_to_hash_null_slot_x");
     emitter.instruction("mov eax, 8");                                          // runtime tag 8 = canonical PHP null
     abi::emit_load_int_immediate(emitter, "rdi", NULL_SENTINEL);                // null payload uses the shared in-band sentinel
     emitter.instruction("xor esi, esi");                                        // null carries no high payload word
-    emitter.label("__rt_object_to_hash_box_x");
+    emitter.label("4");
     emitter.instruction("call __rt_mixed_from_value");                          // call `__rt_mixed_from_value` with the prepared projection arguments
     emitter.instruction("mov rcx, rax");                                        // prepare the projection argument or result with `mov rcx, rax`
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // load the result-hash slot for `mov rdi, QWORD PTR [rbp - 24]`

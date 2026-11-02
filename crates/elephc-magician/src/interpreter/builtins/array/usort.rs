@@ -69,9 +69,18 @@ pub(in crate::interpreter) fn eval_user_sort_replacement_from_scope(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
+    // A callable array's receiver read (`[$object, 'method']`) is an owner the dispatch
+    // borrows for the whole walk; `with_values` releases it once, after the last callback.
     callback.with_values(context, values, |callback, context, values| {
         let mut entries = eval_user_sort_entries(array, values)?;
-        eval_user_sort_entries_in_place(name, &callback, &mut entries, context, values)?;
+        if let Err(status) = eval_user_sort_entries_in_place(name, &callback, &mut entries, context, values)
+        {
+            for entry in entries {
+                let _ = values.release(entry.source_key);
+                let _ = values.release(entry.value);
+            }
+            return Err(status);
+        }
         if name == "usort" {
             return eval_user_sort_reindex_result(entries, values);
         }
@@ -94,31 +103,89 @@ pub(in crate::interpreter) fn eval_user_sort_entries(
     Ok(entries)
 }
 
-/// Sorts entries by repeatedly invoking the PHP comparator callback.
+/// Runs at or below this length are sorted by insertion, as php's hybrid `zend_sort` does.
+const EVAL_USER_SORT_INSERTION_RUN: usize = 16;
+
+/// Sorts entries with the PHP comparator callback: stable and O(n log n), like php 8's sort.
+///
+/// This used to be a bubble sort -- quadratic comparator calls, so a few thousand elements took
+/// millions of interpreted callbacks. Runs of up to `EVAL_USER_SORT_INSERTION_RUN` are sorted by
+/// binary insertion and then merged bottom-up; ties keep their original order (php's sort is
+/// stable since 8.0). A comparator that throws stops the sort with the entries still a
+/// permutation of the input, so every owner is still released by the caller.
 pub(in crate::interpreter) fn eval_user_sort_entries_in_place(
     name: &str,
     callback: &EvaluatedCallable,
-    entries: &mut [EvalUserSortEntry],
+    entries: &mut Vec<EvalUserSortEntry>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    for pass in 0..entries.len() {
-        let upper = entries.len().saturating_sub(pass + 1);
-        for index in 0..upper {
-            let comparison = eval_user_sort_compare(
-                name,
-                callback,
-                &entries[index],
-                &entries[index + 1],
-                context,
-                values,
-            )?;
-            if comparison > 0 {
-                entries.swap(index, index + 1);
+    let len = entries.len();
+    if len < 2 {
+        return Ok(());
+    }
+    let mut order: Vec<usize> = (0..len).collect();
+    let compare = |left: usize, right: usize, context: &mut ElephcEvalContext, values: &mut _| {
+        eval_user_sort_compare(name, callback, &entries[left], &entries[right], context, values)
+    };
+    let outcome = (|| -> Result<(), EvalStatus> {
+        // Binary-insertion sort of each short run.
+        let mut start = 0;
+        while start < len {
+            let end = (start + EVAL_USER_SORT_INSERTION_RUN).min(len);
+            for index in start + 1..end {
+                let item = order[index];
+                let (mut low, mut high) = (start, index);
+                while low < high {
+                    let middle = low + (high - low) / 2;
+                    // Insert AFTER equal elements to stay stable.
+                    if compare(order[middle], item, context, values)? <= 0 {
+                        low = middle + 1;
+                    } else {
+                        high = middle;
+                    }
+                }
+                order[low..=index].rotate_right(1);
             }
+            start = end;
+        }
+        // Bottom-up merges of sorted runs.
+        let mut width = EVAL_USER_SORT_INSERTION_RUN;
+        let mut buffer = Vec::with_capacity(len);
+        while width < len {
+            let mut left = 0;
+            while left + width < len {
+                let middle = left + width;
+                let right = (left + 2 * width).min(len);
+                buffer.clear();
+                let (mut i, mut j) = (left, middle);
+                while i < middle && j < right {
+                    // Take from the left run on ties: that is what keeps the merge stable.
+                    if compare(order[i], order[j], context, values)? <= 0 {
+                        buffer.push(order[i]);
+                        i += 1;
+                    } else {
+                        buffer.push(order[j]);
+                        j += 1;
+                    }
+                }
+                buffer.extend_from_slice(&order[i..middle]);
+                buffer.extend_from_slice(&order[j..right]);
+                order[left..right].copy_from_slice(&buffer);
+                left = right;
+            }
+            width *= 2;
+        }
+        Ok(())
+    })();
+    // Apply the permutation (complete, or the partial one a throwing comparator left behind).
+    let mut taken: Vec<Option<EvalUserSortEntry>> = entries.drain(..).map(Some).collect();
+    for index in order {
+        if let Some(entry) = taken[index].take() {
+            entries.push(entry);
         }
     }
-    Ok(())
+    outcome
 }
 
 /// Invokes one user-sort comparator and returns its integer ordering result.
@@ -136,7 +203,10 @@ pub(in crate::interpreter) fn eval_user_sort_compare(
         vec![left.value, right.value]
     };
     let result = eval_evaluated_callable_with_values(callback, args, context, values)?;
-    eval_int_value(result, values)
+    let ordering = eval_int_value(result, values);
+    // The comparator's return value is this call's owner, whatever it converts to.
+    values.release(result)?;
+    ordering
 }
 
 /// Builds the reindexed result for `usort()`.
@@ -148,6 +218,10 @@ pub(in crate::interpreter) fn eval_user_sort_reindex_result(
     for (index, entry) in entries.into_iter().enumerate() {
         let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
         result = values.array_set(result, key, entry.value)?;
+        // `array_set` retained the value; the entry's own key and value reads are released.
+        values.release(key)?;
+        values.release(entry.source_key)?;
+        values.release(entry.value)?;
     }
     Ok(result)
 }
@@ -160,6 +234,8 @@ pub(in crate::interpreter) fn eval_user_sort_preserve_key_result(
     let mut result = values.assoc_new(entries.len())?;
     for entry in entries {
         result = values.array_set(result, entry.source_key, entry.value)?;
+        values.release(entry.source_key)?;
+        values.release(entry.value)?;
     }
     Ok(result)
 }
@@ -181,7 +257,13 @@ pub(in crate::interpreter) fn eval_user_sort_declared_call(
         Some(scope),
         context,
         values,
-    )?;
+    );
+    // An evaluated comparator expression (`fn ($a, $b) => ...` written in the call) is this
+    // call's owner; a borrowed variable read is not.
+    if !callback.is_borrowed() {
+        values.release(callback)?;
+    }
+    let replacement = replacement?;
     let result = values.bool_value(true)?;
     eval_write_direct_ref_target(&target, replacement, context, values, None)?;
     Ok(result)

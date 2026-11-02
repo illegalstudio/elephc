@@ -14,7 +14,7 @@ use super::prefix_complex::{collect_arrow_expr_captures, push_arrow_capture};
 
 /// Visits the assignment statement shapes emitted in expression preludes.
 pub(super) fn collect(
-    statement: &Stmt, bound: &HashSet<String>, seen: &mut HashSet<String>, captures: &mut Vec<String>,
+    statement: &Stmt, bound: &mut HashSet<String>, seen: &mut HashSet<String>, captures: &mut Vec<String>,
 ) {
     match &statement.kind {
         StmtKind::Synthetic(statements) => {

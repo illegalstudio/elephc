@@ -60,6 +60,48 @@ pub enum ThrowAccessKind {
         /// Property name without the leading `$`.
         property: String,
     },
+    /// An argument whose type the checker proved incompatible with the parameter it binds.
+    ///
+    /// php performs this check when the call RUNS, so a program that never reaches the call is
+    /// perfectly loadable — and real code relies on that. php also exempts constructors from
+    /// inheritance signature rules, so an overriding `__construct` may declare a completely
+    /// different parameter list and still forward positionally to `parent::__construct`, landing
+    /// arguments in differently typed slots. `twig/twig`'s `ExtensionSet` does exactly that in a
+    /// deprecated conversion path, and refusing it at compile time stopped the whole build.
+    ArgumentType {
+        /// The complete `TypeError` message, already in php's wording.
+        message: String,
+    },
+    /// An argument the checker proved can never bind to its declared parameter (a strict_types
+    /// scalar mismatch, or a class/array/null no coercion accepts). Keyed by the ARGUMENT's span.
+    ///
+    /// php never refuses this at compile time: the call evaluates its arguments, then throws
+    /// `TypeError`. Lowering finds the site from the call's arguments, evaluates all of them, and
+    /// appends php's `, called in FILE on line N` clause to `message`.
+    CallArgumentType {
+        /// The message without the `called in` clause.
+        message: String,
+    },
+    /// A weak-mode argument php coerces to an `int` parameter at run time: a string or float
+    /// whose value only the call knows. Keyed by the ARGUMENT's span.
+    ///
+    /// A numeric string or an integral float binds, a fractional one binds after php's
+    /// `Deprecated:` precision notice, and anything else throws `TypeError`. Lowering converts
+    /// the argument with the return-boundary int coercion, whose message is `prefix` followed by
+    /// the runtime type word and php's `given, called in FILE on line N` clause.
+    CallArgumentIntCoercion {
+        /// `f(): Argument #N ($p) must be of type int, `
+        prefix: String,
+    },
+    /// A `self::`/`parent::` call naming a method the class does not have.
+    ///
+    /// php resolves the method when the call RUNS. A trait shared by several classes may call a
+    /// method only one of them declares (Carbon's `Mixin` calls `self::copyStep()`, which only
+    /// `CarbonInterval` has): the other users load fine and fail only if that branch executes.
+    UndefinedMethod {
+        /// The complete `Error` message, already in php's wording.
+        message: String,
+    },
 }
 
 /// Checker-selected native property storage and any indirect-write refusal at one call site.
@@ -112,7 +154,7 @@ pub struct CheckResult {
     #[allow(dead_code)]
     pub callable_array_return_sigs: HashMap<String, FunctionSig>,
     pub interfaces: HashMap<String, InterfaceInfo>,
-    pub classes: HashMap<String, ClassInfo>,
+    pub classes: crate::fast_hash::FastMap<String, ClassInfo>,
     pub enums: HashMap<String, EnumInfo>,
     pub packed_classes: HashMap<String, PackedClassInfo>,
     pub extern_functions: HashMap<String, ExternFunctionSig>,
@@ -120,17 +162,20 @@ pub struct CheckResult {
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
     pub warnings: Vec<CompileWarning>,
-    /// Statically-decided access violations lowered to runtime exception throws,
-    /// keyed by the source span of the offending call/assignment.
-    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
-    /// Authoritative checker result types for builtin calls, keyed by call span.
-    pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Statically-decided access violations lowered to runtime `Error` throws,
+    /// keyed by function-like scope and the source span of the offending call/assignment.
+    pub throw_access_sites: HashMap<(String, Span), ThrowAccessInfo>,
+    /// Authoritative checker result types for builtin calls, keyed by function-like scope and
+    /// call span so equal coordinates in different loaded files cannot overwrite one another.
+    pub builtin_call_types: HashMap<(String, Span), PhpType>,
     /// Closure literals whose checked source bodies contain yield, keyed by source identity.
     pub closure_generator_spans: HashSet<Span>,
     /// Native array_push property decisions, scoped to the body and original place span.
     pub array_push_property_plans: HashMap<(String, Span), ArrayPushPropertyPlan>,
     /// Checked member receiver types by body scope and source node; conflicting visits are None.
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Authoritative checker result types for property reads through flow-narrowed receivers.
+    pub flow_typed_property_accesses: HashMap<(String, Span), PhpType>,
     /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.
     pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
     /// Reads proven to use native buffers on every checker visit to the source span.
@@ -143,6 +188,25 @@ pub struct CheckResult {
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
     /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// Boxed caller-local storage contracts selected for source-declared by-reference calls.
+    pub by_ref_local_storage_types: HashMap<(String, String), PhpType>,
+    /// Lowercase bare names of callees whose by-reference parameter cell may outlive the call.
+    pub ref_param_escaping_callees: HashSet<String>,
+    /// Call-site locals passed to a property-bound by-reference parameter; see
+    /// `Checker::property_bound_promotion_sites`.
+    pub property_bound_promotion_sites: HashSet<(String, crate::span::Span)>,
+    /// Call results passed to a by-reference parameter; see `Checker::by_ref_call_result_sites`.
+    pub by_ref_call_result_sites: HashSet<crate::span::Span>,
+    /// See `Checker::bcmath_operator_sites`.
+    pub bcmath_operator_sites: HashSet<crate::span::Span>,
+    /// See `Checker::stdclass_by_ref_walk_sites`.
+    pub stdclass_by_ref_walk_sites: HashSet<crate::span::Span>,
+    /// Names some `define()` call creates; see `Checker::runtime_define_names`.
+    pub runtime_define_names: HashSet<String>,
+    /// Constant names read but never defined; see `Checker::undefined_constant_reads`.
+    pub undefined_constant_reads: HashSet<String>,
+    /// Checker-proven types for dynamic property reference locals, keyed by scope and local.
+    pub dynamic_ref_local_types: HashMap<(String, String), PhpType>,
     /// The `unset()` arguments whose local binding the checker killed, as span -> the SET of local
     /// NAMES killed at that position, so EIR lowering abandons the old frame slot (after releasing
     /// its value) instead of null-storing into it.
@@ -198,6 +262,10 @@ pub struct CheckResult {
     /// compiler panicked (`strlen cannot lower checked operand type Int`) on valid PHP. Same-NAME
     /// collisions remain genuinely ambiguous and are still rejected by the ambiguity pass.
     pub mixed_storage_store_sites: HashMap<Span, HashSet<String>>,
+    /// See `Checker::user_filters_reachable`: EIR metadata keeps the raw filter ABI only then.
+    pub user_filters_reachable: bool,
+    /// See `Checker::user_filter_registered`.
+    pub user_filter_registered: Option<std::collections::HashSet<String>>,
 }
 
 impl CheckResult {
@@ -336,6 +404,7 @@ pub fn check_with_target_and_options(
     options: checker::CheckOptions,
     generics: &crate::generics::GenericContext,
 ) -> Result<CheckResult, CompileError> {
+    checker::set_program_evaluates_code(crate::ast_usage::collect(program).references("eval"));
     checker::check_types_with_options(program, target, options, generics)
 }
 
@@ -366,6 +435,26 @@ mod tests {
         let mac = check_with_target(&program, Target::new(Platform::MacOS, Arch::AArch64))
             .expect("mac type check failed");
         assert_eq!(mac.required_libraries, vec!["elephc_crypto"]);
+    }
+
+    /// Verifies class declaration doc comments survive parsing and resolved schema construction.
+    #[test]
+    fn test_class_info_retains_declared_doc_comment() {
+        let program = parse_program(
+            "<?php /**\n * Schema metadata.\n */ class TypeCheckedDocumentedClass {}",
+        );
+        let checked = check_with_target(
+            &program,
+            Target::new(Platform::MacOS, Arch::AArch64),
+        )
+        .expect("type check failed");
+        assert_eq!(
+            checked
+                .classes
+                .get("TypeCheckedDocumentedClass")
+                .and_then(|class| class.doc_comment.as_deref()),
+            Some("/**\n * Schema metadata.\n */"),
+        );
     }
 
     /// Verifies enum class metadata preserves flattened trait relation data for runtime reflection.

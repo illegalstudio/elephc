@@ -395,3 +395,69 @@ eval($source);
     }
     assert_eq!(residual[0], residual[1], "eval output retained per-expression cells");
 }
+
+/// Releases every operand of the expression-form property and element writes eval runs.
+///
+/// `$o->n += 1`, `$o->a[0] = 5`, `$o->a[1] ??= 5` and a compound assignment whose right-hand side
+/// throws are all `CompoundAssign`/`Assign`/`NullCoalesceAssign` expressions now. Each leaked the
+/// property or element value it read, the element key, or the detached container it stored back
+/// (up to five blocks per statement), where the statement forms they replaced did not.
+#[test]
+fn test_eval_property_and_element_writes_release_their_operands() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class EvalWriteOperands { public $n = 1; public $s = "a"; public $a = [1, [2, 3]]; public $z = null; }
+$o = new EvalWriteOperands();
+function eval_write_operands_throw() { throw new Exception("boom"); }
+for ($i = 0; $i < 20; $i++) {
+    eval('$o->n += 1; $o->s .= "x"; $o->a[0] += 2; $o->a[1][1] *= 1; $o->a[1][0] = $i;
+$o->a[2] ??= "new"; $o->z ??= "z"; $l = [1, [2]]; $l[1][0] .= "q"; $l[0] -= 3; $l[2] ??= 4;
+try { $o->s .= eval_write_operands_throw(); } catch (Exception $e) {}
+try { $o->a[1][1] += eval_write_operands_throw(); } catch (Exception $e) {}');
+}
+echo $o->n, ":", strlen($o->s), ":", $o->a[0], ":", $o->a[1][0], ":", $o->a[1][1], ":", $o->a[2], ":", $o->z;
+"#,
+    );
+    assert!(output.success, "{}\n{}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "21:21:41:19:3:new:z");
+    assert!(
+        output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        output.stderr
+    );
+}
+
+/// Keeps an argument stored into `$this->items[]` alive when the same argument also builds the
+/// returned object, through eval-declared classes and functions.
+///
+/// The interpreter appends an owned value and releases it afterwards; the runtime's
+/// `__elephc_eval_value_array_set` retains its own reference first. Two iteration counts make
+/// this a slope check: eval class registration leaves a constant residue, a per-call imbalance
+/// does not.
+#[test]
+fn test_eval_stored_argument_shared_with_constructed_object_stays_live() {
+    let mut residual = Vec::new();
+    for count in [2, 12] {
+        let source = format!(r#"<?php
+eval('class EvalSharedArgBuilt {{ public function __construct(public string $n) {{}} }}
+class EvalSharedArgStore {{
+    public array $seen = [];
+    public function import(string $f): EvalSharedArgBuilt {{ $this->seen[] = $f; return new EvalSharedArgBuilt($f); }}
+}}
+function eval_shared_arg_local(string $f): array {{ $seen = []; $seen[] = $f; $obj = new EvalSharedArgBuilt($f); return $seen; }}');
+$out = "";
+for ($i = 0; $i < {count}; $i++) {{
+    eval('$r = new EvalSharedArgStore(); $r->import(str_repeat("a", 2)); $r->import(str_repeat("b", 2));
+$local = eval_shared_arg_local(str_repeat("c", 2));
+$out = $r->seen[0] . $r->seen[1] . $local[0];');
+}}
+echo $out;
+"#);
+        let output = compile_and_run_with_gc_stats(&source);
+        assert!(output.success, "{}\n{}", output.stdout, output.stderr);
+        assert_eq!(output.stdout, "aabbcc");
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        residual.push(allocated as i64 - freed as i64);
+    }
+    assert_eq!(residual[0], residual[1], "a shared argument was retained or released per call");
+}

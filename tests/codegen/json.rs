@@ -75,3 +75,74 @@ mod token_dispatch;
 mod packed_integer;
 #[path = "json/encode_large_string.rs"]
 mod encode_large_string;
+#[path = "json/decode_ownership.rs"]
+mod decode_ownership;
+
+/// `json_decode()` takes depth and flags forwarded from untyped parameters
+/// (`Filesystem::json($path, $flags = 0)`). Expected output verified against php 8.5.
+#[test]
+fn test_json_decode_accepts_depth_and_flags_forwarded_from_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+class F { function json($s, $flags = 0) { return json_decode($s, true, 512, $flags); } function d($s, $assoc = false, $depth = 512) { return json_decode($s, $assoc, $depth); } }
+$f = new F;
+var_dump($f->json('{"a":1}'), $f->json('{"a":1}', JSON_BIGINT_AS_STRING), $f->d('[1,[2]]', true), $f->d('[1,[2]]', true, 1));
+function g($x, $fl) { return json_decode($x, false, 512, $fl); }
+var_dump(g('{"a":"b"}', 0)->a);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"array(1) {
+  ["a"]=>
+  int(1)
+}
+array(1) {
+  ["a"]=>
+  int(1)
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+}
+NULL
+string(1) "b"
+"#
+    );
+}
+
+/// A `JsonSerializable` element encoded under a small depth limit keeps the `{"key":` prefix its
+/// encoder had already written: the runtime saved `_json_depth_limit` in the register that held
+/// the prefix length, so it persisted (and restored) that many bytes instead -- none at all for a
+/// zero limit. Expected output verified against php 8.5.
+#[test]
+fn test_json_serializable_element_keeps_prefix_under_small_depth_limit() {
+    let out = compile_and_run(
+        r#"<?php
+class Item implements JsonSerializable {
+    public function __construct(private array $names) {}
+    public function jsonSerialize(): mixed {
+        $out = [];
+        foreach ($this->names as $name) { $out[] = strtoupper($name) . '-' . str_repeat('x', 2); }
+        return $out;
+    }
+}
+$data = ['published_items' => new Item(['a', 'b']), 'count' => 3, 'next' => new Item(['c'])];
+echo json_encode($data, 0, 3), "\n";
+echo json_encode($data, 0, 512), "\n";
+echo json_encode($data), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"{"published_items":["A-xx","B-xx"],"count":3,"next":["C-xx"]}
+{"published_items":["A-xx","B-xx"],"count":3,"next":["C-xx"]}
+{"published_items":["A-xx","B-xx"],"count":3,"next":["C-xx"]}
+"#
+    );
+}

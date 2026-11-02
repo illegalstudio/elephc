@@ -170,6 +170,27 @@ return $child->id();"#,
     assert_eq!(values.get(result), FakeValue::Int(2));
 }
 
+/// Verifies native parent metadata makes return-type covariance available to eval declarations.
+#[test]
+fn execute_program_accepts_covariant_return_type_through_native_parent_metadata() {
+    let program = parse_fragment(
+        br#"class EvalNativeReturnBase {
+    protected function make(): EvalNativeParent { throw new \Exception(); }
+}
+class EvalNativeReturnChild extends EvalNativeReturnBase {
+    protected function make(): EvalNativeChild { throw new \Exception(); }
+}"#,
+    )
+    .expect("parse native metadata covariance declarations");
+    let mut context = ElephcEvalContext::new();
+    assert!(context.define_native_class_parent("EvalNativeChild", "EvalNativeParent"));
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("native metadata should prove covariant return compatibility");
+}
+
 /// Verifies eval rejects method overrides that widen declared return types.
 #[test]
 fn execute_program_rejects_incompatible_method_return_type_overrides() {
@@ -275,7 +296,10 @@ return $box->id();"#,
     let mut values = FakeOps::default();
     let err = execute_program(&bad_scalar, &mut scope, &mut values)
         .expect_err("non-numeric string should fail int return type");
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    // `php -n` 8.5.6 raises a CATCHABLE TypeError here, not a fatal:
+    // `EvalReturnBadScalar::id(): Return value must be of type int, string returned`, and the
+    // script keeps running. This expectation said `RuntimeFatal` while php said otherwise.
+    assert_eq!(err, EvalStatus::UncaughtThrowable);
 
     let bad_void = parse_fragment(
         br#"class EvalReturnBadVoid {
@@ -304,7 +328,9 @@ return $child->make();"#,
     let mut values = FakeOps::default();
     let err = execute_program(&bad_static, &mut scope, &mut values)
         .expect_err("base instance should fail inherited static return type");
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    // Catchable too: `php -n` 8.5.6 prints
+    // `B::make(): Return value must be of type C, B returned` and keeps running.
+    assert_eq!(err, EvalStatus::UncaughtThrowable);
 
     let implicit_return = parse_fragment(
         br#"class EvalReturnImplicitBad {

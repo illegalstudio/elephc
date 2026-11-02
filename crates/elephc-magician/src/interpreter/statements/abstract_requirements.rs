@@ -13,30 +13,88 @@ use super::*;
 pub(super) fn validate_concrete_class_requirements(
     class: &EvalClass,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if !pending_class_abstract_method_requirements(class, context).is_empty() {
+    let methods = pending_class_abstract_method_requirements(class, context);
+    if !methods.is_empty() {
+        trace_unmet_requirements(
+            class,
+            "abstract_method",
+            methods.iter().map(|method| method.name().to_string()),
+        );
         return Err(EvalStatus::RuntimeFatal);
     }
-    if !pending_class_abstract_property_requirements(class, context)?.is_empty() {
+    let properties = pending_class_abstract_property_requirements(class, context)?;
+    if !properties.is_empty() {
+        trace_unmet_requirements(
+            class,
+            "abstract_property",
+            properties.iter().map(|property| property.name().to_string()),
+        );
         return Err(EvalStatus::RuntimeFatal);
     }
-    for interface in pending_class_interface_names(class, context) {
+    for interface in pending_class_contract_interface_names(class, context) {
         if context.has_interface(&interface) {
-            validate_class_implements_eval_interface(class, &interface, context)?;
+            validate_class_implements_eval_interface(class, &interface, context, values)
+                .inspect_err(|_| {
+                    trace_unmet_requirements(
+                        class,
+                        "interface_contract",
+                        std::iter::once(interface.clone()),
+                    );
+                })?;
         }
     }
     Ok(())
 }
 
+/// Names what a concrete class failed to satisfy, under `ELEPHC_EVAL_TRACE`.
+///
+/// Without it the only report is `class <N> could not be declared`, which says that a stage
+/// refused the class but not which member it was still waiting for — and the answer is rarely in
+/// the class's own source, since these requirements arrive from an ancestor or an interface.
+fn trace_unmet_requirements(
+    class: &EvalClass,
+    kind: &str,
+    names: impl Iterator<Item = String>,
+) {
+    if !crate::eval_trace::enabled() {
+        return;
+    }
+    let mut names: Vec<String> = names.collect();
+    names.sort();
+    eprintln!(
+        "[elephc-eval-trace] phase=class_decl_unmet class={:?} parent={:?} kind={kind} unmet={}",
+        class.name(),
+        class.parent(),
+        names.join(","),
+    );
+}
+
 /// Validates concrete class methods required by PHP builtin runtime interfaces.
+///
+/// A method the class inherits from a native ancestor satisfies the contract too: Symfony's
+/// `InheritDataAwareIterator extends \IteratorIterator implements \RecursiveIterator` declares
+/// only `getChildren()`/`hasChildren()` and inherits `current()`, `key()`, `next()`, `rewind()`
+/// and `valid()` from `IteratorIterator`, and every form with a nested type was refused with
+/// `class ... could not be declared`.
 pub(super) fn validate_concrete_class_builtin_interface_requirements(
     class: &EvalClass,
     context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for (requirement_owner, requirement) in
         pending_class_builtin_interface_method_requirements(class, context)
     {
-        if !class_has_builtin_interface_method(class, &requirement_owner, &requirement, context) {
+        if !class_has_builtin_interface_method(class, &requirement_owner, &requirement, context)
+            && !native_ancestor_provides_method(
+                class,
+                requirement.name(),
+                requirement.is_static(),
+                context,
+                values,
+            )?
+        {
             return Err(EvalStatus::RuntimeFatal);
         }
     }
@@ -74,7 +132,7 @@ pub(super) fn validate_concrete_class_aot_interface_requirements(
         {
             continue;
         }
-        if !class_has_aot_interface_method(class, &requirement, context) {
+        if !class_has_aot_interface_method(class, &requirement, context, values)? {
             return Err(EvalStatus::RuntimeFatal);
         }
     }

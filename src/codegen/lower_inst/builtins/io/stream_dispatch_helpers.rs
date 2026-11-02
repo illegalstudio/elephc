@@ -188,18 +188,34 @@ pub(super) fn store_recvfrom_address(ctx: &mut FunctionContext<'_>, value: Value
     Ok(())
 }
 
-/// Stores local `$errno` and `$errstr` outputs for `fsockopen`.
-pub(super) fn store_fsockopen_error_outputs(
+/// Stores the local `$error_code` and `$error_message` outputs of a socket-connect builtin.
+///
+/// Shared by `fsockopen`/`pfsockopen` (out-parameters at operands 2 and 3) and by
+/// `stream_socket_client` (operands 1 and 2), because PHP gives all three the same pair of
+/// by-reference outputs with the same meaning. The indices are parameters rather than baked in
+/// precisely so the two signatures can share one implementation.
+///
+/// Both outputs are written on EVERY outcome, which is what PHP does: `0` and the empty string
+/// when the connection succeeded, the error code and its text when it did not. Writing only the
+/// failure case would leave a caller's `$errno` undefined after a successful connect, and PHP
+/// programs read it unconditionally.
+///
+/// Called with the connection result still live in the canonical result register (`x0`/`rax`),
+/// which it preserves across the stores; `__rt_stash_connect_host` returns its `fd` argument
+/// precisely so `stream_socket_client` can call this straight afterwards.
+pub(super) fn store_socket_error_outputs(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    error_code_operand: usize,
+    error_message_operand: usize,
 ) -> Result<()> {
-    let errno_slot = if inst.operands.len() >= 3 {
-        source_load_local_slot(ctx, expect_operand(inst, 2)?)?
+    let errno_slot = if inst.operands.len() > error_code_operand {
+        source_load_local_slot(ctx, expect_operand(inst, error_code_operand)?)?
     } else {
         None
     };
-    let errstr_slot = if inst.operands.len() >= 4 {
-        source_load_local_slot(ctx, expect_operand(inst, 3)?)?
+    let errstr_slot = if inst.operands.len() > error_message_operand {
+        source_load_local_slot(ctx, expect_operand(inst, error_message_operand)?)?
     } else {
         None
     };

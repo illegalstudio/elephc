@@ -28,6 +28,14 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     {
         return Ok(());
     }
+    if !ctx.module.class_infos.contains_key(receiver.as_str())
+        && !ctx.module.extern_class_infos.contains_key(receiver.as_str())
+        && !ctx.module.packed_class_infos.contains_key(receiver.as_str())
+        && !builtins::has_eval_context(ctx)
+    {
+        exceptions::emit_error(ctx, &format!("Class \"{}\" not found", receiver));
+        return Ok(());
+    }
     let called_class_id = resolve_static_called_class_arg(ctx, receiver_label, &receiver)?;
     if let Some(intrinsic) = runtime_backed_static_intrinsic(receiver.as_str(), method_name) {
         return lower_static_runtime_intrinsic(
@@ -67,7 +75,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
         ))
     })?;
     let Some(callee_sig) = impl_info.static_methods.get(&method_key) else {
-        if is_lexical_instance_static_receiver(receiver_label)
+        if is_lexical_instance_static_receiver(ctx, receiver_label, receiver.as_str())
             && receiver_info.methods.contains_key(&method_key)
         {
             return lower_lexical_instance_static_method_call(
@@ -191,6 +199,15 @@ pub(super) fn lower_lexical_instance_static_method_call(
     let mut target =
         resolve_method_call_target(ctx, receiver, method_name, inst.operands.len() + 1)?;
     target.dynamic_slot = None;
+    if objects::lower_builtin_throwable_parent_constructor_call(
+        ctx,
+        inst,
+        &target.impl_class,
+        method_name,
+        this_slot,
+    )? {
+        return Ok(());
+    }
     super::method_resolution::emit_method_literal_parameter_guards(ctx, &target, &inst.operands)?;
     let receiver_ty = PhpType::Object(receiver.to_string());
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
@@ -203,7 +220,7 @@ pub(super) fn lower_lexical_instance_static_method_call(
     let ref_cell_lifetime = if method_name.eq_ignore_ascii_case("__construct") {
         constructor_ref_cell_lifetime(ctx, receiver)
     } else {
-        RefArgCellLifetime::CallOnly
+        RefArgCellLifetime::for_callee(ctx, method_name)
     };
     let call_args = materialize_method_call_args_with_receiver_local_and_refs(
         ctx,
@@ -425,13 +442,44 @@ pub(super) fn is_late_bound_static_receiver(receiver: &str) -> bool {
     receiver.trim_start_matches('\\') == "static"
 }
 
-/// Returns true when PHP static-call syntax should bind an instance method lexically.
-pub(super) fn is_lexical_instance_static_receiver(receiver: &str) -> bool {
-    matches!(receiver.trim_start_matches('\\'), "self" | "parent")
+/// Returns true when static-call syntax names `self`, `parent`, the current class, or an ancestor.
+pub(super) fn is_lexical_instance_static_receiver(
+    ctx: &FunctionContext<'_>,
+    receiver_label: &str,
+    resolved_receiver: &str,
+) -> bool {
+    if matches!(receiver_label.trim_start_matches('\\'), "self" | "parent") {
+        return true;
+    }
+    // A rebindable closure with a bound `$this` forwards it to any class's instance method:
+    // `parent::m()` in such a closure is lowered to `Parent::m()` for the bound scope's parent.
+    if builtins::eval::has_runtime_closure_scope(ctx) && ctx.local_slot_by_name("this").is_some() {
+        return true;
+    }
+    let Ok(mut current) = current_method_class(ctx) else {
+        return false;
+    };
+    loop {
+        if php_symbol_key(current) == php_symbol_key(resolved_receiver) {
+            return true;
+        }
+        let Some(parent) = ctx
+            .module
+            .class_infos
+            .get(current)
+            .and_then(|class_info| class_info.parent.as_deref())
+        else {
+            return false;
+        };
+        current = parent;
+    }
 }
 
-/// Returns the class name encoded in the current EIR class-method function name.
+/// Returns the lexical class recorded for a closure or encoded in a class-method function name.
 pub(super) fn current_method_class<'a>(ctx: &'a FunctionContext<'_>) -> Result<&'a str> {
+    if let Some(lexical_class) = ctx.function.lexical_class.as_deref() {
+        return Ok(lexical_class);
+    }
     ctx.function
         .name
         .rsplit_once("::")

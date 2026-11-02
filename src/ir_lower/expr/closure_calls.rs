@@ -39,7 +39,10 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
                 ..
             }
         ) && instance_callable_args_need_descriptor_binder(ctx, args);
-        if !tracked_instance_descriptor_spread {
+        if !tracked_instance_descriptor_spread
+            && (!has_dynamic_call_spread(args)
+                || super::callable_resolution::static_target_plans_its_own_spreads(&target))
+        {
             if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
                 return value;
             }
@@ -131,10 +134,16 @@ fn instance_callable_args_need_descriptor_binder(
     args: &[Expr],
 ) -> bool {
     args.iter().any(|arg| match &arg.kind {
-        ExprKind::Spread(source) => {
-            indexed_spread_source_type(ctx, source).is_none()
-                && !matches!(source.kind, ExprKind::ArrayLiteralAssoc(_))
-        }
+        ExprKind::Spread(source) => match indexed_spread_source_type(ctx, source) {
+            // Only a physically indexed array binds exactly through the direct ABI. A gradual
+            // source (`mixed`, a union, a declared `array`, a callable, an iterable) may carry
+            // string keys or too few/many elements: the descriptor walk binds by name and raises
+            // php's `Error` / `ArgumentCountError`, where the direct path warned and read null
+            // (`$cb = [$object, 'm']; $cb(...$boxed)`).
+            Some(PhpType::Array(_)) => false,
+            Some(_) => true,
+            None => !matches!(source.kind, ExprKind::ArrayLiteralAssoc(_)),
+        },
         _ => false,
     })
 }
@@ -184,15 +193,26 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     if let Some(value) = lower_literal_callable_array_expr_call(ctx, callee, args, expr) {
         return value;
     }
-    if let Some(callback) = static_call_user_func_callback(ctx, callee) {
-        if let Some(value) = lower_static_callable_call(ctx, callback, args, expr) {
-            return value;
+    if !has_dynamic_call_spread(args) {
+        if let Some(callback) = static_call_user_func_callback(ctx, callee) {
+            if let Some(value) = lower_static_callable_call(ctx, callback, args, expr) {
+                return value;
+            }
         }
     }
-    if let Some(callback) = static_assignment_callable_target(ctx, callee) {
-        lower_expr(ctx, callee);
-        if let Some(value) = lower_static_callable_call(ctx, callback, args, expr) {
-            return value;
+    if !has_dynamic_call_spread(args) {
+        if let Some(callback) = static_assignment_callable_target(ctx, callee) {
+            let lowered_callee = lower_expr(ctx, callee);
+            let direct = lower_static_callable_call(ctx, callback, args, expr);
+            // The direct call bypasses the closure it read, and the fallback below reads it
+            // again: `$fs[0]()` read the element with its own reference and never dropped it, so
+            // the closure, and every object it captured, outlived the array.
+            if ctx.value_is_owning_temporary(lowered_callee) {
+                crate::ir_lower::ownership::release_if_owned(ctx, lowered_callee, Some(expr.span));
+            }
+            if let Some(value) = direct {
+                return value;
+            }
         }
     }
     // `Closure::bind(fn &() => $this->prop, $obj, $obj)()` invokes the bound closure. Lower it
@@ -202,12 +222,30 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     if let Some(value) = lower_bound_closure_immediate_call(ctx, callee, args, expr) {
         return value;
     }
+    // Only the binding THIS callee registers may be taken below. The slot is shared: any closure
+    // literal lowered earlier leaves its binding behind unless a consumer takes it, and an arrow
+    // function passed as an ARGUMENT (`$db->transaction(fn () => $pipeline($x))`) is never taken.
+    // Laravel's `Pipeline::then()` then lowered `($this->finally)($this->passable)` in its
+    // `finally` as a direct call to that arrow function with the other branch's captures — a
+    // wrong callee, caught only because its operands did not dominate the call.
+    ctx.clear_pending_static_callable_result();
+    // `($f = function (&$v) {})($a["k"])` is the same literal, assigned on its way to the call:
+    // the descriptor path would pass the element by value and drop the write through `&$v`.
+    let callee_is_closure_literal = match &callee.kind {
+        ExprKind::Closure { .. } => true,
+        ExprKind::Assignment { target, value, .. } => {
+            matches!(target.kind, ExprKind::Variable(_))
+                && matches!(value.kind, ExprKind::Closure { .. })
+        }
+        _ => false,
+    };
     let lowered_callee = lower_expr(ctx, callee);
     // An immediately-invoked closure literal (`(fn &() => …)()`) registers its static
     // callable binding while lowering. Call it directly through the static-callable path
     // (as `$f()` does) so the closure body's signature — including a by-reference return —
     // drives the call instead of the generic descriptor-invoke path, which cannot return
-    // every result type.
+    // every result type. A closure nested INSIDE another callee (`(make(fn () => 1))()`) also
+    // registers one, and is not the value being called.
     //
     // The direct call passes the closure's captured values, not its descriptor, so that
     // descriptor is unused by the invocation, but it is what keeps a captured environment
@@ -215,8 +253,11 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     // retire it afterwards, which also covers a throw from an argument or from the callee.
     // The binding is checked for direct callability first, so no instruction is emitted for
     // a call that then has to fall back to the descriptor path below.
-    if let Some(target) = ctx.take_pending_static_callable_result() {
-        if static_callable_call_lowers_directly(ctx, &target) {
+    let pending = ctx.take_pending_static_callable_result();
+    if let Some(target) = pending.filter(|_| callee_is_closure_literal) {
+        if static_callable_call_lowers_directly(ctx, &target)
+            && super::callable_resolution::static_callable_call_accepts_args(args)
+        {
             // Retiring the descriptor destroys the captured environment, which runs PHP
             // destructors that can throw into a catch in this same frame. The call's own owned
             // result is staged in a record published OUTSIDE the descriptor record, so it is
@@ -237,6 +278,11 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     let lowered_callee = root_descriptor_callback(ctx, lowered_callee, result_type, expr.span);
     let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
     emit_callable_descriptor_invoke(ctx, lowered_callee, arg_container, expr.span)
+}
+
+/// Returns whether a call contains a spread whose elements are only known at runtime.
+fn has_dynamic_call_spread(args: &[Expr]) -> bool {
+    args.iter().any(is_spread_arg) && !has_static_call_spread_args(args)
 }
 
 /// Recognizes the parser's internal `call_user_func([$object, $method], ...)`
@@ -260,6 +306,14 @@ pub(super) fn lower_desugared_dynamic_method_call(
     let [object, method] = items.as_slice() else {
         return None;
     };
+    if let ExprKind::StringLiteral(method_name) = &method.kind {
+        if let Some(receiver) = object_static_method_receiver_for_expr(ctx, object, method_name) {
+            let object_value = lower_expr(ctx, object);
+            let call = lower_static_method_call(ctx, &receiver, method_name, &args[1..], expr);
+            release_owning_receiver_temporary(ctx, object_value, expr.span);
+            return Some(call);
+        }
+    }
     Some(lower_dynamic_method_expr_call(
         ctx,
         object,

@@ -14,6 +14,23 @@ pub(super) fn lower_iterator_iterator_new(ctx: &mut FunctionContext<'_>, inst: &
     let source = expect_operand(inst, 0)?;
     let source_ty = ctx.value_php_type(source)?.codegen_repr();
     let PhpType::Object(source_name) = &source_ty else {
+        // php's answer for a SCALAR argument is a TypeError, and emitting it is both what php does
+        // and the only honest lowering: the constructor has no Traversable to wrap. Refusing the
+        // whole program instead is what a fabricated scalar parameter type turned into a build
+        // failure -- `twig/twig`'s `CoreExtension::filter($env, $isSandboxed, $array, $arrow)` has
+        // no compiled caller, its untyped parameters keep the `int` inference seed, and
+        // `new \IteratorIterator($array)` is reached only past `if (!is_iterable($array)) throw`,
+        // so the throw this emits stands where the guard already made the code unreachable.
+        if let Some(given) = scalar_type_error_name(&source_ty) {
+            exceptions::emit_type_error(
+                ctx,
+                &format!(
+                    "IteratorIterator::__construct(): Argument #1 ($iterator) must be of type Traversable, {} given",
+                    given
+                ),
+            );
+            return store_if_result(ctx, inst);
+        }
         return Err(CodegenIrError::unsupported(format!(
             "IteratorIterator source PHP type {:?}",
             source_ty
@@ -86,6 +103,18 @@ pub(super) fn lower_iterator_iterator_new(ctx: &mut FunctionContext<'_>, inst: &
     )
 }
 
+/// Returns php's name for a scalar type in a TypeError message, or `None` for anything else.
+fn scalar_type_error_name(php_type: &PhpType) -> Option<&'static str> {
+    match php_type {
+        PhpType::Int | PhpType::TaggedScalar => Some("int"),
+        PhpType::Float => Some("float"),
+        PhpType::Bool | PhpType::False => Some("bool"),
+        PhpType::Str => Some("string"),
+        PhpType::Void => Some("null"),
+        _ => None,
+    }
+}
+
 /// Stores IteratorIterator::$inner after converting IteratorAggregate inputs through getIterator().
 pub(super) fn emit_iterator_iterator_inner_from_traversable(
     ctx: &mut FunctionContext<'_>,
@@ -102,6 +131,37 @@ pub(super) fn emit_iterator_iterator_inner_from_traversable(
     let done = ctx.next_label("iterator_iterator_source_done");
     emit_branch_if_saved_traversable_implements(ctx, "Iterator", &direct_case)?;
     emit_branch_if_saved_traversable_implements(ctx, "IteratorAggregate", &aggregate_case)?;
+    let owned_case = ctx.next_label("iterator_iterator_source_unwrapped");
+    let bridge = ctx.module.required_runtime_features.eval_bridge;
+    if bridge {
+        // A class the interpreter declared has no compiled class id, so neither check above can
+        // see its interfaces. The interpreter already refused a non-Traversable at the parameter
+        // boundary, so an object it owns is an IteratorAggregate (the bridge hands over what
+        // `getIterator()` returns, which `$inner` wraps) or an Iterator (kept as `$inner`, whose
+        // methods are dispatched through the bridge like every other call on such an object).
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            0,
+        );
+        let unwrap_symbol = ctx
+            .emitter
+            .target
+            .extern_symbol("__elephc_eval_unwrap_aggregate");
+        abi::emit_call_label(ctx.emitter, &unwrap_symbol);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &owned_case);
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            0,
+        );
+        let owner_probe = ctx
+            .emitter
+            .target
+            .extern_symbol("__elephc_eval_object_has_dynamic_owner");
+        abi::emit_call_label(ctx.emitter, &owner_probe);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &direct_case);
+    }
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
 
@@ -110,6 +170,13 @@ pub(super) fn emit_iterator_iterator_inner_from_traversable(
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     abi::emit_incref_if_refcounted(ctx.emitter, &slot.php_type.codegen_repr());
     abi::emit_jump(ctx.emitter, &done);
+
+    if bridge {
+        // The bridge returned the aggregate's traversable with a reference this object now owns.
+        ctx.emitter.label(&owned_case);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_jump(ctx.emitter, &done);
+    }
 
     ctx.emitter.label(&aggregate_case);
     emit_validate_iterator_iterator_aggregate_downcast(ctx)?;
@@ -140,6 +207,46 @@ pub(super) fn emit_push_iterator_iterator_downcast_status(
         }
         PhpType::Void | PhpType::Never => {
             emit_push_iterator_iterator_downcast_status_pair(ctx, 0, 0);
+        }
+        // The omitted optional `?string $class` reaches the constructor as a BOXED null, so the
+        // static type says nothing: only a null at run time means "no downcast requested". Taking
+        // every boxed value for an invalid downcast made `new IteratorIterator($aggregate)` throw
+        // "Class to downcast to not found..." for every IteratorAggregate source.
+        // A given class name arrives boxed the same way, so a string tag is resolved exactly like
+        // a `string` operand; taking every non-null box for an invalid name made
+        // `new IteratorIterator(new ArrayObject(...), "ArrayObject")` throw.
+        PhpType::Mixed | PhpType::Union(_) => {
+            let null_label = ctx.next_label("iterator_iterator_downcast_null");
+            let string_label = ctx.next_label("iterator_iterator_downcast_string");
+            let done_label = ctx.next_label("iterator_iterator_downcast_done");
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #8");                      // runtime tag 8 is null: no downcast class was given
+                    ctx.emitter.instruction(&format!("b.eq {}", null_label));   // omitted or null class: no downcast constraint
+                    ctx.emitter.instruction("cmp x0, #1");                      // runtime tag 1 is a class-name string to resolve
+                    ctx.emitter.instruction(&format!("b.eq {}", string_label)); // resolve the boxed class name like a string operand
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 8");                      // runtime tag 8 is null: no downcast class was given
+                    ctx.emitter.instruction(&format!("je {}", null_label));     // omitted or null class: no downcast constraint
+                    ctx.emitter.instruction("cmp rax, 1");                      // runtime tag 1 is a class-name string to resolve
+                    ctx.emitter.instruction(&format!("je {}", string_label));   // resolve the boxed class name like a string operand
+                }
+            }
+            emit_push_iterator_iterator_downcast_status_pair(ctx, 2, 0);
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&string_label);
+            if ctx.emitter.target.arch == Arch::X86_64 {
+                ctx.emitter.instruction("mov rax, rdi");                        // the unboxed string pointer becomes the lookup's string pointer
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_instanceof_lookup");
+            emit_push_iterator_iterator_downcast_status_from_lookup(ctx);
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&null_label);
+            emit_push_iterator_iterator_downcast_status_pair(ctx, 0, 0);
+            ctx.emitter.label(&done_label);
         }
         _ => {
             emit_push_iterator_iterator_downcast_status_pair(ctx, 2, 0);
@@ -262,8 +369,7 @@ pub(super) fn emit_validate_iterator_iterator_aggregate_downcast(ctx: &mut Funct
 pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #56");                             // request Throwable payload storage (message/code/previous)
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks object instances
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp allocation as a runtime object
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
@@ -279,7 +385,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store static exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
             ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
@@ -288,9 +394,8 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction("push rbp");                                // preserve caller frame pointer for exception allocation
             ctx.emitter.instruction("mov rbp, rsp");                            // establish an aligned helper frame
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call aligned
-            ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(                                            // materialize the target heap-kind marker
+            crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
+            ctx.emitter.instruction(
                 &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
             );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
@@ -307,7 +412,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ));                                                                 // store static exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             ctx.emitter
                 .instruction("mov QWORD PTR [rip + _exc_value], rax"); // publish the active exception object
             ctx.emitter.instruction("mov rsp, rbp");                            // release helper frame before throwing

@@ -9,6 +9,62 @@
 
 use super::*;
 
+/// Reads one eval object's property slot from the store that actually holds it.
+///
+/// An eval-declared object does NOT keep its properties in the runtime object's slots.
+/// `eval_dynamic_class_allocate_object()` writes every declared default into the context
+/// overlay with `set_dynamic_property_value()`, and an ordinary `$o->p` read comes back out of
+/// that same overlay. Reflection used to read `values.property_get()`, which for such an object
+/// is a different and empty store, so `getValue()` answered null for every property until some
+/// reflection write happened to populate the slot it was reading — which is why the value
+/// appeared only on the SECOND read in the suite fixture.
+///
+/// The lookup order is the ordinary read path's, so the two cannot answer differently: a
+/// by-reference alias first, then the overlay, then the runtime slot. That last fallback is not
+/// dead — an eval class may extend an AOT class whose properties really do live in real slots.
+fn eval_reflection_stored_property_value(
+    object: RuntimeCellHandle,
+    storage_property_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let identity = values.object_identity(object)?;
+    if let Some(target) = context
+        .dynamic_property_alias(identity, storage_property_name)
+        .cloned()
+    {
+        return eval_reference_target_value(&target, context, values);
+    }
+    if let Some(value) = context.dynamic_property_value(identity, storage_property_name) {
+        return values.retain(value);
+    }
+    values.property_get(object, storage_property_name)
+}
+
+/// Writes one eval object's property slot into the store ordinary reads consult.
+///
+/// The runtime-slot write is kept because an eval class backed by an AOT parent stores there,
+/// and the overlay write is what makes the value visible to `$o->p` and to a later reflected
+/// read. The overlay owns its cells, so the value is retained before being stored and any
+/// distinct replaced cell is released, exactly as an ordinary `$o->p = ...` write does.
+///
+/// A property currently aliased by reference is not written through to its reference target
+/// here: the helper that does that is private to `crate::interpreter::statements`. That case
+/// did not reach the target before this change either, so it stays as it was.
+fn eval_reflection_store_property_value(
+    object: RuntimeCellHandle,
+    storage_property_name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    values.property_set(object, storage_property_name, value)?;
+    let identity = values.object_identity(object)?;
+    eval_store_dynamic_property_value(identity, storage_property_name, value, context, values)?;
+    context.mark_dynamic_property_initialized(identity, storage_property_name);
+    Ok(())
+}
+
 /// Reads one eval instance property through ReflectionProperty semantics.
 pub(super) fn eval_reflection_instance_property_get_value(
     declaring_class: &str,
@@ -49,7 +105,7 @@ pub(super) fn eval_reflection_instance_property_get_value(
         );
     }
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
-    values.property_get(object, &storage_property_name)
+    eval_reflection_stored_property_value(object, &storage_property_name, context, values)
 }
 
 /// Writes one eval instance property through ReflectionProperty semantics.
@@ -73,7 +129,7 @@ pub(super) fn eval_reflection_instance_property_set_value(
             declaring_class, property.name(), value, context, values,
         );
     }
-    validate_eval_reflection_property_write(declaring_class, &property, context)?;
+    validate_eval_reflection_property_write(declaring_class, &property, object, context, values)?;
     if property.has_set_hook() {
         if !current_eval_property_hook_is(
             declaring_class,
@@ -94,7 +150,7 @@ pub(super) fn eval_reflection_instance_property_set_value(
                 object,
                 vec![EvaluatedCallArg {
                     name: None,
-                    value,
+                    value: value.borrowed(),
                     ref_target: None,
                 }],
                 context,
@@ -107,10 +163,7 @@ pub(super) fn eval_reflection_instance_property_set_value(
         return Err(EvalStatus::RuntimeFatal);
     }
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
-    values.property_set(object, &storage_property_name, value)?;
-    let identity = values.object_identity(object)?;
-    context.mark_dynamic_property_initialized(identity, &storage_property_name);
-    Ok(())
+    eval_reflection_store_property_value(object, &storage_property_name, value, context, values)
 }
 
 /// Reads one generated/AOT instance property through ReflectionProperty semantics.
@@ -269,7 +322,7 @@ pub(super) fn eval_reflection_instance_property_get_raw_value(
         return Err(EvalStatus::RuntimeFatal);
     }
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
-    values.property_get(object, &storage_property_name)
+    eval_reflection_stored_property_value(object, &storage_property_name, context, values)
 }
 
 /// Writes one eval instance property through ReflectionProperty raw-storage semantics.
@@ -291,12 +344,9 @@ pub(super) fn eval_reflection_instance_property_set_raw_value(
     if property.is_virtual() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    validate_eval_reflection_property_write(declaring_class, &property, context)?;
+    validate_eval_reflection_property_write(declaring_class, &property, object, context, values)?;
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
-    values.property_set(object, &storage_property_name, value)?;
-    let identity = values.object_identity(object)?;
-    context.mark_dynamic_property_initialized(identity, &storage_property_name);
-    Ok(())
+    eval_reflection_store_property_value(object, &storage_property_name, value, context, values)
 }
 
 /// Reads a public dynamic property through ReflectionProperty semantics.
@@ -308,7 +358,7 @@ pub(super) fn eval_reflection_dynamic_property_get_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_reflection_dynamic_property_validate_object(declaring_class, object, context, values)?;
-    values.property_get(object, property_name)
+    eval_reflection_stored_property_value(object, property_name, context, values)
 }
 
 /// Writes a public dynamic property through ReflectionProperty semantics.
@@ -321,10 +371,7 @@ pub(super) fn eval_reflection_dynamic_property_set_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     eval_reflection_dynamic_property_validate_object(declaring_class, object, context, values)?;
-    values.property_set(object, property_name, value)?;
-    let identity = values.object_identity(object)?;
-    context.mark_dynamic_property_initialized(identity, property_name);
-    Ok(())
+    eval_reflection_store_property_value(object, property_name, value, context, values)
 }
 
 /// Returns whether a public dynamic property currently exists on the target object.
@@ -336,7 +383,7 @@ pub(super) fn eval_reflection_dynamic_property_is_initialized(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     eval_reflection_dynamic_property_validate_object(declaring_class, object, context, values)?;
-    eval_reflection_object_dynamic_property_exists(object, property_name, values)
+    eval_reflection_object_dynamic_property_exists(object, property_name, context, values)
 }
 
 /// Validates the object argument used by dynamic ReflectionProperty operations.
@@ -404,22 +451,42 @@ pub(super) fn eval_reflection_instance_property_target(
 }
 
 /// Rejects writes to eval properties ReflectionProperty is not allowed to mutate.
+///
+/// php lets Reflection INITIALIZE a readonly property from any scope -- that is how an ORM
+/// hydrates `private readonly string $name` -- and refuses only a second write, with a catchable
+/// `Error: Cannot modify readonly property C::$p`. Refusing the first write as a fatal killed
+/// Doctrine's hydration of every entity with a readonly field.
 pub(super) fn validate_eval_reflection_property_write(
     declaring_class: &str,
     property: &EvalClassProperty,
-    context: &ElephcEvalContext,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if !property.is_readonly() {
+    if !property.is_readonly()
+        || current_eval_property_hook_is(
+            declaring_class,
+            property.name(),
+            &property_hook_set_method(property.name()),
+            context,
+        )
+    {
         return Ok(());
     }
-    current_eval_property_hook_is(
-        declaring_class,
-        property.name(),
-        &property_hook_set_method(property.name()),
+    let identity = values.object_identity(object)?;
+    let storage_property_name = eval_instance_property_storage_name(declaring_class, property);
+    if !context.dynamic_property_is_initialized(identity, &storage_property_name) {
+        return Ok(());
+    }
+    eval_throw_error(
+        &format!(
+            "Cannot modify readonly property {}::${}",
+            declaring_class.trim_start_matches('\\'),
+            property.name()
+        ),
         context,
+        values,
     )
-    .then_some(())
-    .ok_or(EvalStatus::RuntimeFatal)
 }
 
 /// Throws PHP's `ReflectionException` for invalid static-property writes.

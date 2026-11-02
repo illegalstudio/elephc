@@ -1180,3 +1180,73 @@ run(5);
         inst.op == Op::Release && inst.operands == [result]
     }).count(), 1, "the detached result still releases its independent SSA owner");
 }
+
+/// Verifies a string a function builds with `.=` and then returns is stabilized before it
+/// crosses the frame boundary.
+///
+/// Concatenation writes into a shared scratch buffer, and the three persist sites all key on the
+/// defining opcode of the value they see. `return $v;` loads a slot, so that opcode is
+/// `LoadLocal` and none of them fires — the caller then holds a pointer the next string
+/// operation is free to overwrite. Symfony's `Dotenv::lexValue()` is exactly this shape, and the
+/// corruption it produced was invisible until an unrelated allocation reused the block.
+#[test]
+fn string_built_by_compound_concat_is_persisted_when_returned() {
+    let module = super::lower_source(
+        r#"<?php
+function lex(string $s): string {
+    $v = '';
+    $i = 0;
+    while ($i < strlen($s)) {
+        $v .= $s[$i];
+        ++$i;
+    }
+    return $v;
+}
+echo lex(getenv('X') ?: 'dev');
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "lex")
+        .expect("expected the lex EIR function");
+    // A string `Acquire` lowers to `__rt_str_persist` too, and the return now relies on it rather
+    // than persisting the acquired copy a second time (which leaked the first copy per call).
+    assert!(
+        function.instructions.iter().any(|inst| inst.op == Op::StrPersist
+            || (inst.op == Op::Acquire && inst.result_php_type.codegen_repr() == crate::types::PhpType::Str)),
+        "returning a scratch-backed local must persist it, otherwise the caller reads bytes the \
+         next string operation overwrites"
+    );
+}
+
+/// Guards the narrowing that keeps the persist above from firing on every string return: a slot
+/// whose last store owns its bytes is not scratch-backed, so returning it needs no copy.
+///
+/// Without this, `return $v;` persists unconditionally, and `__rt_str_persist` DUPLICATES
+/// anything that is not a concat temporary — a copy per string return, plus a second owner for
+/// bytes the frame already owns.
+#[test]
+fn string_returned_from_a_persistent_local_is_not_copied() {
+    let module = super::lower_source(
+        r#"<?php
+function pick(string $s): string {
+    $v = $s;
+    return $v;
+}
+echo pick(getenv('X') ?: 'dev');
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "pick")
+        .expect("expected the pick EIR function");
+    assert!(
+        function
+            .instructions
+            .iter()
+            .all(|inst| inst.op != Op::StrPersist),
+        "a local holding an owned string must be returned as-is, not duplicated"
+    );
+}

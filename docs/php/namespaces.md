@@ -447,6 +447,8 @@ The interpreter understands a deliberate subset of PHP, enough for typical autol
 - variable reads/writes (`$path = ...; require_once $path;`)
 - `if`/`elseif`/`else` whose conditions fold to a literal bool
 - `str_replace`, `str_starts_with`, `str_ends_with`, `strtolower`, `strtoupper` with literal arguments
+- `substr($string, $offset)` and `substr($string, $offset, $length)` with PHP 8 clamping (negative offset counts from the end; an offset past the end gives `""`; a negative length drops that many bytes from the end), and `strrpos($haystack, $needle)` / `strrpos($haystack, $needle, $offset)`, which yields `false` — not `0` — when the needle is absent
+- integer `+` and unary `-` on an integer (only those two; no other arithmetic operator folds — unary `-` exists so a negative `substr` offset or length can be written at all), so the ordinary leaf expression `substr($class, strrpos($class, '\\') + 1)` works. PHP's `false + 1` is `1`, so a class with no `\` loses its first character exactly as it does under php — the compiler reproduces that rather than "correcting" it, because correcting it would resolve a global-namespace class to a different file than php picks
 - `sprintf` with `%s` placeholders (and the `%%` literal escape)
 - `dirname` (with optional levels), `basename`, `realpath` (returns `false` when the path doesn't resolve, matching PHP), and `pathinfo($path, PATHINFO_*)` for `DIRNAME` / `BASENAME` / `EXTENSION` / `FILENAME`
 - `file_exists`, `is_file`, `is_readable`, `is_dir` against the actual filesystem at compile time
@@ -455,7 +457,9 @@ The interpreter understands a deliberate subset of PHP, enough for typical autol
 
 `spl_autoload_register` callsites can also live inside a top-level `if`, `if/else`, or `if/elseif/else` whose condition folds to a literal bool (`if (true)`, `if (1)`, `if (PHP_OS === 'Linux')` if `PHP_OS` were a foldable constant, …). The chosen branch is inlined at compile time before collection runs. Conditions whose value the compiler can't decide leave the `if` unchanged and the inner register call is ignored.
 
-Anything else — loops, exceptions, `new`, method calls, ternaries, match, captures via `use(...)` — silently rejects the rule for that candidate; the chain falls through to the next rule (or PSR-4).
+Anything else — loops, exceptions, `new`, method calls, ternaries, match, captures via `use(...)`, and every arithmetic operator except `+` and unary `-` — silently rejects the rule for that candidate; the chain falls through to the next rule (or PSR-4).
+
+A call php itself would reject also rejects the rule rather than inventing an answer: `strrpos` with an `$offset` outside the haystack (php raises `ValueError`), and `substr` / `strrpos` given a non-string subject that php would coerce. The rule yields no path, so the chain moves on.
 
 `spl_autoload_unregister($closure)` removes a previously-registered rule when the closure AST matches an entry. `spl_autoload_call("App\\Foo")` with a literal class-name argument forces the autoload pass to resolve `App\Foo` even if the rest of the program doesn't reference it.
 

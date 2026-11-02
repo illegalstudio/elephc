@@ -2,7 +2,7 @@
 title: "in_array()"
 description: "Checks if a value exists in an array."
 sidebar:
-  order: 57
+  order: 68
 ---
 
 ## in_array()

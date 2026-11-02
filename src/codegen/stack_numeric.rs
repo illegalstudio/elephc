@@ -415,15 +415,22 @@ fn tagged_producer(inst: &crate::ir::Instruction) -> bool {
 }
 
 /// Shares the closed numeric proof with comparison lowering; no pointer lifetime is extended.
-pub(super) fn numeric_comparison(function: &Function, proven: &HashSet<ValueId>, inst: &crate::ir::Instruction) -> bool {
+pub(super) fn numeric_comparison(
+    proven: &HashSet<ValueId>,
+    inst: &crate::ir::Instruction,
+    prove: impl FnOnce(&[ValueId]) -> bool,
+) -> bool {
     domain::comparison(inst) && inst.operands.len() == 2
-        && (inst.operands.iter().all(|value| proven.contains(value))
-            || domain::inputs(function, &inst.operands))
+        && (inst.operands.iter().all(|value| proven.contains(value)) || prove(&inst.operands))
 }
 
 /// Shares the complete scalar-origin proof with retirement, without admitting any pointer escape.
-pub(super) fn numeric_value(function: &Function, proven: &HashSet<ValueId>, value: ValueId) -> bool {
-    proven.contains(&value) || domain::inputs(function, &[value])
+pub(super) fn numeric_value(
+    proven: &HashSet<ValueId>,
+    value: ValueId,
+    prove: impl FnOnce(&[ValueId]) -> bool,
+) -> bool {
+    proven.contains(&value) || prove(&[value])
 }
 
 /// Copies a scalar payload without exposing its address; declared returns retain their checks.

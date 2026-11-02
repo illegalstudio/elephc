@@ -27,7 +27,7 @@ use super::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 pub(crate) fn emit_interface_return_wrappers(
     emitter: &mut Emitter,
     interfaces: &HashMap<String, InterfaceInfo>,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     emitted_class_names: Option<&HashSet<String>>,
 ) -> Result<(), String> {
     let mut sorted_classes: Vec<(&String, &ClassInfo)> = classes
@@ -69,7 +69,7 @@ fn emit_class_interface_return_wrappers(
     _class_name: &str,
     class_info: &ClassInfo,
     interfaces: &HashMap<String, InterfaceInfo>,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> Result<(), String> {
     for interface_name in &class_info.interfaces {
         let Some(interface_info) = interfaces.get(interface_name) else {
@@ -144,7 +144,7 @@ fn interface_method_needs_return_wrapper(
     interface_info: &InterfaceInfo,
     method_name: &str,
     impl_class: &str,
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> bool {
     let Some(interface_sig) = interface_info.methods.get(method_name) else {
         return false;

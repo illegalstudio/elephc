@@ -31,14 +31,20 @@ pub(crate) const CALLABLE_DESC_KIND_OBJECT_INVOKE: u64 =
 pub(crate) const CALLABLE_DESC_KIND_FUNCTION: u64 = CallableDescriptorShape::Function as u64;
 pub(crate) const CALLABLE_DESC_KIND_BUILTIN: u64 = CallableDescriptorShape::Builtin as u64;
 pub(crate) const CALLABLE_DESC_KIND_EXTERN: u64 = CallableDescriptorShape::Extern as u64;
+pub(crate) const CALLABLE_DESC_KIND_ARRAY: u64 = CallableDescriptorShape::Array as u64;
 pub(crate) const CALLABLE_DESC_KIND_STATIC_METHOD: u64 =
     CallableDescriptorShape::StaticMethod as u64;
 pub(crate) const CALLABLE_DESC_KIND_INSTANCE_METHOD: u64 =
     CallableDescriptorShape::InstanceMethod as u64;
 
 pub(crate) const CALLABLE_DESC_ENTRY_OFFSET: usize = 8;
+/// Pointer to the descriptor's PHP name (`"strlen"`, `"Foo::bar"`), or 0 when it has none.
 pub(crate) const CALLABLE_DESC_NAME_OFFSET: usize = 16;
-pub(crate) const CALLABLE_DESC_NAME_LENGTH_OFFSET: usize = 24;
+/// Byte length of the name at [`CALLABLE_DESC_NAME_OFFSET`].
+pub(crate) const CALLABLE_DESC_NAME_LEN_OFFSET: usize = 24;
+/// Same offset as [`CALLABLE_DESC_NAME_LEN_OFFSET`], under the spelling main's literal-parameter
+/// guards use.
+pub(crate) const CALLABLE_DESC_NAME_LENGTH_OFFSET: usize = CALLABLE_DESC_NAME_LEN_OFFSET;
 #[allow(dead_code)]
 pub(crate) const CALLABLE_DESC_SIGNATURE_OFFSET: usize = 32;
 #[allow(dead_code)]
@@ -344,6 +350,19 @@ pub(crate) fn emit_initialize_runtime_descriptor(emitter: &mut Emitter, dest: &s
     }
 }
 
+/// Copies a fixed descriptor header from a runtime-selected template pointer.
+pub(crate) fn emit_copy_descriptor_template_to_runtime(
+    emitter: &mut Emitter,
+    dest_reg: &str,
+    source_reg: &str,
+) {
+    let word_reg = abi::secondary_scratch_reg(emitter);
+    for offset in (0..CALLABLE_DESC_STATIC_SIZE).step_by(8) {
+        abi::emit_load_from_address(emitter, word_reg, source_reg, offset);
+        abi::emit_store_to_address(emitter, word_reg, dest_reg, offset);
+    }
+}
+
 /// Stores the current result registers into a runtime descriptor capture slot.
 pub(crate) fn emit_store_current_result_to_runtime_capture(
     emitter: &mut Emitter,
@@ -417,6 +436,7 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
     let defaults = optional_symbol(default_table(data, &sig.defaults));
     let ref_flags = optional_symbol(flag_table(data, &sig.ref_params));
     let declared_flags = optional_symbol(flag_table(data, &sig.declared_params));
+    let param_type_specs = optional_symbol(param_type_spec_table(data, sig));
 
     data.add_words(vec![
         DataWord::U64(visible_param_count as u64),
@@ -431,7 +451,38 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
         defaults,
         ref_flags,
         declared_flags,
+        param_type_specs,
     ])
+}
+
+/// Builds the `(pointer, length)` table of each declared parameter's type-spec string.
+///
+/// The type table above holds representation TAGS, which is all the ABI needs and too little for
+/// reflection: `\ReflectionClass|\ReflectionMethod` is a boxed slot, tag `Mixed`, and
+/// `(new \ReflectionFunction($closure))->getParameters()[0]->getType()` answered `mixed` for it.
+/// Symfony's `AttributeAutoconfigurationPass` reads exactly that type to decide which reflectors
+/// an attribute autoconfigurator applies to. The spec is the one native function registration
+/// already sends the bridge, so both paths parse the same text.
+fn param_type_spec_table(data: &mut DataSection, sig: &FunctionSig) -> Option<String> {
+    let specs = crate::codegen::lower_inst::builtins::eval::eval_native_callable_param_type_specs(sig);
+    if specs.iter().all(Option::is_none) {
+        return None;
+    }
+    let mut words = Vec::with_capacity(specs.len() * 2);
+    for spec in specs {
+        match spec {
+            Some(spec) if !spec.is_empty() => {
+                let (label, len) = data.add_string(spec.as_bytes());
+                words.push(DataWord::Symbol(label));
+                words.push(DataWord::U64(len as u64));
+            }
+            _ => {
+                words.push(DataWord::U64(0));
+                words.push(DataWord::U64(0));
+            }
+        }
+    }
+    Some(data.add_words(words))
 }
 
 /// Builds the descriptor environment record for captures and hidden wrapper params.

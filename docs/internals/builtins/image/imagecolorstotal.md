@@ -2,7 +2,7 @@
 title: "imagecolorstotal() - internals"
 description: "Compiler internals for imagecolorstotal(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 487
+  order: 500
 ---
 
 ## `imagecolorstotal()` - internals

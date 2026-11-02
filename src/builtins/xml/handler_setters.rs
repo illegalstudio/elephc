@@ -332,6 +332,7 @@ pub(super) fn check_setter(
                 return_type,
                 body,
                 captures,
+                capture_refs,
                 *by_ref_return,
                 value.span,
                 cx.env,

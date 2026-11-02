@@ -115,9 +115,30 @@ pub(crate) fn lower_settype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers the defensive `class_alias()` fallback that remains after AOT alias extraction.
+///
+/// A call that reaches the backend names its classes at run time (closed-world builds accept
+/// it): `__rt_class_alias_register` records the alias in the run-time table the by-name lookups
+/// (`new $name`, dynamic class constants, `class_exists()`) resolve through. `$autoload` has no
+/// effect: every class of a closed world is already compiled.
 pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count_between(inst, "class_alias", 2, 3)?;
-    emit_bool_result(ctx, false);
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    super::strings::load_string_arg_to_regs(ctx, inst, 0, "class_alias", ptr, len)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+    super::strings::load_string_arg_to_regs(ctx, inst, 1, "class_alias", ptr, len)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x1");                              // alias name pointer
+            ctx.emitter.instruction("mov x4, x2");                              // alias name length
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rdx");                            // alias name length
+            ctx.emitter.instruction("mov rdx, rax");                            // alias name pointer
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_class_alias_register");
     store_if_result(ctx, inst)
 }
 
@@ -480,11 +501,14 @@ pub(crate) fn lower_class_name_lookup(
             emit_mixed_object_class_name(ctx, name);
         }
         PhpType::Str if name == "get_parent_class" => {
-            let class_name = const_string_operand(ctx, value)?;
-            if let Some(parent) = parent_of_existing(ctx, &class_name) {
-                emit_string_result(ctx, parent.as_bytes());
+            if let Some(class_name) = optional_const_string_operand(ctx, value)? {
+                if let Some(parent) = parent_of_existing(ctx, &class_name) {
+                    emit_string_result(ctx, parent.as_bytes());
+                } else {
+                    emit_class_lookup_type_error(ctx, name, "string");
+                }
             } else {
-                emit_class_lookup_type_error(ctx, name, "string");
+                emit_runtime_parent_class_name(ctx, value)?;
             }
         }
         PhpType::Int
@@ -507,12 +531,87 @@ pub(crate) fn lower_class_name_lookup(
     store_if_result(ctx, inst)
 }
 
+/// Resolves a runtime class-name string against the closed-world AOT class metadata.
+fn emit_runtime_parent_class_name(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let mut candidates = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter_map(|(class_name, info)| {
+            info.parent
+                .as_ref()
+                .map(|parent| (class_name.clone(), parent.clone()))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.0.cmp(&right.0));
+    if candidates.is_empty() {
+        emit_string_result(ctx, b"");
+        return Ok(());
+    }
+
+    let (names, parents): (Vec<_>, Vec<_>) = candidates.into_iter().unzip();
+    super::member_queries::emit_find_in_packed_name_list(
+        ctx,
+        value,
+        &super::member_queries::packed_name_list(&names),
+    )?;
+    let found_label = ctx.next_label("get_parent_class_dynamic_found");
+    let done_label = ctx.next_label("get_parent_class_dynamic_done");
+    emit_branch_if_name_list_index_found(ctx, &found_label);
+    emit_string_result(ctx, b"");
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&found_label);
+    super::member_queries::emit_packed_name_list_entry(
+        ctx,
+        &super::member_queries::packed_name_list(&parents),
+    );
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Lowers `get_object_vars()` to a fresh public-property hash projection.
 pub(crate) fn lower_get_object_vars(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "get_object_vars", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let scope_class_id = lexical_object_vars_scope_class_id(ctx);
+    emit_object_hash_projection(ctx, value, false, scope_class_id)?;
+    // The helper hands back a raw hash. A call the checker could only type `mixed` (a by-ref
+    // closure parameter that captures its own closure, as Symfony's `UrlGenerator::doGenerate()`
+    // `$caster` does) stores into a Mixed slot, which read that pointer as a box: `count()` said
+    // 16, a `foreach` saw an int, and the demo's login redirect segfaulted.
+    if let Some(result) = inst.result {
+        if matches!(
+            ctx.value_php_type(result)?.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ) {
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::AssocArray {
+                    key: Box::new(PhpType::Str),
+                    value: Box::new(PhpType::Mixed),
+                },
+            );
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers an in-scope `foreach ($this ...)` source to the properties its scope can see.
+///
+/// The iterated object may be a subclass instance: its own private properties stay
+/// invisible, and a private property of this scope that the subclass shadows keeps its
+/// name. That is exactly the `get_object_vars()` projection from the same scope.
+pub(crate) fn lower_object_foreach_projection(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let scope_class_id = lexical_object_vars_scope_class_id(ctx);
     emit_object_hash_projection(ctx, value, false, scope_class_id)?;
@@ -595,7 +694,7 @@ pub(crate) fn emit_mangled_object_vars(
 }
 
 /// Resolves the EIR function's lexical class id, using `-1` for global scopes.
-fn lexical_object_vars_scope_class_id(ctx: &FunctionContext<'_>) -> i64 {
+pub(in crate::codegen::lower_inst) fn lexical_object_vars_scope_class_id(ctx: &FunctionContext<'_>) -> i64 {
     let Some(class_name) = ctx.lexical_class() else {
         return -1;
     };
@@ -646,56 +745,190 @@ pub(crate) fn lower_is_a_relation(
     let object = expect_operand(inst, 0)?;
     let target = expect_operand(inst, 1)?;
     let exclude_self = name == "is_subclass_of";
+    // PHP takes a CLASS NAME here as readily as an object. `is_subclass_of()` allows the string
+    // form by DEFAULT (`bool $allow_string = true`); `is_a()` requires it to be asked for
+    // (`$allow_string = false`). A non-constant flag cannot be folded, so the relation is computed
+    // as if the string were allowed and the answer is the flag itself -- true only when both hold.
+    let allows_string_by_default = name == "is_subclass_of";
+    let flag = inst.operands.get(2).copied();
+    let constant_flag = match flag {
+        Some(value) => const_bool_operand(ctx, value)?,
+        None => Some(allows_string_by_default),
+    };
+    // The eval bridge answers an OBJECT's relation only. With strings allowed a boxed value may
+    // hold a class NAME, which that probe calls "not an object": `is_a($this->collects,
+    // JsonResource::class, true)` inside any function with an eval context was false, so Laravel's
+    // resource collections refused every resource class. Those calls take the name-based path.
     if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_))
         && super::has_eval_context(ctx)
+        && constant_flag == Some(false)
     {
         if let Some(target_class) = optional_const_string_operand(ctx, target)? {
             return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
         }
     }
-    // `$allow_string` decides whether a string first operand names a class, and the two builtins
-    // disagree on its default: `is_subclass_of` takes names unless told otherwise, `is_a` only
-    // when told to. Measured, `is_a("Derived", "Base")` is false and `is_a("Derived", "Base",
-    // true)` is true.
-    let literal_flag = match inst.operands.get(2) {
-        Some(flag) => const_bool_operand(ctx, *flag)?,
-        None => Some(exclude_self),
-    };
-    let subject_is_object = matches!(ctx.value_php_type(object)?, PhpType::Object(_));
-    if let Some(allow_string_subject) = literal_flag {
-        let result =
-            static_relation_holds(ctx, object, target, exclude_self, allow_string_subject)?;
-        emit_bool_result(ctx, result);
+    let object_is_object = matches!(ctx.value_php_type(object)?, PhpType::Object(_));
+    // Two class NAMES, one of them only known at run time: the static walk below can only answer
+    // for literals and said false for every other pair -- including `is_a($attribute->getName(),
+    // Route::class, true)`, the filter `ReflectionMethod::getAttributes(..., IS_INSTANCEOF)` runs.
+    //
+    // A GRADUAL operand is decided at run time too: `is_subclass_of($class, $interface)` with
+    // `$class` from a parameter bag and `$interface` a `foreach` key answered false for every
+    // pair, `Countable` on `ArrayObject` included -- which is how Symfony's
+    // `ResolveInstanceofConditionalsPass` dropped every autoconfigured tag of a rebuilt container.
+    let gradual_object = matches!(
+        ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    );
+    let strings_allowed = constant_flag == Some(true)
+        && class_name_operand_is_runtime_resolvable(ctx, object)?
+        && (optional_const_string_operand(ctx, object)?.is_none()
+            || optional_const_string_operand(ctx, target)?.is_none());
+    // With `$allow_string` false only an OBJECT in the gradual value counts: `is_a($value, Foo::class)`.
+    let objects_only = constant_flag == Some(false) && gradual_object;
+    if (strings_allowed || objects_only) && class_name_operand_is_runtime_resolvable(ctx, target)? {
+        emit_runtime_class_name_is_a(ctx, object, target, exclude_self, strings_allowed)?;
         return store_if_result(ctx, inst);
     }
-    if subject_is_object {
-        // The flag only governs a STRING subject; an object never consults it, so its runtime
-        // value cannot change this answer.
-        let result = static_relation_holds(ctx, object, target, exclude_self, false)?;
-        emit_bool_result(ctx, result);
-        return store_if_result(ctx, inst);
+    let result = static_relation_holds(
+        ctx,
+        object,
+        target,
+        exclude_self,
+        object_is_object || constant_flag.unwrap_or(true),
+    )?;
+    match (result, object_is_object, constant_flag, flag) {
+        // A relation that does not hold is false however the flag lands, and an object operand
+        // never consults the flag at all.
+        (false, _, _, _) | (_, true, _, _) | (_, _, Some(_), _) => emit_bool_result(ctx, result),
+        // The relation holds and only a runtime flag decides: the answer IS that flag.
+        (true, false, None, Some(value)) => {
+            if matches!(ctx.value_php_type(value)?, PhpType::Bool) {
+                ctx.load_value_to_result(value)?;
+            } else {
+                // The declared signature is `bool $allow_string`, but coercive mode admits any
+                // scalar and the argument lowering does not cast it, so an `int`, `string` or
+                // `float` flag reaches here. The relation already holds at this point, so the
+                // answer is exactly the flag's PHP truthiness.
+                super::super::predicates::emit_value_truthiness(ctx, value, name)?;
+            }
+        }
+        (true, false, None, None) => unreachable!("a missing flag always folds to its default"),
     }
-    // A literal name with a RUNTIME flag. Substituting the builtin's default here answered `y`
-    // for `is_subclass_of("Derived", "Base", $false)`, where PHP answers `n` — a wrong answer
-    // this lowering did not produce before it learned to read names at all. The result is simply
-    // `$allow_string && relation`, so when the relation holds the flag IS the answer.
-    let holds = static_relation_holds(ctx, object, target, exclude_self, true)?;
-    if !holds {
-        emit_bool_result(ctx, false);
-        return store_if_result(ctx, inst);
-    }
-    let flag = expect_operand(inst, 2)?;
-    if matches!(ctx.value_php_type(flag)?, PhpType::Bool) {
-        ctx.load_value_to_result(flag)?;
-        return store_if_result(ctx, inst);
-    }
-    // The declared signature is `bool $allow_string`, but coercive mode admits any scalar and the
-    // argument lowering does not cast it, so an `int`, `string` or `float` flag reaches here.
-    // Answering `false` made `$flag = 1; is_subclass_of("Derived", "Base", $flag)` report `n`
-    // where PHP reports `y`. The relation already holds at this point, so the answer is exactly
-    // the flag's PHP truthiness.
-    super::super::predicates::emit_value_truthiness(ctx, flag, name)?;
     store_if_result(ctx, inst)
+}
+
+/// Calls `__rt_class_name_is_a` with two runtime class-name strings.
+fn emit_runtime_class_name_is_a(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    target: ValueId,
+    exclude_self: bool,
+    allow_string: bool,
+) -> Result<()> {
+    load_class_name_is_a_args(ctx, object, target, exclude_self, allow_string)?;
+    abi::emit_call_label(ctx.emitter, "__rt_class_name_is_a");
+    // `__rt_class_name_is_a` knows the COMPILED class table only. A class the interpreter declared
+    // (an autoloaded file the compiler never saw) is absent from it, so a "no" is not final while
+    // the eval bridge is linked: the bridge knows both worlds and settles it.
+    if ctx.module.required_runtime_features.eval_bridge {
+        let done = ctx.next_label("class_name_is_a_done");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &done);
+        load_class_name_is_a_args(ctx, object, target, exclude_self, allow_string)?;
+        let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_class_name_is_a");
+        abi::emit_call_label(ctx.emitter, &symbol);
+        ctx.emitter.label(&done);
+    }
+    Ok(())
+}
+
+/// Returns whether an `is_a()`/`is_subclass_of()` operand can be turned into a class name at run
+/// time by [`load_class_name_operand`]: a string, or a gradual value that may hold one.
+fn class_name_operand_is_runtime_resolvable(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<bool> {
+    Ok(matches!(
+        ctx.value_php_type(value)?.codegen_repr(),
+        PhpType::Str | PhpType::Mixed | PhpType::Union(_)
+    ))
+}
+
+/// Loads the class name an operand names into the string result registers.
+///
+/// A string is the name itself. A boxed gradual value is unboxed and answered by its runtime tag:
+/// an object gives its class name (through the eval bridge for an interpreter-declared class), a
+/// string gives itself when `allow_string` holds, and anything else gives the empty name, which no
+/// class relation matches.
+fn load_class_name_operand(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    allow_string: bool,
+) -> Result<()> {
+    if !matches!(
+        ctx.value_php_type(value)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        let (ptr, len) = abi::string_result_regs(ctx.emitter);
+        return ctx.load_string_value_to_regs(value, ptr, len);
+    }
+    let object_label = ctx.next_label("class_name_operand_object");
+    let string_label = ctx.next_label("class_name_operand_string");
+    let done_label = ctx.next_label("class_name_operand_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::emit_branch_on_gettype_mixed_tag(ctx, 6, &object_label);
+    if allow_string {
+        super::emit_branch_on_gettype_mixed_tag(ctx, 1, &string_label);
+    }
+    emit_string_result(ctx, b"");
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&string_label);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rax, rdi");                                // unboxed string pointer -> string result pointer (length is already in rdx)
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&object_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // unboxed object pointer -> class-name lookup input
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // unboxed object pointer -> class-name lookup input
+    }
+    emit_dynamic_object_class_name(ctx, "get_class");
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Loads `(source ptr, source len, target ptr, target len, exclude_self)` into the first five
+/// integer argument registers, the ABI `__rt_class_name_is_a` and its eval twin share.
+fn load_class_name_is_a_args(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    target: ValueId,
+    exclude_self: bool,
+    allow_string: bool,
+) -> Result<()> {
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    load_class_name_operand(ctx, object, allow_string)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+    load_class_name_operand(ctx, target, true)?;
+    let exclude = i64::from(exclude_self);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x2");                              // target name length -> fourth helper argument
+            ctx.emitter.instruction("mov x2, x1");                              // target name pointer -> third helper argument
+            abi::emit_pop_reg_pair(ctx.emitter, "x0", "x1");
+            abi::emit_load_int_immediate(ctx.emitter, "x4", exclude);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rdx");                            // target name length -> fourth helper argument
+            ctx.emitter.instruction("mov rdx, rax");                            // target name pointer -> third helper argument
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            abi::emit_load_int_immediate(ctx.emitter, "r8", exclude);
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `get_declared_classes/interfaces/traits()` using the shared declaration registry.
@@ -733,7 +966,8 @@ pub(crate) fn lower_get_loaded_extensions(
     };
     match (constant_flag, flag) {
         (Some(zend_extensions), _) => {
-            emit_string_array(ctx, &loaded_extension_names(zend_extensions))?
+            let names = loaded_extension_names(ctx, zend_extensions);
+            emit_string_array(ctx, &names)?
         }
         (None, Some(value)) => lower_dynamic_get_loaded_extensions(ctx, value)?,
         (None, None) => unreachable!("a missing flag always folds to false"),
@@ -744,24 +978,17 @@ pub(crate) fn lower_get_loaded_extensions(
 /// Returns the extension-name list `get_loaded_extensions($zend_extensions)` reports.
 ///
 /// Single source of truth for the const-folded and the runtime-selected forms, so they can never
-/// report different sets.
-fn loaded_extension_names(zend_extensions: bool) -> Vec<String> {
+/// report different sets — and the SAME set `extension_loaded()` answers from, through the shared
+/// [`super::dynamic_extension_loaded_candidates`], so `in_array($e, get_loaded_extensions())` and
+/// `extension_loaded($e)` cannot disagree about any name.
+fn loaded_extension_names(ctx: &FunctionContext<'_>, zend_extensions: bool) -> Vec<String> {
     if zend_extensions {
         return super::ZEND_LOADED_EXTENSIONS
             .iter()
             .map(|name| (*name).to_string())
             .collect();
     }
-    let mut names: Vec<String> = super::CORE_LOADED_EXTENSIONS
-        .iter()
-        .map(|name| (*name).to_string())
-        .collect();
-    for extension in crate::codegen::linked_extensions() {
-        if !names.iter().any(|name| name.eq_ignore_ascii_case(&extension)) {
-            names.push(extension);
-        }
-    }
-    names
+    super::dynamic_extension_loaded_candidates(ctx)
 }
 
 /// Lowers `get_loaded_extensions($flag)` for a flag that is only known at runtime.
@@ -797,11 +1024,13 @@ fn lower_dynamic_get_loaded_extensions(
             ctx.emitter.instruction(&format!("jne {}", zend_label));            // a truthy flag selects the Zend list
         }
     }
-    emit_string_array(ctx, &loaded_extension_names(false))?;
+    let regular = loaded_extension_names(ctx, false);
+    emit_string_array(ctx, &regular)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&zend_label);
-    emit_string_array(ctx, &loaded_extension_names(true))?;
+    let zend = loaded_extension_names(ctx, true);
+    emit_string_array(ctx, &zend)?;
 
     ctx.emitter.label(&done_label);
     Ok(())
@@ -1010,7 +1239,10 @@ fn emit_no_arg_class_name_lookup(ctx: &mut FunctionContext<'_>, name: &str) {
 }
 
 /// Emits dynamic class-name lookup for an object pointer already loaded in the result register.
-fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+pub(in crate::codegen::lower_inst) fn emit_dynamic_object_class_name(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+) {
     let empty_label = ctx.next_label("get_class_empty");
     let done_label = ctx.next_label("get_class_done");
     if ctx.module.required_runtime_features.eval_bridge {
@@ -1139,6 +1371,33 @@ fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     ctx.emitter.label(&done_label);
 }
 
+/// Emits a class-name lookup for a boxed gradual value while preserving the unboxed object payload.
+pub(super) fn emit_mixed_object_class_name_from_value(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    name: &str,
+) -> Result<()> {
+    let object_label = ctx.next_label("get_class_mixed_obj");
+    let done_label = ctx.next_label("get_class_mixed_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::emit_branch_on_gettype_mixed_tag(ctx, 6, &object_label);
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, "_class_name_missing");
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&object_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),
+    }
+    emit_dynamic_object_class_name(ctx, name);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Resolves an unboxed dynamic class-name string for `get_parent_class()`.
 ///
 /// The string pair is still in the Mixed-unbox payload registers. It is matched
@@ -1152,36 +1411,40 @@ fn emit_dynamic_parent_class_name(ctx: &mut FunctionContext<'_>, done_label: &st
         .map(|(name, info)| (name.clone(), info.parent.clone().unwrap_or_default()))
         .collect::<Vec<_>>();
     metadata.sort_by(|left, right| left.0.cmp(&right.0));
-    let candidates = metadata
-        .into_iter()
-        .map(|(name, parent)| {
-            (
-                name,
-                parent,
-                ctx.next_label("get_parent_class_mixed_match"),
-            )
-        })
-        .collect::<Vec<_>>();
-
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
-        Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rdi", "rdx"),
-    }
-    for (candidate, _, label) in &candidates {
-        super::member_queries::emit_branch_if_dynamic_class_like_exists_candidate(
-            ctx,
-            candidate,
-            label,
-        );
-    }
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    let (names, parents): (Vec<_>, Vec<_>) = metadata.into_iter().unzip();
+    let found_label = ctx.next_label("get_parent_class_mixed_match");
+    let (ptr_reg, len_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rdi", "rdx"),
+    };
+    super::member_queries::emit_find_regs_in_packed_name_list(
+        ctx,
+        ptr_reg,
+        len_reg,
+        &super::member_queries::packed_name_list(&names),
+    );
+    emit_branch_if_name_list_index_found(ctx, &found_label);
     emit_class_lookup_type_error(ctx, "get_parent_class", "string");
 
-    for (_, parent, label) in candidates {
-        ctx.emitter.label(&label);
-        abi::emit_release_temporary_stack(ctx.emitter, 16);
-        emit_string_result(ctx, parent.as_bytes());
-        abi::emit_jump(ctx.emitter, done_label);
+    ctx.emitter.label(&found_label);
+    super::member_queries::emit_packed_name_list_entry(
+        ctx,
+        &super::member_queries::packed_name_list(&parents),
+    );
+    abi::emit_jump(ctx.emitter, done_label);
+}
+
+/// Branches to `found_label` when the integer result register holds a found packed-list index
+/// (anything but -1).
+fn emit_branch_if_name_list_index_found(ctx: &mut FunctionContext<'_>, found_label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("tbz x0, #63, {}", found_label));  // a non-negative index names the matching class
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the shared lookup find the class?
+            ctx.emitter.instruction(&format!("jns {}", found_label));           // a non-negative index names the matching class
+        }
     }
 }
 
@@ -1247,6 +1510,43 @@ fn emit_class_lookup_type_error(ctx: &mut FunctionContext<'_>, name: &str, type_
 }
 
 /// Emits AArch64 runtime object class-name lookup for `get_class()` and `get_parent_class()`.
+/// Answers `get_class()` for an instance of a class the interpreter declared.
+///
+/// Such an object lives in the storage of its nearest compiled ancestor, so its class id names
+/// that ancestor. The bridge knows the real class; a zero length back means the object is not the
+/// interpreter's and the class-id lookup that follows stands. Expects the object pointer in the
+/// integer result register and leaves it there on the fallback path.
+fn emit_eval_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, done_label: &str) {
+    let native = ctx.next_label("get_class_native");
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_dynamic_object_class_name");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // keep the object pointer for the class-id fallback
+            ctx.emitter.instruction(&format!("bl {}", symbol));                 // x0/x1 = eval class name, or length 0 when not eval-owned
+            ctx.emitter.instruction(&format!("cbz x1, {}", native));            // not an interpreter-declared instance: use the class id
+            ctx.emitter.instruction("add sp, sp, #16");                         // drop the saved object pointer
+            ctx.emitter.instruction("mov x2, x1");                              // class-name length into the string result pair
+            ctx.emitter.instruction("mov x1, x0");                              // class-name pointer into the string result pair
+            ctx.emitter.instruction(&format!("b {}", done_label));              // the eval class name is the answer
+            ctx.emitter.label(&native);
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the object pointer for the class-id lookup
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // keep the object pointer, preserving 16-byte alignment
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the object pointer for the class-id fallback
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the object pointer
+            ctx.emitter.instruction(&format!("call {}", symbol));               // rax/rdx = eval class name, or length 0 when not eval-owned
+            ctx.emitter.instruction("test rdx, rdx");                           // did the bridge name an interpreter-declared class?
+            ctx.emitter.instruction(&format!("jz {}", native));                 // no: use the class id
+            ctx.emitter.instruction("add rsp, 16");                             // drop the saved object pointer; rax/rdx already hold the name
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // the eval class name is the answer
+            ctx.emitter.label(&native);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the object pointer for the class-id lookup
+            ctx.emitter.instruction("add rsp, 16");                             // release the saved slot
+        }
+    }
+}
+
 fn emit_dynamic_object_class_name_aarch64(
     ctx: &mut FunctionContext<'_>,
     name: &str,
@@ -1435,7 +1735,36 @@ fn static_relation_holds(
     if parent_chain_contains(ctx, object_class, &target_key) {
         return Ok(true);
     }
-    Ok(class_interfaces_contain(ctx, object_class, &target_key))
+    if class_interfaces_contain(ctx, object_class, &target_key) {
+        return Ok(true);
+    }
+    // An INTERFACE named as the subject is a subtype of every interface it extends, directly or
+    // through a parent: `is_subclass_of(Child::class, Base::class)` for `interface Child extends
+    // Base`. Interfaces have no `class_infos` entry, so the two walks above never saw them.
+    let mut pending = vec![object_class.to_string()];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(current) = pending.pop() {
+        let current_key = php_symbol_key(current.trim_start_matches('\\'));
+        if !seen.insert(current_key.clone()) {
+            continue;
+        }
+        let Some(info) = ctx
+            .module
+            .interface_infos
+            .iter()
+            .find(|(name, _)| php_symbol_key(name.trim_start_matches('\\')) == current_key)
+            .map(|(_, info)| info)
+        else {
+            continue;
+        };
+        for parent in &info.parents {
+            if php_symbol_key(parent.trim_start_matches('\\')) == target_key {
+                return Ok(true);
+            }
+            pending.push(parent.clone());
+        }
+    }
+    Ok(false)
 }
 
 /// Returns true when an object's parent chain contains the target PHP symbol key.

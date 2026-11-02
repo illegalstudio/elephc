@@ -2,7 +2,7 @@
 title: "mysqli_field_tell()"
 description: "Returns a result's current column cursor position."
 sidebar:
-  order: 130
+  order: 141
 ---
 
 ## mysqli_field_tell()

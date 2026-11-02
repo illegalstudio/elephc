@@ -400,6 +400,21 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             strict_types,
             attributes: Vec::new(),
         }],
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => vec![Stmt {
+            kind: StmtKind::PropertyRefAssign {
+                object: Box::new(prune_expr(*object)),
+                property,
+                source: prune_expr(source),
+            },
+            span,
+            source_mode,
+            strict_types,
+            attributes: Vec::new(),
+        }],
         StmtKind::StaticPropertyAssign {
             receiver,
             property,
@@ -540,16 +555,17 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             strict_types,
             attributes: Vec::new(),
         }],
-        StmtKind::IncludeOnceMark { label } => vec![Stmt {
-            kind: StmtKind::IncludeOnceMark { label },
+        StmtKind::IncludeOnceMark { source_path } => vec![Stmt {
+            kind: StmtKind::IncludeOnceMark { source_path },
             span,
             source_mode,
             strict_types,
             attributes: Vec::new(),
         }],
-        StmtKind::IncludeOnceGuard { label, body } => vec![Stmt {
+        StmtKind::IncludeOnceGuard { source_path, required, body } => vec![Stmt {
             kind: StmtKind::IncludeOnceGuard {
-                label,
+                source_path,
+                required,
                 body: dce_block_with_guards(body, guards.clone()),
             },
             span,
@@ -749,6 +765,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
         StmtKind::ClassDecl {
             generics,
             name,
+            doc_comment,
             extends,
             implements,
             is_abstract,
@@ -768,6 +785,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 kind: StmtKind::ClassDecl {
                     generics,
                     name,
+                    doc_comment,
                     extends,
                     implements,
                     is_abstract,

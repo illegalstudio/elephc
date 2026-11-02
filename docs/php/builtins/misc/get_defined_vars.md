@@ -2,7 +2,7 @@
 title: "get_defined_vars()"
 description: "Returns variables visible in the current scope."
 sidebar:
-  order: 689
+  order: 705
 ---
 
 ## get_defined_vars()

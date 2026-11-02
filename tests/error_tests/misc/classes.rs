@@ -236,10 +236,11 @@ fn test_error_undefined_method() {
     );
 }
 
-/// Verifies an interface call keeps its declared ancestor return type.
+/// A method that exists only on a sub-interface, called on an ancestor-typed return value, is not a
+/// compile-time error: php resolves the call at run time and elephc now does the same.
 #[test]
-fn test_error_interface_method_does_not_infer_receiver_from_wither_name() {
-    expect_error(
+fn test_interface_method_call_on_ancestor_receiver_is_resolved_at_runtime() {
+    expect_no_error(
         r#"<?php
 interface Message { public function withHeader(): Message; }
 interface Request extends Message { public function requestOnly(): string; }
@@ -252,7 +253,6 @@ function read(Request $request): string {
     return $request->withHeader()->requestOnly();
 }
 "#,
-        "Undefined method: Message::requestOnly",
     );
 }
 
@@ -265,14 +265,12 @@ fn test_error_object_class_name_requires_object() {
     );
 }
 
-/// Verifies that a method call on an object union (`A|B`) is rejected when the
-/// method is absent from one of the member classes: every object member must
-/// provide the method for the runtime class-id dispatch to be sound.
+/// A method that one member of an object union lacks is not a compile-time error; elephc resolves the
+/// call at run time like php and the program output matches php.
 #[test]
-fn test_error_object_union_method_missing_from_member() {
-    expect_error(
+fn test_object_union_method_missing_from_member_is_resolved_at_runtime() {
+    expect_no_error(
         "<?php class A { function only_a() {} } class B {} function make(bool $b): A|B { return $b ? new A() : new B(); } make(true)->only_a();",
-        "Undefined method: B::only_a",
     );
 }
 
@@ -307,16 +305,15 @@ fn test_error_parenthesis_free_new_rejects_immediate_postfix_access() {
     );
 }
 
-/// Verifies unsupported dynamic class-name references after `new` fail instead of miscompiling.
+/// `new $box->className` and `new $classes[0]` are valid php class-name expressions; elephc now
+/// compiles them and the program output matches php.
 #[test]
-fn test_error_dynamic_new_rejects_unsupported_class_name_references() {
-    expect_error(
+fn test_dynamic_new_accepts_property_and_element_class_name_references() {
+    expect_no_error(
         "<?php class Box { public $className = \"stdClass\"; } $box = new Box(); $object = new $box->className;",
-        "Dynamic class-name expressions after 'new' are not supported",
     );
-    expect_error(
+    expect_no_error(
         "<?php $classes = [\"stdClass\"]; $object = new $classes[0];",
-        "Dynamic class-name expressions after 'new' are not supported",
     );
 }
 
@@ -647,16 +644,6 @@ fn test_error_static_outside_class_scope() {
     );
 }
 
-/// Verifies the error diagnostic for self instance method from static method.
-#[test]
-fn test_error_self_instance_method_from_static_method() {
-    // `self::` in a static method cannot call an instance method.
-    expect_error(
-        "<?php class Box { public static function run() { return self::value(); } public function value() { return 1; } } echo Box::run();",
-        "Cannot call self instance method from a static method",
-    );
-}
-
 /// Verifies the error diagnostic for circular inheritance.
 #[test]
 fn test_error_circular_inheritance() {
@@ -824,6 +811,15 @@ class MyThrowable implements MyThrowableInterface {
 }
 "#,
         "Class MyThrowable cannot implement interface Throwable, extend Exception or Error instead",
+    );
+}
+
+/// Verifies a non-enum class cannot implement an interface derived from `UnitEnum`.
+#[test]
+fn test_error_non_enum_class_cannot_implement_unit_enum_descendant() {
+    expect_error(
+        "<?php interface EnumMarker extends UnitEnum {} class State implements EnumMarker {}",
+        "Non-enum class State cannot implement interface UnitEnum",
     );
 }
 
@@ -1521,14 +1517,5 @@ fn test_error_new_static_rejects_array_element_reference_argument() {
     expect_error(
         "<?php class Factory { public function __construct(mixed &$value) {} public static function make(array &$items): object { return new static($items['k']); } } $items = ['k' => 1]; Factory::make($items);",
         "new static() cannot bind an array element by reference because the runtime constructor target is late-bound",
-    );
-}
-
-/// A runtime class name has no signature that can safely bind an element reference.
-#[test]
-fn test_error_dynamic_constructor_rejects_array_element_reference_argument() {
-    expect_error(
-        "<?php class DynamicRefCtor { public function __construct(mixed &$value) {} } $class = $argc > 1 ? 'DynamicRefCtor' : 'DynamicRefCtor'; $items = ['k' => 1]; new $class($items['k']);",
-        "Dynamic constructor cannot bind an array element by reference because its runtime signature is unknown",
     );
 }

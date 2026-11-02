@@ -21,8 +21,17 @@ pub(super) fn initialize_owned_property_reference(
     base_reg: &str,
     starts_uninitialized: bool,
 ) -> bool {
-    let owns_cell = slot.is_reference && ctx.module.class_infos.get(&slot.class_name)
-        .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
+    // Asked per physical SLOT: a hidden ancestor private `$p` shares its name with the child's
+    // own `$p`, and the name-keyed set describes only the child's, so the ancestor's promoted
+    // slot was left without a cell and its `$r = &$this->p` wrote through null.
+    let index = slot.offset.checked_sub(8).map(|bytes| bytes / 16);
+    let owns_cell = slot.is_reference
+        && index.is_some_and(|index| {
+            ctx.module
+                .class_infos
+                .get(&slot.class_name)
+                .is_some_and(|class| class.property_slot_is_owned_reference(index))
+        });
     if owns_cell {
         // Fixed and known dynamic allocations already own this cell. Replacing it would
         // leak that owner and discard its typed-uninitialized marker. Runtime by-name
@@ -176,6 +185,14 @@ pub(super) enum PropertyRuntimeAction {
     /// call site yet and keeps `MagicDeferred`; a write and an `unset()` are peeled off earlier by
     /// `crate::ir_lower`, which calls `__set` and `__unset` through the ordinary method lowering.
     MagicGet,
+    /// php reads THIS class's per-instance hash first and calls `__get` only when the name is
+    /// not there: a class that allows dynamic properties and declares `__get` (guzzle's
+    /// `FnStream` keeps its `_fn_*` callables in the hash behind a throwing `__get(): void`).
+    /// Built for a value read only, like `MagicGet`.
+    DynamicHashThenMagicGet {
+        /// This class's own `8 + slots * 16` hash offset.
+        hash_offset: usize,
+    },
     /// php answers an accessor this dispatch does not call.
     ///
     /// For a DIRECT name that never happens here: `crate::ir_lower::stmt::instance_property_writes`
@@ -358,13 +375,20 @@ pub(super) fn resolve_property_runtime_action(
     ) {
         if let Some(magic) = kind.magic_method() {
             if class_declares_method(ctx, class_name, magic) {
-                return Ok(
-                    if matches!(kind, PropertyAccessKind::DirectRead(mode) if mode.is_read()) {
-                        PropertyRuntimeAction::MagicGet
-                    } else {
-                        PropertyRuntimeAction::MagicDeferred
-                    },
-                );
+                let value_read =
+                    matches!(kind, PropertyAccessKind::DirectRead(mode) if mode.is_read());
+                if value_read && resolution == PropertyNameResolution::Dynamic {
+                    if let Some(hash_offset) =
+                        dynamic_property_hash_offset_for_class(ctx, class_name, property)?
+                    {
+                        return Ok(PropertyRuntimeAction::DynamicHashThenMagicGet { hash_offset });
+                    }
+                }
+                return Ok(if value_read {
+                    PropertyRuntimeAction::MagicGet
+                } else {
+                    PropertyRuntimeAction::MagicDeferred
+                });
             }
         }
     }
@@ -744,15 +768,19 @@ fn subtree_declares_magic_method(
     class_name: &str,
     method: &str,
 ) -> bool {
-    ctx.module.class_infos.iter().any(|(candidate, class_info)| {
-        (candidate == class_name
-            || crate::types::class_inherits_from(
-                &ctx.module.class_infos,
-                candidate,
-                class_name,
-            ))
-            && class_info.methods.contains_key(&php_symbol_key(method))
-    })
+    let method_key = php_symbol_key(method);
+    let declares = |candidate: &str| {
+        ctx.module
+            .class_infos
+            .get(candidate)
+            .is_some_and(|class_info| class_info.methods.contains_key(&method_key))
+    };
+    declares(class_name)
+        || ctx
+            .module
+            .strict_descendants()
+            .get(class_name)
+            .is_some_and(|descendants| descendants.iter().any(|candidate| declares(candidate)))
 }
 
 /// Returns whether a module-declared SUBCLASS answers this name from its OWN per-instance hash
@@ -780,16 +808,8 @@ fn subtree_answers_from_its_own_hash(
     ) {
         return Ok(false);
     }
-    for (candidate, _) in &ctx.module.class_infos {
-        if candidate.as_str() == class_name
-            || !crate::types::class_inherits_from(
-                &ctx.module.class_infos,
-                candidate.as_str(),
-                class_name,
-            )
-        {
-            continue;
-        }
+    let descendants = ctx.module.strict_descendants();
+    for candidate in descendants.get(class_name).into_iter().flatten() {
         if dynamic_property_hash_offset_for_class(ctx, candidate, property)?.is_some() {
             return Ok(true);
         }
@@ -813,12 +833,76 @@ pub(super) fn resolve_property_name_in_current_scope(
     class_name: &str,
     property: &str,
 ) -> PropertyNameResolution {
-    crate::types::resolve_property_name(
-        &ctx.module.class_infos,
-        class_name,
-        property,
-        ctx.lexical_class(),
-    )
+    let lexical_class = ctx.lexical_class();
+    // A body with a RUNTIME scope (see `closure_scope_gate`) cannot know its scope here. It
+    // resolves every name as the property's own declaring class would, and the gate raises php's
+    // refusal before the access when the scope that is really bound cannot see the member.
+    if let Some(declaring) = runtime_scope_declaring_class(ctx, class_name, property) {
+        return crate::types::resolve_property_name(
+            &ctx.module.class_infos,
+            class_name,
+            property,
+            Some(declaring.as_str()),
+        );
+    }
+    // `ReflectionProperty::getValue()`/`setValue()` read and write `$object->{$this->name}` in a
+    // builtin body whose lexical class is `ReflectionProperty`. php 8.1+ lets a reflector reach a
+    // private or protected property without `setAccessible()`, so that body resolves the name as
+    // the DECLARING class would: a private property an ancestor declares is invisible from the
+    // receiver's own class, and resolving it there wrote a dynamic property instead of the slot.
+    // Only a user class's property php's reflection sees: a builtin's runtime slots stay hidden.
+    // The one builtin exception is the Throwable payload (`Exception`/`Error`'s `message`,
+    // `previous`, ...), ordinary PHP values php's reflection reaches: Symfony's `ErrorListener`
+    // chains exceptions with `new ReflectionProperty(\Error::class, 'previous')->setValue()`.
+    let reflected_scope = lexical_class
+        .filter(|lexical| {
+            lexical.trim_start_matches('\\').eq_ignore_ascii_case("ReflectionProperty")
+        })
+        .and_then(|_| ctx.module.class_infos.get(class_name.trim_start_matches('\\')))
+        .and_then(|info| {
+            let declaring = info.property_declaring_classes.get(property)?;
+            let throwable_payload = declaring.eq_ignore_ascii_case("Exception")
+                || declaring.eq_ignore_ascii_case("Error");
+            // An ancestor's private property is not in the receiver's own reflection list
+            // (php's `getProperties()` of a subclass omits it), but a reflector built on the
+            // declaring class reaches it: ask the declaring class.
+            let reflected = ctx
+                .module
+                .class_infos
+                .get(declaring.as_str())
+                .unwrap_or(info)
+                .reflection_properties
+                .iter()
+                .any(|name| name == property);
+            ((!info.is_internal || throwable_payload) && reflected).then(|| declaring.clone())
+        });
+    let scope = match reflected_scope.as_deref() {
+        Some(declaring) => Some(declaring),
+        None => lexical_class,
+    };
+    crate::types::resolve_property_name(&ctx.module.class_infos, class_name, property, scope)
+}
+
+/// Returns the class whose scope a RUNTIME-scoped body is resolved as for one property name.
+///
+/// A closure that addresses properties by a runtime name carries the hidden scope capture
+/// `crate::names::CLOSURE_SCOPE_LOCAL`; its scope is decided when `Closure::bind()` stamps the
+/// descriptor, not by `Function::lexical_class`. Resolution therefore answers "as the declaring
+/// class sees it" and `closure_scope_gate` enforces the real scope before the access runs.
+/// `None` for an ordinary body and for a name the receiver does not declare (dynamic either way).
+pub(super) fn runtime_scope_declaring_class(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+) -> Option<String> {
+    ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL)?;
+    let info = ctx.module.class_infos.get(class_name.trim_start_matches('\\'))?;
+    // A builtin's non-public storage is engine-owned (callback environments, raw pointers): its
+    // slots cannot take an arbitrary PHP value, and no userland scope reaches them anyway.
+    if info.is_internal {
+        return None;
+    }
+    info.property_declaring_classes.get(property).cloned()
 }
 
 /// php's answer for ONE property name on ONE class, as the `Mixed` candidate builders read it.
@@ -882,6 +966,15 @@ pub(super) fn resolve_property_read_arm(
     inst: &Instruction,
 ) -> Result<Option<PropertyNameArm>> {
     let normalized = class_name.trim_start_matches('\\');
+    // A Reflection object's public `$name` / `$class` live in hidden backing slots (`__name`,
+    // `__class`). Name resolution sees no declared `name` and answers DYNAMIC, and the class has
+    // no per-instance hash, so the class dropped out of every boxed-receiver ladder:
+    // `array_map(fn($m) => $m->name, $rc->getMethods())` warned "Undefined property" and read "".
+    // The slot resolver already maps the virtual name, exactly as a typed receiver's read does.
+    if reflection_backing(ctx, normalized, property).is_some() {
+        return resolve_property_slot_for_class(ctx, normalized, property, inst)
+            .map(|slot| Some(PropertyNameArm::Slot(slot)));
+    }
     let resolution = resolve_property_name_in_current_scope(ctx, normalized, property);
     // php consults the magic accessor BEFORE it reports either diagnostic: a private property
     // reached from an unrelated scope on a class that declares `__get` answers `__get`, not
@@ -889,7 +982,10 @@ pub(super) fn resolve_property_read_arm(
     // not dispatch magic for a runtime name yet, so neither the refusal nor the undefined-property
     // warning may be emitted for such a class: both would be diagnostics php never reports.
     if class_declares_property_magic(ctx, normalized, mode)
-        && !matches!(resolution, PropertyNameResolution::Visible)
+        && !matches!(
+            resolution,
+            PropertyNameResolution::Visible | PropertyNameResolution::ScopePrivate { .. }
+        )
     {
         return Ok(Some(PropertyNameArm::MagicDeferred));
     }
@@ -920,11 +1016,22 @@ fn class_declares_property_magic(
     class_name: &str,
     mode: PropertyFetchMode,
 ) -> bool {
-    let magic = if mode.is_read() { "__get" } else { "__isset" };
-    ctx.module
-        .class_infos
-        .get(class_name)
-        .is_some_and(|class_info| class_info.methods.contains_key(&php_symbol_key(magic)))
+    let declares = |magic: &str| {
+        ctx.module
+            .class_infos
+            .get(class_name)
+            .is_some_and(|class_info| class_info.methods.contains_key(&php_symbol_key(magic)))
+    };
+    match mode {
+        PropertyFetchMode::Read => declares("__get"),
+        // `isset()` asks `__isset` alone.
+        PropertyFetchMode::Probe | PropertyFetchMode::Isset => declares("__isset"),
+        // `??` consults `__isset` first and then `__get`, so either accessor takes the name away
+        // from the slot and from the diagnostics. `empty()` asks the same two accessors.
+        PropertyFetchMode::Coalesce | PropertyFetchMode::Empty => {
+            declares("__get") || declares("__isset")
+        }
+    }
 }
 
 /// Resolves the ladder arm a property name takes for a REFERENCE binding on ONE class.
@@ -1054,11 +1161,14 @@ pub(super) fn property_name_is_scope_dynamic(
     class_name: &str,
     property: &str,
 ) -> bool {
+    let runtime_scope = runtime_scope_declaring_class(ctx, class_name, property);
     crate::types::property_name_shadows_ancestor_private_slot(
         &ctx.module.class_infos,
         class_name,
         property,
-        ctx.lexical_class(),
+        runtime_scope
+            .as_deref()
+            .or(ctx.lexical_class()),
     )
 }
 
@@ -1122,6 +1232,119 @@ pub(super) fn object_is_builtin_stdclass(ctx: &FunctionContext<'_>, object: Valu
     ))
 }
 
+/// Returns the canonical interface name carried by a statically narrowed object value.
+pub(super) fn property_interface_receiver(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+) -> Result<Option<String>> {
+    let PhpType::Object(interface_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(None);
+    };
+    let key = php_symbol_key(interface_name.trim_start_matches('\\'));
+    let resolved = ctx
+        .module
+        .interface_infos
+        .keys()
+        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .cloned();
+    if std::env::var("ELEPHC_METADATA_TRACE")
+        .ok()
+        .is_some_and(|target| target.trim_start_matches('\\') == interface_name.trim_start_matches('\\'))
+    {
+        eprintln!(
+            "[elephc-metadata-trace] property_interface_receiver={interface_name} resolved={:?}",
+            resolved
+        );
+    }
+    Ok(resolved)
+}
+
+/// Returns an abstract class whose virtual property must dispatch through a concrete subtype.
+pub(super) fn property_abstract_receiver(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+) -> Result<Option<String>> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(None);
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    if normalized.is_empty() {
+        return Ok(Some(String::new()));
+    }
+    let Some(class_info) = ctx.module.class_infos.get(normalized) else {
+        return Ok(None);
+    };
+    let backing = reflection_backing(ctx, normalized, property)
+        .unwrap_or(property);
+    if class_info.visible_property(backing).is_some() {
+        return Ok(None);
+    }
+    // An ABSTRACT receiver never has an instance of its own, so the slot always belongs to a
+    // descendant. A CONCRETE base is the same question whenever a descendant declares the
+    // property: the runtime class decides, and only the polymorphic read can ask it.
+    //
+    // This is the backend half of the checker's matching rule in `infer_property_on_class_type`;
+    // the two must agree, because the checker now types such a read as the descendants' declared
+    // type rather than `null`, and a `null` type is what used to fold the access away.
+    if class_info.is_abstract || module_descendant_declares_property(ctx, normalized, backing) {
+        return Ok(Some(normalized.to_string()));
+    }
+    Ok(None)
+}
+
+/// Returns whether any class in the module descending from `ancestor` declares `property`.
+fn module_descendant_declares_property(
+    ctx: &FunctionContext<'_>,
+    ancestor: &str,
+    property: &str,
+) -> bool {
+    ctx.module.class_infos.iter().any(|(name, info)| {
+        name.trim_start_matches('\\') != ancestor
+            && info.visible_property(property).is_some()
+            && class_descends_from_module_class(ctx, name, ancestor)
+    })
+}
+
+/// Walks a module class's parent chain looking for `ancestor`.
+fn class_descends_from_module_class(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    ancestor: &str,
+) -> bool {
+    let mut current = ctx
+        .module
+        .class_infos
+        .get(class_name.trim_start_matches('\\'))
+        .and_then(|info| info.parent.as_deref());
+    while let Some(parent) = current {
+        let normalized = parent.trim_start_matches('\\');
+        if normalized == ancestor {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(normalized)
+            .and_then(|info| info.parent.as_deref());
+    }
+    false
+}
+
+/// Maps a public built-in Reflection property (`$name`, `$class`) to its hidden backing slot.
+///
+/// Walks the parent chain, so a user class that extends a Reflection class reads the inherited
+/// property the way the built-in does.
+pub(super) fn reflection_backing(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+) -> Option<&'static str> {
+    crate::types::checker::reflection_virtual_property_backing_in(class_name, property, |c| {
+        ctx.module.class_infos.get(c).and_then(|info| info.parent.clone())
+    })
+}
+
 /// Resolves a property slot for a known class name.
 pub(super) fn resolve_property_slot_for_class(
     ctx: &FunctionContext<'_>,
@@ -1130,6 +1353,8 @@ pub(super) fn resolve_property_slot_for_class(
     inst: &Instruction,
 ) -> Result<PropertySlot> {
     let normalized = class_name.trim_start_matches('\\');
+    let property = reflection_backing(ctx, normalized, property)
+        .unwrap_or(property);
     let class_info = ctx
         .module
         .class_infos
@@ -1403,4 +1628,17 @@ pub(super) fn resolve_packed_field_slot(
         is_reference: false,
         abstract_setter_type_error_prefix: None,
     })
+}
+
+/// Returns the dynamic-property hash slot offset for an undeclared allow-dynamic property.
+pub(super) fn dynamic_property_hash_offset_for_object(
+    ctx: &FunctionContext<'_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> Result<Option<usize>> {
+    let object_ty = ctx.value_php_type(object)?;
+    let PhpType::Object(class_name) = object_ty else {
+        return Ok(None);
+    };
+    dynamic_property_hash_offset_for_class(ctx, &class_name, property)
 }

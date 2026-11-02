@@ -15,15 +15,8 @@ pub(in crate::codegen) fn class_method_body_exists(
     class_name: &str,
     method_key: &str,
 ) -> bool {
-    ctx.module.class_methods.iter().any(|function| {
-        !function.flags.is_static
-            && function
-                .name
-                .rsplit_once("::")
-                .is_some_and(|(class, method)| {
-                    class == class_name && php_symbol_key(method) == method_key
-                })
-    })
+    ctx.shared
+        .emitted_method_contains(class_name, method_key, false)
 }
 
 /// Allocates a runtime descriptor and stores the receiver in capture slot zero.
@@ -37,7 +30,10 @@ pub(in crate::codegen) fn emit_runtime_descriptor_with_receiver_capture(
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
     let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
     ctx.load_value_to_result(receiver)?;
-    if !ctx.value_can_transfer_ownership_to_consumer(receiver)? {
+    // A receiver read out of a boxed (promoted) local is unboxed with a reference of its own,
+    // which the capture takes over. Retaining again leaked the receiver: `$o = new T; $f =
+    // $o->m(...); $o = null; $f = null;` never destroyed `$o`'s object.
+    if !ctx.value_can_own_mixed_box_source(receiver)? {
         abi::emit_incref_if_refcounted(ctx.emitter, receiver_ty);
     }
     abi::emit_push_reg(ctx.emitter, result_reg);
@@ -159,6 +155,12 @@ pub(super) fn first_class_callable_descriptor(
 /// wrong in the borrowed direction leaks one string per call. Owned results come from the
 /// mbstring engine and from the transforms that persist before returning (`strtoupper`,
 /// `strtolower`), and from full semantic wrappers that persist their PHP return value.
+///
+/// EVERY unary string builtin answers owned through a callable, not only the ones whose runtime
+/// helper allocates: the callback wrapper persists a scratch result itself (`lower_unary_string`
+/// in `runtime_calls.rs`, `is_callback_wrapper`), so an invoker that persisted again left the
+/// wrapper's copy behind, one block per element in `array_map($name, [...])` with
+/// `$name = 'strrev'`.
 pub(super) fn builtin_returns_owned_string(name: &str) -> bool {
     crate::builtins::registry::lookup(name).is_some_and(|definition| {
         let semantics = &definition.spec.semantics;
@@ -171,8 +173,8 @@ pub(super) fn builtin_returns_owned_string(name: &str) -> bool {
         ) || matches!(
             semantics.lowering,
             crate::builtins::semantics::BuiltinLowering::Runtime(
-                crate::ir::RuntimeCallTarget::UnaryString(runtime)
-            ) if runtime.returns_owned_string()
+                crate::ir::RuntimeCallTarget::UnaryString(_)
+            )
         )
     })
 }
@@ -207,7 +209,8 @@ pub(super) fn first_class_builtin_descriptor(
     }
     let wrapper_sig = runtime_builtin_wrapper_sig(&name, &callable_wrapper_sig(&sig));
     let owns_string_return = wrapper_sig.return_type.codegen_repr() == PhpType::Str
-        && builtin_returns_owned_string(&name);
+        && (builtin_returns_owned_string(&name)
+            || super::runtime_wrappers::builtin_wrapper_string_cast_is_owning(&name, &wrapper_sig));
     let entry_label =
         emit_runtime_builtin_wrapper_inline(ctx, &name, &wrapper_sig, strict_php)?;
     Ok(Some(FirstClassCallableDescriptor {

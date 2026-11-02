@@ -37,6 +37,10 @@ echo "done";
 }
 
 /// Opaque callable invocation unpacks both arrays and preserves input/result owners on return and throw.
+///
+/// php's `array_merge()` is variadic: zero, one and three arrays are all valid, so only a
+/// non-array operand throws (a `TypeError`). The earlier expectation of an `ArgumentCountError`
+/// for those arities was not php's behaviour.
 #[test]
 fn test_core_php_array_merge_descriptor_unpack_and_arity_cleanup() {
     let source = r#"<?php
@@ -52,15 +56,9 @@ for ($i = 0; $i < 6; $i++) {
         ":", $result[0], ":", $result[1], "|";
     unset($result);
 }
-try { opaqueMergeInvocation($merge, []); }
-catch (ArgumentCountError $error) { echo "zero|"; }
-unset($error);
-try { opaqueMergeInvocation($merge, [$left]); }
-catch (ArgumentCountError $error) { echo "one|"; }
-unset($error);
-try { opaqueMergeInvocation($merge, [$left, $right, []]); }
-catch (ArgumentCountError $error) { echo "three|"; }
-unset($error);
+echo count(opaqueMergeInvocation($merge, [])), "|";
+echo count(opaqueMergeInvocation($merge, [$left])), "|";
+echo count(opaqueMergeInvocation($merge, [$left, $right, []])), "|";
 try { opaqueMergeInvocation($merge, [$left, 42]); }
 catch (TypeError $error) { echo "type|"; }
 unset($error);
@@ -70,7 +68,7 @@ unset($left, $right, $merge);
     let out = compile_and_run_with_heap_debug(source);
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout,
-        format!("{}zero|one|three|type|24:24", "shared,0,1:24:left:right|".repeat(6)),
+        format!("{}0|2|3|type|24:24", "shared,0,1:24:left:right|".repeat(6)),
         "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

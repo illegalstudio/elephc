@@ -1,7 +1,7 @@
 //! Purpose:
 //! Walks the whole AST in place, rewriting `func_num_args()`, `func_get_args()` and
 //! `func_get_arg()` inside every function scope that supports them and adding that scope's
-//! hidden `mixed ...$__elephc_func_args` parameter when at least one call was rewritten.
+//! hidden `mixed ...$__elephc_func_args` parameter when the source has no variadic tail.
 //!
 //! Called from:
 //! - `crate::func_args::desugar()`.
@@ -30,6 +30,8 @@
 //!   A surviving dynamic `include`/`require` is deliberately not a trigger: it lowers to a
 //!   runtime stub that cannot execute PHP source, so it can reach no new frame.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::errors::CompileError;
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{
@@ -48,7 +50,8 @@ struct Scope {
     param_names: Vec<String>,
     /// The first declared parameter that carries a default value, if any.
     optional_param: Option<String>,
-    /// The variadic parameter the source function declares itself, if any.
+    /// The variadic parameter the source function declares itself, if any. Its original
+    /// tail can reconstruct surplus arguments without adding a second ABI parameter.
     source_variadic: Option<String>,
     /// Set once an introspection call was rewritten in this scope, which is what makes the
     /// hidden variadic parameter necessary.
@@ -62,6 +65,11 @@ pub(super) struct Rewriter {
     capture_all_frames: bool,
     rewrite_introspection: bool,
     saw_backtrace: bool,
+    /// Virtual methods, per owner, that whole-program frame capture must leave on their source
+    /// signature because their family holds a source-variadic member.
+    capture_opt_outs: HashMap<String, HashSet<(String, bool)>>,
+    /// Set by `walk_methods` for the one method scope it is about to enter.
+    next_scope_opts_out_of_capture: bool,
 }
 
 impl Rewriter {
@@ -73,7 +81,14 @@ impl Rewriter {
             capture_all_frames,
             rewrite_introspection,
             saw_backtrace: false,
+            capture_opt_outs: HashMap::new(),
+            next_scope_opts_out_of_capture: false,
         }
+    }
+
+    /// Installs the method families that frame capture must skip (see `method_families`).
+    pub(super) fn set_capture_opt_outs(&mut self, opt_outs: HashMap<String, HashSet<(String, bool)>>) {
+        self.capture_opt_outs = opt_outs;
     }
 
     /// Consumes the rewriter and returns every diagnostic collected during the walk.
@@ -103,6 +118,7 @@ impl Rewriter {
             | StmtKind::PackedClassDecl { .. }
             | StmtKind::ExternFunctionDecl { .. }
             | StmtKind::ExternClassDecl { .. }
+            | StmtKind::ClassLikeActivate { .. }
             | StmtKind::ExternGlobalDecl { .. } => {}
 
             StmtKind::Echo(expr)
@@ -131,6 +147,7 @@ impl Rewriter {
                 self.walk_expr(value);
             }
             StmtKind::PropertyAssign { object, value, .. }
+            | StmtKind::PropertyRefAssign { object, source: value, .. }
             | StmtKind::PropertyArrayPush { object, value, .. } => {
                 self.walk_expr(object);
                 self.walk_expr(value);
@@ -149,6 +166,22 @@ impl Rewriter {
             | StmtKind::StaticPropertyArrayPush { value, .. } => self.walk_expr(value),
             StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
                 self.walk_expr(index);
+                self.walk_expr(value);
+            }
+            StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+                self.walk_expr(index);
+                self.walk_expr(source);
+            }
+            StmtKind::DynamicStaticPropertyWrite {
+                property,
+                index,
+                value,
+                ..
+            } => {
+                self.walk_expr(property);
+                if let Some(index) = index {
+                    self.walk_expr(index);
+                }
                 self.walk_expr(value);
             }
             StmtKind::If {
@@ -242,6 +275,13 @@ impl Rewriter {
                 ..
             } => {
                 let label = format!("function '{}'", name);
+                // The compiler's own Throwable-string helpers read `getTrace()` on every program
+                // (they are injected unconditionally), so their calls say nothing about whether
+                // the user's program inspects traces. Counting them switched whole-program frame
+                // capture on everywhere and appended the hidden variadic to every closure.
+                let compiler_helper = crate::throwable_string_prelude::FUNCTIONS
+                    .contains(&name.as_str());
+                let saw_before = self.saw_backtrace;
                 self.walk_function_scope(
                     label,
                     params,
@@ -250,6 +290,9 @@ impl Rewriter {
                     variadic_type,
                     body,
                 );
+                if compiler_helper {
+                    self.saw_backtrace = saw_before;
+                }
             }
             StmtKind::ClassDecl {
                 name,
@@ -284,6 +327,11 @@ impl Rewriter {
     fn walk_methods(&mut self, owner: &str, methods: &mut [ClassMethod]) {
         for method in methods.iter_mut() {
             let label = format!("method '{}::{}'", owner, method.name);
+            self.next_scope_opts_out_of_capture = method.visibility
+                != crate::parser::ast::Visibility::Private
+                && self.capture_opt_outs.get(owner).is_some_and(|set| {
+                    set.contains(&(crate::names::php_symbol_key(&method.name), method.is_static))
+                });
             let ClassMethod {
                 params,
                 param_attributes,
@@ -317,6 +365,8 @@ impl Rewriter {
         variadic_type: &mut Option<TypeExpr>,
         body: &mut Vec<Stmt>,
     ) {
+        // Consumed here so closures nested in the method body capture frames as usual.
+        let opts_out = std::mem::take(&mut self.next_scope_opts_out_of_capture);
         let scope = Scope {
             param_names: params.iter().map(|(name, ..)| name.clone()).collect(),
             optional_param: params
@@ -326,7 +376,16 @@ impl Rewriter {
             // Compiler-provided collectors already contain the passed-count metadata.
             // They must not be snapshotted again as a PHP-declared variadic tail.
             source_variadic: variadic.clone().filter(|name| name != HIDDEN_ARGS_PARAM),
-            used: self.capture_all_frames,
+            // A generator's parameters, `$this` included, live in the coroutine's fixed start
+            // slots, and the snapshot collector would take one more: Symfony's six-parameter
+            // `FileLoader::glob()` generator overflowed them only because a backtrace call
+            // elsewhere asked for every frame's arguments. Such a frame keeps its source
+            // signature; an explicit `func_get_args()` in it still sets `used` below.
+            used: self.capture_all_frames
+                && !opts_out
+                && !(params.len() + 2
+                    > crate::codegen_support::runtime::GENERATOR_START_ARGS_MAX as usize
+                    && crate::types::checker::yield_validation::body_contains_yield(body)),
         };
         let outer = self.scope.replace(scope);
         self.walk_stmts(body);
@@ -403,7 +462,11 @@ impl Rewriter {
             | ExprKind::ClassConstant { .. }
             | ExprKind::ScopedConstantAccess { .. } => {}
 
+            ExprKind::DynamicStaticPropertyAccess { property, .. } => self.walk_expr(property),
+            ExprKind::DynamicScopedConstantAccess { receiver, .. } => self.walk_expr(receiver),
+
             ExprKind::Negate(inner)
+            | ExprKind::ArrayReference(inner)
             | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::Throw(inner)
@@ -498,8 +561,19 @@ impl Rewriter {
                 self.walk_expr(object);
                 self.walk_expr(property);
             }
-            ExprKind::MethodCall { object, args, .. }
-            | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            ExprKind::MethodCall { object, method, args }
+            | ExprKind::NullsafeMethodCall { object, method, args } => {
+                // A Throwable records its frames, arguments included, when it is created, so a
+                // program that reads one needs the same hidden argument-count snapshot as
+                // `debug_backtrace()`. Without it every declared parameter prints, including a
+                // defaulted one the caller never passed (`f('a', 'b', 0)` where php prints
+                // `f('a', 'b')`). The receiver is not consulted; a user method of the same name
+                // only costs the snapshot.
+                if method.eq_ignore_ascii_case("getTrace")
+                    || method.eq_ignore_ascii_case("getTraceAsString")
+                {
+                    self.saw_backtrace = true;
+                }
                 self.walk_expr(object);
                 self.walk_exprs(args);
             }

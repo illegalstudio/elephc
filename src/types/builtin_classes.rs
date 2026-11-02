@@ -20,11 +20,34 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use elephc_builtin_contract::{classes, lookup_class, ClassKind, ClassRoute, PhpModule};
+use elephc_builtin_contract::{
+    classes, lookup_class, ClassContract, ClassKind, ClassRoute, PhpModule,
+};
 
-/// Returns the PHP spellings of every builtin class-like name, internal helpers included.
+/// Returns the PHP spellings of every builtin class-like name the selected profile provides,
+/// internal helpers included.
+///
+/// A class-like newer than the profile is a free name there: php 8.6's `SortDirection` under an
+/// 8.5 build is what symfony/polyfill-php86's stub declares, which the autoloader must load
+/// (Laravel's `BelongsToMany::orderByPivot()` defaults to `SortDirection::Ascending`).
 pub(crate) fn builtin_class_like_names() -> impl Iterator<Item = &'static str> {
-    classes().iter().map(|class| class.name)
+    classes()
+        .iter()
+        .filter(|class| in_profile(class))
+        .map(|class| class.name)
+}
+
+/// Looks up `name` (case-insensitive, optional leading `\`) in the builtin catalog, treating a
+/// class-like newer than the selected profile as absent, like `builtin_class_like_names()`.
+pub(crate) fn lookup_profile_class(name: &str) -> Option<&'static ClassContract> {
+    lookup_class(name).filter(|class| in_profile(class))
+}
+
+/// Whether the selected PHP profile provides `class`.
+fn in_profile(class: &ClassContract) -> bool {
+    class
+        .since
+        .is_none_or(|since| crate::codegen_support::compile_php_version() >= since)
 }
 
 /// Returns public, target-independent intrinsic classes, including callable-backed classes.
@@ -63,7 +86,7 @@ pub(crate) fn is_class_like_in_modules(name: &str, modules: &[PhpModule]) -> boo
 }
 
 /// Checks inherited PHP internal clone restrictions without rejecting user declarations.
-pub(crate) fn class_allows_clone(name: &str, classes: &HashMap<String, crate::types::ClassInfo>) -> bool {
+pub(crate) fn class_allows_clone(name: &str, classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>) -> bool {
     let mut current = name.trim_start_matches('\\');
     for _ in 0..=classes.len() {
         let Some(info) = classes.get(current) else { return true; };
@@ -122,6 +145,8 @@ mod tests {
             .iter()
             .filter(|class| {
                 !class.internal
+                    // A class newer than the profile is a free name, not an injection.
+                    && super::in_profile(class)
                     // Closures use callable storage, not a checker-injected object class.
                     && class.name != "Closure"
                     && class.target_support.is_none_or(|targets| targets.contains(&target))

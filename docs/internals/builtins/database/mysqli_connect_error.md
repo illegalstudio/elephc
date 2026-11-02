@@ -2,7 +2,7 @@
 title: "mysqli_connect_error() - internals"
 description: "Compiler internals for mysqli_connect_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 110
+  order: 121
 ---
 
 ## `mysqli_connect_error()` - internals

@@ -41,7 +41,16 @@ pub(super) fn parse_file(
     include_span: Span,
     defines: &std::collections::HashSet<String>,
 ) -> Result<Vec<Stmt>, CompileError> {
-    let source = std::fs::read_to_string(path).map_err(|e| {
+    parse_file_with_source(path, include_span, defines).map(|(program, _)| program)
+}
+
+/// Parses a file while retaining the exact input before include-site specialization.
+pub(super) fn parse_file_with_source(
+    path: &Path,
+    include_span: Span,
+    defines: &std::collections::HashSet<String>,
+) -> Result<(Vec<Stmt>, super::source_units::SourceUnit), CompileError> {
+    let source = crate::source::read_physical_source(path).map_err(|e| {
         CompileError::new(
             include_span,
             &format!("Cannot read '{}': {}", path.display(), e),
@@ -52,8 +61,10 @@ pub(super) fn parse_file(
 
     let mode = SourceMode::from_path(path);
     let source_id = Span::fresh_source_id();
-    // Names this file in a later checker or lowering diagnostic, which carries only a span.
-    Span::register_source_path(source_id, file.clone());
+    // php names a frame, a warning and a Throwable by the file its code came from, resolved. The
+    // same name serves a later checker or lowering diagnostic, which carries only a span.
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    Span::register_source_path(source_id, canonical.display().to_string());
     let tokens = lexer::tokenize_with_mode_and_source_id(&source, mode, source_id)
         .map_err(|e| e.with_file(file.clone()))?;
 
@@ -61,10 +72,42 @@ pub(super) fn parse_file(
     // declaration discovery found and the body resolution inlines referring to one class. The
     // canonical path names them, as discovery merges includes by it: two spellings of one path
     // must agree too.
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let parsed = parser::with_anonymous_class_scope(&canonical.to_string_lossy(), || {
         parser::parse_with_mode(&tokens, mode)
     })
     .map_err(|e| e.with_file(file))?;
-    crate::source::finalize_physical_program(parsed, &source, path, mode, defines)
+    let program = crate::source::finalize_physical_program(parsed, &source, path, mode, defines)?;
+    let unit = super::source_units::SourceUnit {
+        canonical_path: canonical,
+        mode,
+        source: source.into(),
+    };
+    Ok((program, unit))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies included PHP files may declare high-byte identifiers accepted by PHP.
+    #[test]
+    fn parses_non_utf8_php_identifier_byte() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "elephc_non_utf8_identifier_{}_{}.php",
+            std::process::id(),
+            unique
+        ));
+        let mut source = b"<?php class ".to_vec();
+        source.push(0xa9);
+        source.extend_from_slice(b" {}");
+        std::fs::write(&path, source).expect("write non-UTF-8 PHP fixture");
+
+        let parsed = parse_file(&path, Span::dummy(), &std::collections::HashSet::new());
+        let _ = std::fs::remove_file(&path);
+        assert!(parsed.is_ok(), "non-UTF-8 PHP identifier should parse: {parsed:?}");
+    }
 }

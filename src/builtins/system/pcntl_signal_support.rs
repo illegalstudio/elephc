@@ -133,6 +133,23 @@ fn check_signal_arguments(
         }
         if name.as_deref() == Some("signals") || (name.is_none() && index == signals_index) {
             let ty = cx.checker.infer_type(value, cx.env)?;
+            // A declared `array` property (`Process::$ignoredSignals`) or a `mixed` value is an
+            // array only at run time; lowering lists it through `crate::array_gradual_prelude`,
+            // which raises php's `TypeError` for anything else.
+            if ty.is_php_array()
+                || crate::types::checker::builtins::array_arg_is_gradually_acceptable(&ty)
+                    && !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            {
+                if !matches!(call, SignalCall::Mask)
+                    && matches!(&value.kind, ExprKind::ArrayLiteral(items) if items.is_empty())
+                {
+                    return Err(CompileError::new(
+                        value.span,
+                        &format!("{}() parameter $signals must not be empty", cx.name),
+                    ));
+                }
+                continue;
+            }
             match ty.codegen_repr() {
                 PhpType::Array(element) | PhpType::AssocArray { value: element, .. }
                     if signal_element_type_supported(&element) => {}

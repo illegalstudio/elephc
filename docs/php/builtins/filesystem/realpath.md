@@ -2,7 +2,7 @@
 title: "realpath()"
 description: "Returns canonicalized absolute pathname."
 sidebar:
-  order: 298
+  order: 309
 ---
 
 ## realpath()

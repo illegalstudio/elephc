@@ -198,16 +198,24 @@ fn multiple_detach_iterator_body() -> Vec<Stmt> {
             empty_array_expr(),
         ),
         assign_stmt("newInfos", empty_array_expr()),
-        assign_stmt("i", int_expr(0)),
+        // A typed index keeps `iterators[$i]` an `Iterator` read; an untyped loop counter is boxed
+        // `mixed`, which makes the pushed element `mixed` and widens `newIterators` past the
+        // property's `Iterator[]` storage.
+        typed_assign_stmt("i", TypeExpr::Int, int_expr(0)),
         assign_stmt("limit", count_expr(multiple_iterators_expr())),
         while_stmt(
             binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
             vec![
-                assign_stmt("candidate", multiple_iterator_at(var_expr("i"))),
                 if_stmt(
-                    not_expr(binary_expr(var_expr("candidate"), BinOp::StrictEq, var_expr("iterator"))),
+                    not_expr(binary_expr(
+                        multiple_iterator_at(var_expr("i")),
+                        BinOp::StrictEq,
+                        var_expr("iterator"),
+                    )),
                     vec![
-                        array_push_stmt("newIterators", var_expr("candidate")),
+                        // Pushed as an expression, not through a local: a local carries its own
+                        // storage type, which would widen `newIterators` past `Iterator[]`.
+                        array_push_stmt("newIterators", multiple_iterator_at(var_expr("i"))),
                         array_push_stmt("newInfos", multiple_info_at(var_expr("i"))),
                     ],
                     None,

@@ -41,24 +41,43 @@ pub(in crate::interpreter) fn eval_call_user_func_with_call_args_from_scope(
     let callback =
         eval_call_user_func_callback(callback, "call_user_func", lexical_scope, context, values)?;
     callback.with_values(context, values, |callback, context, values| {
-        if let EvaluatedCallable::Named { name, .. } = &callback {
-            if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
-                if forbidden != "get_defined_vars" || callback_is_object {
-                    return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
-                }
-            }
-            if name.eq_ignore_ascii_case("get_defined_vars") {
-                if let Some(lexical_scope) = lexical_scope {
-                    if let Some(label) = callback_args.iter().find_map(|arg| arg.name.as_deref()) {
-                        return eval_throw_error(
-                            &format!("Unknown named parameter ${label}"), context, values,
-                        );
-                    }
-                    let positional = callback_args.iter().map(|arg| arg.value).collect::<Vec<_>>();
-                    return eval_get_defined_vars_from_scope(&positional, lexical_scope, values);
-                }
+        eval_call_user_func_call_args_dispatch(
+            callback,
+            callback_is_object,
+            callback_args,
+            lexical_scope,
+            context,
+            values,
+        )
+    })
+}
+
+/// Dispatches a normalized `call_user_func` callback with its named and positional arguments.
+fn eval_call_user_func_call_args_dispatch(
+    callback: &EvaluatedCallable,
+    callback_is_object: bool,
+    callback_args: Vec<EvaluatedCallArg>,
+    lexical_scope: Option<&ElephcEvalScope>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let EvaluatedCallable::Named { name, .. } = callback {
+        if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
+            if forbidden != "get_defined_vars" || callback_is_object {
+                return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
             }
         }
-        eval_evaluated_callable_with_by_value_call_args(&callback, callback_args, context, values)
-    })
+        if name.eq_ignore_ascii_case("get_defined_vars") {
+            if let Some(lexical_scope) = lexical_scope {
+                if let Some(label) = callback_args.iter().find_map(|arg| arg.name.as_deref()) {
+                    return eval_throw_error(
+                        &format!("Unknown named parameter ${label}"), context, values,
+                    );
+                }
+                let positional = callback_args.iter().map(|arg| arg.value).collect::<Vec<_>>();
+                return eval_get_defined_vars_from_scope(&positional, lexical_scope, values);
+            }
+        }
+    }
+    eval_evaluated_callable_with_by_value_call_args(callback, callback_args, context, values)
 }

@@ -382,6 +382,11 @@ fn expr_refs_xml(expr: &Expr) -> bool {
         // xml detection runs, so it should never reach here. Recurse into the path
         // expression defensively to keep detection exhaustive and correct.
         ExprKind::IncludeValue { path, .. } => expr_refs_xml(path),
+        ExprKind::ArrayReference(inner) => expr_refs_xml(inner),
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            receiver_refs_xml(receiver) || expr_refs_xml(property)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_refs_xml(receiver),
     }
 }
 
@@ -393,6 +398,7 @@ fn stmt_refs_xml(stmt: &Stmt) -> bool {
     match &stmt.kind {
         // Statements with no xml-name position and no child expr/stmt.
         StmtKind::RefAssign { .. }
+        | StmtKind::ClassLikeActivate { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
@@ -413,6 +419,27 @@ fn stmt_refs_xml(stmt: &Stmt) -> bool {
             .iter()
             .any(|item| name_is_xml_class(&item.name) || name_is_xml_function(&item.name)),
 
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            expr_refs_xml(object) || expr_refs_xml(source)
+        }
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            index,
+            source,
+            ..
+        } => receiver_refs_xml(receiver) || expr_refs_xml(index) || expr_refs_xml(source),
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            value,
+            ..
+        } => {
+            receiver_refs_xml(receiver)
+                || expr_refs_xml(property)
+                || index.as_ref().is_some_and(expr_refs_xml)
+                || expr_refs_xml(value)
+        }
         StmtKind::Echo(expr) | StmtKind::Throw(expr) | StmtKind::ExprStmt(expr) => {
             expr_refs_xml(expr)
         }

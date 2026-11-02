@@ -207,6 +207,7 @@ fn runtime_function_probes_expose_targeted_effects() {
         RuntimeFnId::GetParentClass.effects(),
         Effects::READS_HEAP | Effects::MAY_THROW
     );
+    assert_eq!(RuntimeFnId::ArrayCombine.effects(), Effects::MAY_THROW);
     assert_eq!(RuntimeFnId::Clamp.effects(), Effects::MAY_THROW);
     assert_eq!(
         RuntimeFnId::SplAutoloadExtensions.effects(),

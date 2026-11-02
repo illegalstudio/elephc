@@ -133,8 +133,7 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.instruction("bl __rt_concat");                              // append the caller's suffix
             emitter.instruction("bl __rt_str_persist");                         // give the Throwable stable message ownership
             emitter.instruction("stp x1, x2, [sp, #56]");                       // preserve message pointer/length across allocation
-            emitter.instruction("mov x0, #56");                                 // request the canonical Throwable payload size
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate the TypeError object payload
+            crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
             emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation as a runtime object
             emitter.instruction("bl __rt_object_handle_acquire");               // bind the TypeError to its PHP object handle
@@ -153,7 +152,7 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
                 emitter, "x0",
             );
-            emitter.instruction("str xzr, [x0, #40]");                          // previous Throwable defaults to null
+            emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous Throwable defaults to null
             crate::codegen_support::abi::emit_store_reg_to_symbol(
                 emitter,
                 "x0",
@@ -285,8 +284,7 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.instruction("call __rt_str_persist");                       // give the Throwable stable message ownership
             emitter.instruction("mov QWORD PTR [rbp - 40], rax");               // save persisted message pointer
             emitter.instruction("mov QWORD PTR [rbp - 48], rdx");               // save persisted message length
-            emitter.instruction("mov rax, 56");                                 // request the canonical Throwable payload size
-            emitter.instruction("call __rt_heap_alloc");                        // allocate the TypeError object payload
+            crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // materialize the throwable heap-kind marker
             emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the allocation as a runtime object
             emitter.instruction("call __rt_object_handle_acquire");             // bind the TypeError to its PHP object handle
@@ -305,7 +303,7 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
                 emitter, "rax",
             );
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous Throwable defaults to null
+            emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous Throwable defaults to null
             crate::codegen_support::abi::emit_store_reg_to_symbol(
                 emitter,
                 "rax",
@@ -357,8 +355,7 @@ pub(super) fn emit_unserialize_object_string_error_helper(emitter: &mut Emitter)
             emitter.instruction("bl __rt_concat");                              // append PHP's conversion failure suffix
             emitter.instruction("bl __rt_str_persist");                         // give the Error stable message ownership
             emitter.instruction("stp x1, x2, [sp, #16]");                       // preserve message pair across object allocation
-            emitter.instruction("mov x0, #56");                                 // request the canonical Throwable payload size
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate the Error object payload
+            crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
             emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation as a runtime object
             emitter.instruction("bl __rt_object_handle_acquire");               // bind the Error to its PHP object handle
@@ -368,7 +365,7 @@ pub(super) fn emit_unserialize_object_string_error_helper(emitter: &mut Emitter)
             emitter.instruction("stp x10, x11, [x0, #8]");                      // store Error message pointer and length
             emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
-            emitter.instruction("str xzr, [x0, #40]");                          // previous Throwable defaults to null
+            emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous Throwable defaults to null
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
             emitter.instruction("ldp x29, x30, [sp, #48]");                     // restore the caller frame before unwinding
             emitter.instruction("add sp, sp, #64");                             // release Error-construction state
@@ -412,8 +409,7 @@ pub(super) fn emit_unserialize_object_string_error_helper(emitter: &mut Emitter)
             emitter.instruction("call __rt_str_persist");                       // give the Error stable message ownership
             emitter.instruction("mov QWORD PTR [rbp - 24], rax");               // preserve persisted message pointer
             emitter.instruction("mov QWORD PTR [rbp - 32], rdx");               // preserve persisted message length
-            emitter.instruction("mov rax, 56");                                 // request the canonical Throwable payload size
-            emitter.instruction("call __rt_heap_alloc");                        // allocate the Error object payload
+            crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
             emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // throwable heap-kind marker
             emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the allocation as a runtime object
             emitter.instruction("call __rt_object_handle_acquire");             // bind the Error to its PHP object handle
@@ -425,7 +421,7 @@ pub(super) fn emit_unserialize_object_string_error_helper(emitter: &mut Emitter)
             emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store message byte length
             emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
             crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous Throwable defaults to null
+            emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous Throwable defaults to null
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
             emitter.instruction("leave");                                       // restore the caller frame before unwinding
             emitter.instruction("jmp __rt_throw_current");                      // propagate through the catchable Throwable path

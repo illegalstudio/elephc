@@ -61,6 +61,53 @@ echo json_encode($a), "|", json_encode($b);
 
 // --- Phase 12: v0.6 — Associative arrays, switch, match ---
 
+/// Verifies assigning PHP null to an already typed associative entry preserves a readable null.
+#[test]
+fn test_hash_set_accepts_null_after_concrete_value() {
+    let out = compile_and_run(
+        r#"<?php
+$values = ["name" => "elephc"];
+$values["name"] = null;
+var_dump($values["name"]);
+"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
+/// Verifies an explicit string cast of a Stringable object can index an associative array.
+#[test]
+fn test_hash_key_accepts_explicitly_cast_stringable_object() {
+    let out = compile_and_run(
+        r#"<?php
+final class AliasKey {
+    public function __toString(): string {
+        return "service.alias";
+    }
+}
+$values = ["service.alias" => 7];
+$key = new AliasKey();
+echo $values[(string) $key];
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies a short-circuited nested key probe remains lowerable when flow typing models the
+/// unreachable second array operand as null.
+#[test]
+fn test_array_key_exists_unreachable_null_operand_is_lowerable() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [];
+if (isset($rows["missing"]) && array_key_exists("child", $rows["missing"])) {
+    echo "bad";
+}
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Compiles a PHP script with two static string-keyed entries and verifies the first value is echoed.
 #[test]
 fn test_assoc_array_basic() {
@@ -85,6 +132,28 @@ echo $m["a"] + $m["b"] + $m["c"];
     assert_eq!(out, "6");
 }
 
+/// Verifies nullable integer keys preserve their inline tag: integers stay integer keys and
+/// PHP null normalizes to the empty-string key rather than being rejected by hash lowering.
+#[test]
+fn test_assoc_array_nullable_integer_tagged_scalar_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function nullable_key(bool $useNull): ?int {
+    return $useNull ? null : 7;
+}
+$values = ["seed" => 0];
+unset($values["seed"]);
+$values[nullable_key(false)] = 11;
+$values[nullable_key(true)] = 22;
+foreach ($values as $key => $value) {
+    echo "[", $key, ":", $value, "]";
+}
+echo "|", $values[null];
+"#,
+    );
+    assert_eq!(out, "[7:11][:22]|22");
+}
+
 /// Verifies an associative literal stores the declared object result of a method call instead of
 /// stamping the hash value layout from the syntactic integer fallback.
 #[test]
@@ -94,11 +163,11 @@ fn test_assoc_array_literal_property_receiver_method_element_typed_by_return() {
 declare(strict_types=1);
 final class Link { public function __construct(public string $label) {} }
 final class Factory { public function link(string $label): Link { return new Link($label); } }
-final class Composer {
+final class LinkCollection {
     public function __construct(private Factory $factory) {}
     public function links(): array { return ['view' => $this->factory->link('View')]; }
 }
-$links = (new Composer(new Factory()))->links();
+$links = (new LinkCollection(new Factory()))->links();
 echo $links['view']->label;
 "#,
     );
@@ -116,6 +185,28 @@ echo $m["x"] + $m["y"];
 "#,
     );
     assert_eq!(out, "30");
+}
+
+/// Verifies an append dynamically dispatches after a Mixed-key write promotes indexed storage.
+#[test]
+fn test_array_append_after_dynamic_string_key_promotion() {
+    let out = compile_and_run(
+        r#"<?php
+$source = [2 => "first", "named" => "second", 5 => "third"];
+$result = [];
+foreach ($source as $key => $value) {
+    if (is_string($key)) {
+        $result[$key] = $value;
+    } else {
+        $result[] = $value;
+    }
+}
+foreach ($result as $key => $value) {
+    echo $key, "=>", $value, "|";
+}
+"#,
+    );
+    assert_eq!(out, "0=>first|named=>second|1=>third|");
 }
 
 /// Compiles a PHP script that creates an assoc array, overwrites its sole key, and verifies the new value is returned.
@@ -261,6 +352,91 @@ foreach ($a as $k => $v) {
     assert_eq!(out, "2|3=x;5=y;");
 }
 
+/// Verifies `+` on two values whose static type is the gradual `array<mixed>` reads their
+/// RUNTIME storage kind instead of assuming indexed.
+///
+/// A declared `array` parameter carries `array<mixed>`, which promises nothing about keys: it
+/// holds string keys perfectly happily. Picking the union helper from that static type alone ran
+/// the indexed walk over hash storage, which returned a short array — `count()` said 1 where php
+/// says 2 — and left it malformed enough that iterating it afterwards exhausted the heap. The
+/// literal-operand tests above never caught it because their refined types really are indexed.
+///
+/// Symfony reaches this through `Config\Definition\Processor::process()`, which accumulates with
+/// `$currentConfig = $configTree->merge($currentConfig, $config);`.
+#[test]
+fn test_array_union_of_two_gradual_array_parameters_dispatches_on_runtime_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function u(array $left, array $right): string {
+    $out = $left + $right;
+    return count($out) . ":" . implode(",", array_keys($out));
+}
+echo u(["a" => 1], ["b" => 2]), "|";
+echo u([1, 2], [3]), "|";
+echo u(["a" => 1], [7]), "|";
+echo u([1], ["b" => 2]);
+"#,
+    );
+    assert_eq!(out, "2:a,b|2:0,1|2:a,0|2:0,b");
+}
+
+/// Verifies the MIXED union arms read the gradual side's runtime storage too.
+///
+/// `$gradual + ['b' => 2]` and `['a' => 1] + $gradual` each pair one `array<mixed>` operand with
+/// a refined literal. Assuming the gradual side is indexed did not shorten the result here — it
+/// RENUMBERED a string key, which is quieter: `count()` still said 2 while `array_keys()` said
+/// `0,b` where php says `a,b`.
+#[test]
+fn test_array_union_mixed_arms_read_the_gradual_operand_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function leftGradual(array $left): string {
+    $out = $left + ["b" => 2];
+    return count($out) . ":" . implode(",", array_keys($out));
+}
+function rightGradual(array $right): string {
+    $out = ["a" => 1] + $right;
+    return count($out) . ":" . implode(",", array_keys($out));
+}
+echo leftGradual(["a" => 1]), "|", leftGradual([7]), "|";
+echo rightGradual(["b" => 2]), "|", rightGradual([7]);
+"#,
+    );
+    assert_eq!(out, "2:a,b|2:0,b|2:a,b|2:a,0");
+}
+
+/// Verifies the same union survives the accumulator shape that found it: a local reassigned in a
+/// loop from a call that receives it, reached through an interface so the callee is not known
+/// statically.
+#[test]
+fn test_array_union_accumulator_through_interface_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+interface NodeInterface {
+    public function merge(array $left, array $right): array;
+}
+class Node implements NodeInterface {
+    public function merge(array $left, array $right): array {
+        if (!$right) {
+            return $left;
+        }
+        return $left + $right;
+    }
+}
+function process(NodeInterface $tree, array $configs): array {
+    $current = [];
+    foreach ($configs as $config) {
+        $current = $tree->merge($current, $config);
+    }
+    return $current;
+}
+$out = process(new Node(), [["a" => 1], [], ["b" => 2], []]);
+echo count($out), ":", implode(",", array_keys($out));
+"#,
+    );
+    assert_eq!(out, "2:a,b");
+}
+
 /// Compiles a PHP script that performs array union (+) with two assoc arrays sharing a key "a" and verifies the left operand's value is retained for the duplicate key.
 #[test]
 fn test_assoc_array_union_keeps_left_duplicate_keys() {
@@ -376,6 +552,22 @@ echo "|" . $result[0] . "|" . $result[1] . "|" . $result["01"] . "|" . $result[2
     );
 }
 
+/// Verifies compound array union accepts an array stored in a boxed Mixed associative slot.
+#[test]
+fn test_mixed_slot_compound_array_union() {
+    let out = compile_and_run(
+        r#"<?php
+$state = [
+    "options" => ["left" => "keep"],
+    "marker" => 1,
+];
+$result = $state["options"] += ["right" => "add", "left" => "replace"];
+echo $state["options"]["left"] . ":" . $state["options"]["right"] . ":" . $result["right"];
+"#,
+    );
+    assert_eq!(out, "keep:add:add");
+}
+
 /// Compiles a PHP script that performs array union with mixed indexed and assoc arrays containing nested arrays, then unsets the operands and verifies the result retains nested values.
 #[test]
 fn test_mixed_representation_array_union_retains_nested_values() {
@@ -390,6 +582,30 @@ echo $result[0][0] . "|" . $result[1][0] . "|" . $result["meta"][0];
 "#,
     );
     assert_eq!(out, "10|20|30");
+}
+
+/// Verifies boxed union operands dispatch `+` between PHP array union and numeric addition.
+#[test]
+fn test_gradual_add_dispatches_array_union_and_numeric_paths() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_array(bool $array, string $key): array|false {
+    return $array ? [$key => $key] : false;
+}
+
+$union = gradual_array(true, 'left') + gradual_array(true, 'right');
+foreach ($union as $key => $value) {
+    echo $key . '=' . $value . ';';
+}
+echo gradual_array(false, 'left') + gradual_array(false, 'right');
+try {
+    gradual_array(true, 'left') + gradual_array(false, 'right');
+} catch (TypeError $error) {
+    echo '|type-error';
+}
+"#,
+    );
+    assert_eq!(out, "left=left;right=right;0|type-error");
 }
 
 /// Compiles a PHP script that performs array union inside a function with indexed left and assoc right, then iterates via foreach, verifying key/value preservation.
@@ -782,6 +998,37 @@ echo $a[null] ?? "miss";
 "#,
     );
     assert_eq!(out, "miss");
+}
+
+/// Verifies a write finds its key past a tombstone instead of inserting a duplicate.
+///
+/// Regression: the hash insert claimed the first tombstone on the probe path, so once an unset
+/// left one ahead of a live key, writing that key stored it a second time. `count()` then saw
+/// both copies and `array_keys()` listed the key twice. The keys are driven by an LCG so the
+/// unsets land between live keys' home slots; the expected answer is php's.
+#[test]
+fn test_hash_write_after_unset_updates_the_key_past_a_tombstone() {
+    let out = compile_and_run(
+        r#"<?php
+$seed = 12345;
+$strs = [];
+for ($round = 0; $round < 800; $round++) {
+    $seed = ($seed * 1103515245 + 12345) % 2147483648;
+    $slot = $seed % 97;
+    if (intdiv($seed, 97) % 7 < 2) {
+        $strs[$slot] = str_repeat('a', intdiv($seed, 679) % 700 * 2);
+    } else {
+        unset($strs[$slot]);
+    }
+}
+ksort($strs);
+echo count($strs), ":", implode(",", array_keys($strs));
+"#,
+    );
+    assert_eq!(
+        out,
+        "32:2,3,5,7,10,12,19,20,25,26,27,32,35,39,41,48,49,50,52,54,56,57,58,61,63,65,74,75,83,86,91,92"
+    );
 }
 
 

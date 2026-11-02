@@ -153,6 +153,13 @@ fn validate_declared_builtin_spec(spec: &EvalBuiltinSpec) {
             "eval builtin {} has a variadic name out of sync",
             spec.name
         );
+        if spec.by_ref_params.contains(&variadic) {
+            assert!(
+                !spec.params.iter().any(|param| param.name == variadic),
+                "eval builtin {} represents its by-reference variadic outside fixed params",
+                spec.name
+            );
+        }
     }
     if let Some(required_param_count) = spec.required_param_count {
         assert!(
@@ -262,6 +269,27 @@ pub(in crate::interpreter) fn eval_declared_builtin_requires_source_arguments(
     eval_declared_builtin_spec(name).is_some_and(|spec| spec.source_arguments)
 }
 
+/// Returns whether `arg_count` positional arguments reach a by-reference parameter of a builtin
+/// that has a direct (source-argument) hook to bind it.
+///
+/// The evaluated-argument route reads every argument as a value, so a by-reference destination
+/// has nowhere to be written: `str_replace($s, $r, $subject, $count)` inside an eval fragment
+/// reached the three-argument value hook and failed with a bare `RuntimeFatal`. The direct hook
+/// is the one that binds the destination.
+pub(in crate::interpreter) fn eval_declared_builtin_call_binds_reference(
+    name: &str,
+    arg_count: usize,
+) -> bool {
+    eval_declared_builtin_spec(name).is_some_and(|spec| {
+        spec.direct.is_some()
+            && spec
+                .params
+                .iter()
+                .take(arg_count)
+                .any(|param| spec.by_ref_param_names().contains(&param.name))
+    })
+}
+
 /// Returns stable canonical names for builtins in the declarative registry.
 pub(in crate::interpreter) fn eval_declared_builtin_function_names() -> &'static [&'static str] {
     declared_builtin_registry().names.as_slice()
@@ -293,7 +321,15 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
     let Some(spec) = eval_declared_builtin_spec(name) else {
         return Ok(None);
     };
-    if let Some(runtime_builtin) = spec.runtime_builtin {
+    // A call that reaches a by-reference parameter (`headers_sent($file, $line)`) cannot go
+    // through the by-value runtime builtin: it would read the destination as a value (warning on
+    // an undefined one) and have nowhere to write the result. The direct hook binds it.
+    let reaches_by_ref_param = spec
+        .params
+        .iter()
+        .take(args.len())
+        .any(|param| spec.by_ref_param_names().contains(&param.name));
+    if let Some(runtime_builtin) = spec.runtime_builtin.filter(|_| !reaches_by_ref_param) {
         if runtime_builtin.is_mbstring() {
             return call_shared_mbstring_direct(runtime_builtin, args, context, scope, values);
         }
@@ -313,7 +349,110 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
     let Some(hook) = spec.direct else {
         return Ok(None);
     };
+    // A `string` parameter accepts any Stringable object, converted through `__toString()`
+    // (`file_get_contents($splFileInfo)` is how Symfony's `lint:twig` reads each template). A
+    // direct hook evaluates its own arguments and reads the raw bytes, which are empty for an
+    // object, so a builtin that has an evaluated-argument hook is routed through it instead,
+    // where the conversion happens once for every builtin.
+    // The arity guard leaves a wrong argument count to the direct hook, which is what raises
+    // PHP's catchable ArgumentCountError.
+    let required = spec.required_param_count.unwrap_or_else(|| {
+        spec.params
+            .iter()
+            .take_while(|param| param.default.is_none())
+            .count()
+    });
+    let arity_fits = args.len() >= required
+        && (spec.variadic.is_some() || args.len() <= spec.params.len());
+    if spec.has_string_param()
+        && arity_fits
+        && spec.by_ref_param_names().is_empty()
+        && !eval_builtin_is_backtrace_visible(spec.name)
+    {
+        if let Some(values_hook) = spec.values {
+            let mut evaluated_args = Vec::with_capacity(args.len());
+            for arg in args {
+                evaluated_args.push(eval_expr(arg, context, scope, values)?);
+            }
+            let originals = evaluated_args.clone();
+            let evaluated_args =
+                eval_coerce_string_param_objects(spec, evaluated_args, context, values)?;
+            let result = values_hook.call(spec.name, &evaluated_args, Some(&*scope), context, values)?;
+            release_builtin_arg_temporaries(args, &originals, &evaluated_args, Some(result), values)?;
+            return Ok(Some(result));
+        }
+    }
+    if eval_builtin_is_backtrace_visible(spec.name) {
+        // The class probes must be visible to a userland autoloader they start: Symfony's
+        // `ClassExistenceResource::throwOnRequiredClass` returns silently only when it finds one
+        // of these frames above itself. PHP shows the probe's arguments too, so a probe whose
+        // parameters are all by value is re-routed through its evaluated-argument hook to make
+        // real handles available; one with a by-reference parameter keeps the direct hook and
+        // pushes a frame with no `args` key, which is a shape PHP itself produces (under
+        // `DEBUG_BACKTRACE_IGNORE_ARGS`) rather than an invented empty list.
+        if spec.by_ref_param_names().is_empty() {
+            if let Some(values_hook) = spec.values {
+                let mut evaluated_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    evaluated_args.push(eval_expr(arg, context, scope, values)?);
+                }
+                let frame =
+                    EvalCallFrame::function(spec.name, Some(evaluated_args.clone()), context);
+                context.push_call_frame(frame);
+                let result = values_hook.call(spec.name, &evaluated_args, Some(&*scope), context, values);
+                context.pop_call_frame();
+                let result = result?;
+                release_builtin_arg_temporaries(
+                    args,
+                    &evaluated_args,
+                    &evaluated_args,
+                    Some(result),
+                    values,
+                )?;
+                return Ok(Some(result));
+            }
+        }
+        let frame = EvalCallFrame::function(spec.name, None, context);
+        context.push_call_frame(frame);
+        let result = hook.call(spec.name, args, context, scope, values);
+        context.pop_call_frame();
+        return result.map(Some);
+    }
     hook.call(spec.name, args, context, scope, values).map(Some)
+}
+
+/// Releases the argument cells a builtin call evaluated for itself and no longer needs.
+///
+/// `eval_expr` hands back either a cell storage still owns (`$var`, a constant, a static
+/// property: a BORROWED handle, or `eval_expr_result_aliases_storage`) or a fresh temporary nobody
+/// else holds. The builtins only READ their arguments -- they must, since a variable's cell is
+/// borrowed -- so a temporary was simply dropped: every `mt_rand(1, 1)` or `strlen("ab")` in eval
+/// code leaked its literal cells. `coerced` is the list after `__toString()` conversion; a
+/// replacement it holds is a fresh string of its own. The result is never released: a builtin may
+/// answer with an argument.
+fn release_builtin_arg_temporaries(
+    args: &[EvalExpr],
+    originals: &[RuntimeCellHandle],
+    coerced: &[RuntimeCellHandle],
+    result: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for (index, original) in originals.iter().enumerate() {
+        let replacement = coerced.get(index).copied().filter(|cell| cell != original);
+        if let Some(replacement) = replacement {
+            if Some(replacement) != result {
+                values.release(replacement)?;
+            }
+        }
+        let temporary = !original.is_borrowed()
+            && args.get(index).is_some_and(|arg| {
+                !crate::interpreter::expressions::eval_expr_result_aliases_storage(arg)
+            });
+        if temporary && Some(*original) != result {
+            values.release(*original)?;
+        }
+    }
+    Ok(())
 }
 
 /// Dispatches evaluated builtin cells with optional lexical scope for callback resolution.
@@ -339,8 +478,63 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call_from_scope(
     let Some(hook) = spec.values else {
         return Ok(None);
     };
+    let coerced;
+    let evaluated_args = if spec.has_string_param() {
+        coerced = eval_coerce_string_param_objects(spec, evaluated_args.to_vec(), context, values)?;
+        coerced.as_slice()
+    } else {
+        evaluated_args
+    };
+    if eval_builtin_is_backtrace_visible(spec.name) {
+        let frame =
+            EvalCallFrame::function(spec.name, Some(evaluated_args.to_vec()), context);
+        context.push_call_frame(frame);
+        let result = hook.call(spec.name, evaluated_args, lexical_scope, context, values);
+        context.pop_call_frame();
+        return result.map(Some);
+    }
     hook.call(spec.name, evaluated_args, lexical_scope, context, values)
         .map(Some)
+}
+
+/// Converts each object passed to a `string` parameter through `__toString()`.
+///
+/// Only objects are touched: a scalar keeps its own coercion inside the implementation, which
+/// is where PHP's per-type rules already live.
+fn eval_coerce_string_param_objects(
+    spec: &EvalBuiltinSpec,
+    mut evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    for (index, arg) in evaluated_args.iter_mut().enumerate() {
+        let Some(param) = spec.params.get(index) else {
+            break;
+        };
+        if !param.string_param || values.type_tag(*arg)? != EVAL_TAG_OBJECT {
+            continue;
+        }
+        // A `string` parameter given an object without `__toString()` is php's TypeError
+        // (`strlen(): Argument #1 ($string) must be of type string, stdClass given`), not the
+        // string-context `Object of class stdClass could not be converted to string` Error.
+        if !crate::interpreter::dynamic_functions::eval_object_has_to_string(*arg, context, values)? {
+            let given = crate::interpreter::eval_given_type_spelling(*arg, values)?;
+            let parameter = spec.param_names.get(index).copied().unwrap_or("value");
+            return eval_throw_type_error(
+                &format!(
+                    "{}(): Argument #{} (${parameter}) must be of type string, {given} given",
+                    spec.name,
+                    index + 1,
+                ),
+                context,
+                values,
+            );
+        }
+        *arg = crate::interpreter::dynamic_functions::eval_string_context_value(
+            *arg, context, values,
+        )?;
+    }
+    Ok(evaluated_args)
 }
 
 #[cfg(test)]

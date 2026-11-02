@@ -62,7 +62,7 @@ pub(super) fn default_requires_metadata(default: &Expr) -> bool {
 
 /// Collects signatures whose nonliteral defaults can throw before the method body executes.
 pub(super) fn collect(
-    classes: &HashMap<String, ClassInfo>,
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
     static_methods: bool,
 ) -> HashMap<String, FunctionSig> {
     classes.iter().flat_map(|(class_name, class)| {

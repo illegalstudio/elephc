@@ -15,6 +15,9 @@ eval_builtin! {
     values: Symbols,
 }
 
+use crate::interpreter::builtins::spl::array_iterator::{
+    eval_array_iterator_is_a, eval_object_is_array_iterator,
+};
 use super::super::super::*;
 
 /// Evaluates direct `is_a(...)` calls over eval boxed object cells and class strings.
@@ -95,6 +98,24 @@ pub(in crate::interpreter) fn eval_is_a_relation_result(
         let resolved_source_class = context
             .resolve_class_like_name(&source_class)
             .unwrap_or_else(|| source_class.trim_start_matches('\\').to_string());
+        // `is_a($name, $target, true)` LOADS the class it names, as php's `zend_lookup_class`
+        // does. Answering from what happened to be declared already made
+        // `getAttributes(Route::class, IS_INSTANCEOF)` drop every attribute whose class only the
+        // autoloader could supply -- symfony/routing's own `#[Route]`, in the interpreter.
+        if context.class(&resolved_source_class).is_none()
+            && context.interface(&resolved_source_class).is_none()
+            && context.trait_decl(&resolved_source_class).is_none()
+            && !values.class_exists(&resolved_source_class)?
+            && !values.interface_exists(&resolved_source_class)?
+        {
+            let _ = crate::interpreter::eval_spl_autoload_class(
+                &resolved_source_class,
+                context,
+                values,
+            )?;
+            #[cfg(not(test))]
+            context.sync_global_eval_classes();
+        }
         if context.class(&resolved_source_class).is_some() {
             eval_class_string_is_a(
                 &resolved_source_class,
@@ -114,6 +135,17 @@ pub(in crate::interpreter) fn eval_is_a_relation_result(
         } else if context.trait_decl(&resolved_source_class).is_some() {
             !exclude_self
                 && eval_class_like_name_matches(&resolved_source_class, &resolved_target_class)
+        } else if values.interface_exists(&resolved_source_class)? {
+            // A COMPILED interface: the runtime relation helper walks class parents and
+            // implemented interfaces only, so `is_a(ContainerInterface::class,
+            // PsrContainerInterface::class, true)` answered false and `lint:container` rejected
+            // every service taking the PSR container. Its inherited interfaces are the same
+            // runtime metadata `class_implements()` answers from.
+            (!exclude_self
+                && eval_class_like_name_matches(&resolved_source_class, &resolved_target_class))
+                || eval_runtime_class_interface_names(&resolved_source_class, values)?
+                    .iter()
+                    .any(|parent| eval_class_like_name_matches(parent, &resolved_target_class))
         } else {
             values.object_is_a(object_or_class, &resolved_target_class, exclude_self)?
         }
@@ -252,6 +284,32 @@ fn eval_class_like_name_matches(left: &str, right: &str) -> bool {
         .eq_ignore_ascii_case(right.trim_start_matches('\\'))
 }
 
+/// Returns whether one class-like NAME satisfies another by PHP's `instanceof` relation --
+/// self, subclass, or implemented interface -- with neither side an object instance.
+///
+/// Mirrors `is_a($name, $target, true)` exactly (verified against php -n: self, subclass, and
+/// interface implementation all return `true`; an unrelated or reversed pair returns `false`),
+/// which is also PHP's own semantics for `ReflectionAttribute::IS_INSTANCEOF`. Reused by
+/// `getAttributes()` filtering (`crate::interpreter::reflection::member_api`) where only the two
+/// class NAMES are known, not object instances.
+pub(in crate::interpreter) fn eval_class_like_name_is_instance_of(
+    source_class: &str,
+    target_class: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let source = values.string(source_class)?;
+    let target = values.string(target_class)?;
+    let allow_string = values.bool_value(true)?;
+    let result = eval_is_a_relation_result("is_a", &[source, target, allow_string], context, values)?;
+    let matches = values.truthy(result)?;
+    values.release(source)?;
+    values.release(target)?;
+    values.release(allow_string)?;
+    values.release(result)?;
+    Ok(matches)
+}
+
 /// Returns whether an eval-created object matches a dynamic class/interface target.
 pub(in crate::interpreter) fn dynamic_object_is_a(
     object: RuntimeCellHandle,
@@ -266,16 +324,87 @@ pub(in crate::interpreter) fn dynamic_object_is_a(
             !exclude_self && eval_class_like_name_matches("Closure", target_class),
         ));
     }
-    let Some(class) = context.dynamic_object_class(identity) else {
+    if eval_object_is_array_iterator(identity, context) {
+        // `ArrayIterator` has no eval declaration to walk, so its interfaces are answered here.
+        // Without this `foreach` never reaches the Iterator protocol and `count()` never reaches
+        // `Countable::count()`, whatever the members do.
+        return Ok(Some(
+            !exclude_self && eval_array_iterator_is_a(target_class),
+        ));
+    }
+    let Some((declaring, class)) = context.dynamic_object_declaring_class(identity) else {
         return Ok(None);
     };
-    if eval_class_string_is_a(class.name(), target_class, exclude_self, context, values)? {
+    if eval_class_string_is_a(class.name(), target_class, exclude_self, declaring, values)? {
         return Ok(Some(true));
     }
-    if context.class_native_parent_name(class.name()).is_some() {
-        return values
-            .object_is_a(object, target_class, exclude_self)
-            .map(Some);
+    // An eval-declared object is carried by a `stdClass` runtime object, so the AOT metadata
+    // fallback below would answer "yes" to `$obj instanceof stdClass` for EVERY class the
+    // interpreter declared. `Router::toResponse()` tests `$response instanceof stdClass` and then
+    // JSON-encoded a Blade `View` as `{}`. Only an explicit `extends stdClass` (answered above)
+    // makes such an object a `stdClass`.
+    if eval_class_like_name_matches("stdClass", target_class)
+        && context.class_native_parent_name(class.name()).is_none()
+    {
+        return Ok(Some(false));
     }
-    Ok(Some(false))
+    // A "no" from the eval tables is not proof. They hold what THIS request declared, and a
+    // compiled ancestor or a compiled interface can be absent from them entirely -- the AOT
+    // metadata is the other half of the world, and it is what a compiled class id resolves
+    // through. Asking it before answering no is what stops a true `instanceof` from reading as
+    // false: `Twig\Environment::addExtension(ExtensionInterface $extension)` threw a TypeError on
+    // a `TranslationExtension` whose only declared ancestry left the eval table at
+    // `AbstractExtension`, and the Symfony container swallowed it into a null `twig` service.
+    //
+    // The two can only disagree in one direction: a subclass inherits every interface its
+    // ancestors declare, so the bridge answering true over an eval "no" is the correct answer,
+    // never a looser one.
+    values
+        .object_is_a(object, target_class, exclude_self)
+        .map(Some)
+}
+
+/// Answers `is_a($source, $target, true)` / `is_subclass_of()` for two class-name strings on
+/// behalf of compiled code.
+///
+/// Compiled code settles a class-name relation from its own class table first and asks here only
+/// when that table said no, which is exactly the case of a class the interpreter declared (an
+/// autoloaded file the compiler never saw). It takes the path an interpreted `is_a()` takes,
+/// autoload included.
+pub(crate) fn eval_class_name_is_a_bridge(
+    source_class: &str,
+    target_class: &str,
+    exclude_self: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let source = values.string(source_class)?;
+    let target = match values.string(target_class) {
+        Ok(target) => target,
+        Err(status) => {
+            let _ = values.release(source);
+            return Err(status);
+        }
+    };
+    let allow_string = match values.bool_value(true) {
+        Ok(flag) => flag,
+        Err(status) => {
+            let _ = values.release(source);
+            let _ = values.release(target);
+            return Err(status);
+        }
+    };
+    let name = if exclude_self { "is_subclass_of" } else { "is_a" };
+    let result = eval_is_a_relation_result(name, &[source, target, allow_string], context, values)
+        .and_then(|cell| {
+            let truthy = values.truthy(cell);
+            let released = values.release(cell);
+            let truthy = truthy?;
+            released?;
+            Ok(truthy)
+        });
+    let _ = values.release(source);
+    let _ = values.release(target);
+    let _ = values.release(allow_string);
+    result
 }

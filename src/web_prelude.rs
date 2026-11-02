@@ -21,6 +21,8 @@
 //!   `session_set_save_handler()`.
 //! - Process-environment copying is omitted when source access and introspection cannot observe it.
 
+use std::path::Path;
+
 use crate::parser::ast::{BinOp, Program, Stmt, StmtKind};
 use crate::synthetic_class::{
     e_binop, e_call, e_const, e_int, e_static_prop, s_assign, s_expr, s_if, s_try,
@@ -47,9 +49,8 @@ pub use crate::php_version::PhpVersion;
 ///   module) that does not exist here, and library code branches on those names to reach for
 ///   `fastcgi_finish_request()` / `apache_*` functions elephc does not provide.
 ///
-/// Why this matters more than cosmetics: framework code gates on `PHP_SAPI === 'cli'` (Symfony's
-/// `Debug`/`ErrorHandler` and Laravel's `runningInConsole()` both do) to decide whether it is in
-/// a console or a request. Reporting `cli` under `--web` would put every such library on the
+/// Why this matters more than cosmetics: application code can gate on `PHP_SAPI === 'cli'` to
+/// decide whether it is in a console or a request. Reporting `cli` under `--web` would put every library on the
 /// console path inside an HTTP request. `cli-server` is on the "web" side of every such test
 /// while still being a name libraries already know.
 ///
@@ -80,9 +81,22 @@ pub(crate) fn program_observes_environment(program: &[Stmt]) -> bool {
 /// the connection). The `$__elephc_wrap = 0;` placeholder body is replaced with the real
 /// statements by [`inject_if_web`].
 ///
-/// `finally` closes an active session, which is what makes `session_write_close()` run on the
-/// exception path too — `__ElephcSessionState::$shutdown` is the latch a `session_write_close()`
-/// in user code clears so it does not run twice.
+/// `finally` first drains the `register_shutdown_function()` registry — PHP runs those callbacks
+/// after the script body on the success AND the exception path — and then closes an active
+/// session, which is what makes `session_write_close()` run on the exception path too.
+/// `__ElephcSessionState::$shutdown` is the latch a `session_write_close()` in user code clears
+/// so it does not run twice.
+///
+/// It is NOT the only place in a request that qualifies, and believing that was a hole: a handler
+/// that calls `exit()` never reaches this `finally` at all — `lower_exit`'s `--web` arm jumps
+/// straight to the handler epilogue, exactly as the CLI arm jumps to the exit syscall. The
+/// shutdown drain is therefore ALSO emitted at `lower_exit`, which closes that half; the
+/// `session_write_close()` half below is still skipped by an `exit()` and is an open gap.
+///
+/// The drain is spelled as the nullary `__elephc_shutdown_run()` rather than
+/// `__elephc_shutdown_function_state(null, [], 2)` because codegen has to call the same entry by
+/// symbol, with no arguments to marshal. Calling it from here is also what keeps it REACHABLE
+/// under `--web`, where nothing forces its group.
 pub(crate) fn web_wrap_stmt() -> Stmt {
     crate::synthetic_class::internal_declarations(|| {
         vec![s_try(
@@ -95,20 +109,23 @@ pub(crate) fn web_wrap_stmt() -> Stmt {
                     vec![],
                 ))],
             )],
-            Some(vec![s_if(
-                e_binop(
+            Some(vec![
+                s_expr(e_call(crate::names::SHUTDOWN_RUN_FUNCTION, vec![])),
+                s_if(
                     e_binop(
-                        e_call("elephc_web_session_get_status", vec![]),
-                        BinOp::StrictEq,
-                        e_const("PHP_SESSION_ACTIVE"),
+                        e_binop(
+                            e_call("elephc_web_session_get_status", vec![]),
+                            BinOp::StrictEq,
+                            e_const("PHP_SESSION_ACTIVE"),
+                        ),
+                        BinOp::And,
+                        e_static_prop("__ElephcSessionState", "shutdown"),
                     ),
-                    BinOp::And,
-                    e_static_prop("__ElephcSessionState", "shutdown"),
+                    vec![s_expr(e_call("session_write_close", vec![]))],
+                    vec![],
+                    None,
                 ),
-                vec![s_expr(e_call("session_write_close", vec![]))],
-                vec![],
-                None,
-            )]),
+            ]),
         )]
     })
     .remove(0)
@@ -140,9 +157,8 @@ pub mod application;
 /// request opens. Running from the entry stub — in the master, before the fork, which is
 /// also where php-src runs preload — means the bytes take the plain `write(1, …)` path.
 ///
-/// Matched by LABEL, not by position: `include_once_label` is a hash of the resolved
-/// preload path, so a `require_once` the user happened to write first cannot be mistaken
-/// for it.
+/// Matched by the guard's canonical source path, not by position, so a `require_once` the user
+/// happened to write first cannot be mistaken for the preload.
 fn lift_preload_to_startup(
     program: Program,
     preload_path: Option<&std::path::Path>,
@@ -150,11 +166,13 @@ fn lift_preload_to_startup(
     let Some(path) = preload_path else {
         return program;
     };
-    let label = crate::resolver::include_once_label(path);
+    // The guard is keyed by the canonical source path of the included file (ours dropped the
+    // hashed `include_once_label`), so the preload is matched by that path.
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut program = program;
     let preload = program
         .iter_mut()
-        .find_map(|statement| take_preload_boundary(statement, &label));
+        .find_map(|statement| take_preload_boundary(statement, &canonical));
     let Some(preload) = preload else {
         return program;
     };
@@ -169,10 +187,10 @@ fn lift_preload_to_startup(
 /// resolver-only wrappers but never into user control flow. A `return` nested in the preload is
 /// already confined INSIDE the guard's body (`resolver::engine_includes::confine_nested_returns`),
 /// so moving the guard moves that confinement with it.
-fn take_preload_boundary(statement: &mut Stmt, label: &str) -> Option<Stmt> {
+fn take_preload_boundary(statement: &mut Stmt, preload: &std::path::Path) -> Option<Stmt> {
     let span = statement.span;
     match &mut statement.kind {
-        StmtKind::IncludeOnceGuard { label: found, .. } if found == label => {
+        StmtKind::IncludeOnceGuard { source_path: found, .. } if found.as_path() == preload => {
             Some(std::mem::replace(
                 statement,
                 Stmt::new(StmtKind::Synthetic(Vec::new()), span),
@@ -182,7 +200,7 @@ fn take_preload_boundary(statement: &mut Stmt, label: &str) -> Option<Stmt> {
         | StmtKind::IncludeOnceGuard { body, .. }
         | StmtKind::Synthetic(body) => body
             .iter_mut()
-            .find_map(|nested| take_preload_boundary(nested, label)),
+            .find_map(|nested| take_preload_boundary(nested, preload)),
         _ => None,
     }
 }
@@ -200,11 +218,12 @@ pub fn inject_if_web(
     web: bool,
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],
+    entry_path: &Path,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload_path: Option<&std::path::Path>,
 ) -> Program {
     inject_if_web_with_autoload_usage(
-        program, web, php_version, ini_overrides, inventory, preload_path, false,
+        program, web, php_version, ini_overrides, entry_path, inventory, preload_path, false,
     )
 }
 
@@ -214,6 +233,7 @@ pub(crate) fn inject_if_web_with_autoload_usage(
     web: bool,
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],
+    entry_path: &Path,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload_path: Option<&std::path::Path>,
     autoload_observes_environment: bool,
@@ -224,6 +244,7 @@ pub(crate) fn inject_if_web_with_autoload_usage(
             web,
             php_version,
             ini_overrides,
+            entry_path,
             inventory,
             preload_path,
             autoload_observes_environment,
@@ -237,6 +258,7 @@ fn inject_if_web_on_compiler_stack(
     web: bool,
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],
+    entry_path: &Path,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload_path: Option<&std::path::Path>,
     autoload_observes_environment: bool,
@@ -244,15 +266,30 @@ fn inject_if_web_on_compiler_stack(
     if !web {
         return program;
     }
+    // A program that declares one of the SHARED error-handling names for itself loses that
+    // declaration to the prelude's, which is what php does and what elephc already does for a
+    // registry builtin. `if (!function_exists('trigger_error')) { function trigger_error(…) }`
+    // is ordinary library code: php never takes the branch, but elephc EMITS the guarded body
+    // as a symbol anyway, and this prelude declaring the same name failed the link with
+    // `duplicate symbol '_fn_trigger_u_error'`. See
+    // `error_handling_prelude::without_shadowing_declarations` for why the prelude has to be
+    // the side that wins. Scoped to that module's own names — the session and `ini_*` surface
+    // below carries the identical hazard and is deliberately left as it was.
+    let program = crate::error_handling_prelude::without_shadowing_declarations(program);
     let program = lift_preload_to_startup(program, preload_path);
     let user_usage = usage::collect_environment(&program);
     let needs_callable_session_handler = user_usage.references("session_set_save_handler")
         || user_usage.dynamic_function_call;
-    let mut combined = build::web_declarations_with_environment(
+    let combined = build::web_declarations_with_environment(
         php_version,
         ini_overrides,
         autoload_observes_environment || environment::is_observable(&program, &user_usage),
     );
+    // `$_SERVER['SCRIPT_FILENAME'] / ['DOCUMENT_ROOT'] / ['SCRIPT_NAME'] / ['PHP_SELF']` and
+    // `trigger_error()`'s handler call are built with `__FILE__` / `__DIR__` / `__LINE__`, and
+    // they are introduced AFTER the per-file magic-constant pass has already run, so nothing
+    // else would ever resolve them. They are resolved here against the entry file.
+    let mut combined = crate::magic_constants::substitute_file_constants(combined, entry_path);
     if !needs_callable_session_handler {
         combined.retain(|stmt| !is_callable_session_handler_decl(&stmt.kind));
     }
@@ -282,13 +319,14 @@ fn inject_if_web_on_compiler_stack(
     // declarations are heavy and a program that never mentions `session_set_save_handler` cannot
     // want them, which is a different question from what it can reach.
     inventory.record_program("web", &combined);
+    crate::error_handling_prelude::record_internal_callable_drain(inventory, "web");
     combined.extend(program);
 
     // The catch-all try wrap below reorders the top level (declarations hoisted
     // out, executables wrapped). That reordering is unsafe across namespace
     // boundaries: a `namespace X;` / `namespace X { … }` would be separated from
     // the declarations it scopes, leaving them in the wrong namespace. For
-    // namespaced programs (e.g. a framework with `App\…` classes) skip the wrap
+    // namespaced programs with application-defined classes skip the wrap
     // entirely — such programs do their own error handling — and keep B1's
     // uncaught-exception → 500 net only for flat, non-namespaced programs.
     if combined.iter().any(|s| {
@@ -328,7 +366,7 @@ fn inject_if_web_on_compiler_stack(
 /// user code can reach `session_set_save_handler()` or another dynamic callable
 /// surface; otherwise omitting them avoids compiling ten boxed-Mixed callback
 /// dispatchers into every `--web` binary.
-fn is_callable_session_handler_decl(kind: &StmtKind) -> bool {
+pub(crate) fn is_callable_session_handler_decl(kind: &StmtKind) -> bool {
     match kind {
         StmtKind::ClassDecl { name, .. } => name == "__ElephcCallableSessionHandler",
         StmtKind::FunctionDecl { name, .. } => {
@@ -499,6 +537,7 @@ mod tests {
             web,
             php_version,
             ini_overrides,
+            Path::new("index.php"),
             &mut inventory,
             // These tests exercise the declaration selection, not the preload hoist.
             None,

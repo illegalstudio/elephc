@@ -222,6 +222,8 @@ fn hash_supports_full_algorithm_set() {
     assert_eq!(compile_and_run(r#"<?php echo hash("ripemd160","hello");"#),
         "108f07b8382412612c048d07d13f814118445acd");
     assert_eq!(compile_and_run(r#"<?php echo hash("crc32b","hello");"#), "3610a686");
+    assert_eq!(compile_and_run(r#"<?php echo hash("xxh128","hello");"#),
+        "b5e9c1ad071b3e7fc779cfaa5e523818");
 }
 
 /// Verifies md5/sha256 keep byte-for-byte parity through the new crate path,
@@ -241,6 +243,8 @@ fn hash_binary_flag_returns_raw_bytes() {
     assert_eq!(compile_and_run(r#"<?php echo bin2hex(hash("sha256","abc",true));"#),
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     assert_eq!(compile_and_run(r#"<?php echo strlen(hash("sha256","abc",true));"#), "32");
+    assert_eq!(compile_and_run(r#"<?php echo bin2hex(hash("xxh128","abc",true));"#),
+        "06b05ab6733a618578af5f94892f3950");
 }
 
 /// Verifies an unknown algorithm throws a catchable `\ValueError` with PHP's message.
@@ -299,6 +303,7 @@ fn hash_algos_lists_supported_and_each_is_hashable() {
     assert_eq!(compile_and_run(r#"<?php echo in_array("sha256", hash_algos()) ? "1" : "0";"#), "1");
     assert_eq!(compile_and_run(r#"<?php echo in_array("crc32c", hash_algos()) ? "1" : "0";"#), "1");
     assert_eq!(compile_and_run(r#"<?php echo in_array("whirlpool", hash_algos()) ? "1" : "0";"#), "1");
+    assert_eq!(compile_and_run(r#"<?php echo in_array("xxh128", hash_algos()) ? "1" : "0";"#), "1");
     // tiger is a documented gap — must NOT be advertised
     assert_eq!(compile_and_run(r#"<?php echo in_array("tiger128,3", hash_algos()) ? "1" : "0";"#), "0");
     // Every advertised algorithm must hash without throwing.

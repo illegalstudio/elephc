@@ -11,10 +11,15 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{ArrayEntry, Expr, ExprKind, MagicConstant, StaticReceiver};
+use crate::parser::ast::{
+    ArrayEntry, BinOp, CallableTarget, Expr, ExprKind, MagicConstant, StaticReceiver,
+};
 use crate::span::Span;
 
-use super::calls::{parse_scoped_static_call, peek_cast};
+use super::assignment_targets::{
+    is_non_local_assignment_target, AssignmentExpressionLowerer,
+};
+use super::calls::{parse_first_class_callable_parens, parse_scoped_static_call, peek_cast};
 use super::prefix_complex::{
     parse_arrow_closure, parse_attributed_closure, parse_closure, parse_function_call_or_callable,
     parse_match_expr, parse_named_expr, parse_new_object,
@@ -81,14 +86,8 @@ pub(super) fn parse_prefix(
     }
 
     match &tokens[*pos].0 {
-        Token::Plus => parse_unary(tokens, pos, span, |inner| {
-            ExprKind::BinaryOp {
-                left: Box::new(Expr::new(ExprKind::IntLiteral(0), inner.span)),
-                op: crate::parser::ast::BinOp::Add,
-                right: inner,
-            }
-        }, 35),
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
+        Token::Plus => parse_unary(tokens, pos, span, unary_plus, 35),
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
         Token::Tilde => parse_unary(tokens, pos, span, ExprKind::BitNot, 35),
         Token::At => parse_unary(tokens, pos, span, ExprKind::ErrorSuppress, 35),
@@ -295,24 +294,16 @@ pub(super) fn parse_prefix(
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => parse_new_object(tokens, pos, span),
-        // `$this(...)` invokes the current object exactly like `($this)(...)`: through
-        // `__invoke` only. A plain `__invoke` method call would fall back to `__call`, which PHP
-        // never does for an object invocation.
-        Token::This if matches!(tokens.get(*pos + 1), Some((Token::LParen, _))) => {
-            let this = Expr::new(ExprKind::This, span);
-            *pos += 2;
-            let args = parse_args(tokens, pos, span)?;
-            let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
-            Ok(Expr::new(
-                ExprKind::ExprCall {
-                    callee: Box::new(this),
-                    args,
-                },
-                span,
-            ))
-        }
-        Token::This => parse_simple(tokens, pos, span, ExprKind::This),
+        Token::This => parse_this(tokens, pos, span),
         Token::Yield => parse_yield(tokens, pos, span),
+        Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce => {
+            Ok(crate::parser::stmt::try_parse_value_include(tokens, pos)?
+                .expect("include keyword guarantees a value-include expression"))
+        }
+        Token::Dollar => {
+            let name = crate::parser::variable_variables::parse_name_operand(tokens, pos, span)?;
+            Ok(crate::parser::variable_variables::read(name, span))
+        }
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token: {:?}", other),
@@ -460,6 +451,18 @@ fn parse_unary(
     Ok(Expr::new(ctor(Box::new(inner)), span))
 }
 
+/// Builds unary plus `+expr` as `expr * 1`, which is exactly what PHP compiles it to
+/// (`zend_compile_unary_pm` emits `ZEND_MUL expr, 1`): numeric strings convert to int or
+/// float, `null`/`bool` to int, and an operand `*` rejects is rejected the same way.
+fn unary_plus(inner: Box<Expr>) -> ExprKind {
+    let span = inner.span;
+    ExprKind::BinaryOp {
+        left: inner,
+        op: BinOp::Mul,
+        right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+    }
+}
+
 /// Parses a `clone` expression. PHP 8.5 makes `clone` a regular function, so a `(` right
 /// after the keyword starts an ordinary call on the function named `clone` (`clone($o)`,
 /// `clone($o, [...])`) or its first-class callable form (`clone(...)`), sharing the general
@@ -497,6 +500,9 @@ fn parse_prefix_inc_dec(
     *pos += 1;
     if *pos < tokens.len() {
         if let Token::Variable(name) = &tokens[*pos].0 {
+            if place_suffix_follows(tokens, *pos + 1) && !operand_is_append(tokens, *pos) {
+                return parse_complex_prefix_inc_dec(tokens, pos, span, increment);
+            }
             if !place_suffix_follows(tokens, *pos + 1) {
                 let name = name.clone();
                 *pos += 1;
@@ -509,6 +515,17 @@ fn parse_prefix_inc_dec(
                     span,
                 ));
             }
+        }
+        if matches!(tokens[*pos].0, Token::This) && !operand_is_append(tokens, *pos) {
+            return parse_complex_prefix_inc_dec(tokens, pos, span, increment);
+        }
+        let is_scoped_property = matches!(
+            tokens.get(*pos).map(|(token, _)| token),
+            Some(Token::Identifier(_)) | Some(Token::Self_) | Some(Token::Parent) | Some(Token::Static)
+        ) && tokens.get(*pos + 1).map(|(token, _)| token) == Some(&Token::DoubleColon)
+            && matches!(tokens.get(*pos + 2).map(|(token, _)| token), Some(Token::Variable(_)));
+        if is_scoped_property && !operand_is_append(tokens, *pos) {
+            return parse_complex_prefix_inc_dec(tokens, pos, span, increment);
         }
     }
     // Not a bare variable: it may still be an l-value the increment node cannot name,
@@ -554,6 +571,61 @@ fn parse_prefix_inc_dec(
     ))
 }
 
+/// True when the prefix operand is better served by the generic update desugaring than by the
+/// stabilizing read-twice path: an append dimension (`++$a[]`, `++$o->p[]`), which the
+/// write-context operand parse lowers and the stabilizer cannot, or an element target
+/// (`++$a[0]`, `++Cls::$a[0][1]`), whose write half is recognised as the dimension its read
+/// converted (a float key reports its deprecation once; a `false`/`null` parent takes the
+/// nested-update promotion paths). This mirrors the postfix operator in `pratt.rs`.
+fn operand_is_append(tokens: &[SpannedToken], pos: usize) -> bool {
+    let mut probe = pos;
+    match super::pratt::parse_prefix_increment_operand(tokens, &mut probe) {
+        Ok((_, super::pratt::PrefixIncrementTarget::Append | super::pratt::PrefixIncrementTarget::AppendProperty)) => true,
+        Ok((target, _)) => matches!(target.kind, ExprKind::ArrayAccess { .. }),
+        Err(_) => false,
+    }
+}
+
+/// Lowers value-producing prefix increment/decrement on a property or array l-value into the
+/// existing stabilized non-local assignment-expression representation.
+fn parse_complex_prefix_inc_dec(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    increment: bool,
+) -> Result<Expr, CompileError> {
+    let target = parse_expr_bp(tokens, pos, 35)?;
+    if !is_non_local_assignment_target(&target) {
+        return Err(CompileError::new(span, "Invalid increment target"));
+    }
+    let one = Expr::new(ExprKind::IntLiteral(1), span);
+    let mut lowerer = AssignmentExpressionLowerer::new(span);
+    let target = lowerer.stabilize_non_local_target(target, &one);
+    let value = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(target.clone()),
+            op: if increment {
+                crate::parser::ast::BinOp::Add
+            } else {
+                crate::parser::ast::BinOp::Sub
+            },
+            right: Box::new(one),
+        },
+        span,
+    );
+    let result = lowerer.bind_result_value(value);
+    Ok(Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(target),
+            value: Box::new(result.clone()),
+            result_target: Some(Box::new(result)),
+            prelude: lowerer.finish(),
+            conditional_value_temp: None,
+        },
+        span,
+    ))
+}
+
 /// Reports whether the token at `index` continues a variable into a larger l-value.
 ///
 /// `->`, `?->`, `::` and `[` are the four ways a place extends past its base variable. Seeing one
@@ -563,6 +635,50 @@ fn place_suffix_follows(tokens: &[SpannedToken], index: usize) -> bool {
         tokens.get(index).map(|token| &token.0),
         Some(Token::Arrow | Token::QuestionArrow | Token::DoubleColon | Token::LBracket)
     )
+}
+
+/// The operand standing for `$GLOBALS` in `array_key_exists('<name>', $GLOBALS)` (psysh's
+/// `Shell::isIncluded()` asks for `_composer_autoload_path`): `isset($GLOBALS['<name>']) ?
+/// ['<name>' => true] : []`, whose key answers the call. `pos` is just past `$GLOBALS`.
+///
+/// php also answers true for a global holding null, which this reads as absent.
+fn globals_key_exists_operand(tokens: &[SpannedToken], pos: usize, span: Span) -> Option<Expr> {
+    let token = |offset: usize| tokens.get(pos.checked_sub(offset)?).map(|(token, _)| token);
+    if !matches!(tokens.get(pos).map(|(token, _)| token), Some(Token::RParen))
+        || !matches!(token(2), Some(Token::Comma))
+        || !matches!(token(4), Some(Token::LParen))
+        || !matches!(token(5), Some(Token::Identifier(callee)) if callee.trim_start_matches('\\').eq_ignore_ascii_case("array_key_exists"))
+    {
+        return None;
+    }
+    let Some(Token::StringLiteral(key)) = token(3) else {
+        return None;
+    };
+    if !crate::globals_array::is_php_variable_name(key) {
+        return None;
+    }
+    let isset = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("isset"),
+            args: vec![Expr::new(ExprKind::Variable(crate::globals_array::alias_name(key)), span)],
+        },
+        span,
+    );
+    let present = Expr::new(
+        ExprKind::ArrayLiteralAssoc(vec![(
+            Expr::new(ExprKind::StringLiteral(key.clone()), span),
+            Expr::new(ExprKind::BoolLiteral(true), span),
+        )]),
+        span,
+    );
+    Some(Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(isset),
+            then_expr: Box::new(present),
+            else_expr: Box::new(Expr::new(ExprKind::ArrayLiteral(Vec::new()), span)),
+        },
+        span,
+    ))
 }
 
 /// Parses a variable expression starting with a `Variable` token. Consumes the variable name,
@@ -576,6 +692,25 @@ fn parse_variable(
     name: String,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
+    // `$GLOBALS` is supported only as a literal-key element access. The Pratt postfix `[` arm
+    // rewrites that shape to an internal alias before later passes see it; every whole-array use
+    // is refused loudly instead of reading an unrelated local named `GLOBALS`.
+    if name == "GLOBALS" {
+        if let Some(probe) = globals_key_exists_operand(tokens, *pos, span) {
+            return Ok(probe);
+        }
+        let next = tokens.get(*pos).map(|(token, _)| token);
+        if !matches!(next, Some(Token::LBracket)) && !crate::globals_array::is_write_token(next) {
+            // A read of the whole array: the closed world's globals, as an array.
+            return Ok(crate::globals_array::snapshot_call(span));
+        }
+        if let Some(message) = crate::globals_array::unsupported_use_message(
+            matches!(next, Some(Token::LBracket)),
+            matches!(next, Some(Token::Assign)),
+        ) {
+            return Err(CompileError::new(span, message));
+        }
+    }
     if *pos < tokens.len() {
         match &tokens[*pos].0 {
             Token::PlusPlus => {
@@ -588,6 +723,15 @@ fn parse_variable(
             }
             Token::LParen => {
                 *pos += 1;
+                if parse_first_class_callable_parens(tokens, pos)? {
+                    return Ok(Expr::new(
+                        ExprKind::FirstClassCallable(CallableTarget::Method {
+                            object: Box::new(Expr::new(ExprKind::Variable(name), span)),
+                            method: "__invoke".to_string(),
+                        }),
+                        span,
+                    ));
+                }
                 let args = parse_args(tokens, pos, span)?;
                 let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                 return Ok(Expr::new(ExprKind::ClosureCall { var: name, args }, span));
@@ -598,13 +742,44 @@ fn parse_variable(
     Ok(Expr::new(ExprKind::Variable(name), span))
 }
 
+/// Parses `$this`, including direct invocation and first-class callable creation.
+fn parse_this(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    *pos += 1;
+    if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+        return Ok(Expr::new(ExprKind::This, span));
+    }
+    *pos += 1;
+    if parse_first_class_callable_parens(tokens, pos)? {
+        return Ok(Expr::new(
+            ExprKind::FirstClassCallable(CallableTarget::Method {
+                object: Box::new(Expr::new(ExprKind::This, span)),
+                method: "__invoke".to_string(),
+            }),
+            span,
+        ));
+    }
+    let args = parse_args(tokens, pos, span)?;
+    let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+    Ok(Expr::new(
+        ExprKind::ExprCall {
+            callee: Box::new(Expr::new(ExprKind::This, span)),
+            args,
+        },
+        call_span,
+    ))
+}
+
 /// Parses a grouped expression `(...)` or a type cast `(type) expr`. If `peek_cast` detects
 /// a cast, consumes the cast syntax and returns a `Cast` node with the target type and inner
 /// expression parsed at binding power 35 (the unary-operator level). This makes a cast bind
 /// tighter than `* / % + - .` and the comparison/logical operators — so `(int)$x + 3` parses
 /// as `((int)$x) + 3`, matching PHP — while `**` (left bp 37) still binds tighter than the cast.
 /// Otherwise parses as a grouped expression: consumes `(` and `)`, then checks for an immediate
-/// call (`inner(args)`) to support expression-call syntax.
+/// invocation (`inner(args)`) or first-class callable capture (`inner(...)`).
 fn parse_group_or_cast(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -631,6 +806,17 @@ fn parse_group_or_cast(
     if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
         let call_span = tokens[*pos].1.span;
         *pos += 1;
+        if parse_first_class_callable_parens(tokens, pos)? {
+            let call_span =
+                crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
+            return Ok(Expr::new(
+                ExprKind::FirstClassCallable(CallableTarget::Method {
+                    object: Box::new(inner),
+                    method: "__invoke".to_string(),
+                }),
+                call_span,
+            ));
+        }
         let args = parse_args(tokens, pos, call_span)?;
         let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
         return Ok(Expr::new(
@@ -717,16 +903,21 @@ fn parse_array_literal_with_terminator(
             first = false;
             continue;
         }
-        reject_reference_array_element(tokens, pos, closing)?;
-        let expr = parse_expr(tokens, pos)?;
+        let expr = parse_array_literal_value(tokens, pos)?;
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
+            if matches!(expr.kind, ExprKind::ArrayReference(_)) {
+                skip_to_array_literal_end(tokens, pos, closing);
+                return Err(CompileError::new(
+                    expr.span,
+                    "An array key cannot be passed by reference",
+                ));
+            }
             if !is_assoc {
                 promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems, &mut mixed_elems);
             }
             is_assoc = true;
             *pos += 1;
-            reject_reference_array_element(tokens, pos, closing)?;
-            let value = parse_expr(tokens, pos)?;
+            let value = parse_array_literal_value(tokens, pos)?;
             auto_key_overflowed |= explicit_integer_array_key(&expr) == Some(i64::MAX);
             update_next_auto_key_from_explicit_key(
                 &expr,
@@ -778,33 +969,45 @@ fn parse_array_literal_with_terminator(
     }
 }
 
-/// Rejects a by-reference array-literal element (`[&$x]`, `[$k => &$x]`, `array(&$x)`) with a
-/// diagnostic that names the construct instead of a bare "Unexpected token: Ampersand".
+/// Parses one array-literal value, preserving a supported leading reference marker.
 ///
-/// PHP stores such an element as a reference cell that aliases the source variable's storage,
-/// so `$r = [&$a]; $r[0] = 9;` writes through to `$a`. elephc arrays hold plain values and its
-/// only reference form points *into* array storage (`$b =& $a[0]`), never out of it, so the
-/// construct cannot be honoured without either silently copying or leaving the array holding a
-/// pointer to a stack slot it can outlive. Returns `Ok(())` when the element is not a reference.
-///
-/// On rejection `pos` is advanced past the rest of the literal so statement recovery resumes
-/// after it and does not report cascading errors for the remaining elements.
-fn reject_reference_array_element(
+/// `[&$v]` and `[&$a[$k]]` store a reference element: a marker that owns a share of the
+/// variable's (or the element's) reference cell, so the array may outlive the declaring frame.
+/// `[&$o->p]` shares the property's cell. A deeper place (`&$a[$i][$j]`) is not supported yet and
+/// is refused here rather than silently stored by value.
+fn parse_array_literal_value(
     tokens: &[SpannedToken],
     pos: &mut usize,
-    closing: &Token,
-) -> Result<(), CompileError> {
+) -> Result<Expr, CompileError> {
     let Some((Token::Ampersand, metadata)) = tokens.get(*pos) else {
-        return Ok(());
+        return parse_expr(tokens, pos);
     };
     let span = metadata.span;
-    skip_to_array_literal_end(tokens, pos, closing);
-    Err(CompileError::new(
-        span,
-        "Reference elements in array literals (`[&$x]`) are not supported: an array element \
-         cannot alias a variable's storage. Assign the value instead, or use `$b =& $a[0]` \
-         to alias an existing array element",
-    ))
+    *pos += 1;
+    let value = parse_expr(tokens, pos)?;
+    // `$this` can never be rebound, so a reference to it is the value (psysh's AutoCompleter
+    // registers `[&$this, 'callback']`).
+    if matches!(value.kind, ExprKind::This) {
+        return Ok(value);
+    }
+    let supported = match &value.kind {
+        ExprKind::Variable(_) => true,
+        ExprKind::ArrayAccess { array, .. } => matches!(
+            &array.kind,
+            ExprKind::Variable(name) if !crate::superglobals::is_superglobal(name)
+        ),
+        ExprKind::PropertyAccess { object, .. } => {
+            matches!(&object.kind, ExprKind::This | ExprKind::Variable(_))
+        }
+        _ => false,
+    };
+    if !supported {
+        return Err(CompileError::new(
+            span,
+            "Reference elements in array literals currently require a variable, an element of a local array or a property",
+        ));
+    }
+    Ok(Expr::new(ExprKind::ArrayReference(Box::new(value)), span))
 }
 
 /// Advances `pos` past the remainder of the current array literal, including its `closing`

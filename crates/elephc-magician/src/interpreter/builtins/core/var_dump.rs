@@ -84,7 +84,20 @@ fn eval_var_dump_append_value(
         }
         EVAL_TAG_STRING => eval_var_dump_append_string(value, values, depth, is_reference, output),
         EVAL_TAG_FLOAT => {
-            eval_var_dump_append_scalar(b"float", value, values, depth, is_reference, output)
+            // php renders a dumped float with `serialize_precision = -1` (the shortest
+            // round-trip form, `1.8446744073709552E+19`), not the `precision = 14` string
+            // conversion (`1.844674407371E+19`). It is `var_export()`'s form minus the `.0`
+            // that marks an integral value outside exponent notation.
+            let bits = values.raw_value_word(value)?;
+            let mut rendered = super::var_export::eval_var_export_float(f64::from_bits(bits));
+            if rendered.ends_with(".0") && !rendered.contains('E') {
+                rendered.truncate(rendered.len() - 2);
+            }
+            eval_var_dump_append_prefix(depth, is_reference, output);
+            output.extend_from_slice(b"float(");
+            output.extend_from_slice(rendered.as_bytes());
+            output.extend_from_slice(b")\n");
+            Ok(())
         }
         EVAL_TAG_BOOL => eval_var_dump_append_bool(value, values, depth, is_reference, output),
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => eval_var_dump_append_array(

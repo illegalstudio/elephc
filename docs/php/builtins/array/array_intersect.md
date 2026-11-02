@@ -2,13 +2,13 @@
 title: "array_intersect()"
 description: "Computes the intersection of arrays."
 sidebar:
-  order: 16
+  order: 20
 ---
 
 ## array_intersect()
 
 ```php
-function array_intersect(array $array, ...$arrays): array
+function array_intersect(array $array, ...$arrays): mixed
 ```
 
 Computes the intersection of arrays.
@@ -17,7 +17,7 @@ Computes the intersection of arrays.
 - `$array` (`array`)
 - `...$arrays` - variadic: collects excess arguments into `$arrays`.
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 
