@@ -76,6 +76,9 @@ pub(super) fn emit_reference_property_load(
 ) -> Result<()> {
     let pointer_reg = reference_pointer_reg(ctx, base_reg);
     abi::emit_load_from_address(ctx.emitter, pointer_reg, base_reg, slot.offset);
+    if super::super::reference_payloads::load_scalar(ctx, pointer_reg, &slot.php_type) {
+        return Ok(());
+    }
     match slot.php_type.codegen_repr() {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);

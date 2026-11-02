@@ -128,6 +128,10 @@ pub(super) fn load_ref_cell_local_to_result_as(
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
+    if super::reference_payloads::load_scalar(ctx, pointer_reg, &payload_ty) {
+        coerce_borrowed_ref_cell_local(ctx, &payload_ty, &result_ty)?;
+        return Ok(result_ty);
+    }
     match &payload_ty {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);

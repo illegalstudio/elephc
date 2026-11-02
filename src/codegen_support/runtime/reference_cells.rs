@@ -21,6 +21,7 @@ mod property_unset;
 mod mixed_payload;
 mod mixed_symbol;
 mod property_payload;
+mod canonical;
 pub(crate) use property_unset::emit_owned_property_unset;
 pub(crate) use mixed_payload::follow_mixed_reference_slot;
 pub(crate) use mixed_symbol::publish_mixed_symbol;
@@ -62,6 +63,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     mixed_payload::emit_retain_mixed(emitter);
     property_unset::emit_property_unset(emitter);
     emit_owner_lookup(emitter);
+    canonical::emit(emitter);
     emit_unmanaged_borrow_lookup(emitter);
     emit_unmanaged_borrow_escape_error(emitter);
     emit_borrowed_reference_return_error(emitter);

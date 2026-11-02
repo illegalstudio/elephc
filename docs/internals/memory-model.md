@@ -576,6 +576,14 @@ Projection uses that capability before creating a wrapper; a constrained union
 that also uses boxed storage retains its existing representation until its
 property type sources can accompany the shared reference.
 
+Scalar reference readers authenticate a canonical cell through the allocator's
+exact live-base index, heap kind `8`, descriptor `7`, and a live kind-`5` wrapper
+with nested tag `7` and reference marker `1`. Raw frames, interior addresses,
+uninitialized cells and raw `Iterable` payloads retain their existing ABI.
+The shape probe returns a borrowed wrapper and runs again on every read rather
+than caching a result across PHP callbacks. Typed scalar and union promotion
+still requires the matching assignment validators and property-source lifecycle.
+
 Resolved reference-returning callees produce two distinct things at the `return`,
 and keeping them apart is what makes the boundary correct. `AcquireRefCell`
 materializes the returned cell address ONCE and publishes it as a typed `Pointer`

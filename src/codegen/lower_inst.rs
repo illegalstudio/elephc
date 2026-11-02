@@ -113,6 +113,7 @@ mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;
 mod reference_arguments;
+mod reference_payloads;
 mod runtime_wrappers;
 mod static_method_calls;
 mod throwable_methods;
