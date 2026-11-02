@@ -56,7 +56,7 @@ class ContractPipelineTests(unittest.TestCase):
                     # random and fileinfo surfaces, the twenty-four tidy_* functions
                     # of the tidy prelude, the full mysqli procedural surface, and the
                     # remaining injected preludes.
-                    "prelude": 445,
+                    "prelude": 447,
                     # Calls rewritten from their enclosing lexical function frame.
                     "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.

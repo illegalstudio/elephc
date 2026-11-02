@@ -616,6 +616,22 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
     ),
 }
 
+# PHP-visible functions whose injected prelude is not keyed by the contract ``Module`` or
+# ``Area``. Both locale functions are `Area::String` (like the hash prelude) but live in
+# their own synthetic-AST prelude, so a per-name override keeps the page link truthful.
+PRELUDE_SOURCE_BY_NAME: dict[str, tuple[str | tuple[str, ...], str, str]] = {
+    "setlocale": (
+        "locale_prelude.rs",
+        "locale",
+        "crates/elephc-builtin-contract/src/catalog_locale.rs",
+    ),
+    "nl_langinfo": (
+        "locale_prelude.rs",
+        "locale",
+        "crates/elephc-builtin-contract/src/catalog_locale.rs",
+    ),
+}
+
 
 def find_prelude_declaration(source: str, canonical: str):
     """Locate where an injected prelude declares ``canonical``, in either prelude form.
@@ -673,7 +689,10 @@ def resolve_non_registry_lowering(
     kind = aot_support.get("kind")
     if kind == "prelude":
         try:
-            source, label, sig_file = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
+            source_entry = PRELUDE_SOURCE_BY_NAME.get(canonical)
+            if source_entry is None:
+                source_entry = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
+            source, label, sig_file = source_entry
         except KeyError:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "

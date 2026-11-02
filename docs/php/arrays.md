@@ -638,8 +638,10 @@ directions, matching PHP 8's stable sorts.
 
 Two boundaries are worth stating:
 
-- `SORT_LOCALE_STRING` observes the process locale, and elephc has no PHP-visible
-  `setlocale()`, so the locale is always `C` — where collation is byte order. The one place it
+- `SORT_LOCALE_STRING` collates through libc `strcoll`, so it follows the locale
+  [`setlocale()`](./strings.md) selects — `ksort($a, SORT_LOCALE_STRING)` after
+  `setlocale(LC_COLLATE, "de_DE.UTF-8")` uses German ordering. A program that never calls
+  `setlocale()` stays in the `C` locale, where collation is byte order; the one place it then
   differs from `SORT_STRING` is a key with an embedded NUL, which a C string ends at.
 - `SORT_NATURAL | SORT_FLAG_CASE` folds ASCII `a`–`z` and nothing else. php-src folds each
   byte through the process's `LC_CTYPE` table, so its answer above `0x7F` follows the host C

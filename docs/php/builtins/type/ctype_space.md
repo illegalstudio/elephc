@@ -6,13 +6,13 @@ description: "Checks if all characters in the string are whitespace characters."
 ## ctype_space()
 
 ```php
-function ctype_space(string $text): bool
+function ctype_space(mixed $text): bool
 ```
 
 Checks if all characters in the string are whitespace characters.
 
 **Parameters**:
-- `$text` (`string`)
+- `$text` (`mixed`)
 
 **Returns**: `bool`
 

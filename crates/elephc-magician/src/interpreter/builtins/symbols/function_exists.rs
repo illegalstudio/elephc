@@ -153,6 +153,7 @@ pub(in crate::interpreter) fn eval_function_probe_exists(
                 && !eval_builtin_hidden_by_php_version(name)
                 && eval_xml_builtin_linked(context, name)
                 && eval_fileinfo_builtin_linked(context, name)
+                && eval_locale_builtin_linked(context, name)
                 && eval_tidy_builtin_linked(context, name))
             || eval_date_procedural_alias_exists(name)
             || eval_opcache_configuration_function_exists(name)

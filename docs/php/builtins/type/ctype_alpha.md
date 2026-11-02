@@ -6,13 +6,13 @@ description: "Checks if all characters in the string are alphabetic."
 ## ctype_alpha()
 
 ```php
-function ctype_alpha(string $text): bool
+function ctype_alpha(mixed $text): bool
 ```
 
 Checks if all characters in the string are alphabetic.
 
 **Parameters**:
-- `$text` (`string`)
+- `$text` (`mixed`)
 
 **Returns**: `bool`
 
