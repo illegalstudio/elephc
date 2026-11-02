@@ -215,6 +215,7 @@ fn eval_call_arg_value_with_selection(
                 class_name,
                 property.clone(),
                 access_scope,
+                selection.is_some(),
                 context,
                 values,
             )
@@ -230,6 +231,7 @@ fn eval_call_arg_value_with_selection(
                 class_name,
                 property.clone(),
                 access_scope,
+                selection.is_some(),
                 context,
                 values,
             )
@@ -246,6 +248,7 @@ fn eval_call_arg_value_with_selection(
                 class_name,
                 property,
                 access_scope,
+                selection.is_some(),
                 context,
                 values,
             )
@@ -367,10 +370,24 @@ fn eval_static_property_call_arg_value(
     class_name: String,
     property: String,
     access_scope: ElephcEvalExecutionScope,
+    by_reference: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
     let value = eval_static_property_get_result(&class_name, &property, context, values)?;
+    if by_reference && values.supports_persistent_references() {
+        let reference = eval_native_static_property_reference_after_read(&class_name, &property, context, values);
+        match reference {
+            Ok(Some(reference)) => {
+                let result = Ok((reference, Some(EvalReferenceTarget::Cell { cell: reference.borrowed() })));
+                return argument_owners::finish_argument_reference_owners(result, vec![value], context, values);
+            }
+            Err(status) => {
+                return argument_owners::finish_argument_reference_owners(Err(status), vec![value], context, values);
+            }
+            Ok(None) => {}
+        }
+    }
     Ok((
         value,
         Some(EvalReferenceTarget::StaticProperty {

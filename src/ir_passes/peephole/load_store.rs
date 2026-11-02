@@ -98,6 +98,11 @@ pub(super) fn collect(function: &Function, rewrites: &mut Rewrites) {
 fn escaping_slots(function: &Function) -> HashSet<LocalSlotId> {
     let mut escaping = HashSet::new();
     for inst in &function.instructions {
+        if matches!(inst.op, Op::StoreStaticProperty | Op::StoreReflectionStaticProperty) {
+            if let Some(slot) = inst.operands.get(1).and_then(|value| load_local_slot(function, *value)) {
+                escaping.insert(slot);
+            }
+        }
         if matches!(
             inst.op,
             Op::PromoteLocalRefCell

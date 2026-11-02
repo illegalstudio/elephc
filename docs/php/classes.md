@@ -1058,6 +1058,12 @@ instance property. The alias observes subsequent native and eval writes and can
 outlive the object. Cloning preserves shared aliases; unsetting the property
 detaches its storage while surviving aliases keep their value.
 
+The same eval reference-parameter binding shares ordinary `mixed` static
+properties with native reads, writes and aliases. Inherited static properties
+share their declaring class's storage; a redeclaration in a child has separate
+storage. Static storage releases its owner during request teardown. PHP rejects
+unsetting a static property, so that operation leaves the shared value intact.
+
 ### `unset()` on a dynamic property
 
 A property that lives in the object's **dynamic-property hash** — every `stdClass`

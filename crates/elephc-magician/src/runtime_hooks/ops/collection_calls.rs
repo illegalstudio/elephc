@@ -309,6 +309,30 @@ macro_rules! impl_collection_call_ops {
         }
     }
 
+    /// Retains an eligible native static reference through the scoped user helper.
+    fn static_property_reference(
+        &mut self,
+        class_name: &str,
+        property: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let ptr = unsafe {
+            __elephc_eval_value_static_property_reference(
+                class_name.as_ptr(),
+                class_name.len() as u64,
+                property.as_ptr(),
+                property.len() as u64,
+                scope_ptr,
+                scope_len,
+            )
+        };
+        if ptr.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(RuntimeCellHandle::from_raw(ptr)))
+        }
+    }
+
     /// Checks an AOT static property initialization marker through the generated helper.
     fn static_property_is_initialized(
         &mut self,

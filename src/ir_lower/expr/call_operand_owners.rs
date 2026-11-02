@@ -1016,6 +1016,17 @@ pub(crate) fn pin_in_flight_owners(
     records
 }
 
+/// Carries a pin's storage identity to a consuming store using the ordinary by-reference load protocol.
+pub(crate) fn pinned_transfer_owner(
+    ctx: &mut LoweringContext<'_, '_>, pins: &[PinnedInFlightOwner], span: Span,
+) -> Option<crate::ir::ValueId> {
+    let pin = pins.first()?;
+    debug_assert_eq!(pins.len(), 1);
+    let owner = ctx.load_local(&pin.temp_name, Some(span));
+    ctx.builder.set_value_ownership(owner.value, Ownership::Borrowed);
+    Some(owner.value)
+}
+
 /// Retires in-flight pins in reverse publication order once the throwing window has closed.
 ///
 /// `UnsetLocal` zeroes the parking slot without releasing it: the reference never left the SSA

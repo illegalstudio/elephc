@@ -547,6 +547,11 @@ pub trait RuntimeValueOps {
         property: &str,
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus>;
 
+    /// Retains an eligible native static property's persistent PHP reference when supported.
+    fn static_property_reference(
+        &mut self, _class_name: &str, _property: &str,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> { Ok(None) }
+
     /// Checks whether a generated/AOT static property is initialized.
     fn static_property_is_initialized(
         &mut self,

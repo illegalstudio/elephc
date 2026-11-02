@@ -13,6 +13,8 @@
 //! - Null helper returns mean "no bridge match"; boxed PHP null is returned as
 //!   a real Mixed cell pointer.
 
+mod reference_getter;
+
 use std::collections::BTreeMap;
 
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
@@ -51,6 +53,7 @@ pub(super) fn emit_eval_static_property_helpers(
     emit_static_property_get_helper(module, emitter, data, &slots);
     emit_static_property_is_initialized_helper(module, emitter, data, &slots);
     emit_static_property_set_helper(module, emitter, data, &slots);
+    reference_getter::emit(module, emitter, data, &slots);
 }
 
 /// Returns whether this binary links the eval bridge, and therefore needs these helpers.
@@ -570,7 +573,7 @@ fn emit_x86_64_static_property_scope_check(
 /// Returns ARM64 stack offsets for the class-scope pointer and length.
 fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "is_initialized" => (32, 40),
+        "get" | "reference" | "is_initialized" => (32, 40),
         "set" => (40, 48),
         _ => unreachable!("eval static property helpers only use get/set/is_initialized modes"),
     }
@@ -579,7 +582,7 @@ fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
 /// Returns x86_64 frame offsets for the class-scope pointer and length.
 fn x86_64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "is_initialized" => (40, 48),
+        "get" | "reference" | "is_initialized" => (40, 48),
         "set" => (48, 56),
         _ => unreachable!("eval static property helpers only use get/set/is_initialized modes"),
     }
@@ -789,6 +792,7 @@ fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStati
                 slot_body_label_raw(slot, "get")
             );
             abi::emit_load_symbol_to_reg(emitter, "x0", &slot.symbol, 0);
+            abi::emit_call_label(emitter, "__rt_mixed_deref");
             emitter.instruction(&format!("cbz x0, {}", null_label));            // null static storage reads as PHP null
             if slot.ty.is_php_array() {
                 emitter.instruction("bl __rt_mixed_clone");                     // detach the array zval so eval writes preserve static COW aliases
@@ -845,6 +849,7 @@ fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStatic
                 slot_body_label_raw(slot, "get")
             );
             abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
+            abi::emit_call_label(emitter, "__rt_mixed_deref");
             emitter.instruction("test rax, rax");                               // check whether static storage holds a Mixed cell
             emitter.instruction(&format!("jz {}", null_label));                 // null static storage reads as PHP null
             if slot.ty.is_php_array() {
@@ -981,6 +986,13 @@ fn emit_owned_static_string_store(module: &Module, emitter: &mut Emitter, slot: 
 /// Publishes a retained heap owner before releasing the displaced value and its destructors.
 fn emit_publish_owned_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
     let result = abi::int_result_reg(emitter);
+    if slot.ty.codegen_repr() == PhpType::Mixed {
+        let prefix = slot_body_label_raw(slot, "set_reference");
+        crate::codegen_support::runtime::reference_cells::publish_mixed_symbol(
+            emitter, &slot.symbol, true, None, &prefix,
+        );
+        return;
+    }
     abi::emit_push_reg(emitter, result);
     abi::emit_load_symbol_to_reg(emitter, result, &slot.symbol, 0);
     abi::emit_push_reg(emitter, result);

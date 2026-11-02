@@ -199,3 +199,105 @@ exerciseNativeReferenceSerialization($argc > 0);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
     assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
 }
+
+/// Native static symbols and escaped eval references publish into one persistent Mixed wrapper.
+#[test]
+fn test_native_mixed_static_property_escaping_eval_aliases_bundle() {
+    let source = r#"<?php
+class PersistentNativeMixedStatic {
+    public static mixed $value = ['stage' => 'old'];
+    protected static mixed $secret = 'hidden';
+    public static function readSecret(): mixed { return self::$secret; }
+    public static function writeSecret(mixed $value): void { self::$secret = $value; }
+}
+class PersistentNativeMixedStaticShadow extends PersistentNativeMixedStatic {
+    public static mixed $value = ['stage' => 'shadow'];
+}
+class PersistentNativeStaticRetired {
+    public function __destruct() { echo 'static-retired|'; }
+}
+function exerciseNativeMixedStatics(bool $run): void {
+    $native =& PersistentNativeMixedStatic::$value;
+    $copy = PersistentNativeMixedStatic::$value;
+    $code = $run ? '
+function captureNativeStaticMixed(&$value): callable {
+    return function (bool $write, mixed $next = null) use (&$value): mixed {
+        if ($write) { $value = $next; }
+        return $value;
+    };
+}
+$escapedStatic = captureNativeStaticMixed(PersistentNativeMixedStatic::$value);
+class EvalNativeMixedStaticChild extends PersistentNativeMixedStatic {
+    public static function bindSecret(): callable { return captureNativeStaticMixed(parent::$secret); }
+}
+$escapedSecret = EvalNativeMixedStaticChild::bindSecret();
+' : '';
+    eval($code);
+    PersistentNativeMixedStatic::$value = ['stage' => 'native'];
+    PersistentNativeMixedStatic::writeSecret('native-secret');
+    $code = $run ? 'echo json_encode($escapedStatic(false)), ":", $escapedSecret(false), "|";
+$escapedStatic(true, ["stage" => "eval"]); $escapedSecret(true, "eval-secret");' : '';
+    eval($code);
+    echo json_encode($native), ':', PersistentNativeMixedStatic::readSecret(), '|';
+    $native['nested'][] = 'alias';
+    PersistentNativeMixedStatic::$value['property'][] = 'native';
+    $code = $run ? 'echo json_encode($escapedStatic(false)), "|";
+try { unset(PersistentNativeMixedStatic::$value); } catch (Error $error) { echo "static-unset|"; }
+' : '';
+    eval($code);
+    echo json_encode($copy), ':', json_encode(PersistentNativeMixedStaticShadow::$value), '|';
+    $code = $run ? 'unset($escapedStatic, $escapedSecret);' : '';
+    eval($code);
+    unset($native, $copy, $code);
+    PersistentNativeMixedStatic::$value = new PersistentNativeStaticRetired();
+}
+exerciseNativeMixedStatics($argc > 0);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "{\"stage\":\"native\"}:native-secret|{\"stage\":\"eval\"}:eval-secret|{\"stage\":\"eval\",\"nested\":[\"alias\"],\"property\":[\"native\"]}|static-unset|{\"stage\":\"old\"}:{\"stage\":\"shadow\"}|static-retired|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}
+
+/// Committed static stores relinquish operand pins before an old destructor retires the replacement.
+#[test]
+fn test_native_mixed_static_reference_reentrant_throwing_store_bundle() {
+    let source = r#"<?php
+class NativeStaticTransferTarget { public static mixed $value; }
+class NativeStaticTransferNew {
+    public function __destruct() { echo 'new-drop|'; }
+}
+class NativeStaticTransferOld {
+    public function __destruct() {
+        echo 'old-enter|';
+        NativeStaticTransferTarget::$value = 'third';
+        echo 'old-after|';
+        throw new Error('retired');
+    }
+}
+function freshNativeStaticTransfer(): mixed { return new NativeStaticTransferNew(); }
+function exerciseNativeStaticTransfer(bool $run): void {
+    $code = $run ? '
+function captureNativeStaticTransfer(&$value): callable {
+    return function () use (&$value): mixed { return $value; };
+}
+$escaped = captureNativeStaticTransfer(NativeStaticTransferTarget::$value);
+' : '';
+    NativeStaticTransferTarget::$value = 'initial';
+    eval($code);
+    NativeStaticTransferTarget::$value = new NativeStaticTransferOld();
+    try { NativeStaticTransferTarget::$value = freshNativeStaticTransfer(); }
+    catch (Error $error) { echo 'catch|'; }
+    $code = $run ? 'echo $escaped(), "|"; unset($escaped);' : '';
+    eval($code);
+    unset($code);
+}
+exerciseNativeStaticTransfer($argc > 0);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "old-enter|new-drop|old-after|catch|third|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}

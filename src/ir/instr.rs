@@ -885,6 +885,8 @@ pub enum Op {
     /// The pointer is borrowed from process-lifetime symbol storage and lets a synthetic local
     /// reference publish container replacements back to the static property.
     LoadStaticPropertyRefCell,
+    /// Moves a value into static storage. An optional second borrowed LoadLocal operand names
+    /// its unwind parking slot, cleared once a same-representation store commits ownership.
     StoreStaticProperty,
     StaticPropInitialized,
     LoadReflectionStaticProperty,
@@ -1398,7 +1400,7 @@ impl Op {
             LoadStaticPropertyRefCell => E::READS_GLOBAL | E::MAY_THROW | E::MAY_FATAL,
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
             // Declared slots can reject a value with a catchable TypeError before the write.
-            StoreStaticProperty | StoreReflectionStaticProperty => E::WRITES_GLOBAL | E::MAY_THROW,
+            StoreStaticProperty | StoreReflectionStaticProperty => E::WRITES_GLOBAL | E::WRITES_LOCAL | E::MAY_THROW,
             StoreGlobal
             | StoreStaticLocal
             | InitStaticLocal

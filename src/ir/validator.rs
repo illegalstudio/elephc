@@ -887,8 +887,21 @@ fn validate_opcode_rules(
             }
             Ok(())
         }
-        StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty
-        | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr | AdoptRefCellPtr
+        StoreStaticProperty | StoreReflectionStaticProperty => {
+            if inst.operands.len() == 2 {
+                let owner = function.value(inst.operands[1]).ok_or(ValidationError::UnknownValue(inst.operands[1]))?;
+                let ValueDef::Instruction { inst: load, .. } = owner.def else {
+                    return Err(ValidationError::OwnershipTypeMismatch(inst.operands[1]));
+                };
+                if function.instruction(load).is_none_or(|load|
+                    load.op != Op::LoadLocal || !matches!(load.immediate, Some(Immediate::LocalSlot(_))))
+                    || owner.ownership != Ownership::Borrowed
+                { return Err(ValidationError::OwnershipTypeMismatch(inst.operands[1])); }
+                Ok(())
+            } else { check_count(inst_id, inst, 1, "1 or 2") }
+        }
+        StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal
+        | ExternGlobalStore | StoreRefCell | BindRefCellPtr | AdoptRefCellPtr
         | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue | PrintValue | WriteStdout
         | WriteStrStdout | VarDump | PrintR | ThrowException | GeneratorReturn
         | ThrowNamedParameterOverwrite | PtrCheckNonnull => {

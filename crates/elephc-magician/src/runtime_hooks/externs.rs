@@ -203,6 +203,15 @@ unsafe extern "C" {
         scope_ptr: *const u8,
         scope_len: u64,
     ) -> *mut RuntimeCell;
+    /// Retains an eligible native static property reference under the supplied access scope.
+    pub(super) fn __elephc_eval_value_static_property_reference(
+        class_ptr: *const u8,
+        class_len: u64,
+        name_ptr: *const u8,
+        name_len: u64,
+        scope_ptr: *const u8,
+        scope_len: u64,
+    ) -> *mut RuntimeCell;
     /// Tests initialization of a scoped static property.
     pub(super) fn __elephc_eval_value_static_property_is_initialized(
         class_ptr: *const u8,

@@ -367,11 +367,15 @@ pub(super) fn store_static_property_by_class_name_with_op(
         return;
     }
     let data = ctx.intern_string(&format!("{}::{}", class_name, property));
+    let pins = super::pin_in_flight_owners(ctx, &[value], span);
+    let mut operands = vec![value];
+    if let Some(owner) = super::pinned_transfer_owner(ctx, &pins, span) { operands.push(owner); }
     ctx.emit_void(
         op,
-        vec![value],
+        operands,
         Some(Immediate::Data(data)),
         op.default_effects(),
         Some(span),
     );
+    super::unpin_in_flight_owners(ctx, pins, span);
 }

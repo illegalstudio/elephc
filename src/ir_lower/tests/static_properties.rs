@@ -243,3 +243,31 @@ echo StaticSlots::$ids[1], StaticSlots::$at->x, ptr_is_null(StaticSlots::$raw) ?
         }
     }
 }
+
+/// Optimizers preserve the parking-slot identity used by committed boxed static stores.
+#[test]
+fn static_mixed_store_transfers_its_unwind_pin_on_every_target() {
+    let source = "<?php class StaticPinTransfer { public static mixed $value; } \
+        function freshStaticPinValue(): mixed { return new stdClass(); } \
+        function commitStaticPinValue(): void { StaticPinTransfer::$value = freshStaticPinValue(); } \
+        commitStaticPinValue();";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen_support::platform::Target::parse(name).unwrap();
+        let mut module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+        );
+        crate::ir_passes::optimize_module(&mut module);
+        let function = module.functions.iter().find(|function| function.name == "commitStaticPinValue").unwrap();
+        let store = function.instructions.iter().find(|inst| inst.op == crate::ir::Op::StoreStaticProperty).unwrap();
+        assert_eq!(store.operands.len(), 2, "{name}: committing a moved value must hand off its pin");
+        let owner = function.value(store.operands[1]).unwrap();
+        assert_eq!(owner.ownership, crate::ir::Ownership::Borrowed, "{name}");
+        let crate::ir::ValueDef::Instruction { inst, .. } = owner.def else { panic!("{name}: parking-slot load"); };
+        let load = function.instruction(inst).unwrap();
+        assert_eq!(load.op, crate::ir::Op::LoadLocal, "{name}: never forward the pin's value over its address identity");
+        let Some(crate::ir::Immediate::LocalSlot(slot)) = load.immediate else { panic!("{name}: parking slot"); };
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::PushCallOperandOwner
+            && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))), "{name}: pin is published");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
