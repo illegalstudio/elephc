@@ -473,6 +473,15 @@ pub(super) fn park_lowered_unset_operand(
     span: Span,
     owners: &mut Vec<crate::ir::LocalSlotId>,
 ) -> Expr {
+    // A literal string has static storage and cannot be replaced by later PHP code.
+    // Preserve its identity so quiet property reads only emit matching slot arms.
+    if let Some(instruction) = ctx.builder.value_defining_instruction(value.value) {
+        if instruction.op == Op::ConstStr {
+            if let Some(Immediate::Data(data)) = instruction.immediate {
+                return Expr::new(ExprKind::StringLiteral(ctx.data.strings[data.as_raw() as usize].clone()), span);
+            }
+        }
+    }
     let ty = ctx.builder.value_php_type(value.value);
     let name = ctx.declare_hidden_temp(ty.clone());
     // Local reads can acquire conversion storage only after frame types settle.

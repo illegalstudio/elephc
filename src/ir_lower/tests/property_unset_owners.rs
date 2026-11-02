@@ -10,6 +10,24 @@
 
 use crate::ir::{Immediate, Op, Ownership};
 
+/// Literal property removals on eval-shaped receivers use the checked runtime slot dispatcher.
+#[test]
+fn mixed_literal_property_unset_dispatches_on_all_targets() {
+    let source = r#"<?php
+class MixedUnsetOwner { public mixed $value = 'before'; }
+function clearMixedUnset(mixed $object): void { unset($object->value); }
+clearMixedUnset(new MixedUnsetOwner());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "clearMixedUnset").unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::DynamicPropUnset),
+            "{target}: a literal name must reach the Mixed property dispatcher");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// A parked expression receiver stays owned by its slot while initialization is probed.
 #[test]
 fn typed_offset_unset_borrows_parked_guard_receivers_on_all_targets() {

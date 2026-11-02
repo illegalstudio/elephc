@@ -44,6 +44,7 @@ pub(crate) fn lower_object_is_enum(
     let skip_label = ctx.next_label("obj_is_enum_not_object");
     let done_label = ctx.next_label("obj_is_enum_done");
     emit_branch_if_result_zero(ctx, &skip_label);
+    emit_object_argument(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_obj_enum_kind");
     // The kind is 0 for a plain class and 1/2/3 for a pure / int-backed /
     // string-backed enum, so PHP's boolean is "kind is non-zero".
@@ -66,8 +67,16 @@ pub(crate) fn lower_object_prop_count(
     ctx.emitter.blank();
     ctx.emitter.comment("__elephc_object_prop_count()");
     emit_object_pointer_from_operand(ctx, expect_operand(inst, 0)?)?;
+    emit_object_argument(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_obj_prop_count");
     store_if_result(ctx, inst)
+}
+
+/// Moves a materialized object result into the runtime helper's first argument register.
+fn emit_object_argument(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the object through the helper's SysV argument register
+    }
 }
 
 /// Lowers `__elephc_object_prop_name(value, index)` to `__rt_obj_prop_name`.

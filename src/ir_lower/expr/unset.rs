@@ -348,6 +348,11 @@ pub(super) fn unset_property_access_has_direct_lowering(
     member: &Expr,
 ) -> bool {
     if needs_native_xml_property_dispatch(ctx, object, property) { return true; }
+    if checked_object_expr_class(ctx, object, member).is_none()
+        && matches!(unset_operand_type(ctx, object).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    {
+        return true;
+    }
     matches!(
         property_unset_action(ctx, object, property, member),
         Some(
@@ -370,6 +375,15 @@ pub(super) fn lower_unset_property_access(
     if needs_native_xml_property_dispatch(ctx, object, property) {
         let object = lower_member_receiver(ctx, object, expr);
         lower_boxed_xml_property_unset(ctx, object, property, expr);
+        return;
+    }
+    // An eval barrier can widen a named receiver to Mixed. The runtime-name ladder
+    // still resolves its physical slot and access rights on the current object.
+    if checked_object_expr_class(ctx, object, expr).is_none()
+        && matches!(unset_operand_type(ctx, object).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    {
+        let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+        lower_unset_dynamic_property_access(ctx, object, &name, expr);
         return;
     }
     let action = property_unset_action(ctx, object, property, expr);
