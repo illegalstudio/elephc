@@ -11,6 +11,27 @@
 
 use super::*;
 
+/// Dynamic and constructorless stdClass allocation reserve the hash tail used by property writes.
+#[test]
+fn test_dynamic_stdclass_factories_preserve_property_storage_and_heap_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function dynamicStdClassFactory(string $class): mixed { return new $class(); }
+function reflectedStdClassFactory(string $class): mixed {
+    return (new ReflectionClass($class))->newInstanceWithoutConstructor();
+}
+for ($index = 0; $index < 4; $index++) {
+    $first = dynamicStdClassFactory('stdClass');
+    $second = reflectedStdClassFactory('stdClass');
+    $first->value = 'first'; $second->value = 'second';
+    echo $first->value, ':', $second->value, '|';
+    unset($first, $second);
+}
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "first:second|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies `ReflectionObject` inherits working construction helpers from `ReflectionClass`.
 #[test]
 fn test_reflection_object_construction_helpers_use_runtime_class() {
