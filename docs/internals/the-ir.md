@@ -624,7 +624,8 @@ reads. Named static receivers include inherited implementations; `self::` and
 `parent::` resolve in the enclosing lexical class. A `static::` call unions all
 concrete implementations in that class's checked descendant hierarchy, including
 callable static bodies declared on abstract classes. Abstract declarations retain
-failure effects, so a discarded call cannot erase invalid dispatch. An opaque
+failure effects and any throwing parameter guards or warning-capable argument
+coercions that run before dispatch, so a discarded call cannot erase them. An opaque
 eval bridge gives late-static calls the full eval-call effects, including
 exceptions, output and global mutation, because it can introduce further
 overrides. Without that barrier, when the lexical class has no static vtable

@@ -280,6 +280,35 @@ Root::relay();
     }
 }
 
+/// Abstract declarations contribute literal guards and coercions without an emitted body.
+#[test]
+fn call_effect_batch_review_abstract_parameter_guards() {
+    let template = r#"<?php
+abstract class Root {
+    abstract public static function accept(LITERAL $value): int;
+    public static function relay(mixed $value): int { return static::accept($value); }
+}
+class Concrete extends Root {
+    public static function accept(mixed $value): int { return 0; }
+    public static function keep(): int { return 1; }
+}
+echo Concrete::keep();
+echo Root::relay($argc);
+"#;
+    for (literal, required) in [("false", Effects::MAY_THROW),
+        ("null", Effects::MAY_THROW), ("bool", Effects::MAY_WARN)]
+    {
+        let source = template.replace("LITERAL", literal);
+        for target in TARGETS {
+            let module = lower_for(&source, target);
+            assert!(call(&module, "Root::relay", "static::accept").effects
+                .contains(required | Effects::MAY_FATAL), "{target}: {literal}");
+            assert!(call(&module, "main", "Root::relay").effects.contains(required),
+                "{target}: {literal} caller summary");
+        }
+    }
+}
+
 /// Private late-static calls keep their lexical body despite unrelated descendant methods.
 #[test]
 fn call_effect_batch_review_private_static_dispatch() {

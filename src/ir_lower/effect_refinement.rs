@@ -144,11 +144,7 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
         crate::ir::parameter_roots::borrowed_parameter_roots(function)
     };
     // Literal false and null signatures have throwing guards even when their bodies are empty.
-    if function.params.iter().any(|parameter|
-        matches!(parameter.php_type, PhpType::False | PhpType::Void))
-    {
-        effects |= Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_THROW | Effects::MAY_DEOPT;
-    }
+    effects |= literal_parameter_guard_effects(function.params.iter().map(|parameter| &parameter.php_type));
     for instruction in &function.instructions {
         // Scratch offsets and the operand-owner chain are private to this frame.
         // Keep instruction effects so intra-function passes retain and order bookkeeping.
@@ -291,22 +287,32 @@ fn resolved_callable_effects(
 ) -> Option<Effects> {
     let summary = context.summaries.get(target).copied()?;
     let parameters = context.parameters.get(target)?.get(parameter_offset..)?;
-    Some(summary | call_argument_coercion_effects(function, instruction, parameters))
+    Some(summary | call_argument_coercion_effects(function, instruction,
+        parameters.iter().map(|parameter| (&parameter.php_type, parameter.by_ref))))
+}
+
+/// Includes throwing literal guards even when a declaration has no emitted function body.
+fn literal_parameter_guard_effects<'a>(parameters: impl IntoIterator<Item = &'a PhpType>) -> Effects {
+    if parameters.into_iter().any(|ty| matches!(ty, PhpType::False | PhpType::Void)) {
+        Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_THROW | Effects::MAY_DEOPT
+    } else {
+        Effects::PURE
+    }
 }
 
 /// Models warning-capable conversions performed only while the backend materializes call args.
-fn call_argument_coercion_effects(
+fn call_argument_coercion_effects<'a>(
     function: &Function,
     instruction: &crate::ir::Instruction,
-    parameters: &[CallParameter],
+    parameters: impl IntoIterator<Item = (&'a PhpType, bool)>,
 ) -> Effects {
     let warns = instruction
         .operands
         .iter()
         .zip(parameters)
-        .any(|(&operand, parameter)| {
-            !parameter.by_ref
-                && parameter.php_type == PhpType::Bool
+        .any(|(&operand, (php_type, by_ref))| {
+            !by_ref
+                && *php_type == PhpType::Bool
                 && function.value(operand).is_none_or(|value| {
                     matches!(
                         value.php_type.codegen_repr(),

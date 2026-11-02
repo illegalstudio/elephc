@@ -9,7 +9,8 @@
 //! - `static` includes concrete implementations even on abstract classes; eval keeps bridge effects.
 
 use super::{
-    callable_key, class_is_same_or_subclass, php_symbol_key, resolved_callable_effects,
+    call_argument_coercion_effects, callable_key, class_is_same_or_subclass,
+    literal_parameter_guard_effects, php_symbol_key, resolved_callable_effects,
     Effects, Function, Immediate, Op, RefinementContext,
 };
 
@@ -52,7 +53,7 @@ pub(super) fn static_call_effects(
         // Calling an abstract class can select its abstract slot instead of any child body.
         // Keep this failure observable even when every concrete override is pure.
         if class.abstract_static_methods.contains(&method_key) {
-            effects |= Effects::READS_HEAP | Effects::MAY_FATAL;
+            effects |= abstract_declaration_effects(function, instruction, class, &method_key)?;
             found = true;
             continue;
         }
@@ -60,6 +61,21 @@ pub(super) fn static_call_effects(
         found = true;
     }
     found.then_some(effects)
+}
+
+/// Abstract slots can run literal guards and argument coercions before failing dispatch.
+fn abstract_declaration_effects(
+    function: &Function,
+    instruction: &crate::ir::Instruction,
+    class: &crate::types::ClassInfo,
+    method: &str,
+) -> Option<Effects> {
+    let signature = class.static_methods.get(method)?;
+    let guards = literal_parameter_guard_effects(signature.params.iter().map(|(_, ty)| ty));
+    let coercions = call_argument_coercion_effects(function, instruction,
+        signature.params.iter().enumerate().map(|(index, (_, ty))|
+            (ty, signature.ref_params.get(index).copied().unwrap_or(false))));
+    Some(Effects::READS_HEAP | Effects::MAY_FATAL | guards | coercions)
 }
 
 /// Includes argument coercions and the actual inherited static or lexical-instance body.

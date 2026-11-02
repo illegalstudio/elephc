@@ -125,6 +125,35 @@ echo PrivateBase::relay();
     assert_eq!(without_ir_opt(|| compile_and_run(source)), "21");
 }
 
+/// Abstract literal guards preserve catch-only readers before the invalid dispatch.
+#[test]
+fn test_call_effect_batch_review_abstract_parameter_guards() {
+    let template = r#"<?php
+abstract class GuardRoot {
+    abstract public static function accept(LITERAL $value): int;
+    public static function relay(mixed $value, bool $force): int {
+        $seen = 0;
+        try {
+            if ($force) { throw new Error("keep catch"); }
+            $seen = 1;
+            return static::accept($value);
+        } catch (Error $e) { return $seen; }
+    }
+}
+class GuardConcrete extends GuardRoot {
+    public static function accept(mixed $value): int { return 0; }
+    public static function keep(): int { return 1; }
+}
+echo GuardConcrete::keep();
+echo GuardRoot::relay($argc, $argc === 999);
+"#;
+    for literal in ["false", "null"] {
+        let source = template.replace("LITERAL", literal);
+        assert_eq!(compile_and_run(&source), "11", "{literal}");
+        assert_eq!(without_ir_opt(|| compile_and_run(&source)), "11", "{literal}");
+    }
+}
+
 /// Runtime-defined overrides preserve catch readers and output in both optimizer modes.
 #[test]
 fn test_call_effect_batch_eval_dispatch_bundle() {
