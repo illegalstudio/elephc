@@ -411,3 +411,22 @@ pendingBorrowedObject(10); pendingBorrowedObject(100);
     assert_eq!(output.stdout, format!("{objects}{arrays}{borrowed}"));
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// A loose guard cannot fold its complement after a warning handler changes its source.
+#[test]
+fn test_loose_comparison_batch_warning_invalidates_nested_guard() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+$value = $argc > 0 ? new stdClass() : 0;
+set_error_handler(function(int $level, string $message): bool {
+    global $value; $value = 2; return true;
+});
+if ($value == 1) {
+    if ($value != 1) { echo "changed\n"; }
+    else { echo "stale\n"; }
+} else { echo "outerfalse\n"; }
+restore_error_handler();
+"#);
+    assert!(output.success, "{}: {} {}", output.status, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "changed\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
