@@ -27,7 +27,7 @@ echo $argument;
     let main = module.functions.iter().find(|function| function.name == "main").unwrap();
     let (call_index, call) = main.instructions.iter().enumerate().find(|(_, inst)|
         inst.op == Op::Call && matches!(inst.immediate, Some(Immediate::Data(data))
-            if module.data.strings[data.as_raw() as usize] == "lateArgumentAlias"))
+            if module.data.function_names[data.as_raw() as usize] == "lateArgumentAlias"))
         .expect("the fixture must reach the alias-capable native call");
     let argument = call.operands[0];
     let lease = main.instructions.iter().find(|inst| inst.result == Some(argument)).unwrap();
