@@ -19,15 +19,18 @@ class AliasUnwindNode {
     public function __destruct() { echo 'D'; }
 }
 class AliasUnwindTarget { public AliasUnwindNode $node; }
-function aliasUnwindFailure(AliasUnwindNode $node): AliasUnwindNode { return $node->child; }
+function aliasUnwindFailure(AliasUnwindNode $node, bool $fail): AliasUnwindNode {
+    if ($fail) { throw new TypeError('alias failure'); }
+    return $node;
+}
 function aliasUnwindObject(mixed $node, bool $keep): mixed {
     return $keep ? $node : new AliasUnwindNode();
 }
 function aliasUnwindArray(mixed $array, bool $keep): mixed { return $keep ? $array : [9]; }
 function aliasUnwindArithmetic(mixed $value, bool $keep): mixed { return $keep ? $value : 99; }
-function aliasUnwindFresh(): void {
+function aliasUnwindFresh(bool $fail): void {
     for ($i = 0; $i < 3; $i++) {
-        try { aliasUnwindFailure(new AliasUnwindNode()); }
+        try { aliasUnwindFailure(new AliasUnwindNode(), $fail); }
         catch (TypeError $error) { unset($error); echo 'T|'; }
     }
 }
@@ -39,11 +42,11 @@ for ($i = 0; $i < 3; $i++) {
 }
 $shared = new AliasUnwindNode();
 for ($i = 0; $i < 3; $i++) {
-    try { aliasUnwindFailure($shared); }
+    try { aliasUnwindFailure($shared, $argc > 0); }
     catch (TypeError $error) { unset($error); echo 'T|'; }
 }
 unset($shared); echo '|';
-aliasUnwindFresh();
+aliasUnwindFresh($argc > 0);
 $alias = aliasUnwindObject(new AliasUnwindNode(), true);
 echo 'live|'; unset($alias); echo '|';
 $alias = aliasUnwindObject(new AliasUnwindNode(), false);

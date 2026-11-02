@@ -558,7 +558,7 @@ dispatchCallableArgument(consumeCallableArgument(...), new CallableArgumentObjec
     }
 }
 
-/// Temporary callable arguments are rooted around independent calls, unlike aliasing returns.
+/// Temporary callables stay unwind-rooted while alias returns transfer their existing owner.
 #[test]
 fn user_callable_argument_owners_are_unwind_visible_on_all_targets() {
     use crate::ir::Op;
@@ -600,8 +600,25 @@ $callback();
             );
         }
         let alias = module.functions.iter().find(|f| f.name == "callbackAliasCaller").unwrap();
-        assert!(!alias.instructions.iter().any(|inst| inst.op == Op::PushCallOperandOwner),
-            "{target}: a single aliasing argument transfers directly to the returned value");
+        let call_index = alias.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+        let argument = alias.instructions[call_index].operands[0];
+        let roots = alias.instructions[..call_index].iter().filter_map(|inst| {
+            if inst.op != Op::StoreLocal || inst.operands != [argument] { return None; }
+            let Some(crate::ir::Immediate::LocalSlot(slot)) = inst.immediate else { return None; };
+            alias.instructions[..call_index].iter().any(|inst|
+                inst.op == Op::PushCallOperandOwner
+                    && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))).then_some(slot)
+        }).collect::<Vec<_>>();
+        assert_eq!(roots.len(), 1, "{target}: the aliasing argument needs one unwind pin");
+        let slot = Some(crate::ir::Immediate::LocalSlot(roots[0]));
+        let after = &alias.instructions[call_index + 1..];
+        let pop = after.iter().position(|inst| inst.op == Op::PopCallOperandOwner && inst.immediate == slot).unwrap();
+        let unset = after.iter().position(|inst| inst.op == Op::UnsetLocal && inst.immediate == slot).unwrap();
+        assert!(pop < unset, "{target}: detach the pin before retiring its bookkeeping slot");
+        assert!(!after.iter().any(|inst| inst.op == Op::ReleaseLocalSlot && inst.immediate == slot),
+            "{target}: the pin must not consume the owner transferred to the alias result");
+        assert!(!after.iter().any(|inst| inst.op == Op::Release && inst.operands == [argument]),
+            "{target}: the returned argument keeps its existing owner");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         assert!(asm.contains("__rt_cleanup_call_operand_descriptor"), "{target}");
     }
