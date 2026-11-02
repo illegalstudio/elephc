@@ -130,6 +130,10 @@ mod tests {
         let source = "<?php class OwnedMixedConstructor { \
             public function __construct(public mixed &$value = 'default') {} } \
             class OwnedMixedChild extends OwnedMixedConstructor {} \
+            class OwnedPrivateMixedConstructor { \
+                public function __construct(private mixed &$value) {} } \
+            class OwnedPrivateMixedShadow extends OwnedPrivateMixedConstructor { \
+                public string $value = 'shadow'; } \
             function makeOwnedMixed(mixed $value): OwnedMixedChild { \
                 return new OwnedMixedChild($value); } \
             function makeFreshOwnedMixed(): OwnedMixedConstructor { \
@@ -144,12 +148,12 @@ mod tests {
             let module = crate::ir_lower::tests::lower_source_at_for_target(
                 source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
             );
-            for class in ["OwnedMixedConstructor", "OwnedMixedChild"] {
+            for class in ["OwnedMixedConstructor", "OwnedMixedChild", "OwnedPrivateMixedConstructor", "OwnedPrivateMixedShadow"] {
                 assert!(module.class_infos[class].property_slot_owns_reference(0), "{name}: {class}");
             }
             let dynamic = module.functions.iter().find(|function| function.name == "makeDynamicOwnedMixed").unwrap();
-            assert_eq!(dynamic.instructions.iter().filter(|inst| inst.op == crate::ir::Op::ObjectNew).count(), 2,
-                "{name}: both declaring and inherited constructors normalize the caller reference");
+            assert_eq!(dynamic.instructions.iter().filter(|inst| inst.op == crate::ir::Op::ObjectNew).count(), 4,
+                "{name}: inherited constructors retain normalization beneath private property shadows");
             let user = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
             assert!(user.contains("__rt_reference_cell_retain_mixed"), "{name}: constructor retains its binding");
             assert!(user.contains("__rt_reference_cell_release"), "{name}: placeholder owner retires");

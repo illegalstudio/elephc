@@ -239,9 +239,9 @@ fn dynamic_new_class_is_planning_candidate(
     if sig.variadic.is_some() {
         return false;
     }
-    let owns_promoted_references = class_info.constructor_param_to_prop.iter().flatten()
-        .any(|property| class_info.visible_property_index(property)
-            .is_some_and(|slot| class_info.property_slot_owns_reference(slot)));
+    let owns_promoted_references = body_owner.constructor_param_to_prop.iter().flatten()
+        .any(|property| body_owner.visible_property_index(property)
+            .is_some_and(|slot| body_owner.property_slot_owns_reference(slot)));
     if !dynamic_new_args_need_planning(sig, args) && !owns_promoted_references {
         return false;
     }
