@@ -181,13 +181,7 @@ pub(super) fn eval_array_unset_element_stmt(
             class_name,
             property,
         } => {
-            let array = eval_static_property_get_result(class_name, property, context, values)?;
-            if let Some(array) =
-                eval_array_unset_target_result(array, index, context, scope, values)?
-            {
-                eval_static_property_set_result(class_name, property, array, context, values)?;
-            }
-            return Ok(());
+            return eval_static_array_unset_element(class_name, property, index, context, scope, values);
         }
         EvalExpr::DynamicStaticPropertyGet {
             class_name,
@@ -195,13 +189,7 @@ pub(super) fn eval_array_unset_element_stmt(
         } => {
             let class_name = eval_expr(class_name, context, scope, values)?;
             let class_name = eval_dynamic_class_name(class_name, context, values)?;
-            let array = eval_static_property_get_result(&class_name, property, context, values)?;
-            if let Some(array) =
-                eval_array_unset_target_result(array, index, context, scope, values)?
-            {
-                eval_static_property_set_result(&class_name, property, array, context, values)?;
-            }
-            return Ok(());
+            return eval_static_array_unset_element(&class_name, property, index, context, scope, values);
         }
         EvalExpr::DynamicStaticPropertyNameGet {
             class_name,
@@ -210,18 +198,32 @@ pub(super) fn eval_array_unset_element_stmt(
             let class_name = eval_expr(class_name, context, scope, values)?;
             let class_name = eval_dynamic_class_name(class_name, context, values)?;
             let property = eval_dynamic_member_name(property, context, scope, values)?;
-            let array = eval_static_property_get_result(&class_name, &property, context, values)?;
-            if let Some(array) =
-                eval_array_unset_target_result(array, index, context, scope, values)?
-            {
-                eval_static_property_set_result(&class_name, &property, array, context, values)?;
-            }
-            return Ok(());
+            return eval_static_array_unset_element(&class_name, &property, index, context, scope, values);
         }
         _ => {}
     }
     with_eval_void_operands(&[array], context, scope, values, |args, context, scope, values| {
         eval_array_access_unset_result(args[0], index, context, scope, values)
+    })
+}
+
+/// Owns a fetched static container and its rebuilt array until the borrowing setter finishes.
+fn eval_static_array_unset_element(
+    class_name: &str,
+    property: &str,
+    index: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let array = eval_static_property_get_result(class_name, property, context, values)?;
+    with_eval_value_lease(array, context, values, |array, context, values| {
+        if let Some(replacement) = eval_array_unset_target_result(array, index, context, scope, values)? {
+            with_eval_value_lease(replacement, context, values, |replacement, context, values| {
+                eval_static_property_set_result(class_name, property, replacement, context, values)
+            })?;
+        }
+        Ok(())
     })
 }
 

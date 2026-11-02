@@ -11,6 +11,31 @@
 use super::super::*;
 use super::support::*;
 
+/// A static unset's rebuilt array transfers only the setter's retained owner to storage.
+#[test]
+fn static_dimension_unset_retires_its_rebuilt_array_owner() {
+    for target in ["UnsetStaticLease::$items", "$class::$items", "$class::${$property}"] {
+        let source = format!(r#"
+class UnsetStaticLease {{ public static array $items = []; }}
+$class = 'UnsetStaticLease'; $property = 'items';
+UnsetStaticLease::$items = [4, 5];
+unset({target}[0]);
+echo UnsetStaticLease::$items[1];
+"#);
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+        eval_release_value(&mut context, &mut values, result).unwrap();
+        let stored = context.static_property("UnsetStaticLease", "items").unwrap();
+        assert_eq!(values.cell_owners.get(&(stored.as_ptr() as usize)), Some(&1),
+            "{target}: the replacement producer must retire its independent owner");
+        assert_eq!(values.output, "5");
+        assert!(values.warnings.is_empty(), "{:?}", values.warnings);
+    }
+}
+
 /// Nested unset captures keys once before selecting live storage and retires exceptional operands.
 #[test]
 fn nested_unset_stages_keys_before_live_receiver_selection() {
