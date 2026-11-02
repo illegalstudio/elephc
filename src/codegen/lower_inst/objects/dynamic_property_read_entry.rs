@@ -320,7 +320,7 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;
     let mode = property_fetch_mode(inst);
-    let candidates = declared_mixed_property_get_candidates(ctx, mode, inst)?;
+    let candidates = declared_mixed_property_get_candidates(ctx, mode, None, inst)?;
     // Magic accessors return an owned Mixed snapshot. Keep narrower result ABIs on their existing
     // miss path until they can consume that snapshot without changing their physical contract.
     let magic_supported = inst.result_php_type.codegen_repr() == PhpType::Mixed;

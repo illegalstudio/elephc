@@ -17,7 +17,10 @@ pub(super) fn lower(
 ) -> Result<()> {
     ensure_runtime_dynamic_property_name(ctx, name, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;
-    let candidates = declared_mixed_property_get_candidates(ctx, PropertyFetchMode::QuietRead, inst)?;
+    let known_name = const_string_operand(ctx, name)?;
+    let candidates = declared_mixed_property_get_candidates(
+        ctx, PropertyFetchMode::QuietRead, known_name.as_deref(), inst,
+    )?;
     let mut classes = ctx.module.class_infos.iter()
         .map(|(name, info)| (name.clone(), info.class_id)).collect::<Vec<_>>();
     classes.sort_by_key(|(_, id)| *id);
