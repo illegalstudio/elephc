@@ -14,7 +14,7 @@ $projectedXml = simplexml_load_string('<r id="1"><a>x</a><b><c/></b></r>', 'Revi
 echo 'J|', json_encode($projectedXml), '|';
 echo 'P|'; $projectedPrint = print_r($projectedXml, true);
 echo (int)str_contains($projectedPrint, 'ReviewProjectionXml Object'), ':', reviewProjectionOccurrences($projectedPrint, 'D:b|'), '|';
-echo 'V|'; ob_start(); var_dump($projectedXml); $projectedDump = ob_get_clean();
+echo 'V|'; ob_start(); var_dump($projectedXml); $projectedDump = (string)ob_get_clean();
 echo (int)str_contains($projectedDump, 'object(ReviewProjectionXml)'), ':', reviewProjectionOccurrences($projectedDump, 'D:b|'), '|';
 echo 'A|'; $projectedArray = (array)$projectedXml;
 echo get_class($projectedArray['b']), '|'; unset($projectedArray);
