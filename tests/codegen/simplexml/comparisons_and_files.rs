@@ -163,3 +163,27 @@ echo (string)$xml, ':', (string)$child;
     assert_eq!(out.stdout, "-2:integer|-3.5:double|SimpleXMLElement:2:integer:3|4:3|NumericXmlSubclass:3.5:double:4.5|5.5:4.5|2:3.5");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// File save failures report false and retain the method-specific warning on every target.
+#[test]
+fn test_simplexml_file_save_failures_return_false() {
+    if skip_without_xml_native("test_simplexml_file_save_failures_return_false") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$xml = new SimpleXMLElement('<r/>');
+set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
+var_dump($xml->asXML('/__simplexml_review_absent_2060__/out.xml'));
+var_dump($xml->saveXML('/__simplexml_review_absent_2060__/out.xml'));
+var_dump($xml->asXML('.'));
+var_dump($xml->saveXML('.'));
+restore_error_handler();
+unset($xml);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "2:SimpleXMLElement::asXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n",
+        "2:SimpleXMLElement::saveXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n",
+        "2:SimpleXMLElement::asXML(.): Failed to open stream: Is a directory|bool(false)\n",
+        "2:SimpleXMLElement::saveXML(.): Failed to open stream: Is a directory|bool(false)\n",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

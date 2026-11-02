@@ -493,7 +493,8 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $xml = (string)hex2bin(elephc_xml_sx_xml_hex($handle, 1));
         if ($filename === null) { return $xml; }
         if ($filename === '') { throw new ValueError('Path must not be empty'); }
-        if (file_put_contents($filename, $xml) === false) {
+        $written = file_put_contents($filename, $xml);
+        if ($written === false || $written < 0) {
             $reason = elephc_xml_sx_file_error();
             __elephc_simplexml_warning('Warning: SimpleXMLElement::' . $method . '(' . $filename . '): Failed to open stream: ' . $reason . "\n");
             return false;
