@@ -96,7 +96,14 @@ impl PropertyWriteReceiver {
     ) {
         let class = self.nullable_class.clone();
         if class.is_none() && !self.nullable_mixed { return; }
-        let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, operands, span);
+        // A computed name belongs to receiver evaluation, even when the RHS is borrowed.
+        let (mut pins, operands) = if let WritePropertyName::Runtime(name) = &property {
+            let pins = ctx.with_independent_write_receiver(|ctx|
+                crate::ir_lower::expr::pin_in_flight_owners(ctx, &[name.value], span));
+            let operands = operands.iter().copied().filter(|value| *value != name.value).collect::<Vec<_>>();
+            (pins, operands)
+        } else { (Vec::new(), operands.to_vec()) };
+        pins.extend(crate::ir_lower::expr::pin_in_flight_owners(ctx, &operands, span));
         let object = ctx.with_independent_write_receiver(|ctx|
             narrow_nullable_write_receiver(ctx, self.value, class.as_deref(), property, verb, span));
         crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);

@@ -79,7 +79,8 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
         let borrowed = ctx.emit_value(Op::Borrow, vec![parent.value.value], None, ty,
             Op::Borrow.default_effects(), Some(span));
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-        let pins = pin_in_flight_owners(ctx, &[name.value], span);
+        let pins = ctx.with_independent_write_receiver(|ctx|
+            pin_in_flight_owners(ctx, &[name.value], span));
         let argument = ctx.emit_value(Op::Borrow, vec![name.value], None, PhpType::Str,
             Op::Borrow.default_effects(), Some(span));
         ctx.builder.set_value_ownership(argument.value, Ownership::Borrowed);
@@ -113,7 +114,9 @@ fn capture_static_write_child(
     child: LoweredValue,
     span: Span,
 ) -> crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver {
-    let child = if ctx.value_is_owning_temporary(child) { child } else {
+    let owns_child = ctx.with_independent_write_receiver(|ctx|
+        ctx.value_is_owning_temporary(child));
+    let child = if owns_child { child } else {
         crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, child, Some(span))
     };
     parent.handoff(ctx, child, span).into_runtime_interface_view(ctx, span)
