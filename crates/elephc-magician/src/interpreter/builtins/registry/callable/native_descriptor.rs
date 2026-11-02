@@ -108,6 +108,7 @@ fn stage_native_descriptor_args(
             coerced,
             target,
             &mut staged,
+            context,
             values,
         ) {
             Ok(staged_ref) => staged_ref,

@@ -51,7 +51,7 @@ pub(in crate::interpreter) fn stage_native_function_invoker_args(
             };
             let (marker, slot) = stage_native_function_shared_ref_arg(
                 function.param_type(param_index), function.param_tagged_scalar_ref(param_index), original,
-                target, &mut staged, values,
+                target, &mut staged, context, values,
             )?;
             staged.values.push(marker);
             if let Some(slot) = slot { staged.ref_slots.push(slot); }
@@ -77,6 +77,7 @@ pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
     original: RuntimeCellHandle,
     target: Option<EvalReferenceTarget>,
     staged: &mut BoundNativeFunctionArgs,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<BoundNativeFunctionRefSlot>), EvalStatus> {
     if target.is_some() && !tagged_scalar && native_function_raw_ref_kind(param_type).is_none()
@@ -90,7 +91,9 @@ pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
             }
         }
     }
-    stage_native_function_ref_arg(param_type, tagged_scalar, original, target, values)
+    let guarded_writeback = target.as_ref()
+        .is_some_and(|target| !generic_reference_contracts(target, context).is_empty());
+    stage_native_function_ref_arg(param_type, tagged_scalar, original, target, guarded_writeback, values)
         .map(|(marker, slot)| (marker, Some(slot)))
 }
 
@@ -100,6 +103,7 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
     tagged_scalar: bool,
     original: RuntimeCellHandle,
     target: Option<EvalReferenceTarget>,
+    guarded_writeback: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, BoundNativeFunctionRefSlot), EvalStatus> {
     if tagged_scalar {
@@ -168,9 +172,9 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
             Ok((marker, BoundNativeFunctionRefSlot::OwnedRawWord { original, slot, target }))
         }
         None => {
-            // The native slot is validated on writeback. Sharing a persistent wrapper here
-            // would let native stores mutate the caller before that validation can reject them.
-            let retained = if values.is_reference(original)? {
+            // Generic local contracts are checked at writeback; do not let native stores
+            // bypass that guard. Ordinary PHP references retain their live shared identity.
+            let retained = if guarded_writeback && values.is_reference(original)? {
                 values.copy_value(original)?
             } else { values.retain(original)? };
             let mut slot = Box::new(retained.as_ptr());
