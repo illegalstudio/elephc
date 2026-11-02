@@ -212,8 +212,12 @@ fn lower_selected_runtime_property_native_incdec(
     let ExprKind::ArrayAccess { array, index } = &read.kind else {
         unreachable!("a runtime property dimension update retains its leaf index")
     };
-    let parent = if let ExprKind::DynamicPropertyAccess { object, property } = &array.kind {
-        // This kernel is reached only after the captured root passed its XML class guard.
+    let stable_native_root = matches!(&array.kind,
+        ExprKind::DynamicPropertyAccess { object, .. } if matches!(&object.kind,
+            ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. }));
+    let parent = if stable_native_root {
+        let ExprKind::DynamicPropertyAccess { object, property } = &array.kind else { unreachable!() };
+        // Reuse the class guard only while rereading the same captured receiver.
         let object = lower_expr(ctx, object);
         let name = lower_expr(ctx, property);
         crate::ir_lower::expr::lower_dynamic_property_fetch_from_operands(

@@ -64,7 +64,11 @@ fn literal_property_name(function: &crate::ir::Function, mut value: crate::ir::V
 fn verify_captured_property_incdec_dispatch_is_shared(target: &str) {
     let source = r#"<?php
 class CapturedKernelXml extends SimpleXMLElement {}
-function capturedKernelUpdate(mixed $object, string $name): void { $object->{$name}[0]++; }
+class CapturedKernelRow { public array $items = []; }
+function capturedKernelName(string $name): string { return $name; }
+function capturedKernelUpdate(mixed $object, string $name): mixed {
+    return $object->{capturedKernelName($name)}[0]++;
+}
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
@@ -76,3 +80,29 @@ function capturedKernelUpdate(mixed $object, string $name): void { $object->{$na
 }
 
 supported_target_cases!(captured_property_incdec_dispatch_is_shared, verify_captured_property_incdec_dispatch_is_shared);
+
+/// Replayed property receivers retain a fresh class guard before their native property read.
+fn verify_replayed_property_incdec_receiver_is_checked(target: &str) {
+    let source = r#"<?php
+class ReplayedKernelXml extends SimpleXMLElement {}
+class ReplayedKernelHolder {
+    private mixed $value;
+    public function __get(string $name): mixed { return $this->value; }
+}
+function replayedKernelName(): string { return 'items'; }
+function replayedKernelUpdate(ReplayedKernelHolder $holder): mixed {
+    return $holder->value->{replayedKernelName()}[0]++;
+}
+"#;
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    crate::ir::validate_module(&module).unwrap();
+    let function = module.functions.iter().find(|function| function.name == "replayedKernelUpdate").unwrap();
+    let guarded_reads = function.blocks.iter().filter(|block|
+        block.name == "xml.property").count();
+    assert!(guarded_reads >= 2,
+        "{target}: both re-evaluated receivers require their own XML property guard\n{}",
+        crate::ir::print_function(function));
+}
+
+supported_target_cases!(replayed_property_incdec_receiver_is_checked, verify_replayed_property_incdec_receiver_is_checked);
