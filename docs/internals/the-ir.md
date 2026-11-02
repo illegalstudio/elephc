@@ -619,15 +619,37 @@ When `php_return_status` is set, `restore_concat_offset_after_nested_call` calls
 Each instruction and terminator carries an `Effects` summary. The builder
 assigns a conservative opcode or semantic-descriptor default; after the complete
 module is lowered, an effect-refinement fixed point may replace the summary on
-explicitly refinable direct calls, named static calls (including inherited
-implementations), instance calls, and property reads. Forwarding static receivers
-and unresolved closure, descriptor, or pipe targets retain conservative defaults
-until their target is proven by a lowering-specific contract. Final
-effects are immutable after validation and remain PHP-observable.
+explicitly refinable direct calls, static calls, instance calls, and property
+reads. Named static receivers include inherited implementations; `self::` and
+`parent::` resolve in the enclosing lexical class. A `static::` call unions all
+concrete implementations in that class's checked descendant hierarchy, including
+callable static bodies declared on abstract classes. Abstract declarations retain
+failure effects and any throwing parameter guards or warning-capable argument
+coercions that run before dispatch, so a discarded call cannot erase them. An opaque
+eval bridge gives late-static calls the full eval-call effects, including
+exceptions, output and global mutation, because it can introduce further
+overrides. Without that barrier, when the lexical class has no static vtable
+slot, such as for a private method, `static::` uses its implementation directly
+and does not union unrelated descendant methods. Unresolved closure, descriptor, pipe,
+function-variant and eval call opcodes retain their defaults, and the validator
+rejects narrower effects for them. Lowering-specific builtin and runtime
+contracts remain refinable. Final effects are immutable after validation and
+remain PHP-observable.
 
-Caller-visible summaries omit `ConcatReset`: it restores frame-private scratch
-bookkeeping rather than PHP state. The instruction itself retains `writes_global`
-so intra-function passes preserve its ordering. Genuine PHP-global writes,
+Call summaries include throwing guards for `false` and `null` parameter
+declarations even when the callee body is pure. Argument-coercion effects use the
+call's operand layout: lexical `self::` and `parent::` calls to instance methods
+omit the implicit receiver from parameter matching, while ordinary instance
+calls include that receiver on both sides.
+Warning-capable argument coercions also retain `may_throw`, because a PHP warning
+handler can throw an exception before the callee runs.
+
+Caller-visible summaries omit `ConcatReset`, `PushCallOperandOwner` and
+`PopCallOperandOwner`: they restore scratch offsets or publish temporary owner
+slots within the current frame rather than changing PHP state. The instructions
+retain their global-state effects so intra-function passes preserve their
+ordering. Actual ownership acquisition and retirement still contribute their
+effects, including possible destructors. Genuine PHP-global writes,
 output, allocation, and exception effects continue to flow into call summaries.
 
 ```rust
