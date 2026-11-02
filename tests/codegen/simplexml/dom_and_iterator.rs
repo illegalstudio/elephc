@@ -575,3 +575,25 @@ unset($instruction, $root, $document);
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Operator-dispatched Mixed arithmetic passed as an int cannot alias a returned substring.
+#[test]
+fn test_simplexml_scalar_parameter_retires_merged_arithmetic_boxes() {
+    if skip_without_xml_native("test_simplexml_scalar_parameter_retires_merged_arithmetic_boxes") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ScalarParameterXmlCapability extends SimpleXMLElement {}
+function scalarParameterPick(string $text, int $index): string {
+    if ($index < 0 || $index >= strlen($text)) { return ''; }
+    return substr($text, $index, 1);
+}
+function scalarParameterWalk(string $text, mixed $index): string {
+    $result = '';
+    for ($n = 0; $n < 16; $n++) { $result = scalarParameterPick($text, $index + 3); }
+    return $result;
+}
+echo scalarParameterWalk('abcdefgh', 2);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "f");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -491,7 +491,15 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                         && conditionally_releasable
                         && ctx.arg_and_result_types_can_alias(*value, result))
             });
-            if !independently_owned_result && !callee_owns && !independently_boxed && result_reuses_arg {
+            // A by-value scalar parameter receives a converted word, never the caller's
+            // owning box. Even an unknown return summary cannot make that box an alias.
+            let scalar_parameter_copy = signature.is_some_and(|signature| {
+                !signature.ref_params.get(parameter_index).copied().unwrap_or(false)
+                    && signature.params.get(parameter_index).is_some_and(|(_, ty)|
+                        matches!(ty.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void))
+            });
+            if !independently_owned_result && !callee_owns && !independently_boxed
+                && !scalar_parameter_copy && result_reuses_arg {
                 // Both suppression reasons above are MAY facts, so an unconditional skip is
                 // right only on the calls that actually hand the payload back. Emitting a
                 // conditional release instead lets each call decide at runtime: the codegen
