@@ -71,4 +71,3 @@ r58NullableIf(null);
 var_dump(r58Refined(2), r58Refined(null));
 var_dump(r58Stored(2), r58Stored(null));
 r58Callback(new R58Both());
-
