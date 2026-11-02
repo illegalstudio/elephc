@@ -244,7 +244,7 @@ pub(super) fn execute_foreach_object_stmt(
     }
     if eval_foreach_object_is_a(object, "IteratorAggregate", context, values)? {
         let iterator = eval_method_call_result(object, "getIterator", Vec::new(), context, values)?;
-        return match values.type_tag(iterator)? {
+        let result = (|| match values.type_tag(iterator)? {
             EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => execute_foreach_array_stmt(
                 iterator, key_name, value_name, body, context, scope, values,
             ),
@@ -254,6 +254,17 @@ pub(super) fn execute_foreach_object_stmt(
                 )
             }
             _ => Err(EvalStatus::RuntimeFatal),
+        })();
+        let released = eval_release_value(context, values, iterator);
+        return match (result, released) {
+            (Ok(control), Ok(())) => Ok(control),
+            (Err(status), _) => Err(status),
+            (Ok(control), Err(status)) => {
+                if let EvalControl::Return(value) | EvalControl::Throw(value) = control {
+                    let _ = eval_release_value(context, values, value);
+                }
+                Err(status)
+            }
         };
     }
     Err(EvalStatus::RuntimeFatal)

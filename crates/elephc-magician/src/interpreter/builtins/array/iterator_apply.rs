@@ -120,13 +120,18 @@ pub(in crate::interpreter) fn eval_iterator_apply_result(
                 context,
                 values,
             )?;
-            eval_iterator_apply_iterator_object(
+            let result = eval_iterator_apply_iterator_object(
                 iterator,
                 callback,
                 &callback_args,
                 context,
                 values,
-            )?
+            );
+            let released = eval_release_value(context, values, iterator);
+            match (result, released) {
+                (Ok(count), Ok(())) => count,
+                (Err(status), _) | (Ok(_), Err(status)) => return Err(status),
+            }
         }
         Err(err) => return Err(err),
     };
@@ -141,13 +146,14 @@ pub(in crate::interpreter) fn eval_iterator_apply_iterator_object(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    let _ = eval_native_method_with_positional_values(
+    let result = eval_native_method_with_positional_values(
         iterator,
         "rewind",
         Vec::new(),
         context,
         values,
     )?;
+    eval_release_value(context, values, result)?;
     let mut count = 0_i64;
     loop {
         let valid = eval_native_method_with_positional_values(
@@ -157,7 +163,7 @@ pub(in crate::interpreter) fn eval_iterator_apply_iterator_object(
             context,
             values,
         )?;
-        if !values.truthy(valid)? {
+        if !truthy_owned_result(valid, context, values)? {
             return Ok(count);
         }
         count = count.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
@@ -167,15 +173,25 @@ pub(in crate::interpreter) fn eval_iterator_apply_iterator_object(
             context,
             values,
         )?;
-        if !values.truthy(result)? {
+        if !truthy_owned_result(result, context, values)? {
             return Ok(count);
         }
-        let _ = eval_native_method_with_positional_values(
+        let result = eval_native_method_with_positional_values(
             iterator,
             "next",
             Vec::new(),
             context,
             values,
         )?;
+        eval_release_value(context, values, result)?;
     }
+}
+
+/// Consumes one owned method or callback result even when its truth conversion fails.
+fn truthy_owned_result(
+    value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let truth = values.truthy(value);
+    let released = eval_release_value(context, values, value);
+    truth.and_then(|truth| released.map(|()| truth))
 }
