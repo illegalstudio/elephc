@@ -16,12 +16,12 @@ use super::*;
 fn test_dynamic_stdclass_factories_preserve_property_storage_and_heap_owners() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 function dynamicStdClassFactory(string $class): mixed { return new $class(); }
-function reflectedStdClassFactory(string $class): mixed {
-    return (new ReflectionClass($class))->newInstanceWithoutConstructor();
+function constructorlessStdClassFactory(string $class): mixed {
+    return __elephc_new_without_constructor($class);
 }
 for ($index = 0; $index < 4; $index++) {
     $first = dynamicStdClassFactory('stdClass');
-    $second = reflectedStdClassFactory('stdClass');
+    $second = constructorlessStdClassFactory('stdClass');
     $first->value = 'first'; $second->value = 'second';
     echo $first->value, ':', $second->value, '|';
     unset($first, $second);
