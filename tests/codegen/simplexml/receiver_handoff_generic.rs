@@ -224,7 +224,8 @@ echo 'append-hidden:', count($visHidden->item), ':', $visHidden->item[0], '|';
     let (source, expected) = if eval_mode {
         let renamed = source.replace("GenericXml", "EvalGenericXml");
         let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
-        (format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);"),
+        (format!("<?php class GenericHandoffXmlCapability extends SimpleXMLElement {{}} \
+            $source = $argc > 0 ? '{body}' : ''; eval($source);"),
             expected.replace("GenericXml", "EvalGenericXml"))
     } else { (source.to_string(), expected.to_string()) };
     let out = compile_and_run_with_heap_debug(&source);
