@@ -12,6 +12,35 @@
 
 use super::*;
 
+/// Real constructor, method and static integer overwrites still widen object storage.
+#[test]
+fn test_untyped_constructor_replay_keeps_real_integer_overwrites() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class RealUntypedPayload { public function __destruct() { echo 'drop|'; } }
+class RealConstructorOverwrite {
+    public $value;
+    public function __construct() { $this->value = new RealUntypedPayload(); $this->value = 7; }
+}
+class RealMethodOverwrite {
+    public $value;
+    public static $shared;
+    public function __construct() { $this->value = new RealUntypedPayload(); }
+    public function change(): void { $this->value = 8; }
+    public static function changeStatic(): void { self::$shared = new RealUntypedPayload(); self::$shared = 9; }
+}
+class RealInheritedOverwrite extends RealMethodOverwrite {}
+$first = new RealConstructorOverwrite();
+echo $first->value, '|';
+$second = new RealInheritedOverwrite();
+$second->change(); echo $second->value, '|';
+RealInheritedOverwrite::changeStatic(); echo RealMethodOverwrite::$shared, '|';
+unset($first, $second);
+"#);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "drop|7|drop|8|drop|9|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Instance and static untyped slots keep object and later array payloads independently owned.
 #[test]
 fn test_untyped_object_property_widens_for_later_array_writes() {

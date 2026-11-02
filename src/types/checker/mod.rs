@@ -417,6 +417,9 @@ pub(crate) struct Checker {
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
+    /// Physical instance slots refined during the current method fixed-point pass.
+    /// A first constructor integer initialization may replay a placeholder from an older pass.
+    pub method_property_refinements: Option<HashSet<(String, usize)>>,
     /// Classes a two-argument `clone()` in this program can hand an override array to.
     ///
     /// Recorded by the `clone` builtin's check hook, and applied to `classes` after checking by

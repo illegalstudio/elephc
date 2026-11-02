@@ -102,8 +102,21 @@ impl Checker {
         flattened_classes: &[FlattenedClass],
         errors: &mut Vec<CompileError>,
     ) -> Result<(), CompileError> {
+        let previous = self.method_property_refinements.take();
+        let result = self.type_check_methods_until_stable_inner(flattened_classes, errors);
+        self.method_property_refinements = previous;
+        result
+    }
+
+    /// Keeps precise cross-class storage across passes without replaying constructor placeholders as new writes.
+    fn type_check_methods_until_stable_inner(
+        &mut self,
+        flattened_classes: &[FlattenedClass],
+        errors: &mut Vec<CompileError>,
+    ) -> Result<(), CompileError> {
         let mut method_passes_remaining = (flattened_classes.len().max(1) * 2) + 1;
         loop {
+            self.method_property_refinements = Some(std::collections::HashSet::new());
             let classes_before_pass = self.classes.clone();
             let mut pass_errors = Vec::new();
 

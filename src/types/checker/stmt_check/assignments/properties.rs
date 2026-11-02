@@ -610,6 +610,7 @@ pub(super) fn refined_untyped_property_assignment_type(
     current: &PhpType,
     val_ty: &PhpType,
     definitely_initialized: bool,
+    already_refined_in_pass: bool,
 ) -> Option<PhpType> {
     match current {
         PhpType::Void => {
@@ -656,6 +657,9 @@ pub(super) fn refined_untyped_property_assignment_type(
                 return Some(refined_ty);
             }
             if *val_ty == PhpType::Void && !untyped_property_value_needs_nullable_storage(current) {
+                return None;
+            }
+            if definitely_initialized && *val_ty == PhpType::Int && !already_refined_in_pass {
                 return None;
             }
             (!checker.type_accepts(current, val_ty)).then_some(PhpType::Mixed)
@@ -705,6 +709,8 @@ fn refine_object_property_type(
             &class_info.properties[slot].1,
             val_ty,
             definitely_initialized,
+            checker.method_property_refinements.as_ref().is_none_or(|slots|
+                slots.contains(&(class_name.to_string(), slot))),
         ) else {
             return;
         };
@@ -773,6 +779,9 @@ fn update_inherited_property_slot_type(
     for name in inheritors {
         if let Some(info) = checker.classes.get_mut(&name) {
             info.properties[slot].1 = shared_ty.clone();
+            if let Some(refined) = &mut checker.method_property_refinements {
+                refined.insert((name.clone(), slot));
+            }
         }
     }
 }
