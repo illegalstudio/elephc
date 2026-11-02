@@ -388,7 +388,7 @@ mod tests {
 
     /// A callback can detach a pending source and attach an older unmatched source to this wrapper.
     #[test]
-    fn native_reference_source_index_requires_rescan_after_physical_reentry() {
+    fn native_reference_source_index_later_writes_restart_after_shape_changes() {
         let mut sources = NativeReferenceTypeSources::default();
         let initially_unmatched = sources.bind(10, 100, 1000).unwrap();
         let first_match = sources.bind(20, 200, 2000).unwrap();
@@ -404,7 +404,7 @@ mod tests {
         assert!(sources.sources.contains_key(&removed_match), "detaching a wrapper does not unset its property");
         assert!(sources.next_indexed(sources.references.get(&500), copied.token).is_none());
         assert_eq!(sources.next_indexed(sources.references.get(&500), 0).unwrap().token, initially_unmatched,
-            "a writer must restart its scan after PHP, preserving only already matched coercion results");
+            "a later assignment starts at zero to include a lower token that joined after the previous snapshot");
     }
 
     /// Failed shape publication leaves both indexes and their convergence epoch intact.
