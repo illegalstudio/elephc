@@ -555,6 +555,12 @@ Each alias owns the cell separately from the contained value. Rebinding acquires
 the new cell before retiring the previous local, which may own the source object.
 Cloning separates a singleton cell and shares one with live aliases, excluding
 temporary collector pins when making that decision.
+Object-to-array projection follows the same visible-owner rule. A shared owned
+`mixed` cell acquires its persistent PHP wrapper before `get_object_vars()` or an
+array cast retains that wrapper. This also preserves native aliases in programs
+that never export the property to eval. A singleton reference projects an
+independent value when neither the native cell nor its PHP wrapper has another
+visible owner.
 
 Resolved reference-returning callees produce two distinct things at the `return`,
 and keeping them apart is what makes the boundary correct. `AcquireRefCell`

@@ -10,6 +10,45 @@
 
 use crate::support::*;
 
+/// Native aliases already make object projections shared before eval exports any PHP wrapper.
+#[test]
+fn test_native_mixed_projection_without_eval_bundle() {
+    let source = r#"<?php
+class PureNativeMixedProjection {
+    public mixed $value = ['stage' => 'initial'];
+    public mixed $nullable = null;
+    public function &valueRef(): mixed { return $this->value; }
+    public function &nullableRef(): mixed { return $this->nullable; }
+}
+function exercisePureNativeMixedProjection(): void {
+    $object = new PureNativeMixedProjection();
+    $alias =& $object->valueRef();
+    $nullable =& $object->nullableRef();
+    $vars = get_object_vars($object);
+    $vars['value'] = ['stage' => 'vars'];
+    $vars['nullable'] = 'present';
+    echo json_encode($alias), ':', $nullable, '|';
+    $cast = (array)$object;
+    $cast['value'] = ['stage' => 'cast'];
+    echo json_encode($object->value), '|';
+    $copy = clone $object;
+    $copy->value = ['stage' => 'clone'];
+    echo json_encode($alias), ':', json_encode($object->value), '|';
+    unset($copy, $vars, $cast, $alias, $nullable);
+    $separate = get_object_vars($object);
+    $separate['value'] = ['stage' => 'separate'];
+    echo json_encode($object->value), '|';
+    unset($object, $separate);
+}
+exercisePureNativeMixedProjection();
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "{\"stage\":\"vars\"}:present|{\"stage\":\"cast\"}|{\"stage\":\"clone\"}:{\"stage\":\"clone\"}|{\"stage\":\"clone\"}|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}
+
 /// Collector snapshot owners do not keep a singleton inner PHP reference shared during clone.
 #[test]
 fn test_native_mixed_reference_clone_ignores_collector_wrapper_pin_bundle() {

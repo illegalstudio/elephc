@@ -206,13 +206,6 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     // -- a Mixed slot that holds no cell (implicit or explicit null) projects canonical null --
     emitter.instruction("cmp x0, #7");                                          // does the slot hold a boxed Mixed cell pointer?
     emitter.instruction("b.ne __rt_object_to_hash_box");                        // other tags box their payload directly
-    emit_branch_if_null_container(emitter, "x1", "x9", "__rt_object_to_hash_null_slot");
-    emitter.instruction("ldr x9, [x1]");                                        // inspect the existing Mixed box before selecting copy semantics
-    emitter.instruction("cmp x9, #7");                                          // persistent references carry the nested Mixed tag
-    emitter.instruction("b.ne __rt_object_to_hash_copy_value");                 // ordinary values get independent zval storage
-    emitter.instruction("ldr x9, [x1, #16]");                                   // inspect the reference identity marker
-    emitter.instruction("cmp x9, #1");                                          // only a persistent PHP reference preserves its binding
-    emitter.instruction("b.ne __rt_object_to_hash_copy_value");                 // nested value boxes remain ordinary copies
     emitter.instruction("ldr x9, [sp, #0]");                                    // recover the native object whose slot may own a cell
     emitter.instruction("ldr x9, [x9]");                                        // select the class's physical GC descriptor
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_ptrs");
@@ -228,8 +221,19 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ubfx x10, x10, #18, #1");                              // isolate the artificial destructor pin
     emitter.instruction("sub w9, w9, w10");                                     // count only PHP-visible cell owners
     emitter.instruction("cmp w9, #1");                                          // a live native alias keeps the projected reference shared
-    emitter.instruction("b.hi __rt_object_to_hash_shared_reference");           // preserve the native alias even when the wrapper has one owner
+    emitter.instruction("b.ls __rt_object_to_hash_wrapper_owners");             // singleton native cells need an independently shared wrapper
+    emitter.instruction("mov x0, x17");                                         // promote the shared native slot before projecting its value
+    emitter.instruction("bl __rt_reference_cell_promote_mixed");                // keep native aliases and projected PHP references on one child slot
+    emitter.instruction("ldr x1, [x0]");                                        // reload the wrapper installed in the stable native cell
+    emitter.instruction("b __rt_object_to_hash_shared_reference");              // acquire the projected owner's reference to that wrapper
     emitter.label("__rt_object_to_hash_wrapper_owners");
+    emit_branch_if_null_container(emitter, "x1", "x9", "__rt_object_to_hash_null_slot");
+    emitter.instruction("ldr x9, [x1]");                                        // inspect the existing Mixed box before selecting copy semantics
+    emitter.instruction("cmp x9, #7");                                          // persistent references carry the nested Mixed tag
+    emitter.instruction("b.ne __rt_object_to_hash_copy_value");                 // ordinary values get independent zval storage
+    emitter.instruction("ldr x9, [x1, #16]");                                   // inspect the reference identity marker
+    emitter.instruction("cmp x9, #1");                                          // only a persistent PHP reference preserves its binding
+    emitter.instruction("b.ne __rt_object_to_hash_copy_value");                 // nested value boxes remain ordinary copies
     emitter.instruction("ldr w9, [x1, #-12]");                                  // inspect independently retained eval or projected aliases
     emitter.instruction("ldr x10, [x1, #-8]");                                  // exclude collector-only wrapper ownership
     emitter.instruction("ubfx x10, x10, #18, #1");                              // isolate the wrapper's artificial destructor pin
@@ -485,11 +489,6 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     // -- a Mixed slot that holds no cell (implicit or explicit null) projects canonical null --
     emitter.instruction("cmp rax, 7");                                          // does the slot hold a boxed Mixed cell pointer?
     emitter.instruction("jne __rt_object_to_hash_box_x");                       // other tags box their payload directly
-    emit_branch_if_null_container(emitter, "rdi", "r11", "__rt_object_to_hash_null_slot_x");
-    emitter.instruction("cmp QWORD PTR [rdi], 7");                              // persistent references carry the nested Mixed tag
-    emitter.instruction("jne __rt_object_to_hash_copy_value_x");                // ordinary values get independent zval storage
-    emitter.instruction("cmp QWORD PTR [rdi + 16], 1");                         // inspect the reference identity marker
-    emitter.instruction("jne __rt_object_to_hash_copy_value_x");                // nested value boxes remain ordinary copies
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // recover the native object whose slot may own a cell
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // select the class's physical GC descriptor
     abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_ptrs");
@@ -505,8 +504,17 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("and r11d, 1");                                         // isolate the artificial destructor pin
     emitter.instruction("sub r9d, r11d");                                       // count only PHP-visible cell owners
     emitter.instruction("cmp r9d, 1");                                          // a live native alias keeps the projected reference shared
-    emitter.instruction("ja __rt_object_to_hash_shared_reference_x");           // preserve the native alias even when the wrapper has one owner
+    emitter.instruction("jbe __rt_object_to_hash_wrapper_owners_x");            // singleton native cells need an independently shared wrapper
+    emitter.instruction("mov rax, r10");                                        // promote the shared native slot before projecting its value
+    emitter.instruction("call __rt_reference_cell_promote_mixed");              // keep native aliases and projected PHP references on one child slot
+    emitter.instruction("mov rdi, QWORD PTR [rax]");                            // reload the wrapper installed in the stable native cell
+    emitter.instruction("jmp __rt_object_to_hash_shared_reference_x");          // acquire the projected owner's reference to that wrapper
     emitter.label("__rt_object_to_hash_wrapper_owners_x");
+    emit_branch_if_null_container(emitter, "rdi", "r11", "__rt_object_to_hash_null_slot_x");
+    emitter.instruction("cmp QWORD PTR [rdi], 7");                              // persistent references carry the nested Mixed tag
+    emitter.instruction("jne __rt_object_to_hash_copy_value_x");                // ordinary values get independent zval storage
+    emitter.instruction("cmp QWORD PTR [rdi + 16], 1");                         // inspect the reference identity marker
+    emitter.instruction("jne __rt_object_to_hash_copy_value_x");                // nested value boxes remain ordinary copies
     emitter.instruction("mov r9d, DWORD PTR [rdi - 12]");                       // inspect independently retained eval or projected aliases
     emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                        // exclude collector-only wrapper ownership
     emitter.instruction("shr r11, 18");                                         // position the wrapper's artificial destructor pin
