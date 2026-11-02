@@ -187,6 +187,59 @@ unset($old, $created, $doc);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
+/// Instance property incdec returns an old live XML view or the detached prefix scalar.
+#[test]
+fn test_simplexml_instance_dimension_incdec_expression_results() {
+    if skip_without_xml_native("test_simplexml_instance_dimension_incdec_expression_results") { return; }
+    let source = r#"<?php
+class InstanceStepName {
+    public function __toString(): string { echo 'name|'; return 'a'; }
+    public function __destruct() { echo 'name-dtor|'; }
+}
+class InstanceStepHolder {
+    public SimpleXMLElement $typed;
+    public mixed $erased;
+    public function __construct(SimpleXMLElement $node) { $this->typed = $node; $this->erased = $node; }
+}
+function instanceStepRoot(SimpleXMLElement $node): SimpleXMLElement { echo 'root|'; return $node; }
+function instanceStepErased(mixed $node): mixed { echo 'root|'; return $node; }
+function instanceStepName(): mixed { echo 'new-name|'; return new InstanceStepName(); }
+function instanceStepReport(mixed $value, SimpleXMLElement $doc): void {
+    echo gettype($value), ':', (string)$value, ':', (string)$doc->a, '|';
+}
+$doc = new SimpleXMLElement('<r><a>7</a></r>');
+instanceStepReport(instanceStepRoot($doc)->{instanceStepName()}[0]++, $doc);
+instanceStepReport(++instanceStepRoot($doc)->{instanceStepName()}[0], $doc);
+instanceStepReport(instanceStepErased($doc)->{instanceStepName()}[0]--, $doc);
+instanceStepReport(--instanceStepErased($doc)->{instanceStepName()}[0], $doc);
+$holder = new InstanceStepHolder($doc->a);
+instanceStepReport($holder->typed[0]++, $doc);
+instanceStepReport(++$holder->typed[0], $doc);
+$field = 'erased';
+instanceStepReport($holder->{$field}[0]--, $doc);
+instanceStepReport(--$holder->{$field}[0], $doc);
+$old = instanceStepRoot($doc)->a[0]++;
+$doc->a = '12';
+echo 'live:', (string)$old, '|';
+unset($old, $holder, $doc);
+"#;
+    let expected = concat!(
+        "root|new-name|name|name-dtor|object:7:7|",
+        "root|new-name|name|name-dtor|integer:8:7|",
+        "root|new-name|name|name-dtor|object:7:7|",
+        "root|new-name|name|name-dtor|integer:6:7|",
+        "object:7:7|integer:8:7|object:7:7|integer:6:7|root|live:12|",
+    );
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(source, &[&[]]);
+    preserve_stdout_mismatches(source, &assembly, &runs, &[expected]);
+    drop(assembly);
+    let output = &runs[0];
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}
+
 /// Null decrement warnings can throw repeatedly without retaining selected XML views.
 #[test]
 fn test_simplexml_null_dimension_decrement_handler_unwind() {
