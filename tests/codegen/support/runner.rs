@@ -1627,6 +1627,24 @@ fn append_macos_signal_diagnostics(
         "[print('sp+%04x 0x%x %s' % (i, w, n[:240])) for i, w, n in v[:32]]"
     );
     let mut cmd = Command::new("lldb");
+    if std::thread::current().name().is_some_and(|name|
+        name.ends_with("test_opaque_eval_spl_nested_write_keeps_attached_storage_through_reentry")
+            || name.ends_with("test_simplexml_eval_indirect_dimension_copies_bundle"))
+    {
+        // Inspect the linked runtime, since the user assembly artifact omits cached helpers.
+        // Bound each disassembly and the raw stack dump even when the frame chain is damaged.
+        cmd.args([
+            "-k", "memory read --format x --size 8 --count 64 $sp",
+            "-k", "disassemble --name __elephc_eval_spl_storage_write_v1 --count 128",
+            "-k", "disassemble --name _rt_mixed_array_get_for_write --count 64",
+            "-k", "disassemble --name _rt_mixed_array_get --count 32",
+            "-k", "disassemble --name _rt_mixed_array_get_php_offset_get --count 80",
+            "-k", "disassemble --name _rt_array_get_mixed_key --count 48",
+            "-k", "disassemble --name _rt_array_get_mixed_key_detach_indexed --count 48",
+            "-k", "disassemble --name _rt_array_ensure_unique --count 32",
+            "-k", "disassemble --name _rt_mixed_clone --count 16",
+        ]);
+    }
     cmd.args([
         "--batch",
         "-o",
