@@ -15,6 +15,10 @@ use super::*;
 pub(super) fn lower(
     ctx: &mut FunctionContext<'_>, inst: &Instruction, object: ValueId, name: ValueId,
 ) -> Result<()> {
+    if let Some(label) = crate::codegen::shared_property_read::helper_label(ctx, inst) {
+        crate::codegen::shared_property_read::emit_call(ctx, object, name, &label)?;
+        return store_if_result(ctx, inst);
+    }
     ensure_runtime_dynamic_property_name(ctx, name, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;
     let known_name = const_string_operand(ctx, name)?;
