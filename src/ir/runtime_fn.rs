@@ -2535,6 +2535,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayColumn
                 | RuntimeFnId::ArrayCombine
                 | RuntimeFnId::ArrayDiff
+                // The key-set helpers build their result with `__rt_hash_new` and retain each
+                // copied value, so the hash is never an argument. Left in the default
+                // `MayAliasArguments` bucket, the result of `array_diff_key($h, $g)` and
+                // `array_intersect_key($h, $g)` was never released (four blocks per call).
+                | RuntimeFnId::ArrayDiffKey
+                | RuntimeFnId::ArrayIntersectKey
                 | RuntimeFnId::ArrayFill
                 | RuntimeFnId::ArrayFillKeys
                 // Every `array_flip` lowering allocates its destination table before writing a
