@@ -604,6 +604,12 @@ wiring is required before this registry can enforce typed canonical references.
 An unchanged metadata epoch does not prove that a native cell stayed raw across
 PHP re-entry; callers must recheck physical shape and previously unmatched cells.
 
+Native function parameter flags carry physical boxed-reference storage separately
+from declared PHP types and tagged nullable integers. Normal function object
+references use the normalized Mixed ABI. A closure descriptor can instead expose
+a raw object or container payload and receives detached concrete-box adaptation.
+Only a physical Mixed pointer slot can share the live staging wrapper.
+
 Resolved reference-returning callees produce two distinct things at the `return`,
 and keeping them apart is what makes the boundary correct. `AcquireRefCell`
 materializes the returned cell address ONCE and publishes it as a typed `Pointer`

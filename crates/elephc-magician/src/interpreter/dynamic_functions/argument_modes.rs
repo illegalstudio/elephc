@@ -31,7 +31,7 @@ impl CallArgumentModes {
     pub(in crate::interpreter) fn for_native_function(function: &NativeFunction) -> Self {
         Self { names: function.param_names().to_vec(),
             references: (0..function.param_count()).map(|index| function.param_by_ref(index)).collect(),
-            native_boxed_references: (0..function.param_count()).map(|index| function.param_by_ref(index)
+            native_boxed_references: (0..function.param_count()).map(|index| function.param_by_ref(index) && function.param_boxed_ref(index)
                 && super::function_staging::native_reference_uses_boxed_staging(
                     function.param_type(index), function.param_tagged_scalar_ref(index))).collect(),
             variadic: function.source_variadic_index() }
@@ -123,7 +123,7 @@ impl CallArgumentModes {
                     Some(signature) => Self { names: signature.parameters.iter().map(|parameter| parameter.name.clone()).collect(),
                         references: signature.parameters.iter().map(|parameter| parameter.by_ref).collect(),
                         native_boxed_references: signature.parameters.iter().map(|parameter|
-                            parameter.by_ref && matches!(parameter.type_tag, 4 | 5 | 7)).collect(),
+                            parameter.by_ref && parameter.type_tag == 7).collect(),
                         variadic: signature.variadic_index },
                     None => Self::default(),
                 }

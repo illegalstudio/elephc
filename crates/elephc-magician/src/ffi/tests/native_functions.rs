@@ -18,12 +18,17 @@ fn native_function_reference_flags_preserve_compiled_tagged_scalar_layout() {
     assert_eq!(unsafe { __elephc_eval_register_native_function(
         &mut ctx, name.as_ptr(), name.len() as u64, 1usize as *mut c_void, Some(fake_native_invoker), 1,
     ) }, 1);
-    for (flags, accepted, tagged) in [(3, 1, true), (2, 0, true), (4, 0, true), (1, 1, false), (0, 1, false)] {
+    for (flags, accepted, tagged, boxed) in [
+        (3, 1, true, false), (2, 0, true, false), (4, 0, true, false),
+        (1, 1, false, false), (5, 1, false, true), (7, 0, false, true),
+        (8, 0, false, true), (0, 1, false, false),
+    ] {
         assert_eq!(unsafe { __elephc_eval_register_native_function_param_flags(
             &mut ctx, name.as_ptr(), name.len() as u64, 0, flags, 0,
         ) }, accepted);
         let function = ctx.native_function("native_nullable_ref").unwrap();
         assert_eq!(function.param_tagged_scalar_ref(0), tagged);
+        assert_eq!(function.param_boxed_ref(0), boxed);
         if accepted == 1 { assert_eq!(function.param_by_ref(0), flags & 1 != 0); }
     }
 }

@@ -106,6 +106,7 @@ fn stage_native_descriptor_args(
             parameter_type.as_ref(),
             false,
             coerced,
+            parameter.type_tag == EVAL_TAG_MIXED,
             target,
             &mut staged,
             context,

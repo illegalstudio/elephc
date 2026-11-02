@@ -154,6 +154,9 @@ pub(super) fn register_eval_native_function(
             matches!(if is_variadic {
                 match param_type { PhpType::Array(element) => element.codegen_repr(), _ => param_type.codegen_repr() }
             } else { param_type.codegen_repr() }, PhpType::TaggedScalar),
+            matches!(if is_variadic {
+                match param_type { PhpType::Array(element) => element.codegen_repr(), _ => param_type.codegen_repr() }
+            } else { param_type.codegen_repr() }, PhpType::Mixed | PhpType::Union(_)),
             is_variadic,
         );
         if let Some(type_spec) = param_type_specs

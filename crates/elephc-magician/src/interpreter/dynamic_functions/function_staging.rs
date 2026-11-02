@@ -19,10 +19,7 @@ use super::*;
 pub(super) fn native_reference_uses_boxed_staging(
     param_type: Option<&EvalParameterType>, tagged_scalar: bool,
 ) -> bool {
-    let raw_object = param_type.is_some_and(|ty| !ty.allows_null() && !ty.is_intersection()
-        && ty.variants().len() == 1 && matches!(ty.variants().first(),
-            Some(EvalParameterTypeVariant::Class(_) | EvalParameterTypeVariant::Object)));
-    !tagged_scalar && !raw_object && native_function_raw_ref_kind(param_type).is_none()
+    !tagged_scalar && native_function_raw_ref_kind(param_type).is_none()
 }
 
 /// Transfers value arguments or prepares reference markers, rolling back partial staging on errors.
@@ -61,7 +58,7 @@ pub(in crate::interpreter) fn stage_native_function_invoker_args(
             };
             let (marker, slot) = stage_native_function_shared_ref_arg(
                 function.param_type(param_index), function.param_tagged_scalar_ref(param_index), original,
-                target, &mut staged, context, values,
+                function.param_boxed_ref(param_index), target, &mut staged, context, values,
             )?;
             staged.values.push(marker);
             if let Some(slot) = slot { staged.ref_slots.push(slot); }
@@ -85,6 +82,7 @@ pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
     param_type: Option<&EvalParameterType>,
     tagged_scalar: bool,
     original: RuntimeCellHandle,
+    boxed_storage: bool,
     target: Option<EvalReferenceTarget>,
     staged: &mut BoundNativeFunctionArgs,
     context: &ElephcEvalContext,
@@ -92,7 +90,7 @@ pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
 ) -> Result<(RuntimeCellHandle, Option<BoundNativeFunctionRefSlot>), EvalStatus> {
     let guarded_writeback = target.as_ref()
         .is_none_or(|target| !generic_reference_contracts(target, context).is_empty());
-    if target.is_some() && native_reference_uses_boxed_staging(param_type, tagged_scalar)
+    if boxed_storage && target.is_some() && native_reference_uses_boxed_staging(param_type, tagged_scalar)
         && values.is_reference(original)?
     {
         for existing in &mut staged.ref_slots {
@@ -121,7 +119,8 @@ pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
             }
         }
     }
-    stage_native_function_ref_arg(param_type, tagged_scalar, original, target, guarded_writeback, values)
+    stage_native_function_ref_arg(param_type, tagged_scalar, original, target,
+        guarded_writeback || !boxed_storage, values)
         .map(|(marker, slot)| (marker, Some(slot)))
 }
 
@@ -202,8 +201,7 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
         None => {
             // Generic contracts and raw object adapters need a concrete detached value.
             // Only physically boxed parameters can preserve a live PHPRef in this slot.
-            let detached = guarded_writeback || !native_reference_uses_boxed_staging(param_type, false);
-            let retained = if detached && values.is_reference(original)? {
+            let retained = if guarded_writeback && values.is_reference(original)? {
                 values.copy_value(original)?
             } else { values.retain(original)? };
             let mut slot = Box::new(retained.as_ptr());
@@ -233,8 +231,8 @@ fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Optio
         return None;
     }
     match param_type.variants().first()? {
-        // Object parameters stage a concrete box that the invoker adapts to a raw object
-        // payload address. A PHPRef wrapper needs the future canonical typed adapter.
+        // Normal function EIR normalizes object references to Mixed. A closure descriptor
+        // may retain a raw Object payload; its physical flag selects detached adaptation.
         EvalParameterTypeVariant::Class(_)
         | EvalParameterTypeVariant::Object => None,
         EvalParameterTypeVariant::Iterable => Some(NativeFunctionRawRefKind::OwnedHeap),
@@ -251,13 +249,13 @@ fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Optio
 mod layout_tests {
     use super::*;
 
-    /// Concrete object adapters require tag-six boxes; nullable object unions use physical Mixed cells.
+    /// Logical object contracts do not decide whether an invoker has boxed physical storage.
     #[test]
     fn persistent_native_reference_modes_follow_physical_object_layouts() {
         for variant in [EvalParameterTypeVariant::Object, EvalParameterTypeVariant::Class("ReferenceLayoutContract".into())] {
             let exact = EvalParameterType::new(vec![variant.clone()], false);
             let nullable = EvalParameterType::new(vec![variant], true);
-            assert!(!native_reference_uses_boxed_staging(Some(&exact), false));
+            assert!(native_reference_uses_boxed_staging(Some(&exact), false));
             assert!(native_reference_uses_boxed_staging(Some(&nullable), false));
         }
         let mixed = EvalParameterType::new(vec![EvalParameterTypeVariant::Mixed], false);

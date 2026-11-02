@@ -346,6 +346,14 @@ impl ElephcEvalContext {
             .is_some_and(|function| function.set_param_tagged_scalar_ref(index, tagged))
     }
 
+    /// Records a native reference parameter's physical boxed pointer-slot ABI.
+    pub fn define_native_function_param_boxed_ref(
+        &mut self, function_name: &str, index: usize, boxed: bool,
+    ) -> bool {
+        self.native_functions.get_mut(function_name)
+            .is_some_and(|function| function.set_param_boxed_ref(index, boxed))
+    }
+
     /// Records which native AOT callback parameter is variadic.
     pub fn define_native_function_variadic_param(
         &mut self,
