@@ -127,7 +127,7 @@ eval($source);
     let owner_probe = mixed_body.find(&target.extern_symbol("__elephc_eval_object_context"))
         .expect("Mixed calls must recover eval ownership before checking the backing class id");
     let eval_call = mixed_body.find(&target.extern_symbol("__elephc_eval_method_call")).unwrap();
-    let native_dispatch = mixed_body.find("load the receiver class id for Mixed method dispatch").unwrap();
+    let native_dispatch = mixed_body.find("mixed_method_EscapedNativeReferenceImplementation_").unwrap();
     assert!(owner_probe < eval_call && eval_call < native_dispatch,
         "{name}: an eval override must precede its native backing method");
     let named_call = format!("{}\n", target.extern_symbol("__elephc_eval_object_is_a"));
@@ -151,6 +151,9 @@ eval($source);
         .unwrap_or_else(|| panic!("{name}: native interface fallback must remain available"));
     assert!(context_probe < method_call, "{name}: resolve ownership before dynamic dispatch");
     assert!(method_call < native_table, "{name}: dynamic dispatch must precede the native fallback");
+    let conversion = guard_body[method_call..].find("__rt_mixed_cast_string").unwrap() + method_call;
+    let result_release = guard_body[conversion..].find("__rt_decref_mixed").unwrap() + conversion;
+    assert!(result_release < native_table, "{name}: retire the owned eval string box after conversion");
 }
 
 macro_rules! context_free_eval_object_relations_target_test {

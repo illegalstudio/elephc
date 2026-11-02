@@ -172,86 +172,22 @@ pub(super) fn emit_eval_native_frame_override_probe(
     abi::emit_branch_if_int_result_zero(ctx.emitter, no_override_label);
 }
 
-/// Converts an eval Mixed result cell to the concrete EIR type expected here.
+/// Consumes an owned eval result box when a concrete ABI replaces its Mixed representation.
+/// Mixed and union callers instead receive the box itself.
 pub(super) fn emit_eval_result_as_type(ctx: &mut FunctionContext<'_>, result_ty: &PhpType) -> Result<()> {
-    match result_ty.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => Ok(()),
-        PhpType::Str => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-            Ok(())
-        }
-        PhpType::Float => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
-            Ok(())
-        }
-        PhpType::Int => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
-            Ok(())
-        }
-        PhpType::Bool | PhpType::False => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
-            Ok(())
-        }
-        PhpType::TaggedScalar => {
-            emit_eval_mixed_result_as_tagged_scalar(ctx);
-            Ok(())
-        }
-        PhpType::Void | PhpType::Never => {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
+    let representation = result_ty.codegen_repr();
+    match representation {
+        PhpType::Narrow(_) | PhpType::Resource(_) | PhpType::Packed(_) => {
+            super::super::super::callables::results::emit_detach_owned_mixed_heap_result(
+                ctx.emitter, &representation,
             );
             Ok(())
         }
-        PhpType::Array(_)
-        | PhpType::AssocArray { .. }
-        | PhpType::Iterable
-        | PhpType::Object(_)
-        | PhpType::Buffer(_)
-        | PhpType::Callable
-        | PhpType::Packed(_)
-        | PhpType::Pointer(_)
-        | PhpType::Narrow(_)
-        | PhpType::Resource(_) => {
-            emit_eval_unbox_mixed_to_owned_result(ctx, &result_ty.codegen_repr());
-            Ok(())
-        }
-    }
-}
-
-/// Reorders an eval Mixed result cell into inline tagged-scalar result registers.
-pub(super) fn emit_eval_mixed_result_as_tagged_scalar(ctx: &mut FunctionContext<'_>) {
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x9, x0");                              // preserve the unboxed eval result tag before moving the payload
-            ctx.emitter.instruction("mov x0, x1");                              // place the unboxed eval payload into the tagged-scalar payload register
-            ctx.emitter.instruction("mov x1, x9");                              // place the unboxed eval tag into the tagged-scalar tag register
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, rax");                            // preserve the unboxed eval result tag before moving the payload
-            ctx.emitter.instruction("mov rax, rdi");                            // place the unboxed eval payload into the tagged-scalar payload register
-            ctx.emitter.instruction("mov rdx, r10");                            // place the unboxed eval tag into the tagged-scalar tag register
-        }
-    }
-}
-
-/// Unboxes an eval Mixed result cell and retains concrete refcounted payloads.
-pub(super) fn emit_eval_unbox_mixed_to_owned_result(ctx: &mut FunctionContext<'_>, result_ty: &PhpType) {
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    emit_eval_move_unboxed_low_payload_to_result(ctx);
-    abi::emit_incref_if_refcounted(ctx.emitter, result_ty);
-}
-
-/// Moves the low payload from `__rt_mixed_unbox` into the integer result register.
-pub(super) fn emit_eval_move_unboxed_low_payload_to_result(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // return the unboxed eval low payload as the concrete result
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, rdi");                            // return the unboxed eval low payload as the concrete result
+        _ => {
+            let ty = if representation == PhpType::False { PhpType::Bool } else { representation };
+            super::super::super::callables::results::emit_unbox_owned_descriptor_result(
+                ctx.emitter, &ty, crate::ir::Ownership::Owned,
+            )
         }
     }
 }

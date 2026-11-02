@@ -226,6 +226,7 @@ mod native_string_arguments;
 mod native_property_unset;
 mod eval_closure_receivers;
 mod eval_alias_unwind;
+mod eval_call_result_owners;
 mod eval_argument_lifetimes;
 mod eval_array_references;
 mod eval_operand_owners;

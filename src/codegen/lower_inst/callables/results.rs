@@ -1,8 +1,9 @@
 //! Purpose:
-//! Converts descriptor-owned Mixed results into the caller's concrete ABI.
+//! Converts owned Mixed call results into the caller's concrete ABI.
 //!
 //! Called from:
 //! - `super::store_descriptor_invoker_result()` after descriptor invocation.
+//! - Eval method adapters that receive the same owned boxed result contract.
 //!
 //! Key details:
 //! - Mixed results transfer their box; concrete results consume it after conversion.
@@ -105,11 +106,11 @@ fn emit_object_descriptor_result(emitter: &mut Emitter, ty: &PhpType) {
     abi::emit_release_temporary_stack(emitter, 16);
 }
 
-/// Transfers a heap payload out of its owned Mixed result box.
+/// Transfers the low payload out of an owned Mixed box, retaining refcounted values.
 ///
 /// `Array(Mixed)` may use indexed or promoted hash storage at runtime. Both shapes expose their
 /// container pointer in the low Mixed payload word, and the generic retain preserves either kind.
-fn emit_detach_owned_mixed_heap_result(emitter: &mut Emitter, ty: &PhpType) {
+pub(in crate::codegen::lower_inst) fn emit_detach_owned_mixed_heap_result(emitter: &mut Emitter, ty: &PhpType) {
     let result = abi::int_result_reg(emitter);
     abi::emit_push_reg(emitter, result);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
