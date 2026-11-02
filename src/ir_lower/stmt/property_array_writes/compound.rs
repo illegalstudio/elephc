@@ -28,6 +28,16 @@ pub(super) fn write_ordinary_compound(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     index: LoweredValue, value: LoweredValue, compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
 ) {
+    if compound.is_some() && magic_index::lower(ctx, object, property, index, value, compound, span, diagnosed,
+        |ctx, object| ordinary_compound(ctx, object, property, index, value, compound, span, diagnosed)) { return; }
+    ordinary_compound(ctx, object, property, index, value, compound, span, diagnosed);
+}
+
+/// Reads a declared container after special runtime names have selected their own single fetch.
+fn ordinary_compound(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    index: LoweredValue, value: LoweredValue, compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
+) {
     let Some((op, key)) = compound else {
         lower_property_array_assign_value(ctx, object, property, index, value, span, diagnosed);
         return;
@@ -40,7 +50,7 @@ pub(super) fn write_ordinary_compound(
     let expression = Expr::new(ExprKind::StringLiteral(property.into()), span);
     let array = crate::ir_lower::expr::lower_property_get_from_value(ctx, borrowed, property, Op::PropGet, &expression);
     with_compound_value(ctx, array, index, value, op, key, span, |ctx, stored| {
-        lower_property_array_assign_value(ctx, object, property, index, stored, span, diagnosed);
+        lower_property_array_assign_value_without_magic(ctx, object, property, index, stored, span, diagnosed);
     });
 }
 

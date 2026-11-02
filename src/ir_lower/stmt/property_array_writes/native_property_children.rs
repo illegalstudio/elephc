@@ -17,7 +17,7 @@ use super::*;
 enum Storage {
     Declared { array_writable: bool },
     Dynamic,
-    Magic,
+    Magic { hash: bool },
     NativeHook,
 }
 
@@ -79,58 +79,19 @@ pub(super) fn fetch(
                 Op::Borrow.default_effects(), Some(span))
         };
         ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
-        let child = read(ctx, receiver, expression, property, storage, missing, span);
-        let child = ctx.box_value_as_mixed(child, PhpType::Mixed, Some(span));
-        let class = ctx.intern_class_name("SimpleXMLElement");
-        let native = ctx.emit_value(Op::InstanceOf, vec![child.value], Some(Immediate::Data(class)),
-            PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
-        let selected = ctx.builder.create_named_block("xml.property_child.native", vec![]);
-        let ordinary = ctx.builder.create_named_block("xml.property_child.not_native", vec![]);
-        let rejected = ctx.builder.create_named_block("xml.property_child.rejected", vec![]);
-        let split = ctx.initialized_slots_snapshot();
-        ctx.builder.terminate(Terminator::CondBr { cond: native.value,
-            then_target: selected, then_args: vec![], else_target: ordinary, else_args: vec![] });
-        ctx.builder.position_at_end(selected);
-        ctx.restore_initialized_slots(split.clone());
-        crate::ir_lower::expr::store_value_into_temp(ctx, &result, PhpType::Mixed, child, span);
-        merge_slots(&mut merged, ctx.initialized_slots_snapshot());
-        jump(ctx, done);
-        ctx.builder.position_at_end(ordinary);
-        ctx.restore_initialized_slots(split.clone());
-        if matches!(storage, Storage::NativeHook | Storage::Magic)
-            || matches!(storage, Storage::Declared { array_writable: false }) {
-            jump(ctx, rejected);
+        if matches!(storage, Storage::Magic { hash: true }) {
+            let getter = ctx.builder.create_named_block("xml.property_child.getter", vec![]);
+            let split = ctx.initialized_slots_snapshot();
+            select_child(ctx, receiver, expression, property, Storage::Dynamic,
+                getter, missing, &result, done, &mut merged, span);
+            ctx.builder.position_at_end(getter);
+            ctx.restore_initialized_slots(split);
+            select_child(ctx, receiver, expression, property, Storage::Magic { hash: false },
+                missing, missing, &result, done, &mut merged, span);
         } else {
-            let array = ctx.emit_value(Op::TypePredicate, vec![child.value],
-                Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)), PhpType::Bool,
-                Op::TypePredicate.default_effects(), Some(span));
-            let array_candidate = ctx.builder.create_named_block("xml.property_child.array", vec![]);
-            ctx.builder.terminate(Terminator::CondBr { cond: array.value,
-                then_target: array_candidate, then_args: vec![], else_target: rejected, else_args: vec![] });
-            ctx.builder.position_at_end(array_candidate);
-            let shared = ctx.emit_value(Op::RuntimeCall, vec![receiver.value],
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::ObjectCellHasOtherOwner)), PhpType::Bool,
-                effects_lookup::runtime_effects(), Some(span));
-            let array_selected = ctx.builder.create_named_block("xml.property_child.array_selected", vec![]);
-            ctx.builder.terminate(Terminator::CondBr { cond: shared.value,
-                then_target: rejected, then_args: vec![], else_target: array_selected, else_args: vec![] });
-            ctx.builder.position_at_end(array_selected);
-            ctx.restore_initialized_slots(split.clone());
-            crate::ir_lower::expr::store_value_into_temp(ctx, &result, PhpType::Mixed, child, span);
-            merge_slots(&mut merged, ctx.initialized_slots_snapshot());
-            jump(ctx, done);
+            select_child(ctx, receiver, expression, property, storage,
+                missing, missing, &result, done, &mut merged, span);
         }
-        ctx.builder.position_at_end(rejected);
-        ctx.restore_initialized_slots(split.clone());
-        crate::ir_lower::ownership::release_if_owned(ctx, child, Some(span));
-        if matches!(storage, Storage::NativeHook) {
-            let PhpType::Object(class) = ctx.builder.value_php_type(receiver.value) else { unreachable!() };
-            let owner = ctx.classes.get(&class).and_then(|info| info.property_declaring_classes.get(property))
-                .cloned().unwrap_or(class);
-            lower_throw_access_exception(ctx, "Error",
-                &format!("Indirect modification of {}::${property} is not allowed", owner.trim_start_matches('\\')), span);
-        }
-        jump(ctx, missing);
         ctx.builder.position_at_end(next);
         ctx.restore_initialized_slots(before);
     }
@@ -145,6 +106,66 @@ pub(super) fn fetch(
     ctx.restore_initialized_slots(merged.expect("ordinary storage always reaches the merge"));
     crate::ir_lower::expr::retire_owned_call_operand(ctx, name_slot, span);
     Some(crate::ir_lower::expr::take_owned_temp(ctx, &result, span))
+}
+
+/// Classifies one fetched value without confusing an absent hash entry with a rejected child.
+fn select_child(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, expression: &Expr,
+    property: &str, storage: Storage, read_miss: BlockId, missing: BlockId,
+    result: &str, done: BlockId, merged: &mut Option<std::collections::HashSet<LocalSlotId>>, span: Span,
+) {
+    let child = read(ctx, receiver, expression, property, storage, read_miss, span);
+    let child = ctx.box_value_as_mixed(child, PhpType::Mixed, Some(span));
+    let class = ctx.intern_class_name("SimpleXMLElement");
+    let native = ctx.emit_value(Op::InstanceOf, vec![child.value], Some(Immediate::Data(class)),
+        PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
+    let selected = ctx.builder.create_named_block("xml.property_child.native", vec![]);
+    let ordinary = ctx.builder.create_named_block("xml.property_child.not_native", vec![]);
+    let rejected = ctx.builder.create_named_block("xml.property_child.rejected", vec![]);
+    let split = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr { cond: native.value,
+        then_target: selected, then_args: vec![], else_target: ordinary, else_args: vec![] });
+    ctx.builder.position_at_end(selected);
+    ctx.restore_initialized_slots(split.clone());
+    crate::ir_lower::expr::store_value_into_temp(ctx, result, PhpType::Mixed, child, span);
+    merge_slots(merged, ctx.initialized_slots_snapshot());
+    jump(ctx, done);
+    ctx.builder.position_at_end(ordinary);
+    ctx.restore_initialized_slots(split.clone());
+    if matches!(storage, Storage::NativeHook | Storage::Magic { .. })
+        || matches!(storage, Storage::Declared { array_writable: false }) {
+        jump(ctx, rejected);
+    } else {
+        let array = ctx.emit_value(Op::TypePredicate, vec![child.value],
+            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)), PhpType::Bool,
+            Op::TypePredicate.default_effects(), Some(span));
+        let array_candidate = ctx.builder.create_named_block("xml.property_child.array", vec![]);
+        ctx.builder.terminate(Terminator::CondBr { cond: array.value,
+            then_target: array_candidate, then_args: vec![], else_target: rejected, else_args: vec![] });
+        ctx.builder.position_at_end(array_candidate);
+        let shared = ctx.emit_value(Op::RuntimeCall, vec![receiver.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ObjectCellHasOtherOwner)), PhpType::Bool,
+            effects_lookup::runtime_effects(), Some(span));
+        let array_selected = ctx.builder.create_named_block("xml.property_child.array_selected", vec![]);
+        ctx.builder.terminate(Terminator::CondBr { cond: shared.value,
+            then_target: rejected, then_args: vec![], else_target: array_selected, else_args: vec![] });
+        ctx.builder.position_at_end(array_selected);
+        ctx.restore_initialized_slots(split.clone());
+        crate::ir_lower::expr::store_value_into_temp(ctx, result, PhpType::Mixed, child, span);
+        merge_slots(merged, ctx.initialized_slots_snapshot());
+        jump(ctx, done);
+    }
+    ctx.builder.position_at_end(rejected);
+    ctx.restore_initialized_slots(split.clone());
+    crate::ir_lower::ownership::release_if_owned(ctx, child, Some(span));
+    if matches!(storage, Storage::NativeHook) {
+        let PhpType::Object(class) = ctx.builder.value_php_type(receiver.value) else { unreachable!() };
+        let owner = ctx.classes.get(&class).and_then(|info| info.property_declaring_classes.get(property))
+            .cloned().unwrap_or(class);
+        lower_throw_access_exception(ctx, "Error",
+            &format!("Indirect modification of {}::${property} is not allowed", owner.trim_start_matches('\\')), span);
+    }
+    jump(ctx, missing);
 }
 
 /// Selects ordinary storage and preserves the existing XML-typed getter surface.
@@ -173,7 +194,10 @@ fn storage(
         }
     }
     if magic_append::is_candidate(ctx, class, info, property) {
-        return Some(Storage::Magic);
+        let hash = info.visible_property(property).is_none() && property.parse::<i64>().is_err()
+            && (crate::types::checker::builtin_stdclass::is_stdclass(class)
+                || info.dynamic_property_hash_is_name_addressable());
+        return Some(Storage::Magic { hash });
     }
     let hash = crate::types::checker::builtin_stdclass::is_stdclass(class)
         || info.dynamic_property_hash_is_name_addressable();
@@ -196,7 +220,7 @@ fn read(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, expression: &Expr,
     property: &str, storage: Storage, missing: BlockId, span: Span,
 ) -> LoweredValue {
-    if matches!(storage, Storage::NativeHook | Storage::Magic) {
+    if matches!(storage, Storage::NativeHook | Storage::Magic { .. }) {
         let expr = Expr::new(ExprKind::PropertyAccess {
             object: Box::new(expression.clone()), property: property.into(),
         }, span);
@@ -204,7 +228,7 @@ fn read(
     }
     let data = ctx.intern_string(property);
     let present = match storage {
-        Storage::NativeHook | Storage::Magic => unreachable!(),
+        Storage::NativeHook | Storage::Magic { .. } => unreachable!(),
         Storage::Declared { .. } => ctx.emit_value(Op::PropInitialized, vec![object.value],
             Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span)),
         Storage::Dynamic => {
@@ -220,7 +244,7 @@ fn read(
         then_target: stored, then_args: vec![], else_target: missing, else_args: vec![] });
     ctx.builder.position_at_end(stored);
     match storage {
-        Storage::NativeHook | Storage::Magic => unreachable!(),
+        Storage::NativeHook | Storage::Magic { .. } => unreachable!(),
         Storage::Declared { .. } => {
             let expr = Expr::new(ExprKind::PropertyAccess {
                 object: Box::new(expression.clone()), property: property.into(),

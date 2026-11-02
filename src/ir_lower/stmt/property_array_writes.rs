@@ -13,6 +13,7 @@ use crate::parser::ast::BinOp;
 mod native_xml;
 mod native_property_children;
 mod magic_append;
+mod magic_index;
 mod compound;
 mod incdec;
 mod runtime_receivers;
@@ -536,10 +537,19 @@ fn lower_property_array_assign_value(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, index: LoweredValue,
     value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
-    if runtime_receivers::lower(ctx, object, property, index, value, span, key_already_diagnosed) {
-        return;
-    }
-    lower_property_array_assign_value_direct(ctx, object, property, index, value, span, key_already_diagnosed);
+    if magic_index::lower(ctx, object, property, index, value, None, span, key_already_diagnosed,
+        |ctx, object| lower_property_array_assign_value_without_magic(
+            ctx, object, property, index, value, span, key_already_diagnosed)) { return; }
+    lower_property_array_assign_value_without_magic(ctx, object, property, index, value, span, key_already_diagnosed);
+}
+
+/// Retains declared-slot COW after special runtime getter and visibility cases are excluded.
+fn lower_property_array_assign_value_without_magic(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, index: LoweredValue,
+    value: LoweredValue, span: Span, diagnosed: bool,
+) {
+    if runtime_receivers::lower(ctx, object, property, index, value, span, diagnosed) { return; }
+    lower_property_array_assign_value_direct(ctx, object, property, index, value, span, diagnosed);
 }
 
 /// Reuses typed storage after class selection without recursively dispatching an erased fallback.

@@ -245,3 +245,51 @@ fn test_simplexml_generic_property_handoff_native_bundle() {
 fn test_simplexml_generic_property_handoff_eval_bundle() {
     assert_generic_property_handoff(true);
 }
+
+/// Ordinary magic and dynamic names select one accessible child for indexed writes.
+#[test]
+fn test_simplexml_indexed_property_protocols_bundle() {
+    if skip_without_xml_native("test_simplexml_indexed_property_protocols_bundle") { return; }
+    let source = r#"<?php
+set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
+class IndexedHiddenXml {
+    public function __construct(private mixed $items) {}
+}
+class IndexedMagicXml {
+    public function __construct(private mixed $items, private mixed $visible) {}
+    public function __get(string $name): mixed { echo 'get|'; return $this->visible; }
+}
+#[AllowDynamicProperties]
+class IndexedDynamicXml {
+    public function __get(string $name): mixed { echo 'unexpected-get|'; return null; }
+}
+class IndexedMagicArray {
+    private array $backing = [1, 2];
+    public function __get(string $name): mixed { echo 'array-get|'; return $this->backing; }
+    public function snapshot(): array { return $this->backing; }
+}
+function indexedPropertySeed(mixed $object, mixed $value): void { $object->items = $value; }
+function indexedPropertySet(mixed $object, mixed $value): void { $object->items[0] = $value; }
+function indexedPropertyConcat(mixed $object): void { $object->items[0] .= 'T'; }
+function indexedKnownMagic(IndexedMagicXml $object): void { $object->items[0] .= 'K'; }
+$hidden = new SimpleXMLElement('<r><a>H</a></r>');
+$visible = new SimpleXMLElement('<r><a>V</a></r>');
+$private = new IndexedHiddenXml($hidden->a);
+try { indexedPropertySet($private, 'bad'); } catch (Error $error) { echo $error->getMessage(), '|'; }
+$magic = new IndexedMagicXml($hidden->a, $visible->a);
+indexedPropertySet($magic, 'S'); indexedPropertyConcat($magic); indexedKnownMagic($magic);
+echo $hidden->a, ':', $visible->a, '|';
+$dynamic = new IndexedDynamicXml(); indexedPropertySeed($dynamic, $visible->a);
+indexedPropertySet($dynamic, 'D'); indexedPropertyConcat($dynamic); echo $visible->a, '|';
+indexedPropertySeed($dynamic, [1, 2]); $alias = get_object_vars($dynamic)['items'];
+indexedPropertySet($dynamic, 9); echo json_encode(get_object_vars($dynamic)['items']), ':', json_encode($alias), '|';
+$array = new IndexedMagicArray(); indexedPropertySet($array, 9);
+echo json_encode($array->snapshot()), '|';
+unset($private, $magic, $dynamic, $array, $alias, $hidden, $visible, $error);
+restore_error_handler();
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Cannot access private property IndexedHiddenXml::$items|get|get|get|H:STK|DT|[9,2]:[1,2]|array-get|8:Indirect modification of overloaded property IndexedMagicArray::$items has no effect|[1,2]|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
