@@ -182,10 +182,10 @@ fn array_element_writeback_preserves_cell_metadata() {
     assert_array_element_writeback_preserves_metadata(true);
 }
 
-/// Structural array copies retain reference identity while ordinary values stay independent.
+/// Structural copies preserve shared references and separate references owned only by the source.
 #[test]
 fn shallow_array_copy_preserves_physical_reference_elements() {
-    for associative in [false, true] {
+    for (associative, shared_reference) in [(false, false), (false, true), (true, false), (true, true)] {
         let mut values = FakeOps::default();
         let array = if associative { values.assoc_new(2) } else { values.array_new(2) }.unwrap();
         let key = if associative { values.string("ref\0key") } else { values.int(0) }.unwrap();
@@ -194,18 +194,26 @@ fn shallow_array_copy_preserves_physical_reference_elements() {
         let reference = values.reference_new(before).unwrap();
         values.array_set(array, key, reference).unwrap();
         values.array_set(array, plain_key, before).unwrap();
+        if !shared_reference { values.release(reference).unwrap(); }
         let copied = values.array_clone_shallow(array).unwrap();
         let copied_reference = values.array_get_preserving_references(copied, key).unwrap();
-        assert_eq!(copied_reference, reference, "associative={associative}");
+        if shared_reference {
+            assert_eq!(copied_reference, reference, "associative={associative}");
+        } else {
+            assert_ne!(copied_reference, reference, "associative={associative}");
+            assert!(!values.is_reference(copied_reference).unwrap());
+        }
         values.release(copied_reference).unwrap();
         let after = values.int(13).unwrap();
         values.array_set(copied, key, after).unwrap();
         values.array_set(copied, plain_key, after).unwrap();
         let shared = values.array_get(array, key).unwrap();
         let unchanged = values.array_get(array, plain_key).unwrap();
-        assert_eq!(values.get(shared), FakeValue::Int(13), "associative={associative}");
+        assert_eq!(values.get(shared), FakeValue::Int(if shared_reference { 13 } else { 1 }),
+            "associative={associative}, shared_reference={shared_reference}");
         assert_eq!(values.get(unchanged), FakeValue::Int(1), "associative={associative}");
-        for value in [shared, unchanged, copied, array, reference, before, after, key, plain_key] {
+        if shared_reference { values.release(reference).unwrap(); }
+        for value in [shared, unchanged, copied, array, before, after, key, plain_key] {
             values.release(value).unwrap();
         }
     }

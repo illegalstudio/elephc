@@ -347,6 +347,32 @@ pub trait RuntimeValueOps {
         self.array_get(array, index)
     }
 
+    /// Copies a stored element, preserving only references with another owner before the read.
+    fn array_get_for_structural_copy(
+        &mut self,
+        array: RuntimeCellHandle,
+        index: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let value = self.array_get_preserving_references(array, index)?;
+        let reference = match self.is_reference(value) {
+            Ok(reference) => reference,
+            Err(status) => {
+                if !value.is_borrowed() { let _ = self.release(value); }
+                return Err(status);
+            }
+        };
+        if !reference { return Ok(value); }
+        // The source array still owns this slot. Retire the read lease before testing
+        // whether some other PHP owner shares it, just as native array COW does.
+        if !value.is_borrowed() { self.release(value)?; }
+        let stored = value.borrowed();
+        if self.reference_is_shared(stored)? {
+            self.retain(stored)
+        } else {
+            self.copy_value(stored)
+        }
+    }
+
     /// Checks whether a normalized PHP array key exists without conflating null values with misses.
     fn array_key_exists(
         &mut self,
@@ -422,7 +448,7 @@ pub trait RuntimeValueOps {
             for position in 0..len {
                 let key = self.array_iter_key(array, position)?;
                 operands.push(key);
-                let value = self.array_get_preserving_references(array, key)?;
+                let value = self.array_get_for_structural_copy(array, key)?;
                 operands.push(value);
                 self.array_set(result, key, value)?;
             }

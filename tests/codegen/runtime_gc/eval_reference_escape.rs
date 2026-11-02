@@ -10,6 +10,43 @@
 
 use crate::support::*;
 
+/// Array-property writes separate orphan references while retaining genuinely shared elements.
+#[test]
+fn test_eval_property_array_clone_separates_orphan_references() {
+    let source = r#"<?php
+class NativeOrphanArrayClone { public array $items = []; }
+$source = $argc > 0 ? '
+class EvalOrphanArrayClone { public array $items = []; }
+function exerciseOrphanArrayClone($original, $key, bool $shared): void {
+    $value = "before";
+    $original->items = [$key => &$value];
+    if (!$shared) { unset($value); }
+    $copy = clone $original;
+    $copy->items[$key] = "after";
+    echo $original->items[$key], ":", $copy->items[$key];
+    if ($shared) { echo ":", $value; }
+    echo "|";
+    unset($value, $copy, $original);
+}
+foreach ([0, "key\\0part"] as $key) {
+    exerciseOrphanArrayClone(new NativeOrphanArrayClone(), $key, false);
+    exerciseOrphanArrayClone(new NativeOrphanArrayClone(), $key, true);
+    exerciseOrphanArrayClone(new EvalOrphanArrayClone(), $key, false);
+    exerciseOrphanArrayClone(new EvalOrphanArrayClone(), $key, true);
+}
+unset($key);
+' : '';
+eval($source); unset($source);
+"#;
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    let expected = "before:after|after:after:after|".repeat(4);
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[&expected]);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+}
+
 /// Escaped property references outlive temporary receivers and retain caller alias identities.
 #[test]
 fn test_eval_property_reference_escape_owners_bundle() {
