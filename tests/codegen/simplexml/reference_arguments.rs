@@ -16,7 +16,7 @@ fn test_simplexml_reference_arguments_materialize_missing_paths_bundle() {
     if skip_without_xml_native("test_simplexml_reference_arguments_materialize_missing_paths_bundle") { return; }
     let body = r#"
 function replaceMissingXmlSelection(&$value, string $observed): void {
-    echo get_debug_type($value), ':', $observed, '|'; $value = 'replacement';
+    echo get_class($value), ':', $observed, '|'; $value = 'replacement';
 }
 function observeMissingXmlSelection(SimpleXMLElement $xml): string {
     return isset($xml->nested->child) ? 'created' : 'absent';
@@ -43,7 +43,7 @@ $callback = MissingXmlSelectionConsumer::changeStatic(...); $callback($xml->boun
 $callback = function (&$value): void { $value = 'closure'; }; $callback($xml->closure);
 echo (int)isset($xml->ctor), (int)isset($xml->method), (int)isset($xml->stat), (int)isset($xml->invoke),
     (int)isset($xml->bound), (int)isset($xml->boundStatic), (int)isset($xml->closure), '|';
-function readMissingXmlSelection($value): void { echo get_debug_type($value), '|'; }
+function readMissingXmlSelection($value): void { echo get_class($value), '|'; }
 readMissingXmlSelection($xml->unread); echo (int)isset($xml->unread), '|';
 function replaceMissingVariadicXmlSelection(&...$values): void {
     if (array_key_exists('slot', $values)) { $values['slot'] = 'replacement'; }

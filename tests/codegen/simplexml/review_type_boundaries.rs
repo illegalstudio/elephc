@@ -198,6 +198,7 @@ fn test_simplexml_type_boundaries_native_bundle() {
     let mut failures = Vec::new();
     for ((output, expected), checkpoint) in runs.iter().zip(expected).zip([
         "complete", "arguments", "properties", "references", "raw_reflection", "static_properties", "methods", "callables",
+        "plain_property", "dynamic_property", "reflection_property",
     ]) {
         if !output.success || output.stdout != expected
             || !output.stderr.contains("HEAP DEBUG: leak summary: clean")
@@ -206,7 +207,7 @@ fn test_simplexml_type_boundaries_native_bundle() {
             failures.push(format!("checkpoint={checkpoint}: stdout={} stderr={}", output.stdout, output.stderr));
         }
     }
-    assert_eq!(runs.len(), 8);
+    assert_eq!(runs.len(), 11);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -231,7 +232,7 @@ fn test_simplexml_type_boundaries_eval_bundle() {
             || !output.stderr.contains("HEAP DEBUG: leak summary: clean") || output.stderr.contains("Warning:")
         { failures.push(format!("checkpoint={index}: stdout={} stderr={}", output.stdout, output.stderr)); }
     }
-    assert_eq!(runs.len(), 8);
+    assert_eq!(runs.len(), 11);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -243,6 +244,9 @@ fn boundary_property_checkpoints(source: &str) -> String {
         (6, "$lateReturn = new BoundaryXmlReturnChild('<r/>');"),
         (7, "$callback = acceptBoundaryXml(...);"),
         (8, "$hook = new BoundaryXmlHook();"),
+        (9, "$property = 'node';"),
+        (10, "$instanceProperty = new ReflectionProperty(BoundaryXmlBox::class, 'node');"),
+        (11, "// Raw reflection is exposed through eval"),
     ] {
         assert_eq!(source.matches(marker).count(), 1, "{marker}");
         source = source.replace(marker, &format!("if ($argc === {argc}) {{ return; }}\n{marker}"));
@@ -256,11 +260,14 @@ fn boundary_checkpoint_argv() -> &'static [&'static [&'static str]] {
         &["raw", "checkpoint", "checkpoint", "checkpoint"],
         &["static", "checkpoint", "checkpoint", "checkpoint", "checkpoint"],
         &["methods", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint"],
-        &["callables", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint"]]
+        &["callables", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint"],
+        &["plain", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint"],
+        &["dynamic", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint"],
+        &["reflection", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint", "checkpoint"]]
 }
 
 /// Keeps the same exact stdout expectations through the additional property checkpoints.
 fn boundary_property_checkpoint_outputs(expected: &str) -> impl Iterator<Item = String> + '_ {
-    [24, 36, 45, 48].into_iter().map(move |lines|
+    [24, 36, 45, 48, 21, 22, 23].into_iter().map(move |lines|
         expected.lines().take(lines).collect::<Vec<_>>().join("\n") + "\n")
 }
