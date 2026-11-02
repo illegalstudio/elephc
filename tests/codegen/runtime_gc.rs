@@ -295,3 +295,5 @@ mod counter_regions;
 mod static_object_exports;
 #[path = "runtime_gc/gmp_exception_operands.rs"]
 mod gmp_exception_operands;
+
+mod eval_reference_escape;

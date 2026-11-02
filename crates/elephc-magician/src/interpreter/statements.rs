@@ -36,6 +36,7 @@ mod native_property_access;
 mod native_property_unset;
 mod native_static_dispatch;
 mod property_constant_validation;
+mod property_reference_owners;
 mod property_dispatch;
 mod property_dimension_writes;
 mod property_append_fetch;
