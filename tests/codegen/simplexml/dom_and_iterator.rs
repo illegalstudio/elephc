@@ -549,3 +549,25 @@ echo '|', $xml->getName();
     assert_eq!(out.stdout, "getter|r");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Native DOM text setters mutate the same tree while previously exposed PI nodes stay live.
+#[test]
+fn test_simplexml_native_dom_text_setters_update_live_views() {
+    if skip_without_xml_native("test_simplexml_native_dom_text_setters_update_live_views") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$document = new DOMDocument();
+$document->loadXML('<r>a<b>c</b><?work data?></r>');
+$root = $document->documentElement;
+$instruction = $root->childNodes->item(2);
+if ($instruction instanceof DOMProcessingInstruction) {
+    $instruction->nodeValue = 'changed'; echo $instruction->data, '|';
+    $instruction->data = 'again'; echo $document->saveXML($instruction), '|';
+} else { throw new Error('Expected a processing instruction'); }
+$root->nodeValue = 'A&amp;B'; echo $root->textContent, ':', $document->saveXML($root), '|';
+$root->textContent = 'A&amp;B'; echo $root->textContent, ':', $document->saveXML($root), '|';
+unset($instruction, $root, $document);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "changed|<?work again?>|A&B:<r>A&amp;B</r>|A&amp;B:<r>A&amp;amp;B</r>|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
