@@ -78,6 +78,26 @@ pub(super) fn dynamic(
     mode: PropertyFetchMode, known_native: bool,
     selection: Option<elephc_builtin_contract::ObjectProperty>, expr: &Expr,
 ) -> LoweredValue {
+    dynamic_with_result(ctx, object, property, mode, known_native, selection, expr, |_, value| value)
+}
+
+/// Keeps an erased non-XML receiver on its ordinary argument path while XML gets a reference marker.
+pub(super) fn dynamic_reference_argument(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
+    alias: &str, expr: &Expr,
+) -> LoweredValue {
+    dynamic_with_result(ctx, object, property, PropertyFetchMode::Read, false,
+        Some(elephc_builtin_contract::ObjectProperty::ReferenceSelect), expr,
+        |ctx, value| reference_arguments::marker(ctx, alias, value, expr.span))
+}
+
+/// Shares name and receiver owners while optionally transforming the selected native result.
+fn dynamic_with_result(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
+    mode: PropertyFetchMode, known_native: bool,
+    selection: Option<elephc_builtin_contract::ObjectProperty>, expr: &Expr,
+    native_result: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue) -> LoweredValue,
+) -> LoweredValue {
     let temp = ctx.declare_owned_hidden_temp(PhpType::Str);
     store_value_into_temp(ctx, &temp, PhpType::Str, property, expr.span);
     let slot = ctx.local_slots[&temp];
@@ -93,7 +113,8 @@ pub(super) fn dynamic(
         ctx, object, expr, PhpType::Mixed, known_native,
         |ctx, receiver| {
             let name = borrow_owned_name(ctx, &temp, expr.span);
-            emit_native_name_call(ctx, receiver, name, method, expr)
+            let value = emit_native_name_call(ctx, receiver, name, method, expr);
+            native_result(ctx, value)
         },
         |ctx, receiver| {
             let property = borrow_owned_name(ctx, &temp, expr.span);

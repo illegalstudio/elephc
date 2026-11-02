@@ -64,7 +64,11 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     }
     if instance_signature.is_none() {
         let mut callable = root_descriptor_callback(ctx, callable, result_type, expr.span);
-        let arg_container = if descriptor_signature.is_some() {
+        // A parameter's inferred signature can describe a different caller's callback.
+        // XML read context must use the descriptor actually selected at this invocation.
+        let arg_container = if descriptor_signature.is_some()
+            && !args.iter().any(|arg| may_be_native_selection_reference_argument(ctx, arg))
+        {
             lower_descriptor_invoker_arg_container_for_call_user_func(
                 ctx,
                 args,

@@ -21,7 +21,7 @@ pub(super) fn prepare(
     ctx: &mut LoweringContext<'_, '_>, callback: &mut RootedDescriptorCallback,
     args: &[Expr], span: Span,
 ) -> Vec<Option<SelectionArgument>> {
-    if !args.iter().any(|arg| is_native_selection_reference_argument(ctx, arg)) {
+    if !args.iter().any(|arg| may_be_native_selection_reference_argument(ctx, arg)) {
         return (0..args.len()).map(|_| None).collect();
     }
     ctx.declare_eval_context_local();
@@ -32,7 +32,7 @@ pub(super) fn prepare(
     let boxed = ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span));
     let (boxed, owner) = root_owned_call_operand(ctx, boxed, span);
     let modes: Vec<_> = args.iter().enumerate().map(|(index, arg)| {
-        if !is_native_selection_reference_argument(ctx, arg) { return None; }
+        if !may_be_native_selection_reference_argument(ctx, arg) { return None; }
         let name = match &arg.kind { ExprKind::NamedArg { name, .. } => name.as_str(), _ => "" };
         let name_expr = Expr::new(ExprKind::StringLiteral(name.to_string()), arg.span);
         let name = lower_expr(ctx, &name_expr);
@@ -68,10 +68,8 @@ pub(super) fn lower(
     ctx.builder.terminate(Terminator::CondBr { cond: selection.by_reference.value,
         then_target: reference, then_args: Vec::new(), else_target: read, else_args: Vec::new() });
     ctx.builder.position_at_end(reference);
-    let value = property_access::lower_property_reference_receiver(ctx, arg);
-    store_value_into_temp(ctx, &selection.alias, PhpType::Mixed, value, arg.span);
-    let marker = lower_invoker_ref_variadic_arg_marker(ctx, &selection.alias, arg.span);
-    store_value_into_temp(ctx, &result, PhpType::Mixed, marker, arg.span);
+    let value = property_access::lower_runtime_reference_argument(ctx, arg, &selection.alias);
+    store_value_into_temp(ctx, &result, PhpType::Mixed, value, arg.span);
     branch_to(ctx, merge);
     let reference_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(read);

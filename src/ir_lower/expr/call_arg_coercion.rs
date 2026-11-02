@@ -116,6 +116,20 @@ pub(super) fn is_native_selection_reference_argument(
         || is_native_selection_reference_argument(ctx, receiver)
 }
 
+/// Includes erased receivers whose native family must be selected at the argument's runtime position.
+pub(super) fn may_be_native_selection_reference_argument(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+    if let ExprKind::NamedArg { value, .. } = &arg.kind {
+        return may_be_native_selection_reference_argument(ctx, value);
+    }
+    if is_native_selection_reference_argument(ctx, arg) { return true; }
+    if !ctx.classes.contains_key("SimpleXMLElement") { return false; }
+    let Some(receiver) = crate::types::param_binding::native_selection_reference_receiver(arg) else { return false; };
+    let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, receiver);
+    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || singular_object_class(&ty).is_some_and(|(class, _)| class.is_empty() || ctx.interfaces.contains_key(class))
+        || may_be_native_selection_reference_argument(ctx, receiver)
+}
+
 /// Moves the selected view into a scoped reference cell so no old-value lease spans the call.
 pub(super) fn stage_native_selection_reference(
     ctx: &mut LoweringContext<'_, '_>, arg: &Expr,

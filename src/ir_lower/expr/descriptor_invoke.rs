@@ -473,11 +473,16 @@ pub(super) fn lower_call_user_func_descriptor_invoke_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = descriptor_invoker_result_type(sig);
-    let callback = root_descriptor_callback(ctx, callback, result_type, expr.span);
+    let mut callback = root_descriptor_callback(ctx, callback, result_type, expr.span);
     let native_references = !matches!(&expr.kind, ExprKind::FunctionCall { name, .. }
         if php_symbol_key(name.as_str().trim_start_matches('\\')) == "call_user_func");
-    let arg_container =
-        lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, native_references, expr.span);
+    let arg_container = if native_references
+        && args.iter().any(|arg| may_be_native_selection_reference_argument(ctx, arg))
+    {
+        lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut callback, args, expr.span)
+    } else {
+        lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, native_references, expr.span)
+    };
     emit_callable_descriptor_invoke(ctx, callback, arg_container, expr.span)
 }
 

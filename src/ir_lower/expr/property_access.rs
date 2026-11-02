@@ -11,6 +11,8 @@ use super::*;
 
 pub(super) mod native_xml_reads;
 mod runtime_hooks;
+mod reference_arguments;
+pub(crate) use reference_arguments::lower_runtime_reference_argument;
 mod write_dimensions;
 pub(crate) use write_dimensions::{lower_native_dimension_write_select, may_have_native_xml_dimensions};
 pub(crate) use write_dimensions::lower_native_dimension_incdec_select_from_values;

@@ -63,12 +63,23 @@ function runtimeMissingXmlValue($value, string $after): void { echo $after, '|';
 function runtimeMissingXmlCall(mixed $callback, SimpleXMLElement $root): void {
     $callback($root->runtime, isset($root->runtime) ? 'created' : 'absent');
     $callback(value: $root->runtimeNamed[0], after: isset($root->runtimeNamed) ? 'created' : 'absent');
-    echo (int)isset($root->runtime), (int)isset($root->runtimeNamed), '|';
+    $name = 'runtimeDynamic';
+    $callback($root->{$name}, isset($root->{$name}) ? 'created' : 'absent');
+    echo (int)isset($root->runtime), (int)isset($root->runtimeNamed), (int)isset($root->{$name}), '|';
 }
 runtimeMissingXmlCall(runtimeMissingXmlReference(...), new SimpleXMLElement('<r/>'));
 runtimeMissingXmlCall(runtimeMissingXmlValue(...), new SimpleXMLElement('<r/>'));
+function runtimeMissingXmlAfterEval(mixed $callback, SimpleXMLElement $root, string $source): void {
+    eval($source);
+    $callback($root->afterEval, isset($root->afterEval) ? 'created' : 'absent');
+    $callback(value: $root->afterEvalNamed[0], after: isset($root->afterEvalNamed) ? 'created' : 'absent');
+    echo (int)isset($root->afterEval), (int)isset($root->afterEvalNamed), '|';
+}
+$barrier = $argc > 0 ? '' : 'echo "unexpected";';
+runtimeMissingXmlAfterEval(runtimeMissingXmlReference(...), new SimpleXMLElement('<r/>'), $barrier);
+runtimeMissingXmlAfterEval(runtimeMissingXmlValue(...), new SimpleXMLElement('<r/>'), $barrier);
 "#;
-    let expected = "SimpleXMLElement:first|SimpleXMLElement:created|SimpleXMLElement:name|1:1:1|::|1:4|1111111|SimpleXMLElement|0|11|11|created|created|11|absent|absent|00|";
+    let expected = "SimpleXMLElement:first|SimpleXMLElement:created|SimpleXMLElement:name|1:1:1|::|1:4|1111111|SimpleXMLElement|0|11|11|created|created|created|111|absent|absent|absent|000|created|created|11|absent|absent|00|";
     let native = format!("<?php {body}");
     let encoded = body.replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $xmlCapability = new SimpleXMLElement('<r/>'); unset($xmlCapability); $code = $argc > 0 ? '{encoded}' : ''; eval($code); unset($code);");
