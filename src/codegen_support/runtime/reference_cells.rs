@@ -268,6 +268,9 @@ fn emit_singleton_mixed_clone_branch(emitter: &mut Emitter) {
             emitter.instruction("cmp x10, #1");                                 // ordinary nested Mixed boxes have no reference identity
             emitter.instruction("b.ne __rt_reference_cell_clone_mixed");        // clone an ordinary nested boxed value
             emitter.instruction("ldr w10, [x0, #-12]");                         // count owners of the inner persistent reference
+            emitter.instruction("ldr x11, [x0, #-8]");                          // inspect the wrapper's collector-only ownership
+            emitter.instruction("ubfx x11, x11, #18, #1");                      // isolate the artificial destructor pin
+            emitter.instruction("sub w10, w10, w11");                           // only PHP-visible wrapper aliases preserve sharing
             emitter.instruction("cmp w10, #1");                                 // a singleton wrapper can separate like an ordinary value
             emitter.instruction("b.hi __rt_reference_cell_clone_retain");       // preserve references shared outside the native cell
         }
@@ -280,7 +283,12 @@ fn emit_singleton_mixed_clone_branch(emitter: &mut Emitter) {
             emitter.instruction("jne __rt_reference_cell_clone_mixed");         // ordinary boxed values need an independent zval
             emitter.instruction("cmp QWORD PTR [rax + 16], 1");                 // recognize the persistent-reference ABI marker
             emitter.instruction("jne __rt_reference_cell_clone_mixed");         // clone an ordinary nested boxed value
-            emitter.instruction("cmp DWORD PTR [rax - 12], 1");                 // count owners of the inner persistent reference
+            emitter.instruction("mov ecx, DWORD PTR [rax - 12]");               // count owners of the inner persistent reference
+            emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // inspect the wrapper's collector-only ownership
+            emitter.instruction("shr r10, 18");                                 // position the artificial destructor pin
+            emitter.instruction("and r10d, 1");                                 // isolate collector-only ownership
+            emitter.instruction("sub ecx, r10d");                               // only PHP-visible wrapper aliases preserve sharing
+            emitter.instruction("cmp ecx, 1");                                  // singleton references separate despite a collector snapshot
             emitter.instruction("ja __rt_reference_cell_clone_retain");         // preserve references shared outside the native cell
         }
     }

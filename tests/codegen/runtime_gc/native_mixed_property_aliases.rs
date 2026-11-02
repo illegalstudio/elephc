@@ -10,6 +10,43 @@
 
 use crate::support::*;
 
+/// Collector snapshot owners do not keep a singleton inner PHP reference shared during clone.
+#[test]
+fn test_native_mixed_reference_clone_ignores_collector_wrapper_pin_bundle() {
+    let source = r#"<?php
+class CollectorPinnedMixedClone {
+    public mixed $value = 'old';
+    public mixed $cycle = null;
+    public bool $run = true;
+    public function __destruct() {
+        if (!$this->run) { return; }
+        $this->run = false;
+        $copy = clone $this;
+        $copy->cycle = null;
+        $copy->value = 'copy';
+        echo $this->value, ':', $copy->value, '|';
+        unset($copy);
+    }
+}
+function makeCollectorPinnedMixedClone(bool $run): void {
+    $object = new CollectorPinnedMixedClone();
+    $code = $run ? '
+function touchCollectorPinnedMixedClone(&$value): void {}
+touchCollectorPinnedMixedClone($object->value);
+' : '';
+    eval($code);
+    $object->cycle = $object;
+    unset($object, $code);
+}
+makeCollectorPinnedMixedClone($argc > 0);
+gc_collect_cycles();
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "old:copy|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Mixed constructor properties retain live caller bindings across frame retirement and eval.
 #[test]
 fn test_promoted_mixed_constructor_owned_reference_lifetimes_bundle() {
