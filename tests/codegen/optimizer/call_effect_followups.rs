@@ -54,3 +54,52 @@ echo $saved;
     assert_eq!(compile_and_run(source), expected);
     assert_eq!(without_ir_opt(|| compile_and_run(source)), expected);
 }
+
+/// Discarding lexical instance results cannot remove NaN-to-bool warning handlers.
+#[test]
+fn test_call_effect_batch_review_lexical_instance_warnings() {
+    let source = r#"<?php
+set_error_handler(function(int $level, string $message): bool { echo "warn;"; return true; });
+class WarningBase {
+    public function consume(bool $value): int { return $value ? 1 : 0; }
+}
+class WarningChild extends WarningBase {
+    public function relay(mixed $value): void { parent::consume($value); self::consume($value); }
+}
+(new WarningChild())->relay(NAN);
+echo "done";
+"#;
+    assert_eq!(compile_and_run(source), "warn;warn;done");
+    assert_eq!(without_ir_opt(|| compile_and_run(source)), "warn;warn;done");
+}
+
+/// Discarded calls retain null guards after an independent throw keeps the AST catch live.
+#[test]
+fn test_call_effect_batch_review_null_parameter_guards() {
+    let source = r#"<?php
+class NullBase {
+    public static function accept(null $value): int { return 1; }
+}
+class NullChild extends NullBase {
+    public static function relaySelf(mixed $value, bool $force): void {
+        if ($force) { throw new TypeError("keep catch"); }
+        self::accept($value);
+    }
+    public static function relayParent(mixed $value, bool $force): void {
+        if ($force) { throw new TypeError("keep catch"); }
+        parent::accept($value);
+    }
+    public static function relayLate(mixed $value, bool $force): void {
+        if ($force) { throw new TypeError("keep catch"); }
+        static::accept($value);
+    }
+}
+try { NullChild::relaySelf($argc, $argc === 999); } catch (TypeError $e) { echo "self;"; }
+try { NullChild::relayParent($argc, $argc === 999); } catch (TypeError $e) { echo "parent;"; }
+try { NullChild::relayLate($argc, $argc === 999); } catch (TypeError $e) { echo "late;"; }
+echo "done";
+"#;
+    let expected = "self;parent;late;done";
+    assert_eq!(compile_and_run(source), expected);
+    assert_eq!(without_ir_opt(|| compile_and_run(source)), expected);
+}

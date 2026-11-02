@@ -143,8 +143,10 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
     } else {
         crate::ir::parameter_roots::borrowed_parameter_roots(function)
     };
-    // A literal false signature has a throwing call-boundary guard even if its body is empty.
-    if function.params.iter().any(|parameter| parameter.php_type == PhpType::False) {
+    // Literal false and null signatures have throwing guards even when their bodies are empty.
+    if function.params.iter().any(|parameter|
+        matches!(parameter.php_type, PhpType::False | PhpType::Void))
+    {
         effects |= Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_THROW | Effects::MAY_DEOPT;
     }
     for instruction in &function.instructions {
@@ -252,7 +254,7 @@ fn direct_call_effects(
         return None;
     };
     let name = context.data.function_names.get(name_id.as_raw() as usize)?;
-    resolved_callable_effects(function, instruction, &callable_key(name), context)
+    resolved_callable_effects(function, instruction, &callable_key(name), 0, context)
 }
 
 /// Resolves and unions all concrete implementations reachable by one instance call.
@@ -273,20 +275,22 @@ fn instance_call_effects(
         let class = context.classes.get(&runtime_class)?;
         let implementation = class.method_impl_classes.get(&method_key)?;
         let target = callable_key(&format!("{implementation}::{method_key}"));
-        effects |= resolved_callable_effects(function, instruction, &target, context)?;
+        effects |= resolved_callable_effects(function, instruction, &target, 0, context)?;
     }
     Some(effects)
 }
 
 /// Combines one callee summary with warning effects from its caller-side argument coercions.
+/// A lexical instance call omits its implicit receiver from both parameter and operand matching.
 fn resolved_callable_effects(
     function: &Function,
     instruction: &crate::ir::Instruction,
     target: &str,
+    parameter_offset: usize,
     context: &RefinementContext<'_>,
 ) -> Option<Effects> {
     let summary = context.summaries.get(target).copied()?;
-    let parameters = context.parameters.get(target)?;
+    let parameters = context.parameters.get(target)?.get(parameter_offset..)?;
     Some(summary | call_argument_coercion_effects(function, instruction, parameters))
 }
 

@@ -42,9 +42,11 @@ pub(super) fn static_call_effects(
     let mut found = false;
     for (candidate, class) in context.classes {
         if !class_is_same_or_subclass(context.classes, candidate, class_name) { continue; }
-        // Abstract classes can be called directly when this static method has a body.
-        // A genuinely abstract declaration has no callable implementation to summarize.
-        if class.is_abstract && !class.static_method_impl_classes.contains_key(&method_key) {
+        // Calling an abstract class can select its abstract slot instead of any child body.
+        // Keep this failure observable even when every concrete override is pure.
+        if class.abstract_static_methods.contains(&method_key) {
+            effects |= Effects::READS_HEAP | Effects::MAY_FATAL;
+            found = true;
             continue;
         }
         effects |= implementation_effects(function, instruction, context, class, &method_key, false)?;
@@ -62,8 +64,15 @@ fn implementation_effects(
     method: &str,
     lexical_instance: bool,
 ) -> Option<Effects> {
-    let implementation = class.static_method_impl_classes.get(method)
-        .or_else(|| lexical_instance.then(|| class.method_impl_classes.get(method)).flatten())?;
+    let (implementation, parameter_offset) =
+        if let Some(implementation) = class.static_method_impl_classes.get(method) {
+            (implementation, 0)
+        } else if lexical_instance {
+            // Codegen supplies `$this` separately; EIR operands contain only user arguments.
+            (class.method_impl_classes.get(method)?, 1)
+        } else {
+            return None;
+        };
     let target = callable_key(&format!("{implementation}::{method}"));
-    resolved_callable_effects(function, instruction, &target, context)
+    resolved_callable_effects(function, instruction, &target, parameter_offset, context)
 }

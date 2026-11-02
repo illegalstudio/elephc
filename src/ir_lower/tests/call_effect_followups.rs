@@ -209,3 +209,73 @@ echo wrap("abc"), update("def");
         .intersects(Effects::READS_GLOBAL | Effects::WRITES_GLOBAL));
     assert!(call(&module, "main", "update").effects.contains(Effects::WRITES_GLOBAL));
 }
+
+/// Implicit receivers do not consume the first user argument's bool-coercion effects.
+#[test]
+fn call_effect_batch_review_lexical_instance_coercions() {
+    let source = r#"<?php
+class Base {
+    public function consume(bool $value): int { return $value ? 1 : 0; }
+}
+class Child extends Base {
+    public function relayParent(mixed $value): int { return parent::consume($value); }
+    public function relaySelf(mixed $value): int { return self::consume($value); }
+}
+"#;
+    for target in TARGETS {
+        let module = lower_for(source, target);
+        for (caller, callee) in [("Child::relayParent", "parent::consume"),
+            ("Child::relaySelf", "self::consume")]
+        {
+            assert!(call(&module, caller, callee).effects.contains(Effects::MAY_WARN),
+                "{target}: {caller}");
+        }
+    }
+}
+
+/// Null-only parameters preserve throwing guards for early and late static receivers.
+#[test]
+fn call_effect_batch_review_null_parameter_guards() {
+    let source = r#"<?php
+class Base {
+    public static function accept(null $value): int { return 1; }
+}
+class Child extends Base {
+    public static function relaySelf(mixed $value): int { return self::accept($value); }
+    public static function relayParent(mixed $value): int { return parent::accept($value); }
+    public static function relayLate(mixed $value): int { return static::accept($value); }
+}
+"#;
+    for target in TARGETS {
+        let module = lower_for(source, target);
+        for (caller, callee) in [("Child::relaySelf", "self::accept"),
+            ("Child::relayParent", "parent::accept"), ("Child::relayLate", "static::accept")]
+        {
+            assert!(call(&module, caller, callee).effects.contains(Effects::MAY_THROW),
+                "{target}: {caller}");
+        }
+    }
+}
+
+/// A callable abstract receiver retains failure effects beside pure concrete overrides.
+#[test]
+fn call_effect_batch_review_abstract_static_failure() {
+    let source = r#"<?php
+abstract class Root {
+    abstract public static function value(): int;
+    public static function relay(): int { return static::value(); }
+}
+class Concrete extends Root {
+    public static function value(): int { return 1; }
+}
+echo Concrete::value();
+Root::relay();
+"#;
+    for target in TARGETS {
+        let module = lower_for(source, target);
+        assert!(call(&module, "Root::relay", "static::value").effects
+            .contains(Effects::READS_HEAP | Effects::MAY_FATAL), "{target}");
+        assert!(call(&module, "main", "Root::relay").effects
+            .contains(Effects::MAY_FATAL), "{target}");
+    }
+}

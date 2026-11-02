@@ -623,12 +623,19 @@ explicitly refinable direct calls, static calls, instance calls, and property
 reads. Named static receivers include inherited implementations; `self::` and
 `parent::` resolve in the enclosing lexical class. A `static::` call unions all
 concrete implementations in that class's checked descendant hierarchy, including
-callable static bodies declared on abstract classes. An opaque
+callable static bodies declared on abstract classes. Abstract declarations retain
+failure effects, so a discarded call cannot erase invalid dispatch. An opaque
 eval bridge blocks this late-static refinement because it can introduce further
 overrides. Unresolved closure, descriptor, pipe, function-variant and eval call
 opcodes retain their defaults, and the validator rejects narrower effects for
 them. Lowering-specific builtin and runtime contracts remain refinable. Final
 effects are immutable after validation and remain PHP-observable.
+
+Call summaries include throwing guards for `false` and `null` parameter
+declarations even when the callee body is pure. Argument-coercion effects use the
+call's operand layout: lexical `self::` and `parent::` calls to instance methods
+omit the implicit receiver from parameter matching, while ordinary instance
+calls include that receiver on both sides.
 
 Caller-visible summaries omit `ConcatReset`, `PushCallOperandOwner` and
 `PopCallOperandOwner`: they restore scratch offsets or publish temporary owner
