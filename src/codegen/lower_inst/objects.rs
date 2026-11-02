@@ -388,7 +388,7 @@ fn unset_unsupported_slot_reason(ctx: &FunctionContext<'_>, slot: &PropertySlot)
         return Some("packed class field");
     }
     let owned_reference = slot.is_declared && ctx.module.class_infos.get(&slot.class_name)
-        .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
+        .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16));
     if slot.is_reference && !owned_reference {
         return Some("by-reference property");
     }

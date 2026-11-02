@@ -1432,7 +1432,7 @@ pub(crate) fn emit_runtime_data_user(
                 }
                 let prop_name = &class_info.properties[i].0;
                 let tag = if class_info.property_slot_is_reference(i, prop_name) {
-                    if class_info.owned_reference_properties.contains(prop_name) { 11 } else { 0 }
+                    if class_info.property_slot_owns_reference(i) { 11 } else { 0 }
                 } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
                     // An inline `{payload, tag}` slot owns no heap reference: reading it as
                     // Mixed (7) handed the integer payload to decref/mark as a cell pointer.
@@ -4768,6 +4768,7 @@ mod tests {
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),
             owned_reference_properties: HashSet::new(),
+            owned_reference_property_slots: HashSet::new(),
             promoted_properties: HashSet::new(),
             property_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),

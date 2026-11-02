@@ -493,8 +493,8 @@ pub(super) fn constructor_ref_cell_lifetime(
         let Some(info) = ctx.module.class_infos.get(name) else {
             return RefArgCellLifetime::MayOutliveCall;
         };
-        if info.reference_properties.iter().any(|property| {
-            !info.owned_reference_properties.contains(property)
+        if info.properties.iter().enumerate().any(|(index, (property, _))| {
+            info.property_slot_is_reference(index, property) && !info.property_slot_owns_reference(index)
         }) {
             return RefArgCellLifetime::MayOutliveCall;
         }

@@ -75,3 +75,73 @@ exercisePersistentNativeMixed($argc > 0);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
     assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
 }
+
+/// Physical private slots and authorized protected exports retain distinct escaping aliases.
+#[test]
+fn test_native_mixed_reference_hidden_slots_and_eval_scope_bundle() {
+    let source = r#"<?php
+class NativeHiddenMixedParent {
+    private mixed $value = 'parent';
+    public function readParent(): mixed { return $this->value; }
+    public function writeParent(mixed $next): void { $this->value = $next; }
+    public function &parentRef(): mixed { return $this->value; }
+}
+class NativeHiddenMixedChild extends NativeHiddenMixedParent {
+    public mixed $value = 'child';
+}
+class NativeHiddenRawChild extends NativeHiddenMixedParent {
+    public string $value = 'raw';
+}
+class NativeProtectedMixedParent {
+    protected mixed $value = 'old';
+    public function readValue(): mixed { return $this->value; }
+    public function writeValue(mixed $next): void { $this->value = $next; }
+    public function __destruct() { echo 'retired|'; }
+}
+function exerciseNativeMixedScopes(bool $run): void {
+    $child = new NativeHiddenMixedChild();
+    $raw = new NativeHiddenRawChild();
+    $parentAlias =& $child->parentRef();
+    $rawAlias =& $raw->parentRef();
+    $parentAlias = 'first';
+    $rawAlias = 'second';
+    echo $child->readParent(), ':', $child->value, '|', $raw->readParent(), ':', $raw->value, '|';
+    $child->writeParent('third');
+    echo $parentAlias, '|';
+    $copy = clone $child;
+    $copy->writeParent('shared');
+    echo $parentAlias, ':', $copy->value, '|';
+    unset($child, $raw, $copy, $parentAlias, $rawAlias);
+    $code = $run ? '
+function captureNativeScopedMixed(&$value): callable {
+    return function (bool $write, mixed $next = null) use (&$value): mixed {
+        if ($write) { $value = $next; }
+        return $value;
+    };
+}
+class EvalProtectedMixedChild extends NativeProtectedMixedParent {
+    public function bind(): callable { return captureNativeScopedMixed($this->value); }
+}
+$protected = new EvalProtectedMixedChild();
+$escapedProtected = $protected->bind();
+$protected->writeValue("native");
+echo $escapedProtected(false), "|";
+$escapedProtected(true, "eval");
+echo $protected->readValue(), "|";
+try { captureNativeScopedMixed($protected->value); } catch (Error $error) { echo "protected|"; }
+unset($protected);
+$escapedProtected(true, "survived");
+echo $escapedProtected(false), "|";
+unset($escapedProtected);
+' : '';
+    eval($code);
+    unset($code);
+}
+exerciseNativeMixedScopes($argc > 0);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "first:child|second:raw|third|shared:child|native|eval|protected|retired|survived|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}

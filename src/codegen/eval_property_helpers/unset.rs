@@ -76,7 +76,7 @@ pub(super) fn emit_property_unset_helper(
         emitter.label(&slot_body_label(module, slot, "unset"));
         if slot.is_reference {
             let owned = slot.is_declared && module.class_infos.get(&slot.class_name)
-                .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
+                .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16));
             if owned {
                 let base = match emitter.target.arch {
                     Arch::AArch64 => {

@@ -476,7 +476,7 @@ pub(super) fn store_ref_cell_pointer_result(ctx: &mut FunctionContext<'_>, inst:
 fn promote_mixed_property_reference(ctx: &mut FunctionContext<'_>, slot: &PropertySlot) {
     if slot.php_type == PhpType::Mixed
         && ctx.module.class_infos.get(&slot.class_name)
-            .is_some_and(|class| class.owned_reference_properties.contains(&slot.property))
+            .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16))
     {
         abi::emit_call_label(ctx.emitter, "__rt_reference_cell_promote_mixed");
     }

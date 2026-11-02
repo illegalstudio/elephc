@@ -268,8 +268,9 @@ fn eval_property_call_arg_value(
             { return Ok(value); }
         }
         if selection.is_some() && values.supports_persistent_references() {
-            validate_property_ref_target(object, &property, context, values)?;
-            if let Some(reference) = values.property_reference(object, &property)? {
+            if let Some(reference) = eval_native_property_reference_for_access(
+                object, &property, context, values,
+            )? {
                 persistent_native = true;
                 return Ok(reference);
             }

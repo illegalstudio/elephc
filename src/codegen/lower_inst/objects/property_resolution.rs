@@ -22,7 +22,7 @@ pub(super) fn initialize_owned_property_reference(
     starts_uninitialized: bool,
 ) -> bool {
     let owns_cell = slot.is_reference && ctx.module.class_infos.get(&slot.class_name)
-        .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
+        .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16));
     if owns_cell {
         // Fixed and known dynamic allocations already own this cell. Replacing it would
         // leak that owner and discard its typed-uninitialized marker. Runtime by-name

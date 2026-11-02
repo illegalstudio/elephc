@@ -224,6 +224,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         readonly_properties: Default::default(),
         reference_properties: Default::default(),
         owned_reference_properties: Default::default(),
+        owned_reference_property_slots: Default::default(),
         promoted_properties: Default::default(),
         property_reference_slots: Vec::new(),
         abstract_properties: Default::default(),

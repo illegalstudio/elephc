@@ -51,6 +51,32 @@ pub(in crate::interpreter) fn eval_native_magic_property_set(
     result.and(popped).map(|()| true)
 }
 
+/// Exports only the native slot selected by ordinary eval visibility and shadow resolution.
+pub(in crate::interpreter) fn eval_native_property_reference_for_access(
+    object: RuntimeCellHandle, property: &str, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else { return Ok(None); };
+    let metadata = if let Some(class) = context.dynamic_object_class(identity) {
+        let class_name = class.name().to_string();
+        // Eval-declared properties have their own storage and persistent reference targets.
+        if eval_dynamic_property_for_access(&class_name, property, context).is_some() {
+            return Ok(None);
+        }
+        eval_dynamic_class_native_property_metadata(&class_name, property, context, values)?
+    } else {
+        let class_name = eval_runtime_object_class_name(object, values)?;
+        eval_native_instance_property_metadata_for_access(
+            &class_name, &class_name, property, context, values,
+        )?
+    };
+    let Some((owner, visibility, _, false)) = metadata else { return Ok(None); };
+    if validate_eval_member_access(&owner, visibility, context).is_err() {
+        return eval_throw_property_access_error(&owner, property, visibility, context, values);
+    }
+    eval_with_native_bridge_scope(&owner, context, || values.property_reference(object, property))
+}
+
 /// Reads a native property through its getter, or its backing storage when no getter exists.
 pub(in crate::interpreter) fn eval_native_property_get_authorized(
     object: RuntimeCellHandle,

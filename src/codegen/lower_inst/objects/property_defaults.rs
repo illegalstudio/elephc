@@ -48,7 +48,7 @@ pub(super) fn collect_property_initialization(
         defaults.push(PropertyDefault {
             offset,
             value,
-            is_reference: class_info.owned_reference_properties.contains(property),
+            is_reference: class_info.property_slot_owns_reference(index),
         });
     }
     PropertyInitialization::Inline(defaults)

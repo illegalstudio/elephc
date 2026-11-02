@@ -1558,26 +1558,30 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
             .get(&access_class)
             .and_then(|info| info.property_declaring_classes.get(&prop).cloned())
             .unwrap_or_else(|| access_class.clone());
-        for info in checker.classes.values_mut() {
-            if !info.properties.iter().any(|(name, _)| name == &prop) {
-                continue;
+        let Some(slot) = checker.classes.get(&declaring)
+            .and_then(|info| info.visible_property_index(&prop)) else { continue; };
+        let descendants = checker.classes.keys().filter(|name| {
+            let mut current = Some(name.as_str());
+            let mut seen = HashSet::new();
+            while let Some(name) = current {
+                if name == declaring { return true; }
+                if !seen.insert(name) { break; }
+                current = checker.classes.get(name).and_then(|info| info.parent.as_deref());
             }
-            let same_decl = info
-                .property_declaring_classes
-                .get(&prop)
-                .is_some_and(|decl| decl == &declaring);
-            if !same_decl {
-                continue;
-            }
-            if info.reference_properties.contains(&prop) {
-                continue;
-            }
-            info.reference_properties.insert(prop.clone());
-            info.owned_reference_properties.insert(prop.clone());
-            if let Some(slot) = info.visible_property_index(&prop) {
-                if let Some(slot_reference) = info.property_reference_slots.get_mut(slot) {
-                    *slot_reference = true;
-                }
+            false
+        }).cloned().collect::<Vec<_>>();
+        for name in descendants {
+            let info = checker.classes.get_mut(&name).unwrap();
+            if info.properties.get(slot).is_none_or(|(name, _)| name != &prop) { continue; }
+            // A constructor's borrowed cell already has the reference representation.
+            if info.property_slot_is_reference(slot, &prop)
+                && !info.property_slot_owns_reference(slot) { continue; }
+            info.property_reference_slots.resize(info.properties.len(), false);
+            info.property_reference_slots[slot] = true;
+            info.owned_reference_property_slots.insert(slot);
+            if info.visible_property_index(&prop) == Some(slot) {
+                info.reference_properties.insert(prop.clone());
+                info.owned_reference_properties.insert(prop.clone());
             }
         }
     }

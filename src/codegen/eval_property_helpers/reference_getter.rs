@@ -98,7 +98,7 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
 fn eligible(module: &Module, slot: &EvalPropertySlot) -> bool {
     slot.is_reference && slot.ty.codegen_repr() == PhpType::Mixed
         && module.class_infos.get(&slot.declaring_class).is_some_and(|class|
-            !class.is_internal && class.owned_reference_properties.contains(&slot.property)
+            !class.is_internal && class.property_slot_owns_reference((slot.offset - 8) / 16)
                 && class.properties.get((slot.offset - 8) / 16).is_some_and(|(_, ty)| ty == &PhpType::Mixed)
                 && !class.readonly_properties.contains(&slot.property)
                 && !class.property_set_visibilities.contains_key(&slot.property)
@@ -145,4 +145,30 @@ mod tests {
             assert!(!assembly.contains("BorrowedExport"), "{name}: borrowed constructor cells are not promoted");
         }
     }
+    /// Private ancestor cells retain physical ownership beneath both promoted and raw shadows.
+    #[test]
+    fn hidden_mixed_reference_cells_keep_physical_ownership_on_every_target() {
+        let source = "<?php class HiddenCellParent { private mixed $value = 'parent'; } \
+            class HiddenCellChild extends HiddenCellParent { public mixed $value = 'child'; } \
+            class HiddenRawChild extends HiddenCellParent { public string $value = 'raw'; } \
+            $code = $argc > 0 ? '' : 'echo 1;'; eval($code);";
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let module = crate::ir_lower::tests::lower_source_at_for_target(
+                source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+            );
+            for (class_name, owned) in [("HiddenCellParent", vec![0]),
+                ("HiddenCellChild", vec![0, 1]), ("HiddenRawChild", vec![0])] {
+                let class = &module.class_infos[class_name];
+                assert_eq!(class.owned_reference_property_slots, owned.into_iter().collect(), "{name}: {class_name}");
+                assert!(class.property_slot_is_reference(0, "value"), "{name}: hidden ancestor cell");
+            }
+            let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            let raw = &module.class_infos["HiddenRawChild"];
+            let marker = format!("_class_gc_desc_{}:\n", raw.class_id);
+            assert!(assembly.split_once(&marker).unwrap().1.starts_with("    .byte 11, 1\n"),
+                "{name}: hidden cell and raw string keep separate destruction contracts");
+        }
+    }
+
 }

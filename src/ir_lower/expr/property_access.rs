@@ -118,8 +118,18 @@ pub(crate) fn lower_ref_assign_property(
     let object = lower_expr(ctx, object);
     let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
     let owns_cell = match ctx.builder.value_php_type(object.value).codegen_repr() {
-        PhpType::Object(class) => ctx.classes.get(class.as_str())
-            .is_some_and(|info| info.owned_reference_properties.contains(property)),
+        PhpType::Object(class) => {
+            let index = match crate::types::resolve_property_name(
+                ctx.classes, &class, property, ctx.current_class.as_deref(),
+            ) {
+                crate::types::PropertyNameResolution::ScopePrivate { index, .. } => Some(index),
+                crate::types::PropertyNameResolution::Visible => ctx.classes.get(class.as_str())
+                    .and_then(|info| info.visible_property_index(property)),
+                _ => None,
+            };
+            ctx.classes.get(class.as_str()).is_some_and(|info|
+                index.is_some_and(|index| info.property_slot_owns_reference(index)))
+        }
         _ => false,
     };
     let data = ctx.intern_string(property);
