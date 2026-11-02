@@ -10,6 +10,7 @@
 //! - Static locals are persisted through `ElephcEvalContext` after function execution.
 
 mod argument_owners;
+mod argument_modes;
 mod closure_execution;
 mod function_binding;
 mod function_staging;
@@ -20,6 +21,8 @@ pub(in crate::interpreter) mod builtin_arguments;
 use super::*;
 
 pub(in crate::interpreter) use argument_owners::eval_owned_call_arg_values;
+use argument_owners::eval_call_argument_receiver;
+pub(in crate::interpreter) use argument_modes::*;
 pub(in crate::interpreter) use closure_execution::*;
 pub(in crate::interpreter) use function_binding::*;
 pub(in crate::interpreter) use function_staging::{
@@ -36,7 +39,8 @@ pub(in crate::interpreter) fn eval_dynamic_function(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, caller_scope, values, |arguments, context, _, values| {
+    let modes = CallArgumentModes::for_function(function);
+    with_eval_call_arguments_with_modes(args, &modes, context, caller_scope, values, |arguments, context, _, values| {
         eval_dynamic_function_with_evaluated_args(function, arguments, context, values)
     })
 }
@@ -145,6 +149,14 @@ pub(in crate::interpreter) fn eval_call_arg_value(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    eval_call_arg_value_with_mode(expr, false, context, caller_scope, values)
+}
+
+/// Fetches reference selections in write context before later arguments are evaluated.
+fn eval_call_arg_value_with_mode(
+    expr: &EvalExpr, by_reference: bool, context: &mut ElephcEvalContext,
+    caller_scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
     match expr {
         EvalExpr::LoadVar(name) => {
             let value = visible_scope_cell(context, caller_scope, name)
@@ -158,16 +170,21 @@ pub(in crate::interpreter) fn eval_call_arg_value(
             ))
         }
         EvalExpr::ArrayGet { array, index } => {
-            eval_nested_array_element_call_arg_value(array, index, context, caller_scope, values)
+            eval_nested_array_element_call_arg_value(array, index, by_reference, context, caller_scope, values)
         }
         EvalExpr::PropertyGet { object, property } => {
             let access_scope = context.execution_scope();
-            let object = eval_expr(object, context, caller_scope, values)?;
-            eval_property_call_arg_value(object, property.clone(), access_scope, context, values)
+            let object = eval_call_argument_receiver(object, by_reference, context, caller_scope, values)?;
+            eval_property_call_arg_value(object, property.clone(), access_scope, by_reference, context, values)
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
             let access_scope = context.execution_scope();
-            let object = eval_expr(object, context, caller_scope, values)?;
+            if by_reference && matches!(object.as_ref(), EvalExpr::LoadVar(_)) {
+                let property = eval_dynamic_member_name(property, context, caller_scope, values)?;
+                let object = eval_call_argument_receiver(object, true, context, caller_scope, values)?;
+                return eval_property_call_arg_value(object, property, access_scope, true, context, values);
+            }
+            let object = eval_call_argument_receiver(object, by_reference, context, caller_scope, values)?;
             let property = match eval_dynamic_member_name(property, context, caller_scope, values) {
                 Ok(property) => property,
                 Err(status) => {
@@ -175,7 +192,7 @@ pub(in crate::interpreter) fn eval_call_arg_value(
                     return Err(status);
                 }
             };
-            eval_property_call_arg_value(object, property, access_scope, context, values)
+            eval_property_call_arg_value(object, property, access_scope, by_reference, context, values)
         }
         EvalExpr::StaticPropertyGet {
             class_name,
@@ -229,9 +246,18 @@ pub(in crate::interpreter) fn eval_call_arg_value(
 /// Keeps ordinary reference receivers while XML selections become independent temporary targets.
 fn eval_property_call_arg_value(
     object: RuntimeCellHandle, property: String, access_scope: ElephcEvalExecutionScope,
+    by_reference: bool,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
-    let value = match eval_property_get_result(object, &property, context, values) {
+    let selected = (|| {
+        if by_reference {
+            if let Some(value) = runtime_ops::simplexml_properties::invoke(values, object, &property,
+                elephc_builtin_contract::ObjectProperty::WriteSelect, None)?
+            { return Ok(value); }
+        }
+        eval_property_get_result(object, &property, context, values)
+    })();
+    let value = match selected {
         Ok(value) => value,
         Err(status) => {
             let _ = release_expr_result(object, context, values);
@@ -261,15 +287,22 @@ fn eval_property_call_arg_value(
 
 /// Keeps indexed argument receivers and keys alive until either selection or reference writeback ends.
 fn eval_nested_array_element_call_arg_value(
-    array: &EvalExpr, index: &EvalExpr, context: &mut ElephcEvalContext,
+    array: &EvalExpr, index: &EvalExpr, by_reference: bool, context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
-    let (array, mut array_target) = eval_call_arg_value(array, context, caller_scope, values)?;
+    let (array, mut array_target) = eval_call_arg_value_with_mode(array, by_reference, context, caller_scope, values)?;
     let mut index_owner = None;
     let result = (|| {
         let index = eval_expr(index, context, caller_scope, values)?;
         index_owner = Some(index);
-        let value = eval_array_get_result(array, index, context, values)?;
+        let value = if by_reference {
+            match runtime_ops::simplexml_properties::dimension(values, array.borrowed(),
+                elephc_builtin_contract::ObjectDimension::WriteSelect, vec![index.borrowed()])?
+            {
+                Some(value) => value,
+                None => eval_array_get_result(array, index, context, values)?,
+            }
+        } else { eval_array_get_result(array, index, context, values)? };
         let value = promote_borrowed_result(value, values)?;
         let tag = match values.type_tag(array) {
             Ok(tag) => tag,

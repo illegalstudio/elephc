@@ -265,14 +265,16 @@ pub(in crate::interpreter) fn eval_dynamic_call_with_callback(
             || crate::context::pcntl_runtime::is_handler_callable(callback);
         if !is_closure_object && !is_detached_pcntl_handler {
             eval_invokable_object_precheck(callback, context, values)?;
-            return with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+            let modes = CallArgumentModes::for_method(callback, "__invoke", context, values).unwrap_or_default();
+            return with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, _, values| {
                 eval_invokable_object_call_result(callback, arguments, context, values)
             });
         }
     }
     let callback = eval_callable(callback, context, values)?;
     callback.with_values(context, values, |callback, context, values| {
-        with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+        let modes = CallArgumentModes::for_callable(&callback, context, values)?;
+        with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, _, values| {
             eval_evaluated_callable_with_call_array_args(&callback, arguments, context, values)
         })
     })

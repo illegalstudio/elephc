@@ -34,6 +34,10 @@ use crate::numeric_string::{scan_numeric_prefix, NumericScan};
 use crate::types::PhpType;
 
 mod union;
+mod native_selections;
+pub(crate) use native_selections::{
+    native_selection_reference_receiver, native_selection_reference_receiver_type,
+};
 pub(crate) use union::{
     runtime_int_binding_needs_diagnostics, runtime_scalar_param_binding,
     runtime_strict_param_acceptance, runtime_weak_int_param_acceptance,

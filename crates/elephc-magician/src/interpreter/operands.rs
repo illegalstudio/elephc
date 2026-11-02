@@ -154,7 +154,17 @@ pub(in crate::interpreter) fn with_eval_call_arguments<V: RuntimeValueOps>(
         Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
     ) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (arguments, receiver_owners) = eval_owned_call_arg_values(args, context, scope, values)?;
+    with_eval_call_arguments_with_modes(args, &CallArgumentModes::default(), context, scope, values, consume)
+}
+
+/// Applies resolved parameter passing modes without changing source-order argument ownership.
+pub(in crate::interpreter) fn with_eval_call_arguments_with_modes<V: RuntimeValueOps>(
+    args: &[EvalCallArg], modes: &CallArgumentModes,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (arguments, receiver_owners) = eval_owned_call_arg_values(args, modes, context, scope, values)?;
     let borrowed_arguments = arguments.iter().cloned().map(|mut argument| {
         argument.value = argument.value.borrowed();
         argument
@@ -191,7 +201,19 @@ pub(in crate::interpreter) fn finish_eval_argument_values(
     }
 }
 
+#[cfg(test)]
 pub(in crate::interpreter) use with_eval_call_arguments as with_eval_method_arguments;
+
+/// Uses the selected instance method's flags for discarded calls and nullsafe chain steps.
+pub(in crate::interpreter) fn with_eval_object_method_arguments<V: RuntimeValueOps>(
+    args: &[EvalCallArg], object: RuntimeCellHandle, method: &str,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let modes = CallArgumentModes::for_method(object, method, context, values).unwrap_or_default();
+    with_eval_call_arguments_with_modes(args, &modes, context, scope, values, consume)
+}
 
 /// Owns extracted call-array values until dispatch and reference writeback have completed.
 pub(in crate::interpreter) fn with_eval_array_call_arguments<V: RuntimeValueOps>(

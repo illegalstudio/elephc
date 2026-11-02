@@ -31,6 +31,15 @@ fn expect_xml_error(src: &str, needle: &str) {
     );
 }
 
+/// XML reference selection support does not authorize ordinary temporary values.
+#[test]
+fn simplexml_reference_argument_values_remain_rejected() {
+    for value in ["'text'", "new stdClass()"] {
+        expect_xml_error(&format!("<?php function xmlReferenceArgument(&$value): void {{ $value = null; }} xmlReferenceArgument({value});"),
+            "must be passed a variable");
+    }
+}
+
 /// PHP's `XMLParser` is `final`: a user class cannot extend it.
 #[test]
 fn xml_parser_cannot_be_extended() {

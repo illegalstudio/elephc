@@ -26,7 +26,8 @@ pub(in crate::interpreter) fn eval_native_function(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, caller_scope, values, |arguments, context, _, values| {
+    let modes = CallArgumentModes::for_native_function(&function);
+    with_eval_call_arguments_with_modes(args, &modes, context, caller_scope, values, |arguments, context, _, values| {
         let bound = bind_evaluated_native_function_args(&function, arguments, context, values)?;
         eval_native_function_with_values(function, bound, context, values)
     })

@@ -111,6 +111,9 @@ pub(super) fn rewrite_typed_property_ref_args(
             } else {
                 continue;
             };
+        if super::call_arg_coercion::is_native_selection_reference_argument(ctx, place_arg) {
+            continue;
+        }
         match &place_arg.kind {
             // `stabilize_place` retains a nested receiver in a synthetic local, so the
             // rewrite targets the same object PHP resolved when it bound the reference.
@@ -861,6 +864,9 @@ fn ref_param_place<'a>(sig: &FunctionSig, index: usize, arg: &'a Expr) -> Option
 /// back to their frame slot. Scalar places are excluded so builtins that re-type their
 /// by-reference argument keep their current lowering and diagnostics.
 fn is_array_place(ctx: &LoweringContext<'_, '_>, arg: &Expr, param_type: &PhpType) -> bool {
+    if super::call_arg_coercion::is_native_selection_reference_argument(ctx, arg) {
+        return false;
+    }
     if !is_candidate_place_shape(arg) {
         return false;
     }

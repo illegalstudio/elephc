@@ -32,6 +32,14 @@ pub(super) fn lower_arg_with_signature(
     arg: &Expr,
 ) -> crate::ir::ValueId {
     if sig.ref_params.get(index).copied().unwrap_or(false)
+        && is_native_selection_reference_argument(ctx, arg)
+    {
+        let mut selection = arg;
+        while let ExprKind::NamedArg { value, .. } = &selection.kind { selection = value; }
+        let lowered = property_access::lower_property_write_receiver(ctx, selection);
+        return coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value;
+    }
+    if sig.ref_params.get(index).copied().unwrap_or(false)
         && matches!(&arg.kind, ExprKind::ArrayAccess { array, .. }
             if instance_object_class_for_ir(ctx, array)
                 .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap")))
@@ -90,6 +98,23 @@ pub(super) fn lower_arg_with_signature(
     };
     record_pointer_reference_argument(ctx, sig, index, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Shares the checker's XML selection classification before any argument is evaluated.
+pub(super) fn is_native_selection_reference_argument(
+    ctx: &LoweringContext<'_, '_>, arg: &Expr,
+) -> bool {
+    if let ExprKind::NamedArg { value, .. } = &arg.kind {
+        return is_native_selection_reference_argument(ctx, value);
+    }
+    let Some(receiver) = crate::types::param_binding::native_selection_reference_receiver(arg) else {
+        return false;
+    };
+    let source = super::array_cast_source::array_cast_source_type_for_ir(ctx, receiver);
+    let checked = ctx.member_receiver_types.get(&(ctx.loop_storage_scope.clone(), arg.span))
+        .and_then(Option::as_ref).unwrap_or(&source);
+    crate::types::param_binding::native_selection_reference_receiver_type(checked, ctx.classes)
+        || is_native_selection_reference_argument(ctx, receiver)
 }
 
 /// Records a local passed to a pointer by-reference parameter for the final storage check.

@@ -22,7 +22,8 @@ pub(in crate::interpreter) fn eval_builtin_settype_call(
     args: &[EvalCallArg], context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |args, context, _, values| {
+    let modes = CallArgumentModes::for_builtin("settype");
+    with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |args, context, _, values| {
         let (value, target, type_name) = bind_settype_arguments(args)?;
         let Some(converted) = eval_settype_cast_value(value, type_name, values)? else {
             return values.bool_value(false);

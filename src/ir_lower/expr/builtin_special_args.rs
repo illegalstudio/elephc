@@ -47,6 +47,19 @@ pub(super) fn lower_static_settype(
     }
     let (var_arg, type_arg) = static_settype_arg_exprs(ctx, name, args)?;
     let target_ty = static_settype_target_type(&type_arg)?;
+    if super::call_arg_coercion::is_native_selection_reference_argument(ctx, &var_arg) {
+        let target = match target_ty {
+            PhpType::Int => CastType::Int,
+            PhpType::Float => CastType::Float,
+            PhpType::Str => CastType::String,
+            PhpType::Bool => CastType::Bool,
+            _ => unreachable!("static settype targets are scalar"),
+        };
+        let selection = property_access::lower_property_write_receiver(ctx, &var_arg);
+        let converted = super::ternary_cast::lower_scalar_cast_value(ctx, &target, selection, expr);
+        crate::ir_lower::ownership::release_if_owned(ctx, converted, Some(expr.span));
+        return Some(emit_bool_literal(ctx, true, Some(expr.span)));
+    }
     if matches!(&var_arg.kind, ExprKind::ArrayAccess { array, .. }
         if instance_object_class_for_ir(ctx, array)
             .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap")))

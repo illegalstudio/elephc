@@ -90,12 +90,12 @@ fn evaluate_receiver(
                 finish_eval_argument_values(result, [index], context, values)
             }
             EvalExpr::MethodCall { method, args, .. } | EvalExpr::NullsafeMethodCall { method, args, .. } =>
-                with_eval_method_arguments(args, context, scope, values, |args, context, _, values| {
+                with_eval_object_method_arguments(args, object, method, context, scope, values, |args, context, _, values| {
                     eval_method_call_result_with_evaluated_args(object, method, args, context, values)
                 }),
             EvalExpr::DynamicMethodCall { method, args, .. } | EvalExpr::NullsafeDynamicMethodCall { method, args, .. } => {
                 let method = eval_dynamic_member_name(method, context, scope, values)?;
-                with_eval_method_arguments(args, context, scope, values, |args, context, _, values| {
+                with_eval_object_method_arguments(args, object, &method, context, scope, values, |args, context, _, values| {
                     eval_method_call_result_with_evaluated_args(object, &method, args, context, values)
                 })
             }

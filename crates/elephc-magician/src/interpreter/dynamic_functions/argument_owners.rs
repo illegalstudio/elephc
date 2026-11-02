@@ -13,6 +13,7 @@ use super::*;
 /// Acquires each argument before later argument side effects can replace its source storage.
 pub(in crate::interpreter) fn eval_owned_call_arg_values(
     args: &[EvalCallArg],
+    modes: &CallArgumentModes,
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
@@ -50,7 +51,8 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
 
             if let Some(name) = arg.name() {
                 saw_named = true;
-                let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+                let (value, ref_target) = eval_call_arg_value_with_mode(arg.value(),
+                    modes.by_reference(Some(name), evaluated_args.len()), context, caller_scope, values)?;
                 let (value, mut ref_target) = own_temporary_reference(value, ref_target, context, values)?;
                 capture_argument_receiver_owners(ref_target.as_mut(), &mut receiver_owners);
                 let value = if value.is_borrowed() {
@@ -69,7 +71,8 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
             if saw_named {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            let (value, ref_target) = eval_call_arg_value(arg.value(), context, caller_scope, values)?;
+            let (value, ref_target) = eval_call_arg_value_with_mode(arg.value(),
+                modes.by_reference(None, evaluated_args.len()), context, caller_scope, values)?;
             let (value, mut ref_target) = own_temporary_reference(value, ref_target, context, values)?;
             capture_argument_receiver_owners(ref_target.as_mut(), &mut receiver_owners);
             let value = if value.is_borrowed() {
@@ -95,6 +98,20 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
         return Err(status);
     }
     Ok((evaluated_args, receiver_owners))
+}
+
+/// Resolves a reference receiver once and retires metadata belonging only to an intermediate hop.
+pub(super) fn eval_call_argument_receiver(
+    expr: &EvalExpr, by_reference: bool, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !by_reference { return eval_expr(expr, context, scope, values); }
+    let (value, mut target) = eval_call_arg_value_with_mode(expr, true, context, scope, values)?;
+    let value = promote_borrowed_result(value, values);
+    let mut owners = Vec::new();
+    capture_abandoned_reference_owners(target.as_mut(), &mut owners);
+    finish_argument_reference_owners(value.map(|value| (value, None)), owners, context, values)
+        .map(|(value, _)| value)
 }
 
 /// Moves independently owned property receivers out of borrowed call reference metadata.

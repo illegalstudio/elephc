@@ -204,6 +204,9 @@ impl Checker {
         arg: &Expr,
         env: &TypeEnv,
     ) -> Result<bool, CompileError> {
+        if self.is_native_selection_reference_argument(arg, env)? {
+            return Ok(true);
+        }
         match &arg.kind {
             ExprKind::Variable(_) => Ok(true),
             ExprKind::ArrayAccess { array, .. } => {
@@ -211,6 +214,20 @@ impl Checker {
             }
             _ => Ok(false),
         }
+    }
+
+    /// Recognizes XML selections before ordinary property/array reference-place validation.
+    pub(crate) fn is_native_selection_reference_argument(
+        &mut self, arg: &Expr, env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        let Some(receiver) = crate::types::param_binding::native_selection_reference_receiver(arg) else {
+            return Ok(false);
+        };
+        let ty = self.infer_type(receiver, env)?;
+        if crate::types::param_binding::native_selection_reference_receiver_type(&ty, &self.classes) {
+            return Ok(true);
+        }
+        self.is_native_selection_reference_argument(receiver, env)
     }
 
     /// Validates one source value collected by a user-visible by-reference variadic.

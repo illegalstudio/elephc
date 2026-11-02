@@ -10,6 +10,55 @@
 
 use crate::support::*;
 
+/// Native and eval calls create missing paths before subsequent argument side effects.
+#[test]
+fn test_simplexml_reference_arguments_materialize_missing_paths_bundle() {
+    if skip_without_xml_native("test_simplexml_reference_arguments_materialize_missing_paths_bundle") { return; }
+    let body = r#"
+function replaceMissingXmlSelection(&$value, string $observed): void {
+    echo get_debug_type($value), ':', $observed, '|'; $value = 'replacement';
+}
+function observeMissingXmlSelection(SimpleXMLElement $xml): string {
+    return isset($xml->nested->child) ? 'created' : 'absent';
+}
+$xml = new SimpleXMLElement('<r><p>old</p><q>4</q></r>');
+replaceMissingXmlSelection($xml->missing, 'first');
+replaceMissingXmlSelection($xml->nested->child, observeMissingXmlSelection($xml));
+$name = 'dynamic'; replaceMissingXmlSelection($xml->{$name}, 'name');
+echo (int)isset($xml->missing), ':', (int)isset($xml->nested->child), ':', (int)isset($xml->dynamic), '|';
+echo (string)$xml->missing, ':', (string)$xml->nested->child, ':', (string)$xml->dynamic, '|';
+echo (int)settype($xml->q, 'integer'), ':', (string)$xml->q, '|';
+class MissingXmlSelectionConsumer {
+    public function __construct(&$value) { $value = 'ctor'; }
+    public function change(&$value): void { $value = 'method'; }
+    public static function changeStatic(&$value): void { $value = 'static'; }
+    public function __invoke(&$value): void { $value = 'invoke'; }
+}
+$consumer = new MissingXmlSelectionConsumer($xml->ctor);
+$consumer->change($xml->method);
+MissingXmlSelectionConsumer::changeStatic($xml->stat);
+$consumer($xml->invoke);
+$callback = $consumer->change(...); $callback($xml->bound);
+$callback = MissingXmlSelectionConsumer::changeStatic(...); $callback($xml->boundStatic);
+$callback = function (&$value): void { $value = 'closure'; }; $callback($xml->closure);
+echo (int)isset($xml->ctor), (int)isset($xml->method), (int)isset($xml->stat), (int)isset($xml->invoke),
+    (int)isset($xml->bound), (int)isset($xml->boundStatic), (int)isset($xml->closure), '|';
+function readMissingXmlSelection($value): void { echo get_debug_type($value), '|'; }
+readMissingXmlSelection($xml->unread); echo (int)isset($xml->unread), '|';
+"#;
+    let expected = "SimpleXMLElement:first|SimpleXMLElement:created|SimpleXMLElement:name|1:1:1|::|1:4|1111111|SimpleXMLElement|0|";
+    let native = format!("<?php {body}");
+    let encoded = body.replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $xmlCapability = new SimpleXMLElement('<r/>'); unset($xmlCapability); $code = $argc > 0 ? '{encoded}' : ''; eval($code); unset($code);");
+    for (mode, source) in [native, eval].iter().enumerate() {
+        let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+        preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[expected]);
+        assert!(out.success, "mode={mode}: stdout={} stderr={}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, expected, "mode={mode}");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "mode={mode}: {}", out.stderr);
+    }
+}
+
 /// Reference arguments keep selected views without replaying a parent property store.
 #[test]
 fn test_simplexml_reference_argument_selections_bundle() {

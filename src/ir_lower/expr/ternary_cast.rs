@@ -110,6 +110,13 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         return lower_array_cast(ctx, inner, expr);
     }
     let value = lower_expr(ctx, inner);
+    lower_scalar_cast_value(ctx, target, value, expr)
+}
+
+/// Converts an already evaluated scalar or object and retires its temporary owner.
+pub(super) fn lower_scalar_cast_value(
+    ctx: &mut LoweringContext<'_, '_>, target: &CastType, value: LoweredValue, expr: &Expr,
+) -> LoweredValue {
     if matches!(target, CastType::Int | CastType::Float) {
         if let Some(result) = object_operators::lower_object_cast(ctx, value, target, expr) {
             release_binary_operand_temporary(ctx, value, expr.span);
