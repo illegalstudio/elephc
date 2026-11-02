@@ -127,7 +127,8 @@ pub extern "C" fn __elephc_reference_sources_contains_v1(token: u64) -> i32 {
     }
 }
 
-/// Returns the nonzero mutation epoch, or zero on failure, for post-callback convergence checks.
+/// Returns the nonzero metadata epoch, or zero on failure, for post-callback convergence checks.
+/// Callers must still recheck physical cell shape after PHP even when this epoch is unchanged.
 #[no_mangle]
 pub extern "C" fn __elephc_reference_sources_epoch_v1() -> u64 {
     std::panic::catch_unwind(|| SOURCES.with(|sources| sources.borrow().epoch)).unwrap_or(0)

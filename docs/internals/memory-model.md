@@ -601,6 +601,8 @@ dereference no receiver, cell, value or validator address. Binding hooks must
 remove each source after the receiver destructor and before releasing its cell;
 ordinary reference parameters add no property source. Publisher and lifecycle
 wiring is required before this registry can enforce typed canonical references.
+An unchanged metadata epoch does not prove that a native cell stayed raw across
+PHP re-entry; callers must recheck physical shape and previously unmatched cells.
 
 Resolved reference-returning callees produce two distinct things at the `return`,
 and keeping them apart is what makes the boundary correct. `AcquireRefCell`
