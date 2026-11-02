@@ -108,3 +108,36 @@ fn programs_without_eval_have_no_demand() {
     assert_eq!(eval_demand(&module), EvalDemand::None);
     assert!(!module.required_runtime_features.eval_bridge);
 }
+
+/// A resolved eval callable keeps literal source and named demand on every supported target.
+#[test]
+fn known_callable_literal_eval_keeps_named_demand_on_all_targets() {
+    let source = r#"<?php
+$prefix = 'ev'; $invoke = $prefix . 'al';
+$invoke('class KnownEvalDemand { public int $n = 3; } echo (new KnownEvalDemand())->n;');
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let EvalDemand::Names(names) = eval_demand(&module) else {
+            panic!("{target}: a known callable with literal source must retain named demand");
+        };
+        assert!(names.classes.contains("knownevaldemand"), "{target}");
+        assert!(module.functions.iter().flat_map(|function| &function.instructions)
+            .any(|inst| inst.op == crate::ir::Op::EvalLiteralCall), "{target}");
+        let lowered = lowered_methods(&module);
+        assert!(!lowered.contains("DateTime::createFromFormat"), "{target}");
+        assert!(!lowered.contains("ReflectionClass::getName"), "{target}");
+    }
+}
+
+/// A known eval target still demands the full catalog when its source is runtime-sourced.
+#[test]
+fn known_callable_runtime_eval_keeps_opaque_demand() {
+    let module = lower_source("<?php $prefix = 'ev'; $invoke = $prefix . 'al'; $invoke($argv[1]);");
+    assert_eq!(eval_demand(&module), EvalDemand::Everything);
+    assert!(module.functions.iter().flat_map(|function| &function.instructions)
+        .any(|inst| inst.op == crate::ir::Op::LanguageConstructCall));
+}
