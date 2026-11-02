@@ -9,6 +9,13 @@
 
 use super::*;
 
+/// Guard views preserve reference layouts and actual in-arm writes in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_r58_guard_value_containment_runtime() {
+    assert_nullable_flow_cli_heap_output(include_str!("../../fixtures/nullable_fallback_guard_views.php"),
+        "or:widget\ns-int:value\ns-array:value\ns-if:value\nf-int:float(1.5)\nf-array:float(1.5)\nn-array:int(2)\nn-array:NULL\nn-if:int(2)\nn-if:NULL\nint(2)\nint(9)\nNULL\nint(5)\nNULL\n");
+}
+
 /// Object guard capabilities leave the existing example's later typed calls intact.
 #[test]
 fn test_nullable_fallback_flow_r57_instanceof_ternary_runtime() {

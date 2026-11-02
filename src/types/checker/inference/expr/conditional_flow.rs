@@ -275,12 +275,11 @@ impl Checker {
                 (None, None) => false,
             };
             let Some(exit_view) = edge.views.get(name) else { continue; };
-            // An instanceof capability can intersect an unrelated interface without
-            // rebinding the receiver. Preserve the entry contract at the join when the
-            // guard-only view cannot express that intersection as a subtype.
+            // A guard-only view cannot add values that the entry binding cannot hold.
+            // Containment keeps coercive Mixed fallbacks out of raw and nullable storage.
             let guard_only_view = edge.origins.get(name).is_some_and(|origin|
                 !origin.stored_in_region && origin.view.as_ref() == Some(exit_view));
-            let exit_read = if guard_only_view && !self.type_accepts(entry_view, exit_view) {
+            let exit_read = if guard_only_view && !self.type_contains_values(entry_view, exit_view) {
                 entry_view
             } else { exit_view };
             let exit_storage = edge.storage.get(name).filter(|storage|

@@ -9,6 +9,13 @@
 
 use super::*;
 
+/// Read-only scalar, union and array guards retain raw and nullable reference contracts.
+#[test]
+fn test_nullable_fallback_flow_r58_guard_value_containment() {
+    check_source(include_str!("../fixtures/nullable_fallback_guard_views.php"))
+        .unwrap_or_else(|error| panic!("guard-only binding contract: {error}"));
+}
+
 /// Temporary object capabilities in ternaries cannot change the following binding contract.
 #[test]
 fn test_nullable_fallback_flow_r57_instanceof_ternary_binding_views() {

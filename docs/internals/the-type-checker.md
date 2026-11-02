@@ -808,7 +808,7 @@ Object guards preserve a known subclass when probing its parent class or an impl
 
 Nullable boxing alone does not establish a prior reference binding. A null-guarded `?iterable` parameter without an earlier boxed-reference promotion retains the by-reference foreach diagnostic, including an Iterator whose first `valid()` result is false.
 
-An object capability introduced only by a ternary guard ends with that guard region. If it is incompatible with the entry type and the branch made no store, restore the entry view before joining the ternary alternatives. This keeps an `instanceof Missing` probe from changing later typed calls, while retaining actual branch assignments.
+A guard-only read view must contain only values representable by the entry binding, using `type_contains_values` rather than coercive argument compatibility. Close incompatible scalar, object and union views before ternary or short-circuit regions end, and apply the same rule to still-open `if` arm snapshots. This keeps `instanceof` capabilities and `is_array` Mixed fallbacks from changing later typed calls or raw/nullable reference storage, while retaining genuine nullable refinements and actual branch assignments.
 
 #### Lazy initialization (the singleton shape)
 

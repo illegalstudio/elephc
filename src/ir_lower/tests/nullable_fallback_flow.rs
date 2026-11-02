@@ -9,6 +9,19 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Every supported target retains scalar, nullable and union layouts after guard-only joins.
+#[test]
+fn test_nullable_fallback_flow_r58_guard_value_containment_all_targets() {
+    let source = include_str!("../../../tests/fixtures/nullable_fallback_guard_views.php");
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source,
+            std::path::Path::new("tests/fixtures/nullable_fallback_guard_views.php"),
+            std::path::Path::new("tests/fixtures"), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Every supported target retains object binding types after temporary ternary capabilities.
 #[test]
 fn test_nullable_fallback_flow_r57_instanceof_views_all_targets() {

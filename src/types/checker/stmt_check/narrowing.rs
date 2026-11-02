@@ -90,13 +90,13 @@ impl Checker {
         }
         let result = body(self, env);
         for (origin, previous) in saved.into_iter().rev() {
-            // An unrelated object capability is an intersection inside this region, not
-            // a new value stored by the branch. Close it before the arm's exit is joined.
+            // A guard-only view refines the existing value without rebinding its storage.
+            // Close an unrepresentable view before the arm's exit is joined.
             let guard_only = self.narrowed_local_origins.get(&origin.name).is_some_and(|entry|
                 !entry.stored_in_region && entry.view.as_ref() == env.get(&origin.name));
             if let Some(previous) = previous {
                 if guard_only && env.get(&origin.name).is_some_and(|view|
-                    matches!(view, PhpType::Object(_)) && !self.type_accepts(&previous, view))
+                    !self.type_contains_values(&previous, view))
                 {
                     env.insert(origin.name.clone(), previous);
                 }
