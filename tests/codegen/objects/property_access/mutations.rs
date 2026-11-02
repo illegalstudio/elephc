@@ -1301,3 +1301,33 @@ echo $total, "\n";
     assert_eq!(out.stdout, "1225\n");
     assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
 }
+
+/// Erased prefix operations preserve typed storage and one hook pair without loading XML.
+#[test]
+fn test_erased_property_prefix_results_preserve_typed_storage() {
+    let source = r#"<?php
+class ErasedPrefixString { public string $value = '5'; }
+class ErasedPrefixDeclaredMagic {
+    public string $value = '5';
+    public function __get(string $name): mixed { echo 'unexpected-get'; return '5'; }
+    public function __set(string $name, mixed $value): void { echo 'unexpected-set'; }
+}
+class ErasedPrefixHook {
+    public string $value = '5' {
+        get { echo 'G'; return $this->value; }
+        set { echo 'S'; $this->value = $value; }
+    }
+}
+function erasedPrefixNamed(mixed $object): mixed { return ++$object->value; }
+function erasedPrefixDynamic(mixed $object, string $name): mixed { return --$object->{$name}; }
+foreach ([new ErasedPrefixString(), new ErasedPrefixDeclaredMagic(), new ErasedPrefixHook()] as $object) {
+    var_dump(erasedPrefixNamed($object), erasedPrefixDynamic($object, 'value'));
+}
+"#;
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    let expected = "string(1) \"6\"\nstring(1) \"5\"\n".repeat(2) + "GSGSint(6)\nint(5)\n";
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[&expected]);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

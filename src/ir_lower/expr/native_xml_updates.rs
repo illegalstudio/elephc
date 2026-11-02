@@ -70,9 +70,10 @@ pub(super) fn lower_assignment(
         if name.starts_with(crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX)));
     let ty = array_cast_source::array_cast_source_type_for_ir(ctx, object);
     let snapshot = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) || singular_object_class(&ty).is_some();
-    if !possible(ctx, object, property) && !(scoped && snapshot) { return None; }
+    let admitted = possible(ctx, object, property) || (scoped && snapshot);
+    if !admitted && !erased(ctx, object, property) { return None; }
     if let ExprKind::BinaryOp { left, op, right } = &value.kind {
-        if left.as_ref() == target && value.span.line == expr.span.line
+        if admitted && left.as_ref() == target && value.span.line == expr.span.line
             && value.span.col == expr.span.col && operation(op).is_some() {
             if scoped { super::super::scoped_writes::consume_update_operands(ctx); }
             for stmt in prelude { crate::ir_lower::stmt::lower_stmt(ctx, stmt); }
@@ -94,10 +95,20 @@ pub(super) fn lower_assignment(
         if !old.contains("__elephc_incdec_old_") { return None; }
         (position, result.is_some_and(|value| matches!(&value.kind, ExprKind::Variable(name) if name == old)))
     };
+    if !admitted && post { return None; }
     if scoped { super::super::scoped_writes::consume_update_operands(ctx); }
     for stmt in &prelude[..prefix] { crate::ir_lower::stmt::lower_stmt(ctx, stmt); }
     let reread = !post;
     Some(lower(ctx, object, property, op, right, post, scoped, reread, "increment/decrement", expr))
+}
+
+/// Recognizes ordinary erased prefix receivers independently of optional XML reachability.
+fn erased(ctx: &LoweringContext<'_, '_>, object: &Expr, property: Property<'_>) -> bool {
+    if matches!(property, Property::Named(name) if name.starts_with("__elephc_")) { return false; }
+    let ty = array_cast_source::array_cast_source_type_for_ir(ctx, object);
+    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || singular_object_class(&ty).is_some_and(|(class, _)| class.is_empty()
+            || ctx.interfaces.contains_key(class))
 }
 
 /// Admits XML subclasses and erased receivers while leaving other typed objects unchanged.
