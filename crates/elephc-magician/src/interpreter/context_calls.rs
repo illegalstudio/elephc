@@ -138,7 +138,7 @@ pub fn execute_context_callable_parameter_is_by_ref(
     name: Option<&str>, position: usize, values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let callable = eval_callable(callback, context, values)?;
-    callable.with_values(context, values, |callable, context, values| {
+    callable.with_probe(context, values, |callable, context, values| {
         let modes = CallArgumentModes::for_callable(&callable, context, values)?;
         Ok(modes.by_reference(name, position))
     })
