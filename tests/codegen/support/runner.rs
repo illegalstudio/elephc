@@ -1615,6 +1615,12 @@ fn append_linux_property_signal_diagnostics(
         || !std::thread::current().name().is_some_and(|name|
             name.contains("test_shared_property_read_owners_bundle"))
     { return; }
+    let available = std::env::var_os("PATH").is_some_and(|paths|
+        std::env::split_paths(&paths).any(|path| path.join("gdb").is_file()));
+    if !available {
+        output.stderr.extend_from_slice(b"\nGDB replay unavailable: gdb is not installed.\n");
+        return;
+    }
     let mut command = Command::new("gdb");
     command.current_dir(dir).envs(env.iter().copied()).args([
         "--batch", "-ex", "set pagination off", "-ex", "run", "-ex", "bt",
@@ -1665,6 +1671,9 @@ fn append_macos_signal_diagnostics(
         // Inspect the linked runtime, since the user assembly artifact omits cached helpers.
         // Bound each disassembly and the raw stack dump even when the frame chain is damaged.
         cmd.args([
+            "-k", "thread backtrace all",
+            "-k", "register read",
+            "-k", stack_symbols,
             "-k", "memory read --format x --size 8 --count 64 $sp",
             "-k", "disassemble --name __elephc_eval_spl_storage_write_v1 --count 128",
             "-k", "disassemble --name _rt_mixed_array_get_for_write --count 64",

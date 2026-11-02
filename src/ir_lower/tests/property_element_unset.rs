@@ -335,7 +335,9 @@ quietCandidateRead(new QuietCandidateOwner(), 'items');
             let module = super::lower_source_at_for_target(&source, Path::new("main.php"),
                 Path::new("."), Target::parse(target).unwrap());
             let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-            let labels = assembly.lines().filter(|line| line.ends_with(':') && line.contains("unset_prop_slot")).count();
+            let body = assembly.split_once("@fn name=quietCandidateRead symbol=").unwrap().1
+                .split_once("@endfn name=quietCandidateRead").unwrap().0;
+            let labels = body.lines().filter(|line| line.ends_with(':') && line.contains("unset_prop_slot")).count();
             if known {
                 assert_eq!(labels, 1, "{target}: literal reads must skip unrelated slots");
             } else {
