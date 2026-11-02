@@ -46,7 +46,10 @@ $db->close();
   `MYSQLI_INIT_COMMAND` (several commands run in order, like mysqlnd's list),
   `MYSQLI_SET_CHARSET_NAME`, `MYSQLI_OPT_LOCAL_INFILE`,
   `MYSQLI_OPT_LOAD_DATA_LOCAL_DIR`, `MYSQLI_OPT_SSL_VERIFY_SERVER_CERT`,
-  `MYSQLI_SERVER_PUBLIC_KEY`, and `MYSQLI_OPT_INT_AND_FLOAT_NATIVE`; the other
+  `MYSQLI_SERVER_PUBLIC_KEY`, `MYSQLI_OPT_INT_AND_FLOAT_NATIVE`, and
+  `MYSQLI_OPT_READ_TIMEOUT` (the socket read and write timeout, in seconds: a
+  stalled server fails the statement with errno 2006 "MySQL server has gone
+  away", like mysqlnd); the other
   mysqlnd option ids are accepted (`true`) and unknown ids return `false`.
 - Calling `real_connect()` on an already-connected object closes the previous
   connection first (php-src's mysqlnd reconnect semantics).
@@ -400,9 +403,7 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
 - **`get_charset()` reports only the charset name.** The returned object's
   `charset` field is exact; `collation`, `number`, `state`, `dir`,
   `min_length`, `max_length`, and `comment` are `0` / `""`.
-- **`MYSQLI_OPT_READ_TIMEOUT`** is recorded but has no effect (the bridge's
-  client has no per-read timeout knob), and **`refresh()`** uses SQL
-  statements instead of `COM_REFRESH` (see above).
+- **`refresh()`** uses SQL statements instead of `COM_REFRESH` (see above).
 - **`mysqli` / `mysqli_stmt` declare a `__destruct()`** (php frees them in C),
   so `method_exists($db, '__destruct')` is `true`.
 

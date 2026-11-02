@@ -115,6 +115,8 @@ struct MyDriverOptions {
     ssl_ca_path: Option<PathBuf>,
     ssl_cipher: Option<String>,
     server_public_key: Option<PathBuf>,
+    /// Socket read/write timeout in seconds (mysqli's `MYSQLI_OPT_READ_TIMEOUT`).
+    io_timeout_secs: Option<u64>,
 }
 
 impl Default for MyDriverOptions {
@@ -130,6 +132,7 @@ impl Default for MyDriverOptions {
             ssl_ca_path: None,
             ssl_cipher: None,
             server_public_key: None,
+            io_timeout_secs: None,
         }
     }
 }
@@ -629,6 +632,9 @@ fn parse_driver_options(config: &str) -> Result<MyDriverOptions, String> {
                 options.local_infile_directory = Some(PathBuf::from(value))
             }
             "compress" => options.compress = value == "1",
+            "iotimeout" => {
+                options.io_timeout_secs = value.parse::<u64>().ok().filter(|secs| *secs > 0)
+            }
             "ignore" => options.ignore_space = value == "1",
             "multi" => options.multi_statements = value != "0",
             "buffered" => options.buffered_query = value != "0",
@@ -1824,6 +1830,13 @@ impl MyConn {
         opts = apply_ssl_opts(opts, &ssl_config, driver_options.ssl_cipher.as_deref())?;
         if driver_options.compress {
             opts = opts.compress(Some(mysql::Compression::default()));
+        }
+        if let Some(secs) = driver_options.io_timeout_secs {
+            // mysqlnd applies MYSQLI_OPT_READ_TIMEOUT to the socket stream, so a
+            // stalled server fails the read (and a stalled write) instead of hanging.
+            opts = opts
+                .read_timeout(Some(Duration::from_secs(secs)))
+                .write_timeout(Some(Duration::from_secs(secs)));
         }
         opts = opts.local_infile_handler(Some(local_infile_handler(
             driver_options.local_infile,
@@ -3624,6 +3637,18 @@ mod tests {
     }
 
     /// Packed PDO driver options preserve supported TLS selections and validate
+    /// mysqli's `MYSQLI_OPT_READ_TIMEOUT` travels as `iotimeout=<secs>`; zero or a
+    /// malformed value means "no timeout", like mysqlnd's default.
+    #[test]
+    fn driver_options_parse_the_socket_io_timeout() {
+        let options = parse_driver_options("iotimeout=7;").expect("iotimeout parses");
+        assert_eq!(options.io_timeout_secs, Some(7));
+        let options = parse_driver_options("iotimeout=0;").expect("zero parses");
+        assert_eq!(options.io_timeout_secs, None);
+        let options = parse_driver_options("iotimeout=x;").expect("junk is ignored");
+        assert_eq!(options.io_timeout_secs, None);
+    }
+
     /// a caller-supplied authentication key path before the handshake.
     #[test]
     fn driver_options_parse_supported_flags_and_security_paths() {

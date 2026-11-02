@@ -1251,14 +1251,14 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                 .private()
                 .returns(TypeExpr::Bool)
                 .body(vec![
-                    s_prop_assign(e_this(), "errno", e_call("elephc_pdo_stmt_errcode", vec![e_this_prop("stmt")])),
                     s_prop_assign(e_this(), "error", e_static_call("mysqli", "__elephcServerMessage", vec![e_call("elephc_pdo_stmt_errmsg", vec![e_this_prop("stmt")])])),
+                    s_prop_assign(e_this(), "errno", e_static_call("mysqli", "__elephcClientErrno", vec![e_call("elephc_pdo_stmt_errcode", vec![e_this_prop("stmt")]), e_this_prop("error")])),
                     s_prop_assign(e_this(), "sqlstate", e_call("elephc_pdo_stmt_sqlstate", vec![e_this_prop("stmt")])),
                     s_if(
                         e_binop(e_binop(e_this_prop("errno"), BinOp::Eq, e_int(0)), BinOp::And, e_binop(e_this_prop("conn"), BinOp::GtEq, e_int(0))),
                         vec![
-                            s_prop_assign(e_this(), "errno", e_call("elephc_pdo_errcode", vec![e_this_prop("conn")])),
                             s_prop_assign(e_this(), "error", e_static_call("mysqli", "__elephcServerMessage", vec![e_call("elephc_pdo_errmsg", vec![e_this_prop("conn")])])),
+                            s_prop_assign(e_this(), "errno", e_static_call("mysqli", "__elephcClientErrno", vec![e_call("elephc_pdo_errcode", vec![e_this_prop("conn")]), e_this_prop("error")])),
                             s_prop_assign(e_this(), "sqlstate", e_call("elephc_pdo_sqlstate", vec![e_this_prop("conn")])),
                         ],
                         vec![],

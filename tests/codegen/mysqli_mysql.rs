@@ -1134,3 +1134,24 @@ try {
         "1146|42S02|Table 'testdb.no_such_table_err' doesn't exist\nfalse|Table 'testdb.no_such_table_err2' doesn't exist\n1146|42S02|Table 'testdb.no_such_table_err3' doesn't exist"
     );
 }
+
+/// MYSQLI_OPT_READ_TIMEOUT bounds the socket read: a statement that outlives it
+/// fails fast with mysqlnd's errno 2006 instead of waiting for the server.
+#[test]
+#[ignore]
+fn test_mysqli_read_timeout_aborts_a_stalled_read() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$slow = mysqli_init();
+echo $slow->options(MYSQLI_OPT_READ_TIMEOUT, 1) ? "opt" : "no";
+$slow->real_connect($host, $user, $pass, $dbname, $port);
+$started = microtime(true);
+$result = $slow->query("SELECT SLEEP(4)");
+$elapsed = microtime(true) - $started;
+echo "|", $result === false ? "failed" : "ran", "|", $elapsed < 3.0 ? "fast" : "slow";
+echo "|", $slow->errno, "|", $slow->error;
+"#,
+    ));
+    assert_eq!(out, "opt|failed|fast|2006|MySQL server has gone away");
+}

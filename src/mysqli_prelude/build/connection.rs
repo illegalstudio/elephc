@@ -343,6 +343,14 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_if(
+                        e_binop(e_this_prop("optReadTimeout"), BinOp::Gt, e_int(0)),
+                        vec![
+                            s_assign("_driverConfig", e_binop(e_binop(e_binop(e_var("_driverConfig"), BinOp::Concat, e_str("iotimeout=")), BinOp::Concat, e_this_prop("optReadTimeout")), BinOp::Concat, e_str(";"))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
                         e_binop(e_this_prop("optServerPublicKey"), BinOp::StrictNotEq, e_str("")),
                         vec![
                             s_assign("_driverConfig", e_binop(e_binop(e_binop(e_var("_driverConfig"), BinOp::Concat, e_str("serverkey=")), BinOp::Concat, e_method_call(e_this(), "encodeDriverOption", vec![e_this_prop("optServerPublicKey")])), BinOp::Concat, e_str(";"))),
@@ -1760,12 +1768,39 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 ]),
         )
         .method(
+            method("__elephcClientErrno")
+                .private()
+                .static_()
+                .param("errno", TypeExpr::Int)
+                .param("message", TypeExpr::Str)
+                .returns(TypeExpr::Int)
+                .body(vec![
+                    s_if(
+                        e_binop(e_binop(e_var("errno"), BinOp::Eq, e_int(1)), BinOp::And, e_binop(e_var("message"), BinOp::StrictEq, e_str("MySQL server has gone away"))),
+                        vec![
+                            s_return(e_int(2006)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_var("errno")),
+                ]),
+        )
+        .method(
             method("__elephcServerMessage")
                 .private()
                 .static_()
                 .param("message", TypeExpr::Str)
                 .returns(TypeExpr::Str)
                 .body(vec![
+                    s_if(
+                        e_binop(e_binop(e_call("strpos", vec![e_var("message"), e_str("IO error")]), BinOp::StrictNotEq, e_bool(false)), BinOp::Or, e_binop(e_call("strpos", vec![e_var("message"), e_str("IoError")]), BinOp::StrictNotEq, e_bool(false))),
+                        vec![
+                            s_return(e_str("MySQL server has gone away")),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_assign("_prefix", e_str("MySqlError { ERROR ")),
                     s_if(
                         e_binop(e_binop(e_binop(e_call("strlen", vec![e_var("message")]), BinOp::Gt, e_binop(e_call("strlen", vec![e_var("_prefix")]), BinOp::Add, e_int(2))), BinOp::And, e_binop(e_call("substr", vec![e_var("message"), e_int(0), e_call("strlen", vec![e_var("_prefix")])]), BinOp::StrictEq, e_var("_prefix"))), BinOp::And, e_binop(e_call("substr", vec![e_var("message"), e_neg(e_int(2))]), BinOp::StrictEq, e_str(" }"))),
@@ -1830,8 +1865,8 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .private()
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_prop_assign(e_this(), "errno", e_call("elephc_pdo_errcode", vec![e_this_prop("conn")])),
                     s_prop_assign(e_this(), "error", e_static_call("mysqli", "__elephcServerMessage", vec![e_call("elephc_pdo_errmsg", vec![e_this_prop("conn")])])),
+                    s_prop_assign(e_this(), "errno", e_static_call("mysqli", "__elephcClientErrno", vec![e_call("elephc_pdo_errcode", vec![e_this_prop("conn")]), e_this_prop("error")])),
                     s_prop_assign(e_this(), "sqlstate", e_call("elephc_pdo_sqlstate", vec![e_this_prop("conn")])),
                     s_if(
                         e_binop(e_this_prop("sqlstate"), BinOp::StrictEq, e_str("")),
@@ -2189,8 +2224,8 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .private()
                 .returns(TypeExpr::Bool)
                 .body(vec![
-                    s_prop_assign(e_this(), "errno", e_call("elephc_pdo_errcode", vec![e_this_prop("conn")])),
                     s_prop_assign(e_this(), "error", e_static_call("mysqli", "__elephcServerMessage", vec![e_call("elephc_pdo_errmsg", vec![e_this_prop("conn")])])),
+                    s_prop_assign(e_this(), "errno", e_static_call("mysqli", "__elephcClientErrno", vec![e_call("elephc_pdo_errcode", vec![e_this_prop("conn")]), e_this_prop("error")])),
                     s_prop_assign(e_this(), "sqlstate", e_call("elephc_pdo_sqlstate", vec![e_this_prop("conn")])),
                     s_if(
                         e_binop(e_this_prop("sqlstate"), BinOp::StrictEq, e_str("")),

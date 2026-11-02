@@ -244,6 +244,10 @@ class mysqli {
         if ($this->sslCipher !== "" && $_sslConfig !== "") {
             $_driverConfig = $_driverConfig . "cipher=" . $this->encodeDriverOption($this->sslCipher) . ";";
         }
+        if ($this->optReadTimeout > 0) {
+            // MYSQLI_OPT_READ_TIMEOUT: the socket read (and write) timeout.
+            $_driverConfig = $_driverConfig . "iotimeout=" . $this->optReadTimeout . ";";
+        }
         if ($this->optServerPublicKey !== "") {
             $_driverConfig = $_driverConfig . "serverkey=" . $this->encodeDriverOption($this->optServerPublicKey) . ";";
         }
@@ -764,8 +768,8 @@ class mysqli {
             return true;
         }
         if ($option == 11) {
-            // MYSQLI_OPT_READ_TIMEOUT: recorded (the bridge's client has no
-            // per-read timeout knob; documented).
+            // MYSQLI_OPT_READ_TIMEOUT: socket read/write timeout in seconds,
+            // applied at the next real_connect().
             $this->optReadTimeout = (int) $value;
             return true;
         }
@@ -1052,10 +1056,24 @@ class mysqli {
         return explode(" ", "bytes_sent bytes_received packets_sent packets_received protocol_overhead_in protocol_overhead_out bytes_received_ok_packet bytes_received_eof_packet bytes_received_rset_header_packet bytes_received_rset_field_meta_packet bytes_received_rset_row_packet bytes_received_prepare_response_packet bytes_received_change_user_packet packets_sent_command packets_received_ok packets_received_eof packets_received_rset_header packets_received_rset_field_meta packets_received_rset_row packets_received_prepare_response packets_received_change_user result_set_queries non_result_set_queries no_index_used bad_index_used slow_queries buffered_sets unbuffered_sets ps_buffered_sets ps_unbuffered_sets flushed_normal_sets flushed_ps_sets ps_prepared_never_executed ps_prepared_once_executed rows_fetched_from_server_normal rows_fetched_from_server_ps rows_buffered_from_client_normal rows_buffered_from_client_ps rows_fetched_from_client_normal_buffered rows_fetched_from_client_normal_unbuffered rows_fetched_from_client_ps_buffered rows_fetched_from_client_ps_unbuffered rows_fetched_from_client_ps_cursor rows_affected_normal rows_affected_ps rows_skipped_normal rows_skipped_ps copy_on_write_saved copy_on_write_performed command_buffer_too_small connect_success connect_failure connection_reused reconnect pconnect_success active_connections active_persistent_connections explicit_close implicit_close disconnect_close in_middle_of_command_close explicit_free_result implicit_free_result explicit_stmt_close implicit_stmt_close mem_emalloc_count mem_emalloc_amount mem_ecalloc_count mem_ecalloc_amount mem_erealloc_count mem_erealloc_amount mem_efree_count mem_efree_amount mem_malloc_count mem_malloc_amount mem_calloc_count mem_calloc_amount mem_realloc_count mem_realloc_amount mem_free_count mem_free_amount mem_estrndup_count mem_strndup_count mem_estrdup_count mem_strdup_count mem_edupl_count mem_dupl_count proto_text_fetched_null proto_text_fetched_bit proto_text_fetched_tinyint proto_text_fetched_short proto_text_fetched_int24 proto_text_fetched_int proto_text_fetched_bigint proto_text_fetched_decimal proto_text_fetched_float proto_text_fetched_double proto_text_fetched_date proto_text_fetched_year proto_text_fetched_time proto_text_fetched_datetime proto_text_fetched_timestamp proto_text_fetched_string proto_text_fetched_blob proto_text_fetched_enum proto_text_fetched_set proto_text_fetched_geometry proto_text_fetched_other proto_binary_fetched_null proto_binary_fetched_bit proto_binary_fetched_tinyint proto_binary_fetched_short proto_binary_fetched_int24 proto_binary_fetched_int proto_binary_fetched_bigint proto_binary_fetched_decimal proto_binary_fetched_float proto_binary_fetched_double proto_binary_fetched_date proto_binary_fetched_year proto_binary_fetched_time proto_binary_fetched_datetime proto_binary_fetched_timestamp proto_binary_fetched_string proto_binary_fetched_json proto_binary_fetched_blob proto_binary_fetched_enum proto_binary_fetched_set proto_binary_fetched_geometry proto_binary_fetched_other init_command_executed_count init_command_failed_count com_quit com_init_db com_query com_field_list com_create_db com_drop_db com_refresh com_shutdown com_statistics com_process_info com_connect com_process_kill com_debug com_ping com_time com_delayed_insert com_change_user com_binlog_dump com_table_dump com_connect_out com_register_slave com_stmt_prepare com_stmt_execute com_stmt_send_long_data com_stmt_close com_stmt_reset com_stmt_set_option com_stmt_fetch com_deamon bytes_received_real_data_normal bytes_received_real_data_ps");
     }
 
+    // The errno php reports for a bridge failure: a transport error (which the
+    // bridge numbers 1) is mysqlnd's CR_SERVER_GONE_ERROR 2006.
+    private static function __elephcClientErrno(int $errno, string $message): int {
+        if ($errno == 1 && $message === "MySQL server has gone away") {
+            return 2006;
+        }
+        return $errno;
+    }
+
     // The server's own error text, as php's mysqli_error() reports it: the
     // bridge renders a server error as "MySqlError { ERROR 1146 (42S02): <text> }",
     // so the wrapper is peeled off (client-side messages pass through unchanged).
     private static function __elephcServerMessage(string $message): string {
+        // A transport failure (read timeout, dropped socket) is mysqlnd's
+        // CR_SERVER_GONE_ERROR; the bridge renders it as a codec/IO error.
+        if (strpos($message, "IO error") !== false || strpos($message, "IoError") !== false) {
+            return "MySQL server has gone away";
+        }
         $_prefix = "MySqlError { ERROR ";
         if (strlen($message) > strlen($_prefix) + 2
             && substr($message, 0, strlen($_prefix)) === $_prefix
@@ -1095,8 +1113,8 @@ class mysqli {
     // mysqli::prepare() copies a failed statement prepare onto the link before
     // the statement reports it (php's close_stmt_and_copy_errors).
     private function __elephcAdoptBridgeError(): void {
-        $this->errno = elephc_pdo_errcode($this->conn);
         $this->error = mysqli::__elephcServerMessage(elephc_pdo_errmsg($this->conn));
+        $this->errno = mysqli::__elephcClientErrno(elephc_pdo_errcode($this->conn), $this->error);
         $this->sqlstate = elephc_pdo_sqlstate($this->conn);
         if ($this->sqlstate === "") {
             $this->sqlstate = "HY000";
@@ -1324,8 +1342,8 @@ class mysqli {
     // Refreshes errno/error/sqlstate/error_list from the live bridge error
     // state after a failed operation, then dispatches mysqli_report.
     private function opFailed(): bool {
-        $this->errno = elephc_pdo_errcode($this->conn);
         $this->error = mysqli::__elephcServerMessage(elephc_pdo_errmsg($this->conn));
+        $this->errno = mysqli::__elephcClientErrno(elephc_pdo_errcode($this->conn), $this->error);
         $this->sqlstate = elephc_pdo_sqlstate($this->conn);
         if ($this->sqlstate === "") {
             $this->sqlstate = "HY000";

@@ -779,12 +779,12 @@ class mysqli_stmt {
     // (falling back to the connection for prepare-level failures), then
     // dispatches mysqli_report. Always returns false so callers tail-call it.
     private function opFailed(): bool {
-        $this->errno = elephc_pdo_stmt_errcode($this->stmt);
         $this->error = mysqli::__elephcServerMessage(elephc_pdo_stmt_errmsg($this->stmt));
+        $this->errno = mysqli::__elephcClientErrno(elephc_pdo_stmt_errcode($this->stmt), $this->error);
         $this->sqlstate = elephc_pdo_stmt_sqlstate($this->stmt);
         if ($this->errno == 0 && $this->conn >= 0) {
-            $this->errno = elephc_pdo_errcode($this->conn);
             $this->error = mysqli::__elephcServerMessage(elephc_pdo_errmsg($this->conn));
+            $this->errno = mysqli::__elephcClientErrno(elephc_pdo_errcode($this->conn), $this->error);
             $this->sqlstate = elephc_pdo_sqlstate($this->conn);
         }
         if ($this->sqlstate === "") {

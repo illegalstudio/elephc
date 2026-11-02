@@ -571,3 +571,22 @@ echo "|", $driver->driver_version;
     );
     assert_eq!(out, "1|quiet-false|strict-throw|cv|ci|101009");
 }
+
+/// Every mysqlnd option id the surface honors or accepts returns `true` from
+/// `options()` before connecting (MYSQLI_OPT_READ_TIMEOUT included), and an
+/// unknown id returns `false`, like php.
+#[test]
+fn test_mysqli_options_accept_mysqlnd_ids() {
+    let out = compile_and_run(
+        r#"<?php
+$db = mysqli_init();
+$ids = [MYSQLI_OPT_CONNECT_TIMEOUT, MYSQLI_OPT_READ_TIMEOUT, MYSQLI_INIT_COMMAND, MYSQLI_SET_CHARSET_NAME,
+    MYSQLI_OPT_LOCAL_INFILE, MYSQLI_OPT_LOAD_DATA_LOCAL_DIR, MYSQLI_OPT_SSL_VERIFY_SERVER_CERT,
+    MYSQLI_OPT_INT_AND_FLOAT_NATIVE, MYSQLI_OPT_NET_CMD_BUFFER_SIZE, MYSQLI_OPT_NET_READ_BUFFER_SIZE];
+$ok = 0;
+foreach ($ids as $id) { if ($db->options($id, 1)) { $ok++; } }
+echo $ok, "/", count($ids), "|", $db->options(9999, 1) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "10/10|F");
+}
