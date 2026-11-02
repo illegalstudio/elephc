@@ -237,6 +237,7 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fpc_open_linux_x86_64");
     emitter.instruction("mov rdx, 0x1A4");                                      // pass mode 0644 for newly created files
     emitter.instruction("call open");                                           // open the destination file through libc open()
+    emitter.instruction("movsxd rax, eax");                                     // libc returns a signed 32-bit descriptor, including -1 in eax
     emitter.instruction("test rax, rax");                                       // libc reports an unsuccessful open with a negative descriptor
     emitter.instruction("js __rt_fpc_return_linux_x86_64");                     // preserve open's failure and errno without writing or closing fd -1
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the opened file descriptor for the later write() and close() calls
@@ -348,11 +349,12 @@ mod tests {
         let asm = emitter.output();
         assert!(asm.contains("call open") && asm.contains("call write"));
         let after_open = asm.split_once("call open").unwrap().1;
+        let extend = after_open.find("movsxd rax, eax").unwrap();
         let check = after_open.find("test rax, rax").unwrap();
         let failure = after_open.find("js __rt_fpc_return_linux_x86_64").unwrap();
         let write = after_open.find("call write").unwrap();
-        assert!(check < failure && failure < write,
-            "a failed libc open must return before write/close overwrite its errno");
+        assert!(extend < check && check < failure && failure < write,
+            "sign-extend libc's int result before testing failed open and preserving errno");
     }
 
     /// `__rt_flock` and `__rt_ftruncate` do NOT take the platform's first argument registers on
