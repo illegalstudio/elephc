@@ -422,7 +422,7 @@ pub trait RuntimeValueOps {
             for position in 0..len {
                 let key = self.array_iter_key(array, position)?;
                 operands.push(key);
-                let value = self.array_get(array, key)?;
+                let value = self.array_get_preserving_references(array, key)?;
                 operands.push(value);
                 self.array_set(result, key, value)?;
             }

@@ -544,15 +544,19 @@ pub(super) fn write_back_method_nested_array_element_ref_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let current = eval_reference_target_value(array_target, context, values)?;
-    let array = if values.is_array_like(current)? {
-        let array = values.array_clone_shallow(current)?;
-        context.copy_array_metadata(current, array);
-        array
-    } else {
-        eval_new_array_for_index(index, values)?
-    };
-    let array = values.array_set(array, index, value)?;
-    write_back_method_ref_target(array_target, array, context, values)
+    with_eval_value_lease(current, context, values, |current, context, values| {
+        let array = if values.is_array_like(current)? {
+            let array = values.array_clone_shallow(current)?;
+            context.copy_array_metadata(current, array);
+            array
+        } else {
+            eval_new_array_for_index(index, values)?
+        };
+        with_eval_value_lease(array, context, values, |array, context, values| {
+            let array = values.array_set(array, index, value)?;
+            write_back_method_ref_target(array_target, array, context, values)
+        })
+    })
 }
 
 /// Stores one by-reference method result in a caller-side object property.
