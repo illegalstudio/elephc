@@ -1250,8 +1250,7 @@ class DOMDocument extends DOMNode {
 
     public function loadXML(string $source, int $options = 0): bool {
         if ($source === '') { throw new ValueError('DOMDocument::loadXML(): Argument #1 ($source) must not be empty'); }
-        $load = "__elephc_simplexml_load_dom";
-        return $load($this, $source, $options);
+        return ("__elephc_simplexml_load_dom")($this, $source, $options);
     }
 
     public function saveXML(mixed $node = null, int $options = 0): string {

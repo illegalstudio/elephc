@@ -15,6 +15,36 @@ use crate::parser::ast::{Program, StmtKind};
 use super::usage::scan_program;
 use super::{prune_unreachable_declarations, PreludeInventory, PruneOptions};
 
+/// A literal expression-call target contributes one exact edge instead of a global hazard.
+#[test]
+fn prune_literal_expression_calls_keep_exact_targets() {
+    let source = r#"<?php
+function retainedTarget(): int { return 1; }
+function unusedTarget(): int { return 2; }
+echo ("RETAINEDTARGET")();
+"#;
+    let usage = scan_program(&parse(source));
+    assert!(usage.functions.contains(&php_symbol_key("retainedTarget")));
+    assert!(!usage.hazards.dynamic_function);
+    assert!(!usage.hazards.dynamic_method);
+    let (program, _) = prune(source);
+    assert!(has_function(&program, "retainedTarget"));
+    assert!(!has_function(&program, "unusedTarget"));
+}
+
+/// Runtime expression-call targets retain conservative lookup, including inside literal eval.
+#[test]
+fn scan_runtime_expression_calls_keep_lookup_hazards() {
+    for source in [
+        "<?php ($argv[1])();",
+        "<?php eval('($argv[1])();');",
+    ] {
+        let usage = scan_program(&parse(source));
+        assert!(usage.hazards.dynamic_function, "{source}");
+        assert!(usage.hazards.dynamic_method, "{source}");
+    }
+}
+
 /// Folded class-name strings keep runtime static-callable targets without rooting unrelated classes.
 #[test]
 fn prune_keeps_runtime_static_callable_class_after_class_constant_folding() {

@@ -25,7 +25,7 @@ impl Scanner<'_> {
             ExprKind::FunctionCall { name, args } => self.scan_function_call(name.as_str(), args),
             ExprKind::FirstClassCallable(target) => self.scan_callable_target(target),
             ExprKind::ExprCall { callee, args } => {
-                self.unresolved_callable_hazard();
+                self.callable_or_hazard(Some(callee));
                 self.scan_class_introspection_callable(callee, args);
                 self.scan_expr(callee);
                 self.scan_exprs(args);
