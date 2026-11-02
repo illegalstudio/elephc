@@ -838,6 +838,20 @@ pub trait RuntimeValueOps {
         slot: *mut *mut crate::value::RuntimeCell,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Allocates a retainable native Mixed slot owning an existing persistent PHP reference.
+    /// Embeddings without native managed cells keep the temporary staging representation.
+    fn native_mixed_reference_cell(
+        &mut self,
+        _reference: RuntimeCellHandle,
+    ) -> Result<Option<u64>, EvalStatus> {
+        Ok(None)
+    }
+
+    /// Consumes a native staging-cell lease, containing any destructor exception in the host ABI.
+    fn release_native_mixed_reference_cell(&mut self, cell: u64) -> Result<(), EvalStatus> {
+        self.release_raw_heap_word(cell)
+    }
+
     /// Creates an invoker-only marker for raw storage whose source tag identifies its full layout.
     fn invoker_raw_ref_cell(
         &mut self,

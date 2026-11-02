@@ -140,6 +140,7 @@ class RawShadowOwnedPromotedMixed extends PrivateOwnedPromotedMixed {
 function makePrivateOwnedPromotedMixed(string $class): PrivateOwnedPromotedMixed {
     $value = 'before';
     $object = new $class($value);
+    if (!($object instanceof PrivateOwnedPromotedMixed)) { throw new TypeError('unexpected private factory class'); }
     $value = 'after';
     return $object;
 }
@@ -548,7 +549,10 @@ $escapedRendered = captureRenderedNativeReference($object->value);
     ob_start(); var_dump($object); $dump = ob_get_clean();
     $printed = print_r($object, true);
     $exported = var_export($object, true);
-    if (!str_contains($exported, "'text'")) { echo '[export:', $exported, ']'; }
+    if (!str_contains($exported, "'text'")) {
+        echo '[export:', $exported, ';count:', __elephc_object_prop_count($object),
+            ';first:', __elephc_object_prop_name($object, 0), ']';
+    }
     echo (int)str_contains($dump, 'uninitialized(mixed)'),
         (int)str_contains($dump, 'string(4) "text"'),
         (int)str_contains($dump, 'int(7)'),

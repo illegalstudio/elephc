@@ -10,6 +10,9 @@
 use super::*;
 use crate::ir::RuntimeCallTarget;
 
+mod owned_output;
+pub(in crate::codegen) use owned_output::publish_current_owned_output;
+
 /// Lowers an addressable local store from one SSA operand.
 pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;

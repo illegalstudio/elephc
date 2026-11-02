@@ -551,6 +551,16 @@ for the actual caller cell. Borrowed eval argument slots first share a persisten
 PHP reference wrapper with a new owned native cell. The constructor publishes the
 retained binding before releasing its allocation-time placeholder. Other typed
 constructor reference payloads retain their separate borrowed representation.
+When eval stages an existing PHP reference for a native boxed reference parameter,
+an unconstrained binding uses a managed descriptor-`7` cell retaining that same
+wrapper. Duplicate arguments share one cell lease. Native reference returns and
+constructors can retain the cell beyond the staging frame. Retirement uses the
+protected generic release boundary; it never frees a Rust pointer slot retained
+by a callee. Generic contracts and by-value fallback arguments keep detached
+temporary staging and validate their writeback before publishing it.
+Numeric and named variadic marker writes update the wrapper's child, as do native
+builtin outputs. A property write fetch clones and replaces that child before
+releasing the old box, preserving the wrapper used by escaping eval aliases.
 Each alias owns the cell separately from the contained value. Rebinding acquires
 the new cell before retiring the previous local, which may own the source object.
 Cloning separates a singleton cell and shares one with live aliases, excluding

@@ -10,6 +10,81 @@
 
 use crate::support::*;
 
+/// Native numeric and named variadic markers publish immediately into one eval reference.
+#[test]
+fn test_eval_native_mixed_variadic_markers_keep_shared_reference_bundle() {
+    let source = r#"<?php
+function nativeMixedVariadicMarkers(callable $reader, &...$values): void {
+    $values[0] = 'first';
+    echo $reader(), '|';
+    $values['named'] = 'last';
+    echo $reader(), '|';
+}
+eval('class NativeVariadicStagingEvalMarker {}
+$value = "before";
+$reader = function () use (&$value): mixed { return $value; };
+nativeMixedVariadicMarkers($reader, $value, named: $value);
+echo $value, "|";
+unset($reader, $value);');
+"#;
+    let expected = "first|last|last|";
+    let (output, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&output), &[expected]);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}
+
+/// Native reference returns can retain a Mixed argument staged from an existing eval PHPRef.
+#[test]
+fn test_eval_native_mixed_reference_return_owns_staging_cell() {
+    let source = r#"<?php
+function &nativeMixedStagingIdentity(mixed &$value): mixed { return $value; }
+eval('class NativeMixedStagingEvalMarker {}
+$fresh = "fresh";
+echo nativeMixedStagingIdentity($fresh), "|";
+$value = "before";
+$alias =& $value;
+echo nativeMixedStagingIdentity($value), ":";
+$value = "after";
+echo $alias, "|";
+unset($alias, $value, $fresh);');
+"#;
+    let expected = "fresh|before:after|";
+    let (output, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&output), &[expected]);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}
+
+/// A native output builtin publishes before a reentrant eval reader observes the shared reference.
+#[test]
+fn test_eval_native_mixed_signal_output_keeps_reference_identity() {
+    let source = r#"<?php
+function nativeMixedSignalOutput(mixed &$output, callable $reader): void {
+    pcntl_sigprocmask(SIG_BLOCK, [SIGKILL], $output);
+    echo (int)is_array($reader()), '|';
+}
+eval('class NativeSignalStagingEvalMarker {}
+$value = "before";
+$alias =& $value;
+$reader = function () use (&$value): mixed { return $value; };
+nativeMixedSignalOutput($value, $reader);
+echo (int)is_array($value), ":", (int)is_array($alias), "|";
+unset($reader, $alias, $value);');
+"#;
+    let expected = "1|1:1|";
+    let (output, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&output), &[expected]);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}
+
 /// Array-property writes separate orphan references while retaining genuinely shared elements.
 #[test]
 fn test_eval_property_array_clone_separates_orphan_references() {

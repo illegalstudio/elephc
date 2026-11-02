@@ -3240,6 +3240,10 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the runtime setter after marker write-through
 
     ctx.emitter.label(&mixed_cell_label);
+    let payload = ctx.next_label("mixed_array_set_ref_phpref_payload");
+    crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+        ctx.emitter, "x10", "x12", "x13", &payload,
+    );
     // The cell is the caller variable's storage and OWNS the box it holds, so overwriting it
     // has to release the old one exactly as `__rt_array_set_mixed` does for an ordinary slot.
     // Without this the caller's previous box — and the payload it pins — is orphaned at
@@ -3356,6 +3360,10 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the runtime setter after marker write-through
 
     ctx.emitter.label(&mixed_cell_label);
+    let payload = ctx.next_label("mixed_array_set_ref_phpref_payload");
+    crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+        ctx.emitter, "r10", "r11", "r8", &payload,
+    );
     // See the AArch64 arm: the cell owns the box it holds, so the replaced one is released
     // here rather than orphaned (issue #1062), after the store rather than before it.
     ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the boxed Mixed the caller ref-cell currently owns

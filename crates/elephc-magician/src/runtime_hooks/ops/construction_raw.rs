@@ -167,6 +167,20 @@ macro_rules! impl_construction_raw_ops {
         Self::handle(unsafe { __elephc_eval_value_invoker_ref_cell(slot) })
     }
 
+    /// Gives native reference consumers a managed slot retaining the caller's PHP reference.
+    fn native_mixed_reference_cell(
+        &mut self,
+        reference: RuntimeCellHandle,
+    ) -> Result<Option<u64>, EvalStatus> {
+        let cell = unsafe { __elephc_eval_value_native_mixed_reference_cell(reference.as_ptr()) };
+        if cell == 0 { Err(EvalStatus::RuntimeFatal) } else { Ok(Some(cell)) }
+    }
+
+    /// Uses the protected generic release ABI so a final cell cannot throw across Rust frames.
+    fn release_native_mixed_reference_cell(&mut self, cell: u64) -> Result<(), EvalStatus> {
+        self.release(RuntimeCellHandle::from_raw(cell as *mut crate::value::RuntimeCell))
+    }
+
     /// Creates an invoker-only by-reference marker for a staged raw one-word slot.
     fn invoker_raw_ref_cell(
         &mut self,

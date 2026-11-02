@@ -430,6 +430,8 @@ fn native_ref_cleanup_consumes_every_slot_after_a_release_error() {
         let string = values.string("staged").unwrap();
         let array = values.array_new(0).unwrap();
         let mixed = values.int(7).unwrap();
+        let managed = values.array_new(0).unwrap();
+        let caller = values.int(11).unwrap();
         let bound = BoundNativeFunctionArgs {
             values: Vec::new(),
             named_keys: Vec::new(),
@@ -446,6 +448,9 @@ fn native_ref_cleanup_consumes_every_slot_after_a_release_error() {
                 BoundNativeFunctionRefSlot::Mixed {
                     original: mixed, slot: Box::new(mixed.as_ptr()), target: None,
                 },
+                BoundNativeFunctionRefSlot::ManagedMixed {
+                    original: caller, cell: managed.as_ptr() as u64,
+                },
             ],
         };
         values.fail_release_call = Some(0);
@@ -455,10 +460,12 @@ fn native_ref_cleanup_consumes_every_slot_after_a_release_error() {
             cleanup_native_function_ref_args(&bound, &mut values)
         };
         assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
-        assert_eq!(values.releases, vec![string, array, mixed]);
-        for value in [string, array, mixed] {
+        assert_eq!(values.releases, vec![string, array, mixed, managed]);
+        for value in [string, array, mixed, managed] {
             assert_eq!(values.cell_owners[&(value.as_ptr() as usize)], 0);
         }
+        assert_eq!(values.cell_owners[&(caller.as_ptr() as usize)], 1,
+            "a live shared reference needs no detached caller writeback");
     }
 }
 

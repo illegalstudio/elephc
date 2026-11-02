@@ -60,6 +60,11 @@ pub(super) struct BoundNativeFunctionArgs {
 
 /// One staged by-reference slot passed to a native function invoker.
 pub(super) enum BoundNativeFunctionRefSlot {
+    /// One managed native slot owns the live PHP reference shared with the caller.
+    ManagedMixed {
+        original: RuntimeCellHandle,
+        cell: u64,
+    },
     Mixed {
         original: RuntimeCellHandle,
         slot: Box<*mut crate::value::RuntimeCell>,

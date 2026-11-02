@@ -80,19 +80,37 @@ pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<BoundNativeFunctionRefSlot>), EvalStatus> {
+    let guarded_writeback = target.as_ref()
+        .is_none_or(|target| !generic_reference_contracts(target, context).is_empty());
     if target.is_some() && !tagged_scalar && native_function_raw_ref_kind(param_type).is_none()
         && values.is_reference(original)?
     {
         for existing in &mut staged.ref_slots {
+            if let BoundNativeFunctionRefSlot::ManagedMixed { original: first, cell } = existing {
+                if !guarded_writeback && first.as_ptr() == original.as_ptr() {
+                    return values.invoker_ref_cell(*cell as *mut *mut crate::value::RuntimeCell)
+                        .map(|marker| (marker, None));
+                }
+            }
             if let BoundNativeFunctionRefSlot::Mixed { original: first, slot, target: Some(_) } = existing {
                 if first.as_ptr() == original.as_ptr() {
                     return values.invoker_ref_cell(slot.as_mut()).map(|marker| (marker, None));
                 }
             }
         }
+        if !guarded_writeback {
+            if let Some(cell) = values.native_mixed_reference_cell(original)? {
+                let marker = match values.invoker_ref_cell(cell as *mut *mut crate::value::RuntimeCell) {
+                    Ok(marker) => marker,
+                    Err(status) => {
+                        let _ = values.release_native_mixed_reference_cell(cell);
+                        return Err(status);
+                    }
+                };
+                return Ok((marker, Some(BoundNativeFunctionRefSlot::ManagedMixed { original, cell })));
+            }
+        }
     }
-    let guarded_writeback = target.as_ref()
-        .is_none_or(|target| !generic_reference_contracts(target, context).is_empty());
     stage_native_function_ref_arg(param_type, tagged_scalar, original, target, guarded_writeback, values)
         .map(|(marker, slot)| (marker, Some(slot)))
 }

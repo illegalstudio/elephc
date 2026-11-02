@@ -457,6 +457,10 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_invoker_ref_cell(
         slot: *mut *mut crate::value::RuntimeCell,
     ) -> *mut RuntimeCell;
+    /// Allocates a managed native Mixed slot that owns the existing PHP reference.
+    pub(super) fn __elephc_eval_value_native_mixed_reference_cell(
+        reference: *mut RuntimeCell,
+    ) -> u64;
     /// Wraps a typed raw slot for native callable reference binding.
     pub(super) fn __elephc_eval_value_invoker_raw_ref_cell(
         slot: *mut c_void,

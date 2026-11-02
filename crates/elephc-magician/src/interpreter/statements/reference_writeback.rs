@@ -444,6 +444,13 @@ pub(in crate::interpreter) fn write_back_invoker_slot_ref_target(
             write_back_invoker_heap_slot(slot, source_tag, value, values)
         }
         EVAL_TAG_MIXED => {
+            let current = RuntimeCellHandle::from_raw(unsafe {
+                *(slot as *const *mut crate::value::RuntimeCell)
+            });
+            if values.is_reference(current)? {
+                let previous = values.reference_replace(current, value)?;
+                return values.release(previous);
+            }
             let retained = values.retain(value)?;
             let replaced = unsafe {
                 let slot = slot as *mut *mut crate::value::RuntimeCell;

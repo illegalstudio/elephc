@@ -279,6 +279,9 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
     emitter.instruction("ldr x14, [x12, #24]");                                 // reload the boxed invoker marker
     emitter.instruction("ldr x14, [x14, #8]");                                  // load the caller's Mixed storage address
+    crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+        emitter, "x14", "x13", "x15", "__rt_hash_set_invoker_phpref_payload",
+    );
     emitter.instruction("ldr x0, [x14]");                                       // save the previous boxed Mixed owner for release
     emitter.instruction("ldr x13, [sp, #24]");                                  // load the owned replacement box
     emitter.instruction("str x13, [x14]");                                      // publish the replacement before a destructor can throw
@@ -650,6 +653,9 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
     emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // reload the boxed invoker marker
     emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // load the caller's Mixed storage address
+    crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+        emitter, "r14", "r10", "r11", "__rt_hash_set_invoker_phpref_payload_x",
+    );
     emitter.instruction("mov rax, QWORD PTR [r14]");                            // save the previous boxed Mixed owner for release
     emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // load the owned replacement box
     emitter.instruction("mov QWORD PTR [r14], r13");                            // publish the replacement before a destructor can throw

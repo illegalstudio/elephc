@@ -170,6 +170,15 @@ fn eval_call_arg_value_with_selection(
     let by_reference = selection.is_some();
     match expr {
         EvalExpr::LoadVar(name) => {
+            if by_reference {
+                if let Some(reference) =
+                    eval_persistent_variable_reference(name, context, caller_scope, values)?
+                {
+                    return Ok((reference.borrowed(), Some(EvalReferenceTarget::Cell {
+                        cell: reference.borrowed(),
+                    })));
+                }
+            }
             let value = visible_scope_cell(context, caller_scope, name)
                 .map_or_else(|| values.null(), Ok)?;
             Ok((
