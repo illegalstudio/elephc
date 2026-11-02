@@ -563,7 +563,7 @@ fn prepare_write_only_output_local(
         // output argument. Earlier arguments must still see its original type.
         // Frame representation is whole-function metadata, not an evaluation:
         // expose it now so earlier narrowed loads receive their detached owner.
-        if ctx.local_type(name).codegen_repr() != ty.codegen_repr() {
+        if !ctx.is_ref_bound_local(name) && ctx.local_type(name).codegen_repr() != ty.codegen_repr() {
             if let Some(slot) = ctx.local_slots.get(name).copied() {
                 ctx.builder.widen_local_storage_type(slot, PhpType::Mixed);
             }

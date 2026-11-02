@@ -362,3 +362,37 @@ eval($source);
 "#);
     assert_eq!(out, "3:4|1");
 }
+
+/// Capture writeback preserves PHP references exported from native properties to eval aliases.
+#[test]
+fn preg_capture_native_property_alias_writeback_bundle() {
+    let source = r#"<?php
+class RegexNativeReference {
+    public mixed $matches = [];
+    public function &matchesRef(): mixed { return $this->matches; }
+}
+function exerciseRegexNativeReferences(bool $run): void {
+    $holder = new RegexNativeReference();
+    $alias =& $holder->matchesRef();
+    $code = $run ? '
+function captureRegexNativeReference(&$value): callable {
+    return function () use (&$value): mixed { return $value; };
+}
+$escaped = captureRegexNativeReference($holder->matches);
+' : '';
+    eval($code);
+    echo preg_match('/(a)/', 'a', $alias), ':', json_encode($escaped()), '|';
+    echo preg_match_all('/(b)/', 'bb', $alias), ':', json_encode($escaped()), '|';
+    $alias = ['after'];
+    echo json_encode($escaped()), '|';
+    unset($holder, $alias, $code);
+    echo json_encode($escaped()), '|';
+    unset($escaped);
+}
+exerciseRegexNativeReferences($argc > 0);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "1:[\"a\",\"a\"]|2:[[\"b\",\"b\"],[\"b\",\"b\"]]|[\"after\"]|[\"after\"]|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

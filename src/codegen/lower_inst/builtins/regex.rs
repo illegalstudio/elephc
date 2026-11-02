@@ -42,7 +42,7 @@ pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction
     load_pattern_and_subject(ctx, pattern, subject)?;
     if let Some(slot) = matches_slot {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_capture");
-        store_matches_array_on_success(ctx, slot)?;
+        store_matches_array_on_success(ctx, slot, &PhpType::Array(Box::new(PhpType::Str)))?;
     } else {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match");
     }
@@ -74,7 +74,7 @@ pub(crate) fn lower_preg_match_all(
     emit_preg_match_all_flag_guard(ctx);
     if let Some(slot) = matches_slot {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_all_capture");
-        store_matches_array_on_success(ctx, slot)?;
+        store_matches_array_on_success(ctx, slot, &PhpType::Array(Box::new(PhpType::Mixed)))?;
     } else {
         lower_preg_match_all_count(ctx);
     }
@@ -713,6 +713,7 @@ fn box_split_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
 fn store_matches_array_on_success(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
+    raw_capture_type: &PhpType,
 ) -> Result<()> {
     let result = abi::int_result_reg(ctx.emitter);
     let failed = ctx.next_label("preg_matches_failed");
@@ -727,7 +728,7 @@ fn store_matches_array_on_success(
             ctx.emitter.instruction(&format!("je {}", failed));                 // leave the caller's matches variable untouched
         }
     }
-    store_matches_array(ctx, slot)?;
+    store_matches_array(ctx, slot, raw_capture_type)?;
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&failed);
     abi::emit_push_reg(ctx.emitter, result);
@@ -746,7 +747,7 @@ fn store_matches_array_on_success(
 }
 
 /// Stores the runtime-built matches array into a local slot without clobbering the match flag.
-fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
+fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId, raw_capture_type: &PhpType) -> Result<()> {
     let result = abi::int_result_reg(ctx.emitter);
     let array = match ctx.emitter.target.arch {
         Arch::AArch64 => "x1",
@@ -755,14 +756,32 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resu
     // Both return values must survive retirement and optional Mixed boxing.
     abi::emit_push_reg(ctx.emitter, result);
     abi::emit_push_reg(ctx.emitter, array);
-    ctx.release_local_before_refcounted_writeback(slot)?;
-    abi::emit_pop_reg(ctx.emitter, result);
-    if matches!(ctx.local_php_type(slot)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-        crate::codegen::emit_box_current_owned_value_as_mixed(
-            ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)),
-        );
+    if ctx.local_ref_cell_representation_is_definite(slot) {
+        let payload = ctx.ref_cell_payload_type(slot)?.codegen_repr();
+        if payload != PhpType::Mixed && payload != *raw_capture_type {
+            return Err(CodegenIrError::unsupported(format!(
+                "regex capture output cannot retype a native reference with {:?} payload", payload,
+            )));
+        }
+        abi::emit_pop_reg(ctx.emitter, result);
+        if payload == PhpType::Mixed {
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)),
+            );
+        }
+        super::super::local_stores::publish_current_ref_cell_value(
+            ctx, slot, &payload, super::super::local_stores::RefCellStorePrevious::RetireAcquired,
+        )?;
+    } else {
+        ctx.release_local_before_refcounted_writeback(slot)?;
+        abi::emit_pop_reg(ctx.emitter, result);
+        if matches!(ctx.local_php_type(slot)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)),
+            );
+        }
+        ctx.store_current_result_to_local(slot)?;
     }
-    ctx.store_current_result_to_local(slot)?;
     abi::emit_pop_reg(ctx.emitter, result);
     Ok(())
 }

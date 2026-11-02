@@ -780,6 +780,15 @@ fn store_value_to_raw_ref_cell_as(
     } else {
         coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
     }
+    publish_current_ref_cell_value(ctx, slot, &target_ty, previous)
+}
+
+/// Publishes an already owned ABI result through a reference before retiring its previous value.
+pub(in crate::codegen) fn publish_current_ref_cell_value(
+    ctx: &mut FunctionContext<'_>, slot: LocalSlotId, target_ty: &PhpType,
+    previous: RefCellStorePrevious,
+) -> Result<()> {
+    let target_ty = target_ty.codegen_repr();
     let retires_previous = previous != RefCellStorePrevious::Keep
         && (matches!(target_ty, PhpType::Str | PhpType::Callable) || target_ty.is_refcounted());
     if retires_previous {
