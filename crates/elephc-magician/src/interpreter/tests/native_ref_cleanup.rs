@@ -537,3 +537,41 @@ fn native_ref_writeback_retires_its_owner_after_a_retaining_setter() {
     assert_eq!(values.releases, vec![old, value]);
     assert_eq!(values.cell_owners[&(value.as_ptr() as usize)], 1);
 }
+
+/// Native staging cannot modify a persistent typed alias before writeback validates its value.
+#[test]
+fn native_reference_staging_preserves_typed_alias_on_rejection() {
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let declaration = parse_fragment(b"array<int> $a = [1]; $b =& $a;").unwrap();
+    let result = execute_program_with_context(&mut context, &declaration, &mut scope, &mut values).unwrap();
+    values.release(result).unwrap();
+    let original = scope.visible_cell("b").unwrap();
+    assert!(values.is_reference(original).unwrap());
+    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 1);
+    function.set_param_type(0, EvalParameterType::new(vec![EvalParameterTypeVariant::Array], false));
+    function.set_param_by_ref(0, true);
+    let mut bound = bind_evaluated_native_function_args(&function, vec![EvaluatedCallArg {
+        name: None, value: original.borrowed(),
+        ref_target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: "b".into() }),
+    }], &mut context, &mut values).unwrap();
+    let BoundNativeFunctionRefSlot::Mixed { slot, .. } = &mut bound.ref_slots[0] else {
+        panic!("array reference must use boxed staging");
+    };
+    let staged = RuntimeCellHandle::from_raw(**slot);
+    assert!(!values.is_reference(staged).unwrap());
+    let bad = values.string("bad").unwrap();
+    let replacement = values.alloc(FakeValue::Array(vec![bad]));
+    **slot = replacement.as_ptr();
+    values.release(staged).unwrap();
+    assert_eq!(write_back_native_function_ref_args(&bound, &mut context, &mut values), Err(EvalStatus::UncaughtThrowable));
+    assert_eq!(scope.visible_cell("a"), Some(original));
+    assert_eq!(scope.visible_cell("b"), Some(original));
+    let FakeValue::Array(items) = values.get(original) else { panic!("typed alias remains an array"); };
+    assert_eq!(values.get(items[0]), FakeValue::Int(1));
+    assert_eq!(values.cell_owners[&(replacement.as_ptr() as usize)], 0);
+    let error = context.take_pending_throw().unwrap();
+    eval_release_value(&mut context, &mut values, error).unwrap();
+    for marker in bound.values { values.release(marker).unwrap(); }
+}

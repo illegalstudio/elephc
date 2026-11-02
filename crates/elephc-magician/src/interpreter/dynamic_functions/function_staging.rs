@@ -143,7 +143,11 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
             Ok((marker, BoundNativeFunctionRefSlot::OwnedRawWord { original, slot, target }))
         }
         None => {
-            let retained = values.retain(original)?;
+            // The native slot is validated on writeback. Sharing a persistent wrapper here
+            // would let native stores mutate the caller before that validation can reject them.
+            let retained = if values.is_reference(original)? {
+                values.copy_value(original)?
+            } else { values.retain(original)? };
             let mut slot = Box::new(retained.as_ptr());
             let marker = match values.invoker_ref_cell(slot.as_mut()) {
                 Ok(marker) => marker,
