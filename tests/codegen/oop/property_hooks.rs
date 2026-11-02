@@ -122,12 +122,52 @@ class RuntimeSetterArgument { public string $text = 'argument'; }
 class RuntimeThrowingSetter {
     public mixed $value { set { throw new RuntimeException('caught'); } }
 }
+
 function runtimeThrowingSetterMake(): mixed { return new RuntimeThrowingSetter(); }
 try { runtimeThrowingSetterMake()->value = new RuntimeSetterArgument(); }
 catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "caught|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// String setter argument conversions retire after both normal and throwing accessor exits.
+#[test]
+fn test_mixed_string_property_setter_conversion_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeStringSetterArgument {
+    public function __construct(public bool $fail) {}
+    public function __toString(): string {
+        if ($this->fail) { throw new RuntimeException('conversion'); }
+        return str_repeat('x', 33);
+    }
+}
+class RuntimeStringSetter {
+    public bool $fail = false;
+    public string $value {
+        set {
+            echo strlen($value), '|';
+            if ($this->fail) { throw new RuntimeException('setter'); }
+        }
+    }
+}
+function runtimeStringSetterWrite(mixed $object, mixed $value): void { $object->value = $value; }
+$object = new RuntimeStringSetter();
+for ($index = 0; $index < 3; $index++) {
+    $object->fail = false;
+    runtimeStringSetterWrite($object, str_repeat('a', 33));
+    runtimeStringSetterWrite($object, new RuntimeStringSetterArgument(false));
+    $object->fail = true;
+    try { runtimeStringSetterWrite($object, str_repeat('b', 33)); }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+    try { runtimeStringSetterWrite($object, new RuntimeStringSetterArgument(true)); }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+unset($object);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "33|33|33|setter|conversion|".repeat(3));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

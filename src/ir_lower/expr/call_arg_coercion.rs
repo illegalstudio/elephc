@@ -442,7 +442,7 @@ fn root_prior_argument_preserving_reference_place(
 /// conversion is also explicit here because it allocates caller-owned storage whose lifetime
 /// depends on the call's return/argument alias contract; leaving that conversion hidden in ABI
 /// materialization would give EIR no value to transfer or release after the call.
-pub(super) fn coerce_scalar_arg_to_param_storage(
+pub(crate) fn coerce_scalar_arg_to_param_storage(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     index: usize,

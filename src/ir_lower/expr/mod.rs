@@ -187,6 +187,7 @@ use array_builtin_args::*;
 use weak_string_unions::*;
 use builtin_special_args::*;
 use call_arg_coercion::*;
+pub(crate) use call_arg_coercion::coerce_scalar_arg_to_param_storage;
 use positional_spreads::*;
 use packed_builtin_args::*;
 use named_args::*;

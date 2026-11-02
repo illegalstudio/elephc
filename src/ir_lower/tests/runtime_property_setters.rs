@@ -18,10 +18,15 @@ class RuntimeHookBase {}
 class RuntimeHookTarget extends RuntimeHookBase {
     public mixed $value = null { set { $this->value = $value; } }
 }
+class RuntimeStringHookTarget {
+    public string $text = '' { set { $this->text = $value; } }
+}
 function runtimeHookAssign(mixed $object, mixed $value): void { $object->value = $value; }
+function runtimeStringHookAssign(mixed $object, mixed $value): void { $object->text = $value; }
 function runtimeHookAssignBase(RuntimeHookBase $object, mixed $value): void { $object->value = $value; }
 $object = new RuntimeHookTarget(); runtimeHookAssign($object, 'value');
 runtimeHookAssignBase($object, 'derived');
+runtimeStringHookAssign(new RuntimeStringHookTarget(), 'string');
 "#, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());
     let function = module.functions.iter().find(|function| function.name == "runtimeHookAssign").unwrap();
@@ -48,6 +53,24 @@ runtimeHookAssignBase($object, 'derived');
     assert!(base.instructions.iter().any(|inst| inst.op == Op::DynamicPropSet
         && base.value(inst.operands[0]).unwrap().php_type == PhpType::Mixed),
         "{target}: fallback storage must dispatch the runtime class instead of a missing base slot");
+    let strings = module.functions.iter().find(|function| function.name == "runtimeStringHookAssign").unwrap();
+    let (call_position, setter) = strings.instructions.iter().enumerate().find(|(_, inst)| inst.op == Op::MethodCall
+        && matches!(inst.immediate, Some(Immediate::Data(data))
+            if module.data.strings[data.as_raw() as usize] == "__propset_text")).unwrap();
+    assert_eq!(strings.value(setter.operands[1]).unwrap().php_type, PhpType::Str,
+        "{target}: setter conversions must be visible to EIR ownership");
+    let owner = strings.instructions[..call_position].iter().find_map(|inst| match inst.immediate {
+        Some(Immediate::LocalSlot(slot)) if inst.op == Op::StoreLocal
+            && inst.operands == [setter.operands[1]] => Some(slot),
+        _ => None,
+    }).expect("the converted setter string must be stored in an owning slot");
+    assert!(strings.instructions[..call_position].iter().any(|inst| inst.op == Op::PushCallOperandOwner
+        && inst.immediate == Some(Immediate::LocalSlot(owner))), "{target}: converted string needs an unwind owner");
+    for op in [Op::PopCallOperandOwner, Op::ReleaseLocalSlot] {
+        assert!(strings.instructions[call_position + 1..].iter().any(|inst| inst.op == op
+            && inst.immediate == Some(Immediate::LocalSlot(owner))),
+            "{target}: converted setter string needs {op:?}");
+    }
 }
 
 supported_target_cases!(runtime_property_setters, verify_runtime_property_setters);

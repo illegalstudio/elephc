@@ -131,7 +131,7 @@ fn dispatch(
     ctx.restore_initialized_slots(merge_initialized_slots(&initial, yes_slots, yes_live, no_slots, true));
 }
 
-/// Extracts a typed receiver lease and lets the ordinary call ABI coerce the boxed RHS.
+/// Extracts a typed receiver and owns parameter conversions explicitly through the setter call.
 fn emit_setter(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, value: LoweredValue,
     class: &str, method: &str, span: Span,
@@ -149,16 +149,25 @@ fn emit_setter(
     let (receiver, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, receiver, span);
     let signature = ctx.classes[class].methods.get(&php_symbol_key(method)).cloned();
     let expression = Expr::new(ExprKind::Null, span);
-    let mut operands = vec![receiver.value, value.value];
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
+    let value_type = ctx.builder.value_php_type(value.value);
+    let borrowed = ctx.emit_value(Op::Borrow, vec![value.value], None, value_type,
+        Op::Borrow.default_effects(), Some(span));
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    let argument = if let Some(signature) = signature.as_ref() {
+        crate::ir_lower::expr::coerce_scalar_arg_to_param_storage(ctx, signature, 0, borrowed, &expression)
+    } else { borrowed };
+    let (argument, argument_owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, argument, span);
+    let mut operands = vec![receiver.value, argument.value];
     let extra = crate::ir_lower::expr::object_operators::append_hidden_arguments(
         ctx, signature.as_ref(), &mut operands, 1, &expression,
     );
-    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
     let data = ctx.intern_string(method);
     ctx.emit_void(Op::MethodCall, operands, Some(Immediate::Data(data)),
         Op::MethodCall.default_effects(), Some(span));
-    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     for argument in extra { crate::ir_lower::ownership::release_if_owned(ctx, argument, Some(span)); }
+    if let Some(owner) = argument_owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     release_magic_set_value_after_call(ctx, value, span);
     if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
 }
