@@ -246,3 +246,25 @@ fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Optio
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    /// Concrete object adapters require tag-six boxes; nullable object unions use physical Mixed cells.
+    #[test]
+    fn persistent_native_reference_modes_follow_physical_object_layouts() {
+        for variant in [EvalParameterTypeVariant::Object, EvalParameterTypeVariant::Class("ReferenceLayoutContract".into())] {
+            let exact = EvalParameterType::new(vec![variant.clone()], false);
+            let nullable = EvalParameterType::new(vec![variant], true);
+            assert!(!native_reference_uses_boxed_staging(Some(&exact), false));
+            assert!(native_reference_uses_boxed_staging(Some(&nullable), false));
+        }
+        let mixed = EvalParameterType::new(vec![EvalParameterTypeVariant::Mixed], false);
+        assert!(native_reference_uses_boxed_staging(Some(&mixed), false));
+        let text = EvalParameterType::new(vec![EvalParameterTypeVariant::String], false);
+        assert!(!native_reference_uses_boxed_staging(Some(&text), false));
+        let nullable_int = EvalParameterType::new(vec![EvalParameterTypeVariant::Int], true);
+        assert!(!native_reference_uses_boxed_staging(Some(&nullable_int), true));
+    }
+}
