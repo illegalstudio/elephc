@@ -10,6 +10,7 @@
 use super::*;
 
 mod native_xml;
+mod runtime_set_hooks;
 
 /// Routes a runtime-name XML write while preserving the caller's common operand owners.
 pub(crate) fn lower_native_dynamic_property_set(
@@ -533,6 +534,18 @@ pub(super) fn lower_property_assign_without_native(
         lower_property_hook_set(ctx, object.value, property, value, span);
         return;
     }
+    if runtime_set_hooks::lower(ctx, object, property, value, preserve_property_operand, span) {
+        return;
+    }
+    lower_property_slot_assign(ctx, object, property, value, preserve_property_operand,
+        retained_abstract_setter, span);
+}
+
+/// Stores an already prepared RHS after native and ordinary property hooks are excluded.
+fn lower_property_slot_assign(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    value: LoweredValue, preserve_property_operand: bool, retained_abstract_setter: bool, span: Span,
+) {
     let data = ctx.intern_string(property);
     // A declared property store carries MAY_THROW: the weak typed-property guard raises PHP's
     // catchable TypeError, and a Stringable receiver can throw out of its own __toString. Both

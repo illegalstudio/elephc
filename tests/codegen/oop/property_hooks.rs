@@ -12,6 +12,74 @@
 
 use super::*;
 
+/// Boxed receivers invoke backed and virtual setters while ordinary objects keep their slots.
+#[test]
+fn test_mixed_property_setters_preserve_native_hook_dispatch() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeSetterBox {
+    public mixed $value = null {
+        set { echo 'hook:', $value, '|'; $this->value = strtoupper((string)$value); }
+    }
+}
+class RuntimeSetterChild extends RuntimeSetterBox {
+    public string $data {
+        get { return (string)$this->value; }
+        set { $this->value = $value; }
+    }
+}
+function runtimeSetterMake(string $class): mixed { return new $class(); }
+$box = runtimeSetterMake('RuntimeSetterBox');
+$box->value = 'a'; echo $box->value, '|';
+$child = runtimeSetterMake('RuntimeSetterChild');
+if ($child instanceof RuntimeSetterChild) {
+    $child->value = 'b'; echo $child->data, '|';
+    $child->data = 12; echo $child->value, '|';
+}
+$plain = runtimeSetterMake('stdClass'); $plain->value = 'plain'; echo $plain->value, '|';
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "hook:a|A|hook:b|B|hook:12|12|plain|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Runtime class selection preserves asymmetric visibility and the accessor's lexical scope.
+#[test]
+fn test_mixed_property_setters_preserve_private_set_visibility() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimePrivateSetter {
+    public private(set) string $value = '' {
+        set { echo 'hook:', $value, '|'; $this->value = $value; }
+    }
+    public function assign(mixed $other): void { $other->value = 'inside'; }
+}
+function runtimePrivateSetterMake(): mixed { return new RuntimePrivateSetter(); }
+$box = runtimePrivateSetterMake();
+try { $box->value = 'outside'; }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+$box->assign($box); echo $box->value;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Cannot modify private(set) property RuntimePrivateSetter::$value from global scope|hook:inside|inside");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Throwing boxed setters unwind their argument and both receiver leases exactly once.
+#[test]
+fn test_mixed_property_setters_unwind_temporary_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeSetterArgument { public string $text = 'argument'; }
+class RuntimeThrowingSetter {
+    public mixed $value { set { throw new RuntimeException('caught'); } }
+}
+function runtimeThrowingSetterMake(): mixed { return new RuntimeThrowingSetter(); }
+try { runtimeThrowingSetterMake()->value = new RuntimeSetterArgument(); }
+catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A backed getter without a setter keeps ordinary writes and compound-update storage.
 #[test]
 fn test_backed_get_only_property_keeps_implicit_storage_writes() {
