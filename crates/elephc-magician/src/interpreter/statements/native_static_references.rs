@@ -28,5 +28,5 @@ pub(in crate::interpreter) fn eval_native_static_property_reference_after_read(
     if validate_eval_member_access(&owner, visibility, context).is_err() {
         return eval_throw_property_access_error(&owner, property, visibility, context, values);
     }
-    eval_with_native_bridge_scope(&owner, context, || values.static_property_reference(&owner, property, &owner))
+    eval_with_native_bridge_scope(&owner, context, values, |values| values.static_property_reference(&owner, property, &owner))
 }

@@ -38,6 +38,11 @@ use reflection::impl_reflection_ops;
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
+    /// Keeps generated helper authorization independent of the adapter's original context pointer.
+    fn replace_native_class_scope(&mut self, scope: Option<String>) -> Option<String> {
+        std::mem::replace(&mut self.native_class_scope, scope)
+    }
+
     /// Uses the native Mixed cast after internal-class adapters have been checked.
     fn cast_array(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_cast_array(value.as_ptr()) })

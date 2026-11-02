@@ -12,6 +12,38 @@ use super::support::*;
 
 mod argument_ownership;
 
+/// Foreign and nested bridge contexts restore adapter authorization after errors and panics.
+#[test]
+fn native_bridge_scope_restores_adapter_across_foreign_contexts() {
+    let mut values = FakeOps::default();
+    values.replace_native_class_scope(Some("AdapterOriginal".into()));
+    let mut context = ElephcEvalContext::new();
+    context.push_class_scope("CallerOriginal".into());
+    let mut foreign = ElephcEvalContext::new();
+    let result: Result<(), EvalStatus> = eval_with_native_bridge_scope("NativeParent", &mut context, &mut values, |values| {
+        assert_eq!(values.replace_native_class_scope(Some("NativeParent".into())), Some("NativeParent".into()));
+        let nested: Result<(), EvalStatus> = eval_with_native_bridge_scope("NativeChild", &mut foreign, values, |values| {
+            assert_eq!(values.replace_native_class_scope(Some("NativeChild".into())), Some("NativeChild".into()));
+            Err(EvalStatus::RuntimeFatal)
+        });
+        assert_eq!(nested, Err(EvalStatus::RuntimeFatal));
+        assert_eq!(values.replace_native_class_scope(Some("NativeParent".into())), Some("NativeParent".into()));
+        Err(EvalStatus::RuntimeFatal)
+    });
+    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    assert_eq!(values.replace_native_class_scope(Some("AdapterOriginal".into())), Some("AdapterOriginal".into()));
+    assert_eq!(context.current_class_scope(), Some("CallerOriginal"));
+    assert_eq!(foreign.current_class_scope(), None);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        eval_with_native_bridge_scope("PanickingScope", &mut context, &mut values, |_values| -> Result<(), EvalStatus> {
+            panic!("bridge failure")
+        })
+    }));
+    assert!(panic.is_err());
+    assert_eq!(values.replace_native_class_scope(None), Some("AdapterOriginal".into()));
+    assert_eq!(context.current_class_scope(), Some("CallerOriginal"));
+}
+
 /// Native descriptor results satisfy callable, object and Closure contracts without losing ownership.
 #[test]
 fn native_callable_return_contracts_preserve_descriptor_owners() {

@@ -551,15 +551,36 @@ pub(super) fn eval_native_static_method_call_with_scope(
 }
 
 /// Runs one generated/AOT bridge operation while exposing an explicit PHP class scope.
-pub(in crate::interpreter) fn eval_with_native_bridge_scope<T>(
+pub(in crate::interpreter) fn eval_with_native_bridge_scope<T, V: RuntimeValueOps>(
     scope: &str,
     context: &mut ElephcEvalContext,
-    call: impl FnOnce() -> Result<T, EvalStatus>,
+    values: &mut V,
+    call: impl FnOnce(&mut V) -> Result<T, EvalStatus>,
 ) -> Result<T, EvalStatus> {
     context.push_class_scope(scope.to_string());
-    let result = call();
-    context.pop_class_scope();
-    result
+    let previous = values.replace_native_class_scope(Some(scope.to_string()));
+    let mut guard = NativeBridgeScope { context, values, previous };
+    call(guard.values())
+}
+
+/// Restores both interpreter and adapter scopes on normal, error and panic exits.
+struct NativeBridgeScope<'a, V: RuntimeValueOps> {
+    context: &'a mut ElephcEvalContext,
+    values: &'a mut V,
+    previous: Option<String>,
+}
+
+impl<V: RuntimeValueOps> NativeBridgeScope<'_, V> {
+    /// Lends the adapter while keeping restoration owned by this scope guard.
+    fn values(&mut self) -> &mut V { self.values }
+}
+
+impl<V: RuntimeValueOps> Drop for NativeBridgeScope<'_, V> {
+    /// Removes the temporary bridge authorization before returning to its caller.
+    fn drop(&mut self) {
+        self.values.replace_native_class_scope(self.previous.take());
+        self.context.pop_class_scope();
+    }
 }
 
 /// Returns generated/AOT property metadata inherited by an eval-declared class.
@@ -623,7 +644,7 @@ pub(super) fn eval_with_native_property_storage_scope<T, V: RuntimeValueOps>(
     let native = eval_dynamic_class_native_property_metadata(class_name, storage_name, context, values)?;
     if let Some((declaring_class, visibility, _, false)) = native {
         if visibility != EvalVisibility::Private {
-            return eval_with_native_bridge_scope(&declaring_class, context, || operation(values));
+            return eval_with_native_bridge_scope(&declaring_class, context, values, |values| operation(values));
         }
     }
     operation(values)

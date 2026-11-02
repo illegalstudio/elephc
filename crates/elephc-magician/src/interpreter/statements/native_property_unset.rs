@@ -97,7 +97,7 @@ pub(super) fn eval_native_property_unset_result(
         return eval_throw_hooked_property_unset_error(object_class, property, context, values);
     }
     if flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY != 0 {
-        let initialized = eval_with_native_bridge_scope(&owner, context, || {
+        let initialized = eval_with_native_bridge_scope(&owner, context, values, |values| {
             values.property_is_initialized(object, property)
         })?;
         if initialized {
@@ -116,7 +116,7 @@ pub(super) fn eval_native_property_unset_result(
         }
         return eval_throw_property_access_error(&owner, property, write_visibility, context, values);
     }
-    eval_with_native_bridge_scope(&owner, context, || {
+    eval_with_native_bridge_scope(&owner, context, values, |values| {
         values.unset_native_typed_property(object, property)
     })
 }

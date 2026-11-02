@@ -74,7 +74,7 @@ pub(in crate::interpreter) fn eval_native_property_reference_for_access(
     if validate_eval_member_access(&owner, visibility, context).is_err() {
         return eval_throw_property_access_error(&owner, property, visibility, context, values);
     }
-    eval_with_native_bridge_scope(&owner, context, || values.property_reference(object, property, &owner))
+    eval_with_native_bridge_scope(&owner, context, values, |values| values.property_reference(object, property, &owner))
 }
 
 /// Reads a native property through its getter, or its backing storage when no getter exists.
@@ -104,7 +104,7 @@ pub(super) fn eval_native_property_get_for_container(
             context, values,
         );
     }
-    let initialized = eval_with_native_bridge_scope(declaring_class, context, || {
+    let initialized = eval_with_native_bridge_scope(declaring_class, context, values, |values| {
         values.property_is_initialized(object, property)
     })?;
     if !initialized && quiet { return values.null(); }
@@ -116,7 +116,7 @@ pub(super) fn eval_native_property_get_for_container(
             values,
         );
     }
-    eval_with_native_bridge_scope(declaring_class, context, || {
+    eval_with_native_bridge_scope(declaring_class, context, values, |values| {
         values.property_get(object, property)
     })
 }
@@ -141,7 +141,7 @@ pub(in crate::interpreter) fn eval_native_property_set_authorized(
     if native_property_is_virtual(declaring_class, property, values)? {
         return eval_throw_property_hook_readonly_error(declaring_class, property, context, values);
     }
-    eval_with_native_bridge_scope(declaring_class, context, || {
+    eval_with_native_bridge_scope(declaring_class, context, values, |values| {
         values.property_set(object, property, value)
     })
 }

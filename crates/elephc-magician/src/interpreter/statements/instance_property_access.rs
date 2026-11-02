@@ -918,12 +918,12 @@ pub(in crate::interpreter) fn eval_property_isset_result(
                 )
                 .map(|result| result.unwrap_or(false));
             }
-            if !eval_with_native_bridge_scope(&declaring_class, context, || {
+            if !eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
                 values.property_is_initialized(object, property_name)
             })? {
                 return Ok(false);
             }
-            let value = eval_with_native_bridge_scope(&declaring_class, context, || {
+            let value = eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
                 values.property_get(object, property_name)
             })?;
             return eval_property_probe_value_is_set(value, context, values);

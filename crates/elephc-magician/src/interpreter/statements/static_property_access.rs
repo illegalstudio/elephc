@@ -157,7 +157,7 @@ pub(in crate::interpreter) fn eval_static_property_get_result_with_ownership(
                         None => eval_reference_target_value(&target, context, values),
                     };
                 }
-                if !eval_with_native_bridge_scope(&declaring_class, context, || {
+                if !eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
                     values.static_property_is_initialized(&declaring_class, property_name)
                 })? {
                     return eval_throw_uninitialized_static_property_error(
@@ -170,7 +170,7 @@ pub(in crate::interpreter) fn eval_static_property_get_result_with_ownership(
                 if let Some(value) = eval_with_native_bridge_scope(
                     &declaring_class,
                     context,
-                    || values.static_property_get(&declaring_class, property_name),
+                    values, |values| values.static_property_get(&declaring_class, property_name),
                 )? {
                     return Ok(value);
                 }
@@ -284,7 +284,7 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
                     let value = eval_reference_target_value(&target, context, values)?;
                     return Ok(!values.is_null(value)?);
                 }
-                if !eval_with_native_bridge_scope(&declaring_class, context, || {
+                if !eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
                     values.static_property_is_initialized(&declaring_class, property_name)
                 })? {
                     return Ok(false);
@@ -292,7 +292,7 @@ pub(in crate::interpreter) fn eval_static_property_isset_result(
                 if let Some(value) = eval_with_native_bridge_scope(
                     &declaring_class,
                     context,
-                    || values.static_property_get(&declaring_class, property_name),
+                    values, |values| values.static_property_get(&declaring_class, property_name),
                 )? {
                     return Ok(!values.is_null(value)?);
                 }
@@ -411,7 +411,7 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
             if let Some(value) = eval_with_native_bridge_scope(
                 &declaring_class,
                 context,
-                || values.class_constant_get(&declaring_class, constant_name),
+                values, |values| values.class_constant_get(&declaring_class, constant_name),
             )? {
                 return Ok(value);
             }
@@ -630,7 +630,7 @@ pub(super) fn eval_static_property_reference_bind_result(
                 )?;
                 let value = eval_reference_target_value(&target, context, values)?;
                 context.bind_static_property_alias(&declaring_class, property_name, target);
-                if eval_with_native_bridge_scope(&declaring_class, context, || {
+                if eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
                     values.static_property_set(&declaring_class, property_name, value)
                 })? {
                     return Ok(());
@@ -861,7 +861,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                         values,
                     )?;
                 }
-                if eval_with_native_bridge_scope(&declaring_class, context, || {
+                if eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
                     values.static_property_set(&declaring_class, property_name, value)
                 })? {
                     return Ok(());

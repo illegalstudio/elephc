@@ -55,6 +55,9 @@ pub struct NativeCallableSignatureMetadata {
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Replaces the explicitly authorized native bridge scope, returning the previous override.
+    fn replace_native_class_scope(&mut self, _scope: Option<String>) -> Option<String> { None }
+
     /// Boxes a borrowed persistent native callable descriptor for Reflection default factories.
     fn native_callable_from_raw(&mut self, _descriptor: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         Err(EvalStatus::UnsupportedConstruct)
