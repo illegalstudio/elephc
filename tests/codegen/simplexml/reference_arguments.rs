@@ -81,6 +81,32 @@ runtimeMissingXmlCall(runtimeMissingXmlValue(...), new SimpleXMLElement('<r/>'))
     }
 }
 
+/// Native indirect calls inspect eval closure modes in the closure's owning context.
+#[test]
+fn test_simplexml_foreign_context_reference_arguments_bundle() {
+    if skip_without_xml_native("test_simplexml_foreign_context_reference_arguments_bundle") { return; }
+    let source = r#"<?php
+function invokeForeignXmlReference(mixed $callback, SimpleXMLElement $root): void {
+    $callback($root->missing);
+    echo (int)isset($root->missing), '|';
+}
+$code = $argc > 0 ? '
+$foreignReference = function (&$value): void { $value = "ref"; };
+$foreignValue = function ($value): void {};
+' : '';
+eval($code);
+invokeForeignXmlReference($foreignReference, new SimpleXMLElement('<r/>'));
+invokeForeignXmlReference($foreignValue, new SimpleXMLElement('<r/>'));
+unset($foreignReference, $foreignValue, $code);
+"#;
+    let (output, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&output), &["1|0|"]);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "1|0|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}
+
 /// Reference arguments keep selected views without replaying a parent property store.
 #[test]
 fn test_simplexml_reference_argument_selections_bundle() {

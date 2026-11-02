@@ -96,7 +96,10 @@ impl CallArgumentModes {
         callable: &EvaluatedCallable, context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
     ) -> Result<Self, EvalStatus> {
         Ok(match callable {
-            EvaluatedCallable::ForeignContext { .. } => Self::default(),
+            EvaluatedCallable::ForeignContext { callback, owner } => {
+                let owner_context = unsafe { owner.context_ptr().as_ref() }.ok_or(EvalStatus::RuntimeFatal)?;
+                Self::for_callable(callback, owner_context, values)?
+            }
             EvaluatedCallable::NativeDescriptor { callback, .. } => {
                 match values.native_callable_signature(*callback)? {
                     Some(signature) => Self { names: signature.parameters.iter().map(|parameter| parameter.name.clone()).collect(),
