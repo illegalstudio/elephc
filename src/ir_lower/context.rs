@@ -1566,13 +1566,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
-    /// Returns whether `name` can be promoted to its own managed reference cell in place.
+    /// Returns whether this frame owns the storage that can acquire a managed reference cell.
     ///
     /// Promotion rewrites the local's storage into a heap cell that keeps the variable's
     /// identity, which only works for an ordinary addressable PHP local of this frame.
     /// Globals, static locals, extern globals, eval-scope names and interior aliases keep
     /// storage this frame does not own.
-    pub(crate) fn local_is_promotable_to_ref_cell(&self, name: &str) -> bool {
+    pub(crate) fn local_can_own_reference_cell(&self, name: &str) -> bool {
         if self.extern_global_type(name).is_some() || self.eval_scope_read_param.is_some() {
             return false;
         }
@@ -1587,9 +1587,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.is_borrowed_element_ref_local(name) {
             return false;
         }
-        self.local_slots
-            .get(name)
-            .is_some_and(|slot| self.initialized_slots.contains(slot))
+        true
+    }
+
+    /// Requires an initialized occupant for conversions that read its previous PHP value.
+    pub(crate) fn local_is_promotable_to_ref_cell(&self, name: &str) -> bool {
+        self.local_can_own_reference_cell(name)
+            && self.local_slots
+                .get(name)
+                .is_some_and(|slot| self.initialized_slots.contains(slot))
     }
 
     /// Returns whether type checking approved widening this exact call argument local to Mixed.

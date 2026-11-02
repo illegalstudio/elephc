@@ -396,7 +396,7 @@ fn promote_boxed_reference_local_argument(
     {
         return;
     }
-    if !ctx.is_ref_bound_local(name) && ctx.local_is_promotable_to_ref_cell(name) {
+    if !ctx.is_ref_bound_local(name) && ctx.local_can_own_reference_cell(name) {
         ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
     }
 }

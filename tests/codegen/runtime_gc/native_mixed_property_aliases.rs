@@ -92,6 +92,10 @@ $escaped = captureOwnedPromotedMixed($object->value);
     echo json_encode($survivor), '|';
     $default = new OwnedPromotedMixed();
     echo $default->value, '|';
+    $fresh = new OwnedPromotedMixed($unsetValue);
+    echo json_encode($fresh->value), '|';
+    $unsetValue = ['stage' => 'fresh'];
+    echo json_encode($fresh->value), '|';
     $class = $run ? 'OwnedPromotedMixed' : 'OwnedPromotedMixedChild';
     $dynamic = new $class($value);
     $value = ['stage' => 'dynamic'];
@@ -106,13 +110,13 @@ echo json_encode($evalObject->value), "|";
 unset($evalObject, $evalNativeValue);
 ' : '';
     eval($code);
-    unset($value, $incoming, $survivor, $default, $dynamic, $class, $code, $error);
+    unset($value, $incoming, $survivor, $default, $fresh, $unsetValue, $dynamic, $class, $code, $error);
 }
 exerciseOwnedPromotedMixed($argc > 0);
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "{\"stage\":\"caller\"}:{\"stage\":\"caller\"}|{\"stage\":\"method\"}|{\"value\":{\"stage\":\"new\"}}:{\"value\":{\"stage\":\"method\"}}|{\"stage\":\"escaped\"}|{\"value\":{\"stage\":\"survived\"}}|default|{\"stage\":\"dynamic\"}|constructor|{\"stage\":\"eval-updated\"}|");
+    assert_eq!(output.stdout, "{\"stage\":\"caller\"}:{\"stage\":\"caller\"}|{\"stage\":\"method\"}|{\"value\":{\"stage\":\"new\"}}:{\"value\":{\"stage\":\"method\"}}|{\"stage\":\"escaped\"}|{\"value\":{\"stage\":\"survived\"}}|default|null|{\"stage\":\"fresh\"}|{\"stage\":\"dynamic\"}|constructor|{\"stage\":\"eval-updated\"}|");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
     assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
 }

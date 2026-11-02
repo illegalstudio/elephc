@@ -132,7 +132,10 @@ mod tests {
             class OwnedMixedChild extends OwnedMixedConstructor {} \
             function makeOwnedMixed(mixed $value): OwnedMixedChild { \
                 return new OwnedMixedChild($value); } \
-            $object = makeOwnedMixed('initial'); $object->value = 'updated';";
+            function makeFreshOwnedMixed(): OwnedMixedConstructor { \
+                return new OwnedMixedConstructor($fresh); } \
+            $object = makeOwnedMixed('initial'); $object->value = 'updated'; \
+            $freshObject = makeFreshOwnedMixed();";
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let module = crate::ir_lower::tests::lower_source_at_for_target(
