@@ -2824,6 +2824,13 @@ impl RuntimeFnId {
                 | RuntimeFnId::StrIreplace
                 // Repetition uses separate concat storage and cannot alias its subject.
                 | RuntimeFnId::StrRepeat
+                // `__rt_sprintf` (and `__rt_vsprintf` through it) formats into its own concat
+                // reservation and never hands back the format string. The default
+                // `MayAliasArguments` bucket suppressed the release of an owned format
+                // temporary, so a format read from a variable or an array element leaked one
+                // string per call, and `var_export()` of a float leaked its probe formats.
+                | RuntimeFnId::Sprintf
+                | RuntimeFnId::Vsprintf
                 // Wire bytes occupy concat storage, never an operand's allocation. This also
                 // keeps temporary inputs pinned while serialization hooks can unwind.
                 | RuntimeFnId::Serialize

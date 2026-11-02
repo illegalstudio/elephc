@@ -4599,3 +4599,28 @@ echo $total, "\n";
         out.stderr
     );
 }
+
+/// Regression: `sprintf()` and `vsprintf()` release an owned format string after the call. Their
+/// result is formatted into separate concat storage, but they were classified as possibly
+/// aliasing an argument, so a format read from a variable or an array element leaked one string
+/// per call, and `var_export()` of a float leaked its probe formats (AIC #218).
+#[test]
+fn test_sprintf_releases_an_owned_format_string() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+$formats = ["%d", "%s|%s"];
+$f = str_repeat("%05.1f", 1);
+for ($i = 0; $i < 3; $i++) {
+    echo sprintf($formats[0], $i), sprintf($formats[1], $i, "x"), sprintf($f, $i + 0.5), vsprintf($f, [$i]), ",";
+}
+foreach ([1.5, 0.1, 1e20, -2.5] as $v) { echo var_export($v, true), ","; }
+echo "\n";
+"#,
+    );
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(
+        output.stdout,
+        "00|x000.5000.0,11|x001.5001.0,22|x002.5002.0,1.5,0.1,1.0E+20,-2.5,\n"
+    );
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
