@@ -49,6 +49,7 @@ mod native_property_read_leases;
 mod runtime_property_setters;
 mod indexed_property_protocols;
 mod callable_argument_labels;
+mod object_property_indices;
 mod source_variadic_calls;
 mod erased_xml_presence;
 mod ordinary_prefix_storage;

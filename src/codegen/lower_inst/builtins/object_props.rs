@@ -121,8 +121,9 @@ fn emit_object_and_index_arguments(
 ) -> Result<()> {
     let index = expect_operand(inst, 1)?;
     let index_reg = abi::secondary_scratch_reg(ctx.emitter);
-    ctx.load_value_to_reg(index, index_reg)?;
-    abi::emit_push_reg(ctx.emitter, index_reg);
+    let index_type = ctx.load_value_to_result(index)?;
+    super::super::coerce_loaded_local_to_result_type(ctx, &index_type, &PhpType::Int)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     emit_object_pointer_from_operand(ctx, expect_operand(inst, 0)?)?;
     abi::emit_pop_reg(ctx.emitter, index_reg);
     match ctx.emitter.target.arch {

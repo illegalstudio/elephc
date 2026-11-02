@@ -10,6 +10,29 @@
 
 use crate::support::*;
 
+/// Introspection accepts boxed ordinals while keeping borrowed object and value owners intact.
+#[test]
+fn test_native_object_property_introspection_boxed_indices() {
+    let source = r#"<?php
+class BoxedIndexNativeOwner { public int $number = 7; public string $text = 'text'; }
+function inspectNativeBoxedIndex(object $owner, mixed $index): void {
+    echo __elephc_object_prop_name($owner, $index), ':',
+        __elephc_object_prop_value($owner, $index), '|';
+}
+$owner = new BoxedIndexNativeOwner();
+inspectNativeBoxedIndex($owner, 0);
+inspectNativeBoxedIndex($owner, 1);
+unset($owner);
+"#;
+    let (output, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    let expected = "number:7|text:text|";
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&output), &[expected]);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, expected);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    assert!(!output.stderr.contains("Warning:"), "{}", output.stderr);
+}
+
 /// Managed promoted Mixed cells retain array-entry aliases after their source containers retire.
 #[test]
 fn test_promoted_mixed_property_retains_managed_element_bundle() {
