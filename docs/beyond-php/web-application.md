@@ -104,6 +104,9 @@ unknown callable targets retain population. `getenv()` reads the process
 environment independently. Bootstrap always receives the complete environment
 in both `$_ENV` and `$_SERVER`; request preparation still resets `$_ENV` to a
 valid array for internal session storage even when population is omitted.
+Opaque calls inside unreferenced callback helpers do not force population.
+Referenced and escaped helper names remain conservative, along with implicit
+lifecycle methods, inheritance, interfaces, traits, and runtime symbol discovery.
 
 Ordinary globals, function statics, static properties, and application-owned
 objects live for the worker. Process registrations, including error handlers

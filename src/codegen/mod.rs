@@ -13,6 +13,7 @@ mod block_emit;
 mod block_layout;
 pub use block_emit::generic_body_sharing_oracle;
 pub(crate) mod callable_reachability;
+mod callable_signatures;
 mod const_default_values;
 mod constant_materialization;
 pub(crate) mod context;

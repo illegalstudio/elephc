@@ -31,7 +31,7 @@
 //!   ARGUMENT names the class, because it is not always the first: `is_a($obj, 'Imagick')` names
 //!   its class second, and reading position zero there is how the one name that had to survive
 //!   gets recorded as a method instead.
-//! - THE CALLABLE SET (`CALLABLE_TAKING_BUILTINS`) — builtins that will INVOKE a string. A literal
+//! - CALLBACK BOUNDARIES (`callable_taking_builtin`): builtins that INVOKE or retain a callable. A literal
 //!   there is a plain reference and does not depend on harvest mode:
 //!   `register_shutdown_function('session_write_close')` contains no dynamic call at all.
 //! - THE ENUMERATION SET (`INTROSPECTION_BUILTINS`) — builtins that hand over the whole symbol
@@ -42,7 +42,7 @@
 //! Adding a prelude to `crate::prelude_prune` means checking this list against how that prelude's
 //! declarations can be reached — including by a compiler pass that SYNTHESISES a call to one.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
@@ -98,6 +98,25 @@ pub(crate) struct Usage {
     /// Walk state, not a finding: true while the parsed source of a literal `eval` is being
     /// scanned, where an `include` resolves at runtime and names nothing this walk can read.
     pub(crate) scanning_eval_fragment: bool,
+    /// Walk-only proof used by the environment gate to discard unreferenced callable facts.
+    callable_declaration_roots: Option<super::environment_callables::DeclarationRoots>,
+    /// Constructor roles are usable during full collection as well as declaration exclusion.
+    callable_constructor_metadata: Option<super::environment_callables::ConstructorMetadata>,
+    /// Defers native-constructor classification until forward aliases and parents are available.
+    has_constructor_calls: bool,
+    /// Environment-only static dispatch facts; ordinary symbol consumers still read `methods`.
+    pub(super) callable_static_methods: HashSet<(String, String)>,
+    pub(super) callable_wildcard_methods: HashSet<String>,
+    pub(super) callable_class_edges: HashMap<String, HashSet<String>>,
+    pub(super) callable_inherited_classes: HashSet<String>,
+    pub(super) callable_interfaces: HashSet<String>,
+    pub(super) callable_interface_methods: HashMap<String, HashSet<String>>,
+    pub(super) callable_implementations: HashMap<String, HashSet<String>>,
+    pub(super) callable_constructor_classes: HashSet<String>,
+    /// Walk-only lexical class for self/static calls before namespace resolution.
+    callable_current_class: Option<String>,
+    /// Extra dispatch metadata is only needed by web environment demand, not ordinary consumers.
+    environment_mode: bool,
 }
 
 impl Usage {
@@ -170,40 +189,36 @@ const CLASS_PROBES: &[ClassProbe] = &[
     probe("is_subclass_of", 1, None),
 ];
 
-/// Builtins that take a CALLABLE and will invoke it. A literal argument here is a plain
-/// reference — the string is statically visible and unconditionally used as a symbol — so it
-/// belongs in `functions`, not in the `literals` pool that only a dynamic call unlocks.
-///
-/// `register_shutdown_function('session_write_close')` is idiomatic PHP and contains no dynamic
-/// call at all. Treating it as a hazard rather than a reference is how a shutdown handler goes
-/// silently uninstalled.
-///
-/// The position matters: `usort($a, 'cmp')` names its callable SECOND. Every argument is
-/// therefore examined, which over-approximates (a literal that merely looks like a function name
-/// roots a declaration) in the only safe direction.
-const CALLABLE_TAKING_BUILTINS: &[&str] = &[
-    "array_filter",
-    "array_map",
-    "array_reduce",
-    "array_walk",
-    "array_walk_recursive",
-    "call_user_func",
-    "call_user_func_array",
+/// Prelude hooks and dynamic-name APIs absent from shared fixed-parameter callback roles.
+const CALLBACK_BOUNDARY_EXCEPTIONS: &[&str] = &[
     "class_alias",
     "header_register_callback",
-    "iterator_apply",
-    "ob_start",
-    "preg_replace_callback",
     "preg_replace_callback_array",
     "register_shutdown_function",
     "register_tick_function",
     "session_set_save_handler",
-    "set_error_handler",
-    "set_exception_handler",
-    "uasort",
-    "uksort",
-    "usort",
 ];
+
+/// Joins shared callback roles with prelude hooks, XML setters and descriptor-producing escapes.
+fn callable_taking_builtin(name: &str) -> bool {
+    // Autoload registration is handled by introspection; neither SPL stub invokes its value.
+    if matches!(name, "spl_autoload_register" | "spl_autoload_unregister") { return false; }
+    if CALLBACK_BOUNDARY_EXCEPTIONS.contains(&name) { return true; }
+    crate::builtins::registry::lookup(name).is_some_and(|definition| {
+        !crate::builtins::registry::callback_parameter_indices(definition).is_empty()
+            || matches!(definition.spec.semantics.argument_lowering,
+                crate::builtins::semantics::BuiltinArgumentLowering::XmlHandlerSetter)
+            || definition.return_type == crate::types::PhpType::Callable
+    })
+}
+
+/// Treats observer and callback-dispatch functions as opaque when carried by a callable value.
+pub(super) fn callable_gateway(name: &str) -> bool {
+    let key = php_symbol_key(name.trim_start_matches('\\'));
+    matches!(key.as_str(), "eval" | "get_defined_vars" | "compact")
+        || callable_taking_builtin(&key)
+        || key.rsplit_once("::").is_some_and(|(_, method)| method == "fromcallable")
+}
 
 /// Records one class name.
 fn record_class(usage: &mut Usage, name: &str) {
@@ -216,6 +231,44 @@ fn record_class(usage: &mut Usage, name: &str) {
 /// Records one method name seen without a known receiver class.
 fn record_method(usage: &mut Usage, name: &str) {
     usage.methods.insert(php_symbol_key(name));
+    if usage.environment_mode { usage.callable_wildcard_methods.insert(php_symbol_key(name)); }
+}
+
+/// Records a named static receiver without rooting unrelated classes' same-named methods.
+fn record_static_method(usage: &mut Usage, receiver: &crate::parser::ast::StaticReceiver, method: &str) {
+    use crate::parser::ast::StaticReceiver;
+    usage.methods.insert(php_symbol_key(method));
+    if !usage.environment_mode { return; }
+    let class = match receiver.written_class_receiver() {
+        StaticReceiver::Named(name) => Some(name.as_canonical()),
+        StaticReceiver::Self_ | StaticReceiver::Static => usage.callable_current_class.clone(),
+        _ => None,
+    };
+    if let Some(class) = class {
+        usage.callable_static_methods.insert((php_symbol_key(&class), php_symbol_key(method)));
+    } else {
+        usage.callable_wildcard_methods.insert(php_symbol_key(method));
+    }
+}
+
+/// Applies native callback roles to every construction spelling before lowering changes its shape.
+fn scan_constructor_callbacks(usage: &mut Usage, receiver: &crate::parser::ast::StaticReceiver, args: &[Expr]) {
+    use super::environment_callables::ConstructorCallbacks;
+    usage.has_constructor_calls |= usage.environment_mode && !args.is_empty();
+    let Some(metadata) = &usage.callable_constructor_metadata else { return; };
+    match metadata.constructor_callbacks_for_receiver(receiver, usage.callable_current_class.as_deref()) {
+        Err(()) | Ok(Some(ConstructorCallbacks::Opaque)) => usage.callable_names.unknown_call(),
+        Ok(Some(ConstructorCallbacks::Slots(indices))) => {
+            let opaque_order = args.iter().any(|arg| matches!(arg.kind,
+                ExprKind::NamedArg { .. } | ExprKind::Spread(_)));
+            for index in indices {
+                if opaque_order || !args.get(index).is_some_and(|arg| record_callback_slot(usage, arg, false)) {
+                    usage.callable_names.unknown_call();
+                }
+            }
+        }
+        Ok(None) => {}
+    }
 }
 
 /// Records a literal callable, in every form PHP accepts one, and reports whether it was READ.
@@ -232,6 +285,8 @@ fn record_method(usage: &mut Usage, name: &str) {
 fn record_literal_callable(usage: &mut Usage, expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::StringLiteral(text) => {
+            let Some(text) = crate::names::literal_symbol_name(text) else { return false; };
+            if callable_gateway(&text) { usage.callable_names.unknown_call(); }
             if let Some((class, method)) = text.split_once("::") {
                 record_class(usage, class);
                 record_method(usage, method);
@@ -239,14 +294,15 @@ fn record_literal_callable(usage: &mut Usage, expr: &Expr) -> bool {
             } else if text.is_empty() {
                 false
             } else {
-                record_name(usage, text);
+                record_name(usage, &text);
                 true
             }
         }
         ExprKind::ArrayLiteral(items) => match items.as_slice() {
             [receiver, method] => {
                 let receiver_read = if let ExprKind::StringLiteral(name) = &receiver.kind {
-                    record_class(usage, name);
+                    let Some(name) = crate::names::literal_symbol_name(name) else { return false; };
+                    record_class(usage, &name);
                     true
                 } else {
                     // Inline, `[$obj, 'm']` roots every class declaring `m`. Inside a literal
@@ -256,7 +312,9 @@ fn record_literal_callable(usage: &mut Usage, expr: &Expr) -> bool {
                 };
                 match &method.kind {
                     ExprKind::StringLiteral(name) => {
-                        record_method(usage, name);
+                        let Some(name) = crate::names::literal_symbol_name(name) else { return false; };
+                        if name.eq_ignore_ascii_case("fromCallable") { usage.callable_names.unknown_call(); }
+                        record_method(usage, &name);
                         receiver_read
                     }
                     _ => false,
@@ -268,6 +326,36 @@ fn record_literal_callable(usage: &mut Usage, expr: &Expr) -> bool {
     }
 }
 
+/// Recognizes a value only after its position is known to carry a callback.
+/// The ordinary expression scan still visits closure bodies and their symbol uses.
+fn record_callback_slot(usage: &mut Usage, arg: &Expr, nullable: bool) -> bool {
+    matches!(arg.kind, ExprKind::Closure { .. })
+        || (nullable && matches!(arg.kind, ExprKind::Null))
+        || record_literal_callable(usage, arg)
+}
+
+/// Requires every catalogued callback slot to be known, preserving opaque siblings.
+/// Named/spread order remains conservative before the shared call planner runs.
+fn record_builtin_callbacks(usage: &mut Usage, name: &str, args: &[Expr]) -> bool {
+    if let Some(definition) = crate::builtins::registry::lookup(name) {
+        let xml = matches!(definition.spec.semantics.argument_lowering,
+            crate::builtins::semantics::BuiltinArgumentLowering::XmlHandlerSetter);
+        let indices = if xml { (1..definition.params.len()).collect() }
+            else { crate::builtins::registry::callback_parameter_indices(definition) };
+        if !indices.is_empty() {
+            if args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))) {
+                return false;
+            }
+            return indices.into_iter().fold(true, |known, index| {
+                let read = args.get(index).is_some_and(|arg| record_callback_slot(usage, arg, xml));
+                read && known
+            });
+        }
+    }
+    // Prelude-only boundaries retain their existing symbol scan without accepting closure data.
+    args.iter().fold(false, |seen, arg| record_literal_callable(usage, arg) || seen)
+}
+
 /// Collects direct and literal-indirect function references from a program.
 pub(crate) fn collect(program: &[Stmt]) -> Usage {
     let mut usage = Usage::default();
@@ -275,6 +363,40 @@ pub(crate) fn collect(program: &[Stmt]) -> Usage {
         scan_stmt(stmt, &mut usage);
     }
     usage
+}
+
+/// Collects ordinary usage plus the dispatch metadata needed to exclude unreferenced callbacks.
+pub(crate) fn collect_environment(program: &[Stmt]) -> Usage {
+    let mut usage = Usage { environment_mode: true, ..Usage::default() };
+    scan_program(program, &mut usage);
+    // A native callback can be the only opaque call, with no source helper to activate the gate.
+    if usage.has_constructor_calls && !usage.callable_names.has_unknown_target() {
+        usage.callable_constructor_metadata = Some(super::environment_callables::ConstructorMetadata::collect(&usage));
+        scan_program(program, &mut usage);
+        usage.callable_constructor_metadata = None;
+    }
+    usage
+}
+
+/// Checks opaque callable demand in a fixed point rooted by executable and implicit entries.
+/// Direct storage observers remain the caller's whole-program findings. Escaped literals root
+/// their declarations, and any remaining unknown callable forces population.
+pub(crate) fn has_reachable_unknown_callable(program: &[Stmt], all_usage: &Usage) -> bool {
+    let Some(roots) = super::environment_callables::declaration_roots(all_usage) else {
+        return true;
+    };
+    let mut roots = roots.implicit_only(all_usage);
+    let constructors = super::environment_callables::ConstructorMetadata::collect(all_usage);
+    loop {
+        let mut usage = Usage {
+            callable_declaration_roots: Some(roots.clone()),
+            callable_constructor_metadata: Some(constructors.clone()),
+            environment_mode: true, ..Usage::default()
+        };
+        scan_program(program, &mut usage);
+        let Some(next) = super::environment_callables::declaration_roots(&usage) else { return true; };
+        if !roots.expand(next) { return usage.callable_names.has_unknown_target(); }
+    }
 }
 
 
@@ -333,8 +455,8 @@ fn record_literal_function(usage: &mut Usage, expr: Option<&Expr>) {
     else {
         return;
     };
-    if !name.contains("::") && !name.is_empty() {
-        record_name(usage, name);
+    if let Some(name) = crate::names::literal_symbol_name(name) {
+        if !name.contains("::") && !name.is_empty() { record_name(usage, &name); }
     }
 }
 
@@ -392,12 +514,35 @@ fn scan_property(property: &ClassProperty, usage: &mut Usage) {
 }
 
 /// Scans one class-like method body, parameter types and defaults.
-fn scan_method(method: &ClassMethod, usage: &mut Usage) {
-    scan_params(&method.params, usage);
-    if let Some(ty) = &method.return_type {
+fn scan_method(method: &ClassMethod, usage: &mut Usage, can_exclude: bool) {
+    let name = usage.callable_current_class.as_ref()
+        .map(|class| format!("{class}::{}", method.name));
+    scan_callable(
+        name.as_deref().filter(|_| can_exclude && method.attributes.is_empty()),
+        &method.params, method.variadic.as_deref(), method.return_type.as_ref(), &method.body, usage,
+    );
+}
+
+/// Scans a callable contract/body only after its entry becomes reachable in the environment walk.
+/// A missing name means an implicit, inherited, attributed or trait entry that stays conservative.
+fn scan_callable(
+    name: Option<&str>,
+    params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
+    variadic: Option<&str>,
+    return_type: Option<&crate::parser::ast::TypeExpr>,
+    body: &[Stmt],
+    usage: &mut Usage,
+) {
+    let exclude = name.zip(usage.callable_declaration_roots.as_ref()).is_some_and(|(name, roots)| {
+        !super::environment_callables::is_referenced(roots, name)
+    });
+    if exclude { return; }
+    scan_params(params, usage);
+    if let Some(name) = variadic { usage.callable_names.write(name); }
+    if let Some(ty) = return_type {
         scan_type(ty, usage);
     }
-    scan_program(&method.body, usage);
+    scan_program(body, usage);
 }
 
 /// Scans one class constant initializer.
@@ -584,6 +729,7 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         StmtKind::FunctionDecl {
             name,
             params,
+            variadic,
             return_type,
             body,
             ..
@@ -593,11 +739,10 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             if usage.scanning_eval_fragment {
                 record_name(usage, name);
             }
-            scan_params(params, usage);
-            if let Some(ty) = return_type {
-                scan_type(ty, usage);
-            }
-            scan_program(body, usage);
+            scan_callable(
+                stmt.attributes.is_empty().then_some(name.as_str()),
+                params, variadic.as_deref(), return_type.as_ref(), body, usage,
+            );
         }
         StmtKind::Try {
             try_body,
@@ -620,11 +765,18 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             name,
             extends,
             implements,
+            trait_uses,
             properties,
             methods,
             constants,
             ..
         } => {
+            let previous_class = if usage.environment_mode {
+                if methods.iter().any(|method| method.name.eq_ignore_ascii_case("__construct")) {
+                    usage.callable_constructor_classes.insert(php_symbol_key(name));
+                }
+                usage.callable_current_class.replace(name.clone())
+            } else { None };
             // A class the fragment declares keeps a builtin of the same name registered, so the
             // interpreter can refuse the duplicate as PHP does (`eval('class SplStack {}')`).
             if usage.scanning_eval_fragment {
@@ -633,19 +785,35 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             // A supertype is a reference: keeping a class means keeping what it inherits from.
             if let Some(parent) = extends {
                 record_class(usage, &parent.as_canonical());
+                if usage.environment_mode {
+                    super::environment_callables::class_edge(
+                        &mut usage.callable_class_edges, name, &parent.as_canonical(),
+                    );
+                    usage.callable_inherited_classes.insert(php_symbol_key(&parent.as_canonical()));
+                }
             }
             for interface in implements {
                 record_class(usage, &interface.as_canonical());
+                if usage.environment_mode {
+                    usage.callable_implementations.entry(php_symbol_key(name)).or_default()
+                        .insert(php_symbol_key(&interface.as_canonical()));
+                }
             }
             for property in properties {
                 scan_property(property, usage);
             }
             for method in methods {
-                scan_method(method, usage);
+                let known_interfaces = implements.is_empty()
+                    || usage.callable_declaration_roots.as_ref().is_some_and(|roots| {
+                        implements.iter().all(|name| roots.knows_interface(&name.as_canonical()))
+                    });
+                scan_method(method, usage, extends.is_none() && known_interfaces
+                    && trait_uses.is_empty() && stmt.attributes.is_empty());
             }
             for constant in constants {
                 scan_class_const(constant, usage);
             }
+            usage.callable_current_class = previous_class;
         }
         StmtKind::InterfaceDecl {
             name,
@@ -655,6 +823,11 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             constants,
             ..
         } => {
+            if usage.environment_mode {
+                usage.callable_interfaces.insert(php_symbol_key(name));
+                usage.callable_interface_methods.entry(php_symbol_key(name)).or_default()
+                    .extend(methods.iter().map(|method| php_symbol_key(&method.name)));
+            }
             // Same as a class declaration: the declared name keeps a builtin of that name, and
             // a parent interface is a reference (`interface Child extends DateTimeInterface`).
             if usage.scanning_eval_fragment {
@@ -662,12 +835,17 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             }
             for parent in extends {
                 record_class(usage, &parent.as_canonical());
+                if usage.environment_mode {
+                    super::environment_callables::class_edge(
+                        &mut usage.callable_class_edges, name, &parent.as_canonical(),
+                    );
+                }
             }
             for property in properties {
                 scan_property(property, usage);
             }
             for method in methods {
-                scan_method(method, usage);
+                scan_method(method, usage, false);
             }
             for constant in constants {
                 scan_class_const(constant, usage);
@@ -688,7 +866,7 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
                 scan_property(property, usage);
             }
             for method in methods {
-                scan_method(method, usage);
+                scan_method(method, usage, false);
             }
             for constant in constants {
                 scan_class_const(constant, usage);
@@ -704,7 +882,7 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
                 }
             }
             for method in methods {
-                scan_method(method, usage);
+                scan_method(method, usage, false);
             }
             for constant in constants {
                 scan_class_const(constant, usage);
@@ -720,8 +898,26 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             }
             for import in imports {
                 let name = import.name.as_canonical();
+                if usage.environment_mode && import.kind == crate::parser::ast::UseKind::Class {
+                    super::environment_callables::class_edge(
+                        &mut usage.callable_class_edges, &import.alias, &name,
+                    );
+                }
                 record_name(usage, &name);
                 record_class(usage, &name);
+                if callable_taking_builtin(&php_symbol_key(&name)) {
+                    usage.callable_names.unknown_call();
+                }
+            }
+        }
+        StmtKind::FunctionVariantGroup { variants, .. } => {
+            // The resolver dispatches the public name through any of these internal bodies.
+            for variant in variants { record_name(usage, variant); }
+        }
+        StmtKind::ExternFunctionDecl { params, .. } => {
+            // Native code can retain and invoke an escaped callable without a PHP call site.
+            if params.iter().any(|param| matches!(param.c_type, crate::parser::ast::CType::Callable)) {
+                usage.callable_names.unknown_call();
             }
         }
         StmtKind::NamespaceDecl { .. } if usage.scanning_eval_fragment => {
@@ -732,12 +928,10 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
-        | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Global { .. }
         | StmtKind::PackedClassDecl { .. }
-        | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => {}
     }
@@ -768,7 +962,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         ExprKind::FunctionCall { name, args } => {
             let name = php_symbol_key(name.as_str().trim_start_matches('\\'));
             record_name(usage, &name);
-            if CALLABLE_TAKING_BUILTINS.contains(&name.as_str()) && !args.is_empty() {
+            if callable_taking_builtin(&name) && !args.is_empty() {
                 usage.callable_names.unknown_call();
             }
             let literal_first = matches!(
@@ -814,14 +1008,9 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                         record_class(usage, subject);
                     }
                 }
-            } else if CALLABLE_TAKING_BUILTINS.contains(&name.as_str()) {
-                // A literal callable is a plain reference; only one this walk cannot READ is a
-                // hazard. Every argument is examined because the position varies — `usort($a,
-                // 'cmp')` names its callable second — and `fold` rather than `any` so that
-                // examining does not stop early: recording the names is the point, not the flag.
-                let read = args.iter().fold(false, |seen, arg| {
-                    record_literal_callable(usage, arg) || seen
-                });
+            } else if callable_taking_builtin(&name) {
+                // Callback positions come from the catalog, including every XML handler slot.
+                let read = record_builtin_callbacks(usage, &name, args);
                 // An argumentless `ob_start()` installs no callback and is not a hazard; one whose
                 // arguments exist but say nothing — `usort($a, $cmp)`, `call_user_func($x)` — is.
                 if !read && !args.is_empty() {
@@ -842,6 +1031,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         }
         ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
             record_name(usage, name.as_str());
+            if callable_gateway(name.as_str()) { usage.callable_names.unknown_call(); }
         }
         // A first-class callable ROOTS EXACTLY WHAT CALLING IT WOULD. `Imagick::queryFormats(...)`
         // names a class and a method just as `Imagick::queryFormats()` does; deferring the call
@@ -854,14 +1044,16 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         // declaration the program goes on to use, and the failure surfaces as an undefined
         // class rather than as anything pointing back here.
         ExprKind::FirstClassCallable(CallableTarget::Method { object, method }) => {
+            if method.eq_ignore_ascii_case("fromCallable") { usage.callable_names.unknown_call(); }
             record_method(usage, method);
             scan_expr(object, usage);
         }
         ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }) => {
+            if method.eq_ignore_ascii_case("fromCallable") { usage.callable_names.unknown_call(); }
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                 record_class(usage, &name.as_canonical());
             }
-            record_method(usage, method);
+            record_static_method(usage, receiver, method);
         }
         ExprKind::ExprCall { callee, args } => {
             usage.callable_names.expression_call(callee);
@@ -985,10 +1177,11 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(then_expr, usage);
             scan_expr(else_expr, usage);
         }
-        ExprKind::Closure { params, body, captures, capture_refs, .. } => {
+        ExprKind::Closure { params, variadic, body, captures, capture_refs, .. } => {
             for name in capture_refs { usage.callable_names.write(name); }
             usage.storage_variables.extend(captures.iter().chain(capture_refs).cloned());
             scan_params(params, usage);
+            if let Some(name) = variadic { usage.callable_names.write(name); }
             scan_program(body, usage);
         }
         ExprKind::NamedArg { value, .. } => scan_expr(value, usage),
@@ -997,6 +1190,15 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             method,
             args,
         } => {
+            if method.eq_ignore_ascii_case("__construct") {
+                scan_constructor_callbacks(usage, receiver, args);
+            }
+            // An alias may hide the Closure class before name resolution.
+            if method.eq_ignore_ascii_case("fromCallable") && !args.is_empty()
+                && !args.first().is_some_and(|arg| record_callback_slot(usage, arg, false))
+            {
+                usage.callable_names.unknown_call();
+            }
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                 let class = name.as_canonical();
                 record_class(usage, &class);
@@ -1011,7 +1213,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                     }
                 }
             }
-            record_method(usage, method);
+            record_static_method(usage, receiver, method);
             for arg in args {
                 scan_expr(arg, usage);
             }
@@ -1019,6 +1221,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         // The head of the constructed type is the class this construction keeps alive; its
         // type arguments name classes of their own and are recorded the same way.
         ExprKind::NewGeneric { class_type, args } => {
+            scan_constructor_callbacks(usage, &crate::parser::ast::StaticReceiver::Generic(class_type.clone()), args);
             for name in class_type.named_classes() {
                 record_class(usage, crate::names::pointer_target_leaf(&name.as_canonical()));
             }
@@ -1028,17 +1231,20 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         }
         ExprKind::NewObject { class_name, args } => {
             record_class(usage, &class_name.as_canonical());
+            scan_constructor_callbacks(usage, &crate::parser::ast::StaticReceiver::Named(class_name.clone()), args);
             for arg in args {
                 scan_expr(arg, usage);
             }
         }
-        ExprKind::NewScopedObject { args, .. } => {
+        ExprKind::NewScopedObject { receiver, args } => {
+            scan_constructor_callbacks(usage, receiver, args);
             for arg in args {
                 scan_expr(arg, usage);
             }
         }
         ExprKind::NewDynamic { name_expr, args } => {
             usage.constructs_dynamic_class = true;
+            usage.callable_names.unknown_call();
             scan_expr(name_expr, usage);
             for arg in args {
                 scan_expr(arg, usage);
@@ -1048,6 +1254,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             class_name, args, ..
         } => {
             usage.constructs_dynamic_class = true;
+            usage.callable_names.unknown_call();
             scan_expr(class_name, usage);
             for arg in args {
                 scan_expr(arg, usage);
@@ -1070,6 +1277,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             method,
             args,
         } => {
+            if method.eq_ignore_ascii_case("__construct") { usage.callable_names.unknown_call(); }
             // The receiver's class is unknown before name resolution, so the METHOD NAME is the
             // only handle. The pruner roots every class that declares it.
             record_method(usage, method);
@@ -1088,6 +1296,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             // at neither.
             if !record_literal_callable(usage, method) {
                 usage.dynamic_function_call = true;
+                usage.callable_names.unknown_call();
             }
             scan_expr(object, usage);
             scan_expr(method, usage);
@@ -1113,7 +1322,9 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             }
         }
         ExprKind::StringLiteral(text) => {
-            usage.literals.insert(php_symbol_key(text.trim_start_matches('\\')));
+            if let Some(text) = crate::names::literal_symbol_name(text) {
+                usage.literals.insert(php_symbol_key(text.trim_start_matches('\\')));
+            }
         }
         ExprKind::ClassConstant { receiver, .. }
         | ExprKind::StaticPropertyAccess { receiver, .. }
@@ -1155,6 +1366,100 @@ mod tests {
     fn parse(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         crate::parser::parse(&tokens).expect("fixture must parse")
+    }
+
+    /// Literal XML handlers retain their bodies without activating unrelated native bridges.
+    #[test]
+    fn literal_xml_handlers_do_not_activate_tokenizer() {
+        let program = parse(include_str!("../../scripts/ci/fixtures/ios-xml-link/main.php"));
+        assert!(!crate::tokenizer_prelude::program_uses_surface(&program));
+        assert!(!collect(&program).dynamic_function_call);
+
+        let observing = parse("<?php xml_set_character_data_handler($parser, function () { echo $_ENV['PATH']; });");
+        assert!(!crate::tokenizer_prelude::program_uses_surface(&observing));
+        assert!(crate::web_prelude::program_observes_environment(&observing));
+
+        let opaque = parse("<?php xml_set_character_data_handler($parser, $callback);");
+        assert!(crate::tokenizer_prelude::program_uses_surface(&opaque));
+        assert!(crate::web_prelude::program_observes_environment(&opaque));
+    }
+
+    /// A known callback cannot hide an opaque callback slot or a dynamic method target.
+    #[test]
+    fn literal_callback_slots_preserve_opaque_siblings() {
+        for source in [
+            "<?php xml_set_element_handler($parser, function () {}, $callback);",
+            "<?php xml_set_element_handler($parser, $callback, function () {});",
+            "<?php xml_set_element_handler($parser, 'start_handler', $callback);",
+            "<?php xml_set_element_handler($parser, function () {}, ...$handlers);",
+            "<?php xml_set_element_handler(parser: $parser, start_handler: function () {}, end_handler: $callback);",
+            "<?php xml_set_character_data_handler($parser, function () use ($callback) { $callback(); });",
+            "<?php call_user_func($callback, function () { return 1; });",
+            "<?php $object->$method(function () { return 1; });",
+            "<?php $object?->$method(function () { return 1; });",
+        ] {
+            let program = parse(source);
+            assert!(collect(&program).dynamic_function_call, "{source}");
+            assert!(crate::tokenizer_prelude::program_uses_surface(&program), "{source}");
+        }
+        let usage = collect(&parse("<?php eval('call_user_func($callback, function () {});');"));
+        assert!(usage.introspects);
+    }
+
+    /// Disabled XML handlers and known callback slots retain precise symbol references.
+    #[test]
+    fn literal_callback_slots_keep_disabled_xml_handlers_precise() {
+        for source in [
+            "<?php xml_set_element_handler($parser, function () {}, null);",
+            "<?php xml_set_element_handler($parser, null, function () {});",
+            "<?php xml_set_character_data_handler($parser, null);",
+            "<?php call_user_func(function ($value) {}, $unknownData);",
+            "<?php usort($array, function ($a, $b) { return 0; });",
+        ] {
+            let program = parse(source);
+            assert!(!collect(&program).dynamic_function_call, "{source}");
+            assert!(!crate::tokenizer_prelude::program_uses_surface(&program), "{source}");
+        }
+        let usage = collect(&parse("<?php xml_set_element_handler($parser, 'start_handler', 'end_handler');"));
+        assert!(usage.references("start_handler"));
+        assert!(usage.references("end_handler"));
+    }
+
+    /// Autoload registration preserves the complete prelude without implying a callback invoke.
+    #[test]
+    fn autoload_registration_preserves_introspection_without_callback_demand() {
+        for source in [
+            "<?php spl_autoload_register();",
+            "<?php spl_autoload_register(function ($class) { require __DIR__ . '/' . $class . '.php'; });",
+            "<?php spl_autoload_register('loader');",
+        ] {
+            let program = parse(source);
+            let usage = collect(&program);
+            assert!(usage.introspects, "{source}");
+            assert!(!usage.dynamic_function_call, "{source}");
+            assert!(!crate::web_prelude::program_observes_environment(&program), "{source}");
+        }
+        let import = parse("<?php use function spl_autoload_register as reg;");
+        assert!(!crate::web_prelude::program_observes_environment(&import));
+        let observer = parse("<?php spl_autoload_register(function () { echo $_ENV['PATH']; });");
+        assert!(crate::web_prelude::program_observes_environment(&observer));
+    }
+
+    /// Removing an autoload hook does not invoke or dynamically discover the supplied callable.
+    #[test]
+    fn autoload_unregistration_does_not_invoke_callbacks() {
+        for source in [
+            "<?php spl_autoload_unregister('loader');",
+            "<?php spl_autoload_unregister($callback);",
+            "<?php use function spl_autoload_unregister as unreg;",
+        ] {
+            let program = parse(source);
+            let usage = collect(&program);
+            assert!(!usage.introspects, "{source}");
+            assert!(!usage.dynamic_function_call, "{source}");
+            assert!(!crate::tokenizer_prelude::program_uses_surface(&program), "{source}");
+            assert!(!crate::web_prelude::program_observes_environment(&program), "{source}");
+        }
     }
 
     /// A literal eval contributes the names and literals of its source and is not introspection.

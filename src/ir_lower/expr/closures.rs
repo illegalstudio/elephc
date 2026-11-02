@@ -338,6 +338,7 @@ pub(super) fn lower_closure_with_context(
     let loop_storage_scope =
         crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
+    let source_is_generator = ctx.closure_generator_spans.contains(&expr.span);
     let signature = if contextual_arg_types.is_empty() && bound_this_context.is_none() {
         function::lower_closure_function(
             ctx,
@@ -353,6 +354,7 @@ pub(super) fn lower_closure_with_context(
             self_ref_callable_capture,
             by_ref_return,
             loop_storage_scope,
+            source_is_generator,
         )
     } else {
         function::lower_closure_function_with_context(
@@ -371,6 +373,7 @@ pub(super) fn lower_closure_with_context(
             self_ref_callable_capture,
             by_ref_return,
             loop_storage_scope,
+            source_is_generator,
         )
     };
     let data = ctx.intern_string(&name);

@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind};
 
 /// Whole-program callable bindings used only to prove that environment copying can be omitted.
 #[derive(Clone, Debug, Default)]
@@ -87,8 +87,20 @@ impl CallableNames {
 
 /// Identifies values whose callable identity cannot be synthesized by string computation.
 fn simple_callable(value: &Expr) -> bool {
-    matches!(value.kind,
-        ExprKind::StringLiteral(_) | ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_)
-        | ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_)
-    )
+    match &value.kind {
+        ExprKind::StringLiteral(name) => crate::names::literal_symbol_name(name)
+            .is_some_and(|name| !super::usage::callable_gateway(&name)),
+        ExprKind::Closure { .. } => true,
+        ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            !super::usage::callable_gateway(name.as_str())
+        }
+        ExprKind::FirstClassCallable(CallableTarget::Method { method, .. }
+            | CallableTarget::StaticMethod { method, .. }) => !method.eq_ignore_ascii_case("fromCallable"),
+        ExprKind::ArrayLiteral(items) => match items.as_slice() {
+            [_, Expr { kind: ExprKind::StringLiteral(name), .. }] => crate::names::literal_symbol_name(name)
+                .is_some_and(|name| !name.eq_ignore_ascii_case("fromCallable")),
+            _ => false,
+        },
+        _ => false,
+    }
 }

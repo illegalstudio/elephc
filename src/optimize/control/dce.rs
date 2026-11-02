@@ -815,7 +815,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 cases,
                 implements,
                 trait_uses,
-                methods,
+                methods: methods.into_iter().map(dce_method_without_context).collect(),
                 constants,
             },
             span,

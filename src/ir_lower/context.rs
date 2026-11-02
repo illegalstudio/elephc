@@ -360,6 +360,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls in this source module.
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
+    /// Source-body generator classification for closure literals.
+    pub closure_generator_spans: &'m HashSet<Span>,
     /// Checked property classes and write refusals before opaque calls erase flow facts.
     pub array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Checked receiver views at property reads and method calls, scoped to the current body.
@@ -555,6 +557,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         extern_classes: &'m HashMap<String, ExternClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
+        closure_generator_spans: &'m HashSet<Span>,
         array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
         member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
@@ -624,6 +627,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             extern_classes,
             throw_access_sites,
             builtin_call_types,
+            closure_generator_spans,
             array_push_property_plans,
             member_receiver_types,
             boxed_reference_promotion_sites,

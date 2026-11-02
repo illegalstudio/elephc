@@ -6,21 +6,23 @@
 //! - `super::application::inject_on_compiler_stack` for application request preparation.
 //!
 //! Key details:
-//! - Scans all declarations, including callbacks and included code, without assuming reachability.
+//! - Direct observers scan all declarations; opaque callable demand excludes unreferenced helpers.
 //! - Eval and variable-table inspection retain the complete per-request environment copy.
 //! - The pipeline also checks the autoload probe, since class files arrive after web injection.
 //! - Computed or escaped call targets retain population; simple literal and closure calls can omit it.
 
-use crate::prelude_prune::usage::Usage;
+use crate::parser::ast::Stmt;
+use crate::prelude_prune::usage::{self, Usage};
 
 /// Retains population for direct storage access and indirect variable-table observers.
 /// `getenv()` reads the process environment independently and needs no PHP array copy.
-pub(super) fn is_observable(usage: &Usage) -> bool {
+pub(super) fn is_observable(program: &[Stmt], usage: &Usage) -> bool {
     ["_ENV", "GLOBALS"].iter().any(|name| {
         usage.variables.contains(*name) || usage.storage_variables.contains(*name)
     }) || ["eval", "get_defined_vars", "compact"].iter().any(|name| usage.references(name))
-        || usage.callable_names.has_unknown_target()
         || ["eval", "get_defined_vars"].iter().any(|name| usage.literals.contains(*name))
+        || (usage.callable_names.has_unknown_target()
+            && usage::has_reachable_unknown_callable(program, usage))
 }
 
 #[cfg(test)]
@@ -57,6 +59,8 @@ mod tests {
             "<?php $fn = fn() => 'ok'; echo $fn();",
             "<?php echo 'ok' |> strlen(...);",
             "<?php $fn = 'strlen'; echo function_exists($fn);",
+            "<?php function unused(callable $callback) { $callback(); } echo 'ok';",
+            "<?php class Config { public function map(callable $callback) { $callback(); } } echo 'ok';",
         ] {
             assert!(!populates_environment(source), "{source}");
         }
@@ -83,7 +87,7 @@ mod tests {
             "<?php $prefix = 'ev'; $fn = $prefix . 'al'; $fn($code);",
             "<?php $fn = 'evaX'; ($fn[3] = 'l'); $fn($code);",
             "<?php $fn = 'evaX'; $ignored = $fn[3] = 'l'; $fn($code);",
-            "<?php function invoke(string $fn, string $code) { $fn($code); }",
+            "<?php function invoke(string $fn, string $code) { $fn($code); } invoke($callback, $source);",
             "<?php $fn = 'strlen'; replace($fn); $fn($code);",
             "<?php $fn = 'strlen'; $fn |> replace(...); $fn($code);",
             "<?php $fn = 'get_defined_vars'; $fn();",

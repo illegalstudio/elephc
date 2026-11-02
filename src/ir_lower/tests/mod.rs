@@ -90,6 +90,7 @@ mod dom_html_review;
 mod dynamic_spreads;
 mod effects;
 mod container_store_effects;
+mod generator_identity;
 mod method_receiver_roots;
 mod enum_argument_boundaries;
 mod enum_review;

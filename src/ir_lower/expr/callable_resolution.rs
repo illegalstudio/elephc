@@ -160,13 +160,15 @@ pub(super) fn lower_static_callable_call(
                 expr.span,
             );
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+            // Keep literal eval demand instead of requesting the full runtime catalog.
+            let eval_literal = eval_literal_fragment(&function_name, callback_args);
             let call = emit_builtin_call_value(
                 ctx,
                 &function_name,
                 operands,
                 php_type,
                 expr.span,
-                None,
+                eval_literal,
             );
             retire_call_argument_intermediates(ctx, &evaluation_intermediates);
             Some(call)

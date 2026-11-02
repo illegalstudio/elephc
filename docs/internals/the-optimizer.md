@@ -212,50 +212,31 @@ Current pruning coverage includes:
   - `??`
   - short-circuit `&&` / `||`
 
-### A pass must not delete a body's last `yield`
+### Generator identity survives body optimization
 
-PHP decides generator-ness **syntactically, at declaration**. The checker records
-that on `FunctionSig::is_generator` from the source body, before any later pass
-runs. Named functions and methods pass that checker bit to lowering; closures
-rebuild it from the optimized body in `closure_signature_from_ast`. A declared `: Generator` return is not a
-substitute: `function factory(): Generator { return inner(); }` declares the type
-without containing `yield`, and it is an ordinary function (issue #1086). A body
-that held a `yield` is still a generator when no `yield` can run, so
-`function g(): iterable { while (false) { yield 1; } }` returns an empty
-`Generator`.
+PHP classifies generators syntactically, including unreachable `yield` and `yield from`
+expressions. Folding, propagation, pruning, and dead-code elimination rewrite callable bodies
+through `optimize::generator_bodies::rewrite_preserving_yield`. If a rewrite removes the final
+yield, the helper keeps the rewritten body and appends `if (false) { yield; }`. The marker
+preserves classification before type checking without restoring dead branches or undoing other
+optimizations. This applies to functions, methods, enum methods, traits, and closures.
 
-The bit does not replace the token in the body. Generator source and the body-scan
-fallback still look for a `yield`, and a pass that removes every one of them changes
-the body the coroutine is lowered from. When constant folding took the dead branch
-with the token, the function returned a boxed `null`, `valid()` answered `true`
-forever, and `foreach` never terminated (issues #673 and #1085). Pre-check target
-folding is earlier still: it runs before the checker records the bit, so deleting
-the last `yield` there would make the declaration look ordinary.
+The checker records `FunctionSig::is_generator` for named callables and
+`CheckResult::closure_generator_spans` for closure literals. EIR lowering consumes these source
+classifications even when an optimized body no longer contains a yield. A remaining yield may
+also establish generator identity when source metadata is unavailable. Declaring a `Generator`
+return type alone never makes a callable a generator: a factory can return another generator.
 
-`optimize::generator_bodies::rewrite_preserving_yield` keeps the original body when
-a rewrite would leave it with no `yield` at all. Only a body whose yields are all
-removed gives up that pass. The walk is paid by every body; the clone only by
-bodies that contain a yield.
+For example, both declarations below remain generators that immediately finish when resumed:
 
-The rewrites that delete a yield do it for different reasons, so each has its own call:
+```php
+function g() { if (false) { yield 1; } return; }
+function h() { return 7; yield; }
+```
 
-- **Pre-check target folding** (`fold_callable_body`) can fold a target-availability
-  condition such as `PHP_OS_FAMILY === "Windows"` and take a `yield` with that
-  branch, before `is_generator` exists.
-- **Pass 3, pruning** (which Pass 4 runs again over the same bodies) folds a
-  condition it can read as a literal — `while (false)`, `if (false)`. Named
-  functions and methods reach the guard through `prune_function_body()`, closures
-  through the `Closure` arm of `prune_expr()`.
-- **Pass 5, dead-code elimination** rewrites an `if` chain as a whole.
-  `if (false) { ... } elseif (false) { yield 1; }` leaves pruning with the guard
-  engaged and the body restored; DCE then collapses the chain and takes the token
-  with it. Named functions reach the guard in `dce_stmt_in_source_mode`, methods
-  through `dce_method()` and `dce_method_without_context()`.
-
-Checking for a yield after a pass is not enough: `prune_function_body()`'s own
-trailing-`return` guard did exactly that and was defeated the same way. A `yield`
-after `return` in the same block is kept by the same helper on the propagation
-boundary, which stops rewriting at the first terminator.
+Constant `match` and `?:` expressions can discard unreachable yield expressions while keeping
+this minimal marker. A generator's observable body effects still run only when it is resumed,
+and `getReturn()` reports its terminal return value.
 
 ## Pass 4: Control-flow normalization
 
@@ -290,55 +271,6 @@ The second generation of the pass (control-flow normalization v2) adds shell can
 - leading `if (g) { break; } [else { E }]` guards folded into the loop test: `while (c) { if (g) break; rest }` becomes `while (c && !g) { rest }` (`while (true)` / `for (;;)` become plain `while (!g)`), with the guard's `else` body leading the remaining body; the fold repeats while the body still starts with such a guard, and `for` loops with an update clause receive the same test without changing shape
 - an endless loop that ends in `if (g) { break; }` rotated into `do { body } while (!g)`, refused when the body carries a `continue` targeting that loop (it skips the guard today but would reach the rotated test); nested loops and `switch` bodies raise the `continue` level the check looks for
 - trailing terminators that transfer exactly where falling off the block would are dropped: a `continue` ending a loop body, the `break` ending the body that runs last in a `switch` (the `default` body when it is written last, else the last case; a `default` written between cases keeps its `break`, since EIR lowering places it at its source position), and a bare `return;` ending a function or method body. The walk follows only the tail path — the last statement, then recursively the last statement of each `if` / `ifdef` / `try` branch — and never enters loops, `switch` bodies, or `finally` blocks; a shell whose branch was emptied is re-pruned so it collapses like fresh input. By-reference-returning functions and generators keep their `return;`, and a `break`-only last case is kept when a `default` follows it
-
-### A generator must still look like one
-
-Constant propagation, pruning, and dead-code elimination rewrite callable bodies through
-`optimize::generator_bodies::rewrite_preserving_yield`, which keeps the original body when a
-rewrite would leave it with NO `yield` at all. Pruning's call sites are described under Pass 3;
-dead-code elimination uses the same helper because it runs later and can delete a yield the
-prune guard has just restored.
-
-Named functions and methods keep the checker's `FunctionSig::is_generator` bit from the source
-body. Lowering also scans their rewritten bodies and can classify them as generators when that
-bit is false or unavailable. Closures take a different path: `closure_signature_from_ast`
-rechecks the optimized body with `body_contains_yield` during EIR lowering. Preserving a `yield`
-therefore also preserves their generator classification.
-
-PHP decides whether a declaration is a **generator** syntactically, before any folding, and the
-type checker does the same — it types `g()` as `Generator` from the `yield` it can see. These
-passes run *after* checking, and both the propagation and pruning walks stop at a block's first
-terminator, so an unreachable `yield` was deleted. The two classifications then disagreed: the
-caller still drove a `Generator` while EIR lowering saw an ordinary function, and the driving
-`foreach` spun forever on a boxed null (issue #673).
-
-Both of PHP's ways to spell an immediately-complete generator hit it, and they are destroyed by
-different passes:
-
-```php
-function g() { if (false) { yield 1; } return; }   // constant-branch pruning
-function g() { return; yield; }                     // the stop-at-terminator rule
-```
-
-Keeping the un-rewritten body is the conservative answer: the retained `yield` is unreachable by
-construction, so the cost is one unexecuted statement in a body that is now lowered as the
-coroutine it is — and only a body whose every `yield` is dead pays it.
-
-It is also whole-body: one dead `yield` blocks propagation, pruning, and dead-code elimination
-in that callable. A surgical "keep one yield, apply the rest" would be tighter (issue #1325).
-
-Dead-code elimination is wrapped by the same helper. The checker bit preserves generator
-classification for named callables, and the body scan can add it; closure classification is
-derived from the optimized body. The coroutine body still has to contain a `yield`. DCE runs after
-pruning and collapses shapes the
-prune guard has just put back: a constant `elseif` chain is the case that still deleted the
-last `yield` with the pruning guard alone (issue #1085). Reverting that pass's whole body is
-the same trade propagation and pruning already make, and only a callable whose every `yield`
-is dead pays it.
-
-The invariant covers both paths: named callables retain their check-time classification with an
-additive body scan, closures are classified again from the optimized body, and a pass that
-rewrites either body must not delete its last `yield`.
 
 ### Example
 
