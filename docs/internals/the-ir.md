@@ -619,15 +619,23 @@ When `php_return_status` is set, `restore_concat_offset_after_nested_call` calls
 Each instruction and terminator carries an `Effects` summary. The builder
 assigns a conservative opcode or semantic-descriptor default; after the complete
 module is lowered, an effect-refinement fixed point may replace the summary on
-explicitly refinable direct calls, named static calls (including inherited
-implementations), instance calls, and property reads. Forwarding static receivers
-and unresolved closure, descriptor, or pipe targets retain conservative defaults
-until their target is proven by a lowering-specific contract. Final
+explicitly refinable direct calls, static calls, instance calls, and property
+reads. Named static receivers include inherited implementations; `self::` and
+`parent::` resolve in the enclosing lexical class. A `static::` call unions all
+concrete implementations in that class's checked descendant hierarchy, including
+callable static bodies declared on abstract classes. An opaque
+eval bridge blocks this late-static refinement because it can introduce further
+overrides. Unresolved closure, descriptor, pipe, function-variant and eval call
+opcodes retain their defaults, and the validator rejects narrower effects for
+them. Lowering-specific builtin and runtime contracts remain refinable. Final
 effects are immutable after validation and remain PHP-observable.
 
-Caller-visible summaries omit `ConcatReset`: it restores frame-private scratch
-bookkeeping rather than PHP state. The instruction itself retains `writes_global`
-so intra-function passes preserve its ordering. Genuine PHP-global writes,
+Caller-visible summaries omit `ConcatReset`, `PushCallOperandOwner` and
+`PopCallOperandOwner`: they restore scratch offsets or publish temporary owner
+slots within the current frame rather than changing PHP state. The instructions
+retain their global-state effects so intra-function passes preserve their
+ordering. Actual ownership acquisition and retirement still contribute their
+effects, including possible destructors. Genuine PHP-global writes,
 output, allocation, and exception effects continue to flow into call summaries.
 
 ```rust

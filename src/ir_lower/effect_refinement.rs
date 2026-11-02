@@ -18,6 +18,10 @@ use crate::ir::{
 use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 
+mod static_calls;
+
+use static_calls::static_call_effects;
+
 const MAX_EFFECT_ITERATIONS: usize = 64;
 
 /// Read-only module facts used while summarizing and rewriting instructions.
@@ -144,9 +148,12 @@ fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> E
         effects |= Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::MAY_THROW | Effects::MAY_DEOPT;
     }
     for instruction in &function.instructions {
-        // The reset restores this frame's inherited scratch offset, which PHP cannot observe.
-        // Keep its instruction effect so intra-function passes retain and order the reset.
-        if instruction.op == Op::ConcatReset {
+        // Scratch offsets and the operand-owner chain are private to this frame.
+        // Keep instruction effects so intra-function passes retain and order bookkeeping.
+        // Acquisition and retirement remain separate, potentially observable instructions.
+        if matches!(instruction.op,
+            Op::ConcatReset | Op::PushCallOperandOwner | Op::PopCallOperandOwner)
+        {
             continue;
         }
         if instruction.op == Op::ReleaseLocalSlot
@@ -233,27 +240,6 @@ fn refined_instruction_effects(
         }
         _ => instruction.effects,
     }
-}
-
-/// Resolves an explicitly named static receiver through its inherited implementation.
-/// Forwarding self/parent/static receivers and runtime-selected callables keep their defaults.
-fn static_call_effects(
-    function: &Function,
-    instruction: &crate::ir::Instruction,
-    context: &RefinementContext<'_>,
-) -> Option<Effects> {
-    let Immediate::Data(name_id) = instruction.immediate.as_ref()? else {
-        return None;
-    };
-    let name = context.data.strings.get(name_id.as_raw() as usize)?;
-    let (class_name, method) = name.rsplit_once("::")?;
-    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
-    let (_, class) = context.classes.iter()
-        .find(|(name, _)| php_symbol_key(name) == class_key)?;
-    let method_key = php_symbol_key(method);
-    let implementation = class.static_method_impl_classes.get(&method_key)?;
-    let target = callable_key(&format!("{implementation}::{method_key}"));
-    resolved_callable_effects(function, instruction, &target, context)
 }
 
 /// Resolves a direct user-function call through the function-name data pool.
