@@ -1114,7 +1114,7 @@ jobs:
           retention-days: 7
 
   web-tests-macos-aarch64:
-    name: Web Tests (macos-aarch64 ${{ matrix.shard }}/2)
+    name: Web Tests (macos-aarch64 ${{ matrix.shard }}/3)
     needs: [plan, build-archive-macos-aarch64]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
@@ -1122,7 +1122,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        # The former second shard spent about 18 minutes in tests alone and could
+        # exhaust the 20-minute job cap. Keep every test and split the work further.
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
 
@@ -1165,7 +1167,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
             -E 'binary(web_tests) or binary(web_session_tests)' \
-            --partition hash:${{ matrix.shard }}/2 \
+            --partition hash:${{ matrix.shard }}/3 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
 
@@ -2871,6 +2873,9 @@ jobs:
 
       - name: Test macOS notarization gate
         run: python3 -B -m unittest discover -s .github/scripts -p 'test_notarize_macos.py' -v
+
+      - name: Test nextest archive validation
+        run: bash scripts/ci/test_validate_nextest_archive.sh
 
       - name: Check workflow and composite Action refs
         run: ruby .github/scripts/check_action_pins.rb
