@@ -808,7 +808,9 @@ Object guards preserve a known subclass when probing its parent class or an impl
 
 Nullable boxing alone does not establish a prior reference binding. A null-guarded `?iterable` parameter without an earlier boxed-reference promotion retains the by-reference foreach diagnostic, including an Iterator whose first `valid()` result is false.
 
-A guard-only read view must contain only values representable by the entry binding, using `type_contains_values` rather than coercive argument compatibility. Close incompatible scalar, object and union views before ternary or short-circuit regions end, and apply the same rule to still-open `if` arm snapshots. This keeps `instanceof` capabilities and `is_array` Mixed fallbacks from changing later typed calls or raw/nullable reference storage, while retaining genuine nullable refinements and actual branch assignments.
+A guard-only read view must contain only values representable by its logical input, using `type_contains_values` rather than coercive argument compatibility. `NarrowedLocalOrigin::read_input` retains the read before that individual guard, independently of the outermost physical assignment origin. A nested guard closes an incompatible unwritten input view before saving its own input. Exit snapshots contain guard-only reads at capture, before loop-tail, catch, finally, match or switch joins can discard their origins. The copied origin retains its physical type behind the contained read. This covers single and multiple continue edges while preserving contained nullable refinements, inner object capabilities and actual stores made before or inside a guard. Ternary and short-circuit regions also close incompatible views before their origin scopes end.
+
+Conditional joins also accumulate guard-region stores from every alternative, including terminal paths. Publishing a read-only join retains its active guard origin while an actual store ends it. This keeps an inner conditional from treating its own read-view publication as a write to an enclosing guarded binding.
 
 #### Lazy initialization (the singleton shape)
 

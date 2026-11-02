@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Loop-tail snapshots contain guard views while preserving nullable writes and refinements.
+#[test]
+fn test_nullable_fallback_flow_r59_loop_guard_views() {
+    let source = include_str!("../fixtures/nullable_fallback_loop_guard_views.php");
+    check_source(source).unwrap_or_else(|error| panic!("loop guard read contract: {error}"));
+    for name in ["r59StoredBefore", "r59StoredInside", "r59StoredBreak"] {
+        let nullable = format!("function {name}(?int $value): ?int");
+        assert!(source.contains(&nullable), "missing nullable return fixture: {name}");
+        let required = source.replace(&nullable, &format!("function {name}(?int $value): int"));
+        expect_error(&required, "return type expects int");
+    }
+}
+
 /// Read-only scalar, union and array guards retain raw and nullable reference contracts.
 #[test]
 fn test_nullable_fallback_flow_r58_guard_value_containment() {

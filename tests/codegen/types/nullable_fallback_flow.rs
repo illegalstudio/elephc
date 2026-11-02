@@ -9,6 +9,13 @@
 
 use super::*;
 
+/// Continue snapshots retain logical reads, physical slots and actual writes in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_r59_loop_guard_views_runtime() {
+    assert_nullable_flow_cli_heap_output(include_str!("../../fixtures/nullable_fallback_loop_guard_views.php"),
+        "for-int\ndo-int\nfor-array\nwidget\nsingle\nchild\nnested-fallback\nNULL\nNULL\nNULL\nint(5)\nNULL\nNULL\nint(2)\nint(5)\n");
+}
+
 /// Guard views preserve reference layouts and actual in-arm writes in both IR modes.
 #[test]
 fn test_nullable_fallback_flow_r58_guard_value_containment_runtime() {

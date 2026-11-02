@@ -747,6 +747,8 @@ pub(crate) struct SavedLocalBindingScope {
 pub struct NarrowedLocalOrigin {
     /// Type the binding held before any guard on this name narrowed it.
     pub origin: PhpType,
+    /// Logical value read before this guard, independent of its outer physical origin.
+    pub read_input: PhpType,
     /// The guard's own view, or `None` once the region has stored something of its own.
     ///
     /// A failed assignment merge is re-measured against `origin` only while the environment
@@ -1025,12 +1027,17 @@ impl Checker {
             self.definitely_bound_locals.insert(name.to_string());
         }
         let previous = self.narrowed_local_origins.get(name).cloned();
+        let read_input = pre_guard.map(|input| previous.as_ref()
+            .filter(|entry| !entry.stored_in_region && entry.view.as_ref() == Some(input)
+                && !self.type_contains_values(&entry.read_input, input))
+            .map_or_else(|| input.clone(), |entry| entry.read_input.clone()));
         match previous
             .as_ref()
             .map(|entry| entry.origin.clone())
             .or_else(|| pre_guard.cloned())
         {
             Some(origin) => {
+                let read_input = read_input.unwrap_or_else(|| origin.clone());
                 if !name.starts_with('\u{1}')
                     && matches!(origin.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
                 {
@@ -1042,6 +1049,7 @@ impl Checker {
                     name.to_string(),
                     NarrowedLocalOrigin {
                         origin,
+                        read_input,
                         view: Some(view.clone()),
                         // The REGION is new even when the entry inherits an outer origin, so a
                         // store the enclosing region already made does not follow it inward. It
