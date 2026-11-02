@@ -53,8 +53,13 @@ replaceMissingVariadicXmlSelection($xml->tail);
 replaceMissingVariadicXmlSelection($xml->tail[0]);
 $callback = replaceMissingVariadicXmlSelection(...); $callback(slot: $xml->namedTail);
 echo (int)isset($xml->tail), (int)isset($xml->namedTail), '|';
+function replaceOneMissingXmlSelection(&$value): void { $value = 'replacement'; }
+$dimensionCallback = replaceOneMissingXmlSelection(...);
+$dimensionCallback($xml->positionalDimension[0]);
+$dimensionCallback(value: $xml->namedDimension[0]);
+echo (int)isset($xml->positionalDimension), (int)isset($xml->namedDimension), '|';
 "#;
-    let expected = "SimpleXMLElement:first|SimpleXMLElement:created|SimpleXMLElement:name|1:1:1|::|1:4|1111111|SimpleXMLElement|0|11|";
+    let expected = "SimpleXMLElement:first|SimpleXMLElement:created|SimpleXMLElement:name|1:1:1|::|1:4|1111111|SimpleXMLElement|0|11|11|";
     let native = format!("<?php {body}");
     let encoded = body.replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $xmlCapability = new SimpleXMLElement('<r/>'); unset($xmlCapability); $code = $argc > 0 ? '{encoded}' : ''; eval($code); unset($code);");

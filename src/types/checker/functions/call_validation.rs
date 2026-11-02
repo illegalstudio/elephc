@@ -890,7 +890,8 @@ impl Checker {
                 let supplied_reference = sig.ref_params.get(param_idx).copied().unwrap_or(false)
                     && !defaults.get(param_idx).copied().unwrap_or(false);
                 if supplied_reference && !self.internal_callback_binding {
-                    if descriptor_invocation && matches!(arg.kind, ExprKind::ArrayAccess { .. }) {
+                    if descriptor_invocation && matches!(arg.kind, ExprKind::ArrayAccess { .. })
+                        && !self.is_native_selection_reference_argument(arg, caller_env)? {
                         let param_name = sig
                             .params
                             .get(param_idx)
