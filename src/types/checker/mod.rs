@@ -447,6 +447,8 @@ pub(crate) struct Checker {
     /// Authoritative result type of each checked builtin call, keyed by call span.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Closure literals whose checked source bodies contain yield, keyed by source identity.
+    pub closure_generator_spans: HashSet<Span>,
     /// Native property reference plans retain checker facts across opaque argument effects.
     pub array_push_property_plans: HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Receiver types observed at member uses, with conflicting checker visits disabled.
@@ -1459,6 +1461,7 @@ fn check_types_on_compiler_stack(
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
+        closure_generator_spans: checker.closure_generator_spans,
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,

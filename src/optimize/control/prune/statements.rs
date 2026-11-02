@@ -371,7 +371,7 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
                 cases,
                 implements,
                 trait_uses,
-                methods,
+                methods: methods.into_iter().map(prune_method_without_context).collect(),
                 constants,
             },
             span,

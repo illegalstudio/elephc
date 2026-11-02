@@ -71,6 +71,7 @@ and link the resulting user object against the cached runtime object.
 | `src/codegen/frame.rs` | Stack-frame sizing, local slots, register allocation integration |
 | `src/codegen/stack_numeric.rs` | Escape and lifetime proofs for frame-local checked numeric results |
 | `src/codegen/value_placement.rs` | Stack/register placement for EIR values |
+| `src/codegen/callable_signatures.rs` | Shared EIR signature reconstruction for callable descriptors, native registration, and Fiber wrappers |
 | `src/codegen/runtime_callable_invoker.rs` | Generated uniform `(descriptor, argument array) -> Mixed` invoker trampolines |
 | `src/codegen_support/abi/` | Target ABI helpers for registers, calls, stack slots, symbols, and frame mechanics |
 | `src/codegen_support/arrays.rs` | Shared array metadata helpers used by EIR and runtime support |
@@ -85,6 +86,13 @@ and link the resulting user object against the cached runtime object.
 
 The active backend must remain target-aware. New lowering paths should use the
 ABI helpers instead of hardcoding AArch64 or x86_64 register and stack details.
+
+Callable signature reconstruction keeps stored declaration metadata when hidden EIR parameters
+change the parameter count. Declared parameter names map defaults, type expressions, attributes,
+and declaration flags onto the rebuilt signature; hidden captures receive no source metadata.
+Generator classification, declared return type, deprecation, and reference returns remain those
+of the declaration. Without a stored signature, EIR generator and reference-return flags provide
+the fallback; the coroutine's internal `Mixed` return storage is published as `Generator`.
 
 ## Scalar Constants and Immediate Operands
 

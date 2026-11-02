@@ -1,7 +1,7 @@
 name: Download test archive
 description: >
-  Downloads a nextest archive with retries, so a transient artifact-API failure does not fail
-  an otherwise healthy test shard.
+  Downloads artifacts with bounded retries and validates complete nextest zstd frames
+  before a test shard can extract them.
 
 # Short-lived shards were dying in 11-14 seconds with
 # `Unable to download artifact(s): ListArtifacts ... 403 Forbidden`, before running a single
@@ -9,11 +9,10 @@ description: >
 # refusing one request, not a product regression, and the run it kills has already spent a full
 # build on the archive it was about to use.
 #
-# actions/download-artifact has no retry of its own, so the attempts are spelled out. Three of
-# them with a growing pause: one 403 is the whole failure mode, and a second consecutive one
-# usually means the artifact really is gone rather than momentarily unreachable. The last
-# attempt does NOT continue on error, so a genuinely missing archive still fails the job with
-# the action's own message.
+# A successful download can also leave a truncated inner nextest archive (PR #2208).
+# Check the complete zstd frame before accepting it, so that failure participates in the
+# same three attempts. Native-cache artifacts use this action too and retain download-only
+# validation. The final download and validation fail normally if recovery is exhausted.
 
 inputs:
   name:
@@ -33,28 +32,64 @@ runs:
         name: ${{ inputs.name }}
         path: ${{ inputs.path }}
 
-    - if: steps.first.outcome == 'failure'
+    - id: first_archive
+      if: steps.first.outcome == 'success' && startsWith(inputs.name, 'nextest-archive-')
+      continue-on-error: true
       shell: bash
+      env:
+        ARCHIVE_DIR: ${{ steps.first.outputs.download-path }}
+      # Runtime paths are already mapped into a job container; contexts can retain host paths.
+      run: bash "$GITHUB_ACTION_PATH/validate.sh" "$ARCHIVE_DIR"
+
+    - if: steps.first.outcome == 'failure' || steps.first_archive.outcome == 'failure'
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.name }}
+        ARCHIVE_DIR: ${{ steps.first.outputs.download-path }}
       run: |
-        echo "::warning title=Artifact download retried::${{ inputs.name }} failed to download; retrying in 15s"
+        echo "::warning title=Artifact download retried::$ARTIFACT_NAME failed download or archive validation; retrying in 15s"
+        if [[ "$ARTIFACT_NAME" == nextest-archive-* && -n "$ARCHIVE_DIR" ]]; then
+          rm -f -- "$ARCHIVE_DIR/nextest-archive.tar.zst"
+        fi
         sleep 15
 
     - id: second
-      if: steps.first.outcome == 'failure'
+      if: steps.first.outcome == 'failure' || steps.first_archive.outcome == 'failure'
       uses: actions/download-artifact@v4
       continue-on-error: true
       with:
         name: ${{ inputs.name }}
         path: ${{ inputs.path }}
 
-    - if: steps.first.outcome == 'failure' && steps.second.outcome == 'failure'
+    - id: second_archive
+      if: steps.second.outcome == 'success' && startsWith(inputs.name, 'nextest-archive-')
+      continue-on-error: true
       shell: bash
+      env:
+        ARCHIVE_DIR: ${{ steps.second.outputs.download-path }}
+      run: bash "$GITHUB_ACTION_PATH/validate.sh" "$ARCHIVE_DIR"
+
+    - if: steps.second.outcome == 'failure' || steps.second_archive.outcome == 'failure'
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.name }}
+        ARCHIVE_DIR: ${{ steps.second.outputs.download-path }}
       run: |
-        echo "::warning title=Artifact download retried::${{ inputs.name }} failed twice; retrying in 45s"
+        echo "::warning title=Artifact download retried::$ARTIFACT_NAME failed twice; retrying in 45s"
+        if [[ "$ARTIFACT_NAME" == nextest-archive-* && -n "$ARCHIVE_DIR" ]]; then
+          rm -f -- "$ARCHIVE_DIR/nextest-archive.tar.zst"
+        fi
         sleep 45
 
-    - if: steps.first.outcome == 'failure' && steps.second.outcome == 'failure'
+    - id: third
+      if: steps.second.outcome == 'failure' || steps.second_archive.outcome == 'failure'
       uses: actions/download-artifact@v4
       with:
         name: ${{ inputs.name }}
         path: ${{ inputs.path }}
+
+    - if: steps.third.outcome == 'success' && startsWith(inputs.name, 'nextest-archive-')
+      shell: bash
+      env:
+        ARCHIVE_DIR: ${{ steps.third.outputs.download-path }}
+      run: bash "$GITHUB_ACTION_PATH/validate.sh" "$ARCHIVE_DIR"
