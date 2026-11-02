@@ -395,14 +395,13 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
         ctx.unguard_call_argument(*value, span);
         if let Some((_, slot)) = roots.iter().find(|(index, _)| *index == parameter_index) {
             let pin_only = ctx.builder.value_defining_op(*value) == Some(Op::EnsureOwned)
-                || (ctx.builder.value_defining_op(*value) == Some(Op::Acquire)
-                    && ctx.builder.local_kind(*slot) == LocalKind::OwnedTemp);
+                || ctx.builder.local_kind(*slot) == LocalKind::OwnedTemp;
             if !pin_only {
                 retire_owned_call_operand(ctx, *slot, span);
                 continue;
             }
-            // Claimed strings and persisted byte views are only PINNED for the call: retire the
-            // pin without releasing, then decide the release against the result below.
+            // OwnedTemp records only pin an existing operand owner. Detach that record without
+            // releasing, then apply the same result-alias decision to the original producer.
             unregister_owned_call_operand(ctx, *slot, span);
             ctx.emit_void(
                 Op::UnsetLocal,

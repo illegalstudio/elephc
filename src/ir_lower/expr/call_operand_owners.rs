@@ -533,16 +533,17 @@ pub(super) fn root_user_call_operands(
                     roots.push((index, pin.slot));
                 }
             }
-            // A later eval barrier can widen a PHP string local after this call is lowered.
-            // Its eventual load then owns a cast copy, although the eager claim above saw a
-            // borrowed string. Lease a separate payload and leave the provisional source
-            // release to finalization, which prunes it when the local keeps string storage.
+            // A later eval barrier can widen a heap local after this call is lowered.
+            // Its eventual load then owns a conversion or payload reference. Lease that value
+            // independently and let finalization prune the source release for concrete storage.
             let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
             if !repeated
                 && !ctx.has_call_argument_guard(*operand)
                 && !roots.iter().any(|(owner_index, _)| *owner_index == index)
-                && ctx.builder.value_php_type(*operand).codegen_repr() == PhpType::Str
-                && matches!(ctx.builder.value_defining_op(*operand), Some(Op::LoadLocal | Op::LoadStaticLocal))
+                && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(*operand))
+                && !matches!(ctx.builder.value_php_type(*operand).codegen_repr(), PhpType::Buffer(_))
+                && matches!(ctx.builder.value_defining_op(*operand), Some(Op::LoadLocal | Op::LoadStaticLocal
+                    | Op::LoadGlobal | Op::LoadRefCell | Op::LoadStaticProperty))
                 && ctx.value_needs_release_after_use(value)
             {
                 let lease = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
@@ -551,14 +552,16 @@ pub(super) fn root_user_call_operands(
                 crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
                 *operand = lease.value;
             }
-            // Source-order evaluation can already have acquired a borrowed string. Its
-            // evaluation slot was handed to this call, so keep that lease visible when
-            // an alias-capable callee throws before the ordinary post-call release.
+            // Pin every independent heap operand, including fresh objects and arrays, without
+            // changing its producer or the alias facts used by normal post-call retirement.
             if !repeated
                 && !ctx.has_call_argument_guard(*operand)
                 && !roots.iter().any(|(owner_index, _)| *owner_index == index)
-                && ctx.builder.value_php_type(*operand).codegen_repr() == PhpType::Str
-                && matches!(ctx.builder.value_defining_op(*operand), Some(Op::Acquire | Op::EnsureOwned))
+                && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(*operand))
+                && !matches!(ctx.builder.value_php_type(*operand).codegen_repr(), PhpType::Buffer(_))
+                && ctx.value_is_owning_temporary(LoweredValue {
+                    value: *operand, ir_type: ctx.builder.value_type(*operand),
+                })
             {
                 for pin in pin_in_flight_owners(ctx, &[*operand], span) {
                     roots.push((index, pin.slot));

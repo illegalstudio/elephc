@@ -41,7 +41,7 @@ pub(super) fn lower_method_call(
         None
     };
     let object_expr = object;
-    let object = lower_member_receiver(ctx, object_expr, expr);
+    let mut object = lower_member_receiver(ctx, object_expr, expr);
     if op == Op::MethodCall && args.is_empty()
         && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
         && matches!(php_symbol_key(method).as_str(),
@@ -130,6 +130,11 @@ pub(super) fn lower_method_call(
     if op == Op::MethodCall && reflection_property_reflected_target(ctx, object_expr).is_some() {
         // Specialized property calls still evaluate a reflector receiver. Keep its
         // independent owner through argument/guard throws and retire it on success.
+        if ctx.value_is_owned_unboxed_local_load(object.value) {
+            let source = object;
+            object = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, source, Some(expr.span));
+            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(expr.span));
+        }
         let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
         let result = lower_reflection_property_value_call(ctx, Some(object_expr), method, args, expr);
         unpin_in_flight_owners(ctx, pins, expr.span);
