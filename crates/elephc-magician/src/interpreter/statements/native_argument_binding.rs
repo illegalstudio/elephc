@@ -46,7 +46,7 @@ pub(super) fn number_scalar_binding_signature(
 }
 
 /// Binds native AOT callable args using the selected by-reference degradation mode.
-pub(super) fn bind_native_callable_bound_args_with_mode(
+pub(in crate::interpreter) fn bind_native_callable_bound_args_with_mode(
     signature: Option<NativeCallableSignature>,
     mut args: Vec<EvaluatedCallArg>,
     by_ref_mode: EvalByRefBindingMode<'_>,
