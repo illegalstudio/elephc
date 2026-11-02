@@ -45,14 +45,16 @@ pub(crate) fn resolve(
 
 #[cfg(test)]
 mod tests {
-    use crate::codegen_support::{platform::Target, sentinels::SERPROP_REFERENCE_PROPERTY_FLAG};
+    use crate::codegen_support::{platform::Target, sentinels::{SERPROP_REFERENCE_PROPERTY_FLAG,
+        SERPROP_MIXED_REFERENCE_PROPERTY_FLAG}};
 
     /// Serialization rows retain each logical tag independently of native cell indirection.
     #[test]
     fn native_reference_serialization_metadata_on_every_target() {
         let source = "<?php class SerializationCellLayout { public string $text = 'text'; \
-            public mixed $value = 1; public mixed $missing; \
-            public function &textRef(): string { return $this->text; } } \
+            public mixed $value = 1; public mixed $missing; public int|string $choice = 1; \
+            public function &textRef(): string { return $this->text; } \
+            public function &choiceRef(): int|string { return $this->choice; } } \
             $code = $argc > 0 ? '' : 'echo 1;'; eval($code);";
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
@@ -64,14 +66,16 @@ mod tests {
             let marker = format!("_class_serprop_{}:\n", class.class_id);
             let rows = assembly.split_once(&marker).unwrap().1
                 .split_once(".globl _class_serprop_declaring_").unwrap().0;
-            assert_eq!(rows.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 7)).count(), 2,
+            assert_eq!(rows.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | SERPROP_MIXED_REFERENCE_PROPERTY_FLAG | 7)).count(), 2,
                 "{name}: Mixed value and uninitialized slots remain distinct from their cell pointers");
+            assert_eq!(rows.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 7)).count(), 1,
+                "{name}: the constrained union keeps its existing payload representation");
             assert!(rows.contains(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 1)),
                 "{name}: a raw native string cell keeps the string payload tag");
             let marker = format!("_class_vd_desc_{}:\n", class.class_id);
             let dump = assembly.split_once(&marker).unwrap().1
                 .split_once(".globl _class_prop_desc_").unwrap().0;
-            assert_eq!(dump.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 7)).count(), 2,
+            assert_eq!(dump.matches(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 7)).count(), 3,
                 "{name}: dump and serialization agree on Mixed cell indirection");
             assert!(dump.contains(&format!("    .quad {}\n", SERPROP_REFERENCE_PROPERTY_FLAG | 1)),
                 "{name}: dump preserves the raw string's logical tag");

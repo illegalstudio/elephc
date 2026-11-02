@@ -23,6 +23,7 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::{
     emit_branch_if_null_container, emit_resolve_tagged_scalar_property_tag, NULL_SENTINEL,
+    SERPROP_MIXED_REFERENCE_PROPERTY_FLAG,
 };
 
 /// Emits `__rt_object_to_hash(object, cast_mode, scope_class_id)` for the active target.
@@ -193,7 +194,6 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x17, [sp, #0]");                                   // load the object pointer slot for `ldr x17, [sp, #0]`
     emitter.instruction("add x17, x17, x15");                                   // derive the current descriptor/property offset with `add x17, x17, x15`
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x17", "x16", "x11", "__rt_object_to_hash_slot");
-    emitter.instruction("str x16, [sp, #80]");                                  // persist the logical tag after resolving native storage
     emitter.instruction("ldr x1, [x17]");                                       // load the current object/descriptor operand for `ldr x1, [x17]`
     emitter.instruction("ldr x2, [x17, #8]");                                   // load the current object/descriptor operand for `ldr x2, [x17, #8]`
     emitter.instruction("str x1, [sp, #88]");                                   // save the property low-word slot across nested runtime calls
@@ -206,6 +206,9 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     // -- a Mixed slot that holds no cell (implicit or explicit null) projects canonical null --
     emitter.instruction("cmp x0, #7");                                          // does the slot hold a boxed Mixed cell pointer?
     emitter.instruction("b.ne __rt_object_to_hash_box");                        // other tags box their payload directly
+    emitter.instruction("ldr x9, [sp, #80]");                                   // recover the declared row's canonical-reference capability
+    emitter.instruction(&format!("tst x9, #{SERPROP_MIXED_REFERENCE_PROPERTY_FLAG}"));// constrained storage cannot acquire an unconstrained wrapper
+    emitter.instruction("b.eq __rt_object_to_hash_wrapper_owners");             // ordinary and typed slots keep their existing projection policy
     emitter.instruction("ldr x9, [sp, #0]");                                    // recover the native object whose slot may own a cell
     emitter.instruction("ldr x9, [x9]");                                        // select the class's physical GC descriptor
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_ptrs");
@@ -478,7 +481,6 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the object pointer slot for `mov r10, QWORD PTR [rbp - 8]`
     emitter.instruction("add r10, r14");                                        // derive the current descriptor/property offset with `add r10, r14`
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "r15", "r11", "__rt_object_to_hash_slot");
-    emitter.instruction("mov QWORD PTR [rbp - 88], r15");                       // persist the logical tag after resolving native storage
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the current object/descriptor operand for `mov rdi, QWORD PTR [r10]`
     emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // load the current object/descriptor operand for `mov rsi, QWORD PTR [r10 + 8]`
     abi::emit_load_int_immediate(emitter, "r9", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
@@ -489,6 +491,8 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     // -- a Mixed slot that holds no cell (implicit or explicit null) projects canonical null --
     emitter.instruction("cmp rax, 7");                                          // does the slot hold a boxed Mixed cell pointer?
     emitter.instruction("jne __rt_object_to_hash_box_x");                       // other tags box their payload directly
+    emitter.instruction(&format!("test QWORD PTR [rbp - 88], {SERPROP_MIXED_REFERENCE_PROPERTY_FLAG}"));// only unconstrained Mixed cells acquire a canonical wrapper
+    emitter.instruction("jz __rt_object_to_hash_wrapper_owners_x");             // ordinary and typed slots keep their existing projection policy
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // recover the native object whose slot may own a cell
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // select the class's physical GC descriptor
     abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_ptrs");

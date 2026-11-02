@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
-use crate::codegen_support::sentinels::{JSON_DECLARED_PROPERTY_FLAG, JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, SERPROP_REFERENCE_PROPERTY_FLAG, TAGGED_SCALAR_PROPERTY_TAG};
+use crate::codegen_support::sentinels::{JSON_DECLARED_PROPERTY_FLAG, JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, SERPROP_REFERENCE_PROPERTY_FLAG, SERPROP_MIXED_REFERENCE_PROPERTY_FLAG, TAGGED_SCALAR_PROPERTY_TAG};
 use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
@@ -1523,7 +1523,12 @@ pub(crate) fn emit_runtime_data_user(
             let tag = serialized_property_payload_tag(prop_ty)
                 | if class_info.property_slot_is_reference(*prop_index, prop_name) {
                     SERPROP_REFERENCE_PROPERTY_FLAG
-                } else { 0 };
+                } else { 0 }
+                | if *prop_ty == &PhpType::Mixed && class_info.property_slot_owns_reference(*prop_index)
+                    && !metadata.is_internal && !metadata.readonly_properties.contains(*prop_name)
+                    && !metadata.property_set_visibilities.contains_key(*prop_name)
+                    && metadata.property_hooks.get(*prop_name).is_none_or(|hooks| !hooks.any())
+                { SERPROP_MIXED_REFERENCE_PROPERTY_FLAG } else { 0 };
             out.push_str(&format!(
                 "    .quad _class_serpname_{}_{}\n",
                 class_info.class_id, prop_index

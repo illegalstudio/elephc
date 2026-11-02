@@ -561,6 +561,10 @@ array cast retains that wrapper. This also preserves native aliases in programs
 that never export the property to eval. A singleton reference projects an
 independent value when neither the native cell nor its PHP wrapper has another
 visible owner.
+The serialization row separately marks eligible exact `mixed` backing storage.
+Projection uses that capability before creating a wrapper; a constrained union
+that also uses boxed storage retains its existing representation until its
+property type sources can accompany the shared reference.
 
 Resolved reference-returning callees produce two distinct things at the `return`,
 and keeping them apart is what makes the boundary correct. `AcquireRefCell`

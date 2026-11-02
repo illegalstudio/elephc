@@ -163,6 +163,8 @@ pub(crate) const REFERENCE_CELL_HEAP_KIND: u32 = 8;
 
 /// Property descriptor rows preserve the payload tag and mark a native reference-cell slot.
 pub(crate) const SERPROP_REFERENCE_PROPERTY_FLAG: u64 = 1 << 8;
+/// Serialization rows mark unconstrained Mixed cells that can share a canonical PHP wrapper.
+pub(crate) const SERPROP_MIXED_REFERENCE_PROPERTY_FLAG: u64 = 1 << 9;
 
 /// JSON property descriptors preserve the payload tag and mark an indirect reference cell.
 pub(crate) const JSON_REFERENCE_PROPERTY_FLAG: u64 = 1 << 8;
