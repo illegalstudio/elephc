@@ -74,3 +74,24 @@ runtimeStringHookAssign(new RuntimeStringHookTarget(), 'string');
 }
 
 supported_target_cases!(runtime_property_setters, verify_runtime_property_setters);
+
+/// Eval ownership must be probed before a native backing class can claim the declared slot.
+fn verify_native_backed_eval_property_dispatch(target: &str) {
+    let source = r#"<?php
+class NativeEvalStorageBase { public int $count = 1; }
+function nativeEvalStorageWrite(mixed $object, int $value): void { $object->count = $value; }
+$code = $argc > 0 ? 'class DynamicEvalStorageChild extends NativeEvalStorageBase {} $child = new DynamicEvalStorageChild();' : '';
+eval($code);
+nativeEvalStorageWrite($child, 2);
+"#;
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let symbol = crate::names::function_symbol("nativeEvalStorageWrite");
+    let function = &assembly[assembly.find(&format!("{symbol}:")).unwrap()..];
+    let probe = function.find("__elephc_eval_dynamic_object_property_set").unwrap();
+    let native_slot = function.find("mixed_dyn_prop_set_count").unwrap();
+    assert!(probe < native_slot, "{target}: eval identity must precede the backing slot's class-id arm");
+}
+
+supported_target_cases!(native_backed_eval_property_dispatch, verify_native_backed_eval_property_dispatch);

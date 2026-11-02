@@ -1318,6 +1318,14 @@ pub(super) fn lower_runtime_mixed_prop_set(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
+    // Eval subclasses can retain any native parent's physical class id. Claim their
+    // writes by object identity before declared slots, magic methods or property hashes.
+    emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    emit_runtime_property_set_for_stacked_name_after_eval_probe(
+        ctx, value, &value_ty, 16, 0, 32, Some(&done_label),
+    )?;
+
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         emit_branch_if_mixed_dynamic_property_candidate_matches(
             ctx,
@@ -1613,12 +1621,25 @@ fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
     name_stack_offset: usize,
     enclosing_stack_bytes: usize,
 ) -> Result<()> {
+    emit_runtime_property_set_for_stacked_name_after_eval_probe(
+        ctx, value, value_ty, object_stack_offset, name_stack_offset, enclosing_stack_bytes, None,
+    )
+}
+
+/// Probes eval identity before native dispatch, or completes the legacy stdClass fallback.
+fn emit_runtime_property_set_for_stacked_name_after_eval_probe(
+    ctx: &mut FunctionContext<'_>, value: ValueId, value_ty: &PhpType,
+    object_stack_offset: usize, name_stack_offset: usize, enclosing_stack_bytes: usize,
+    native_done_label: Option<&str>,
+) -> Result<()> {
     if !crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(
         ctx.module,
     ) {
-        return emit_runtime_stdclass_set_for_stacked_name(
-            ctx, value, value_ty, object_stack_offset, name_stack_offset,
-        );
+        return if native_done_label.is_some() { Ok(()) } else {
+            emit_runtime_stdclass_set_for_stacked_name(
+                ctx, value, value_ty, object_stack_offset, name_stack_offset,
+            )
+        };
     }
     let plain = ctx.next_label("eval_prop_set_plain");
     let handled = ctx.next_label("eval_prop_set_handled");
@@ -1665,7 +1686,10 @@ fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     abi::emit_release_temporary_stack(ctx.emitter, 32);
-    abi::emit_jump(ctx.emitter, &done);
+    if let Some(done) = native_done_label {
+        abi::emit_release_temporary_stack(ctx.emitter, enclosing_stack_bytes);
+        abi::emit_jump(ctx.emitter, done);
+    } else { abi::emit_jump(ctx.emitter, &done); }
 
     ctx.emitter.label(&raise);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
@@ -1680,6 +1704,13 @@ fn emit_runtime_stdclass_set_for_stacked_name_after_eval_probe(
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
 
     ctx.emitter.label(&plain);
+    if native_done_label.is_some() {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        ctx.emitter.label(&done);
+        return Ok(());
+    }
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     match target.arch {
         Arch::AArch64 => {
