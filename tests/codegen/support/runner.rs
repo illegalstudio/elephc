@@ -1611,6 +1611,21 @@ fn append_macos_signal_diagnostics(
         return;
     }
 
+    // A damaged frame pointer can hide the native caller from LLDB's ordinary unwinder.
+    // Resolve at most 32 executable addresses from a bounded stack snapshot in that case.
+    let stack_symbols = concat!(
+        "script t = lldb.debugger.GetSelectedTarget(); p = t.GetProcess(); ",
+        "f = p.GetSelectedThread().GetFrameAtIndex(0); ",
+        "s = f.FindRegister('sp').GetValueAsUnsigned(); e = lldb.SBError(); ",
+        "b = p.ReadMemory(s, 16384, e) or b''; ",
+        "a = [(i, int.from_bytes(b[i:i+8], 'little')) for i in range(0, len(b)-7, 8)]; ",
+        "v = [(i, w, t.ResolveLoadAddress(w)) for i, w in a]; ",
+        "v = [(i, w, x.GetSymbol().GetName() or x.GetFunction().GetName() or '?') ",
+        "for i, w, x in v if x.GetModule().IsValid() ",
+        "and x.GetModule().GetFileSpec().GetFilename() == t.GetExecutable().GetFilename()]; ",
+        "print('Bounded executable stack candidates (may include stale values):'); ",
+        "[print('sp+%04x 0x%x %s' % (i, w, n[:240])) for i, w, n in v[:32]]"
+    );
     let mut cmd = Command::new("lldb");
     cmd.args([
         "--batch",
@@ -1620,6 +1635,8 @@ fn append_macos_signal_diagnostics(
         "thread backtrace all",
         "-k",
         "register read",
+        "-k",
+        stack_symbols,
         "-k",
         "disassemble --frame",
         "-k",
