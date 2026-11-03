@@ -35,7 +35,10 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     emitter.label_global(FAILURE);
     abi::emit_teardown_call_alignment(emitter);
     emitter.bl_c("abort");
-    abi::emit_jump(emitter, FAILURE);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("brk #0"),                         // abort never returns; trap instead of reentering an aligned entry
+        Arch::X86_64 => emitter.instruction("ud2"),                             // abort never returns; avoid a backedge with a different stack offset
+    }
     emit_bind_object(emitter);
 }
 
@@ -155,6 +158,10 @@ mod tests {
                 "{name}: weak lifecycle operations cannot retain a value");
             assert!(assembly.contains(&target.extern_symbol("abort")),
                 "{name}: rejected metadata must not silently disable validation");
+            let failure = assembly.split_once("__rt_reference_sources_failure:\n").unwrap().1
+                .split_once("__rt_reference_sources_bind_object:\n").unwrap().0;
+            assert!(failure.contains(if target.arch == Arch::X86_64 { "ud2" } else { "brk #0" }),
+                "{name}: the aligned non-returning entry must terminate without a stack-changing loop");
             if target.arch == Arch::X86_64 {
                 assert!(assembly.contains("and rsp, -16"),
                     "{name}: the non-returning failure entry aligns C calls from every incoming edge");
