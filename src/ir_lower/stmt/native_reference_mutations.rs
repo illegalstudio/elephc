@@ -11,6 +11,17 @@
 
 use super::*;
 
+/// Selects a local native root for a deep store or append without evaluating its dimensions.
+pub(super) fn lower_target(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, span: Span,
+    operation: impl FnMut(&mut LoweringContext<'_, '_>),
+) -> bool {
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
+    let ExprKind::Variable(name) = &root.kind else { return false; };
+    lower(ctx, name, span, operation)
+}
+
 /// Runs an operation with the actual reference layout, preserving ordinary branch joins.
 pub(in crate::ir_lower) fn lower(
     ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span,

@@ -28,6 +28,15 @@ pub(super) fn lower_nested_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    if super::native_reference_mutations::lower_target(ctx, target, span,
+        |ctx| lower_nested_array_assign_dispatch(ctx, target, value, span)) { return; }
+    lower_nested_array_assign_dispatch(ctx, target, value, span);
+}
+
+/// Selects plain and updating deep stores after the native root layout is established.
+fn lower_nested_array_assign_dispatch(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
+) {
     let update = desugared_element_update(value, span, |read| read == target);
     if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
         let mut snapshots = Vec::new();
@@ -120,6 +129,16 @@ pub(super) fn lower_captured_update(
 
 /// Reuses a captured receiver class proof while retaining key snapshots and receiver leases.
 pub(super) fn lower_captured_update_for_receiver(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
+    receiver: CapturedPropertyReceiver,
+) {
+    if super::native_reference_mutations::lower_target(ctx, target, span,
+        |ctx| lower_captured_update_selected(ctx, target, value, span, receiver)) { return; }
+    lower_captured_update_selected(ctx, target, value, span, receiver);
+}
+
+/// Updates one captured deep target through the native layout selected for its local root.
+fn lower_captured_update_selected(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
     receiver: CapturedPropertyReceiver,
 ) {
@@ -379,7 +398,7 @@ fn nested_static_root_is_boxed(ctx: &LoweringContext<'_, '_>, target: &Expr) -> 
 fn nested_target_has_local_array_root(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
     match &target.kind {
         ExprKind::ArrayAccess { array, .. } => nested_target_has_local_array_root(ctx, array),
-        ExprKind::Variable(name) => matches!(ctx.local_type(name).codegen_repr(),
+        ExprKind::Variable(name) => matches!(ctx.local_mutation_type(name).codegen_repr(),
             PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed),
         _ => false,
     }
@@ -702,6 +721,17 @@ fn lower_nested_array_assign_inner(
     span: Span,
     key_already_diagnosed: bool,
 ) {
+    if super::native_reference_mutations::lower_target(ctx, target, span,
+        |ctx| lower_nested_array_assign_selected(ctx, target, value, span, key_already_diagnosed))
+    { return; }
+    lower_nested_array_assign_selected(ctx, target, value, span, key_already_diagnosed);
+}
+
+/// Keeps nested update traversal on the raw or canonical root selected for this operation.
+fn lower_nested_array_assign_selected(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr,
+    span: Span, key_already_diagnosed: bool,
+) {
     // Lowering the FULL target as an expression routes the write through the
     // read helper (`__rt_mixed_array_get`), which returns a detached fresh box
     // whenever the slot storage is not already a boxed Mixed cell; the
@@ -840,8 +870,11 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
 ) -> LoweredValue {
     let ExprKind::ArrayAccess { array, index } = &expr.kind else {
         if let ExprKind::Variable(name) = &expr.kind {
-            if ctx.local_type(name).codegen_repr() == PhpType::Mixed {
+            if ctx.local_mutation_type(name).codegen_repr() == PhpType::Mixed {
                 return load_array_local_for_write(ctx, name, span);
+            }
+            if ctx.live_native_mutation_locals.contains_key(name) {
+                return ctx.load_local_for_mutation(name, Some(span));
             }
         }
         if let ExprKind::PropertyAccess { object, property } = &expr.kind {
@@ -955,12 +988,12 @@ fn lower_local_parent_fetch_for_write_inner(
     key_already_diagnosed: bool,
 ) -> Option<LoweredValue> {
     let span = parent_expr.span;
-    let local_ty = ctx.local_type(name);
+    let local_ty = ctx.local_mutation_type(name);
     match local_ty.codegen_repr() {
         PhpType::Array(elem_ty) => {
             match index_expr_key_type(ctx, index) {
                 PhpType::Int => {
-                    let array = ctx.load_local(name, Some(span));
+                    let array = ctx.load_local_for_mutation(name, Some(span));
                     let key = lower_expr(ctx, index);
                     let key = crate::ir_lower::ownership::persist_string_byte_view(
                         ctx,
@@ -1005,7 +1038,7 @@ fn lower_local_parent_fetch_for_write_inner(
                     Some(lower_indexed_parent_fetch_for_write(ctx, name, array, key, span, key_already_diagnosed))
                 }
                 PhpType::Float | PhpType::Bool => {
-                    let array = ctx.load_local(name, Some(span));
+                    let array = ctx.load_local_for_mutation(name, Some(span));
                     let key = lower_expr(ctx, index);
                     let key = crate::ir_lower::ownership::persist_string_byte_view(
                         ctx,
@@ -1024,7 +1057,7 @@ fn lower_local_parent_fetch_for_write_inner(
                     && ctx.is_ref_bound_local(name) => {
                     // Keep reference variadics on the runtime storage-aware fetch. A string
                     // parent can promote storage, but must not reinterpret marker payloads.
-                    let array = ctx.load_local(name, Some(span));
+                    let array = ctx.load_local_for_mutation(name, Some(span));
                     let key = lower_expr(ctx, index);
                     let key = crate::ir_lower::ownership::persist_string_byte_view(
                         ctx,
@@ -1043,7 +1076,7 @@ fn lower_local_parent_fetch_for_write_inner(
                     // preserves string/numeric keys and null's empty-string key. The
                     // promoted hash flows straight into the ensure call and
                     // is stored back exactly once at the end.
-                    let array_value = ctx.load_local(name, Some(span));
+                    let array_value = ctx.load_local_for_mutation(name, Some(span));
                     let assoc_ty = promoted_assoc_array_type(local_ty, PhpType::Mixed);
                     ctx.prepare_mutated_local_owner_for_backend_retire(name, array_value, assoc_ty.clone(), Some(span));
                     let hash = ctx.emit_value(
@@ -1060,7 +1093,7 @@ fn lower_local_parent_fetch_for_write_inner(
             }
         }
         PhpType::AssocArray { key, .. } => {
-            let hash_value = ctx.load_local(name, Some(span));
+            let hash_value = ctx.load_local_for_mutation(name, Some(span));
             let assoc_ty = PhpType::AssocArray { key, value: Box::new(PhpType::Mixed) };
             // Fetch-for-write normalizes typed entries in place and returns their attached
             // Mixed cells. Declare that result contract before publishing the changed hash.

@@ -42,6 +42,8 @@ Detached locals use their boxed frame storage. The layout choice applies to the
 mutation receiver, while ordinary value observations continue to own copies.
 Offset-expression predicates release their owned observation after testing its tag;
 the expression result is staged independently across the raw and canonical writers.
+Deep stores, appends and captured updates select that same local root layout before
+traversing writable child cells, preserving computed key and RHS evaluation order.
 When eval still shares the imported canonical
 wrapper, reload preserves that identity and skips the legacy scalar projection.
 

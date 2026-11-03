@@ -25,6 +25,8 @@ function nativeCanonicalArrayReplacement(): mixed { return [0]; }
 function nativeCanonicalArrayMutation(int &$target): void {
     $target = nativeCanonicalArrayReplacement(); $target[] = 1; $target[1] = 2;
     echo $target[0], ':', count($target), '|';
+    $target[0] = []; $target[0]['key'] = 3; $target[0]['key'] += 1; $target[0][] = 4;
+    echo $target[0]['key'], ':', $target[0][0], ':', count($target[0]), '|';
 }
 function nativeHeaderlessStringMutation(string &$target): void {
     $target = nativeCanonicalReplacement(); $target[1] = 'X';
@@ -91,7 +93,7 @@ if ($argc < 0) {
             &default_link_paths(),
             &[],
         );
-        assert_eq!(output, "string:cXYnged:Y|0:2|string:cXYnged:Y|1", "optimize={optimize}");
+        assert_eq!(output, "string:cXYnged:Y|0:2|4:4:2|string:cXYnged:Y|1", "optimize={optimize}");
     }
 }
 
@@ -103,15 +105,21 @@ function nativeRawArrayMutation(array<mixed> &$items, string $code): void {
     eval($code); $items[] = 1; $items[1] = 2;
     echo $items[0], ':', $items[1], ':', count($items), '|';
 }
+function nativeRawNestedArrayMutation(array<mixed> &$items, string $code): void {
+    eval($code); $items[0] = []; $items[0]['key'] = 3; $items[0]['key'] += 1; $items[0][] = 4;
+    echo $items[0]['key'], ':', $items[0][0], ':', count($items[0]), '|';
+}
 $items = [0]; $code = $argc > 0 ? '$items[0] = 0;' : '';
 nativeRawArrayMutation($items, $code);
 echo $items[0], ':', $items[1], ':', count($items);
+echo '|'; nativeRawNestedArrayMutation($items, $code);
+echo $items[0]['key'], ':', $items[0][0], ':', count($items[0]);
 "#;
     for optimize in [false, true] {
         let run = || compile_and_run_with_heap_debug(source);
         let output = if optimize { run() } else { without_ir_opt(run) };
         assert!(output.success, "optimize={optimize}: {}", output.stderr);
-        assert_eq!(output.stdout, "0:2:2|0:2:2", "optimize={optimize}: {}", output.stderr);
+        assert_eq!(output.stdout, "0:2:2|0:2:2|4:4:2|4:4:2", "optimize={optimize}: {}", output.stderr);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"),
             "optimize={optimize}: {}", output.stderr);
     }

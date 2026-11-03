@@ -20,6 +20,9 @@ function nativeMutationArray(int &$items, mixed $replacement): void {
 function nativeMutationString(string &$text, mixed $replacement): void {
     $text = $replacement; $text[1] = 'X'; echo ($text[2] = 'Y'), gettype($text);
 }
+function nativeMutationNested(int &$items, mixed $replacement): void {
+    $items = $replacement; $items[0]['key'] = 3; $items[0]['key'] += 1; $items[0][] = 4;
+}
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let mut module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),

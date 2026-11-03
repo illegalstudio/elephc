@@ -18,6 +18,15 @@ mod iterable_property;
 pub(super) fn lower_store(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
 ) {
+    if super::native_reference_mutations::lower_target(ctx, target, span,
+        |ctx| lower_store_selected(ctx, target, value, span)) { return; }
+    lower_store_selected(ctx, target, value, span);
+}
+
+/// Captures inputs once on the selected writable root layout.
+fn lower_store_selected(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
+) {
     let mut sources = Vec::new();
     let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
     let value = lower_expr(ctx, value);
@@ -58,6 +67,15 @@ fn lower_captured_store(
 
 /// Appends directly into a stored parent instead of cloning a detached read and writing it back.
 pub(super) fn lower_append(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
+) {
+    if super::native_reference_mutations::lower_target(ctx, target, span,
+        |ctx| lower_append_selected(ctx, target, value, span)) { return; }
+    lower_append_selected(ctx, target, value, span);
+}
+
+/// Captures a deep append once before traversing its selected writable root.
+fn lower_append_selected(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
 ) {
     let mut sources = Vec::new();
