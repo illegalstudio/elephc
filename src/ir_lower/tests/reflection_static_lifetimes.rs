@@ -27,6 +27,7 @@ function constructStaticLifetimeReflector(): ReflectionClass {
 function readStaticLifetimeReflector(ReflectionClass $reflection): mixed {
     return $reflection->getStaticProperties();
 }
+echo count(readStaticLifetimeReflector(constructStaticLifetimeReflector()));
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());

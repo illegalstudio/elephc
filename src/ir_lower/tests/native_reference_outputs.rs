@@ -14,10 +14,12 @@ use crate::ir::{Immediate, Op, PcntlRuntime, RuntimeCallTarget, RuntimeFnId, Val
 #[test]
 fn native_reference_outputs_after_body_writes_remain_addressable_on_every_target() {
     let source = r#"<?php
+function nativeReferenceOutputStatus(int &$status): void { $status = 0; }
 function nativeReferenceOutputSnapshots(
     int &$status, string &$tag, array &$matches
 ): void {
     $status = 0;
+    nativeReferenceOutputStatus($status);
     $tag = 'before';
     preg_match('/(a)/', 'a', $matches);
     preg_match_all('/(a)/', 'aa', $matches);
@@ -32,6 +34,14 @@ function nativeReferenceOutputSnapshots(
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
         let function = module.functions.iter().find(|function|
             function.name == "nativeReferenceOutputSnapshots").unwrap();
+        let forward = function.instructions.iter().find(|inst| inst.op == Op::Call).unwrap();
+        let forwarded = forward.operands[0];
+        let ValueDef::Instruction { inst, .. } = function.value(forwarded).unwrap().def
+            else { panic!("{target}: forwarded output place"); };
+        assert_eq!(function.instruction(inst).unwrap().op, Op::LoadRefCellValue);
+        assert_eq!(function.instructions.iter().filter(|inst|
+            inst.op == Op::Release && inst.operands == [forwarded]).count(), 1,
+            "{target}: source-evaluation cleanup already consumed the forwarded snapshot");
         for (builtin, argument, local, snapshot) in [
             (RuntimeCallTarget::Function(RuntimeFnId::PregMatch), 2, "matches", false),
             (RuntimeCallTarget::Function(RuntimeFnId::PregMatchAll), 2, "matches", false),
@@ -53,6 +63,11 @@ function nativeReferenceOutputSnapshots(
                 "{target}: {builtin:?} {local}");
             let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("{target}: original place"); };
             assert_eq!(function.locals[slot.as_raw() as usize].name.as_deref(), Some(local));
+            if snapshot {
+                assert_eq!(function.instructions.iter().filter(|inst|
+                    inst.op == Op::Release && inst.operands == [call.operands[argument]]).count(), 1,
+                    "{target}: builtin cleanup cannot consume an already-rooted reference snapshot twice");
+            }
         }
         let encrypts = function.instructions.iter().filter(|inst| inst.op == Op::RuntimeCall
             && matches!(inst.immediate,

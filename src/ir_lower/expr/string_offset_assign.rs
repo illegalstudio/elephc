@@ -156,7 +156,9 @@ fn lower_boxed_offset_assign_expr(
     ctx.builder.position_at_end(other_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     lower_non_local_assignment_write_with_diagnosed_key(ctx, target, value, span, key_already_diagnosed);
-    store_expr_into_temp(ctx, &temp_name, result_type, result_target, span);
+    if !ctx.builder.insertion_block_is_terminated() {
+        store_expr_into_temp(ctx, &temp_name, result_type, result_target, span);
+    }
     let other_reachable = !ctx.builder.insertion_block_is_terminated();
     let other_initialized = ctx.initialized_slots_snapshot();
     branch_to(ctx, merge);

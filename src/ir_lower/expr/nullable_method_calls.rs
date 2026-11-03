@@ -411,7 +411,8 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                 Some(span),
             );
         }
-        let reference_place_view_already_released = signature.is_some_and(|signature| {
+        let native_reference_value_view = ctx.builder.value_defining_op(*value) == Some(Op::LoadRefCellValue);
+        let reference_place_view_already_released = (native_reference_value_view || signature.is_some_and(|signature| {
             signature
                 .ref_params
                 .get(parameter_index)
@@ -420,7 +421,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
         }) && matches!(
             ctx.builder.value_defining_op(*value),
             Some(Op::LoadLocal | Op::LoadRefCell)
-        ) && ctx.builder.function().instructions.iter().any(|inst| {
+        )) && ctx.builder.function().instructions.iter().any(|inst| {
             inst.op == Op::Release && inst.operands == [*value]
         });
         if reference_place_view_already_released {

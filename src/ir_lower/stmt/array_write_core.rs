@@ -494,6 +494,7 @@ pub(super) fn lower_boxed_array_set(
     key_already_diagnosed: bool,
 ) {
     let mut roots = Vec::new();
+    let array = boxed_invalid_scalar_receiver(ctx, array, span);
     let (array, receiver_owner) = super::nested_array_writes::root_static_update_receiver(ctx, array, span);
     if let Some(owner) = receiver_owner { roots.push(owner); }
     let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr| {
@@ -528,6 +529,7 @@ pub(super) fn lower_boxed_array_set_values(
     key_already_diagnosed: bool,
 ) {
     let mut roots = Vec::new();
+    let array = boxed_invalid_scalar_receiver(ctx, array, span);
     let (array, receiver_owner) = super::nested_array_writes::root_static_update_receiver(ctx, array, span);
     if let Some(owner) = receiver_owner { roots.push(owner); }
     let mut root = |ctx: &mut LoweringContext<'_, '_>, operand: LoweredValue| {
@@ -545,6 +547,15 @@ pub(super) fn lower_boxed_array_set_values(
     for root in roots.into_iter().rev() {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
     }
+}
+
+/// Routes impossible integer/float stores through the existing boxed PHP error path.
+fn boxed_invalid_scalar_receiver(
+    ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, span: Span,
+) -> LoweredValue {
+    if matches!(ctx.builder.value_php_type(array.value).codegen_repr(), PhpType::Int | PhpType::Float) {
+        ctx.box_value_as_mixed(array, PhpType::Mixed, Some(span))
+    } else { array }
 }
 
 /// Coerces a buffer element write value into the scalar storage accepted by `BufferSet`.

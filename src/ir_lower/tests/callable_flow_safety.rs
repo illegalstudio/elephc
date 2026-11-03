@@ -10,6 +10,33 @@
 //! - Descriptor invocations may walk Traversable spreads without direct-call specialization.
 //! - Container cleanup reaches user code only when its stored values can own objects or closures.
 
+/// Eval-only magic argument arrays contain runtime callbacks rather than the empty inference seed.
+#[test]
+fn eval_only_magic_callbacks_use_materialized_elements_on_every_target() {
+    use crate::{ir::Op, types::PhpType};
+    let source = r#"<?php
+class EvalOnlyMagicArguments {
+    public function __call(string $name, array $arguments): mixed { return $arguments[0](); }
+    public static function __callStatic(string $name, array $arguments): mixed { return $arguments[0](); }
+}
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        for method in ["__call", "__callStatic"] {
+            let function = module.functions.iter().find(|function|
+                function.name == format!("EvalOnlyMagicArguments::{method}")).unwrap();
+            let arguments = function.params.iter().find(|parameter| parameter.name == "arguments").unwrap();
+            assert_eq!(arguments.php_type, PhpType::Array(Box::new(PhpType::Mixed)), "{target}: {method}");
+            assert!(function.instructions.iter().any(|instruction|
+                instruction.op == Op::ArrayGet && instruction.result_php_type == PhpType::Mixed),
+                "{target}: {method} must load the supplied callback");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Typed scalar containers cannot run PHP cleanup hooks, while nested object and callable
 /// containers can release user-observable owners.
 #[test]

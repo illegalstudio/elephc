@@ -65,6 +65,14 @@ pub(super) fn expect_zero(out: &mut String, symbol: &str) {
     }
 }
 
+/// Runs native PHP calls before main retires eval contexts and process-lifetime runtime caches.
+pub(super) fn inject_before_main_cleanup(user: &str, harness: &str) -> String {
+    let boundary = user.lines().find(|line| line.trim_end().ends_with("epilogue + exit(0)"))
+        .expect("native harness needs the main cleanup boundary");
+    let replacement = format!("{}\n{boundary}", target().transform_assembly(harness));
+    user.replacen(boundary, &replacement, 1)
+}
+
 /// Adds a C-ABI count oracle that copies registry records without retaining PHP values.
 pub(super) fn append_source_counter(user: &mut String) {
     let entry = target().extern_symbol("native_reference_source_count");

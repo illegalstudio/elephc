@@ -125,7 +125,7 @@ function nativeRawNestedArrayMutation(array<mixed> &$items, string $code): void 
     foreach ($items as &$entry) { if (is_int($entry)) { $entry += 1; } }
     unset($entry); echo $items[1], '|';
 }
-$items = [0]; $code = $argc > 0 ? '$items[0] = 0;' : '';
+array<mixed> $items = [0]; $code = $argc > 0 ? '$items[0] = 0;' : '';
 nativeRawArrayMutation($items, $code);
 echo $items[0], ':', $items[1], ':', count($items);
 echo '|'; nativeRawNestedArrayMutation($items, $code);

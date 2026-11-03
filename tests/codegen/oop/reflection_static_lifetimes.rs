@@ -90,6 +90,7 @@ echo 'done';
 }
 
 /// Generic class accessors use populated enum slots on builtin and user-derived reflectors.
+/// The enum case keeps its ordinary process-lifetime owner, exactly as a bare case read does.
 #[test]
 fn test_reflection_enum_inherited_collections_use_enum_metadata() {
     let source = r#"<?php
@@ -110,5 +111,27 @@ printInheritedEnumCollections(new InheritedEnumReflection(InheritedReflectionEnu
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
     assert_eq!(output.stdout, "1:4:2:2:0:9|1:4:2:2:0:9|");
-    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    let baseline = compile_and_run_with_heap_debug(r#"<?php
+enum InheritedReflectionEnumSubject: string {
+    case First = 'first';
+    public const Extra = 9;
+    public function label(): string { return $this->value; }
+}
+echo InheritedReflectionEnumSubject::First->value;
+"#);
+    assert!(baseline.success, "{}", baseline.stderr);
+    assert_eq!(baseline.stdout, "first");
+    for diagnostic in [&baseline.stderr, &output.stderr] {
+        let summary = diagnostic.lines().find(|line| line.starts_with("HEAP DEBUG: allocs="))
+            .expect("heap debug allocation summary");
+        let count = |prefix: &str| summary.split_whitespace()
+            .find_map(|field| field.strip_prefix(prefix)).unwrap().parse::<u64>().unwrap();
+        assert_eq!(count("allocs=") - count("frees="), 1, "{diagnostic}");
+        assert_eq!(count("live_blocks="), 1, "{diagnostic}");
+        let live = diagnostic.lines().filter(|line| line.starts_with("HEAP DEBUG: live offset="))
+            .collect::<Vec<_>>();
+        assert_eq!(live.len(), 1, "{diagnostic}");
+        assert!(live[0].contains("kind=4 refs=1 ")
+            && live[0].ends_with("class=InheritedReflectionEnumSubject"), "{diagnostic}");
+    }
 }

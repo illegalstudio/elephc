@@ -1048,8 +1048,17 @@ pub(super) fn coerce_ref_cell_store_value(
                 return Ok(());
             }
             PhpType::Str => {
+                let result = abi::int_result_reg(ctx.emitter);
+                abi::emit_push_reg(ctx.emitter, result);
                 move_int_result_to_first_arg(ctx);
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+                // The cast owns its persisted string, while this store still owns the source box.
+                abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+                let (pointer, length) = abi::string_result_regs(ctx.emitter);
+                abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
+                abi::emit_release_temporary_stack(ctx.emitter, 16);
                 return Ok(());
             }
             _ => {}

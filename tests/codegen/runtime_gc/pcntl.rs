@@ -14,8 +14,10 @@ use crate::support::compile_and_run_with_heap_debug;
 #[test]
 fn test_native_reference_output_snapshots_preserve_status_tag_and_aliases() {
     let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeOutputStatusAlias(int &$status): void { $status = 0; }
 function nativeOutputSnapshots(int &$status, string &$tag, array &$matches): void {
     $status = 0;
+    nativeOutputStatusAlias($status);
     $pid = pcntl_waitpid(-1, $status, WNOHANG);
     $tag = 'before';
     $cipher = openssl_encrypt('payload', 'aes-128-gcm', '0123456789abcdef',

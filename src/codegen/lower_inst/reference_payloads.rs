@@ -140,9 +140,9 @@ function nativeDetachedMutationLayout(string &$text, mixed $replacement): void {
                     function.name == "nativeDetachedMutationLayout").unwrap().clone();
                 function.locals[0].php_type = storage.clone();
                 function.locals[0].ir_type = if storage == PhpType::Str { IrType::Str } else { IrType::Heap(crate::ir::IrHeapKind::Mixed) };
-                let query = function.instructions.iter().find(|inst| inst.immediate ==
+                let (query_index, query) = function.instructions.iter().enumerate().find(|(_, inst)| inst.immediate ==
                     Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ReferenceCellMutationLayout)))
-                    .unwrap().clone();
+                    .unwrap();
                 let layout = frame::layout_for_function(&function, target, false, false, false);
                 let mut emitter = Emitter::new(target);
                 let mut data = DataSection::new();
@@ -150,7 +150,8 @@ function nativeDetachedMutationLayout(string &$text, mixed $replacement): void {
                 {
                     let mut context = FunctionContext::new(&module, &function, &mut emitter, &mut data,
                         &mut shared, layout, false, false, false, None);
-                    super::lower_mutation_layout(&mut context, &query).unwrap();
+                    context.begin_instruction(crate::ir::InstId::from_raw(query_index as u32));
+                    super::lower_mutation_layout(&mut context, query).unwrap();
                 }
                 let assembly = emitter.output();
                 let detached = assembly.lines().find(|line| line.trim_end().ends_with(':')

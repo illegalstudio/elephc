@@ -20,6 +20,9 @@ function nativeMutationArray(int &$items, mixed $replacement): void {
 function nativeMutationString(string &$text, mixed $replacement): void {
     $text = $replacement; $text[1] = 'X'; echo ($text[2] = 'Y'), gettype($text);
 }
+function nativeMutationScalarOffset(int &$text, mixed $replacement): void {
+    $text = $replacement; echo ($text[0] = 'Z');
+}
 function nativeMutationNested(int &$items, mixed $replacement): void {
     $items = $replacement; $items[0]['key'] = 3; $items[0]['key'] += 1; $items[0][] = 4;
 }

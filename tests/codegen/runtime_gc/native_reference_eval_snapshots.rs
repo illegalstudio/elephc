@@ -56,12 +56,29 @@ if ($argc < 0) { $target = 1; nativeCanonicalEvalSnapshot($target, ''); unset($t
     call(&mut asm, "__rt_decref_array");
     load(&mut asm, 8);
     call(&mut asm, "__rt_reference_cell_release");
-    expect_zero(&mut asm, "_rt_reference_validation_pins_top");
-    expect_zero(&mut asm, "_exc_value");
-    expect_zero(&mut asm, "_gc_live");
-    append_status_output(&mut asm, 32);
-    let mut user = inject_main_exit_harness(&user, &asm);
-    user.push_str("\n.data\n");
+    let mut immediate_checks = String::new();
+    expect_zero(&mut immediate_checks, "_rt_reference_validation_pins_top");
+    expect_zero(&mut immediate_checks, "_exc_value");
+    asm.push_str(&immediate_checks.replace("Lvalidation_pin_fail", "Lnative_eval_snapshot_failed"));
+    instruction(&mut asm, "b Lnative_eval_snapshot_checked", "jmp Lnative_eval_snapshot_checked");
+    asm.push_str("Lnative_eval_snapshot_failed:\n");
+    address(&mut asm, "x9", "r10", "Lnative_eval_snapshot_failure");
+    instruction(&mut asm, "mov x10, #1", "mov r11, 1");
+    instruction(&mut asm, "str x10, [x9]", "mov QWORD PTR [r10], r11");
+    asm.push_str("Lnative_eval_snapshot_checked:\n");
+    instruction(&mut asm, "add sp, sp, #32", "add rsp, 32");
+    // Eval may initialize process-lifetime caches. Run through ordinary PHP shutdown before
+    // checking final ownership, rather than calling back into PHP after its shutdown already ran.
+    let user = inject_before_main_cleanup(&user, &asm);
+    let mut checks = String::new();
+    call(&mut checks, "__rt_heap_debug_report");
+    expect_zero(&mut checks, "_rt_reference_validation_pins_top");
+    expect_zero(&mut checks, "_exc_value");
+    expect_zero(&mut checks, "_gc_live");
+    expect_zero(&mut checks, "Lnative_eval_snapshot_failure");
+    append_status_output(&mut checks, 0);
+    let mut user = inject_main_exit_harness(&user, &checks);
+    user.push_str("\n.data\nLnative_eval_snapshot_failure:\n    .quad 0\n");
     for (index, code) in codes.iter().enumerate() {
         user.push_str(&format!("Lnative_eval_snapshot_code_{index}:\n    .byte {}\n",
             code.bytes().map(|b| b.to_string()).collect::<Vec<_>>().join(",")));
@@ -70,5 +87,8 @@ if ($argc < 0) { $target = 1; nativeCanonicalEvalSnapshot($target, ''); unset($t
     let output = assemble_and_run_capture(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
     assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
     assert_eq!(output.stdout, "integer:41|integer:41|string:changed|1", "stderr: {}", output.stderr);
-    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    let summaries = output.stderr.lines().filter(|line| line.contains("HEAP DEBUG: leak summary:"))
+        .collect::<Vec<_>>();
+    assert!(summaries.len() >= 2 && summaries.iter().all(|line| line.ends_with("clean")),
+        "main shutdown and the post-harness check must both leave a clean heap: {}", output.stderr);
 }
