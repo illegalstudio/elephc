@@ -66,6 +66,7 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x4, x3");                                          // preserve the right reference storage address
     emitter.instruction("mov x3, x2");                                          // preserve the left reference storage address
     emitter.instruction("mov x2, #0");                                          // reference-aware comparisons start at depth zero
+    emitter.instruction("b __rt_mixed_loose_eq_common");                        // enter the shared body across global symbol boundaries
 
     emitter.label_global("__rt_mixed_loose_eq_common");
     emitter.instruction("sub sp, sp, #112");                                    // allocate the loose-equality comparison frame
@@ -391,6 +392,7 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, rcx");                                         // preserve the right reference storage address
     emitter.instruction("mov rcx, rdx");                                        // preserve the left reference storage address
     emitter.instruction("xor edx, edx");                                        // reference-aware comparisons start at depth zero
+    emitter.instruction("jmp __rt_mixed_loose_eq_common");                      // enter the shared body across global symbol boundaries
 
     emitter.label_global("__rt_mixed_loose_eq_common");
     emitter.instruction("push rbp");                                            // save the caller frame pointer

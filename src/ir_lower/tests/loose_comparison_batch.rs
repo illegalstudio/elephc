@@ -55,6 +55,13 @@ echo boolSwitch(true), boolLabels(2), iterableSwitch([1]), mixedSwitch(new stdCl
             crate::codegen_support::RuntimeFeatures::all());
         let asm = emitter.output();
         assert!(asm.contains("__rt_mixed_loose_eq_refs"), "{target:?}: live reference runtime entry");
+        let entry = asm.split("__rt_mixed_loose_eq_refs:").nth(1).unwrap();
+        let entry = entry.split("__rt_mixed_loose_eq_common:").next().unwrap();
+        assert!(entry.lines().any(|line| {
+            let line = line.trim_start();
+            (line.starts_with("b ") || line.starts_with("jmp "))
+                && line.contains("__rt_mixed_loose_eq_common")
+        }), "{target:?}: a separate global entry must branch across section boundaries");
         assert!(asm.contains("__rt_sprintf_warn_object_numeric"), "{target:?}: object warning");
         assert!(asm.contains("__rt_mle_null_float"), "{target:?}: quiet float/null path");
     }
