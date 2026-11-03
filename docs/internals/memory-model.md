@@ -737,10 +737,14 @@ cleanup or leave a record referring to retired foreign storage.
 Source argument evaluation has its own owner in addition to native staging.
 Reference candidates carry shared Rust provenance for that exact owner; ordinary
 value arguments use their existing cleanup without a shared allocation. After
-binding, coercion and argument-container construction, registered AOT functions
-and callable descriptors replace matching source reference leases with invisible
-owned roots. Pending bindings
-remain visible while later argument expressions and coercion callbacks execute.
+binding and argument-container construction, registered AOT functions and callable
+descriptors replace matching source leases with pending owned roots. These roots
+remain PHP-visible through adapter coercion. Acquiring a formal parameter activates
+only roots naming that exact native cell, making their extra owners invisible.
+A nested call using another native cell over the same PHP reference cannot claim
+the pending outer argument. Retiring the exact staging root cancels pending
+associations before its cell address can be reused. Pending bindings remain
+visible while later argument expressions and coercion callbacks execute.
 The original argument boundary retires the replacement root in the original
 cleanup position, including after throws and while other arguments run destructors.
 Taking a root unlinks it before ordinary eval destructor dispatch consumes the owner.

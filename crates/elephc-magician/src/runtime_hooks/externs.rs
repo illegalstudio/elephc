@@ -464,7 +464,7 @@ unsafe extern "C" {
     ) -> u64;
     /// Retains an existing reference in a caller-owned invisible argument record.
     pub(super) fn __elephc_eval_value_native_reference_owner_pin_v1(
-        reference: *mut RuntimeCell, pin: *mut c_void,
+        reference: *mut RuntimeCell, pin: *mut c_void, cell: u64, staging: *mut c_void,
     ) -> u64;
     /// Unlinks an argument root and transfers its owner without running native or eval destructors.
     pub(super) fn __elephc_eval_value_native_reference_owner_take_v1(pin: *mut c_void) -> *mut RuntimeCell;

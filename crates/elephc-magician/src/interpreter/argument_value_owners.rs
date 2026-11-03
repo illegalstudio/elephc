@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Shared Rust metadata identifies an existing owner without acquiring another PHP alias.
-//! - Only actual native entry can replace that lease with an invisible owned pin.
+//! - A pending root becomes invisible only when its exact native cell acquires a parameter binding.
 //! - The originating boundary retires the pin at the original cleanup position.
 
 use super::*;
@@ -20,7 +20,7 @@ pub(super) struct ArgumentValueOwner(Rc<RefCell<Option<ArgumentValueLease>>>);
 /// Holds the foreign owner and, after native entry, its stable mutable root record.
 struct ArgumentValueLease {
     value: RuntimeCellHandle,
-    pin: Option<Box<UnsafeCell<[u64; 4]>>>,
+    pin: Option<Box<UnsafeCell<[u64; 6]>>>,
 }
 
 /// Keeps ordinary arguments allocation-free while reference candidates carry shared provenance.
@@ -50,16 +50,16 @@ impl ArgumentValueOwner {
         self.0.borrow().as_ref().map(|lease| lease.value)
     }
 
-    /// Replaces an existing visible lease with a retained root only at actual native entry.
-    fn pin(&self, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
+    /// Replaces a lease with a pending root whose visibility changes at native parameter entry.
+    fn pin(&self, cell: u64, staging: *mut std::ffi::c_void, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
         let value = {
             let owner = self.0.borrow();
             let Some(owner) = owner.as_ref() else { return Ok(()); };
             if owner.pin.is_some() || owner.value.is_borrowed() { return Ok(()); }
             owner.value
         };
-        let pin = Box::new(UnsafeCell::new([0u64; 4]));
-        if !values.pin_native_reference_argument_owner(value, pin.get().cast())? {
+        let pin = Box::new(UnsafeCell::new([0u64; 6]));
+        if !values.pin_native_reference_argument_owner(value, pin.get().cast(), cell, staging)? {
             return Ok(());
         }
         // Pin creation cannot invoke PHP. Publish the new owner before consuming the old one.
@@ -124,20 +124,20 @@ pub(super) fn own_unpacked_call_argument_owners(
     owners
 }
 
-/// Hides only outer source leases matching this invocation's managed native references.
+/// Prepares only outer source leases matching this invocation's managed native references.
 pub(super) fn pin_native_call_evaluation_owners(
     arguments: &BoundNativeFunctionArgs, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if arguments.evaluation_owners.is_empty() { return Ok(()); }
     let managed = arguments.ref_slots.iter().filter_map(|slot| match slot {
-        BoundNativeFunctionRefSlot::ManagedMixed { original, .. } => Some(original.as_ptr() as usize),
+        BoundNativeFunctionRefSlot::ManagedMixed { original, cell, pin } => Some((original.as_ptr() as usize, (*cell, pin.get().cast()))),
         _ => None,
-    }).collect::<std::collections::HashSet<_>>();
+    }).collect::<std::collections::HashMap<_, _>>();
     for owner in &arguments.evaluation_owners {
         let Some(value) = owner.value() else { continue; };
-        if managed.contains(&(value.as_ptr() as usize)) {
-            owner.pin(context, values)?;
+        if let Some((cell, staging)) = managed.get(&(value.as_ptr() as usize)) {
+            owner.pin(*cell, *staging, context, values)?;
         }
     }
     Ok(())

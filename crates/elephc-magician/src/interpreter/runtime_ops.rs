@@ -855,10 +855,11 @@ pub trait RuntimeValueOps {
         self.release_raw_heap_word(cell)
     }
 
-    /// Retains one source reference lease in an invisible root without executing PHP.
+    /// Retains one source lease in a six-word root associated with its native cell and staging pin.
+    /// Native parameter acquisition makes the root invisible; staging retirement cancels association.
     /// Unsupported embeddings leave the original evaluation owner unchanged.
     fn pin_native_reference_argument_owner(
-        &mut self, _reference: RuntimeCellHandle, _pin: *mut c_void,
+        &mut self, _reference: RuntimeCellHandle, _pin: *mut c_void, _cell: u64, _staging: *mut c_void,
     ) -> Result<bool, EvalStatus> {
         Ok(false)
     }

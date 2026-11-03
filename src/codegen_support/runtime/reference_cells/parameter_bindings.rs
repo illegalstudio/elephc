@@ -54,8 +54,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, 8);
     abi::emit_call_label(emitter, "__rt_incref");
     emitter.label(done);
+    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
     abi::emit_frame_restore(emitter, 64);
-    abi::emit_return(emitter);
+    abi::emit_jump(emitter, "__rt_reference_argument_pins_activate");
 }
 
 /// Skips a record that belongs to another call activation or another cell owner.

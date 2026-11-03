@@ -23,6 +23,7 @@ mod mixed_symbol;
 mod property_payload;
 mod canonical;
 mod parameter_bindings;
+mod argument_pins;
 mod validation_pins;
 mod validation_coercion;
 mod validation_ops;
@@ -72,6 +73,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     mixed_payload::emit_promote_mixed(emitter);
     mixed_payload::emit_retain_mixed(emitter);
     validation_pins::emit(emitter);
+    argument_pins::emit(emitter);
     validation_coercion::emit(emitter);
     validation_ops::emit(emitter);
     property_unset::emit_property_unset(emitter);

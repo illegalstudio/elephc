@@ -5,7 +5,7 @@
 //! - Reference validation publishers and reference-sharing readers.
 //!
 //! Key details:
-//! - Each caller-owned record contains previous/next links, the pinned value and authenticated kind.
+//! - Each record contains links, the pinned value and its authenticated kind or argument phase.
 //! - Removal works in any activation order, including interleaved suspended fibers.
 //! - Every native throw must be contained until the owning publisher removes its records.
 
@@ -58,6 +58,12 @@ pub(crate) fn subtract(
     subtract_unowned_cell_child(emitter, reference, cursor, scratch,
         [extra[0], extra[1], extra[2]], prefix, &direct, &skip);
     emitter.label(&direct);
+    abi::emit_load_from_address(emitter, scratch, cursor, 24);
+    let pending = if emitter.target.arch == Arch::AArch64 {
+        format!("cmp {scratch}, #{}", argument_pins::PENDING)
+    } else { format!("cmp {scratch}, {}", argument_pins::PENDING) };
+    emitter.instruction(&pending);                                              // pending adapter arguments still contribute a PHP-visible binding
+    abi::emit_branch_if_equal_wide(emitter, &skip);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("sub {count}, {count}, #1")),// subtract one invisible owner from PHP sharing
         Arch::X86_64 => emitter.instruction(&format!("sub {count}, 1")),        // subtract one invisible owner from PHP sharing
@@ -155,7 +161,7 @@ fn subtract_unowned_cell_child(
 }
 
 /// Emits a register zero branch without implicit scratch registers or foreign calls.
-fn branch_zero(emitter: &mut Emitter, register: &str, label: &str) {
+pub(super) fn branch_zero(emitter: &mut Emitter, register: &str, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("cbz {register}, {label}")),// stop or skip when this borrowed register is empty
         Arch::X86_64 => {
@@ -180,7 +186,7 @@ fn branch_equal(emitter: &mut Emitter, left: &str, right: &str, label: &str) {
 }
 
 /// Compares two preserved registers and skips an unrelated root or owned child.
-fn branch_not_equal(emitter: &mut Emitter, left: &str, right: &str, label: &str) {
+pub(super) fn branch_not_equal(emitter: &mut Emitter, left: &str, right: &str, label: &str) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {left}, {right}"));               // compare exact managed identities
@@ -259,6 +265,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_reg_move(emitter, record, abi::int_arg_reg_name(emitter.target, 0));
     abi::emit_load_from_address(emitter, result, record, 16);
     abi::store_at_offset(emitter, result, 8);
+    abi::emit_load_from_address(emitter, previous, record, 24);
+    abi::emit_load_int_immediate(emitter, result, 8);
+    branch_not_equal(emitter, previous, result, "__rt_reference_validation_pin_take_unlink");
+    abi::store_at_offset(emitter, record, 16);
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 16);
+    abi::emit_call_label(emitter, "__rt_reference_argument_pins_forget");
+    abi::load_at_offset(emitter, record, 16);
+    emitter.label("__rt_reference_validation_pin_take_unlink");
     abi::emit_load_from_address(emitter, previous, record, 0);
     let next = if emitter.target.arch == Arch::AArch64 { "x12" } else { "r9" };
     abi::emit_load_from_address(emitter, next, record, 8);

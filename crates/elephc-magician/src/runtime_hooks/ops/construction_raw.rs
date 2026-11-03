@@ -177,11 +177,11 @@ macro_rules! impl_construction_raw_ops {
         if cell == 0 { Err(EvalStatus::RuntimeFatal) } else { Ok(Some(cell)) }
     }
 
-    /// Pins a source argument reference without introducing a PHP-visible alias.
+    /// Pins a source reference while preserving its pending alias until native parameter entry.
     fn pin_native_reference_argument_owner(
-        &mut self, reference: RuntimeCellHandle, pin: *mut std::ffi::c_void,
+        &mut self, reference: RuntimeCellHandle, pin: *mut std::ffi::c_void, cell: u64, staging: *mut std::ffi::c_void,
     ) -> Result<bool, EvalStatus> {
-        let record = unsafe { __elephc_eval_value_native_reference_owner_pin_v1(reference.as_ptr(), pin) };
+        let record = unsafe { __elephc_eval_value_native_reference_owner_pin_v1(reference.as_ptr(), pin, cell, staging) };
         if record == 0 { Err(EvalStatus::RuntimeFatal) } else { Ok(true) }
     }
 

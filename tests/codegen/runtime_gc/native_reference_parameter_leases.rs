@@ -64,6 +64,20 @@ function copyAfterDuplicateEvalLeases(mixed &$first, mixed &$second, EvalNativeP
     unset($first, $second); return clone $object;
 }
 function abortEvalNativeLease(): EvalNativeParameterLeaseProbe { throw new Exception('late'); }
+function touchEvalNativeLease(mixed &$value): void { $value = $value; }
+function copyAfterEvalNativeLeaseCoercion(mixed &$value, string $label, EvalNativeParameterLeaseProbe $object): EvalNativeParameterLeaseProbe {
+    unset($value); return clone $object;
+}
+class EvalNativeLeaseStringCoercion {
+    public function __construct(public EvalNativeParameterLeaseProbe $object) {}
+    public function __toString(): string {
+        touchEvalNativeLease($this->object->value);
+        $copy = clone $this->object;
+        $this->object->value = 'during';
+        echo $copy->value, '|';
+        return 'coerced';
+    }
+}
 $shared = new EvalNativeParameterLeaseProbe();
 $alias =& $shared->value;
 $code = $argc > 0 ? '
@@ -80,6 +94,12 @@ $callbackObject = new EvalNativeParameterLeaseProbe();
 $callbackCopy = $descriptor($callbackObject->value, $callbackObject, true);
 $callbackObject->value = "after";
 echo $callbackCopy->value, "|";
+$coercionObject = new EvalNativeParameterLeaseProbe();
+$coercion = new EvalNativeLeaseStringCoercion($coercionObject);
+$coercionCallback = Closure::fromCallable("copyAfterEvalNativeLeaseCoercion");
+$coercionCopy = $coercionCallback($coercionObject->value, $coercion, $coercionObject);
+$coercionObject->value = "after";
+echo $coercionCopy->value, "|";
 $sharedCopy = copyWithEvalNativeLease($shared->value, $shared, true);
 $alias = "after";
 echo $sharedCopy->value, "|";
@@ -112,6 +132,7 @@ try { dropEvalNativeLease($retiring->value, $retiring); }
 catch (Exception $error) { echo $error->getMessage(), "|"; }
 unset($activeCopy, $active, $detachedCopy, $detached, $sharedCopy, $shared, $alias,
     $descriptor, $callbackObject, $callbackCopy,
+    $coercionObject, $coercion, $coercionCallback, $coercionCopy,
     $pending, $pendingCopy, $duplicate, $duplicateCopy, $aborted, $abortedCopy,
     $error, $throwCopy, $throwing, $retiring);
 ' : '';
@@ -119,7 +140,7 @@ eval($code); unset($code);
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "after|before|before|after|after|before|late|before|caught|written|released|retired|");
+    assert_eq!(output.stdout, "after|before|before|during|during|after|after|before|late|before|caught|written|released|retired|");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
