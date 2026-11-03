@@ -1940,7 +1940,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             })
             .collect::<Vec<_>>();
         for (name, slot) in local_names {
-            if !self.is_ref_bound_local(&name)
+            if self.eval_can_widen_binding(&name)
                 && eval_barrier_can_widen(&self.builder.local_php_type(slot))
             {
                 self.set_local_type(&name, PhpType::Mixed);
@@ -1954,12 +1954,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .unwrap_or(LocalKind::PhpLocal);
             if kind == LocalKind::PhpLocal
                 && !crate::names::is_generated_local_name(&name)
-                && !self.is_ref_bound_local(&name)
+                && self.eval_can_widen_binding(&name)
                 && eval_barrier_can_widen(&ty)
             {
                 self.local_types.insert(name, PhpType::Mixed);
             }
         }
+    }
+
+    /// Entry parameter hints constrain arguments, while property aliases keep their cell ABI.
+    fn eval_can_widen_binding(&self, name: &str) -> bool {
+        !self.is_ref_bound_local(name) || self.builder.function().params.iter()
+            .any(|parameter| parameter.by_ref && parameter.name == name)
     }
 
     /// Enables direct eval-scope reads for selected variable names in an AOT eval body.
@@ -2023,7 +2029,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .iter()
             .filter(|name| {
                 self.local_kinds.get(*name).copied() == Some(LocalKind::PhpLocal)
-                    && !self.is_ref_bound_local(name)
+                    && self.eval_can_widen_binding(name)
                     && self
                         .local_slots
                         .get(*name)
@@ -2131,6 +2137,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         fallback.clone()
     }
 
+    /// Keeps reference captures attached to the physical cell ABI after a logical eval widening.
+    pub(crate) fn local_reference_payload_type(&self, name: &str) -> PhpType {
+        self.ref_cell_store_type(name, &self.local_type(name))
+    }
+
     /// PHP-visible name of the body being lowered (`"Class::method"` for methods), as
     /// runtime error messages spell it.
     pub(crate) fn owner_name(&self) -> &str {
@@ -2205,7 +2216,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
         let uses_global = self.uses_global_storage(name, kind);
-        let php_type = self.slot_load_php_type(name, uses_global);
+        let mut php_type = self.slot_load_php_type(name, uses_global);
         if !uses_global && php_type == PhpType::Void && !self.local_slots.contains_key(name) {
             // Probing an abandoned binding must not allocate a null slot that later widens
             // a fresh string capture to Mixed. The absent local is already known to be null.
@@ -2215,17 +2226,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             );
         }
         let slot = self.declare_local(name, php_type.clone());
-        let ir_type = value_ir_type(&php_type);
         let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && kind == LocalKind::PhpLocal;
         let op = match (is_ref_bound, uses_global, kind) {
+            (true, _, _) if php_type.codegen_repr() == PhpType::Mixed
+                && self.ref_cell_store_type(name, &self.builder.local_php_type(slot))
+                    .codegen_repr() != PhpType::Mixed => Op::LoadRefCellValue,
             (true, _, _) => Op::LoadRefCell,
             (false, true, _) => Op::LoadGlobal,
             (false, false, LocalKind::StaticLocal) => Op::LoadStaticLocal,
             _ => Op::LoadLocal,
         };
+        if op == Op::LoadRefCellValue { php_type = PhpType::Mixed; }
+        let ir_type = value_ir_type(&php_type);
         // Reference-cell reads borrow their pointee. Append normalization chooses the
         // final boxed representation without changing other reference payload contracts.
-        let ownership = if op == Op::LoadRefCell
+        let ownership = if op == Op::LoadRefCellValue {
+            Ownership::Owned
+        } else if op == Op::LoadRefCell
             && Ownership::php_type_needs_lifetime_tracking(&php_type)
         {
             Ownership::Borrowed
@@ -3951,6 +3968,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ResourceToStr
                     | Op::MixedBox
                     | Op::MixedClone
+                    | Op::LoadRefCellValue
                     | Op::ArrayToMixed
                     | Op::ArrayToPointerWords
                     | Op::HashToMixed
@@ -5660,7 +5678,7 @@ impl LoweringContext<'_, '_> {
         let inst = self.builder.value_defining_instruction(operand)?;
         match (inst.op, &inst.immediate) {
             (
-                Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell,
+                Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell | Op::LoadRefCellValue,
                 Some(Immediate::LocalSlot(slot)),
             ) => self
                 .local_slots

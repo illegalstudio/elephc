@@ -7,6 +7,48 @@
 //! Key details:
 //! - A shared string/int/float property cell cannot be widened to Mixed behind its aliases.
 
+/// Native parameter hints remain physical entry contracts while eval reads use owned value copies.
+#[test]
+fn dynamic_eval_native_parameters_copy_current_values_on_every_target() {
+    let source = r#"<?php
+function nativeEvalValueView(int &$value, string $code): void {
+    eval($code); echo gettype($value), ':', $value;
+}
+function nativeEvalCaptureView(int &$value, string $code): void {
+    eval($code);
+    $read = function () use (&$value): void { echo gettype($value); };
+    $read();
+}
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function|
+            function.name == "nativeEvalValueView").unwrap();
+        assert_eq!(function.params[0].php_type, crate::types::PhpType::Int, "{target}: retain entry ABI");
+        let value = function.locals.iter().find(|local| local.name.as_deref() == Some("value")).unwrap();
+        assert_eq!(value.php_type, crate::types::PhpType::Mixed, "{target}: detached locals need boxed storage");
+        let reads = function.instructions.iter().filter(|inst|
+            inst.op == crate::ir::Op::LoadRefCellValue).collect::<Vec<_>>();
+        assert!(reads.len() >= 2, "{target}: both native consumers must read the actual PHP value");
+        for read in reads {
+            assert_eq!(read.result_php_type, crate::types::PhpType::Mixed, "{target}");
+            assert_eq!(read.result_ownership, crate::ir::Ownership::Owned, "{target}: raw boxing and canonical cloning both own their result");
+        }
+        let capture = module.closures.iter().find(|closure| closure.params.iter()
+            .any(|parameter| parameter.name == "value" && parameter.by_ref)).unwrap();
+        assert_eq!(capture.params.iter().find(|parameter| parameter.name == "value").unwrap().php_type,
+            crate::types::PhpType::Int, "{target}: the closure must keep the captured cell's physical ABI");
+        let outer = module.functions.iter().find(|function|
+            function.name == "nativeEvalCaptureView").unwrap();
+        assert!(outer.instructions.iter().filter(|inst| inst.op == crate::ir::Op::LoadRefCellValue)
+            .filter_map(|inst| inst.result).all(|value| outer.instructions.iter().any(|inst|
+                inst.op == crate::ir::Op::Release && inst.operands.contains(&value))),
+            "{target}: by-reference descriptors must retire unused owning value views");
+        crate::ir::validate_module(&module).unwrap();
+    }
+}
+
 /// Programs without eval retain concrete array and hash access through whole-local aliases.
 #[test]
 fn ordinary_array_aliases_keep_typed_reference_payloads_on_every_target() {

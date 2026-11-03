@@ -18,12 +18,19 @@ reload skips clean snapshots even when the conservative access mask selects ever
 name or two names share a mask bit. This prevents a stale snapshot from replacing a
 property changed through another native alias. AOT eval scope writes remain dirty;
 literal scope reload keeps its existing path. Eval barriers preserve the payload
-types of already-bound native references rather than widening shared cells to Mixed.
+types of property-backed references. Native parameter entry hints retain their
+physical cell ABI while their post-eval value views and detached local storage
+become Mixed.
 
 Native reads probe a managed reference's canonical wrapper before using its legacy
 payload layout. The current boxed child supplies the PHP tag for the requested
 logical view, including a Mixed read after eval changes a typed parameter's value.
 Raw and headerless references continue to load through their original physical ABI.
+An owning `LoadRefCellValue` copies a typed parameter's current value into Mixed:
+canonical children are cloned, and raw concrete payloads are boxed once. The copy
+has explicit allocation and reference-count effects, and its cleanup survives
+local-load borrowing finalization. When eval still shares the imported canonical
+wrapper, reload preserves that identity and skips the legacy scalar projection.
 
 AOT reflector construction retains declaration metadata without copying current
 static-property values. Builtin reflector accessors materialize a fresh current

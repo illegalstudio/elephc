@@ -855,6 +855,9 @@ pub enum Op {
     UnsetLocal,
     ZeroLocalSlot,
     LoadRefCell,
+    /// Copies the current value of a reference into an independent owning Mixed snapshot.
+    /// The local's physical payload ABI stays unchanged, including for raw native parameters.
+    LoadRefCellValue,
     /// Stores an original RHS through a reference. An optional second I64 PHP bool records
     /// assignment-site strictness for canonical publishers; legacy hand-built IR defaults weak.
     /// An optional third operand borrows a temporary source parking slot, which a canonical
@@ -1371,6 +1374,7 @@ impl Op {
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
+            LoadRefCellValue => E::READS_LOCAL | E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             StoreLocal | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
                 E::WRITES_LOCAL
             }
@@ -1735,6 +1739,7 @@ impl Op {
             UnsetLocal => "unset_local",
             ZeroLocalSlot => "zero_local_slot",
             LoadRefCell => "load_ref_cell",
+            LoadRefCellValue => "load_ref_cell_value",
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",
             AliasLocalRefCell => "alias_local_ref_cell",

@@ -458,7 +458,7 @@ pub(in crate::codegen) fn materialize_returned_local_ref_cell(
             value = source;
             continue;
         }
-        if inst.op != Op::LoadRefCell {
+        if !matches!(inst.op, Op::LoadRefCell | Op::LoadRefCellValue) {
             return Ok(false);
         }
         let Some(Immediate::LocalSlot(slot)) = inst.immediate else {

@@ -237,7 +237,7 @@ fn materialize_existing_promoted_reference_address(
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     match instruction.op {
-        Op::LoadLocal | Op::LoadRefCell => {
+        Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue => {
             super::super::materialize_local_ref_arg_address(ctx, value)?;
             Ok(true)
         }

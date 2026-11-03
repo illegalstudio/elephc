@@ -514,9 +514,10 @@ fn root_prior_argument_preserving_reference_place(
 ) -> crate::ir::ValueId {
     let lowered = lowered_value_from_id(ctx, value);
     if sig.ref_params.get(index).copied().unwrap_or(false) {
-        if matches!(arg.kind, ExprKind::Variable(_))
-            && sig.params.get(index).is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Str)
-            && ctx.builder.value_php_type(value).codegen_repr() == PhpType::Str
+        if ctx.builder.value_defining_op(value) == Some(Op::LoadRefCellValue)
+            || (matches!(arg.kind, ExprKind::Variable(_))
+                && sig.params.get(index).is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Str)
+                && ctx.builder.value_php_type(value).codegen_repr() == PhpType::Str)
         {
             let _protected_view = root_evaluated_call_argument(ctx, lowered, arg.span);
         }

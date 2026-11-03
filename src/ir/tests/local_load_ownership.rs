@@ -11,6 +11,31 @@
 use crate::ir::{Builder, Function, Immediate, IrType, LocalKind, Op, Ownership, Terminator};
 use crate::types::PhpType;
 
+/// Reference value snapshots own their detached box and retain cleanup after builder finalization.
+#[test]
+fn reference_value_copies_require_owned_mixed_results() {
+    for ownership in [Ownership::Owned, Ownership::Borrowed, Ownership::MaybeOwned] {
+        let mut function = Function::new("reference_value_copy".into(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.position_at_end(entry);
+            let slot = builder.add_local(Some("value".into()), IrType::I64,
+                PhpType::Int, LocalKind::PhpLocal);
+            let value = builder.emit(Op::LoadRefCellValue, Vec::new(),
+                Some(Immediate::LocalSlot(slot)), IrType::from_php(&PhpType::Mixed),
+                PhpType::Mixed, ownership).unwrap();
+            builder.emit(Op::Release, vec![value], None, IrType::Void,
+                PhpType::Void, Ownership::NonHeap);
+            builder.prune_borrowed_local_load_release_ops();
+            builder.terminate(Terminator::Return { value: None });
+        }
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::Release),
+            "a detached reference snapshot always needs its own cleanup");
+        assert_eq!(crate::ir::validate_function(&function).is_ok(), ownership == Ownership::Owned);
+    }
+}
+
 /// Builds one local-load release and verifies its state after finalization.
 fn assert_release_survives(
     storage: PhpType,

@@ -246,7 +246,7 @@ fn loaded_local_source(
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     let is_ref_cell = match inst_ref.op {
         Op::LoadLocal => false,
-        Op::LoadRefCell => true,
+        Op::LoadRefCell | Op::LoadRefCellValue => true,
         _ => return Ok(None),
     };
     let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {

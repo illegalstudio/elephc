@@ -567,7 +567,7 @@ impl<'a> FunctionContext<'a> {
             return None;
         };
         let inst = self.function.instruction(inst)?;
-        if !matches!(inst.op, Op::LoadLocal | Op::LoadRefCell) {
+        if !matches!(inst.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
             return None;
         }
         let Some(Immediate::LocalSlot(slot)) = inst.immediate else {

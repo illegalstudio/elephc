@@ -854,7 +854,7 @@ fn local_ref_arg_source(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Loc
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     match inst_ref.op {
-        Op::LoadLocal | Op::LoadRefCell => {}
+        Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue => {}
         _ => {
             return Err(CodegenIrError::unsupported(format!(
                 "by-reference method call argument from opcode {}",

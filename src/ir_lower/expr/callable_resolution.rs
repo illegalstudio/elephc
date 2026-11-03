@@ -32,7 +32,8 @@ pub(super) fn static_callable_call_lowers_directly(
     match target {
         StaticCallableBinding::InstanceMethod { direct_call, .. } => *direct_call,
         StaticCallableBinding::Closure { captures, .. } => !captures.iter().any(|capture| {
-            ctx.builder.value_defining_op(capture.value) == Some(Op::LoadRefCell)
+            capture.by_ref_local.is_some()
+                || ctx.builder.value_defining_op(capture.value) == Some(Op::LoadRefCell)
         }),
         _ => true,
     }

@@ -206,7 +206,7 @@ fn loaded_local_slot(function: &Function, value: ValueId) -> Option<LocalSlotId>
     };
     let inst = function.instruction(inst)?;
     match (inst.op, inst.immediate.as_ref()) {
-        (Op::LoadLocal | Op::LoadRefCell, Some(Immediate::LocalSlot(slot))) => Some(*slot),
+        (Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue, Some(Immediate::LocalSlot(slot))) => Some(*slot),
         _ => None,
     }
 }

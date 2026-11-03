@@ -78,11 +78,14 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut module = crate::ir_lower::tests::lower_source_at_for_target(
-                "<?php echo 1;", std::path::Path::new("main.php"), std::path::Path::new("."), target,
+                "<?php function traceFrozenScope(): void { echo 1; } traceFrozenScope();",
+                std::path::Path::new("main.php"), std::path::Path::new("."), target,
             );
             module.required_runtime_features.eval_bridge = true;
             module.required_runtime_features.fiber = true;
-            module.functions[0].add_local(Some("__frozen_scope".into()),
+            let function = module.functions.iter_mut().find(|function|
+                function.name == "traceFrozenScope").unwrap();
+            function.add_local(Some("__frozen_scope".into()),
                 IrType::I64, PhpType::Int, LocalKind::EvalScope);
             crate::ir::validate_module(&module).unwrap();
             let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();

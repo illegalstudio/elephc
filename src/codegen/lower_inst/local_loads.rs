@@ -50,18 +50,29 @@ pub(super) fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Lowers an explicit local ref-cell load into the result register and SSA slot.
 pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_reference_read(ctx, inst, false)
+}
+
+/// Copies a reference value into owned Mixed storage without retyping its native payload ABI.
+pub(super) fn lower_load_ref_cell_value(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_reference_read(ctx, inst, true)
+}
+
+/// Selects raw versus attached local storage and preserves the instruction's ownership contract.
+fn lower_reference_read(ctx: &mut FunctionContext<'_>, inst: &Instruction, owned: bool) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_ref_cell missing result value"))?;
     let result_ty = ctx.value_php_type(result)?;
     if ctx.local_ref_cell_representation_is_definite(slot) {
-        load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
+        load_reference_value(ctx, slot, &result_ty, owned)?;
         return ctx.store_result_value(result);
     }
     if !ctx.local_ref_cell_representation_is_dynamic(slot) {
         let source_ty = ctx.load_raw_local_to_result(slot)?;
         coerce_borrowed_ref_cell_local(ctx, &source_ty, &result_ty)?;
+        clone_raw_mixed_read(ctx, &source_ty, owned);
         return ctx.store_result_value(result);
     }
     let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
@@ -89,11 +100,31 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruct
     }
     let source_ty = ctx.load_raw_local_to_result(slot)?;
     coerce_borrowed_ref_cell_local(ctx, &source_ty, &result_ty)?;
+    clone_raw_mixed_read(ctx, &source_ty, owned);
     ctx.emit_branch(&done);
     ctx.emitter.label(&ref_cell);
-    load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
+    load_reference_value(ctx, slot, &result_ty, owned)?;
     ctx.emitter.label(&done);
     ctx.store_result_value(result)
+}
+
+/// Concrete-to-Mixed boxing already owns its box; raw Mixed storage needs a detached copy.
+fn clone_raw_mixed_read(ctx: &mut FunctionContext<'_>, source_ty: &PhpType, owned: bool) {
+    if owned && source_ty.codegen_repr() == PhpType::Mixed {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    }
+}
+
+/// Reads an attached reference with either borrowed projection or independent value semantics.
+fn load_reference_value(
+    ctx: &mut FunctionContext<'_>, slot: LocalSlotId, ty: &PhpType, owned: bool,
+) -> Result<()> {
+    if !owned { return load_ref_cell_local_to_result_as(ctx, slot, ty).map(|_| ()); }
+    let payload_ty = ctx.ref_cell_payload_type(slot)?.codegen_repr();
+    let offset = ctx.local_offset(slot)?;
+    let pointer = abi::symbol_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, pointer, offset);
+    super::reference_payloads::load_owned_mixed(ctx, pointer, &payload_ty)
 }
 
 /// Keeps a ref-cell read borrowed on the raw side of a conditional promotion.

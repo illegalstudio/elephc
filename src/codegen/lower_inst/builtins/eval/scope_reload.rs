@@ -30,7 +30,7 @@ pub(super) fn store_mixed_scope_cell_to_local(
                 }
                 Arch::X86_64 => {
                     ctx.emitter.instruction(&format!("test {result}, {result}")); // distinguish a raw widened local from an attached reference cell
-                    ctx.emitter.instruction(&format!("jne {attached}")); // attached aliases use their physical cell payload ABI
+                    ctx.emitter.instruction(&format!("jne {attached}"));        // attached aliases use their physical cell payload ABI
                 }
             }
             abi::emit_pop_reg(ctx.emitter, result);
@@ -117,6 +117,27 @@ fn store_mixed_scope_cell_to_ref_cell(
     pending_throw: Option<usize>,
 ) -> Result<()> {
     let rejected = ctx.next_label("eval_ref_cell_reload_rejected");
+    // A canonical snapshot imports the wrapper itself. Eval has already published
+    // assignments through that wrapper, so writing its projected bits back would corrupt C.
+    let incoming = abi::int_result_reg(ctx.emitter);
+    let snapshot = abi::secondary_scratch_reg(ctx.emitter);
+    let converted = ctx.next_label("eval_ref_cell_reload_shared_wrapper");
+    let offset = ctx.local_offset(local.slot)?;
+    abi::emit_push_reg(ctx.emitter, incoming);
+    abi::load_at_offset(ctx.emitter, incoming, offset);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_canonical");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, snapshot, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {incoming}, {snapshot}"));    // detect the exact shared wrapper imported into this eval scope
+            ctx.emitter.instruction(&format!("b.eq {converted}"));              // its current child is already visible through the native alias
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {incoming}, {snapshot}"));    // detect the exact shared wrapper imported into this eval scope
+            ctx.emitter.instruction(&format!("je {converted}"));                // its current child is already visible through the native alias
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, incoming);
     scope_reload_checks::guard_heap_replacement(
         ctx,
         payload_ty,
@@ -172,6 +193,9 @@ fn store_mixed_scope_cell_to_ref_cell(
             )))
         }
     }
+    abi::emit_jump(ctx.emitter, &rejected);
+    ctx.emitter.label(&converted);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     ctx.emitter.label(&rejected);
     Ok(())
 }

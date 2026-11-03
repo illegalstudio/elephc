@@ -269,6 +269,7 @@ pub(super) fn lower_closure_with_context(
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
         if by_ref {
             ctx.mark_ref_bound_local(capture);
+            if ctx.value_is_owning_temporary(captured) { by_value_capture_views.push(captured); }
         } else {
             by_value_capture_views.push(captured);
         }
@@ -277,9 +278,7 @@ pub(super) fn lower_closure_with_context(
             by_ref_local: by_ref.then(|| capture.clone()),
         });
         let physical_php_type = if by_ref {
-            ctx.ref_cell_owner_slot(capture)
-                .map(|owner| ctx.builder.local_php_type(owner))
-                .unwrap_or_else(|| php_type.clone())
+            ctx.local_reference_payload_type(capture)
         } else {
             php_type.clone()
         };
