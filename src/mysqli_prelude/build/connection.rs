@@ -122,6 +122,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .private_prop("streaming", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("multiMore", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("asyncPending", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("busyStatement", TypeExpr::Int, Some(e_neg(e_int(1))))
         .private_prop("multiStatementsOn", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("asyncUnbuffered", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("connStats", t_array(), Some(e_array(vec![])))
@@ -2248,7 +2249,41 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .private()
                 .returns(TypeExpr::Bool)
                 .body(vec![
-                    s_return(e_binop(e_binop(e_this_prop("liveStmt"), BinOp::GtEq, e_int(0)), BinOp::Or, e_this_prop("asyncPending"))),
+                    s_return(e_binop(e_binop(e_binop(e_this_prop("liveStmt"), BinOp::GtEq, e_int(0)), BinOp::Or, e_this_prop("asyncPending")), BinOp::Or, e_binop(e_this_prop("busyStatement"), BinOp::GtEq, e_int(0)))),
+                ]),
+        )
+        .method(
+            method("__elephcBusyFor")
+                .private()
+                .param("handle", TypeExpr::Int)
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_binop(e_binop(e_binop(e_this_prop("liveStmt"), BinOp::GtEq, e_int(0)), BinOp::Or, e_this_prop("asyncPending")), BinOp::Or, e_binop(e_binop(e_this_prop("busyStatement"), BinOp::GtEq, e_int(0)), BinOp::And, e_binop(e_this_prop("busyStatement"), BinOp::NotEq, e_var("handle"))))),
+                ]),
+        )
+        .method(
+            method("__elephcStatementBusy")
+                .private()
+                .param("handle", TypeExpr::Int)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "busyStatement", e_var("handle")),
+                ]),
+        )
+        .method(
+            method("__elephcStatementIdle")
+                .private()
+                .param("handle", TypeExpr::Int)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("busyStatement"), BinOp::Eq, e_var("handle")),
+                        vec![
+                            s_prop_assign(e_this(), "busyStatement", e_neg(e_int(1))),
+                        ],
+                        vec![],
+                        None,
+                    ),
                 ]),
         )
         .method(

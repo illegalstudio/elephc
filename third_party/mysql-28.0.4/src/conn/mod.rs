@@ -240,6 +240,10 @@ const STAT_PACKETS_TYPED: usize = 14;
 #[derive(Debug)]
 pub struct IoCounters {
     stats: [std::sync::atomic::AtomicU64; IO_STAT_NAMES.len()],
+    /// Server status flags and warning count of the last OK / EOF packet read, visible
+    /// while another thread owns the `Conn` (a streaming result's metadata EOF).
+    last_status: std::sync::atomic::AtomicU64,
+    last_warnings: std::sync::atomic::AtomicU64,
 }
 
 const IO_STAT_ZERO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -248,12 +252,16 @@ const IO_STAT_ZERO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 /// statistics).
 pub static GLOBAL_IO_COUNTERS: IoCounters = IoCounters {
     stats: [IO_STAT_ZERO; IO_STAT_NAMES.len()],
+    last_status: IO_STAT_ZERO,
+    last_warnings: IO_STAT_ZERO,
 };
 
 impl Default for IoCounters {
     fn default() -> Self {
         IoCounters {
             stats: [IO_STAT_ZERO; IO_STAT_NAMES.len()],
+            last_status: IO_STAT_ZERO,
+            last_warnings: IO_STAT_ZERO,
         }
     }
 }
@@ -318,6 +326,35 @@ impl IoCounters {
             .get(index)
             .map(|stat| stat.load(std::sync::atomic::Ordering::Relaxed))
             .unwrap_or(0)
+    }
+
+    /// Server status flags of the last OK / EOF packet read.
+    pub fn last_status(&self) -> u64 {
+        self.last_status.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Warning count of the last OK / EOF packet read.
+    pub fn last_warnings(&self) -> u64 {
+        self.last_warnings.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Records the status flags / warning count an OK or EOF packet carries.
+    fn note_status(&self, buf: &[u8], reader: PacketReader) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let parsed = if is_eof_packet(buf) && matches!(reader, PacketReader::Eof | PacketReader::Row) {
+            let warnings = buf.get(1..3).map(|b| u16::from_le_bytes([b[0], b[1]])).unwrap_or(0);
+            Some((eof_packet_status(buf), warnings))
+        } else if buf.first() == Some(&0x00)
+            && matches!(reader, PacketReader::Ok | PacketReader::RsetHeader | PacketReader::AuthResp)
+        {
+            ok_packet_status_and_warnings(buf)
+        } else {
+            None
+        };
+        if let Some((status, warnings)) = parsed {
+            self.last_status.store(u64::from(status), Relaxed);
+            self.last_warnings.store(u64::from(warnings), Relaxed);
+        }
     }
 
     fn add(&self, index: usize, value: u64) {
@@ -411,13 +448,20 @@ const MORE_RESULTS_EXISTS: u16 = 0x0008;
 
 /// Returns the status flags of an OK packet (`0x00`, affected rows, insert id, status).
 fn ok_packet_status(buf: &[u8]) -> u16 {
+    ok_packet_status_and_warnings(buf).map(|(status, _)| status).unwrap_or(0)
+}
+
+/// Returns the status flags and warning count of an OK packet.
+fn ok_packet_status_and_warnings(buf: &[u8]) -> Option<(u16, u16)> {
     let mut pos = 1;
-    if lenenc_at(buf, &mut pos).is_none() || lenenc_at(buf, &mut pos).is_none() {
-        return 0;
-    }
-    buf.get(pos..pos + 2)
-        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
-        .unwrap_or(0)
+    lenenc_at(buf, &mut pos)?;
+    lenenc_at(buf, &mut pos)?;
+    let status = buf.get(pos..pos + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))?;
+    let warnings = buf
+        .get(pos + 2..pos + 4)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+        .unwrap_or(0);
+    Some((status, warnings))
 }
 
 /// Returns the status flags of an EOF packet (`0xFE`, warnings, status).
@@ -915,6 +959,7 @@ impl Conn {
             // elephc patch: count the packet's wire traffic.
             let reader = self.0.response_state.consume(buffer);
             self.0.io_counters.record_receive(buffer, reader);
+            self.0.io_counters.note_status(buffer, reader);
             Ok(())
         }
     }

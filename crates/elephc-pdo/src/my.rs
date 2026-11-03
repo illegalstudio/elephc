@@ -2481,6 +2481,11 @@ impl MyConn {
     /// Returns the warning count captured from the final OK/EOF packet of the last
     /// completed operation, including SELECT and prepared-statement results.
     pub fn warning_count(&self) -> i64 {
+        if self.conn.0.is_none() {
+            // A streaming worker owns the client (mysqli_stmt rows on the server):
+            // report the warnings of the metadata EOF it already read, like mysqlnd.
+            return self.io_counters.last_warnings() as i64;
+        }
         self.warning_count as i64
     }
 
@@ -2615,11 +2620,12 @@ impl MyConn {
     /// `MYSQLI_REPORT_INDEX` reads `SERVER_QUERY_NO_[GOOD_]INDEX_USED` from them); `0` while a
     /// worker owns the client.
     pub fn server_status(&self) -> i64 {
-        self.conn
-            .0
-            .as_ref()
-            .map(|c| i64::from(c.status_flags().bits()))
-            .unwrap_or(0)
+        match self.conn.0.as_ref() {
+            Some(c) => i64::from(c.status_flags().bits()),
+            // A streaming worker owns the client: the last OK/EOF it read (a
+            // result set's metadata EOF) still carries the flags.
+            None => self.io_counters.last_status() as i64,
+        }
     }
 
     /// Sends `COM_REFRESH` with the `REFRESH_*` bitmask, backing `mysqli::refresh()`.
@@ -3465,6 +3471,18 @@ impl MyStmt {
 
     /// Advances to the next row: `1` for a row, `0` when exhausted, `-1` on error.
     /// Executes lazily on the first call.
+    /// Executes the statement without reading a row: mysqli_stmt::execute(), which leaves
+    /// a result set's rows on the server until they are stored or fetched (mysqlnd). `0` on
+    /// success, the negative error code `step()` would return otherwise.
+    pub fn execute_only(&mut self, conn: &mut MyConn) -> i64 {
+        if !self.executed {
+            if let Err(code) = self.execute(conn) {
+                return code;
+            }
+        }
+        0
+    }
+
     pub fn step(&mut self, conn: &mut MyConn) -> i64 {
         if !self.executed {
             if let Err(code) = self.execute(conn) {

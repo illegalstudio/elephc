@@ -115,11 +115,19 @@ class mysqli_stmt {
     // onto the owning connection (mysqli::prepare's contract).
     private function prepareHandle(string $query, bool $copyToLink): bool {
         if ($this->stmt >= 0) {
+            $_previousLink = $this->link;
+            if ($_previousLink !== null) {
+                $_previousLink->__elephcStatementIdle($this->stmt);
+            }
             elephc_pdo_finalize($this->stmt);
             $this->stmt = -1;
         }
         $this->linkBump("com_stmt_prepare");
+        // Like mysqlnd's prepared statements, the result set stays on the server
+        // (rows streamed on demand) until store_result()/get_result()/fetch().
+        elephc_pdo_set_buffered_query($this->conn, 0);
         $_handle = elephc_pdo_prepare($this->conn, $query, 0);
+        elephc_pdo_set_buffered_query($this->conn, 1);
         if ($_handle < 0) {
             $_link = $this->link;
             if ($copyToLink && $_link !== null) {
@@ -144,8 +152,10 @@ class mysqli_stmt {
         $this->clearLongData();
         $this->executedOnce = false;
         $this->hasPending = false;
+        $this->syncLink();
         $this->dropStored();
         $this->moreResults = false;
+        $this->syncLink();
         $this->affected_rows = 0;
         $this->insert_id = 0;
         $this->num_rows = 0;
@@ -234,9 +244,11 @@ class mysqli_stmt {
         }
         $this->executedOnce = true;
         $this->hasPending = false;
+        $this->syncLink();
         $this->pendingStep = 0;
         $this->dropStored();
         $this->moreResults = false;
+        $this->syncLink();
         if ($params !== null) {
             // PHP 8.1+: execute's own $params bind as strings, in order.
             $_n = count($params);
@@ -284,7 +296,9 @@ class mysqli_stmt {
         // mysqlnd forgets the long-data chunks once they were sent.
         $this->clearLongData();
         $this->linkBump("com_stmt_execute");
-        $_rc = elephc_pdo_step($this->stmt);
+        // The result set's header and metadata only: rows are read when they
+        // are stored or fetched, like mysqlnd.
+        $_rc = elephc_pdo_mysql_execute($this->stmt);
         if ($_rc < 0) {
             return $this->opFailed();
         }
@@ -304,7 +318,8 @@ class mysqli_stmt {
         // A result set exists: the first step's verdict (1 = row, 0 = empty)
         // is kept pending; fetch()/get_result()/store_result() drain from here.
         $this->hasPending = true;
-        $this->pendingStep = $_rc;
+        $this->syncLink();
+        $this->pendingStep = 2;
         $this->num_rows = 0;
         $this->refreshLink();
         $this->clearError();
@@ -344,9 +359,11 @@ class mysqli_stmt {
             }
             return null;
         }
+        $this->pendingRow();
         if ($this->pendingStep < 0) {
             // The previous advance failed: report it now.
             $this->hasPending = false;
+            $this->syncLink();
             $this->opFailed();
             return false;
         }
@@ -386,7 +403,7 @@ class mysqli_stmt {
         }
         $_cells = [];
         $_rowCount = 0;
-        $_rc = $this->pendingStep;
+        $_rc = $this->pendingRow();
         while ($_rc == 1) {
             for ($_i = 0; $_i < $this->field_count; $_i++) {
                 $_cells[] = $this->columnValue($_i);
@@ -395,6 +412,7 @@ class mysqli_stmt {
             $_rc = elephc_pdo_step($this->stmt);
         }
         $this->hasPending = false;
+        $this->syncLink();
         if ($_rc < 0) {
             $this->opFailed();
             return false;
@@ -418,7 +436,7 @@ class mysqli_stmt {
         // them and num_rows is exact.
         $_cells = [];
         $_rowCount = 0;
-        $_rc = $this->pendingStep;
+        $_rc = $this->pendingRow();
         while ($_rc == 1) {
             for ($_i = 0; $_i < $this->field_count; $_i++) {
                 $_cells[] = $this->columnValue($_i);
@@ -427,6 +445,7 @@ class mysqli_stmt {
             $_rc = elephc_pdo_step($this->stmt);
         }
         $this->hasPending = false;
+        $this->syncLink();
         if ($_rc < 0) {
             return $this->opFailed();
         }
@@ -481,6 +500,7 @@ class mysqli_stmt {
         }
         // The probe in finishResultSet() already advanced onto the next set.
         $this->moreResults = false;
+        $this->syncLink();
         $_rc = elephc_pdo_step($this->stmt);
         if ($_rc < 0) {
             return $this->opFailed();
@@ -490,10 +510,12 @@ class mysqli_stmt {
         $this->num_rows = 0;
         if ($this->field_count == 0) {
             $this->hasPending = false;
+            $this->syncLink();
             $this->affected_rows = elephc_pdo_changes($this->conn);
             $this->finishResultSet();
         } else {
             $this->hasPending = true;
+            $this->syncLink();
             $this->pendingStep = $_rc;
         }
         $this->clearError();
@@ -587,7 +609,9 @@ class mysqli_stmt {
             elephc_pdo_reset($this->stmt);
         }
         $this->hasPending = false;
+        $this->syncLink();
         $this->moreResults = false;
+        $this->syncLink();
         $this->dropStored();
     }
 
@@ -599,7 +623,9 @@ class mysqli_stmt {
         // long data and any pending rows.
         $this->clearLongData();
         $this->hasPending = false;
+        $this->syncLink();
         $this->moreResults = false;
+        $this->syncLink();
         $this->dropStored();
         $this->num_rows = 0;
         $this->clearError();
@@ -623,14 +649,44 @@ class mysqli_stmt {
 
     // -- internal helpers ($_-prefixed locals; same checker rule as PDO) --
 
+    // The verdict of the result set's first row (1 = row, 0 = empty, < 0 =
+    // error), read from the server on first use: execute() leaves the rows
+    // unread (pendingStep 2).
+    private function pendingRow(): int {
+        if ($this->pendingStep == 2) {
+            $this->pendingStep = elephc_pdo_step($this->stmt);
+        }
+        return $this->pendingStep;
+    }
+
+    // Registers (or releases) this statement's unread result set on the link,
+    // which then answers other commands with 2014 like mysqlnd.
+    private function syncLink(): void {
+        $_link = $this->link;
+        if ($_link === null || $this->stmt < 0) {
+            return;
+        }
+        if ($this->hasPending || $this->moreResults) {
+            $_link->__elephcStatementBusy($this->stmt);
+        } else {
+            $_link->__elephcStatementIdle($this->stmt);
+        }
+    }
+
     // Finalizes the bridge statement and drops every per-execution state.
     private function release(): void {
+        $_link = $this->link;
+        if ($_link !== null && $this->stmt >= 0) {
+            $_link->__elephcStatementIdle($this->stmt);
+        }
         if ($this->stmt >= 0) {
             elephc_pdo_finalize($this->stmt);
             $this->stmt = -1;
         }
         $this->hasPending = false;
+        $this->syncLink();
         $this->moreResults = false;
+        $this->syncLink();
         $this->dropStored();
         $this->paramReader = null;
         $this->resultWriter = null;
@@ -701,7 +757,9 @@ class mysqli_stmt {
     // none, rewinds the statement so it is immediately re-executable.
     private function finishResultSet(): void {
         $this->hasPending = false;
+        $this->syncLink();
         $this->moreResults = elephc_pdo_next_rowset($this->stmt) == 1;
+        $this->syncLink();
         if (!$this->moreResults) {
             elephc_pdo_reset($this->stmt);
         }
@@ -732,7 +790,7 @@ class mysqli_stmt {
     // php-src raises CR_COMMANDS_OUT_OF_SYNC (2014) on the statement there.
     private function requireLinkNotBusy(): bool {
         $_link = $this->link;
-        if ($_link !== null && $_link->__elephcHasPendingResults()) {
+        if ($_link !== null && $_link->__elephcBusyFor($this->stmt)) {
             $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
             return false;
         }

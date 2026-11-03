@@ -4520,6 +4520,28 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
     })
 }
 
+/// Executes a MySQL statement without reading its first row, backing
+/// mysqli_stmt::execute(): a streaming statement's rows stay on the server until
+/// `elephc_pdo_step` fetches them. `0` on success, the negative `step` error code on
+/// failure, `-1` for a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_execute(stmt_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut sguard = lock_recover(stmts());
+        match sguard.get_mut(&stmt_id) {
+            Some(Stmt::Mysql(s)) => {
+                let conn_id = s.conn_id;
+                let mut cguard = lock_recover(conns());
+                match cguard.get_mut(&conn_id) {
+                    Some(Conn::Mysql(c)) => instr_io::timed(|| s.execute_only(c)),
+                    _ => -1,
+                }
+            }
+            _ => -1,
+        }
+    })
+}
+
 /// Moves a PostgreSQL result according to a PDO fetch orientation and offset.
 /// Returns `1` for an active row, `0` when the target is outside the result or
 /// for a non-PostgreSQL statement, and `-1` on execution failure or panic.

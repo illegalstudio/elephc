@@ -107,6 +107,8 @@ class mysqli {
     // thread (the link is busy until reap_async_query() collects it), and
     // whether its result is wanted unbuffered (MYSQLI_USE_RESULT).
     private bool $asyncPending = false;
+    // The mysqli_stmt handle whose result set is still on the server, or -1.
+    private int $busyStatement = -1;
     // Whether this link turned multi-statements on (mysqlnd's mysql->multi_query).
     private bool $multiStatementsOn = false;
     private bool $asyncUnbuffered = false;
@@ -1418,7 +1420,27 @@ class mysqli {
     // Read-only pending probe for mysqli_stmt's two-step prepare()/execute()
     // guard (the statement records the 2014 on ITS OWN error state).
     private function __elephcHasPendingResults(): bool {
-        return $this->liveStmt >= 0 || $this->asyncPending;
+        return $this->liveStmt >= 0 || $this->asyncPending || $this->busyStatement >= 0;
+    }
+
+    // The same probe for a mysqli_stmt's own operations: its own unread result
+    // set does not block it (mysqlnd flushes it on re-execute / reset / close).
+    private function __elephcBusyFor(int $handle): bool {
+        return $this->liveStmt >= 0 || $this->asyncPending
+            || ($this->busyStatement >= 0 && $this->busyStatement != $handle);
+    }
+
+    // mysqli_stmt result bookkeeping: a statement whose result set (or further
+    // CALL result sets) is still on the server keeps the link out of sync, like
+    // mysqlnd's CONN_FETCHING_DATA / CONN_NEXT_RESULT_PENDING states.
+    private function __elephcStatementBusy(int $handle): void {
+        $this->busyStatement = $handle;
+    }
+
+    private function __elephcStatementIdle(int $handle): void {
+        if ($this->busyStatement == $handle) {
+            $this->busyStatement = -1;
+        }
     }
 
     // Percent-encodes one packed driver-config value ('%' first, then ';' and

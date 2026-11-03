@@ -165,6 +165,11 @@ while ($sel->fetch()) {            // writes the row into $id / $userName
   (every element as a string, `null` as SQL NULL); a non-list array or a wrong
   element count throws php's `ValueError`.
 - `fetch()` returns `true` per row, `null` when exhausted, `false` on error.
+- Like mysqlnd, `execute()` reads only the result set's metadata: the rows stay
+  on the server and `fetch()` reads them one at a time. Until they are fetched
+  to the end, stored, freed (`free_result()` / `reset()` / `close()`), or the
+  statement is re-executed, any other command on the link — a query, another
+  statement — fails with errno 2014 "Commands out of sync".
 - `store_result()` buffers the rows client-side so `num_rows` / `num_rows()`
   are exact and `data_seek()` repositions `fetch()`.
 - `get_result()` drains the result set into an independent `mysqli_result`
@@ -390,12 +395,6 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
 
 ## Divergences from php-src
 
-- **A connection statement while a prepared result is pending is permitted**,
-  not rejected. A `mysqli_stmt::execute()` whose result set has not yet been
-  drained leaves those rows buffered on the bridge (the connection wire is
-  free), so a `query()` on the same connection runs and the statement's rows
-  stay fully readable afterward. Real mysqlnd raises errno 2014 for that
-  interleaving unless the statement was `store_result()`-ed.
 - **No `mysqlnd`**: `extension_loaded('mysqlnd')` is `false`, and
   `mysqli_get_client_info()` reports the bridge's own client string, not a
   mysqlnd version.

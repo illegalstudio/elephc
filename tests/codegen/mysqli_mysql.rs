@@ -877,6 +877,8 @@ $min = 3;
 $sel->execute();
 $sel->fetch();
 echo "again=", $id, ":", $n;
+// Like mysqlnd, the unread EOF keeps the link out of sync until the result is freed.
+$sel->free_result();
 $db->query("DROP TABLE msr");
 "#,
     ));
@@ -993,6 +995,8 @@ $text = "9z";
 $stmt->bind_param("s", $text);
 $stmt->execute();
 $stmt->store_result();
+// mysqlnd takes the statement's warning count from the metadata EOF execute() read (0
+// here), so like php no mysqli_warning chain is built.
 echo "|stmt-warn=", $stmt->get_warnings() instanceof mysqli_warning ? "y" : "n";
 $plain = mysqli_init();
 $plain->options(MYSQLI_OPT_INT_AND_FLOAT_NATIVE, 1);
@@ -1006,7 +1010,7 @@ $db->query("DROP TABLE msw");
     ));
     assert_eq!(
         out,
-        "wc=2|1292/HY000,1292/HY000|info=Records: 2  Duplicates: 0  Warnings: 0|stmt-warn=y|integer,double,string|default=string"
+        "wc=2|1292/HY000,1292/HY000|info=Records: 2  Duplicates: 0  Warnings: 0|stmt-warn=n|integer,double,string|default=string"
     );
 }
 
@@ -1342,6 +1346,9 @@ try {
     echo "|stmt=", str_starts_with($e->getMessage(), "No index used in query/prepared statement SELECT v FROM msx") ? "reported" : $e->getMessage();
 }
 mysqli_report(MYSQLI_REPORT_OFF);
+// The executed statement's rows are still on the server: free them first, or
+// (like mysqlnd) the link answers the next command with 2014.
+$stmt->free_result();
 $refreshed = $db->refresh(MYSQLI_REFRESH_TABLES);
 echo "|refresh=", $refreshed ? "ok" : ($db->errno == 1227 ? "denied" : "err" . $db->errno);
 $dumped = $db->dump_debug_info();
@@ -1550,5 +1557,51 @@ echo (int) $out["protocol_overhead_out"] === 4 * (int) $out["packets_sent"] ? "o
     assert_eq!(
         out,
         "query 2 1 1 2 1 2 0 1013|ping 2 1 0 0 0 0 0 0|prepare 2 1 0 3 2 0 0 0|execute 2 1 1 2 1 2 0 20|close 2 1 0 0 0 0 0 0|reprepare 6 3 0 2 2 0 0 0|overhead"
+    );
+}
+
+/// Like mysqlnd, a prepared statement's result set stays on the server after `execute()`:
+/// any other command on the link — a query, another prepare — gets errno 2014 until the
+/// rows are fetched to the end, stored (`store_result()` / `get_result()`), freed, or the
+/// statement is re-executed or closed. Expected output is php 8.3 mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_statement_results_stay_on_the_server() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$s = $db->prepare("SELECT 1 AS a UNION SELECT 2");
+$s->execute();
+var_dump($db->query("SELECT 9"), $db->errno);
+$t = $db->prepare("SELECT 3"); var_dump($t, $db->errno);
+$a = null; $s->bind_result($a);
+while ($s->fetch()) echo $a, ",";
+echo "\n";
+var_dump($db->query("SELECT 9")->fetch_row()[0]);
+$s->execute(); $s->store_result(); var_dump($s->num_rows, $db->query("SELECT 10")->fetch_row()[0]);
+$s->execute(); $r = $s->get_result(); var_dump($db->query("SELECT 11")->fetch_row()[0], count($r->fetch_all()));
+$s->execute(); $s->free_result(); var_dump($db->query("SELECT 12")->fetch_row()[0]);
+$s->execute(); $s->execute(); $s->store_result(); var_dump($s->num_rows);
+$s->execute(); $s->close(); var_dump($db->query("SELECT 13")->fetch_row()[0]);
+$u = $db->prepare("INSERT INTO nonexist VALUES (1)"); var_dump($u);
+"#,
+    ));
+    assert_eq!(
+        out,
+        r#"bool(false)
+int(2014)
+bool(false)
+int(2014)
+1,2,
+string(1) "9"
+int(2)
+string(2) "10"
+string(2) "11"
+int(2)
+string(2) "12"
+int(2)
+string(2) "13"
+bool(false)
+"#
     );
 }
