@@ -112,6 +112,7 @@ unset($nativeCallback, $code);
 }
 
 /// Cancelling suspended native constructor, instance and static bridges retires adapted callbacks.
+/// The callback is declared in the eval activation that adapts it; PHP's shared declaration is guarded.
 #[test]
 fn test_eval_callable_argument_owners_retire_abandoned_bridge_frames_bundle() {
     let source = r#"<?php
@@ -121,13 +122,15 @@ class NativeSharedPausedCast {
     public static function pauseStatic(callable $callback): void { echo 'static|'; $callback(); }
 }
 
-eval('function evalSharedPausedCast(): void { echo "callback|"; Fiber::suspend(7); }');
 echo 'ready|';
 for ($mode = 0; $mode < 3; $mode++) {
     $fiber = new Fiber(static function () use ($mode): void {
         echo 'fiber|';
         eval('
             echo "eval|";
+            if (!function_exists("evalSharedPausedCast")) {
+                function evalSharedPausedCast(): void { echo "callback|"; Fiber::suspend(7); }
+            }
             if ($mode === 0) { $consumer = new NativeSharedPausedCast("evalSharedPausedCast", true); }
             elseif ($mode === 1) {
                 $consumer = new NativeSharedPausedCast("evalSharedPausedCast", false);
