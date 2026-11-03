@@ -55,7 +55,7 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
     if load_result_slot.is_empty() {
         return escaping;
     }
-    for inst in &function.instructions {
+    for (raw, inst) in function.instructions.iter().enumerate() {
         // A packed field store copies a scalar into the record; unlike an object property store
         // it can never bind a promoted by-reference parameter, so the operand stays a value.
         // `buffer_len` and `buffer_ptr` likewise observe a buffer handle by value through their
@@ -70,10 +70,16 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
         if op_is_value_only_consumer(inst.op)
             || function.is_packed_field_access(inst)
             || observes_buffer_handle
+            || function
+                .by_value_call_sites
+                .contains(&crate::ir::InstId::from_raw(raw as u32))
         {
             continue;
         }
         for (index, operand) in inst.operands.iter().enumerate() {
+            if index > 0 && op_trailing_operands_are_values(inst.op) {
+                continue;
+            }
             // Property reads and method dispatch load the receiver pointer by value, including
             // magic getters and nullable/boxed receivers. Only the receiver is exempt: a later
             // method argument can still pass this same loaded value by reference.
@@ -86,6 +92,21 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
         }
     }
     escaping
+}
+
+/// Returns true when only an opcode's FIRST operand can be a container slot address.
+///
+/// An element access names its container first, and a write-back op may resolve that operand to
+/// the slot's address; the key, index, and stored value that follow are read by value. Treating a
+/// loop counter that only feeds `$a[] = $i` or `$a[$i]` as address-escaping would keep it in
+/// memory for no reason.
+fn op_trailing_operands_are_values(op: Op) -> bool {
+    use Op::*;
+    matches!(
+        op,
+        ArrayPush | ArraySet | HashSet | ArrayGet | ArrayGetSilent | HashGet | HashGetSilent
+            | ArrayIsset | HashIsset | ArrayKeyExists | HashAppend | MixedArrayAppend
+    )
 }
 
 /// Returns true when an opcode consumes all its operands purely as values, so a

@@ -1124,6 +1124,23 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         return lower_args(ctx, args);
     };
     let literal_bound = rewrite_literal_param_bindings(sig, args);
+    if let Some(bound) = &literal_bound {
+        // A string literal rewritten into a first-class callable is a named callable.
+        for (before, after) in args.iter().zip(bound) {
+            let (before, after) = match (&before.kind, &after.kind) {
+                (
+                    ExprKind::NamedArg { value: before, .. },
+                    ExprKind::NamedArg { value: after, .. },
+                ) => (before.as_ref(), after.as_ref()),
+                _ => (before, after),
+            };
+            if matches!(before.kind, ExprKind::StringLiteral(_))
+                && matches!(after.kind, ExprKind::FirstClassCallable(_))
+            {
+                ctx.named_callable_spans.insert(after.span);
+            }
+        }
+    }
     let args = literal_bound.as_deref().unwrap_or(args);
     if crate::func_args::sig_collects_surplus_args(sig) {
         if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, "", false) {

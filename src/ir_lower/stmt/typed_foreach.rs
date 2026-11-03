@@ -324,7 +324,7 @@ pub(super) fn lower_foreach(
             }
         }
     } else {
-        let value_ty = foreach_value_type(&source_ty);
+        let value_ty = foreach_value_type(&source_ty, ctx.target.is_wasm());
         if value_ty == PhpType::Mixed {
             initialize_foreach_mixed_local_if_needed(
                 ctx,
@@ -441,7 +441,7 @@ pub(super) fn lower_foreach(
         ctx.mark_ref_bound_local(value_var);
         ctx.mark_local_initialized(value_var);
     } else {
-        let value_ty = foreach_value_type(&source_ty);
+        let value_ty = foreach_value_type(&source_ty, ctx.target.is_wasm());
         let value = lower_foreach_current_value(ctx, iterator, &source_ty, &value_ty, array.span);
         ctx.store_local(value_var, value, value_ty, Some(array.span));
     }
@@ -759,11 +759,25 @@ fn pin_by_ref_foreach_borrowed_source(
 }
 
 /// Returns the by-value foreach local type when Phase 04 can keep a concrete element.
-pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
+pub(super) fn foreach_value_type(source_ty: &PhpType, wasm: bool) -> PhpType {
     match source_ty.codegen_repr() {
+        // The WASM hash stores every entry as (tag, lo, hi) and its `IterCurrentValue` lowering
+        // rebuilds a scalar or string result straight from the entry, exactly like a keyed read.
+        // Binding the value at its declared scalar type keeps a `foreach` over `array<K, int>`
+        // from boxing every element into a Mixed cell (one allocation, then an unbox per use).
+        // The native hash iterator always yields a Mixed cell, so it keeps the boxed binding.
+        PhpType::AssocArray { value, .. } if wasm => match value.codegen_repr() {
+            elem @ (PhpType::Int | PhpType::Float | PhpType::Str) => elem,
+            _ => PhpType::Mixed,
+        },
         PhpType::Array(elem) => match elem.codegen_repr() {
             PhpType::Callable => PhpType::Callable,
             PhpType::Object(class_name) => PhpType::Object(class_name),
+            // A nested array or hash binds at its own type, exactly as an object element does.
+            // Falling back to Mixed here boxed every row of `[[1,2],[3,4]]`, so `count($row)`
+            // inside the body then had to answer for a cell rather than an array — and a row of
+            // `[["a" => 1]]` reached a dynamic offset-get instead of a typed hash read.
+            inner @ (PhpType::Array(_) | PhpType::AssocArray { .. }) => inner,
             elem @ (PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) => elem,
             // A pointer element is its raw word and may be the null pointer, so the binding is
             // `?ptr<T>` like an indexed read of the same element.

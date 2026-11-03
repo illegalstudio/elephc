@@ -10,8 +10,8 @@
 //! - Every lowered function leaves all blocks terminated before validation.
 
 use crate::ir::{
-    Builder, Function, FunctionFlags, FunctionParam, Immediate, IrType, Module,
-    Op, Ownership, Terminator,
+    Builder, Function, FunctionFlags, FunctionParam, Immediate, IrType, LocalKind,
+    Module, Op, Ownership, Terminator,
 };
 use crate::ir_lower::context::{
     return_ir_type, type_expr_to_php_type, value_ir_type, ClosureCapture, LoweringContext,
@@ -131,6 +131,7 @@ pub(crate) fn lower_main(
         Some(function_global_names),
         module.source_path.clone(),
         None,
+        module.target,
         web,
     );
     add_closures(module, closures);
@@ -278,6 +279,7 @@ pub(crate) fn lower_user_function(
         None,
         module.source_path.clone(),
         None,
+        module.target,
         web,
     );
     add_closures(module, closures);
@@ -406,6 +408,7 @@ pub(crate) fn lower_class_method(
         None,
         module.source_path.clone(),
         None,
+        module.target,
         web,
     );
     add_closures(module, closures);
@@ -527,6 +530,7 @@ pub(crate) fn lower_eval_aot_function(
         None,
         module.source_path.clone(),
         None,
+        module.target,
         module.web,
     );
     add_closures(module, closures);
@@ -659,6 +663,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         None,
         module.source_path.clone(),
         eval_scope_reads,
+        module.target,
         module.web,
     );
     add_closures(module, closures);
@@ -781,6 +786,7 @@ pub(crate) fn lower_property_init_thunk(
         None,
         module.source_path.clone(),
         None,
+        module.target,
         web,
     );
     add_closures(module, closures);
@@ -1151,6 +1157,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         None,
         module.source_path.clone(),
         None,
+        module.target,
         web,
     );
     add_closures(module, closures);
@@ -1276,6 +1283,7 @@ pub(crate) fn lower_clone_override_function(
         None,
         module.source_path.clone(),
         None,
+        module.target,
         web,
     );
     add_closures(module, closures);
@@ -1446,6 +1454,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             None,
             module.source_path.clone(),
             None,
+            module.target,
             module.web,
         );
         add_closures(module, closures);
@@ -1608,6 +1617,7 @@ fn lower_closure_function_with_signature(
         is_closure: true,
         is_synthetic: function.callable_default.is_some(),
         by_ref_return: signature.by_ref_return,
+        closure_capture_count: captures.len(),
         ..FunctionFlags::default()
     };
     function.params = function_params(&signature);
@@ -1690,6 +1700,7 @@ fn lower_closure_function_with_signature(
         None,
         parent.source_path().map(str::to_string),
         None,
+        parent.target,
         parent.web,
     );
     parent.extend_closures(std::iter::once(function).chain(closures));
@@ -1761,10 +1772,16 @@ fn lower_body_into_function(
         std::collections::HashSet<String>,
         std::collections::BTreeSet<String>,
     )>,
+    target: crate::codegen_support::platform::Target,
     web: bool,
 ) -> Vec<Function> {
     let owner_name = function.name.clone();
     let function_by_ref_return = function.flags.by_ref_return;
+    // The trailing `closure_capture_count` params are by-value/by-ref closure
+    // captures appended after the visible params. By-value captures enter the body
+    // as a borrow the descriptor owns; declare their slots `ClosureCapture` so the
+    // first reassignment skips the spurious borrow release (see `store_local`).
+    let closure_capture_count = function.flags.closure_capture_count;
     let by_ref_params = function
         .params
         .iter()
@@ -1816,6 +1833,7 @@ fn lower_body_into_function(
         in_main,
         all_global_var_names,
         source_path,
+        target,
         web,
     );
     if let Some(function_global_names) = function_global_names {
@@ -1832,10 +1850,22 @@ fn lower_body_into_function(
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
         ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);
     }
+    let capture_start = params.len().saturating_sub(closure_capture_count);
     for (index, (name, php_type)) in params.iter().enumerate() {
-        ctx.declare_local(name, php_type.clone());
+        let by_ref = by_ref_params.get(index).copied().unwrap_or(false);
+        // A by-value capture (trailing capture param that is not by-ref) is the
+        // descriptor's borrow on entry: declare it `ClosureCapture` so its first
+        // reassignment does not release that borrow. By-ref captures keep the normal
+        // ref-cell store path (they must stay `PhpLocal` for `is_ref_bound`).
+        // Only the WASM backend implements that borrowed model; the native backend owns
+        // its captures (the frame retains them), so they stay `PhpLocal` there.
+        if target.is_wasm() && index >= capture_start && !by_ref {
+            ctx.declare_local_with_kind(name, php_type.clone(), LocalKind::ClosureCapture);
+        } else {
+            ctx.declare_local(name, php_type.clone());
+        }
         ctx.mark_local_initialized(name);
-        if by_ref_params.get(index).copied().unwrap_or(false) {
+        if by_ref {
             ctx.mark_ref_bound_local(name);
         }
     }
@@ -1954,6 +1984,93 @@ fn mark_generator_if_needed(
         return;
     }
     function.flags.is_generator = true;
+    function.flags.yield_in_try_finally = body_has_yield_in_try_finally(body);
+}
+
+/// Returns true when a statement list holds a `try` WITH a `finally` whose protected region
+/// (the `try` body or a `catch` body) contains a `yield`.
+///
+/// php runs such a `finally` when a suspended generator is destroyed. A backend whose frames
+/// are dropped without resuming them cannot, and reads this flag to refuse the shape.
+fn body_has_yield_in_try_finally(statements: &[Stmt]) -> bool {
+    statements.iter().any(stmt_has_yield_in_try_finally)
+}
+
+/// Returns true when one statement is, or nests, a `try` with a `finally` whose protected
+/// region (the `try` body or a `catch` body) contains a `yield`.
+///
+/// Inspects `try` (the shape itself, then every nested body), `if`/`ifdef`, loops, `switch`,
+/// namespace blocks, include guards and synthetic groups, plus the init/update statements of
+/// a `for`. Other statements cannot hold a nested statement list, so they answer false.
+fn stmt_has_yield_in_try_finally(stmt: &Stmt) -> bool {
+    use crate::types::checker::yield_validation::body_contains_yield;
+    match &stmt.kind {
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            (finally_body.is_some()
+                && (body_contains_yield(try_body)
+                    || catches.iter().any(|catch| body_contains_yield(&catch.body))))
+                || body_has_yield_in_try_finally(try_body)
+                || catches
+                    .iter()
+                    .any(|catch| body_has_yield_in_try_finally(&catch.body))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|body| body_has_yield_in_try_finally(body))
+        }
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            body_has_yield_in_try_finally(then_body)
+                || elseif_clauses
+                    .iter()
+                    .any(|(_, body)| body_has_yield_in_try_finally(body))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body_has_yield_in_try_finally(body))
+        }
+        StmtKind::IfDef {
+            then_body,
+            else_body,
+            ..
+        } => {
+            body_has_yield_in_try_finally(then_body)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body_has_yield_in_try_finally(body))
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => body_has_yield_in_try_finally(body),
+        StmtKind::For {
+            init, update, body, ..
+        } => {
+            init.as_ref()
+                .is_some_and(|stmt| stmt_has_yield_in_try_finally(stmt.as_ref()))
+                || update
+                    .as_ref()
+                    .is_some_and(|stmt| stmt_has_yield_in_try_finally(stmt.as_ref()))
+                || body_has_yield_in_try_finally(body)
+        }
+        StmtKind::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| body_has_yield_in_try_finally(body))
+                || default
+                    .as_ref()
+                    .is_some_and(|body| body_has_yield_in_try_finally(body))
+        }
+        _ => false,
+    }
 }
 
 /// Returns the EIR return type to lower a function body with.

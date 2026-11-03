@@ -39,6 +39,7 @@ use super::const_fold::ConstFold;
 use super::cse::Cse;
 use super::dead_inst::DeadInst;
 use super::dead_store::DeadStore;
+use super::foreach_key_elision::ForeachKeyElision;
 use super::fresh_mixed_transfer::FreshMixedTransfer;
 use super::identity_arith::IdentityArith;
 use super::immutable_local_loads::ImmutableLocalLoads;
@@ -128,6 +129,7 @@ pub trait IrPass {
 fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
     vec![
         Box::new(BorrowedReceiverRoots::new(module)),
+        Box::new(ForeachKeyElision),
         Box::new(IdentityArith),
         Box::new(Peephole),
         Box::new(Mem2Reg),
@@ -239,6 +241,110 @@ fn optimize_module_to_fixed_point(module: &mut Module, passes: &[Box<dyn IrPass>
     // hit the round cap, which is a generous backstop for deep inline chains.
 }
 
+/// The pass subset the WebAssembly pipeline runs.
+///
+/// `ConcatResetElim` is native scratch-state bookkeeping and stays out. `CheckedNumericChain` is
+/// out because its fused opcodes are refused by the WASM capability audit. `CheckedIntSink` is
+/// only applied slot by slot, speculatively (see `optimize_function_for_wasm`).
+fn wasm_passes() -> Vec<Box<dyn IrPass>> {
+    vec![
+        Box::new(ForeachKeyElision),
+        Box::new(IdentityArith),
+        Box::new(Peephole),
+        Box::new(Mem2Reg),
+        Box::new(ImmutableLocalLoads),
+        Box::new(LoopOptimize),
+        Box::new(IntegerRange),
+        Box::new(ConstFold),
+        Box::new(Cse),
+        Box::new(Licm),
+        Box::new(DeadInst),
+        Box::new(DeadStore),
+        Box::new(BranchSimplify),
+    ]
+}
+
+/// Whether the WASM pipeline leaves `function` untouched: generators suspend mid-body and a
+/// function with a `try` handler has exception edges the CFG-based passes do not model.
+fn wasm_skips_function(function: &Function) -> bool {
+    function.flags.is_generator
+        || function
+            .instructions
+            .iter()
+            .any(|inst| inst.op == crate::ir::Op::TryPushHandler)
+}
+
+/// Whether a live instruction is an allocation-free checked op whose overflow path is not PHP's.
+///
+/// The native sink turns a boxed `$i++` into one of these and fatals if it overflows; PHP keeps
+/// the float. WASM therefore accepts a speculative sink only when range analysis removed every
+/// one of them.
+fn has_unproven_checked_int(function: &Function) -> bool {
+    use crate::ir::Op;
+    function.instructions.iter().any(|inst| {
+        matches!(
+            inst.op,
+            Op::ICheckedAddToInt | Op::ICheckedSubToInt | Op::ICheckedMulToInt
+        )
+    })
+}
+
+/// Optimizes one function for WASM.
+///
+/// The checked-int sink retypes a boxed `mixed` counter slot to a raw `i64`, which is only PHP
+/// behaviour when no update can overflow. That is proven by `IntegerRange` AFTER the slot is
+/// scalar (the counter is then a block parameter). So each candidate slot is retyped
+/// speculatively on a copy, the passes run to a fixed point, and the copy is kept only when no
+/// allocation-free checked op survived. A slot whose updates are not proven keeps its boxed
+/// representation and PHP's int-to-float promotion.
+fn optimize_function_for_wasm(function: &mut Function, data: &mut DataPool) {
+    if wasm_skips_function(function) {
+        return;
+    }
+    let passes = wasm_passes();
+    run_function_passes(function, &passes, data);
+    for slot in super::checked_int_sink::provable_integer_slots(function) {
+        let mut trial = function.clone();
+        if !super::checked_int_sink::sink_integer_slot(&mut trial, slot) {
+            continue;
+        }
+        run_function_passes(&mut trial, &passes, data);
+        if !has_unproven_checked_int(&trial) {
+            *function = trial;
+        }
+    }
+}
+
+/// Runs the guarded WebAssembly pass subset over every eligible function-like body.
+///
+/// Unlike `optimize_module` this runs no cross-function inliner. The caller owns a copy of the
+/// module: the WASM backend audits the original EIR first and then re-audits this result.
+pub fn optimize_module_for_wasm(module: &mut Module) {
+    mark_by_value_calls(module);
+    let Module {
+        functions,
+        class_methods,
+        closures,
+        fiber_wrappers,
+        callback_wrappers,
+        extern_callback_trampolines,
+        runtime_callable_invokers,
+        data,
+        ..
+    } = module;
+    let all_functions = functions
+        .iter_mut()
+        .chain(class_methods.iter_mut())
+        .chain(closures.iter_mut())
+        .chain(fiber_wrappers.iter_mut())
+        .chain(callback_wrappers.iter_mut())
+        .chain(extern_callback_trampolines.iter_mut())
+        .chain(runtime_callable_invokers.iter_mut());
+    for function in all_functions {
+        optimize_function_for_wasm(function, data);
+    }
+}
+
 /// Applies one phase to every function table while sharing the module literal pool.
 fn run_module_function_passes(module: &mut Module, passes: &[Box<dyn IrPass>]) -> bool {
     if passes.is_empty() {
@@ -313,5 +419,76 @@ pub fn run_function_passes(
     #[cfg(not(debug_assertions))]
     {
         modified
+    }
+}
+
+/// Records, per function, the call sites whose callee provably takes no argument by reference.
+///
+/// Covers direct calls to a uniquely named user function, constructor calls (a by-reference
+/// constructor parameter is refused by the WASM audit), and instance method calls whose method
+/// name has no by-reference parameter in any class or interface. Anything unresolved stays out of
+/// the set and so keeps the conservative address-escape treatment.
+fn mark_by_value_calls(module: &mut Module) {
+    use crate::ir::{Immediate, InstId, Op};
+    use std::collections::{HashMap, HashSet};
+
+    let function_key = |name: &str| crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    let mut by_ref_function: HashMap<String, Option<bool>> = HashMap::new();
+    for function in module.functions.iter().filter(|function| !function.flags.is_main) {
+        let has_ref = function.params.iter().any(|param| param.by_ref);
+        by_ref_function
+            .entry(function_key(&function.name))
+            .and_modify(|seen| *seen = None)
+            .or_insert(Some(has_ref));
+    }
+    let mut ref_methods: HashSet<String> = HashSet::new();
+    let sig_has_ref = |sig: &crate::types::FunctionSig| {
+        sig.ref_params.iter().any(|by_ref| *by_ref)
+    };
+    for info in module.class_infos.values() {
+        for (key, sig) in &info.methods {
+            if sig_has_ref(sig) {
+                ref_methods.insert(key.clone());
+            }
+        }
+    }
+    for info in module.interface_infos.values() {
+        for (key, sig) in &info.methods {
+            if sig_has_ref(sig) {
+                ref_methods.insert(key.clone());
+            }
+        }
+    }
+    let data = &module.data;
+    let mark = |function: &mut Function| {
+        let mut sites = HashSet::new();
+        for (raw, inst) in function.instructions.iter().enumerate() {
+            let by_value = match (inst.op, &inst.immediate) {
+                (Op::ObjectNew, _) => true,
+                (Op::Call, Some(Immediate::Data(id) | Immediate::ProfiledData { data: id, .. })) => {
+                    data.function_names.get(id.as_raw() as usize).is_some_and(|name| {
+                        by_ref_function.get(&function_key(name)) == Some(&Some(false))
+                    })
+                }
+                (Op::MethodCall, Some(Immediate::Data(id))) => {
+                    data.strings.get(id.as_raw() as usize).is_some_and(|name| {
+                        !ref_methods.contains(&crate::names::php_symbol_key(name))
+                    })
+                }
+                _ => false,
+            };
+            if by_value {
+                sites.insert(InstId::from_raw(raw as u32));
+            }
+        }
+        function.by_value_call_sites = sites;
+    };
+    for function in module
+        .functions
+        .iter_mut()
+        .chain(module.class_methods.iter_mut())
+        .chain(module.closures.iter_mut())
+    {
+        mark(function);
     }
 }

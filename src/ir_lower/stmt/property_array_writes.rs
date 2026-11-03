@@ -627,8 +627,15 @@ pub(in crate::ir_lower) fn release_property_assignment_source_after_retaining_st
     if !ctx.value_is_owning_temporary(value) {
         return;
     }
-    if !property_store_keeps_independent_ref(property_ty, &ctx.builder.value_php_type(value.value))
+    let value_ty = ctx.builder.value_php_type(value.value);
+    // The WASM store into a `mixed` slot adopts an owned box rather than retaining it.
+    if ctx.target.is_wasm()
+        && property_ty.codegen_repr() == PhpType::Mixed
+        && value_ty.codegen_repr() == PhpType::Mixed
     {
+        return;
+    }
+    if !property_store_keeps_independent_ref(property_ty, &value_ty) {
         return;
     }
     crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));

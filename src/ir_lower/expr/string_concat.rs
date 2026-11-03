@@ -72,6 +72,10 @@ pub(crate) fn string_value_needs_persistence(ctx: &LoweringContext<'_, '_>, valu
         return false;
     }
     let Some(op) = ctx.builder.value_defining_op(value.value) else { return false; };
+    // A WASM string cast never answers from scratch storage, so it needs no persisted copy.
+    if op == Op::Cast && ctx.target.is_wasm() {
+        return false;
+    }
     matches!(
         op,
         Op::Cast

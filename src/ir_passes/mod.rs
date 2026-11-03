@@ -36,6 +36,7 @@ mod dead_inst;
 mod dead_store;
 mod dominance;
 mod driver;
+mod foreach_key_elision;
 mod fresh_mixed_transfer;
 mod identity_arith;
 mod inline;
@@ -63,7 +64,7 @@ mod tests;
 
 pub use allocation::{Allocation, Location};
 pub use dominance::{compute_dominance, DominanceInfo};
-pub use driver::optimize_module;
+pub use driver::{optimize_module, optimize_module_for_wasm};
 pub use intervals::{build_intervals, LiveInterval};
 pub use liveness::{compute_liveness, LivenessInfo};
 pub(crate) use cfg::successors;

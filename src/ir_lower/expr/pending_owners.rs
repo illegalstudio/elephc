@@ -54,7 +54,10 @@ fn instruction_can_unwind(function: &crate::ir::Function, inst: &crate::ir::Inst
     if inst.effects.contains(crate::ir::Effects::MAY_THROW) { return true; }
     if !inst.effects.contains(crate::ir::Effects::MAY_WARN) { return false; }
     if inst.op == Op::Cast && inst.result_php_type == PhpType::Int
-        && inst.immediate == Some(Immediate::CastTarget(IrType::I64))
+        && matches!(
+            inst.immediate,
+            Some(Immediate::CastTarget(IrType::I64) | Immediate::ExplicitCastTarget(IrType::I64))
+        )
     {
         let producer = inst.operands.first().and_then(|value| function.value(*value))
             .and_then(|value| match value.def {

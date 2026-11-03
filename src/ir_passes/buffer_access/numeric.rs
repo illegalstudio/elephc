@@ -50,7 +50,10 @@ pub(super) fn preserving_instructions(function: &Function) -> HashSet<InstId> {
 
 /// Admits only numeric casts whose storage path cannot emit PHP coercion diagnostics.
 fn warning_free_numeric_cast(function: &Function, inst: &Instruction) -> bool {
-    let Some(Immediate::CastTarget(target @ (IrType::I64 | IrType::F64))) = inst.immediate
+    let Some(
+        Immediate::CastTarget(target @ (IrType::I64 | IrType::F64))
+        | Immediate::ExplicitCastTarget(target @ (IrType::I64 | IrType::F64)),
+    ) = inst.immediate
     else { return false; };
     if !matches!(inst.result_php_type.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::Bool) {
         return false;

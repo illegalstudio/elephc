@@ -78,6 +78,8 @@ struct Callees {
     /// Declared `extern` functions: their results are always fresh (a C string is copied into
     /// an owned Elephc string) or not refcounted, so never an argument's storage.
     externs: HashSet<String>,
+    /// The positions of each source function's parameters declared exactly `string`.
+    function_string_parameters: HashMap<String, BTreeSet<usize>>,
 }
 
 /// A reference to the callee context that never takes part in state comparisons: it is the
@@ -123,6 +125,10 @@ struct AliasState<'a> {
     /// never reuses the parameter's storage. Claiming it did made every caller skip releasing
     /// an owned argument -- one leaked string per call (`m(string $s): mixed { return $s; }`).
     boxes_returned_strings: bool,
+    /// The visible parameters whose storage is a box that may hold a string: untyped, `mixed`,
+    /// `?string` or a union with `string`. Handed to a callee's `string` parameter, such a box is
+    /// unboxed into a COPY, so a callee returning that parameter returns the copy, never the box.
+    boxed_string_parameter_indices: BTreeSet<usize>,
 }
 
 impl<'a> AliasState<'a> {
@@ -139,6 +145,7 @@ impl<'a> AliasState<'a> {
             str_slot_locals: string_parameters.iter().cloned().collect(),
             string_valued_locals: HashSet::new(),
             boxes_returned_strings: false,
+            boxed_string_parameter_indices: BTreeSet::new(),
         }
     }
 
@@ -198,6 +205,8 @@ pub(crate) fn collect_return_alias_summaries(program: &Program) -> ReturnAliasSu
     collect_declaration_summaries(program, &mut conservative, None);
     let mut externs = HashSet::new();
     collect_extern_names(program, &mut externs);
+    let mut function_string_parameters = HashMap::new();
+    collect_function_string_parameters(program, &mut function_string_parameters);
     let mut summaries = ReturnAliasSummaries {
         functions: conservative.functions.keys().map(|name| (name.clone(), ReturnArgAlias::None)).collect(),
         methods: conservative.methods.keys().map(|key| (key.clone(), ReturnArgAlias::None)).collect(),
@@ -207,6 +216,7 @@ pub(crate) fn collect_return_alias_summaries(program: &Program) -> ReturnAliasSu
             functions: summaries.functions.clone(),
             methods: summaries.methods.clone(),
             externs: externs.clone(),
+            function_string_parameters: function_string_parameters.clone(),
         };
         let mut next = ReturnAliasSummaries::default();
         collect_declaration_summaries(program, &mut next, Some(&callees));
@@ -216,6 +226,32 @@ pub(crate) fn collect_return_alias_summaries(program: &Program) -> ReturnAliasSu
         summaries = next;
     }
     conservative
+}
+
+/// Records, for every source function, the positions of its parameters declared exactly `string`.
+fn collect_function_string_parameters(
+    statements: &[Stmt],
+    parameters: &mut HashMap<String, BTreeSet<usize>>,
+) {
+    for stmt in statements {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, params, .. } => {
+                parameters.insert(
+                    name.trim_start_matches('\\').to_string(),
+                    params
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (_, hint, _, _))| matches!(hint, Some(TypeExpr::Str)))
+                        .map(|(index, _)| index)
+                        .collect(),
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
+                collect_function_string_parameters(body, parameters);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Records the canonical names of every `extern function` declaration.
@@ -374,6 +410,14 @@ fn summarize_with_callees<'a>(
         .map(|(name, _)| (*name).to_string())
         .collect();
     state.callees = CalleeRef(callees);
+    state.boxed_string_parameter_indices = params
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, hint))| {
+            !matches!(hint, Some(TypeExpr::Str)) && hint.is_none_or(type_hint_may_hold_string)
+        })
+        .map(|(index, _)| index)
+        .collect();
     state.boxes_returned_strings = matches!(
         return_type,
         Some(TypeExpr::Named(name)) if name.as_str().eq_ignore_ascii_case("mixed")
@@ -829,6 +873,11 @@ fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
         .unwrap_or_default();
     let boxes_returned_strings = states.iter().any(|state| state.boxes_returned_strings);
     let callees = states.first().map(|state| state.callees).unwrap_or_default();
+    // A declaration fact, the same on every path.
+    let boxed_string_parameter_indices = states
+        .first()
+        .map(|state| state.boxed_string_parameter_indices.clone())
+        .unwrap_or_default();
     AliasState {
         callees,
         locals,
@@ -837,17 +886,42 @@ fn merge_states<'a>(states: Vec<AliasState<'a>>) -> AliasState<'a> {
         str_slot_locals,
         string_valued_locals,
         boxes_returned_strings,
+        boxed_string_parameter_indices,
     }
 }
 
 /// Computes the argument provenance of one expression's resulting storage.
 fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
     match &expr.kind {
-        ExprKind::Variable(name) => state
-            .locals
-            .get(name)
-            .cloned()
-            .unwrap_or(ReturnArgAlias::Unknown),
+        ExprKind::Variable(name) => {
+            let alias = state
+                .locals
+                .get(name)
+                .cloned()
+                .unwrap_or(ReturnArgAlias::Unknown);
+            // A string is not refcounted, and a local that is not a parameter is always boxed:
+            // the box persisted its own copy of the parameter's bytes, so reading it yields that
+            // copy, independent of the `string` parameter it came from. `$copy = $s; return
+            // $copy;` leaked one copy per call while it was taken for a borrow. Only those
+            // parameters are dropped: the answer must stay a merge of the paths, because
+            // `Unknown` here would absorb another return's proven borrow and the caller would
+            // free its own argument. A `string` PARAMETER keeps its provenance even when its
+            // slot widened, since a path that never wrote it still holds the caller's block.
+            match alias {
+                ReturnArgAlias::Parameters(parameters) if !state.is_string_parameter(name) => {
+                    let kept: BTreeSet<usize> = parameters
+                        .into_iter()
+                        .filter(|index| !state.is_string_parameter_index(*index))
+                        .collect();
+                    if kept.is_empty() {
+                        ReturnArgAlias::None
+                    } else {
+                        ReturnArgAlias::Parameters(kept)
+                    }
+                }
+                alias => alias,
+            }
+        }
         ExprKind::ErrorSuppress(inner)
         | ExprKind::NamedArg { value: inner, .. }
         | ExprKind::Spread(inner) => expr_alias(inner, state),
@@ -909,7 +983,10 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
             match state.callees.0 {
                 Some(callees) if callees.externs.contains(canonical) => ReturnArgAlias::None,
                 Some(callees) => match callees.functions.get(canonical) {
-                    Some(summary) => call_alias(summary, args, state),
+                    Some(summary) => {
+                        let string_parameters = callees.function_string_parameters.get(canonical);
+                        call_alias_through_string_parameters(summary, args, state, string_parameters)
+                    }
                     None => ReturnArgAlias::Unknown,
                 },
                 None => ReturnArgAlias::Unknown,
@@ -964,6 +1041,48 @@ fn call_alias(summary: &ReturnArgAlias, args: &[Expr], state: &AliasState<'_>) -
                 .fold(ReturnArgAlias::None, |alias, arg| alias.merge(&expr_alias(arg, state)))
         }
     }
+}
+
+/// `call_alias` for a source function whose `string` parameters are known.
+///
+/// A boxed caller parameter handed to a callee's `string` parameter is unboxed into a copy, so a
+/// callee that returns that parameter returns the copy: the result is independent of the box.
+/// Tracing it as the caller's parameter told the caller it borrowed the result, and the copy
+/// leaked once per call (`function untyped($s) { return id($s); }`).
+fn call_alias_through_string_parameters(
+    summary: &ReturnArgAlias,
+    args: &[Expr],
+    state: &AliasState<'_>,
+    string_parameters: Option<&BTreeSet<usize>>,
+) -> ReturnArgAlias {
+    let ReturnArgAlias::Parameters(indices) = summary else {
+        return call_alias(summary, args, state);
+    };
+    if args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))) {
+        return ReturnArgAlias::Unknown;
+    }
+    indices
+        .iter()
+        .filter_map(|index| args.get(*index).map(|arg| (*index, arg)))
+        .fold(ReturnArgAlias::None, |alias, (index, arg)| {
+            let traced = expr_alias(arg, state);
+            let unboxed = string_parameters.is_some_and(|parameters| parameters.contains(&index));
+            let traced = match traced {
+                ReturnArgAlias::Parameters(passed) if unboxed => {
+                    let kept: BTreeSet<usize> = passed
+                        .into_iter()
+                        .filter(|caller| !state.boxed_string_parameter_indices.contains(caller))
+                        .collect();
+                    if kept.is_empty() {
+                        ReturnArgAlias::None
+                    } else {
+                        ReturnArgAlias::Parameters(kept)
+                    }
+                }
+                other => other,
+            };
+            alias.merge(&traced)
+        })
 }
 
 /// Returns whether a builtin's result storage cannot alias any caller argument.
@@ -1146,7 +1265,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
             if !declared && named_call_can_rebind_unlisted_locals(name.as_str()) {
                 invalidate_all_aliases(state);
             } else {
-                invalidate_call_variables(args, state);
+                invalidate_builtin_reference_arguments(name.as_str(), args, state);
             }
         }
         ExprKind::ClosureCall { args, .. } => {
@@ -1349,6 +1468,63 @@ fn invalidate_all_aliases(state: &mut AliasState<'_>) {
     }
 }
 
+/// Marks unknown the direct variable arguments a builtin takes BY REFERENCE, which it may rebind.
+///
+/// A builtin's parameters are declared, so a by-value one (`strlen($s)`) cannot change what the
+/// variable holds. Invalidating it anyway turned `function f(string $s): string { $n =
+/// strlen($s); return $s; }` into an `Unknown` summary, the caller then treated the result as an
+/// owner and released it, and that freed the argument the caller still held. A named argument is
+/// matched to its declared parameter the same way (`strlen(string: $s)`); a name that matches no
+/// fixed parameter, a spread, and any callable that is not a builtin keep the conservative answer.
+fn invalidate_builtin_reference_arguments(name: &str, args: &[Expr], state: &mut AliasState<'_>) {
+    let bare_name = name.trim_start_matches('\\');
+    let Some(definition) = crate::builtins::registry::lookup(bare_name) else {
+        invalidate_call_variables(args, state);
+        return;
+    };
+    if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+        invalidate_call_variables(args, state);
+        return;
+    }
+    // `params` ends with the variadic when there is one; the fixed parameters precede it.
+    let fixed = definition.params.len() - usize::from(definition.variadic.is_some());
+    for (index, arg) in args.iter().enumerate() {
+        let (by_ref, value) = match &arg.kind {
+            ExprKind::NamedArg { name, value } => (
+                definition.params[..fixed]
+                    .iter()
+                    .position(|(parameter, _)| parameter == name)
+                    .map(|position| definition.ref_params[position]),
+                value.as_ref(),
+            ),
+            _ if index < fixed => (Some(definition.ref_params[index]), arg),
+            // Past the declared list, an argument lands in the variadic, whose flag is the last
+            // one, unless the builtin writes its outputs there behind a by-value contract.
+            _ => (
+                definition.variadic.as_ref().map(|_| {
+                    builtin_variadic_writes_through(bare_name)
+                        || definition.ref_params.last().copied().unwrap_or(true)
+                }),
+                arg,
+            ),
+        };
+        if !by_ref.unwrap_or(true) {
+            continue;
+        }
+        if let ExprKind::Variable(name) = &value.kind {
+            state.locals.insert(name.clone(), ReturnArgAlias::Unknown);
+        }
+    }
+}
+
+/// Returns whether `name` writes through its variadic arguments although its contract declares
+/// them by value (`sscanf("7", "%d", $n)` assigns `$n`).
+fn builtin_variadic_writes_through(name: &str) -> bool {
+    ["sscanf", "fscanf", "array_multisort"]
+        .iter()
+        .any(|builtin| name.eq_ignore_ascii_case(builtin))
+}
+
 /// Marks direct variable call arguments unknown because the callee may accept them by reference.
 fn invalidate_call_variables(args: &[Expr], state: &mut AliasState<'_>) {
     for arg in args {
@@ -1381,6 +1557,72 @@ mod tests {
         );
         let summaries = collect_return_alias_summaries(&program);
         assert_eq!(summaries.method("S", "scan"), Some(&ReturnArgAlias::None));
+    }
+
+    /// A by-value builtin argument keeps the parameter's provenance, by position or by name; a
+    /// by-reference one, which the builtin may rebind, loses it, and so do an output the contract
+    /// declares by value (`sscanf`) and a name that matches no parameter.
+    #[test]
+    fn only_by_reference_builtin_arguments_forget_a_parameter() {
+        let program = parse(
+            "<?php function kept(string $s) { $n = strlen($s); return $s; }
+             function rebound(string $s) { settype($s, 'string'); return $s; }
+             function named(string $s) { $n = strlen(string: $s); return $s; }
+             function scanned(string $s) { sscanf('new', '%s', $s); return $s; }
+             function unmatched(string $s) { $n = strlen(nope: $s); return $s; }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(
+            summaries.function("kept"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([0])))
+        );
+        assert_eq!(summaries.function("rebound"), Some(&ReturnArgAlias::Unknown));
+        assert_eq!(
+            summaries.function("named"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([0])))
+        );
+        assert_eq!(summaries.function("scanned"), Some(&ReturnArgAlias::Unknown));
+        assert_eq!(summaries.function("unmatched"), Some(&ReturnArgAlias::Unknown));
+    }
+
+    /// A local a `string` parameter was copied into holds its own box, so returning it is
+    /// independent of the parameter; merged with a path that returns the parameter itself, the
+    /// proven borrow must survive, or the caller would free its own argument on that path.
+    #[test]
+    fn a_copied_string_local_is_independent_without_hiding_another_borrow() {
+        let program = parse(
+            "<?php function copied(string $s) { $t = $s; return $t; }
+             function choose(string $s, bool $c) { if ($c) { $t = $s; return $t; } return $s; }
+             function widen(string $s, bool $c) { if ($c) { $s = strlen($s) > 4 ? $s : 'x'; } return $s; }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("copied"), Some(&ReturnArgAlias::None));
+        assert_eq!(
+            summaries.function("choose"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([0])))
+        );
+        assert_eq!(
+            summaries.function("widen"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([0])))
+        );
+    }
+
+    /// A boxed parameter handed to a callee's `string` parameter is unboxed into a copy, so a
+    /// wrapper returning that call returns the copy, not its own box; a `string` parameter passed
+    /// the same way is still traced through.
+    #[test]
+    fn a_boxed_parameter_passed_to_a_string_parameter_is_a_copy() {
+        let program = parse(
+            "<?php function id(string $s) { return $s; }
+             function untyped($s) { return id($s); }
+             function typed(string $s) { return id($s); }",
+        );
+        let summaries = collect_return_alias_summaries(&program);
+        assert_eq!(summaries.function("untyped"), Some(&ReturnArgAlias::None));
+        assert_eq!(
+            summaries.function("typed"),
+            Some(&ReturnArgAlias::Parameters(BTreeSet::from([0])))
+        );
     }
 
     /// Verifies `implode()` returns storage independent of a method's string parameters.

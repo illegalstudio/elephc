@@ -24,7 +24,9 @@ mod files;
 mod function_variants;
 /// Read by the checker, which must compare a CALL SITE name against a variant declaration.
 mod include_once;
-pub(crate) use include_once::include_once_label;
+pub(crate) use include_once::{identity_path, include_once_label};
+#[allow(unused_imports)] // consumed by the binary crate's pipeline, not by the library
+pub(crate) use include_once::set_identity_root;
 mod include_path;
 mod state;
 mod stmt_exprs;

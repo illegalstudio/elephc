@@ -203,6 +203,7 @@ fn committed_consumer(function: &Function, inst: &Instruction, scalar_values: &H
     match inst.op {
         Op::Cast => matches!(inst.immediate,
             Some(Immediate::CastTarget(IrType::I64 | IrType::F64 | IrType::Str)
+                | Immediate::ExplicitCastTarget(IrType::I64 | IrType::F64 | IrType::Str)
                 | Immediate::StringOffsetCast)),
         Op::Spaceship | Op::StrictEq | Op::StrictNotEq | Op::LooseEq | Op::LooseNotEq =>
             super::consumers::comparison_preserves_integer(function, inst, scalar_values),

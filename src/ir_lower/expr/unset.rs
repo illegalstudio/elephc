@@ -26,6 +26,8 @@ pub(super) fn lower_unset_locals(
     if !args.iter().all(|arg| unset_target_supported(ctx, arg)) {
         return None;
     }
+    // Decide from the state BEFORE the targets are removed: `unset($x)` retypes `$x` to null.
+    let may_free_cycle_member = args.iter().any(|arg| unset_target_may_free_cycle_member(ctx, arg));
     let null = lower_null(ctx, expr);
     let mut changed = None;
     let mut unconditional = false;
@@ -55,8 +57,76 @@ pub(super) fn lower_unset_locals(
             unconditional = true;
         }
     }
-    super::unset_collection::collect_after_unset(ctx, changed, unconditional, expr.span);
+    // One collection per statement. On wasm, only when a removed value could have been the last
+    // outside reference into a reference cycle: removing a scalar or a string cannot orphan
+    // anything, so the full heap walk it used to cost is skipped. Native keeps the statement as
+    // an unconditional safe point (gated on the removal flags), which its gc contract tests pin.
+    if may_free_cycle_member || !ctx.target.is_wasm() {
+        super::unset_collection::collect_after_unset(ctx, changed, unconditional, expr.span);
+    }
     Some(null)
+}
+
+/// Returns true when a value of this type can be, or lead to, a member of a reference cycle.
+///
+/// Scalars and strings are leaves of the refcount graph, so dropping one never reduces a cycle's
+/// external reference count. Everything that can hold another refcounted value (arrays, hashes,
+/// objects, closures, boxed `mixed`, iterables) or that this lowering cannot see through (a union
+/// member, an unknown type) is treated as able to.
+fn type_may_hold_cycle_member(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Int
+        | PhpType::Float
+        | PhpType::Str
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Void
+        | PhpType::Never
+        | PhpType::TaggedScalar
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_)
+        | PhpType::Packed(_)
+        | PhpType::Narrow(_)
+        | PhpType::Resource(_) => false,
+        PhpType::Union(members) => members.iter().any(type_may_hold_cycle_member),
+        PhpType::Iterable
+        | PhpType::Mixed
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Callable
+        | PhpType::Object(_) => true,
+    }
+}
+
+/// Returns true when removing this `unset(...)` target could orphan a reference cycle.
+///
+/// A plain frame local holding a scalar/string is the only target proven inert. A by-reference
+/// binding, a global, a static, an extern, an eval-visible local, a property (it can run
+/// `__unset`) and an `ArrayAccess` object (it runs `offsetUnset`) all keep the collection, as
+/// does an array element whose type is not a known scalar.
+fn unset_target_may_free_cycle_member(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+    match &arg.kind {
+        ExprKind::Variable(name) => {
+            ctx.unset_local_may_free_cycle_member(name, type_may_hold_cycle_member)
+        }
+        ExprKind::ArrayAccess { array, .. } => {
+            let ExprKind::Variable(name) = &array.kind else {
+                return true;
+            };
+            if ctx.is_ref_bound_local(name)
+                || ctx.local_uses_global_storage(name)
+                || ctx.eval_scope_may_alias_locals()
+            {
+                return true;
+            }
+            match ctx.local_type(name) {
+                PhpType::Array(elem) => type_may_hold_cycle_member(&elem),
+                PhpType::AssocArray { value, .. } => type_may_hold_cycle_member(&value),
+                _ => true,
+            }
+        }
+        _ => true,
+    }
 }
 
 /// Returns true when an `unset(...)` target has direct EIR lowering.

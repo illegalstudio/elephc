@@ -1439,6 +1439,35 @@ echo $a, "|", $b[0];
     );
 }
 
+/// Verifies an associative local append is represented by the typed
+/// `HashAppend` opcode instead of an unclassified `RuntimeCall`, allowing every
+/// backend to enforce the same hash-specific ownership and failure semantics.
+#[test]
+fn associative_array_append_uses_typed_hash_append() {
+    let module = super::lower_source(
+        r#"<?php
+$items = [PHP_INT_MAX => 1];
+$items[] = 2;
+"#,
+    );
+    // Only the script body is the append under test: prelude classes such as `ErrorException`
+    // legitimately call the runtime.
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.flags.is_main)
+        .expect("expected the main function");
+    let text = crate::ir::print_function(main);
+    assert!(
+        text.contains("hash_append"),
+        "missing typed hash_append in {text}"
+    );
+    assert!(
+        !text.contains("runtime_call"),
+        "associative append retained an unclassified runtime_call in {text}"
+    );
+}
+
 /// Cross-layout array unions retire owned literal operands after the borrowing runtime call.
 #[test]
 fn cross_layout_array_unions_release_owned_sources_on_every_target() {

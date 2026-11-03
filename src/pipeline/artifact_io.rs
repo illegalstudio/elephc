@@ -78,36 +78,135 @@ impl ArtifactPlan {
 /// EXISTING REGULAR FILES ARE ALLOWED, and deliberately: recompiling over yesterday's
 /// `main.s` is the normal case. What is refused is a destination whose write would land
 /// somewhere else (a symlink) or would not be a file write at all (a directory, a FIFO, a
-/// device node).
+/// device node). The one regular file that is refused is the SOURCE itself: a program named
+/// `app.wat` or `app.wasm` (tagged PHP is accepted under any suffix), or `app` with no suffix
+/// for a native executable, would otherwise be replaced by its own output.
 pub(super) fn reject_unsafe_destinations(
+    source: &Path,
     paths: &OutputPaths,
     plan: &ArtifactPlan,
 ) -> Result<(), String> {
-    let mut destinations: Vec<&Path> = Vec::new();
+    let destinations = planned_destinations(paths, plan);
+    let source = std::fs::canonicalize(source).ok();
+    if let Some(source) = source.as_deref() {
+        reject_input_inside_package(paths, plan, source)?;
+    }
+    for destination in &destinations {
+        reject_unsafe_destination(destination)?;
+        if source.is_some() && std::fs::canonicalize(destination).ok() == source {
+            return Err(format!(
+                "refusing to write the generated file '{}': it is the source file being \
+                 compiled; rename the source or choose another output name",
+                destination.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a destination that is one of the files the compilation READ besides the main source.
+///
+/// `reject_unsafe_destinations` runs before anything is parsed, so it can only compare against the
+/// main source. A program that includes `app.wat` (`require "app.wat";`) would still have that
+/// included file replaced by the generated text. Once resolution has produced the full input list
+/// — includes, Composer `autoload.files` and autoloaded class files — this second check compares
+/// every destination against every one of them, before any artifact is written.
+///
+/// `inputs` holds canonical paths; a destination that does not exist yet cannot be an input.
+pub(super) fn reject_destinations_that_are_inputs(
+    paths: &OutputPaths,
+    plan: &ArtifactPlan,
+    inputs: &[PathBuf],
+) -> Result<(), String> {
+    for input in inputs {
+        reject_input_inside_package(paths, plan, input)?;
+    }
+    for destination in planned_destinations(paths, plan) {
+        let Ok(canonical) = std::fs::canonicalize(&destination) else {
+            continue;
+        };
+        if inputs.iter().any(|input| *input == canonical) {
+            return Err(format!(
+                "refusing to write the generated file '{}': it is a source file this \
+                 program includes; rename the included file or choose another output name",
+                destination.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a compilation input that lives inside the npm package directory being published.
+///
+/// Publication replaces the whole directory (`module.wasm`, `index.mjs`, `index.d.ts`,
+/// `package.json`, `README.md` and the ownership marker), so an input there — the main source,
+/// an include, an autoloaded file — would be overwritten or deleted by the build that reads it,
+/// whatever its name. A package directory that does not exist yet cannot hold an input.
+///
+/// `input` is a canonical path; the package directory is canonicalized here.
+fn reject_input_inside_package(
+    paths: &OutputPaths,
+    plan: &ArtifactPlan,
+    input: &Path,
+) -> Result<(), String> {
+    if !plan.linked {
+        return Ok(());
+    }
+    let Some(package) = paths.package_dir.as_deref() else {
+        return Ok(());
+    };
+    let Ok(package) = std::fs::canonicalize(package) else {
+        return Ok(());
+    };
+    if input.starts_with(&package) {
+        return Err(format!(
+            "refusing to write the npm package '{}': the compilation reads '{}' from inside it, \
+             and publishing the package would replace that file; move the source out of the \
+             package directory or choose another output name",
+            package.display(),
+            input.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Every destination the planned run writes, including the derived probe-key sidecar.
+///
+/// An npm publication replaces EVERY file it generates inside the package directory, not only
+/// `module.wasm`, so each of those names is a destination too.
+fn planned_destinations(paths: &OutputPaths, plan: &ArtifactPlan) -> Vec<PathBuf> {
+    let mut destinations: Vec<PathBuf> = Vec::new();
     if plan.assembly {
-        destinations.push(paths.asm.as_path());
+        destinations.push(paths.asm.clone());
     }
     if plan.source_map {
-        destinations.push(paths.source_map.as_path());
+        destinations.push(paths.source_map.clone());
     }
     if plan.linked {
-        destinations.push(paths.obj.as_path());
-        destinations.push(paths.bin.as_path());
+        if let Some(obj) = &paths.obj {
+            destinations.push(obj.clone());
+        }
+        destinations.push(paths.bin.clone());
         if let Some(header) = paths.header.as_deref() {
-            destinations.push(header);
+            destinations.push(header.to_path_buf());
         }
     }
     // The probe-key sidecar is derived from the binary path at write time rather than stored
     // in `OutputPaths`; it is an output-path symlink target like any other.
-    let sidecar = paths.bin.with_extension("key");
     if plan.probe_key {
-        destinations.push(sidecar.as_path());
+        destinations.push(paths.bin.with_extension("key"));
     }
-
-    for destination in destinations {
-        reject_unsafe_destination(destination)?;
+    if plan.linked {
+        if let Some(package) = paths.package_dir.as_deref() {
+            for name in crate::codegen_wasm::PACKAGE_FILES {
+                let file = package.join(name);
+                if !destinations.contains(&file) {
+                    destinations.push(file);
+                }
+            }
+        }
     }
-    Ok(())
+    destinations
 }
 
 /// Rejects one destination that is a symlink or a non-regular existing file.
@@ -372,10 +471,11 @@ mod tests {
         let dir = scratch("plan");
         let paths = OutputPaths {
             asm: dir.join("main.s"),
-            obj: dir.join("main.o"),
+            obj: Some(dir.join("main.o")),
             bin: dir.join("main"),
             source_map: dir.join("main.map"),
             header: None,
+            package_dir: None,
         };
         let victim = dir.join("victim.txt");
         std::fs::write(&victim, b"original").expect("victim must be writable");
@@ -385,18 +485,18 @@ mod tests {
         }
 
         let check = ArtifactPlan::for_run(true, false, false, true, true);
-        reject_unsafe_destinations(&paths, &check)
+        reject_unsafe_destinations(&dir.join("absent-source.php"), &paths, &check)
             .expect("--check writes nothing and must not be refused");
         let ir = ArtifactPlan::for_run(false, true, false, true, true);
-        reject_unsafe_destinations(&paths, &ir)
+        reject_unsafe_destinations(&dir.join("absent-source.php"), &paths, &ir)
             .expect("--emit-ir writes none of these and must not be refused");
         let asm = ArtifactPlan::for_run(false, false, true, false, true);
-        reject_unsafe_destinations(&paths, &asm)
+        reject_unsafe_destinations(&dir.join("absent-source.php"), &paths, &asm)
             .expect("--emit-asm writes only the assembly and must not be refused");
 
         // The full build does reach all of them, and is refused.
         let full = ArtifactPlan::for_run(false, false, false, true, true);
-        reject_unsafe_destinations(&paths, &full)
+        reject_unsafe_destinations(&dir.join("absent-source.php"), &paths, &full)
             .expect_err("a full build must still refuse the planted symlinks");
 
         // A build without monitoring writes no key, so a symlink at `main.key` alone is
@@ -404,8 +504,175 @@ mod tests {
         std::fs::remove_file(dir.join("main.o")).expect("planted link must be removable");
         std::fs::remove_file(dir.join("main")).expect("planted link must be removable");
         let unmonitored = ArtifactPlan::for_run(false, false, false, true, false);
-        reject_unsafe_destinations(&paths, &unmonitored)
+        reject_unsafe_destinations(&dir.join("absent-source.php"), &paths, &unmonitored)
             .expect("a build with no probe key must ignore a symlink at the key path");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A source whose name is one of its own outputs is refused instead of overwritten.
+    ///
+    /// Tagged PHP compiles under any suffix, so `app.wat` with `--emit-asm` would be replaced
+    /// by the WAT it produces, and `app` (no suffix) by its own native executable.
+    #[test]
+    fn validation_refuses_to_overwrite_the_source() {
+        let dir = scratch("source");
+        let source = dir.join("app.wat");
+        std::fs::write(&source, b"<?php echo 1;").expect("source must be writable");
+        let paths = OutputPaths {
+            asm: dir.join("app.wat"),
+            obj: Some(dir.join("app.o")),
+            bin: dir.join("app.wasm"),
+            source_map: dir.join("app.map"),
+            header: None,
+            package_dir: None,
+        };
+        let asm = ArtifactPlan::for_run(false, false, true, false, false);
+        let error = reject_unsafe_destinations(&source, &paths, &asm)
+            .expect_err("the assembly path is the source");
+        assert!(error.contains("is the source file"), "{error}");
+        let other = dir.join("other.php");
+        std::fs::write(&other, b"<?php echo 1;").expect("source must be writable");
+        reject_unsafe_destinations(&other, &paths, &asm)
+            .expect("a different source must not be refused");
+        assert_eq!(std::fs::read(&source).expect("source"), b"<?php echo 1;");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A destination that is an INCLUDED file is refused, not only the main source.
+    ///
+    /// `app.php` containing `require "app.wat";` compiled for WASM wrote its WAT over the
+    /// included `app.wat`, because the up-front check only knows the main source.
+    #[test]
+    fn validation_refuses_to_overwrite_an_included_file() {
+        let dir = scratch("included");
+        let included = dir.join("app.wat");
+        std::fs::write(&included, b"<?php echo 'lib';").expect("include must be writable");
+        let paths = OutputPaths {
+            asm: dir.join("app.wat"),
+            obj: Some(dir.join("app.o")),
+            bin: dir.join("app.wasm"),
+            source_map: dir.join("app.map"),
+            header: None,
+            package_dir: None,
+        };
+        let asm = ArtifactPlan::for_run(false, false, true, false, false);
+        let inputs = vec![std::fs::canonicalize(&included).expect("canonical include")];
+        let error = reject_destinations_that_are_inputs(&paths, &asm, &inputs)
+            .expect_err("the assembly path is an included file");
+        assert!(error.contains("source file this program includes"), "{error}");
+        reject_destinations_that_are_inputs(&paths, &asm, &[]).expect("no inputs, no refusal");
+        let other = vec![dir.join("elsewhere.php")];
+        reject_destinations_that_are_inputs(&paths, &asm, &other)
+            .expect("an unrelated input must not be refused");
+        assert_eq!(std::fs::read(&included).expect("include"), b"<?php echo 'lib';");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A WASM build plans no `.o`, so a directory, a symlink or the SOURCE itself named `app.o`
+    /// is neither validated nor mistaken for a destination — while a native build, which does
+    /// write the object, still refuses all three.
+    #[test]
+    fn wasm_ignores_an_object_path_it_never_writes_and_native_still_validates_it() {
+        let dir = scratch("wasm_obj");
+        let wasm = super::super::output::output_paths(
+            dir.join("app.php").to_str().expect("utf-8 path"),
+            crate::codegen::platform::Target::wasm(),
+            crate::codegen::Emit::Executable,
+        );
+        let native = super::super::output::output_paths(
+            dir.join("app.php").to_str().expect("utf-8 path"),
+            crate::codegen::platform::Target::new(
+                crate::codegen::platform::Platform::Linux,
+                crate::codegen::platform::Arch::X86_64,
+            ),
+            crate::codegen::Emit::Executable,
+        );
+        let full = ArtifactPlan::for_run(false, false, false, false, false);
+        let source = dir.join("app.php");
+        std::fs::write(&source, b"<?php echo 1;").expect("source");
+
+        // An unrelated directory named app.o.
+        std::fs::create_dir(dir.join("app.o")).expect("directory");
+        reject_unsafe_destinations(&source, &wasm, &full)
+            .expect("a directory named app.o is not a WASM destination");
+        let error = reject_unsafe_destinations(&source, &native, &full)
+            .expect_err("native writes app.o, so the directory must still be refused");
+        assert!(error.contains("not a regular file"), "{error}");
+        std::fs::remove_dir(dir.join("app.o")).expect("cleanup");
+
+        // An unrelated symlink named app.o.
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"original").expect("victim");
+        std::os::unix::fs::symlink(&victim, dir.join("app.o")).expect("symlink");
+        reject_unsafe_destinations(&source, &wasm, &full).expect("a symlink app.o is ignored");
+        reject_unsafe_destinations(&source, &native, &full)
+            .expect_err("native still refuses a symlink at app.o");
+        std::fs::remove_file(dir.join("app.o")).expect("cleanup");
+
+        // A tagged-PHP source (and an include) that is literally named app.o.
+        let object_named = dir.join("app.o");
+        std::fs::write(&object_named, b"<?php echo 1;").expect("object-named source");
+        reject_unsafe_destinations(&object_named, &wasm, &full)
+            .expect("WASM does not overwrite a source named app.o");
+        let error = reject_unsafe_destinations(&object_named, &native, &full)
+            .expect_err("native would overwrite the source named app.o");
+        assert!(error.contains("is the source file"), "{error}");
+        let inputs = vec![std::fs::canonicalize(&object_named).expect("canonical")];
+        reject_destinations_that_are_inputs(&wasm, &full, &inputs)
+            .expect("WASM does not overwrite an included app.o");
+        reject_destinations_that_are_inputs(&native, &full, &inputs)
+            .expect_err("native would overwrite an included app.o");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An npm publication replaces every generated file in the package directory, so an input
+    /// named like ANY of them is refused, and so is any input at all inside that directory.
+    #[test]
+    fn validation_protects_every_npm_package_file_and_the_directory() {
+        let dir = scratch("npm_inputs");
+        let package = dir.join("app-npm");
+        std::fs::create_dir_all(&package).expect("package dir");
+        let paths = OutputPaths {
+            asm: dir.join("app.wat"),
+            obj: Some(dir.join("app.o")),
+            bin: package.join("module.wasm"),
+            source_map: dir.join("app.map"),
+            header: None,
+            package_dir: Some(package.clone()),
+        };
+        let full = ArtifactPlan::for_run(false, false, false, false, false);
+        let destinations = planned_destinations(&paths, &full);
+        for name in ["module.wasm", "index.mjs", "index.d.ts", "package.json", "README.md", ".elephc-npm"] {
+            assert!(destinations.contains(&package.join(name)), "{name} is not protected");
+        }
+        let readme = package.join("README.md");
+        std::fs::write(&readme, b"<?php echo 'lib';").expect("readme");
+        let inputs = vec![std::fs::canonicalize(&readme).expect("canonical readme")];
+        let error = reject_destinations_that_are_inputs(&paths, &full, &inputs)
+            .expect_err("a generated package file is an input");
+        assert!(error.contains("npm package"), "{error}");
+        // Any other file inside the directory is refused too: publication deletes it.
+        let notes = package.join("notes.php");
+        std::fs::write(&notes, b"<?php").expect("notes");
+        let inputs = vec![std::fs::canonicalize(&notes).expect("canonical notes")];
+        reject_destinations_that_are_inputs(&paths, &full, &inputs)
+            .expect_err("an arbitrary input inside the package directory");
+        // The main source is refused up front, before any work.
+        reject_unsafe_destinations(&notes, &paths, &full)
+            .expect_err("a main source inside the package directory");
+        // A plan that writes no package ignores the directory entirely.
+        let asm = ArtifactPlan::for_run(false, false, true, false, false);
+        reject_destinations_that_are_inputs(&paths, &asm, &inputs).expect("--emit-asm writes no package");
+        // An input outside the package is fine.
+        let outside = dir.join("lib.php");
+        std::fs::write(&outside, b"<?php").expect("outside");
+        let inputs = vec![std::fs::canonicalize(&outside).expect("canonical outside")];
+        reject_destinations_that_are_inputs(&paths, &full, &inputs).expect("outside input");
+        assert_eq!(std::fs::read(&readme).expect("readme"), b"<?php echo 'lib';");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

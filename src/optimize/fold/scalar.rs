@@ -195,6 +195,15 @@ impl ScalarValue {
         matches!(self, ScalarValue::Float(value) if value.is_nan())
     }
 
+    /// Returns PHP truthiness only when folding cannot suppress a diagnostic.
+    ///
+    /// PHP 8.5 reports every NAN-to-bool coercion. Optimizer callers use this gate before
+    /// replacing control flow or a logical expression with a literal, so a program whose
+    /// only observable effect is that warning keeps it.
+    pub(in crate::optimize) fn diagnostic_free_truthiness(&self) -> Option<bool> {
+        (!self.is_nan_float()).then(|| self.truthy())
+    }
+
     /// Converts this scalar value back into the equivalent `ExprKind` literal node.
     pub(in crate::optimize) fn into_expr_kind(self) -> ExprKind {
         match self {

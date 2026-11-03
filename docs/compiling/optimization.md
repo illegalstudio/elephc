@@ -6,9 +6,9 @@ sidebar:
 ---
 
 elephc optimizes in two places: over the AST before lowering, and over EIR after
-lowering. The AST optimizer is always on. The EIR-level controls below let you
-turn passes off for benchmarking and diagnostics, and choose between code-shape
-trade-offs.
+lowering. Native targets run both layers by default. The current experimental
+`wasm32-wasi` path keeps diagnostic-sensitive control flow and EIR intact until
+its capability audit, as detailed below.
 
 ## Two optimization layers
 
@@ -18,11 +18,15 @@ trade-offs.
   reachability that removes unused functions, classes, and methods before EIR
   lowering. Dynamic lookup and Reflection widen its keep-set, while the
   prelude-backed `--with-pdo`, `--with-mysqli`, `--with-tz`, and `--with-image`
-  requests, `--with-eval`, and every `#[Export]` function are roots. Always on; not behind a flag. See
+  requests, `--with-eval`, and every `#[Export]` function are roots. Constant
+  folding and propagation run on every target; native targets also run pruning,
+  normalization, and DCE, while `wasm32-wasi` skips those three
+  diagnostic-eliding passes. Always on; not behind a flag. See
   [The Optimizer](../internals/the-optimizer.md).
 - **EIR optimization passes** — transformations that need value identity, basic
   blocks, or dominance, which the AST cannot express well. Run by a fixed-point
-  pass driver after lowering. Controlled by `--ir-opt`. See
+  pass driver after lowering on native targets. Controlled by `--ir-opt`; WASM
+  runs a guarded subset (see below). See
   [The EIR Design](../internals/the-ir.md#optimization-passes).
 
 Declaration reachability favors correctness over minimum size. Runtime-computed
@@ -64,7 +68,7 @@ candidates. Passes that set `run_after_fixed_point` are partitioned out of that
 loop. [Fresh Mixed assignment transfer](#fresh-mixed-assignment-transfer) runs
 after `optimize_module_to_fixed_point` returns, so removing an assignment clone
 cannot restart the inliner or the checked-integer sink. The passes are **on by
-default**.
+default for native targets**.
 
 ```bash
 # Default: EIR optimization passes enabled
@@ -80,6 +84,18 @@ elephc --ir-opt=on hot.php
 
 The environment variable `ELEPHC_IR_OPT=off` disables the passes for a whole run
 without editing each command.
+
+For `wasm32-wasi`, `--ir-opt` controls a guarded subset. The capability audit
+first validates the original EIR, so every refusal is preserved; a separate
+copy is then optimized with identity folding, peepholes, scalar promotion,
+immutable-local loads, loop canonicalization, integer range analysis, constant
+folding, CSE, LICM, dead-instruction and dead-store elimination and branch
+simplification, and that copy is audited again and lowered. Generators and
+functions with `try` handlers are left alone, no cross-function inlining runs,
+and the checked-int sink is applied one counter slot at a time and kept only
+when range analysis proves the counter cannot overflow, so
+`$i = PHP_INT_MAX; $i++` still yields a float. `--emit-ir` shows the optimized
+EIR; `--ir-opt=off` shows the lowering as produced.
 
 In debug and test builds the driver re-validates each function after **every**
 pass and aborts if a pass produced malformed IR, so optimization bugs surface

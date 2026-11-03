@@ -13,6 +13,9 @@ use crate::types::PhpType;
 use std::path::Path;
 
 /// Both array representations gate collection on removal flags on all supported ABIs.
+///
+/// The top-level array holds arrays, not ints: removing an int cannot orphan a cycle, so an
+/// int-valued array skips the collection altogether rather than gating it.
 #[test]
 fn missing_key_unset_collection_is_conditional_on_every_target() {
     let source = r#"<?php
@@ -22,7 +25,7 @@ function removeDeclaredHeaders(array &$items, string $key): void {
 function nextUnsetKey(): string { echo "key"; return "absent"; }
 function removeComputedHeader(array $items): void { unset($items[nextUnsetKey()]); }
 function removeMixedHeader(mixed &$items): void { unset($items["other"]); }
-$items = ["keep" => 1];
+$items = ["keep" => [1]];
 $key = $argc > 0 ? "absent" : "missing";
 unset($items[strtolower($key)], $items["other"]);
 $declared = ["keep" => 1];

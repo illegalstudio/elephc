@@ -7,3 +7,5 @@ main
 *.webp
 *.gif
 *.bmp
+*.wasm
+*.wat

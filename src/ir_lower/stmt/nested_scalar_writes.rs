@@ -16,7 +16,9 @@ pub(super) fn lower_nested_set(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
     key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
-    if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
+    // The WASM backend has no string-offset write helpers; its nested store keeps the
+    // container path it lowers.
+    if ctx.target.is_wasm() || ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
         emit_set(ctx, parent, key, value, span, key_already_diagnosed);
         return;
     }

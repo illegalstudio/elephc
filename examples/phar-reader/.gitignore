@@ -3,3 +3,5 @@
 main
 runtime-write.phar
 runtime-write.zip
+*.wasm
+*.wat

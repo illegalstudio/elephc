@@ -326,10 +326,12 @@ pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
             condition,
             then_expr,
             else_expr,
-        } => match scalar_value(&condition) {
-            Some(value) if value.truthy() && !expr_has_side_effects(&else_expr)
+        } => match scalar_value(&condition)
+            .and_then(|value| value.diagnostic_free_truthiness())
+        {
+            Some(true) if !expr_has_side_effects(&else_expr)
                 && !array_read_needs_merge_context(&then_expr) => then_expr.kind,
-            Some(value) if !value.truthy() && !expr_has_side_effects(&then_expr)
+            Some(false) if !expr_has_side_effects(&then_expr)
                 && !array_read_needs_merge_context(&else_expr) => else_expr.kind,
             _ => ExprKind::Ternary {
                 condition,
@@ -337,12 +339,13 @@ pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
                 else_expr,
             },
         },
-        ExprKind::ShortTernary { value, default } => match scalar_value(&value) {
-            Some(value_scalar) if value_scalar.truthy() && !expr_has_side_effects(&default) => {
+        ExprKind::ShortTernary { value, default } => match scalar_value(&value)
+            .and_then(|value| value.diagnostic_free_truthiness())
+        {
+            Some(true) if !expr_has_side_effects(&default) => {
                 value.kind
             }
-            Some(value_scalar) if !value_scalar.truthy()
-                && !array_read_needs_merge_context(&default) => default.kind,
+            Some(false) if !array_read_needs_merge_context(&default) => default.kind,
             _ => ExprKind::ShortTernary { value, default },
         },
         ExprKind::NullCoalesce { value, default } => match scalar_value(&value) {
@@ -354,14 +357,18 @@ pub(crate) fn prune_unused_pure_subexpressions(kind: ExprKind) -> ExprKind {
             _ => ExprKind::NullCoalesce { value, default },
         },
         ExprKind::BinaryOp { left, op, right } => match op {
-            BinOp::And => match scalar_value(&left) {
-                Some(value) if !value.truthy() && !expr_has_side_effects(&right) => {
+            BinOp::And => match scalar_value(&left)
+                .and_then(|value| value.diagnostic_free_truthiness())
+            {
+                Some(false) if !expr_has_side_effects(&right) => {
                     ExprKind::BoolLiteral(false)
                 }
                 _ => ExprKind::BinaryOp { left, op, right },
             },
-            BinOp::Or => match scalar_value(&left) {
-                Some(value) if value.truthy() && !expr_has_side_effects(&right) => {
+            BinOp::Or => match scalar_value(&left)
+                .and_then(|value| value.diagnostic_free_truthiness())
+            {
+                Some(true) if !expr_has_side_effects(&right) => {
                     ExprKind::BoolLiteral(true)
                 }
                 _ => ExprKind::BinaryOp { left, op, right },

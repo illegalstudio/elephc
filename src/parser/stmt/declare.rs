@@ -13,6 +13,8 @@
 //!   between PHP's strict and coercive parameter binding.
 //! - Every other directive (`ticks`, `encoding`) is compile-time syntax only.
 //! - Bodies lower through `Synthetic` so they execute in the enclosing scope.
+//! - PHP scopes `strict_types` per file, but the recorded flag is per compilation, so a
+//!   program mixing strict and coercive files is checked as if every file were strict.
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};

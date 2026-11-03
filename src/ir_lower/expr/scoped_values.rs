@@ -16,12 +16,17 @@ pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, targ
         return lower_instance_callable_from_receiver(ctx, object, method, expr.span);
     }
     let data = ctx.intern_string(&callable_target_name(target));
+    // `f(...)` is a `Closure` in php. The same descriptor built from a string or array callable
+    // bound to a `callable` slot is not: it stays a string/array there.
+    let named_callable = !matches!(expr.kind, ExprKind::FirstClassCallable(_))
+        || ctx.named_callable_spans.contains(&expr.span);
     ctx.emit_value(
         Op::FirstClassCallableNew,
         Vec::new(),
         Some(Immediate::ProfiledData {
             data,
             strict_php: crate::strict_php::is_enabled(),
+            named_callable,
         }),
         PhpType::Callable,
         Op::FirstClassCallableNew.default_effects(),
@@ -36,7 +41,11 @@ pub(super) fn lower_instance_callable_from_receiver(
     let data = ctx.intern_string(&format!("object::{method}"));
     ctx.emit_value(
         Op::FirstClassCallableNew, vec![receiver.value],
-        Some(Immediate::ProfiledData { data, strict_php: crate::strict_php::is_enabled() }),
+        Some(Immediate::ProfiledData {
+            data,
+            strict_php: crate::strict_php::is_enabled(),
+            named_callable: false,
+        }),
         PhpType::Callable, Op::FirstClassCallableNew.default_effects(), Some(span),
     )
 }

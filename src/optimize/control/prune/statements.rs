@@ -101,8 +101,8 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
         }
         StmtKind::While { condition, body } => {
             let condition = prune_expr(condition);
-            match scalar_value(&condition) {
-                Some(value) if !value.truthy() => Vec::new(),
+            match scalar_value(&condition).and_then(|value| value.diagnostic_free_truthiness()) {
+                Some(false) => Vec::new(),
                 _ => normalize_while_stmt(
                     condition,
                     prune_block(body),
@@ -117,8 +117,8 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             // A trailing `continue` reaches the test exactly as falling off the body does, so it
             // is dropped before deciding whether a false test lets the body run inline.
             let body = strip_trailing_terminator(prune_block(body), TailTerminator::LoopContinue);
-            match scalar_value(&condition) {
-                Some(value) if !value.truthy() && !block_contains_loop_exit(&body) => body,
+            match scalar_value(&condition).and_then(|value| value.diagnostic_free_truthiness()) {
+                Some(false) if !block_contains_loop_exit(&body) => body,
                 _ => normalize_do_while_stmt(body, condition, span, source_mode, strict_types),
             }
         }
@@ -131,8 +131,12 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             let init = prune_for_clause(init);
             let condition = condition.map(prune_expr);
             let update = prune_for_clause(update);
-            match condition.as_ref().and_then(scalar_value) {
-                Some(value) if !value.truthy() => init.map(|stmt| vec![*stmt]).unwrap_or_default(),
+            match condition
+                .as_ref()
+                .and_then(scalar_value)
+                .and_then(|value| value.diagnostic_free_truthiness())
+            {
+                Some(false) => init.map(|stmt| vec![*stmt]).unwrap_or_default(),
                 _ => normalize_for_stmt(
                     init,
                     condition,

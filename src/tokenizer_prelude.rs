@@ -149,6 +149,16 @@ class PhpToken implements \Stringable {
 }
 "#;
 
+/// Whether the program NAMES the tokenizer surface, ignoring the dynamic-use heuristics.
+///
+/// The WASM target serves no tokenizer (its bridge is native `extern` code), so a closure call
+/// or a reflection probe must not pull the prelude into a module the backend would then refuse.
+pub fn program_names_surface(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    ["token_get_all", "token_name"].iter().any(|name| usage.references(name) || usage.literals.contains(*name))
+        || usage.classes.contains("phptoken") || usage.literals.contains("phptoken")
+}
+
 /// Detects tokenizer references in entry files and the probed autoload closure.
 pub(crate) fn program_uses_surface(program: &[Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);

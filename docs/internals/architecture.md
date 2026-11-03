@@ -7,6 +7,13 @@ sidebar:
 
 ## Compilation pipeline
 
+The diagram shows the complete native path. `wasm32-wasi` still runs constant
+folding and propagation, but temporarily skips constant-control pruning,
+normalization, AST DCE, and EIR optimization so the capability audit sees every
+diagnostic-sensitive coercion. After validated EIR lowering it branches to
+`src/codegen_wasm/`, which exactly plans, assembles, validates, and publishes
+WebAssembly artifacts without the native runtime cache, assembler, or linker.
+
 ```
 Source (.php or .lfc)
     │
@@ -165,13 +172,13 @@ Source (.php or .lfc)
       ▼
 ┌─────────────┐
 │ EIR Lowerer │  src/ir_lower/ + src/ir/
-│             │  Lowers the checked optimized AST into validated EIR.
+│             │  Lowers the checked target-prepared AST into validated EIR.
 └──────┬──────┘
        │
        ▼
 ┌─────────────┐
 │ EIR passes  │  src/ir_passes/
-│             │  Module-level fixed-point pipeline: a cross-function
+│             │  Native module-level fixed-point pipeline: a cross-function
 │             │  small-function inliner interleaved with the per-function
 │             │  pass driver (identity folding, peephole rewrites, scalar
 │             │  local promotion, immutable local classification, checked-
@@ -186,8 +193,8 @@ Source (.php or .lfc)
        │
        ▼
 ┌─────────────┐
-│ EIR Codegen │  src/codegen/ + shared src/codegen_support/abi/
-│             │  Emits target assembly text from EIR.
+│ EIR Codegen │  src/codegen/ or src/codegen_wasm/
+│             │  Emits target assembly or an exactly planned WASM module.
 └──────┬──────┘
      │
      ▼
@@ -294,6 +301,8 @@ internals documentation are examples only. The explicit `Target` split keeps OS,
 binary-format, SDK, ABI, and instruction-set decisions separate across macOS,
 iOS device and Simulator, and Linux.
 
+A third axis, `TargetKind` (`Native` vs `Wasm`), marks whether a target emits native assembly or a WebAssembly module. The non-native `wasm32-wasi` target is selected through `Target::is_wasm()`, which carries placeholder native `Platform`/`Arch` fields the WebAssembly path never consults and bypasses native assembly emission plus the `as`/`ld` tail in favor of the `src/codegen_wasm/` backend.
+
 ## Module map
 
 ```
@@ -352,6 +361,7 @@ src/
 ├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, scalar local promotion, immutable integer-local loads, checked-integer sinking, canonical loop optimization, integer range and induction-variable analysis, numeric-chain fusion, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, concat scratch-state optimization, fresh numeric ownership finalization, direct self/mutual tail-recursion lowering, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation with cost-aware constant rematerialization
 ├── codegen/                   Active EIR to target assembly backend
 ├── codegen_support/           Shared ABI, runtime, platform, metadata, and callable support
+├── codegen_wasm/              EIR to WebAssembly (.wat/.wasm) backend for the non-native wasm32-wasi target (TargetKind::Wasm / is_wasm())
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── runtime_cache/             Cache identity, lease/publication protocol, and pruning internals
 ├── synthetic_class.rs         Rust builders for compiler-injected synthetic PHP declarations

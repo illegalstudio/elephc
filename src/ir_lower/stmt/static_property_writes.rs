@@ -531,6 +531,11 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
 pub(super) fn bind_mixed_static_array_write_root(
     ctx: &mut LoweringContext<'_, '_>, root: &Expr,
 ) -> Option<String> {
+    // The WASM backend has no static-property reference cell; its writes keep the load, write and
+    // publish-back path.
+    if ctx.target.is_wasm() {
+        return None;
+    }
     let ExprKind::StaticPropertyAccess { receiver, property } = &root.kind else { return None; };
     let ty = static_property_type(ctx, receiver, property)?;
     let indexed = match ty.codegen_repr() {

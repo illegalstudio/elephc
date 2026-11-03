@@ -45,6 +45,13 @@ path = "src/main.rs"
 name = "gen_builtins"
 path = "tools/gen_builtins.rs"
 
+# W0 normative-evidence exporter: prints the deterministic wasm32-wasi
+# capability inventory JSON (or `--summary`). Mirrors gen_builtins so it can read
+# `elephc::codegen_wasm::inventory` without linking it into the elephc binary.
+[[example]]
+name = "gen_wasm_inventory"
+path = "tools/gen_wasm_inventory.rs"
+
 [dependencies]
 elephc-generics = { path = "crates/elephc-generics" }
 elephc-builtin-contract = { path = "crates/elephc-builtin-contract" }
@@ -78,6 +85,20 @@ bzip2-rs = "0.1"
 # `elephc native` to unpack catalog sources published only as `.tar.xz` (libxml2).
 # Decompress-only: the crate has no encoder, which is exactly the surface needed.
 lzma-rs = "0.3"
+# wat is the Bytecode Alliance's PURE-RUST WebAssembly-text assembler (no external
+# wat2wasm / wasm-tools CLI). The wasm32-wasi backend emits `.wat` text and encodes
+# it to a `.wasm` binary with `wat::parse_str`, matching the pure-Rust ethos of
+# flate2 / bzip2-rs above.
+wat = "1"
+# wasmparser fully validates (type-checks) the WebAssembly the wasm32-wasi backend
+# emits, both in production (the artifact publish path validates assembled bytes
+# before writing any `.wat`/`.wasm`/npm artifact) and in tests (dispatch-loop and
+# terminator lowering tests assert real wasm validity rather than textual assembly).
+# Pinned to 0.252, which is NOT the wasmparser `wat` pulls in (Cargo.lock carries 0.259 for
+# `wat` as well, so two copies are built). 0.259 changed its offsets and ranges from `usize`
+# to `u64`; moving the pin means adapting `codegen_wasm/artifacts.rs` (`error.offset()` and
+# `body.range()`), which is a separate change.
+wasmparser = "0.252"
 elephc-phar = { path = "crates/elephc-phar" }
 elephc-probe = { path = "crates/elephc-probe" }
 # PCNTL's small rlib surface owns the target constant catalog shared by AOT and runtime eval;

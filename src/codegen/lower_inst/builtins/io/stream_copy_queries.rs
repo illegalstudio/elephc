@@ -92,6 +92,10 @@ pub(crate) fn lower_stream_get_line(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_get_line");
+    // php answers `false` at EOF with nothing read, and `""` for an empty line — two results
+    // the raw (pointer, length) pair separates by its POINTER, exactly as `getenv` does for an
+    // absent variable. A length test would call an empty line EOF.
+    box_string_or_false_on_null_pointer_result(ctx, "stream_get_line");
     store_if_result(ctx, inst)
 }
 

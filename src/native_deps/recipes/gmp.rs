@@ -103,11 +103,13 @@ mod tests {
             platform: crate::codegen_support::platform::Platform::Linux,
             arch: Arch::X86_64,
             apple_variant: crate::codegen_support::platform::AppleVariant::MacOS,
+            ..Target::new(crate::codegen_support::platform::Platform::Linux, Arch::X86_64)
         };
         let aarch64 = Target {
             platform: crate::codegen_support::platform::Platform::Linux,
             arch: Arch::AArch64,
             apple_variant: crate::codegen_support::platform::AppleVariant::MacOS,
+            ..Target::new(crate::codegen_support::platform::Platform::Linux, Arch::X86_64)
         };
         assert!(configure_args(x86_64).contains(&"--enable-fat"));
         assert!(!configure_args(aarch64).contains(&"--enable-fat"));
@@ -116,6 +118,7 @@ mod tests {
             platform: crate::codegen_support::platform::Platform::MacOS,
             arch: Arch::AArch64,
             apple_variant: AppleVariant::IOS,
+            ..Target::new(crate::codegen_support::platform::Platform::Linux, Arch::X86_64)
         };
         assert!(configure_args(ios).contains(&"--disable-assembly"));
         assert!(!configure_args(aarch64).contains(&"--disable-assembly"));

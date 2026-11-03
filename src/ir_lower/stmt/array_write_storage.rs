@@ -59,7 +59,9 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         );
         ctx.store_local(array, empty, array_ty, Some(span));
     }
-    let array_value = if ctx.is_ref_bound_local(array) {
+    // The WASM append writes into the payload it is given, so a reference-bound array shared
+    // with a copy (a by-value capture) still needs its detached cell there.
+    let array_value = if ctx.is_ref_bound_local(array) && !ctx.target.is_wasm() {
         ctx.load_local(array, Some(span))
     } else {
         load_array_local_for_write(ctx, array, span)

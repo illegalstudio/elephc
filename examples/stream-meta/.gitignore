@@ -2,3 +2,5 @@
 *.o
 main
 notes.txt
+*.wasm
+*.wat

@@ -824,6 +824,129 @@ pub enum RuntimeFnId {
 }
 
 impl RuntimeFnId {
+    /// Every `RuntimeFnId` variant in enum-declaration order, so the WASM
+    /// capability inventory can enumerate the current revision without
+    /// re-deriving the list. Keep in sync with the enum above; the exhaustive
+    /// `as_eir`/`requirements`/`runtime_function_is_supported` matches force a
+    /// revisit whenever a variant is added.
+    pub fn all() -> &'static [RuntimeFnId] {
+        use RuntimeFnId::*;
+        &[
+            RuntimeFnId::ArrayAll, ArrayAny, ArrayChunk, ArrayColumn, ArrayCombine, ArrayCountValues,
+            RuntimeFnId::ArrayDiff, ArrayDiffAssoc, ArrayDiffKey, ArrayFill, ArrayFillKeys, ArrayFilter,
+            RuntimeFnId::ArrayFind, ArrayFirst, ArrayFlip, ArrayIntersect, ArrayIntersectAssoc, ArrayIntersectKey,
+            RuntimeFnId::ArrayIsList, ArrayKeyExists, ArrayKeyFirst, ArrayKeyLast, ArrayKeys, ArrayLast,
+            RuntimeFnId::ArrayMap, ArrayMerge, ArrayMergeRecursive, ArrayMultisort, ArrayPad, ArrayPop,
+            RuntimeFnId::ArrayPtrSeek, ArrayPtrKey, ArrayPtrValue, ArrayProduct, ArrayPush, ArrayRand,
+            RuntimeFnId::ArrayReduce, ArrayReplace, ArrayReplaceRecursive, ArrayReverse, ArraySearch, ArrayShift,
+            RuntimeFnId::ArraySlice, ArraySplice, ArraySum, ArrayUdiff, ArrayUintersect, ArrayUnique,
+            RuntimeFnId::ArrayUnshift, ArrayValues, ArrayWalk, ArrayWalkRecursive, Arsort, Asort,
+            RuntimeFnId::Count, InArray, Krsort, Ksort, Natcasesort, Natsort,
+            RuntimeFnId::Range, Rsort, Shuffle, Sort, Uasort, Uksort,
+            RuntimeFnId::Usort, CallUserFunc, CallUserFuncArray, CloneWith, ClassAlias, ClassExists,
+            RuntimeFnId::ClassImplements, ClassParents, ClassUses, EnumExists, FunctionExists, GetClass,
+            RuntimeFnId::GetObjectVars, GetDeclaredClasses, GetDeclaredInterfaces, GetDeclaredTraits, GetLoadedExtensions, GetParentClass,
+            RuntimeFnId::InterfaceExists, IsA, IsSubclassOf, MethodExists, PregReplaceCallback, PropertyExists,
+            RuntimeFnId::TraitExists, ElephcPharBzip2Archive, ElephcPharDecompressArchive, ElephcPharGetFileMetadata, ElephcPharGetMetadata, ElephcPharGetSignatureHash,
+            RuntimeFnId::ElephcPharGetSignatureType, ElephcPharGetStub, ElephcPharGzipArchive, ElephcPharListEntries, ElephcPharSetCompression, ElephcPharSetFileMetadata,
+            RuntimeFnId::ElephcPharSetMetadata, ElephcPharSetStub, ElephcPharSetZipPassword, ElephcPharSignHash, ElephcPharSignOpenssl, Basename,
+            RuntimeFnId::Chdir, Chgrp, Chmod, Chown, Clearstatcache, Closedir,
+            RuntimeFnId::Copy, Dirname, DiskFreeSpace, DiskTotalSpace, Fclose, Fdatasync,
+            RuntimeFnId::Feof, Fflush, Fgetc, Fgetcsv, Fgets, File,
+            RuntimeFnId::FileExists, FileGetContents, FilePutContents, Fileatime, Filectime, Filegroup,
+            RuntimeFnId::Fileinode, Filemtime, Fileowner, Fileperms, Filesize, Filetype,
+            RuntimeFnId::Flock, Fnmatch, Fopen, Fpassthru, Fprintf, Fputcsv,
+            RuntimeFnId::Fread, Fscanf, Fseek, Fsockopen, Fstat, Fsync,
+            RuntimeFnId::Ftell, Ftruncate, Fwrite, Getcwd, Gethostbyaddr, Gethostbyname,
+            RuntimeFnId::Gethostname, Getprotobyname, Getprotobynumber, Getservbyname, Getservbyport, Glob,
+            RuntimeFnId::HashFile, IsDir, IsExecutable, IsFile, IsLink, IsReadable,
+            RuntimeFnId::IsWritable, IsWriteable, Lchgrp, Lchown, Link, Linkinfo,
+            RuntimeFnId::Lstat, Mkdir, ObClean, ObEndClean, ObEndFlush, ObFlush,
+            RuntimeFnId::ObGetClean, ObGetContents, ObGetFlush, ObGetLength, ObGetLevel, ObGetStatus,
+            RuntimeFnId::ObImplicitFlush, ObListHandlers, ObStart, Opendir, Pathinfo, Pclose,
+            RuntimeFnId::Pfsockopen, Popen, PrintR, Readdir, Readfile, Readline,
+            RuntimeFnId::Readlink, Realpath, RealpathCacheGet, RealpathCacheSize, Rename, Rewind,
+            RuntimeFnId::Rewinddir, Rmdir, Scandir, Stat, StreamBucketAppend, StreamBucketMakeWriteable,
+            RuntimeFnId::StreamBucketNew, StreamBucketPrepend, StreamContextCreate, StreamContextGetDefault, StreamContextGetOptions, StreamContextGetParams,
+            RuntimeFnId::StreamContextSetDefault, StreamContextSetOption, StreamContextSetParams, StreamCopyToStream, StreamFilterAppend, StreamFilterPrepend,
+            RuntimeFnId::StreamFilterRegister, StreamFilterRemove, StreamGetContents, StreamGetFilters, StreamGetLine, StreamGetMetaData,
+            RuntimeFnId::StreamGetTransports, StreamGetWrappers, StreamIsLocal, StreamIsatty, StreamResolveIncludePath, StreamSelect,
+            RuntimeFnId::StreamSetBlocking, StreamSetChunkSize, StreamSetReadBuffer, StreamSetTimeout, StreamSetWriteBuffer, StreamSocketAccept,
+            RuntimeFnId::StreamSocketClient, StreamSocketEnableCrypto, StreamSocketGetName, StreamSocketPair, StreamSocketRecvfrom, StreamSocketSendto,
+            RuntimeFnId::StreamSocketServer, StreamSocketShutdown, StreamSupportsLock, StreamWrapperRegister, StreamWrapperRestore, StreamWrapperUnregister,
+            RuntimeFnId::Symlink, SysGetTempDir, Tempnam, Tmpfile, Touch, Umask,
+            RuntimeFnId::Unlink, VarDump, Vfprintf, Abs, Acos, Asin,
+            RuntimeFnId::Atan, Atan2, BaseConvert, BcAdd, BcNumberAdd, BcCeil,
+            RuntimeFnId::BcNumberCeil, BcNumberCreate, BcComp, BcNumberComp, BcDiv, BcNumberDiv,
+            RuntimeFnId::BcDivmod, BcNumberDivmod, BcFloor, BcNumberFloor, BcMod, BcNumberMod,
+            RuntimeFnId::BcMul, BcNumberMul, BcPow, BcNumberPow, BcPowmod, BcNumberPowmod,
+            RuntimeFnId::BcRound, BcNumberRound, BcScale, BcSqrt, BcNumberSqrt, BcSub,
+            RuntimeFnId::BcNumberSub, Ceil, Clamp, Cos, Cosh, Bindec,
+            RuntimeFnId::Decbin, Dechex, Decoct, Deg2rad, Exp, Fdiv,
+            RuntimeFnId::Floor, Fmod, Hexdec, Hypot, Intdiv, Log,
+            RuntimeFnId::Log10, Log2, Max, Min, MtRand, Octdec,
+            RuntimeFnId::Pi, Pow, Rad2deg, Rand, RandomInt, Round,
+            RuntimeFnId::Sin, Sinh, Sqrt, Tan, Tanh, ElephcCloneOverrideReferenceGuard,
+            RuntimeFnId::ElephcObjectIsEnum, ElephcObjectPropCount, ElephcObjectPropName, ElephcObjectPropValue, ElephcOpcacheRtBlacklistEntry, ElephcOpcacheRtScriptField,
+            RuntimeFnId::ElephcOpcacheRtScriptPath, ElephcOpcacheRtReset, ElephcOpcacheRtIsCached, ElephcOpcacheRtDiscard, ElephcOpcacheRtSoftInvalidate, ElephcOpcacheRtCompile,
+            RuntimeFnId::ElephcOpcacheRtInFileCache, ElephcOpcacheRtStat, ElephcOpcacheRtSwap, ElephcPtrGet, ElephcPtrIsNull, ElephcPtrReadString,
+            RuntimeFnId::ElephcPtrWriteString, ElephcZvalFree, ElephcZvalPack, ElephcZvalUnpack, BufferFree, BufferLen,
+            RuntimeFnId::BufferPtr, Ptr, PtrGet, PtrIsNull, PtrNull, PtrOffset,
+            RuntimeFnId::PtrRead16, PtrRead32, PtrRead8, PtrReadF32, PtrReadF64, PtrReadString,
+            RuntimeFnId::PtrSet, PtrSizeof, PtrWrite16, PtrWrite32, PtrWrite8, PtrWriteF32,
+            RuntimeFnId::PtrWriteF64, PtrWriteString, ZvalFree, ZvalPack, ZvalType, ZvalUnpack,
+            RuntimeFnId::IteratorApply, IteratorCount, IteratorToArray, SplAutoload, SplAutoloadCall, SplAutoloadExtensions,
+            RuntimeFnId::SplAutoloadFunctions, SplAutoloadRegister, SplAutoloadUnregister, SplClasses, SplObjectHash, SplObjectId,
+            RuntimeFnId::Base64Decode, Chop, Chr, ChunkSplit, CountChars, Crc32,
+            RuntimeFnId::CtypeAlnum, CtypeAlpha, CtypeDigit, CtypeSpace, CurlEasyInit, CurlEasySetoptLong,
+            RuntimeFnId::CurlEasySetoptStr, CurlEasySetoptSlist, CurlEasySetCallback, CurlAdapterAddr, CurlEasyPerform, CurlEasyBody,
+            RuntimeFnId::CurlEasyErrno, CurlEasyError, CurlVersion, CurlSetoptUnsupportedWarning, CurlEasyGetinfoLong, CurlEasyGetinfoDouble,
+            RuntimeFnId::CurlEasyStrOp, CurlEasyReset, CurlEasyPause, CurlEasyUpkeep, CurlEasyCopy, CurlStrerror,
+            RuntimeFnId::CurlOptionKind, CurlEasyId, CurlMultiInit, CurlMultiAdd, CurlMultiRemove, CurlMultiExec,
+            RuntimeFnId::CurlMultiSelect, CurlMultiInfoRead, CurlMultiSetopt, CurlMultiErrno, CurlMultiStrerror, CurlMultiSetoptUnsupportedWarning,
+            RuntimeFnId::CurlShareInit, CurlShareSetopt, CurlShareErrno, CurlShareStrerror, CurlEasySetShare, CurlShareInitPersistent,
+            RuntimeFnId::CurlMimeNew, CurlMimeAddPart, CurlMimePartField, CurlMimePost, CurlMimeAbort, Explode,
+            RuntimeFnId::GraphemeStrrev, Gzcompress, Gzdeflate, Gzinflate, Gzuncompress, Hash,
+            RuntimeFnId::HashAlgos, HashCopy, HashEquals, HashFinal, HashHmac, HashInit,
+            RuntimeFnId::HashUpdate, OpensslCipherIvLength, OpensslDecrypt, OpensslEncrypt, OpensslGetCipherMethods, Iconv,
+            RuntimeFnId::IconvGetEncoding, IconvMimeDecode, IconvMimeDecodeHeaders, IconvMimeEncode, IconvSetEncoding, IconvStrlen,
+            RuntimeFnId::IconvStrpos, IconvStrrpos, IconvSubstr, Htmlentities, Htmlspecialchars, Implode,
+            RuntimeFnId::InetNtop, InetPton, Ip2long, Lcfirst, Long2ip, Ltrim,
+            RuntimeFnId::MbEregMatch, MbEreg, MbParseStr, MbConvertVariables, MbSendMail, MbEregi,
+            RuntimeFnId::MbEregSearchInit, MbEregSearch, MbEregSearchPos, MbEregSearchRegs, MbEregSearchGetpos, MbEregSearchGetregs,
+            RuntimeFnId::MbEregSearchSetpos, MbSplit, MbEregReplace, MbEregReplaceCallback, MbEregiReplace, MbStrlen,
+            RuntimeFnId::MbStrwidth, MbStrtoupper, MbStrtolower, MbConvertCase, MbUcfirst, MbLcfirst,
+            RuntimeFnId::MbStrimwidth, MbSubstr, MbStrcut, MbScrub, MbTrim, MbLtrim,
+            RuntimeFnId::MbRtrim, MbStrPad, MbConvertKana, MbSubstrCount, MbOrd, MbChr,
+            RuntimeFnId::MbStrpos, MbStripos, MbStrrpos, MbStrripos, MbStrstr, MbStristr,
+            RuntimeFnId::MbStrrchr, MbStrrichr, MbLanguage, MbInternalEncoding, MbHttpOutput, MbEncodingAliases,
+            RuntimeFnId::MbStrSplit, MbPreferredMimeName, MbCheckEncoding, MbSubstituteCharacter, MbListEncodings, MbDetectOrder,
+            RuntimeFnId::MbDetectEncoding, MbConvertEncoding, MbEncodeNumericentity, MbDecodeNumericentity, MbDecodeMimeheader, MbEncodeMimeheader,
+            RuntimeFnId::MbOutputHandler, MbGetInfo, SharedIni, MbHttpInput, MbRegexEncoding, MbRegexSetOptions,
+            RuntimeFnId::Md5, NumberFormat, Ord, ParseUrl, Printf, Rtrim,
+            RuntimeFnId::Sha1, Sprintf, Sscanf, StrContains, StrEndsWith, StrIreplace,
+            RuntimeFnId::StrPad, StrRepeat, StrReplace, StrSplit, StrStartsWith, StrWordCount,
+            RuntimeFnId::Strcasecmp, Strcmp, Strncasecmp, Strncmp, StripTags, Stripos,
+            RuntimeFnId::Strpos, Strripos, Strrpos, Strtr, Strstr, Substr,
+            RuntimeFnId::SubstrCount, SubstrReplace, Trim, Ucfirst, Ucwords, Vprintf,
+            RuntimeFnId::Vsprintf, Wordwrap, ElephcGmmktimeRaw, ElephcMktimeRaw, ElephcStrtotimeRaw, Checkdate,
+            RuntimeFnId::ClassAttributeArgs, ClassAttributeNames, ClassGetAttributes, Date, DateDefaultTimezoneGet, DateDefaultTimezoneSet,
+            RuntimeFnId::Define, Defined, Exec, ExtensionLoaded, Getdate, Getenv,
+            RuntimeFnId::Getmypid, Gmdate, Gmmktime, Header, Hrtime, HttpResponseCode,
+            RuntimeFnId::JsonDecode, JsonEncode, JsonLastError, JsonLastErrorMsg, JsonValidate, Localtime,
+            RuntimeFnId::MemoryGetAllocations, MemoryGetFrees, MemoryGetPeakUsage, MemoryGetUsage, MemoryResetPeakUsage, Microtime,
+            RuntimeFnId::Mktime, Passthru, PhpUname, Phpversion, PregMatch, PregMatchAll,
+            RuntimeFnId::PregReplace, PregSplit, Putenv, Serialize, ShellExec, Sleep,
+            RuntimeFnId::Strtotime, System, Time, Unserialize, Usleep, GetResourceId,
+            RuntimeFnId::GetResourceType, Gettype, IntvalBase, IsCallable, IsFinite, IsInfinite,
+            RuntimeFnId::IsNan, IsNumeric, Settype, TokenizerErrorLocation,
+        ]
+    }
+}
+
+
+
+impl RuntimeFnId {
     /// Returns the central logical ABI and backend contract for this runtime function.
     pub fn descriptor(self) -> RuntimeFnDescriptor {
         let logical_signature = self
@@ -1302,7 +1425,6 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayIntersectAssoc |
             RuntimeFnId::ArrayIntersectKey |
             RuntimeFnId::ArrayIsList |
-            RuntimeFnId::ArrayKeyExists |
             RuntimeFnId::ArrayKeys |
             RuntimeFnId::ArrayMergeRecursive |
             RuntimeFnId::ArrayReplace |
@@ -1387,6 +1509,15 @@ impl RuntimeFnId {
             RuntimeFnId::Trim |
             RuntimeFnId::Ucfirst |
             RuntimeFnId::Ucwords => crate::ir::Effects::empty(),
+            // `array_key_exists()` is not a pure read: PHP raises a `TypeError` for a key
+            // type it has no rule for, and diagnoses a lossy one. Treating it as pure let
+            // dead-code elimination drop a `try` whose body could only throw through it, so
+            // the handler was gone by the time codegen emitted the raise.
+            RuntimeFnId::ArrayKeyExists => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::MAY_WARN.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
             // These raise reference PHP's catchable `ValueError` for out-of-range
             // arguments (`array_chunk()` non-positive length, `clamp()` inverted bounds,
             // `array_fill()` negative count, `array_pad()` oversized length, `explode()`

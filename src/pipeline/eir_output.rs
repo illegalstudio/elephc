@@ -71,7 +71,9 @@ pub(super) fn emit(
 
     crate::progress::phase("ir-opt");
     let phase_started = Instant::now();
-    if ir_opt {
+    if ir_opt && target.is_wasm() {
+        ir_passes::optimize_module_for_wasm(&mut module);
+    } else if ir_opt {
         ir_passes::optimize_module(&mut module);
     }
     timings.record_since("ir-opt", phase_started);

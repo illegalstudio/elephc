@@ -1,0 +1,4 @@
+*.wat
+*.wasm
+main
+main-npm/

@@ -1132,7 +1132,9 @@ impl<'a> ConcatInertAnalysis<'a> {
         if matches!(inst.immediate, Some(Immediate::StringOffsetCast)) {
             return false;
         }
-        let Some(Immediate::CastTarget(target)) = inst.immediate else {
+        let Some(Immediate::CastTarget(target) | Immediate::ExplicitCastTarget(target)) =
+            inst.immediate
+        else {
             return false;
         };
         if !matches!(target, IrType::I64 | IrType::F64) {

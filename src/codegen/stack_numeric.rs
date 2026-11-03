@@ -434,8 +434,8 @@ fn scalar_observation(inst: &crate::ir::Instruction) -> bool {
         || (inst.op == Op::Cast
         && matches!(
             (&inst.immediate, &inst.result_php_type),
-            (Some(Immediate::CastTarget(IrType::I64)), PhpType::Int)
-                | (Some(Immediate::CastTarget(IrType::F64)), PhpType::Float)
+            (Some(Immediate::CastTarget(IrType::I64) | Immediate::ExplicitCastTarget(IrType::I64)), PhpType::Int)
+                | (Some(Immediate::CastTarget(IrType::F64) | Immediate::ExplicitCastTarget(IrType::F64)), PhpType::Float)
         ))
 }
 

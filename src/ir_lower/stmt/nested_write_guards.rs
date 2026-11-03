@@ -79,6 +79,9 @@ fn guard_nested_write_parent_with_string_cleanup(
         let other = parent_type_predicate(ctx, parent, predicate, span);
         invalid = combine_guard(ctx, Op::IBitOr, invalid, other, span);
     }
+    if ctx.target.is_wasm() {
+        return guard_wasm_scalar_parent(ctx, parent, invalid, error_string, error_string_pins, span);
+    }
     // PHP permits false-to-array autovivification, but true is an invalid scalar parent.
     let is_bool = parent_type_predicate(ctx, parent, crate::ir::PhpTypePredicate::Bool, span);
     let truth = ctx.emit_value(
@@ -92,6 +95,44 @@ fn guard_nested_write_parent_with_string_cleanup(
     let initialized = ctx.initialized_slots_snapshot();
     branch_on_guard(ctx, invalid, scalar_error, writable);
     ctx.builder.position_at_end(scalar_error);
+    release_error_string(ctx, error_string, error_string_pins, span);
+    lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
+    ctx.builder.position_at_end(writable);
+    ctx.restore_initialized_slots(initialized);
+    true
+}
+
+/// The WASM form of the scalar-parent check: a boxed parent's truth is read only once its tag is
+/// known to be `bool`, where `is_truthy` answers the payload with no diagnostic, instead of a
+/// `mixed`-to-int cast over every tag, which this backend refuses.
+fn guard_wasm_scalar_parent(
+    ctx: &mut LoweringContext<'_, '_>,
+    parent: LoweredValue,
+    invalid: LoweredValue,
+    error_string: Option<LoweredValue>,
+    error_string_pins: &[crate::ir_lower::expr::PinnedInFlightOwner],
+    span: Span,
+) -> bool {
+    let scalar_error = ctx.builder.create_named_block("nested.write.scalar.error", Vec::new());
+    let bool_check = ctx.builder.create_named_block("nested.write.bool.check", Vec::new());
+    let bool_truth = ctx.builder.create_named_block("nested.write.bool.truth", Vec::new());
+    let writable = ctx.builder.create_named_block("nested.write.parent", Vec::new());
+    let initialized = ctx.initialized_slots_snapshot();
+    branch_on_guard(ctx, invalid, scalar_error, bool_check);
+    ctx.builder.position_at_end(bool_check);
+    ctx.restore_initialized_slots(initialized.clone());
+    let is_bool = parent_type_predicate(ctx, parent, crate::ir::PhpTypePredicate::Bool, span);
+    branch_on_guard(ctx, is_bool, bool_truth, writable);
+    ctx.builder.position_at_end(bool_truth);
+    ctx.restore_initialized_slots(initialized.clone());
+    // PHP permits false-to-array autovivification, but true is an invalid scalar parent.
+    let truth = ctx.emit_value(
+        Op::IsTruthy, vec![parent.value], None,
+        PhpType::Bool, Op::IsTruthy.default_effects(), Some(span),
+    );
+    branch_on_guard(ctx, truth, scalar_error, writable);
+    ctx.builder.position_at_end(scalar_error);
+    ctx.restore_initialized_slots(initialized.clone());
     release_error_string(ctx, error_string, error_string_pins, span);
     lower_throw_access_error(ctx, "Cannot use a scalar value as an array", span);
     ctx.builder.position_at_end(writable);

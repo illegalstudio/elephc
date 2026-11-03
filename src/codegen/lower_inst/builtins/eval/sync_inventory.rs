@@ -23,13 +23,16 @@ pub(super) fn eval_sync_locals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncLocal> 
 }
 
 /// Maps PHP parameter names to their active COW shadows, never exposing incoming ABI duplicates.
+///
+/// A closure's captured variables are PHP locals of its body too, so an `eval` inside the
+/// closure reads and writes them under their PHP names like any other local.
 fn eval_sync_function_locals(function: &Function) -> Vec<EvalSyncLocal> {
     let shadows = function.locals.iter()
         .filter(|local| local.kind == LocalKind::PhpLocal)
         .filter_map(|local| local.name.as_deref()?.strip_suffix("#cow"))
         .collect::<BTreeSet<_>>();
     function.locals.iter()
-        .filter(|local| local.kind == LocalKind::PhpLocal)
+        .filter(|local| matches!(local.kind, LocalKind::PhpLocal | LocalKind::ClosureCapture))
         .filter_map(|local| {
             let stored_name = local.name.as_deref()?;
             // `privatize_container_param` leaves the ABI slot in place and redirects PHP reads

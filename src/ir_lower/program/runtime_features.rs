@@ -252,7 +252,7 @@ pub(crate) fn eval_literal_call_requires_bridge(
 ) -> bool {
     let (data, strict_php) = match inst.immediate {
         Some(Immediate::Data(data)) => (data, false),
-        Some(Immediate::ProfiledData { data, strict_php }) => (data, strict_php),
+        Some(Immediate::ProfiledData { data, strict_php, .. }) => (data, strict_php),
         _ => return true,
     };
     let Some(fragment) = module.data.strings.get(data.as_raw() as usize) else {
@@ -454,7 +454,13 @@ pub(super) fn eval_scope_local_slot<'a>(
     function
         .locals
         .iter()
-        .find(|local| local.name.as_deref() == Some(name) && local.kind == LocalKind::PhpLocal)
+        .find(|local| {
+            local.name.as_deref() == Some(name)
+                && matches!(
+                    local.kind,
+                    LocalKind::PhpLocal | LocalKind::ClosureCapture
+                )
+        })
 }
 
 /// Returns true when a static function call matches the codegen-supported subset.

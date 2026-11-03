@@ -159,6 +159,14 @@ pub struct Module {
     /// those names, so a non-web read/write must not assume a live Hash
     /// pointer is already there.
     pub web: bool,
+    /// `true` when any physical file in this compilation declared `strict_types=1`.
+    ///
+    /// PHP scopes the directive per file, but EIR instructions carry no file identity, so
+    /// this is the whole-module OR: a consumer that must behave differently under strict
+    /// typing sees "a strict file is present" and can only fail closed for the compilation.
+    /// The WASM capability audit is the one consumer, and refusing a coercion it has only
+    /// measured in weak mode is exactly the conservative direction.
+    pub strict_types: bool,
     /// The web entry bootstraps a retained application after fork rather than per request.
     pub web_application: bool,
     /// Generated `clone()` property-override applicators, sorted by class id then scope id.
@@ -215,6 +223,7 @@ impl Module {
             extern_globals: HashMap::new(),
             required_runtime_features: RuntimeFeatures::none(),
             web: false,
+            strict_types: false,
             web_application: false,
             clone_override_applicators: Vec::new(),
         }

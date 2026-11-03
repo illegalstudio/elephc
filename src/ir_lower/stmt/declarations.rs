@@ -92,9 +92,9 @@ pub(super) fn list_unpack_get_op(source_type: IrType) -> Op {
 /// a non-null integer instead of null for missing keys (#337).
 pub(super) fn list_unpack_item_type(ctx: &LoweringContext<'_, '_>, source: crate::ir::ValueId) -> PhpType {
     let item_type = match ctx.builder.value_php_type(source).codegen_repr() {
-        PhpType::Array(elem_ty) => array_access_element_result_type(elem_ty.codegen_repr()),
+        PhpType::Array(elem_ty) => array_access_element_result_type(ctx, elem_ty.codegen_repr()),
         PhpType::AssocArray { value, .. } => {
-            array_access_element_result_type(value.codegen_repr())
+            array_access_element_result_type(ctx, value.codegen_repr())
         }
         _ => PhpType::Mixed,
     };

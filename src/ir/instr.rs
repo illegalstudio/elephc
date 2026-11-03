@@ -21,6 +21,14 @@ use crate::ir::value::{Ownership, ValueId};
 use crate::span::Span;
 use crate::types::PhpType;
 
+/// Exact PHP 8.2 diagnostic emitted by a normal offset read through a null receiver.
+pub const ARRAY_OFFSET_ON_NULL_WARNING_PHP82: &str =
+    "Warning: Trying to access array offset on value of type null\n";
+
+/// Exact PHP 8.3+ diagnostic emitted by a normal offset read through a null receiver.
+pub const ARRAY_OFFSET_ON_NULL_WARNING: &str =
+    "Warning: Trying to access array offset on null\n";
+
 /// Function-local identifier for an instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InstId(u32);
@@ -217,6 +225,10 @@ pub enum Immediate {
         data: DataId,
         /// Whether strict PHP is effective at this call site.
         strict_php: bool,
+        /// Set on a `FirstClassCallableNew` that materializes a NAMED callable (a string or
+        /// array callable bound to a `callable` slot). php keeps those as a string/array, not a
+        /// `Closure`, so a backend that answers `instanceof Closure` must be able to tell.
+        named_callable: bool,
     },
     LocalSlot(LocalSlotId),
     LocalSlotPair {
@@ -269,7 +281,10 @@ pub enum Immediate {
     /// Ordered add/sub/mul operations in an unboxed checked numeric chain.
     CheckedNumericChain(Box<CheckedNumericChainImmediate>),
     CmpPredicate(CmpPredicate),
+    /// Target type for an internal representation cast or implicit runtime coercion.
     CastTarget(IrType),
+    /// Target type for a source-level PHP cast such as `(int) $value`.
+    ExplicitCastTarget(IrType),
     TypeName(DataId),
     Capacity(u32),
     WidthBytes(u8),
@@ -1287,6 +1302,68 @@ pub enum Op {
 }
 
 impl Op {
+    /// Every `Op` variant in enum-declaration order, so the WASM capability
+    /// inventory can enumerate the current revision without re-deriving the list.
+    /// Keep in sync with the enum above; the exhaustive `op_is_supported` and
+    /// `Op::name` matches force a revisit whenever a variant is added.
+    pub fn all() -> &'static [Op] {
+        use Op::*;
+        &[
+            Op::ConstI64, ConstF64, ConstStr, ConstNull, ConstBool, ConstClassName,
+            Op::ConstEnumCase, LoadCalledClassId, DataAddr, LoadLocal, StoreLocal, UnsetLocal,
+            Op::ZeroLocalSlot, LoadRefCell, StoreRefCell, PromoteLocalRefCell, AliasLocalRefCell, RetainLocalRefCell,
+            Op::ReleaseLocalRefCell, ReleaseLocalSlot, PushCallOperandOwner, PopCallOperandOwner, LoadGlobal, StoreGlobal,
+            Op::LoadStaticLocal, StoreStaticLocal, InitStaticLocal, StaticLocalUninitialized, LoadStaticProperty, LoadStaticPropertyRefCell,
+            Op::StoreStaticProperty, StaticPropInitialized, LoadReflectionStaticProperty, StoreReflectionStaticProperty, ReflectionStaticPropertyInitialized, IAdd,
+            Op::ISub, IMul, ICheckedAdd, ICheckedSub, ICheckedMul, ICheckedAddToInt,
+            Op::ICheckedSubToInt, ICheckedMulToInt, ICheckedNumericChainToInt, ICheckedPow, IDiv, ISDiv,
+            Op::ISMod, IPow, INeg, IBitAnd, IBitOr, IBitXor,
+            Op::IBitNot, IShl, IShrA, FAdd, FSub, FMul,
+            Op::FDiv, FPow, FNeg, MixedNumericBinop, StrIncDec, ICmp,
+            Op::FCmp, StrEq, StrCmp, StrLooseEq, StrictEq, StrictNotEq,
+            Op::LooseEq, LooseNotEq, PhpRelCmp, Spaceship, IsNull, IsTruthy,
+            Op::TypePredicate, IsEmpty, InstanceOf, IToF, FToI, IToStr,
+            Op::FToStr, BoolToStr, StrToI, StrToF, StrToNumber, ResourceToStr,
+            Op::Cast, MixedBox, MixedClone, InvokerRefArg, MixedUnbox, MixedTagOf,
+            Op::ArrayToMixed, ArrayToPointerWords, HashToMixed, MixedCastBool, MixedCastInt, MixedCastFloat,
+            Op::MixedCastString, StrConcat, StrAppend, StrLen, StrPersist, StrCharAt,
+            Op::StrInterpolate, ConcatReset, WriteStrStdout, ArrayNew, HashNew, ArrayLen,
+            Op::HashLen, ArrayGet, ArrayGetSilent, ArrayGetForWrite, HashGet, HashGetSilent,
+            Op::HashGetForWrite, ArrayIsset, HashIsset, ArrayElemAddr, ArraySet, HashSet,
+            Op::DescriptorArgSet, DescriptorArgKeyExists, ThrowNamedParameterOverwrite, HashUnset, SlotDetach, ArrayPush,
+            Op::MixedArrayAppend, HashAppend, ArrayEnsureUnique, HashEnsureUnique, ArrayCloneShallow, HashCloneShallow,
+            Op::ArrayUnion, HashUnion, ArrayHashUnion, HashArrayUnion, HashSpread, ArrayToHash,
+            Op::ArraySetMixedKey, ArrayGetMixedKey, ArrayGetMixedKeySilent, ArrayKeyExists, OffsetExists, OffsetUnset,
+            Op::ListUnpack, IterStart, IterCurrentKey, IterCurrentValue, IterCurrentValueRef, IterNext,
+            Op::IterEnd, IteratorMethodCall, SplRuntimeCall, ObjectNew, EvalObjectNew, ObjectCloneShallow,
+            Op::DynamicObjectNew, DynamicObjectNewMixed, DynamicObjectNewWithoutConstructorMixed, CallablePtr, NormalizeCallable, PdoAdapterAddr,
+            Op::DynamicClassHasConstructor, DynamicClassIsAbstract, DynamicPdoStatementClassStatus, DynamicPdoCalledClassStatus, DynamicPdoStatementConstructorCall, DynamicPdoStatementInitialize,
+            Op::PropGet, PropGetForWrite, PropInitialized, PropSet, PropUnset, DynamicPropUnset,
+            Op::LoadPropRefCell, LoadPropRefCellChecked, LoadArrayElemRefCell, LoadArrayElemRefCellExisting, BindRefCellPtr, AdoptRefCellPtr,
+            Op::AcquireRefCell, DynamicPropGet, DynamicPropSet, NullsafePropGet, NullsafeMethodCall, MethodLookup,
+            Op::MethodCall, StaticMethodCall, EvalStaticMethodCall, EnumBackingStringToInt, EnumBackingMixedToInt, PackedFieldMixedToInt,
+            Op::PackedFieldMixedToFloat, PackedFieldMixedToBool, ReturnBoundaryMixedToInt, ClassConstant, ScopedConstantGet, ClassAttrNames,
+            Op::ClassAttrArgs, ClassGetAttributes, InstanceOfDynamic, Call, FunctionVariantCall, ClosureBind,
+            Op::LanguageConstructCall, EvalLiteralCall, EvalScopeGet, EvalScopeSet, EvalFunctionCall, EvalFunctionCallArray,
+            Op::EvalFunctionExists, EvalClassExists, EvalConstantExists, EvalConstantFetch, RuntimeCall, MixedArrayGetForWrite,
+            Op::ExternCall, ClosureNew, ClosureCapture, ClosureCall, ExprCall, FirstClassCallableNew,
+            Op::CallableArrayNew, CallableDescriptorInvoke, PipeCall, PtrCast, PtrRead, PtrWrite,
+            Op::PtrReadString, PtrWriteString, PtrOffset, PtrCheckNonnull, BufferNew, BufferLen,
+            Op::BufferGet, BufferSet, BufferResolve, BufferGetResolved, BufferSetResolved, BufferFree,
+            Op::PackedFieldGet, PackedFieldSet, ExternGlobalLoad, ExternGlobalStore, EchoValue, PrintValue,
+            Op::WriteStdout, VarDump, PrintR, ErrorSuppressBegin, ErrorSuppressEnd, Warn,
+            Op::ThrowException, ThrowError, ThrowErrorValue, TryPushHandler, TryPopHandler, CatchCurrent,
+            Op::CatchBind, FinallyEnter, FinallyExit, FiberRuntimeCall, GeneratorNew, GeneratorYield,
+            Op::GeneratorYieldFrom, GeneratorReturn, IncludeOnceMark, IncludeOnceGuard, FunctionVariantMark, FunctionVariantDispatch,
+            Op::Acquire, Release, ReleaseUnlessAliases, GcCollect, GcControl, CoreBuiltin,
+            Op::Move, Borrow, EnsureOwned, Nop,
+        ]
+    }
+}
+
+
+
+impl Op {
     /// Returns the conservative default effect set for this opcode.
     pub fn default_effects(self) -> Effects {
         use Effects as E;
@@ -1321,7 +1398,6 @@ impl Op {
             | FCmp
             | StrLen
             | IToF
-            | FToI
             | BoolToStr
             | StrToI
             | StrToF
@@ -1400,6 +1476,9 @@ impl Op {
             StrAppend => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             ConcatReset => E::WRITES_GLOBAL,
+            // Out-of-range, NAN and infinite float-to-int conversions are diagnosed
+            // rather than silently saturated, so this is neither pure nor removable.
+            FToI => E::MAY_WARN | E::MAY_FATAL,
             Cast => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
             }
@@ -1416,9 +1495,9 @@ impl Op {
             ClosureNew => E::READS_LOCAL | E::WRITES_LOCAL
                 | E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
                 | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
-            IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt
-            | MixedCastFloat | BufferGet | BufferLen | PackedFieldGet | PtrRead
-            | PtrReadString | BufferGetResolved => {
+            IsNull | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
+            | BufferGet | BufferLen | PackedFieldGet | PtrRead | PtrReadString
+            | BufferGetResolved => {
                 E::READS_HEAP | E::MAY_FATAL
             }
             // Reads the static descriptor registry and never faults.
@@ -1426,10 +1505,14 @@ impl Op {
             // Scalar stores and whole POD record copies never replace refcounted elements.
             BufferSetResolved => E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL,
             BufferSet => E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset | DescriptorArgKeyExists => {
-                E::READS_HEAP
-            }
-            ArrayGet | HashGet => E::READS_HEAP | E::MAY_WARN,
+            // Truthiness of a boxed float warns for NaN on php 8.5.
+            IsTruthy => E::READS_HEAP | E::MAY_WARN | E::MAY_FATAL,
+            ArrayGetSilent => E::READS_HEAP | E::ALLOC_HEAP,
+            HashGetSilent => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_WARN | E::MAY_FATAL,
+            ArrayIsset | DescriptorArgKeyExists => E::READS_HEAP,
+            HashIsset => E::READS_HEAP | E::MAY_WARN | E::MAY_FATAL,
+            ArrayGet => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_WARN,
+            HashGet => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_WARN | E::MAY_FATAL,
             // Not a pure read despite the name: the copy-on-write split rewrites the receiver's
             // element slot (and the receiver's own local slot), so it must never be treated as
             // reorderable or redundant against the plain reads around it.
@@ -1442,7 +1525,8 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             ArrayLen | HashLen => E::READS_HEAP,
-            ArrayKeyExists | OffsetExists | PropInitialized => E::READS_HEAP,
+            ArrayKeyExists => E::READS_HEAP | E::MAY_WARN | E::MAY_FATAL,
+            OffsetExists | PropInitialized => E::READS_HEAP,
             // `LoadPropRefCell` now carries exactly its checked sibling's contract. Phase B2 made
             // the plain form raise php's catchable access `Error` for a name this scope may not
             // reach, and made the `Mixed` form raise instead of publishing a zero pointer as a
@@ -1504,10 +1588,13 @@ impl Op {
             // removed, the same destructors can run, the same access `Error` can be raised, and
             // the hash removal can reallocate the table.
             PropUnset | DynamicPropUnset => E::READS_HEAP
-                | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
+                | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_FATAL
+                | E::REFCOUNT_OP,
+            ArraySet | DescriptorArgSet | ArrayPush
             | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            // A hash write through a boxed key goes through php's key coercion, which can warn.
+            HashSet | HashAppend => E::WRITES_HEAP | E::MAY_WARN | E::MAY_FATAL | E::REFCOUNT_OP,
             // `PropSet` and `DynamicPropSet` now carry the SAME conservative contract, because
             // phase B2 gave them the same set of observable consequences. Either can create a
             // dynamic property in the receiver's per-instance hash, which READS the table,

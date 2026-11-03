@@ -341,9 +341,13 @@ fn lower_finally_with_pending_exception(
     ctx.emit_void(
         Op::RuntimeCall,
         vec![escaped.value, pending.value],
-        Some(Immediate::RuntimeCall(
-            crate::ir::RuntimeCallTarget::ExceptionFinallyChain,
-        )),
+        // The host-aware chain differs from the plain one only inside a PHP extension, which a
+        // WASM module never is.
+        Some(Immediate::RuntimeCall(if ctx.target.is_wasm() {
+            crate::ir::RuntimeCallTarget::ExceptionChain
+        } else {
+            crate::ir::RuntimeCallTarget::ExceptionFinallyChain
+        })),
         crate::ir::Effects::all(),
         Some(span),
     );
@@ -455,16 +459,19 @@ pub(super) fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchC
         Some(span),
     );
     // Only a matched user catch consumes a replacement here. Internal CatchBind users rethrow
-    // after cleanup and must preserve the pending host predecessor automatically.
-    ctx.emit_void(
-        Op::RuntimeCall,
-        vec![caught.value],
-        Some(Immediate::RuntimeCall(
-            crate::ir::RuntimeCallTarget::ExceptionCatchHostReplacement,
-        )),
-        crate::ir::Effects::all(),
-        Some(span),
-    );
+    // after cleanup and must preserve the pending host predecessor automatically. The
+    // notification only reaches a PHP host, which a WASM module never has.
+    if !ctx.target.is_wasm() {
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![caught.value],
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::ExceptionCatchHostReplacement,
+            )),
+            crate::ir::Effects::all(),
+            Some(span),
+        );
+    }
     ctx.store_local(&variable, caught, php_type, Some(span));
 }
 

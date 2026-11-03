@@ -23,7 +23,9 @@ pub(crate) struct PropertyWriteReceiver {
 impl PropertyWriteReceiver {
     /// Acquires borrowed static storage and parks any independently owned receiver for unwind.
     pub(crate) fn new(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> Self {
-        let nullable_class = nullable_write_class(ctx, value);
+        // The WASM backend has no `mixed_unbox`: it writes through the boxed nullable receiver
+        // itself, whose store raises php's null Error.
+        let nullable_class = if ctx.target.is_wasm() { None } else { nullable_write_class(ctx, value) };
         ctx.with_independent_write_receiver(|ctx| {
             let value = if ctx.builder.value_defining_op(value.value) == Some(Op::LoadStaticProperty) {
                 crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span))

@@ -59,14 +59,17 @@ fn release_taken_exceptions(ctx: &mut LoweringContext<'_, '_>, target_loop_depth
         let open = ctx.loop_stack.len();
         emit_innermost_loop_cleanups(ctx, open.saturating_sub(loop_depth));
         ctx.exit_cleaned_loops.extend(loop_depth..open);
-        let discarded = ctx.load_local(&temp, None);
-        ctx.emit_void(
-            Op::RuntimeCall,
-            vec![discarded.value],
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionDiscard)),
-            crate::ir::Effects::all(),
-            None,
-        );
+        // The discard notification only reaches a PHP host, which a WASM module never has.
+        if !ctx.target.is_wasm() {
+            let discarded = ctx.load_local(&temp, None);
+            ctx.emit_void(
+                Op::RuntimeCall,
+                vec![discarded.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionDiscard)),
+                crate::ir::Effects::all(),
+                None,
+            );
+        }
         ctx.release_owned_hidden_temp(&temp, None);
     }
 }
@@ -96,7 +99,12 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     }
     if ctx.return_type == IrType::Void {
         if let Some(value_expr) = value_expr {
-            lower_expr(ctx, value_expr);
+            // The value is discarded, but it may own temporary storage: a void
+            // function that returns an expression still has to release it.
+            let value = lower_expr(ctx, value_expr);
+            if ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
         }
         terminate_return(ctx, None);
         return;
@@ -453,7 +461,9 @@ pub(super) fn persist_scratch_return_string(
     persist_pending_string(ctx, value, span)
 }
 
-/// Gives typed object returns an independent owner and stabilizes borrowed heap reads.
+/// Gives typed object returns an independent owner and stabilizes borrowed heap reads: values
+/// borrowed from heap containers, ref-cells, static storage, or closure captures are acquired
+/// before the owning storage can be cleaned up.
 ///
 /// A borrowed string-to-string cast is persisted too. It aliases its operand except
 /// when that operand is the missing-entry sentinel, which the cast turns into the
@@ -463,6 +473,16 @@ pub(super) fn persist_scratch_return_string(
 /// calls, so `return $static_local` must hand the caller an extra reference, since the
 /// caller releases call results after consuming them, and without the retain that
 /// release frees the box the slot still points to.
+///
+/// Also acquires a captured refcounted value returned by reference from a closure body
+/// (`return $captured`): such a value is a `LoadLocal` of a trailing closure-capture
+/// parameter slot, which the descriptor still owns. The closure descriptor holds exactly
+/// one ref per refcounted capture (stamped at create), the body borrows it (no incref on
+/// the native/WASM unbox path), and the caller hands the result to a local whose cleanup
+/// releases it. Without an extra reference here, that release drops the descriptor's only
+/// ref to zero and frees a value the descriptor still points at — a use-after-free when the
+/// descriptor's release walk later decrefs the freed slot. Incrementing the refcount here
+/// promotes the borrow to an owned return ref and balances the caller's release.
 pub(super) fn acquire_borrowed_return_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -509,6 +529,9 @@ pub(super) fn acquire_borrowed_return_value(
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;
     }
+    if returns_borrowed_closure_capture(ctx, value) {
+        return crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    }
     if !ctx.by_ref_return && ctx.builder.value_defining_op(value.value) == Some(Op::LoadRefCell) {
         // A by-value return cannot transfer the caller's mutable reference owner.
         // Detach Mixed cells so native reference writeback cannot invalidate the result.
@@ -530,12 +553,37 @@ pub(super) fn acquire_borrowed_return_value(
                 | Op::DynamicPropGet
                 | Op::NullsafePropGet
                 | Op::LoadStaticLocal
+                | Op::LoadRefCell
                 | Op::LoadStaticProperty
         )
     ) {
         return value;
     }
     crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+}
+
+/// Returns true when `value` is a `LoadLocal` of a read-only closure-capture parameter slot.
+///
+/// A returned captured value is loaded straight from its capture-parameter slot, so its
+/// defining op is `Op::LoadLocal` carrying an `Immediate::LocalSlot` that
+/// `slot_is_closure_capture` recognizes as a trailing capture parameter. The
+/// `slot_is_closure_capture` check is backed by a read-only guard: a capture that was
+/// reassigned inside the body (`$cap = newValue(); return $cap;`) is no longer borrowed from
+/// the descriptor and must NOT receive the extra acquire (the reassignment already balanced
+/// the refcount via `store_local`'s `acquire_if_refcounted`). Owned locals, hidden temps
+/// (ternary/match merges), and container reads are not capture parameters and do not match,
+/// so the borrow-promoting acquire stays scoped to direct, unmodified capture returns.
+fn returns_borrowed_closure_capture(ctx: &LoweringContext<'_, '_>, value: LoweredValue) -> bool {
+    let Some(inst) = ctx.builder.value_defining_instruction(value.value) else {
+        return false;
+    };
+    if inst.op != Op::LoadLocal {
+        return false;
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+        return false;
+    };
+    ctx.builder.slot_is_closure_capture(slot)
 }
 
 /// Identifies local-backed values whose return transfers the frame's existing reference.

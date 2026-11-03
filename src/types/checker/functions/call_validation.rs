@@ -947,6 +947,7 @@ impl Checker {
                             &actual_ty,
                             arg.span,
                             &format!("{} parameter ${}", callee_desc, param_name),
+                            crate::types::param_binding::StrictBindingSite::Parameter,
                         )?;
                     }
                     // A proven callable array is accepted only where EIR materializes a real
@@ -1031,6 +1032,7 @@ impl Checker {
                             &actual_ty,
                             arg.span,
                             &format!("{} variadic parameter ${}", callee_desc, vname),
+                            crate::types::param_binding::StrictBindingSite::Parameter,
                         )?;
                     }
                     self.require_compatible_arg_type(

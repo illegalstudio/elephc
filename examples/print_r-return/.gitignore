@@ -1,3 +1,5 @@
 *.s
 *.o
-main
+main*.wasm
+*.wat
+*.wasm

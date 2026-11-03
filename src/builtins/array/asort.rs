@@ -8,7 +8,7 @@
 //! - The golden signature is `first_param_ref(fixed(["array"]))`: exactly 1 argument,
 //!   the `array` param is by-reference. The `ref` marker is mandatory — it is what makes
 //!   by-reference mutation lower correctly (ir_lower reads `ref_params` from the registry sig).
-//! - `check` requires the argument be an Array or AssocArray, returning Void.
+//! - `check` requires the argument be an Array or AssocArray, returning Bool: php answers `true`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;

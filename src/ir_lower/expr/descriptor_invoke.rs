@@ -536,11 +536,17 @@ pub(super) fn emit_callable_descriptor_invoke(
     // or a separate retain of a prebuilt Mixed box. Root both raw and boxed
     // owners so a throw cannot bypass their EIR retirement.
     let (arg_container, container_owner) = root_owned_call_operand(ctx, arg_container, span);
-    let strict_types = ctx.builder.emit_const_bool(crate::source::current_strict_types());
+    let mut operands = vec![callback.value, arg_container.value];
+    // The source-strict flag is optional: the WASM backend binds weak-mode only, so a weak call
+    // there keeps the two-operand form it lowers, and a strict one still carries the flag.
+    let strict = crate::source::current_strict_types();
+    if strict || !ctx.target.is_wasm() {
+        operands.push(ctx.builder.emit_const_bool(strict));
+    }
     let result = emit_descriptor_invoker_value(
         ctx,
         Op::CallableDescriptorInvoke,
-        vec![callback.value, arg_container.value, strict_types],
+        operands,
         callable_profile_immediate(),
         result_type,
         span,

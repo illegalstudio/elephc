@@ -9,3 +9,5 @@ ElephcProbe-*.app/
 probehost
 .entitlements.plist
 .profile.plist
+*.wasm
+*.wat

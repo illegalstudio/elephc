@@ -240,6 +240,9 @@ class OffsetCallbacks {
 $offsets = new OffsetCallbacks();
 echo "method callable array_reduce: " . array_reduce([1, 2], $offsets->add_offset(...), 0) . "\n";
 echo "method callable array_walk: ";
+// `array_walk()` takes its array BY REFERENCE, and PHP cannot bind a literal to a
+// by-reference parameter — it is a fatal `could not be passed by reference`, so the
+// array has to live in a variable first.
 $walk_pair = [1, 2];
 array_walk($walk_pair, $offsets->show_shifted(...));
 echo "\n";

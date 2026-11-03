@@ -475,6 +475,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EnsureOwned => ownership::lower_ensure_owned(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
+        Op::Warn => lower_warn(ctx, &inst),
         Op::ThrowException => lower_throw_exception(ctx, &inst),
         Op::ThrowError => lower_throw_error(ctx, &inst),
         Op::ThrowErrorValue => lower_throw_error_value(ctx, &inst),

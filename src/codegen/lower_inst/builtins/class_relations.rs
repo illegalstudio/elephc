@@ -14,19 +14,12 @@
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen::{CodegenIrError, Result};
+use crate::ir::class_relations::{self, ClassLikeTarget};
 use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
-use crate::names::php_symbol_key;
-use crate::types::{ClassInfo, InterfaceInfo, PhpType};
+use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, has_eval_context, lower_eval_class_relation, store_if_result};
-
-enum ClassLikeTarget {
-    Class(String),
-    Interface(String),
-    Trait(String),
-    Unknown,
-}
 
 /// Lowers `class_implements()`, `class_parents()`, and `class_uses()` from static metadata.
 pub(crate) fn lower_class_relation(
@@ -71,30 +64,24 @@ fn emit_boxed_bool(ctx: &mut FunctionContext<'_>, value: bool) {
 }
 
 /// Resolves a class-relation target from a literal class-like name or static object type.
+///
+/// The resolution itself is shared with the WASM backend (`ir::class_relations`): it reads only
+/// the module's declarations, so it is a property of the program rather than of a backend.
 fn resolve_relation_target(
     ctx: &FunctionContext<'_>,
     value: ValueId,
 ) -> Result<ClassLikeTarget> {
     match ctx.value_php_type(value)? {
-        PhpType::Object(class_name) => Ok(lookup_class_name(ctx, &class_name)
-            .map(ClassLikeTarget::Class)
-            .unwrap_or(ClassLikeTarget::Unknown)),
+        PhpType::Object(class_name) => {
+            Ok(class_relations::resolve_object_target(ctx.module, &class_name))
+        }
         PhpType::Str => {
             let Some(raw) = optional_const_string_operand(ctx, value)? else {
                 return Err(CodegenIrError::unsupported(
                     "class-relation builtin with non-literal class name",
                 ));
             };
-            if let Some(name) = lookup_class_name(ctx, &raw) {
-                return Ok(ClassLikeTarget::Class(name));
-            }
-            if let Some(name) = lookup_interface_name(ctx, &raw) {
-                return Ok(ClassLikeTarget::Interface(name));
-            }
-            if let Some(name) = lookup_trait_name(ctx, &raw) {
-                return Ok(ClassLikeTarget::Trait(name));
-            }
-            Ok(ClassLikeTarget::Unknown)
+            Ok(class_relations::resolve_named_target(ctx.module, &raw))
         }
         other => Err(CodegenIrError::unsupported(format!(
             "class-relation target PHP type {:?}",
@@ -109,65 +96,18 @@ fn relation_names(
     name: &str,
     target: &ClassLikeTarget,
 ) -> Result<Vec<String>> {
-    match name {
-        "class_implements" => Ok(class_implements(ctx, target)),
-        "class_parents" => Ok(class_parents(ctx, target)),
-        "class_uses" => Ok(class_uses(ctx, target)),
-        _ => Err(CodegenIrError::unsupported(format!(
-            "class-relation builtin {}",
-            name
-        ))),
-    }
+    let relation = class_relations::ClassRelation::from_builtin_name(name).ok_or_else(|| {
+        CodegenIrError::unsupported(format!("class-relation builtin {}", name))
+    })?;
+    Ok(class_relations::relation_names(ctx.module, relation, target))
 }
 
-/// Computes implemented interface names for a class or parent interfaces for an interface.
-fn class_implements(ctx: &FunctionContext<'_>, target: &ClassLikeTarget) -> Vec<String> {
-    match target {
-        ClassLikeTarget::Class(class_name) => lookup_class(ctx, class_name)
-            .map(|info| info.interfaces.clone())
-            .unwrap_or_default(),
-        ClassLikeTarget::Interface(interface_name) => {
-            let mut names = Vec::new();
-            collect_interface_parents(ctx, interface_name, &mut names);
-            names
-        }
-        ClassLikeTarget::Trait(_) | ClassLikeTarget::Unknown => Vec::new(),
-    }
-}
-
-/// Computes parent class names from the immediate parent through ancestors.
-fn class_parents(ctx: &FunctionContext<'_>, target: &ClassLikeTarget) -> Vec<String> {
-    let ClassLikeTarget::Class(class_name) = target else {
-        return Vec::new();
-    };
-
-    let mut names = Vec::new();
-    let mut current = class_name.clone();
-    while let Some(info) = lookup_class(ctx, &current) {
-        let Some(parent) = &info.parent else {
-            break;
-        };
-        let parent_name = lookup_class_name(ctx, parent).unwrap_or_else(|| parent.clone());
-        names.push(parent_name.clone());
-        current = parent_name;
-    }
-    names
-}
-
-/// Computes direct trait uses for classes or trait declarations.
-fn class_uses(ctx: &FunctionContext<'_>, target: &ClassLikeTarget) -> Vec<String> {
-    match target {
-        ClassLikeTarget::Class(class_name) => lookup_class(ctx, class_name)
-            .map(|info| info.used_traits.clone())
-            .unwrap_or_default(),
-        ClassLikeTarget::Trait(trait_name) => ctx
-            .module
-            .declared_trait_uses
-            .get(trait_name)
-            .cloned()
-            .unwrap_or_default(),
-        ClassLikeTarget::Interface(_) | ClassLikeTarget::Unknown => Vec::new(),
-    }
+/// Looks up an interface by PHP-style case-insensitive name.
+pub(super) fn lookup_interface<'a>(
+    ctx: &'a FunctionContext<'_>,
+    name: &str,
+) -> Option<&'a crate::types::InterfaceInfo> {
+    class_relations::lookup_interface(ctx.module, name)
 }
 
 /// Collects parent interfaces without duplicates.
@@ -176,19 +116,7 @@ pub(super) fn collect_interface_parents(
     interface_name: &str,
     names: &mut Vec<String>,
 ) {
-    let Some(interface) = lookup_interface(ctx, interface_name) else {
-        return;
-    };
-    for parent in &interface.parents {
-        let parent_name = lookup_interface_name(ctx, parent).unwrap_or_else(|| parent.clone());
-        if !names
-            .iter()
-            .any(|name| php_symbol_key(name) == php_symbol_key(&parent_name))
-        {
-            names.push(parent_name.clone());
-            collect_interface_parents(ctx, &parent_name, names);
-        }
-    }
+    class_relations::collect_interface_parents(ctx.module, interface_name, names);
 }
 
 /// Allocates and fills an associative string hash in the target result register.
@@ -268,46 +196,6 @@ fn emit_string_hash_entries_x86_64(ctx: &mut FunctionContext<'_>, names: &[Strin
 /// Returns the runtime tag for string hash values.
 fn runtime_str_tag() -> i64 {
     crate::codegen::runtime_value_tag(&PhpType::Str) as i64
-}
-
-/// Looks up a class by PHP-style case-insensitive name.
-fn lookup_class<'a>(ctx: &'a FunctionContext<'_>, name: &str) -> Option<&'a ClassInfo> {
-    let name = lookup_class_name(ctx, name)?;
-    ctx.module.class_infos.get(&name)
-}
-
-/// Looks up an interface by PHP-style case-insensitive name.
-pub(super) fn lookup_interface<'a>(
-    ctx: &'a FunctionContext<'_>,
-    name: &str,
-) -> Option<&'a InterfaceInfo> {
-    let name = lookup_interface_name(ctx, name)?;
-    ctx.module.interface_infos.get(&name)
-}
-
-/// Looks up a class name by PHP-style case-insensitive name.
-fn lookup_class_name(ctx: &FunctionContext<'_>, raw: &str) -> Option<String> {
-    lookup_folded(ctx.module.class_infos.keys(), raw)
-}
-
-/// Looks up an interface name by PHP-style case-insensitive name.
-fn lookup_interface_name(ctx: &FunctionContext<'_>, raw: &str) -> Option<String> {
-    lookup_folded(ctx.module.interface_infos.keys(), raw)
-}
-
-/// Looks up a trait name by PHP-style case-insensitive name.
-fn lookup_trait_name(ctx: &FunctionContext<'_>, raw: &str) -> Option<String> {
-    lookup_folded(ctx.module.trait_table.names.iter(), raw)
-}
-
-/// Returns a matching symbol name using PHP case-insensitive comparison.
-fn lookup_folded<'a>(names: impl Iterator<Item = &'a String>, raw: &str) -> Option<String> {
-    let clean = raw.trim_start_matches('\\');
-    let key = php_symbol_key(clean);
-    names
-        .into_iter()
-        .find(|name| php_symbol_key(name.trim_start_matches('\\')) == key)
-        .cloned()
 }
 
 /// Returns a `ConstStr` operand value, or `None` when the operand is not a literal string.

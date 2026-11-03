@@ -16,6 +16,10 @@ use crate::parser::ast::BinOp;
 pub(super) fn try_lower(
     ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span,
 ) -> bool {
+    // The WASM backend has no `str_append` lowering; its ordinary concat path stays.
+    if ctx.target.is_wasm() {
+        return false;
+    }
     let ExprKind::BinaryOp { op: BinOp::Concat, left, right } = &value.kind else {
         return false;
     };

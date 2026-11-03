@@ -63,7 +63,10 @@ pub(super) fn run(function: &mut Function) -> bool {
 /// Accepts only explicit PHP integer casts, never typed stores or return coercions.
 fn integer_cast(inst: &crate::ir::Instruction) -> bool {
     inst.op == Op::Cast && inst.result_php_type == PhpType::Int
-        && inst.immediate == Some(Immediate::CastTarget(IrType::I64))
+        && matches!(
+            inst.immediate,
+            Some(Immediate::CastTarget(IrType::I64) | Immediate::ExplicitCastTarget(IrType::I64))
+        )
 }
 
 /// Grows a graph through every slot load and every arithmetic observer to its cast sinks.

@@ -301,7 +301,9 @@ fn lower_array_assign_with_update(
     // A scalar key can still be negative or sparse, even when arithmetic lowering
     // produced an unboxed integer for a checker-facing Mixed expression. Even a
     // literal zero must preserve an existing invoker marker through the shared writer.
+    // The WASM backend has no shared mixed-key writer; its typed `array_set` keeps the write.
     if op == Op::ArraySet
+        && !ctx.target.is_wasm()
         && mixed_elements
         && !index_is_boxed_mixed_key(index_value.ir_type)
         && !index_is_foreach_int_key(ctx, index)

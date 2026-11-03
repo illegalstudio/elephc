@@ -24,10 +24,10 @@ use crate::span::Span;
 use crate::source::SourceMode;
 use crate::timings::CompileTimings;
 use crate::{
-    autoload, codegen, debug_info, errors, exports, func_args, ir, ir_lower, ir_passes, lexer,
-    linker, list_id_prelude, mysqli_prelude, name_resolver, opcache_prelude, optimize, parser,
-    pdo_prelude, resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude,
-    web_prelude,
+    autoload, codegen, codegen_wasm, debug_info, errors, exports, func_args, ir, ir_lower,
+    ir_passes, lexer, linker, list_id_prelude, mysqli_prelude, name_resolver, opcache_prelude,
+    optimize, parser, pdo_prelude, resolver, runtime_cache, source_map, tz_prelude, types,
+    var_export_prelude, web_prelude,
 };
 
 mod artifact_io;
@@ -188,6 +188,9 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
+    // Include labels and include-variant symbols are hashed from paths relative to the main
+    // source's directory, so the same project compiled elsewhere emits the same module.
+    resolver::set_identity_root(parent);
     let output_paths = output_paths(entry.output().unwrap_or(filename), target, emit);
     // BEFORE ANY WORK RUNS. Every generated path is derived from the source filename, so a
     // tree someone else controls chooses them; refusing a symlink destination up front is
@@ -200,7 +203,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         emit_source_map,
         with_crates.contains("probe"),
     );
-    if let Err(error) = artifact_io::reject_unsafe_destinations(&output_paths, &artifact_plan) {
+    if let Err(error) = artifact_io::reject_unsafe_destinations(
+        Path::new(filename),
+        &output_paths,
+        &artifact_plan,
+    ) {
         eprintln!("error: {error}");
         process::exit(1);
     }
@@ -525,13 +532,23 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     crate::progress::phase("hash-prelude");
     let phase_started = Instant::now();
     let ast = crate::hash_prelude::inject_if_used(ast, autoloaded("hash"), &mut prelude_inventory);
-    let ast = crate::tokenizer_prelude::inject_if_used(
-        ast,
-        with_crates.contains("tokenizer") || autoloaded("tokenizer"),
-        &mut prelude_inventory,
-    );
-    let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
-    let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
+    // WASM serves neither extension: only a program that names their surface gets the prelude,
+    // so the backend refuses it there instead of refusing every closure call or class listing.
+    let ast = if target.is_wasm() && !crate::tokenizer_prelude::program_names_surface(&ast) {
+        ast
+    } else {
+        crate::tokenizer_prelude::inject_if_used(
+            ast,
+            with_crates.contains("tokenizer") || autoloaded("tokenizer"),
+            &mut prelude_inventory,
+        )
+    };
+    let ast = crate::core_prelude::inject_if_used_for_target(ast, &mut prelude_inventory, target.is_wasm());
+    let ast = if target.is_wasm() && !crate::bcmath_prelude::program_names_surface(&ast) {
+        ast
+    } else {
+        crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory)
+    };
     let ast = crate::gmp_prelude::inject_if_used(ast, with_crates.contains("gmp"), &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(ast, with_crates.contains("random"), &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
@@ -825,6 +842,22 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     );
     // The manifest's scripts hold hash slots, so the runtime tier gets what they leave.
     codegen::set_opcache_manifest_len(opcache_manifest.len());
+    // The full input list is known now: no generated file may replace a file the program
+    // includes, which the up-front check could not see. Nothing has been written yet.
+    let input_files: Vec<std::path::PathBuf> = opcache_included_files
+        .iter()
+        .chain(opcache_autoloaded_files.iter())
+        .cloned()
+        .collect();
+    if let Err(error) = artifact_io::reject_destinations_that_are_inputs(
+        &output_paths,
+        &artifact_plan,
+        &input_files,
+    ) {
+        crate::progress::clear();
+        eprintln!("error: {error}");
+        process::exit(1);
+    }
     // Re-decide `opcache.preload` against the COMPLETE manifest, which is the set
     // `preload_statistics` reports. Only the `in_manifest` arm can differ from the verdict taken
     // above (the directive, the SAPI gate and the path resolution are all manifest-independent).
@@ -996,20 +1029,39 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // default body into BOTH branches of the synthesized `if` with the original's spans. The
     // checker's local-binding decisions are keyed BY SPAN, so these phases are told which spans
     // carry one and the rewrite vetoes itself rather than duplicating a decision.
-    let ast = post_typecheck_optimizer.prune(ast, check_result.local_binding_decision_spans());
+    //
+    // WASM capability validation must observe every PHP coercion and diagnostic boundary;
+    // target-agnostic pruning has no profile-aware proof for all of them, so it is skipped there.
+    let ast = if target.is_wasm() {
+        ast
+    } else {
+        post_typecheck_optimizer.prune(ast, check_result.local_binding_decision_spans())
+    };
     timings.record_since("opt-post", phase_started);
 
     crate::progress::phase("opt-norm");
     let phase_started = Instant::now();
-    let ast = post_typecheck_optimizer.normalize(ast, check_result.local_binding_decision_spans());
+    // Empty control-flow bodies can still observe PHP diagnostics while their
+    // conditions are evaluated (notably PHP 8.5 NAN-to-bool warnings).
+    let ast = if target.is_wasm() {
+        ast
+    } else {
+        post_typecheck_optimizer.normalize(ast, check_result.local_binding_decision_spans())
+    };
     timings.record_since("opt-norm", phase_started);
 
     crate::progress::phase("dce");
     let phase_started = Instant::now();
     // Tail-sinking clones the tail of an `if`/`switch`/`try` into every branch, and a clone keeps
     // the original's spans — the same span-keyed hazard, in the other pass that clones.
-    let ast = post_typecheck_optimizer
-        .eliminate_dead_code(ast, check_result.local_binding_decision_spans());
+    //
+    // Unused diagnostic-producing expressions stay until the WASM static gate has seen them.
+    let ast = if target.is_wasm() {
+        ast
+    } else {
+        post_typecheck_optimizer
+            .eliminate_dead_code(ast, check_result.local_binding_decision_spans())
+    };
     timings.record_since("dce", phase_started);
 
     crate::progress::phase("decl-reach");
@@ -1081,6 +1133,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             emit,
             filename,
             web,
+            // The WASM capability pass runs after IR optimization, so every
+            // transfer/coercion stays visible until that validation boundary.
             ir_opt,
             &exported_functions,
             &exported_classes,
@@ -1138,7 +1192,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("ir-opt");
     let phase_started = Instant::now();
-    if ir_opt {
+    // WASM audits the original EIR and then a separately optimized copy (see `codegen_wasm`).
+    if ir_opt && !target.is_wasm() {
         ir_passes::optimize_module(&mut ir_module);
     }
     timings.record_since("ir-opt", phase_started);
@@ -1149,6 +1204,21 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             "{}",
             codegen::generic_body_sharing_oracle(&ir_module, regalloc_linear)
         );
+    }
+
+    // WebAssembly target: lower EIR to a `.wat` module and emit `.wat`/`.wasm`.
+    // This bypasses the native runtime object, assembler, and linker entirely.
+    if target.is_wasm() {
+        emit_wasm_artifacts(
+            &ir_module,
+            ir_opt,
+            emit,
+            emit_asm,
+            filename,
+            &output_paths,
+            &mut timings,
+        );
+        return;
     }
 
     backend::emit_and_link(backend::BackendInputs {
@@ -1184,4 +1254,90 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         emit_asm,
         timings: &mut timings,
     });
+}
+
+/// Lowers an EIR module to WebAssembly, validates the assembled bytes, and only
+/// then publishes the target artifacts.
+///
+/// The WAT is generated in memory, assembled to a `.wasm` binary with the
+/// pure-Rust `wat` crate, and type-validated with `wasmparser` before any file
+/// is written. `--emit-asm` performs the same assembly and validation even when
+/// only `.wat` is requested. The `.wat`, `.wasm`, and npm package are written
+/// through staged writes and renames, so backend, assembly, and validation
+/// failures publish nothing and write failures never expose partial destinations.
+/// Cleanup failures after publication are emitted as non-fatal warnings because
+/// every requested destination has already committed. The native runtime object,
+/// assembler, and linker are never involved. Exits the process with a diagnostic
+/// on any backend, validation, or pre-commit publication error.
+fn emit_wasm_artifacts(
+    module: &ir::Module,
+    ir_opt: bool,
+    emit: Emit,
+    emit_asm: bool,
+    filename: &str,
+    output_paths: &OutputPaths,
+    timings: &mut CompileTimings,
+) {
+    let phase_started = Instant::now();
+    let wat = match codegen_wasm::generate_with_options(module, emit, ir_opt) {
+        Ok(wat) => wat,
+        Err(err) => {
+            eprintln!("WebAssembly backend error: {}", err.user_message());
+            process::exit(1);
+        }
+    };
+    timings.record_since("codegen-wasm", phase_started);
+
+    let source_stem = Path::new(filename)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("output");
+
+    // Assemble, type-validate, and publish in one step: nothing is written until
+    // the bytes validate (`--emit-asm` included), and every artifact is written
+    // through staged writes so a failure never exposes a partial destination.
+    let phase_started = Instant::now();
+    match codegen_wasm::publish_wasm_artifacts(
+        &wat,
+        emit,
+        emit_asm,
+        source_stem,
+        &output_paths.asm,
+        &output_paths.bin,
+        output_paths.package_dir.as_deref(),
+    ) {
+        Ok(outcome) => {
+            if !outcome.is_clean() {
+                for warning in outcome.cleanup_warnings() {
+                    eprintln!("warning: {warning}");
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("{}", err);
+            process::exit(1);
+        }
+    }
+    timings.record_since("publish-wasm", phase_started);
+
+    timings.report();
+    if emit_asm {
+        println!(
+            "Emitted WebAssembly text '{}' -> '{}'",
+            filename,
+            output_paths.asm.display()
+        );
+    } else if matches!(emit, Emit::NpmPackage) {
+        let package_dir = output_paths
+            .package_dir
+            .as_deref()
+            .expect("NPM output has a package directory");
+        println!(
+            "Compiled '{}' -> NPM package '{}'",
+            filename,
+            package_dir.display()
+        );
+    } else {
+        println!("Compiled '{}' -> '{}'", filename, output_paths.bin.display());
+    }
 }

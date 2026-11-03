@@ -122,7 +122,7 @@ fn lower_interface_adapter(
         name.to_string(), &module.global_constants,
         Some(owner.to_string()), return_type, signature.declared_return,
         &signature.params, None, false, Default::default(), None,
-        module.source_path.clone(), None, module.web,
+        module.source_path.clone(), None, module.target, module.web,
     );
     debug_assert!(closures.is_empty(), "interface defaults must not create closures");
     function

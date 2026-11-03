@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_get_line(resource $stream, int $length, string $ending = ''): string
+function stream_get_line(resource $stream, int $length, string $ending = ''): mixed
 ```
 
 ## What the type checker enforces

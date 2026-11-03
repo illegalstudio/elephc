@@ -189,6 +189,7 @@ pub(super) fn lower_builtin_callable_body(
         None,
         module.source_path.clone(),
         None,
+        module.target,
         false,
     );
     debug_assert!(closures.is_empty(), "a descriptor wrapper must not synthesize closure declarations");

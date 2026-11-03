@@ -21,7 +21,10 @@ mod tests;
 pub(super) fn try_lower_int(
     ctx: &mut FunctionContext<'_>, inst: &Instruction, value: ValueId,
 ) -> Result<bool> {
-    if inst.immediate != Some(Immediate::CastTarget(IrType::I64))
+    if !matches!(
+        inst.immediate,
+        Some(Immediate::CastTarget(IrType::I64) | Immediate::ExplicitCastTarget(IrType::I64))
+    )
         || inst.result_php_type != PhpType::Int
         || ctx.value_ir_type(value)? != IrType::Heap(IrHeapKind::Mixed)
         || ctx.raw_value_php_type(value)?.codegen_repr() != PhpType::Mixed

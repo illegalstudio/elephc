@@ -114,6 +114,20 @@ struct SinkRewrite {
     saw_cast_sink: bool,
 }
 
+/// Returns whether one instruction is a cast to int, in either of the two spellings.
+///
+/// `(int) $v` and `intval($v)` carry `ExplicitCastTarget`; an internal coercion carries
+/// `CastTarget`. Only the wasm32-wasi capability audit reads them apart, because php diagnoses a
+/// source-level cast differently from a coercion. The sink asks a question neither answer
+/// changes — is this use an integer one — so it accepts both, as it did when there was only one.
+pub(super) fn is_cast_to_int(inst: &crate::ir::Instruction) -> bool {
+    inst.result_php_type == PhpType::Int
+        && matches!(
+            inst.immediate,
+            Some(Immediate::CastTarget(IrType::I64) | Immediate::ExplicitCastTarget(IrType::I64))
+        )
+}
+
 /// Builds the instruction-use adjacency list for every SSA value.
 fn instruction_uses(function: &Function) -> HashMap<ValueId, Vec<InstId>> {
     let mut uses: HashMap<ValueId, Vec<InstId>> = HashMap::new();
@@ -140,8 +154,7 @@ fn terminator_used_values(function: &Function) -> HashSet<ValueId> {
 fn has_potential_integer_sink(function: &Function) -> bool {
     function.instructions.iter().any(|user| {
         let accepts_integer = match user.op {
-            Op::Cast => user.result_php_type == PhpType::Int
-                && matches!(user.immediate, Some(Immediate::CastTarget(IrType::I64))),
+            Op::Cast => is_cast_to_int(user),
             Op::StoreLocal | Op::StoreStaticLocal | Op::InitStaticLocal => {
                 local_store_is_integer(function, user.immediate.as_ref())
             }
@@ -205,9 +218,7 @@ fn analyze_sink_graph(
             return false;
         };
         match user.op {
-            Op::Cast if user.result_php_type == PhpType::Int
-                && matches!(user.immediate, Some(Immediate::CastTarget(IrType::I64))) =>
-            {
+            Op::Cast if is_cast_to_int(user) => {
                 let Some(cast_result) = user.result else {
                     return false;
                 };
@@ -362,6 +373,35 @@ fn sink_integer_slots(function: &mut Function) -> bool {
         changed = true;
     }
     changed
+}
+
+/// Returns the boxed integer locals whose complete access graph a retype could narrow right now.
+///
+/// Lets a backend that cannot accept the sink's overflow behavior (it fatals where PHP promotes
+/// to float) retype one slot at a time and keep the result only when range analysis then removed
+/// every unproven checked update.
+pub(super) fn provable_integer_slots(function: &Function) -> Vec<LocalSlotId> {
+    let candidates = narrowable_integer_slots(function);
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let uses = instruction_uses(function);
+    let terminator_uses = terminator_used_values(function);
+    candidates
+        .into_iter()
+        .filter(|slot| plan_slot_specialization(function, *slot, &uses, &terminator_uses).is_some())
+        .collect()
+}
+
+/// Retypes exactly one boxed integer local to a raw `i64`, returning whether it was provable.
+pub(super) fn sink_integer_slot(function: &mut Function, slot: LocalSlotId) -> bool {
+    let uses = instruction_uses(function);
+    let terminator_uses = terminator_used_values(function);
+    let Some(plan) = plan_slot_specialization(function, slot, &uses, &terminator_uses) else {
+        return false;
+    };
+    apply_slot_specialization(function, slot, plan);
+    true
 }
 
 /// Returns true when the function holds a boxed integer local a retype could narrow.

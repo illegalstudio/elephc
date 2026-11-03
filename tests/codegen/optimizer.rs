@@ -63,6 +63,8 @@ mod dead_instruction_elimination;
 mod declaration_reachability;
 #[path = "optimizer/dead_store_elimination.rs"]
 mod dead_store_elimination;
+#[path = "optimizer/foreach_key_elision.rs"]
+mod foreach_key_elision;
 #[path = "optimizer/eir_constant_propagation.rs"]
 mod eir_constant_propagation;
 #[path = "optimizer/eir_licm.rs"]

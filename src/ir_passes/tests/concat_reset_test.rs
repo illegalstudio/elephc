@@ -1053,7 +1053,7 @@ fn warning_producing_float_key_and_array_get_act_as_concat_barriers() {
                 IrType::I64,
                 PhpType::Int,
                 Ownership::NonHeap,
-                Effects::MAY_WARN,
+                Effects::MAY_WARN | Effects::MAY_FATAL,
                 None,
             )
             .expect("ftoi produces a value");

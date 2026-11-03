@@ -172,14 +172,29 @@ pub fn ensure_weak_reference(
 }
 
 /// Injects the reachable Core class declarations, widening for introspection and eval.
+///
+/// The compiler pipeline calls `inject_if_used_for_target`; this native-target entry stays for the
+/// library's test harnesses, so the binary crate sees it unused.
+#[allow(dead_code)]
 pub fn inject_if_used(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
+    inject_if_used_for_target(program, inventory, false)
+}
+
+/// `inject_if_used` for one target. The WASM target serves no weak references, so reflection or
+/// a dynamic `new` must not pull `WeakMap`/`WeakReference` into a module it would then refuse;
+/// only a program that names them gets them there.
+pub fn inject_if_used_for_target(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+    wasm: bool,
+) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
         let usage = crate::prelude_prune::usage::collect(&program);
         let mut declarations = core_declarations();
-        let dynamic = usage.introspects || usage.constructs_dynamic_class;
+        let dynamic = !wasm && (usage.introspects || usage.constructs_dynamic_class);
         let weak_map = dynamic || usage.classes.contains("weakmap") || usage.literals.contains("weakmap");
         let weak_reference = weak_map || usage.classes.contains("weakreference") || usage.literals.contains("weakreference");
         declarations.retain(|stmt| {

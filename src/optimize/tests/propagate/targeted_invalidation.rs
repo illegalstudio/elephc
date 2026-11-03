@@ -335,6 +335,80 @@ fn test_nested_lvalue_assignment_expr_kills_array_fact() {
     );
 }
 
+/// Builds `$name = value` as an *expression* (usable as a right-hand side).
+fn assign_expr(name: &str, value: Expr) -> Expr {
+    Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(Expr::var(name)),
+            value: Box::new(value),
+            result_target: None,
+            prelude: Vec::new(),
+            conditional_value_temp: None,
+        },
+        Span::dummy(),
+    )
+}
+
+/// Extracts the index of the `ArrayAssign` at `at`.
+fn array_assign_index(program: &[Stmt], at: usize) -> &Expr {
+    match &program[at].kind {
+        StmtKind::ArrayAssign { index, .. } => index,
+        other => panic!("expected an ArrayAssign, got {other:?}"),
+    }
+}
+
+/// php-src compiles `$a[$i] = ...` to `ZEND_ASSIGN_DIM` with the dim as op2, and a
+/// CV operand is dereferenced when that opcode runs — i.e. AFTER the right-hand
+/// side. Measured on 8.5.6: `$i = 0; $a[$i] = ($i = 1);` writes at index **1**.
+/// Folding the index against the pre-RHS environment bakes in the stale key `0`.
+#[test]
+fn test_variable_index_is_not_folded_when_the_rhs_reassigns_it() {
+    let program = vec![
+        Stmt::assign("i", Expr::int_lit(0)),
+        Stmt::new(
+            StmtKind::ArrayAssign {
+                array: "a".to_string(),
+                index: Expr::var("i"),
+                value: assign_expr("i", Expr::int_lit(1)),
+            },
+            Span::dummy(),
+        ),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        array_assign_index(&propagated, 1),
+        &Expr::var("i"),
+        "the RHS reassigns $i before the write, so the index must stay a variable read"
+    );
+}
+
+/// Precision half of the pair: an index the right-hand side cannot touch still
+/// folds, so the ordering rule above costs nothing on ordinary writes.
+#[test]
+fn test_variable_index_still_folds_when_the_rhs_leaves_it_alone() {
+    let program = vec![
+        Stmt::assign("i", Expr::int_lit(2)),
+        Stmt::new(
+            StmtKind::ArrayAssign {
+                array: "a".to_string(),
+                index: Expr::var("i"),
+                value: Expr::int_lit(7),
+            },
+            Span::dummy(),
+        ),
+    ];
+
+    let propagated = propagate_constants(program);
+
+    assert_eq!(
+        array_assign_index(&propagated, 1),
+        &Expr::int_lit(2),
+        "a right-hand side that cannot write $i must leave the index folding"
+    );
+}
+
 /// `ptr($x)` takes the address of a local: any later `ptr_set` through any
 /// alias of that pointer rewrites `$x` invisibly, so `$x` must never carry a
 /// fact from the exposure point on. Regression for the elephc pointer

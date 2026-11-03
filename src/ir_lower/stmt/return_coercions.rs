@@ -34,7 +34,9 @@ pub(super) fn coerce_to_return_type(
     // same object payload ABI as the concrete child carried by the merge.
     let return_ty = ctx.return_php_type.codegen_repr();
     let source_ty = ctx.builder.value_php_type(value.value);
-    if matches!(return_ty, PhpType::Object(_) | PhpType::Callable)
+    // The WASM backend has no `mixed_unbox`; its returns keep the runtime-boundary coercion.
+    if !ctx.target.is_wasm()
+        && matches!(return_ty, PhpType::Object(_) | PhpType::Callable)
         && value.ir_type == IrType::Heap(IrHeapKind::Mixed)
         && matches!(source_ty, PhpType::Union(members) if members.iter().all(|member|
             matches!(member, PhpType::Void | PhpType::Never)
@@ -69,7 +71,8 @@ pub(super) fn coerce_to_return_type(
         IrType::Heap(_) if ctx.return_php_type.codegen_repr() == PhpType::Mixed => {
             ctx.box_value_as_mixed(value, ctx.return_php_type.clone(), span)
         }
-        IrType::Heap(_) if matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
+        IrType::Heap(_) if !ctx.target.is_wasm()
+            && matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
             && matches!(ctx.builder.value_php_type(value.value).codegen_repr(),
                 PhpType::Mixed | PhpType::Union(_)) =>
         {

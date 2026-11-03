@@ -240,6 +240,19 @@ pub(super) fn finish_user_call_argument_evaluation(
     finish_call_argument_evaluation_with(ctx, operands, true)
 }
 
+/// Whether a borrowed-source pin is a string, which is not refcounted: its pin is a COPY, and a
+/// callee returning that parameter hands the copy back as the result. Kept as a root, the pin's
+/// release after the call freed the result (`choose($x, false)` read as freed bytes), so a string
+/// pin is handed to the call like an owned operand and its release decided against the result.
+fn pin_is_string_copy(
+    ctx: &LoweringContext<'_, '_>,
+    owner: &crate::ir_lower::context::CallArgumentEvaluationOwner,
+) -> bool {
+    owner
+        .value
+        .is_some_and(|value| ctx.builder.value_php_type(value).codegen_repr() == PhpType::Str)
+}
+
 /// Shared body of the two `finish_*` entries.
 fn finish_call_argument_evaluation_with(
     ctx: &mut LoweringContext<'_, '_>,
@@ -256,7 +269,7 @@ fn finish_call_argument_evaluation_with(
         unregister_owned_call_operand(ctx, owner.slot, owner.span);
         if owner.ref_cell_payload.is_some()
             || owner.value.is_none()
-            || (keep_borrowed_pins && owner.pins_borrowed_source)
+            || (keep_borrowed_pins && owner.pins_borrowed_source && !pin_is_string_copy(ctx, &owner))
         {
             // Keep the Borrow marker on the call operand. It tells codegen that the
             // surrounding EIR ledger, rather than the ABI materializer, retires this
@@ -572,7 +585,8 @@ fn claim_transient_string_operand(
     operand: crate::ir::ValueId,
     span: Span,
 ) -> crate::ir::ValueId {
-    if ctx.builder.value_php_type(operand).codegen_repr() != PhpType::Str {
+    // The WASM backend has no `ensure_owned`; its call operands keep their existing ownership.
+    if ctx.target.is_wasm() || ctx.builder.value_php_type(operand).codegen_repr() != PhpType::Str {
         return operand;
     }
     // Only a FRESH transient is claimed. A builtin view or a string offset also has a no-op
@@ -804,6 +818,10 @@ pub(super) fn root_method_receiver(
     {
         return (value, owner);
     }
+    // Same storage rule as `root_owned_call_operand`: no boxed pin over object storage on WASM.
+    if ctx.target.is_wasm() && value.ir_type != crate::ir_lower::context::value_ir_type(&ty) {
+        return (value, owner);
+    }
     // Ref-cell and boxed local loads can borrow a payload that an argument's store
     // replaces. Keep that exact value alive without consuming its source reference.
     let pinned = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span));
@@ -832,6 +850,12 @@ pub(crate) fn root_owned_call_operand(
     }
     let ty = ctx.builder.value_php_type(value.value);
     if matches!(ty.codegen_repr(), PhpType::Buffer(_)) { return (value, None); }
+    // A nullable object read keeps object storage under a `T|null` type, which a slot of that
+    // type would box. The WASM backend transfers values only between matching storages, so the
+    // operand there keeps its ordinary post-call release instead of a root.
+    if ctx.target.is_wasm() && value.ir_type != crate::ir_lower::context::value_ir_type(&ty) {
+        return (value, None);
+    }
     let name = ctx.declare_hidden_temp(ty.clone());
     // Concrete local loads can still be provisional owned unboxes until frame
     // types are finalized. Acquire explicitly, then let ownership finalization

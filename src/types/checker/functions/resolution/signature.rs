@@ -28,7 +28,24 @@ impl Checker {
     ///
     /// Returns the resolved return type, or a `CompileError` if the body fails to type-check
     /// or return types are incompatible with any declared annotation.
+    ///
+    /// The body and its return checks run under the `strict_types` of the file that declares
+    /// the function, not of the call site that happened to trigger the resolution.
     pub(crate) fn resolve_function_signature(
+        &mut self,
+        name: &str,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> Result<PhpType, CompileError> {
+        let outer_strict_types = self.strict_types;
+        self.strict_types = decl.strict_types;
+        let result = self.resolve_function_signature_in_declaring_file(name, decl, param_types);
+        self.strict_types = outer_strict_types;
+        result
+    }
+
+    /// Body of `resolve_function_signature`, run with the declaring file's `strict_types`.
+    fn resolve_function_signature_in_declaring_file(
         &mut self,
         name: &str,
         decl: &FnDecl,

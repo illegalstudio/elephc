@@ -135,6 +135,13 @@ pub(crate) fn lower_body(
 ) {
     ctx.conditional_local_declarations =
         super::integer_local_contracts::conditional_declarations(body);
+    // The WASM backend reads a checked store's promoted float back through its boxed slot, so a
+    // loop-carried counter never truncates there; widening it to `mixed` would only turn its
+    // integer operators into boxed ones the backend refuses.
+    if ctx.target.is_wasm() {
+        lower_stmts(ctx, body);
+        return;
+    }
     let checkpoint = ctx.snapshot();
     lower_stmts(ctx, body);
     let scalar_force = loop_carried(ctx);

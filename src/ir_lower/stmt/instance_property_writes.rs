@@ -26,6 +26,13 @@ pub(super) fn lower_property_assign(
             None
         }
     });
+    // The WASM backend has no initialization probe for a typed slot without a default, so a write
+    // inside the declaring class keeps its plain store there; a repeated write is not diagnosed.
+    let readonly_write = readonly_write.filter(|(class_name, _, _)| {
+        !(ctx.target.is_wasm()
+            && ctx.current_class.as_deref().map(|class| class.trim_start_matches('\\'))
+                == Some(class_name.trim_start_matches('\\')))
+    });
     let reflection_write = ctx.throw_access_sites.get(&span).and_then(|info| {
         if let ThrowAccessKind::ReflectionReadOnlyProperty { property: blocked } = &info.kind {
             (blocked == property).then(|| blocked.clone())
@@ -534,8 +541,12 @@ fn lower_property_assign_value(
     let property_ty = object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
     if retained_abstract_setter {
         release_magic_set_value_after_call(ctx, value, span);
-    } else if stored_property_ty.is_none() && ctx.value_is_owning_temporary(value) {
+    } else if !ctx.target.is_wasm()
+        && stored_property_ty.is_none()
+        && ctx.value_is_owning_temporary(value)
+    {
         // Runtime slots may copy a payload or retain its box; EIR owns the source in either arm.
+        // The WASM store still adopts an owned box, so it keeps the retaining-store release.
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     } else {
         release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);

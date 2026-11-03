@@ -142,6 +142,16 @@ pub(crate) fn bcmath_declarations() -> Program {
     })
 }
 
+/// Whether the program NAMES `BcMath\Number` or `RoundingMode`, ignoring the reflection trigger.
+///
+/// The WASM target serves no bcmath, so `get_declared_classes()` must not pull the class into a
+/// module the backend would then refuse.
+pub fn program_names_surface(program: &Program) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    usage.literals.iter().any(|literal| literal.contains("bcmath\\number"))
+        || usage.classes.iter().any(|name| name.rsplit('\\').next() == Some("number") || name == "roundingmode")
+}
+
 /// Injects Number when referenced, reflected, evaluated, or explicitly enabled.
 pub fn inject_if_used(
     program: Program,

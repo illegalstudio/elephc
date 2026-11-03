@@ -570,7 +570,10 @@ fn call_result_hands_back_a_lent_string(
     return_alias: &ReturnArgAlias,
     signature: Option<&FunctionSig>,
 ) -> bool {
-    if ctx.builder.value_php_type(result).codegen_repr() != PhpType::Str
+    // A WASM method copies a borrowed string parameter it returns (its `Return` epilogue), so
+    // the caller always owns that result.
+    if ctx.target.is_wasm()
+        || ctx.builder.value_php_type(result).codegen_repr() != PhpType::Str
         || signature.is_some_and(|signature| signature.by_ref_return)
         || !matches!(
             ctx.builder.value_defining_op(result),

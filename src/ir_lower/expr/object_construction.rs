@@ -191,6 +191,52 @@ pub(super) fn lower_reflection_method_constructor_operands(
 pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let object = lower_expr(ctx, inner);
     let object_ty = ctx.builder.value_php_type(object.value);
+    // The runtime clone serves the native backend's compact builtin layouts and readonly
+    // bookkeeping. The WASM backend lays every object out as an ordinary one, so a clone of a
+    // known class there is the shallow copy followed by the class's own `__clone()`.
+    if ctx.target.is_wasm() {
+        if let Some((class_name, false)) = super::property_access::singular_object_class(&object_ty)
+        {
+            let class_name = class_name.to_string();
+            let data = ctx.intern_class_name(&class_name);
+            let cloned = ctx.emit_value(
+                Op::ObjectCloneShallow,
+                vec![object.value],
+                Some(Immediate::Data(data)),
+                PhpType::Object(class_name.clone()),
+                Op::ObjectCloneShallow.default_effects(),
+                Some(expr.span),
+            );
+            if super::method_metadata::class_method_signature(
+                ctx,
+                &class_name,
+                &php_symbol_key("__clone"),
+            )
+            .is_some()
+            {
+                // The hook only borrows the copy: an owning receiver would be retired by the
+                // call, and the copy is this expression's own result.
+                let receiver = ctx.emit_value(
+                    Op::Borrow,
+                    vec![cloned.value],
+                    None,
+                    PhpType::Object(class_name.clone()),
+                    Op::Borrow.default_effects(),
+                    Some(expr.span),
+                );
+                ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
+                super::nullable_method_calls::lower_method_call_with_receiver(
+                    ctx,
+                    receiver,
+                    "__clone",
+                    &[],
+                    Op::MethodCall,
+                    expr,
+                );
+            }
+            return cloned;
+        }
+    }
     let result_ty = match object_ty.codegen_repr() {
         PhpType::Object(class_name) => PhpType::Object(class_name),
         PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,

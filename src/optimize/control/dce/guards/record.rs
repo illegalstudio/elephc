@@ -97,7 +97,10 @@ pub(super) fn record_exact_literal_guard(
         name: name.to_string(),
         value: value.clone(),
     });
-    record_truthy_guard(guards, name, guard_literal_truthy(&value));
+    // Only a literal PHP can coerce without a diagnostic records a truthiness guard.
+    if let Some(truthy) = guard_literal_truthy(&value) {
+        record_truthy_guard(guards, name, truthy);
+    }
     if let GuardLiteral::Int(n) = value {
         record_exact_int_range(guards, name, n);
     }

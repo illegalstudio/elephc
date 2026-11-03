@@ -115,14 +115,25 @@ fn exclude_eval_literal_read_slots(
     data: &DataPool,
     eligible: &mut HashSet<LocalSlotId>,
 ) {
-    let slots_by_name: HashMap<String, LocalSlotId> = function
-        .locals
-        .iter()
-        .filter(|local| eligible.contains(&local.id))
-        .filter_map(|local| local.name.as_ref().map(|name| (name.clone(), local.id)))
-        .collect();
+    for slot in eval_literal_read_slots(function, data) {
+        eligible.remove(&slot);
+    }
+}
+
+/// Returns the local slots a literal `eval` call reads by name, without naming them as operands.
+pub(super) fn eval_literal_read_slots(function: &Function, data: &DataPool) -> Vec<LocalSlotId> {
+    let mut read = Vec::new();
+    // Every slot carrying a name answers for it: names are not unique across slots, and the one
+    // eval codegen reads is decided there, so protecting only one of them could drop the other's
+    // store.
+    let mut slots_by_name: HashMap<String, Vec<LocalSlotId>> = HashMap::new();
+    for local in &function.locals {
+        if let Some(name) = &local.name {
+            slots_by_name.entry(name.clone()).or_default().push(local.id);
+        }
+    }
     if slots_by_name.is_empty() {
-        return;
+        return read;
     }
 
     for inst in &function.instructions {
@@ -134,6 +145,7 @@ fn exclude_eval_literal_read_slots(
             Some(Immediate::ProfiledData {
                 data: data_id,
                 strict_php,
+                ..
             }) => (data_id, strict_php),
             _ => continue,
         };
@@ -146,11 +158,12 @@ fn exclude_eval_literal_read_slots(
             |_, _| false,
         );
         for name in plan.reads() {
-            if let Some(slot) = slots_by_name.get(name) {
-                eligible.remove(slot);
+            if let Some(slots) = slots_by_name.get(name) {
+                read.extend(slots.iter().copied());
             }
         }
     }
+    read
 }
 
 /// Drops slots whose loaded value can be reinterpreted as the slot's address.

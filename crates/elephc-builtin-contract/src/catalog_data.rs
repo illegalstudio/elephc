@@ -32467,7 +32467,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Str,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Gets line from stream resource up to a given delimiter.",
         examples: &[

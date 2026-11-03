@@ -528,6 +528,7 @@ pub(super) fn emit_builtin_call_value(
             Some(Immediate::ProfiledData {
                 data: ctx.intern_string(fragment),
                 strict_php: crate::strict_php::is_enabled(),
+                named_callable: false,
             }),
             Op::EvalLiteralCall.default_effects(),
         )
@@ -537,6 +538,7 @@ pub(super) fn emit_builtin_call_value(
             Immediate::ProfiledData {
                 data,
                 strict_php: crate::strict_php::is_enabled(),
+                named_callable: false,
             }
         } else {
             Immediate::Data(data)
