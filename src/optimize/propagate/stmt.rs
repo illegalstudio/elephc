@@ -84,6 +84,48 @@ pub(in crate::optimize) fn reference_parameter_names(
     names
 }
 
+/// Identifies closure bindings that copy values instead of inheriting an outer reference.
+pub(in crate::optimize) fn closure_value_binding_names(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    captures: &[String], capture_refs: &[String],
+    variadic: Option<&str>, variadic_by_ref: bool,
+) -> HashSet<String> {
+    let mut names = params.iter().filter(|(_, _, _, by_ref)| !*by_ref)
+        .map(|(name, ..)| name.clone()).collect::<HashSet<_>>();
+    names.extend(captures.iter().filter(|name| !capture_refs.contains(name)).cloned());
+    if let Some(name) = variadic.filter(|_| !variadic_by_ref) { names.insert(name.to_string()); }
+    names
+}
+
+/// Restores only the reference flags shadowed by a closure's by-value bindings.
+struct ReferenceValueScope(Vec<(String, bool)>);
+
+impl Drop for ReferenceValueScope {
+    /// Keeps references discovered in unrelated bindings while restoring the enclosing values.
+    fn drop(&mut self) {
+        REFERENCE_VOLATILE.with(|cell| {
+            let mut names = cell.borrow_mut();
+            for (name, present) in &self.0 {
+                if *present { names.insert(name.clone()); } else { names.remove(name); }
+            }
+        });
+    }
+}
+
+/// Isolates by-value closure bindings from same-spelled exposed references in other scopes.
+pub(in crate::optimize) fn with_reference_value_scope<R>(
+    names: HashSet<String>, f: impl FnOnce() -> R,
+) -> R {
+    let _guard = ReferenceValueScope(REFERENCE_VOLATILE.with(|cell| {
+        let mut current = cell.borrow_mut();
+        names.into_iter().map(|name| {
+            let present = current.remove(&name);
+            (name, present)
+        }).collect()
+    }));
+    f()
+}
+
 /// Restores reference parameter names without losing globally exposed aliases discovered in a body.
 struct ReferenceParameterScope(HashSet<String>);
 

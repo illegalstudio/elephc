@@ -117,13 +117,15 @@ fn semantic_optimizer_arg_types(
 /// Computes a closure body's effect with its own reference parameters and captures in scope.
 fn closure_body_call_effect(callee: &Expr) -> Option<Effect> {
     let ExprKind::Closure { params, return_type, body, variadic, variadic_by_ref,
-        capture_refs, by_ref_return, .. } = &callee.kind else { return None; };
+        captures, capture_refs, by_ref_return, .. } = &callee.kind else { return None; };
     let mut references = reference_parameter_names(params, variadic.as_deref(), *variadic_by_ref);
     references.extend(capture_refs.iter().cloned());
+    let values = closure_value_binding_names(params, captures, capture_refs,
+        variadic.as_deref(), *variadic_by_ref);
     let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
         params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
-    Some(with_return_boundary_facts(Some(&facts), ||
-        with_reference_parameter_scope(*by_ref_return, references, || block_effect(body))))
+    Some(with_return_boundary_facts(Some(&facts), || with_reference_value_scope(values, ||
+        with_reference_parameter_scope(*by_ref_return, references, || block_effect(body)))))
 }
 
 /// Computes the effect for an expression that may be called at runtime.

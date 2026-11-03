@@ -78,7 +78,7 @@ function callReferenceCapture(mixed &$target): void {
     catch (TypeError $error) { echo 'capture'; }
 }
 function callReferenceClosure_plain(mixed $target): void {
-    try { (function (mixed $inner): void { $inner = true; })($target); }
+    try { (function (mixed $target): void { $target = true; })($target); }
     catch (TypeError $error) { echo 'plain'; }
 }
 function callReferenceCapture_plain(mixed $target): void {

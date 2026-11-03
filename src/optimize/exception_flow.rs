@@ -581,14 +581,14 @@ impl ExceptionFlowAnalysis {
                 self.checker_retirement_types.as_ref().and_then(|types| types.get(name)),
             _ => None,
         };
-        self.stmt_throws_at_boundary(stmt, bindings, class_context, true, retired)
+        self.stmt_throws_at_boundary(stmt, bindings, class_context, true, retired, None)
     }
 
     /// Separates a statement's callbacks and cleanup from operands already visited by the checker.
     fn stmt_throws_at_boundary(
         &self, stmt: &Stmt, bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
-        retired_type: Option<&PhpType>,
+        retired_type: Option<&PhpType>, reference_write: Option<bool>,
     ) -> ThrownTypes {
         if !include_operands && !matches!(stmt.kind,
             StmtKind::Echo(_) | StmtKind::ExprStmt(_) | StmtKind::StaticVar { .. }
@@ -645,7 +645,7 @@ impl ExceptionFlowAnalysis {
             StmtKind::Assign { name, value }
             | StmtKind::TypedAssign { name, value, .. } => operand(value)
                 .combined(overwrite())
-                .combined(if is_reference_volatile(name) { ThrownTypes::unknown() }
+                .combined(if reference_write.unwrap_or_else(|| is_reference_volatile(name)) { ThrownTypes::unknown() }
                     else { ThrownTypes::default() }),
             // The untyped optimizer cannot prove reference rebinding harmless. The
             // checker boundary has already validated its source and supplies target storage.
@@ -1163,9 +1163,11 @@ impl ExceptionFlowAnalysis {
     ) -> ThrownTypes {
         match &callee.kind {
             ExprKind::Closure { params, return_type, body, variadic, variadic_by_ref,
-                capture_refs, by_ref_return, .. } => {
+                captures, capture_refs, by_ref_return, .. } => {
                 let mut references = reference_parameter_names(params, variadic.as_deref(), *variadic_by_ref);
                 references.extend(capture_refs.iter().cloned());
+                let values = closure_value_binding_names(params, captures, capture_refs,
+                    variadic.as_deref(), *variadic_by_ref);
                 let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
                     params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
                 // The callee owns different locals even when their spellings match the caller.
@@ -1175,9 +1177,9 @@ impl ExceptionFlowAnalysis {
                     callee_analysis.checker_retirement_types = None;
                     &callee_analysis
                 } else { self };
-                with_return_boundary_facts(Some(&facts), ||
+                with_return_boundary_facts(Some(&facts), || with_reference_value_scope(values, ||
                     with_reference_parameter_scope(*by_ref_return, references, ||
-                        analysis.block_throws(body, bindings, class_context)))
+                        analysis.block_throws(body, bindings, class_context))))
             }
             ExprKind::FirstClassCallable(CallableTarget::Function(name)) => self
                 .function_throws

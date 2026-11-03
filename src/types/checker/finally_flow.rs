@@ -136,7 +136,14 @@ impl Checker {
             return;
         }
         let Some(analysis) = &self.exception_analysis else { return; };
-        let thrown = analysis.statement_throws(stmt, self.current_class.as_deref(), retired_type);
+        // Propagation's global spelling ledger can include references from other functions.
+        // The checker has the actual binding and must use its lexical alias state instead.
+        let reference_write = match &stmt.kind {
+            StmtKind::Assign { name, .. } | StmtKind::TypedAssign { name, .. } =>
+                Some(!self.local_binding_is_unaliased(name)),
+            _ => None,
+        };
+        let thrown = analysis.statement_throws(stmt, self.current_class.as_deref(), retired_type, reference_write);
         if thrown.is_empty() { return; }
         let after = self.snapshot_flow_exit(env);
         // A container/property store can throw before replacing its destination. Keep that
@@ -150,7 +157,7 @@ impl Checker {
         if self.finally_flow_frames.is_empty() { return; }
         let Some(edge) = self.loop_backedge_snapshot() else { return; };
         let Some(analysis) = &self.exception_analysis else { return; };
-        let thrown = analysis.statement_throws(stmt, self.current_class.as_deref(), None);
+        let thrown = analysis.statement_throws(stmt, self.current_class.as_deref(), None, None);
         self.record_exception_snapshot(thrown, edge);
     }
 

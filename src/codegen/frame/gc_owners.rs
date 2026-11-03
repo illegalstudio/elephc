@@ -81,6 +81,7 @@ mod tests {
                 "<?php echo 1;", std::path::Path::new("main.php"), std::path::Path::new("."), target,
             );
             module.required_runtime_features.eval_bridge = true;
+            module.required_runtime_features.fiber = true;
             module.functions[0].add_local(Some("__frozen_scope".into()),
                 IrType::I64, PhpType::Int, LocalKind::EvalScope);
             crate::ir::validate_module(&module).unwrap();
