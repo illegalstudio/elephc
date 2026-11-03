@@ -307,7 +307,16 @@ pub(super) fn reflection_property_slot_default_value(
             .or_else(|| crate::types::deferred_defaults::unconditional_error_message(default)
                 .map(|message| ReflectionParameterDefaultValue::DeferredError(message.to_string())))
             .or_else(|| reflection_folded_property_default(ctx, declaring_class, default))
-            .or_else(|| reflection_literal_parameter_default_value(default)),
+            .or_else(|| reflection_literal_parameter_default_value(default))
+            // A form only the constant evaluator folds (`self::OPTIONS_DEFAULTS + [...]` in
+            // symfony/http-client); dropping it made getDefaultProperties() omit the property.
+            .or_else(|| {
+                let class = declaring_class.unwrap_or("");
+                let info = ctx.module.class_infos.get(class.trim_start_matches('\\'));
+                reflection_constant_value(ctx, class, info, default, 0)
+                    .ok()
+                    .and_then(reflection_parameter_default_from_constant_value)
+            }),
         None if !is_declared => Some(ReflectionParameterDefaultValue::Null),
         None => None,
     }

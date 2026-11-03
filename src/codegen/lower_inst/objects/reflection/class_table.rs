@@ -705,11 +705,17 @@ pub(in crate::codegen) fn emit_reflection_class_table(
         let mut seen: BTreeSet<Vec<u8>> = BTreeSet::new();
         let mut queue: std::collections::VecDeque<String> = names.iter().cloned().collect();
         let mut queued: BTreeSet<String> = names.iter().map(|name| php_symbol_key(name)).collect();
+        // Every class whose metadata cannot be built is reported in ONE failure: stopping at the
+        // first left a large program (the Symfony Demo) one 15-minute build per unsupported form.
+        let mut failures: Vec<String> = Vec::new();
         while let Some(name) = queue.pop_front() {
             let built = match build_row(&mut ctx, &mut members, &name, closed) {
                 Ok(row) => row,
                 Err(_) if tolerant => None,
-                Err(error) => return Err(error),
+                Err(error) => {
+                    failures.push(format!("{name}: {error}"));
+                    None
+                }
             };
             if let Some(row) = built {
                 for referenced in &row.referenced {
@@ -721,6 +727,13 @@ pub(in crate::codegen) fn emit_reflection_class_table(
                     rows.push(row);
                 }
             }
+        }
+        if !failures.is_empty() {
+            return Err(CodegenIrError::unsupported(format!(
+                "Reflection metadata of {} class-like(s) cannot be built:\n  {}",
+                failures.len(),
+                failures.join("\n  ")
+            )));
         }
         // The function and closure rows, plus the builtin functions literal sites name.
         let builtin_names = literal_function_names(&ctx);

@@ -869,6 +869,31 @@ unset($q);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// An array union in a constant expression (`self::OPTIONS_DEFAULTS + [...]`, symfony/http-client
+/// constants and property defaults) reflects as php's union: left entries, then right entries
+/// under keys the left lacks. Constants failed the Demo's build; property defaults vanished from
+/// `getDefaultProperties()`.
+#[test]
+fn test_reflected_array_unions_in_constants_and_property_defaults() {
+    let out = compile_and_run(r#"<?php
+interface HttpClientInterface { const OPTIONS_DEFAULTS = ['a' => 1, 'b' => 2, 'extra' => []]; }
+final class Curl implements HttpClientInterface {
+    const LIST = [1, 2] + [5, 6, 7];
+    const MERGED = self::OPTIONS_DEFAULTS + ['b' => 99, 'c' => 3];
+    private array $defaultOptions = self::OPTIONS_DEFAULTS + ['crypto' => 7];
+    public array $list = [1] + [5, 6];
+}
+$r = new ReflectionClass('Curl');
+echo json_encode($r->getConstants()), "\n";
+echo json_encode($r->getDefaultProperties()), "\n";
+"#);
+    assert_eq!(
+        out,
+        "{\"LIST\":[1,2,7],\"MERGED\":{\"a\":1,\"b\":2,\"extra\":[],\"c\":3},\"OPTIONS_DEFAULTS\":{\"a\":1,\"b\":2,\"extra\":[]}}\n\
+         {\"defaultOptions\":{\"a\":1,\"b\":2,\"extra\":[],\"crypto\":7},\"list\":[1,6]}\n"
+    );
+}
+
 /// php 8.2 lets a constant expression read an enum case's `->value` / `->name` (monolog's
 /// `Logger::DEBUG = Level::Debug->value`); reflecting such constants failed the backend's
 /// metadata evaluator and the Symfony Demo's build.

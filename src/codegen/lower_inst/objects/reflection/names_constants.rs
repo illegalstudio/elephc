@@ -382,6 +382,45 @@ pub(super) fn reflection_constant_value(
     }
 }
 
+/// The key/value entries of a constant array value, in order (a list's keys are its positions).
+fn reflection_array_entries(value: &ReflectionConstantValue) -> Vec<ReflectionConstantAssocEntry> {
+    match value {
+        ReflectionConstantValue::Array(elements) => elements
+            .iter()
+            .enumerate()
+            .map(|(index, element)| ReflectionConstantAssocEntry {
+                key: ReflectionDefaultArrayKey::Int(index as i64),
+                value: element.clone(),
+            })
+            .collect(),
+        ReflectionConstantValue::AssocArray(entries) => entries.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// php's `$left + $right` on two constant arrays: every left entry, then each right entry whose
+/// key the left does not hold. A result keyed `0..n` in order is a list again.
+fn reflection_array_union(
+    left: &ReflectionConstantValue,
+    right: &ReflectionConstantValue,
+) -> ReflectionConstantValue {
+    let mut entries = reflection_array_entries(left);
+    for entry in reflection_array_entries(right) {
+        if !entries.iter().any(|existing| existing.key == entry.key) {
+            entries.push(entry);
+        }
+    }
+    let is_list = entries
+        .iter()
+        .enumerate()
+        .all(|(index, entry)| entry.key == ReflectionDefaultArrayKey::Int(index as i64));
+    if is_list {
+        ReflectionConstantValue::Array(entries.into_iter().map(|entry| entry.value).collect())
+    } else {
+        ReflectionConstantValue::AssocArray(entries)
+    }
+}
+
 /// Answers `left === right` for two scalar (or null) constant values, or `None` when either
 /// side is not a scalar the evaluator decides (arrays, enum cases, undefined constants).
 fn reflection_scalar_identity(
@@ -448,6 +487,14 @@ pub(super) fn reflection_binary_constant_value(
                 _ => *left >> *right,
             }))
         }
+        // Array union (`self::OPTIONS_DEFAULTS + ['auth_ntlm' => null]` in symfony/http-client):
+        // the left array's entries, then the right's entries under keys the left lacks. Before
+        // the arithmetic arm, which answers `+` for numbers only.
+        (
+            ReflectionConstantValue::Array(_) | ReflectionConstantValue::AssocArray(_),
+            BinOp::Add,
+            ReflectionConstantValue::Array(_) | ReflectionConstantValue::AssocArray(_),
+        ) => Ok(reflection_array_union(&left, &right)),
         (
             left,
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow,
@@ -456,8 +503,9 @@ pub(super) fn reflection_binary_constant_value(
             left, op, right, span,
         ).ok_or_else(|| {
             CodegenIrError::unsupported(format!(
-                "ReflectionClass constant metadata binary value {:?} {:?}",
+                "ReflectionClass constant metadata binary value {:?} {:?} {:?}",
                 reflection_constant_value_kind(left),
+                op,
                 reflection_constant_value_kind(right)
             ))
         }),
