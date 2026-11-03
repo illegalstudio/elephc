@@ -1,65 +1,35 @@
 //! Purpose:
-//! Loads borrowed scalar reference values from raw or canonical managed cells.
+//! Loads borrowed native reference values from raw or canonical managed cells.
 //!
 //! Called from:
 //! - Native local and object-property reference reads.
 //!
 //! Key details:
 //! - Physical shape is checked on each read because PHP callbacks may promote a cell.
-//! - Canonical children are already type-validated; loading never coerces or acquires them.
+//! - Canonical children retain their actual PHP tag independently of the entry declaration.
 //! - Headerless borrowed references retain their existing raw ABI.
 
 use super::*;
 
-/// Handles scalar reference layouts, returning false for the existing container-specific paths.
-pub(super) fn load_scalar(
-    ctx: &mut FunctionContext<'_>, pointer: &str, ty: &PhpType,
-) -> bool {
-    let ty = ty.codegen_repr();
-    if !matches!(ty, PhpType::Int | PhpType::Bool | PhpType::False
-        | PhpType::Float | PhpType::Str | PhpType::TaggedScalar)
-    {
-        return false;
-    }
-    let raw = ctx.next_label("scalar_reference_raw_payload");
-    let done = ctx.next_label("scalar_reference_payload_done");
+/// Reads the actual canonical value or the legacy payload, then exposes a borrowed logical view.
+pub(super) fn load_as(
+    ctx: &mut FunctionContext<'_>, pointer: &str, payload_ty: &PhpType, result_ty: &PhpType,
+) -> Result<()> {
+    let raw = ctx.next_label("reference_raw_payload");
+    let done = ctx.next_label("reference_payload_done");
     let result = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, pointer);
     abi::emit_reg_move(ctx.emitter, result, pointer);
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_canonical");
     abi::emit_branch_if_int_result_zero(ctx.emitter, &raw);
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    match (&ty, ctx.emitter.target.arch) {
-        (PhpType::Str, Arch::AArch64) => {}
-        (PhpType::Str, Arch::X86_64) => {
-            ctx.emitter.instruction("mov rax, rdi");                            // expose the borrowed string pointer beside its returned length
-        }
-        (PhpType::Float, Arch::AArch64) => {
-            ctx.emitter.instruction("fmov d0, x1");                             // reinterpret the validated float payload without numeric coercion
-        }
-        (PhpType::Float, Arch::X86_64) => {
-            ctx.emitter.instruction("movq xmm0, rdi");                          // reinterpret the validated float payload without numeric coercion
-        }
-        (PhpType::TaggedScalar, Arch::AArch64) => {
-            ctx.emitter.instruction("mov x9, x0");                              // retain the nullable integer tag before exposing its payload
-            ctx.emitter.instruction("mov x0, x1");                              // expose the validated integer or null low word
-            ctx.emitter.instruction("mov x1, x9");                              // expose the existing tagged-scalar ABI tag
-        }
-        (PhpType::TaggedScalar, Arch::X86_64) => {
-            ctx.emitter.instruction("mov rdx, rax");                            // retain the nullable integer tag before exposing its payload
-            ctx.emitter.instruction("mov rax, rdi");                            // expose the validated integer or null low word
-        }
-        (_, Arch::AArch64) => {
-            ctx.emitter.instruction("mov x0, x1");                              // expose the validated integer or boolean payload
-        }
-        (_, Arch::X86_64) => {
-            ctx.emitter.instruction("mov rax, rdi");                            // expose the validated integer or boolean payload
-        }
-    }
+    // A parameter declaration validates entry, but callbacks can replace its canonical child.
+    // Read that child's actual tag rather than projecting bits through the declaration's ABI.
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
+    super::local_loads::coerce_borrowed_ref_cell_local(ctx, &PhpType::Mixed, result_ty)?;
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&raw);
     abi::emit_load_temporary_stack_slot(ctx.emitter, pointer, 0);
-    match ty {
+    match payload_ty.codegen_repr() {
         PhpType::Str => {
             let (low, high) = abi::string_result_regs(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, high, pointer, 8);
@@ -75,14 +45,22 @@ pub(super) fn load_scalar(
         }
         _ => abi::emit_load_from_address(ctx.emitter, result, pointer, 0),
     }
+    if payload_ty.codegen_repr() == PhpType::Mixed {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
+    }
+    super::local_loads::coerce_borrowed_ref_cell_local(ctx, payload_ty, result_ty)?;
     ctx.emitter.label(&done);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    true
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::codegen::{frame, shared_helper::helper_function};
+    use crate::codegen::{data_section::DataSection, emit::Emitter, shared_state::SharedCodegenState};
     use crate::codegen_support::platform::Target;
+    use crate::ir::{FunctionParam, IrType};
 
     /// Scalar readers preserve the raw ABI while probing current canonical shape on every target.
     #[test]
@@ -103,14 +81,14 @@ mod tests {
                 let body = assembly.split_once(&format!("@fn name={name} symbol=")).unwrap().1
                     .split_once(&format!("@endfn name={name}")).unwrap().0;
                 let probe = body.find("__rt_reference_cell_canonical").unwrap();
-                assert!(body[probe..].contains("__rt_mixed_unbox"),
+                assert!(body[probe..].contains("__rt_mixed_deref"),
                     "{target} {name}: canonical payloads must expose the actual child");
-                assert!(body[probe..].contains("scalar_reference_raw_payload"),
+                assert!(body[probe..].contains("reference_raw_payload"),
                     "{target} {name}: headerless arguments must retain their raw layout");
                 if target == "linux-x86_64" && name == "readNativeStringReference" {
                     let unbox = body[probe..].find("__rt_mixed_unbox").unwrap() + probe;
                     let canonical = body[unbox..].lines().take_while(|line|
-                        !(line.trim_end().ends_with(':') && line.contains("scalar_reference_raw_payload")))
+                        !(line.trim_end().ends_with(':') && line.contains("reference_raw_payload")))
                         .collect::<Vec<_>>().join("\n");
                     assert!(canonical.contains("mov rax, rdi"),
                         "{target}: unbox returns the canonical string pointer in rdi");
@@ -118,6 +96,46 @@ mod tests {
                         "{target}: unbox already returns the string length in rdx");
                 }
             }
+        }
+    }
+
+    /// A Mixed read of a typed reference keeps the canonical child's tag without reboxing raw bits.
+    #[test]
+    fn canonical_reference_mixed_views_keep_actual_tags_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let module = Module::new(target);
+            let mut function = helper_function("canonical_mixed_view", PhpType::Void);
+            function.params.clear();
+            function.params.push(FunctionParam {
+                name: "value".into(), ir_type: IrType::I64, php_type: PhpType::Int,
+                by_ref: true, variadic: false,
+            });
+            function.values[0].ir_type = IrType::I64;
+            function.values[0].php_type = PhpType::Int;
+            let slot = function.add_local(Some("value".into()), IrType::I64, PhpType::Int,
+                crate::ir::LocalKind::PhpLocal);
+            let layout = frame::layout_for_function(&function, target, false, false, false);
+            let mut emitter = Emitter::new(target);
+            let mut data = DataSection::new();
+            let mut shared = SharedCodegenState::default();
+            {
+                let mut context = FunctionContext::new(&module, &function, &mut emitter, &mut data,
+                    &mut shared, layout, false, false, false, None);
+                super::super::local_loads::load_ref_cell_local_to_result_as(
+                    &mut context, slot, &PhpType::Mixed).unwrap();
+            }
+            let assembly = emitter.output();
+            let raw_label = assembly.lines().find(|line|
+                line.trim_end().ends_with(':') && line.contains("reference_raw_payload"))
+                .unwrap_or_else(|| panic!("{name}: missing raw reference branch: {assembly}"));
+            let (canonical, raw) = assembly.split_once(raw_label).unwrap();
+            assert!(canonical.contains("__rt_reference_cell_canonical"), "{name}");
+            assert!(canonical.contains("__rt_mixed_deref"), "{name}");
+            assert!(!canonical.contains("__rt_mixed_from_value"),
+                "{name}: the real boxed child already carries its tag");
+            assert!(raw.contains("__rt_mixed_from_value"),
+                "{name}: raw integer references still need their legacy boxing adapter");
         }
     }
 }

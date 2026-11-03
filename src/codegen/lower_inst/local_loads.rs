@@ -128,51 +128,7 @@ pub(super) fn load_ref_cell_local_to_result_as(
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
-    if super::reference_payloads::load_scalar(ctx, pointer_reg, &payload_ty) {
-        coerce_borrowed_ref_cell_local(ctx, &payload_ty, &result_ty)?;
-        return Ok(result_ty);
-    }
-    match &payload_ty {
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_load_from_address(ctx.emitter, ptr_reg, pointer_reg, 0);
-            abi::emit_load_from_address(ctx.emitter, len_reg, pointer_reg, 8);
-        }
-        PhpType::Float => {
-            abi::emit_load_from_address(
-                ctx.emitter,
-                abi::float_result_reg(ctx.emitter),
-                pointer_reg,
-                0,
-            );
-        }
-        PhpType::TaggedScalar => {
-            abi::emit_load_from_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                pointer_reg,
-                0,
-            );
-            abi::emit_load_from_address(
-                ctx.emitter,
-                crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter),
-                pointer_reg,
-                8,
-            );
-        }
-        _ => {
-            abi::emit_load_from_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                pointer_reg,
-                0,
-            );
-        }
-    }
-    if payload_ty == PhpType::Mixed {
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
-    }
-    coerce_borrowed_ref_cell_local(ctx, &payload_ty, &result_ty)?;
+    super::reference_payloads::load_as(ctx, pointer_reg, &payload_ty, &result_ty)?;
     Ok(result_ty)
 }
 

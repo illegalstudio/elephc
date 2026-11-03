@@ -20,6 +20,11 @@ property changed through another native alias. AOT eval scope writes remain dirt
 literal scope reload keeps its existing path. Eval barriers preserve the payload
 types of already-bound native references rather than widening shared cells to Mixed.
 
+Native reads probe a managed reference's canonical wrapper before using its legacy
+payload layout. The current boxed child supplies the PHP tag for the requested
+logical view, including a Mixed read after eval changes a typed parameter's value.
+Raw and headerless references continue to load through their original physical ABI.
+
 Owned property value reads detach array boxes even when the getter already returned
 an owning lease. Retaining the same property box is insufficient: a COW write replaces
 the payload in that box. The copy preserves array and callable metadata; object reads
