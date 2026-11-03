@@ -51,7 +51,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, result, ENTRY);
     abi::load_at_offset(emitter, result, ORIGINAL);
     abi::emit_branch_if_int_result_zero(emitter, failed);
-    abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0),
+    abi::emit_local_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0),
         "__rt_reference_validation_coerce_body");
     abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 1), ENTRY);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 2), CONTEXT);
@@ -121,4 +121,30 @@ mod tests {
             assert!(!assembly.contains("__rt_throw_current"), "{name}: failures return a status and owned context Throwable");
         }
     }
+
+    /// A private protected callback stays directly addressable after Mach-O label localization.
+    #[test]
+    fn native_reference_coercion_private_entry_uses_local_pic_relocations() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new_pic(target);
+            emitter.dead_strip = target.platform == crate::codegen_support::platform::Platform::MacOS;
+            emit(&mut emitter);
+            let labels = emitter.take_internal_labels();
+            let assembly = crate::codegen_support::emit::localize_internal_labels(
+                &emitter.output(), &labels,
+            );
+            let references = assembly.lines().filter(|line|
+                line.contains("__rt_reference_validation_coerce_body")).collect::<Vec<_>>();
+            assert!(!references.is_empty(), "{name}: the protected entry must remain reachable");
+            assert!(references.iter().all(|line| !line.to_ascii_lowercase().contains("got")),
+                "{name}: an assembler-local callback cannot use an interposable GOT entry");
+            if target.arch == Arch::X86_64 {
+                assert!(references.iter().any(|line| line.contains("lea rdi, [rip +")));
+            } else {
+                assert!(references.iter().any(|line| line.trim_start().starts_with("add x0,")));
+            }
+        }
+    }
+
 }
