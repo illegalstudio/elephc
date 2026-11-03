@@ -948,9 +948,30 @@ fn validate_opcode_rules(
             } else { check_count(inst_id, inst, 1, "1 or 2") }
         }
         StoreRefCell => {
-            if inst.operands.len() == 2 {
-                check_operand_type(function, inst_id, inst, 1, IrType::I64, "assignment-site bool (I64)")
-            } else { check_count(inst_id, inst, 1, "original RHS and optional assignment-site Bool") }
+            if !(1..=3).contains(&inst.operands.len()) {
+                return check_count(inst_id, inst, 1, "original RHS, optional assignment-site Bool and source owner");
+            }
+            if inst.operands.len() >= 2 {
+                check_operand_type(function, inst_id, inst, 1, IrType::I64, "assignment-site bool (I64)")?;
+            }
+            if let Some(owner_id) = inst.operands.get(2) {
+                let owner = function.value(*owner_id).ok_or(ValidationError::UnknownValue(*owner_id))?;
+                let ValueDef::Instruction { inst: load, .. } = owner.def else {
+                    return Err(ValidationError::OwnershipTypeMismatch(*owner_id));
+                };
+                let parking_slot = function.instruction(load).and_then(|load| {
+                    if load.op != Op::LoadLocal { return None; }
+                    let Some(Immediate::LocalSlot(slot)) = load.immediate else { return None; };
+                    function.locals.get(slot.as_raw() as usize)
+                });
+                if parking_slot.is_none_or(|slot| !matches!(slot.kind, LocalKind::OwnedTemp | LocalKind::HiddenTemp))
+                    || owner.ownership != Ownership::Borrowed
+                    || !function.instructions.iter().any(|instruction|
+                        instruction.op == Op::PushCallOperandOwner
+                            && instruction.immediate == function.instruction(load).unwrap().immediate)
+                { return Err(ValidationError::OwnershipTypeMismatch(*owner_id)); }
+            }
+            Ok(())
         }
         StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal
         | ExternGlobalStore | BindRefCellPtr | AdoptRefCellPtr

@@ -712,8 +712,9 @@ Weak candidates reuse the property guard's coercions and diagnostics. Reference
 errors name the original physical declaration independently of candidate storage
 or receiver class, including hidden parent-private slots and inherited statics. The
 native ABI harness calls a generated callback through the protected adapter.
-Publishers still need to register these callbacks and retire the adapter's raw
-Throwable owner on every path.
+Instance binding hooks register these callbacks for completed physical cells.
+Canonical store lowering transfers a contained raw Throwable back to the native
+exception chain only after the publisher has retired its temporary roots.
 
 The native operation callbacks authenticate a source's current physical binding
 through `__rt_reference_cell_canonical`, compare borrowed PHP candidates, and
@@ -762,9 +763,16 @@ store lowering select it together.
 
 Lowered `StoreRefCell` instructions preserve the original RHS and carry an
 explicit PHP bool operand for assignment-site strictness. The physical alias
-type remains separate. Hand-built legacy EIR with only the RHS is still accepted
-as weak mode. Canonical publisher lowering still needs to consume the mode
-before the legacy raw-slot conversion runs.
+type remains separate. With the explicit capability selected, lowering first
+authenticates a managed canonical cell and passes the original boxed RHS and
+source mode to the publisher. Unpromoted and borrowed raw cells retain the
+legacy conversion path; hand-built EIR with only the RHS retains that path too.
+An optional third operand borrows the source expression's unwind parking slot.
+The canonical path clears and retires that extra owner while the replacement
+box still keeps its payload alive, before publication can run a displaced
+destructor. Normal post-store cleanup then observes the empty parking slot.
+Optimizers preserve this slot's address identity. Mutating container writeback
+keeps its existing consuming or acquired-owner convention.
 
 Native function parameter flags carry physical boxed-reference storage separately
 from declared PHP types and tagged nullable integers. Normal function object

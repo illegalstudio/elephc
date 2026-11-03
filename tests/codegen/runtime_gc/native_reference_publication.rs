@@ -28,6 +28,7 @@ class NativePublisherOld {
 }
 function nativePublisherMakeOld(): mixed { return new NativePublisherOld(); }
 function nativePublisherMakeIncoming(): mixed { return new NativePublisherIncoming(); }
+function nativePublisherAssign(mixed &$target): void { $target = nativePublisherMakeIncoming(); }
 if ($argc < 0) {
     $old = nativePublisherMakeOld(); $incoming = nativePublisherMakeIncoming();
     unset($old, $incoming);
@@ -61,6 +62,24 @@ if ($argc < 0) {
     instruction(&mut asm, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
     load(&mut asm, 88);
     call(&mut asm, "__rt_decref_mixed");
+    // Repeat through real StoreRefCell lowering, including its moved source parking owner.
+    call(&mut asm, &elephc::names::function_symbol("nativePublisherMakeOld"));
+    store(&mut asm, 96);
+    call(&mut asm, "__rt_reference_new");
+    store(&mut asm, 88);
+    address(&mut asm, "x9", "r10", "Lnative_publisher_target");
+    instruction(&mut asm, "str x0, [x9]", "mov QWORD PTR [r10], rax");
+    load(&mut asm, 96);
+    call(&mut asm, "__rt_decref_mixed");
+    instruction(&mut asm, "mov x0, #7", "mov edi, 7");
+    call(&mut asm, "__rt_reference_cell_new");
+    store(&mut asm, 104);
+    instruction(&mut asm, "ldr x9, [sp, #88]", "mov r10, QWORD PTR [rsp + 88]");
+    instruction(&mut asm, "str x9, [x0]", "mov QWORD PTR [rax], r10");
+    instruction(&mut asm, "mov x0, x0", "mov rdi, rax");
+    call(&mut asm, &elephc::names::function_symbol("nativePublisherAssign"));
+    load(&mut asm, 104);
+    call(&mut asm, "__rt_reference_cell_release");
     expect_zero(&mut asm, "_rt_reference_validation_pins_top");
     expect_zero(&mut asm, "_gc_live");
     append_status_output(&mut asm, 128);
@@ -68,7 +87,7 @@ if ($argc < 0) {
     append_overwrite_callback(&mut user);
     let runtime = runtime_obj_for_asm(&runtime);
     let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
-    assert_eq!(output, "old-start|incoming|old-end|1");
+    assert_eq!(output, "old-start|incoming|old-end|old-start|incoming|old-end|1");
 }
 
 /// Defines the foreign callback used by the real PHP destructor, with no extra RHS owner.
@@ -88,6 +107,84 @@ fn append_overwrite_callback(user: &mut String) {
     } else { user.push_str("    leave\n    ret\n"); }
     user.push_str(".data\n.p2align 3\nLnative_publisher_target:\n    .quad 0\n\
         .p2align 3\nLnative_publisher_null:\n    .quad 8\n    .quad 0\n    .quad 0\n");
+}
+
+/// Real StoreRefCell calls use source-file strictness and propagate a protected declaration error.
+#[test]
+fn test_native_reference_store_assignment_strictness_bundle() {
+    for strict in [false, true] {
+        let dir = FixtureDir(make_cli_test_dir("elephc_native_reference_store_mode"));
+        let source = format!(r#"<?php
+{}
+class NativeReferenceModeProbe {{ public float $value = 2.0; }}
+function nativeReferenceApplyMode(mixed &$target): void {{
+    try {{ $target = true; echo 'accepted|'; }}
+    catch (TypeError $error) {{ echo 'rejected|'; }}
+}}
+if ($argc < 0) {{
+    $probe = new NativeReferenceModeProbe(); $target = 2.0;
+    nativeReferenceApplyMode($target); unset($probe, $target);
+}}
+"#, if strict { "declare(strict_types=1);" } else { "" });
+        let (user, runtime, requirements) = without_ir_opt(||
+            compile_source_to_asm_with_native_reference_validation(&source, &dir.0, 65_536, true));
+        let prefix = elephc::names::function_symbol("__eir_reference_property_");
+        let suffix = elephc::names::mangle_fqn("_instance");
+        let callback = user.lines().filter_map(|line| line.trim().strip_suffix(':'))
+            .find(|line| line.starts_with(&prefix) && line.ends_with(&suffix)).unwrap();
+        let mut asm = String::new();
+        instruction(&mut asm, "sub sp, sp, #160", "sub rsp, 160");
+        instruction(&mut asm, "mov x0, #2", "mov eax, 2");
+        instruction(&mut asm, "mov x1, #0x4000000000000000", "mov rdi, 0x4000000000000000");
+        instruction(&mut asm, "mov x2, #0", "xor esi, esi");
+        call(&mut asm, "__rt_mixed_from_value");
+        store(&mut asm, 16);
+        call(&mut asm, "__rt_reference_new");
+        store(&mut asm, 0);
+        load(&mut asm, 16);
+        call(&mut asm, "__rt_decref_mixed");
+        instruction(&mut asm, "mov x0, #7", "mov edi, 7");
+        call(&mut asm, "__rt_reference_cell_new");
+        store(&mut asm, 8);
+        instruction(&mut asm, "ldr x9, [sp]", "mov r10, QWORD PTR [rsp]");
+        instruction(&mut asm, "str x9, [x0]", "mov QWORD PTR [rax], r10");
+        address(&mut asm, "x0", "rax", callback);
+        store(&mut asm, 32);
+        instruction(&mut asm, "add x0, sp, #8", "lea rdi, [rsp + 8]");
+        instruction(&mut asm, "ldr x1, [sp, #8]", "mov rsi, QWORD PTR [rsp + 8]");
+        instruction(&mut asm, "add x2, sp, #32", "lea rdx, [rsp + 32]");
+        call(&mut asm, &target().extern_symbol("__elephc_reference_sources_bind_v1"));
+        instruction(&mut asm, "cmp x0, #0", "test rax, rax");
+        instruction(&mut asm, "b.eq Lvalidation_pin_fail", "je Lvalidation_pin_fail");
+        instruction(&mut asm, "ldr x0, [sp, #8]", "mov rdi, QWORD PTR [rsp + 8]");
+        call(&mut asm, "__rt_reference_source_associate_native");
+        instruction(&mut asm, "ldr x0, [sp, #8]", "mov rdi, QWORD PTR [rsp + 8]");
+        call(&mut asm, &elephc::names::function_symbol("nativeReferenceApplyMode"));
+        load(&mut asm, 8);
+        instruction(&mut asm, "ldr x0, [x0]", "mov rax, QWORD PTR [rax]");
+        call(&mut asm, "__rt_mixed_unbox");
+        instruction(&mut asm, "cmp x0, #2", "cmp rax, 2");
+        instruction(&mut asm, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+        load(&mut asm, 8);
+        instruction(&mut asm, "ldr x0, [x0]", "mov rax, QWORD PTR [rax]");
+        call(&mut asm, "__rt_mixed_cast_int");
+        let expected = if strict { 2 } else { 1 };
+        instruction(&mut asm, &format!("cmp x0, #{expected}"), &format!("cmp rax, {expected}"));
+        instruction(&mut asm, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+        instruction(&mut asm, "add x0, sp, #8", "lea rdi, [rsp + 8]");
+        call(&mut asm, &target().extern_symbol("__elephc_reference_sources_unbind_v1"));
+        instruction(&mut asm, "cmp x0, #0", "test rax, rax");
+        instruction(&mut asm, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+        load(&mut asm, 8);
+        call(&mut asm, "__rt_reference_cell_release");
+        expect_zero(&mut asm, "_rt_reference_validation_pins_top");
+        expect_zero(&mut asm, "_gc_live");
+        append_status_output(&mut asm, 160);
+        let user = inject_main_exit_harness(&user, &asm);
+        let runtime = runtime_obj_for_asm(&runtime);
+        let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
+        assert_eq!(output, if strict { "rejected|1" } else { "accepted|1" }, "strict={strict}");
+    }
 }
 
 /// A coercion snapshot's destructor observes publication and its throw survives later clean releases.

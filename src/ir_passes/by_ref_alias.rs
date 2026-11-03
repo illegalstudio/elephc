@@ -56,8 +56,13 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
         return escaping;
     }
     for inst in &function.instructions {
-        if matches!(inst.op, Op::StoreStaticProperty | Op::StoreReflectionStaticProperty) {
-            if let Some(slot) = inst.operands.get(1).and_then(|value| load_result_slot.get(value)) {
+        let owner_index = match inst.op {
+            Op::StoreStaticProperty | Op::StoreReflectionStaticProperty => Some(1),
+            Op::StoreRefCell => Some(2),
+            _ => None,
+        };
+        if let Some(index) = owner_index {
+            if let Some(slot) = inst.operands.get(index).and_then(|value| load_result_slot.get(value)) {
                 escaping.insert(*slot);
             }
         }

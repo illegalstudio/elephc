@@ -857,6 +857,8 @@ pub enum Op {
     LoadRefCell,
     /// Stores an original RHS through a reference. An optional second I64 PHP bool records
     /// assignment-site strictness for canonical publishers; legacy hand-built IR defaults weak.
+    /// An optional third operand borrows a temporary source parking slot, which a canonical
+    /// publisher clears and retires before the displaced value's destructor can execute.
     StoreRefCell,
     PromoteLocalRefCell,
     AliasLocalRefCell,

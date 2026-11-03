@@ -2790,7 +2790,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             let store_type = ref_cell_store_type
                 .expect("a ref-bound local has a physical store type");
             let value = self.box_typed_array_for_mixed_ref_cell(value, &store_type, span);
-            self.store_ref_cell_slot(slot, value, store_type, span);
+            self.store_ref_cell_slot(slot, value, store_type, ref_store_source_owner, span);
         } else {
             self.store_slot_with_op(slot, value, op, span);
         }
@@ -3143,7 +3143,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         match (is_ref_bound, previous_kind) {
             (true, _) => {
                 let store_type = self.ref_cell_store_type(name, &php_type);
-                self.store_ref_cell_slot(slot, value, store_type, span);
+                self.store_ref_cell_slot(slot, value, store_type, None, span);
             }
             (false, LocalKind::StaticLocal) => {
                 self.store_slot_with_op(slot, value, Op::StoreStaticLocal, span);
@@ -5068,9 +5068,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         slot: LocalSlotId,
         value: LoweredValue,
         alias_ty: PhpType,
+        source_owner: Option<LocalSlotId>,
         span: Option<Span>,
     ) {
         let strict_types = self.builder.emit_const_bool(crate::source::current_strict_types());
+        let mut operands = vec![value.value, strict_types];
+        if let Some(owner) = source_owner {
+            let php_type = self.builder.local_php_type(owner);
+            let load = self.builder.emit_with_effects(
+                Op::LoadLocal, Vec::new(), Some(Immediate::LocalSlot(owner)),
+                value_ir_type(&php_type), php_type, Ownership::Borrowed,
+                Op::LoadLocal.default_effects(), span,
+            ).expect("reference source owner is an addressable parking slot");
+            operands.push(load);
+        }
         self.invalidate_callable_facts_after_user_code(
             Op::StoreRefCell,
             &[value.value],
@@ -5079,7 +5090,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
         self.builder.emit_with_effects(
             Op::StoreRefCell,
-            vec![value.value, strict_types],
+            operands,
             Some(Immediate::LocalSlot(slot)),
             IrType::Void,
             alias_ty,

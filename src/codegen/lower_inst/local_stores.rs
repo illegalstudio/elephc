@@ -11,6 +11,7 @@ use super::*;
 use crate::ir::RuntimeCallTarget;
 
 mod owned_output;
+mod native_reference_store;
 pub(in crate::codegen) use owned_output::publish_current_owned_output;
 
 /// Lowers an addressable local store from one SSA operand.
@@ -89,6 +90,11 @@ pub(in crate::codegen) enum RefCellStorePrevious {
 pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
+    let canonical_done = if !value_is_consuming_mutation_of_ref_cell(ctx, value, slot)?
+        && !value_is_retained_mutation_of_ref_cell(ctx, value, slot)?
+    {
+        native_reference_store::emit_if_canonical(ctx, inst, slot, value)?
+    } else { None };
     let previous = if value_is_consuming_mutation_of_ref_cell(ctx, value, slot)? {
         RefCellStorePrevious::Keep
     } else {
@@ -99,7 +105,9 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
             RefCellStorePrevious::Retire
         }
     };
-    store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type, previous)
+    store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type, previous)?;
+    if let Some(done) = canonical_done { ctx.emitter.label(&done); }
+    Ok(())
 }
 
 /// Detects the independent destination owner acquired by a mixed-key ref-cell write.

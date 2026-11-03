@@ -16,7 +16,7 @@ fn verify_native_reference_store_modes(target: &str) {
         let source = format!("<?php {} \
             function nativeModeStore(int &$value, mixed $original): void {{ $value = $original; }}",
             if strict { "declare(strict_types=1);" } else { "" });
-        let module = super::lower_source_at_for_target(
+        let mut module = super::lower_source_at_for_target(
             &source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
@@ -31,9 +31,54 @@ fn verify_native_reference_store_modes(target: &str) {
         let mode = function.instruction(inst).unwrap();
         assert_eq!(mode.op, Op::ConstBool);
         assert_eq!(mode.immediate, Some(Immediate::Bool(strict)), "{target}: assignment-site mode");
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        let ordinary = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        assert!(!ordinary.contains("__rt_reference_publish_native"), "{target}: optional capability");
+        crate::ir_lower::enable_native_reference_validation(&mut module).unwrap();
+        let validated = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let publish = validated.find("__rt_reference_publish_native").unwrap();
+        let narrow = validated[publish..].find("__rt_mixed_cast_int").unwrap();
+        assert!(narrow > 0, "{target}: the raw fallback narrows only after canonical dispatch");
     }
 }
 
 supported_target_cases!(native_reference_store_modes, verify_native_reference_store_modes);
+
+/// A fresh boxed RHS exposes the extra source lease as a borrowed, unwind-visible parking slot.
+fn verify_native_reference_store_source_owner(target: &str) {
+    let source = r#"<?php
+function nativeReferenceFreshValue(): mixed { return new stdClass(); }
+function nativeReferenceFreshStore(mixed &$target): void { $target = nativeReferenceFreshValue(); }
+"#;
+    let mut module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    crate::ir_lower::enable_native_reference_validation(&mut module).unwrap();
+    let function = module.functions.iter().find(|function| function.name == "nativeReferenceFreshStore").unwrap();
+    let store = function.instructions.iter().find(|inst| inst.op == Op::StoreRefCell).unwrap();
+    assert_eq!(store.operands.len(), 3, "{target}: RHS, source mode and source owner");
+    let owner = function.value(store.operands[2]).unwrap();
+    assert_eq!(owner.ownership, crate::ir::Ownership::Borrowed, "{target}: parking owns the source");
+    let ValueDef::Instruction { inst: load, .. } = owner.def else { panic!("{target}: owner load"); };
+    let load = function.instruction(load).unwrap();
+    assert_eq!(load.op, Op::LoadLocal);
+    assert!(function.instructions.iter().any(|instruction|
+        instruction.op == Op::PushCallOperandOwner && instruction.immediate == load.immediate),
+        "{target}: source remains protected until transfer");
+    let Some(Immediate::LocalSlot(parking)) = load.immediate else { panic!("{target}: parking slot"); };
+    let mut malformed = module.clone();
+    let function = malformed.functions.iter_mut().find(|function| function.name == "nativeReferenceFreshStore").unwrap();
+    function.locals[parking.as_raw() as usize].kind = crate::ir::LocalKind::PhpLocal;
+    assert!(crate::ir::validate_module(&malformed).is_err(),
+        "{target}: a canonical store must never clear an ordinary PHP binding");
+    for optimize in [false, true] {
+        let mut candidate = module.clone();
+        if optimize { crate::ir_passes::optimize_module(&mut candidate); }
+        crate::ir::validate_module(&candidate).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&candidate, false, false).unwrap();
+        assert!(assembly.contains("__rt_reference_publish_native"), "{target}: moving store publisher");
+    }
+}
+
+supported_target_cases!(native_reference_store_source_owner, verify_native_reference_store_source_owner);
