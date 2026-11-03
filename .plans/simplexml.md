@@ -21,6 +21,6 @@ The user authorized the supporting native reference refactor and unlimited revie
 
 Native reads use the canonical child's current PHP tag. Suspended activation inventories cover source leases, pending native pins, binder conversions, argument arrays and synthesized magic arguments. Cleanup keeps its held result and remaining argument owners visible until each lease is transferred or released. The strict cycle, cancellation and destructor-order regressions remain required CI gates.
 
-Post-eval typed native parameter reads use explicit owning Mixed value copies while keeping their entry cell payload ABI. Shared canonical wrapper reloads bypass the legacy projection. General reference rebinding, typed body writers and universal promotion remain open integration gates until their lifecycle and CI coverage are complete.
+Post-eval typed native parameter reads use explicit owning Mixed value copies while keeping their entry cell payload ABI. Shared canonical wrapper reloads bypass the legacy projection. Scalar parameter body writes invalidate their stale entry view. General reference rebinding, object/union body writers, expression-result coercion and universal promotion remain open integration gates until their lifecycle and CI coverage are complete.
 
 Reflection construction no longer snapshots live static values. Generic accessors build their current maps lazily through EIR and omit uninitialized properties, preserving the destruction timing of displaced objects.

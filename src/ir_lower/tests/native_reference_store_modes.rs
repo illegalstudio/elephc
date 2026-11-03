@@ -44,6 +44,27 @@ fn verify_native_reference_store_modes(target: &str) {
 
 supported_target_cases!(native_reference_store_modes, verify_native_reference_store_modes);
 
+/// A typed parameter's body observes the published value without changing its entry payload ABI.
+#[test]
+fn native_scalar_reference_writes_refresh_body_value_views_on_every_target() {
+    let source = "<?php function nativeScalarBodyView(int &$value): void { \
+        $value = 'changed'; echo gettype($value), ':', $value; }";
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let mut module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "nativeScalarBodyView").unwrap();
+        assert_eq!(function.params[0].php_type, crate::types::PhpType::Int, "{target}");
+        assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::LoadRefCellValue).count(),
+            2, "{target}: both consumers must copy the current value");
+        crate::ir_lower::enable_native_reference_validation(&mut module).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = assembly.split_once("@fn name=nativeScalarBodyView symbol=").unwrap().1
+            .split_once("@endfn name=nativeScalarBodyView").unwrap().0;
+        let publish = body.find("__rt_reference_publish_native").unwrap();
+        assert!(body[publish..].contains("__rt_mixed_clone"), "{target}: later reads own their actual canonical value");
+    }
+}
+
 /// A fresh boxed RHS exposes the extra source lease as a borrowed, unwind-visible parking slot.
 fn verify_native_reference_store_source_owner(target: &str) {
     let source = r#"<?php

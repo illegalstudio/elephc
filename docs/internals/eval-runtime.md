@@ -29,7 +29,9 @@ Raw and headerless references continue to load through their original physical A
 An owning `LoadRefCellValue` copies a typed parameter's current value into Mixed:
 canonical children are cloned, and raw concrete payloads are boxed once. The copy
 has explicit allocation and reference-count effects, and its cleanup survives
-local-load borrowing finalization. When eval still shares the imported canonical
+local-load borrowing finalization. Scalar reference parameter writes also invalidate
+the entry value view, so later body reads copy the actual published PHP value.
+When eval still shares the imported canonical
 wrapper, reload preserves that identity and skips the legacy scalar projection.
 
 AOT reflector construction retains declaration metadata without copying current

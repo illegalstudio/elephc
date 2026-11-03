@@ -2813,6 +2813,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         if !is_ref_bound {
             self.set_local_type(name, php_type);
+        } else if self.builder.function().params.iter().any(|parameter|
+            parameter.by_ref && parameter.name == name
+                && matches!(parameter.php_type.codegen_repr(), PhpType::Int | PhpType::Bool
+                    | PhpType::Float | PhpType::Str | PhpType::TaggedScalar))
+        {
+            // A parameter hint validated entry. A canonical property source can coerce this
+            // assignment differently, so later reads need its current PHP tag and value.
+            self.set_local_logical_type(name, PhpType::Mixed);
         }
         if let Some(owner) = ref_store_source_owner {
             crate::ir_lower::expr::retire_owned_call_operand(
