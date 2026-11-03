@@ -1,8 +1,6 @@
 ---
 title: "get_included_files()"
 description: "Returns the files included by the current program."
-sidebar:
-  order: 693
 ---
 
 ## get_included_files()
@@ -19,8 +17,9 @@ Returns the files included by the current program.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/get_included_files.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/get_included_files.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

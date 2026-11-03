@@ -1,8 +1,6 @@
 ---
 title: "date_isodate_set()"
 description: "Sets a DateTime from an ISO year, week, and day of week."
-sidebar:
-  order: 206
 ---
 
 ## date_isodate_set()
@@ -23,8 +21,9 @@ Sets a DateTime from an ISO year, week, and day of week.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

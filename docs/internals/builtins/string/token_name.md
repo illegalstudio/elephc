@@ -1,8 +1,6 @@
 ---
 title: "token_name() - internals"
 description: "Compiler internals for token_name(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1015
 ---
 
 ## `token_name()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/tokenizer_prelude.rs`:77](https://github.com/illegalstudio/elephc/blob/main/src/tokenizer_prelude.rs#L77) (`token_name`)
+- **Lowering**: [`src/tokenizer_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/tokenizer_prelude.rs) (`token_name`)
 - **Function symbol**: `token_name()`
 
 

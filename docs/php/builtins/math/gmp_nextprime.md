@@ -1,8 +1,6 @@
 ---
 title: "gmp_nextprime()"
 description: "Returns the next prime greater than a GMP number."
-sidebar:
-  order: 617
 ---
 
 ## gmp_nextprime()
@@ -20,8 +18,9 @@ Returns the next prime greater than a GMP number.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_nextprime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_nextprime.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

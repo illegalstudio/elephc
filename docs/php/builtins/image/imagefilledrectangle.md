@@ -1,8 +1,6 @@
 ---
 title: "imagefilledrectangle()"
 description: "Draws a filled rectangle."
-sidebar:
-  order: 513
 ---
 
 ## imagefilledrectangle()
@@ -25,8 +23,9 @@ Draws a filled rectangle.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

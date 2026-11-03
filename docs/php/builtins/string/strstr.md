@@ -1,8 +1,6 @@
 ---
 title: "strstr()"
 description: "Returns the portion of a string starting at the first occurrence of a substring, or false."
-sidebar:
-  order: 1007
 ---
 
 ## strstr()
@@ -22,8 +20,9 @@ Returns the portion of a string starting at the first occurrence of a substring,
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strstr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strstr.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

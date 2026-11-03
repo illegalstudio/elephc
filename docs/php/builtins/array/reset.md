@@ -1,8 +1,6 @@
 ---
 title: "reset()"
 description: "Rewinds the array's internal pointer to the first element and returns it."
-sidebar:
-  order: 66
 ---
 
 ## reset()
@@ -20,8 +18,9 @@ Rewinds the array's internal pointer to the first element and returns it.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/reset.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/reset.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

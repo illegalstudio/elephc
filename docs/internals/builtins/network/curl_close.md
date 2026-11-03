@@ -1,8 +1,6 @@
 ---
 title: "curl_close() - internals"
 description: "Compiler internals for curl_close(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 766
 ---
 
 ## `curl_close()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1162](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1162) (`curl_close`)
+- **Lowering**: [`src/curl_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs) (`curl_close`)
 - **Function symbol**: `curl_close()`
 
 

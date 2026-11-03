@@ -1,8 +1,6 @@
 ---
 title: "var_export()"
 description: "Renders a value as parsable PHP code, printed or returned."
-sidebar:
-  order: 1053
 ---
 
 ## var_export()
@@ -21,8 +19,9 @@ Renders a value as parsable PHP code, printed or returned.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected var_export prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

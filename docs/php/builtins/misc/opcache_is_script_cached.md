@@ -1,8 +1,6 @@
 ---
 title: "opcache_is_script_cached()"
 description: "Reports whether a script is in the opcode cache."
-sidebar:
-  order: 712
 ---
 
 ## opcache_is_script_cached()
@@ -20,8 +18,9 @@ Reports whether a script is in the opcode cache.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through native OPcache prelude declarations or dedicated interpreter handlers; see [OPcache](../../opcache.md).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

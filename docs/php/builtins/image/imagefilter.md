@@ -1,8 +1,6 @@
 ---
 title: "imagefilter()"
 description: "Applies one of GD's built-in filters to an image."
-sidebar:
-  order: 515
 ---
 
 ## imagefilter()
@@ -25,8 +23,9 @@ Applies one of GD's built-in filters to an image.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "cairo_new_sub_path()"
 description: "Begins a new subpath without a starting point."
-sidebar:
-  order: 430
 ---
 
 ## cairo_new_sub_path()
@@ -20,8 +18,9 @@ Begins a new subpath without a starting point.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

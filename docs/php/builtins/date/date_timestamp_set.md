@@ -1,8 +1,6 @@
 ---
 title: "date_timestamp_set()"
 description: "Sets a DateTime from a Unix timestamp."
-sidebar:
-  order: 217
 ---
 
 ## date_timestamp_set()
@@ -21,8 +19,9 @@ Sets a DateTime from a Unix timestamp.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "xml_parser_create() - internals"
 description: "Compiler internals for xml_parser_create(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1093
 ---
 
 ## `xml_parser_create()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/parser.rs`:1343](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1343) (`xml_parser_create`)
+- **Lowering**: [`src/xml_prelude/build/parser.rs`](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs) (`xml_parser_create`)
 - **Function symbol**: `xml_parser_create()`
 
 

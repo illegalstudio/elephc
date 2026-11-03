@@ -1,8 +1,6 @@
 ---
 title: "decoct() - internals"
 description: "Compiler internals for decoct(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 582
 ---
 
 ## `decoct()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/decoct.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/decoct.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

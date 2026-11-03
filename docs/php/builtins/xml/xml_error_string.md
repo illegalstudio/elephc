@@ -1,8 +1,6 @@
 ---
 title: "xml_error_string()"
 description: "Returns the message for an XML parser error code."
-sidebar:
-  order: 1086
 ---
 
 ## xml_error_string()
@@ -20,8 +18,9 @@ Returns the message for an XML parser error code.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xml_error_string.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xml_error_string.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

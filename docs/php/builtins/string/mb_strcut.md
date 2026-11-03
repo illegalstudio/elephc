@@ -1,8 +1,6 @@
 ---
 title: "mb_strcut()"
 description: "Selects complete encoded characters within a byte offset and length."
-sidebar:
-  order: 949
 ---
 
 ## mb_strcut()
@@ -23,8 +21,9 @@ Selects complete encoded characters within a byte offset and length.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_strcut.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_strcut.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

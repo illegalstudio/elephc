@@ -1,8 +1,6 @@
 ---
 title: "opcache_get_configuration() - internals"
 description: "Compiler internals for opcache_get_configuration(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 709
 ---
 
 ## `opcache_get_configuration()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:204](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L204) (`opcache_get_configuration`)
+- **Lowering**: [`src/opcache_prelude/build.rs`](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs) (`opcache_get_configuration`)
 - **Function symbol**: `opcache_get_configuration()`
 
 

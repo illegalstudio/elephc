@@ -1,8 +1,6 @@
 ---
 title: "is_readable() - internals"
 description: "Compiler internals for is_readable(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 285
 ---
 
 ## `is_readable()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/is_readable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/is_readable.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

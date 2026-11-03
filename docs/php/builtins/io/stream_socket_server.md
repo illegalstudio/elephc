@@ -1,8 +1,6 @@
 ---
 title: "stream_socket_server()"
 description: "Create an Internet or Unix domain server socket."
-sidebar:
-  order: 401
 ---
 
 ## stream_socket_server()
@@ -20,8 +18,9 @@ Create an Internet or Unix domain server socket.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_server.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_server.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

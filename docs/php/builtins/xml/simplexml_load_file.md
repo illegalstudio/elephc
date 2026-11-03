@@ -1,8 +1,6 @@
 ---
 title: "simplexml_load_file()"
 description: "Parses an XML file into a SimpleXML element."
-sidebar:
-  order: 1084
 ---
 
 ## simplexml_load_file()
@@ -24,8 +22,9 @@ Parses an XML file into a SimpleXML element.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/simplexml_load_file.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/simplexml_load_file.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

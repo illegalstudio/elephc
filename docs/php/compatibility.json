@@ -1,0 +1,1803 @@
+{
+  "baseline": {
+    "classes": 329,
+    "constants": 3180,
+    "extensions": 68,
+    "functions": 2169,
+    "generated_at": "2026-09-04",
+    "php_version": "8.5.10"
+  },
+  "beyond_php": {
+    "classes": [
+      "DateUnknownException",
+      "Elephc\\Testing\\AssertionFailedError",
+      "Elephc\\Testing\\IncompleteTestError",
+      "Elephc\\Testing\\Runner",
+      "Elephc\\Testing\\SkippedTestError",
+      "Elephc\\Testing\\TestCase",
+      "Elephc\\Web\\Request",
+      "Elephc\\Web\\Worker",
+      "Elephc\\Web\\WorkerApplication",
+      "ImageException",
+      "PHPUnit\\Framework\\TestCase"
+    ],
+    "constants": [
+      "ARRAY_FILTER_USE_VALUE",
+      "MYSQLI_TYPE_VARCHAR"
+    ],
+    "functions": [
+      {
+        "area": "Buffer",
+        "name": "buffer_free"
+      },
+      {
+        "area": "Buffer",
+        "name": "buffer_len"
+      },
+      {
+        "area": "Pointer",
+        "name": "buffer_new"
+      },
+      {
+        "area": "Buffer",
+        "name": "buffer_ptr"
+      },
+      {
+        "area": "Math",
+        "name": "clamp"
+      },
+      {
+        "area": "Class",
+        "name": "class_attribute_args"
+      },
+      {
+        "area": "Class",
+        "name": "class_attribute_names"
+      },
+      {
+        "area": "Class",
+        "name": "class_get_attributes"
+      },
+      {
+        "area": "String",
+        "name": "grapheme_strrev"
+      },
+      {
+        "area": "Type",
+        "name": "is_real"
+      },
+      {
+        "area": "Math",
+        "name": "log2"
+      },
+      {
+        "area": "Misc",
+        "name": "memory_get_allocations"
+      },
+      {
+        "area": "Misc",
+        "name": "memory_get_frees"
+      },
+      {
+        "area": "Misc",
+        "name": "pcntl_daemon"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_get"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_is_null"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_null"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_offset"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_read16"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_read32"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_read8"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_read_f32"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_read_f64"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_read_string"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_set"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_sizeof"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_write16"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_write32"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_write8"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_write_f32"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_write_f64"
+      },
+      {
+        "area": "Pointer",
+        "name": "ptr_write_string"
+      },
+      {
+        "area": "Image",
+        "name": "read_exif_data"
+      },
+      {
+        "area": "Pointer",
+        "name": "zval_free"
+      },
+      {
+        "area": "Pointer",
+        "name": "zval_pack"
+      },
+      {
+        "area": "Pointer",
+        "name": "zval_type"
+      },
+      {
+        "area": "Pointer",
+        "name": "zval_unpack"
+      }
+    ]
+  },
+  "constructs": [
+    "empty",
+    "isset",
+    "unset"
+  ],
+  "coverage": {
+    "classes": {
+      "have": 188,
+      "total": 329
+    },
+    "constants": {
+      "have": 1361,
+      "total": 3180
+    },
+    "functions": {
+      "have": 1056,
+      "total": 2169
+    }
+  },
+  "dynamic_constants": [
+    "SID"
+  ],
+  "eval_only": {
+    "classes": [],
+    "constants": [],
+    "functions": []
+  },
+  "extensions": [
+    {
+      "docs": "docs/php/pdo.md",
+      "feature": "PDO",
+      "modules": [
+        "pdo"
+      ],
+      "notes": "Driver matrix documented on the PDO page",
+      "php": "https://www.php.net/manual/en/book.pdo.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/mysqli.md",
+      "feature": "mysqli",
+      "modules": [
+        "mysqli"
+      ],
+      "notes": "Locked v1 subset over the elephc-pdo bridge; divergences on the mysqli page",
+      "php": "https://www.php.net/manual/en/book.mysqli.php",
+      "status": "partial"
+    },
+    {
+      "docs": "docs/php/sessions.md",
+      "feature": "Sessions",
+      "modules": [
+        "session"
+      ],
+      "notes": "In --web binaries",
+      "php": "https://www.php.net/manual/en/book.session.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/streams.md",
+      "feature": "Streams",
+      "modules": null,
+      "notes": null,
+      "php": "https://www.php.net/manual/en/book.stream.php",
+      "status": "partial"
+    },
+    {
+      "docs": "docs/php/spl.md",
+      "feature": "SPL",
+      "modules": null,
+      "notes": null,
+      "php": "https://www.php.net/manual/en/book.spl.php",
+      "status": "partial"
+    },
+    {
+      "docs": "docs/php/classes.md",
+      "feature": "Reflection",
+      "modules": null,
+      "notes": null,
+      "php": "https://www.php.net/manual/en/book.reflection.php",
+      "status": "partial"
+    },
+    {
+      "docs": "docs/php/datetime.md",
+      "feature": "DateTime",
+      "modules": [
+        "date"
+      ],
+      "notes": null,
+      "php": "https://www.php.net/manual/en/book.datetime.php",
+      "status": "partial"
+    },
+    {
+      "docs": "docs/php/calendar.md",
+      "feature": "Calendar",
+      "modules": [
+        "calendar"
+      ],
+      "notes": null,
+      "php": "https://www.php.net/manual/en/book.calendar.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/iconv.md",
+      "feature": "iconv",
+      "modules": [
+        "iconv"
+      ],
+      "notes": null,
+      "php": "https://www.php.net/manual/en/book.iconv.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/image.md",
+      "feature": "GD / image",
+      "modules": null,
+      "notes": "Enabled with --with-image",
+      "php": "https://www.php.net/manual/en/book.image.php",
+      "status": "partial"
+    },
+    {
+      "docs": "docs/php/pcntl.md",
+      "feature": "PCNTL",
+      "modules": [
+        "pcntl"
+      ],
+      "notes": "Target-aware Unix process control; auto-linked or forced with --with-pcntl",
+      "php": "https://www.php.net/manual/en/book.pcntl.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/xml.md",
+      "feature": "XML",
+      "modules": [
+        "xml",
+        "xmlwriter"
+      ],
+      "notes": "ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost",
+      "php": "https://www.php.net/manual/en/book.xml.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/xml.md",
+      "feature": "SimpleXML",
+      "modules": [
+        "simplexml"
+      ],
+      "notes": "Three functions and two classes on the managed libxml2 bridge; supports element and attribute selections, mutation, namespace queries, XPath, and recursive iteration. Auto-linked or forced with --with-xml.",
+      "php": "https://www.php.net/manual/en/book.simplexml.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/curl.md",
+      "feature": "cURL",
+      "modules": [
+        "curl"
+      ],
+      "notes": "All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 34 shared-contract functions; curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract and is the one function the row does not count.",
+      "php": "https://www.php.net/manual/en/book.curl.php",
+      "status": "supported"
+    },
+    {
+      "docs": null,
+      "feature": "OpenSSL",
+      "modules": null,
+      "notes": "Encrypt/decrypt subset",
+      "php": "https://www.php.net/manual/en/book.openssl.php",
+      "status": "partial"
+    },
+    {
+      "docs": "docs/php/opcache.md",
+      "feature": "OPcache",
+      "modules": null,
+      "notes": "Compiled-script manifest plus a runtime parsed-script cache for dynamic include/require through eval(), with optional persistent file caching; ordinary code remains AOT-compiled and there is no tracing JIT",
+      "php": "https://www.php.net/manual/en/book.opcache.php",
+      "status": "partial"
+    },
+    {
+      "docs": "docs/php/fileinfo.md",
+      "feature": "File information",
+      "modules": [
+        "fileinfo"
+      ],
+      "notes": "Six functions, finfo and eleven constants, backed by pinned static libmagic 5.46 with an embedded database; native and eval use the same declarations. Declare the libmagic native package; --with-fileinfo enables opaque dynamic use.",
+      "php": "https://www.php.net/manual/en/book.fileinfo.php",
+      "status": "supported"
+    }
+  ],
+  "generated_by": "scripts/docs/gen_php_comparison.py",
+  "language": [
+    {
+      "docs": "docs/php/classes.md",
+      "feature": "Classes & objects",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.oop5.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/classes.md",
+      "feature": "Inheritance, interfaces, abstract classes",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.oop5.inheritance.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/classes.md",
+      "feature": "Traits",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.oop5.traits.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/classes.md",
+      "feature": "Enums",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.enumerations.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/classes.md",
+      "feature": "Anonymous classes",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.oop5.anonymous.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/classes.md",
+      "feature": "Constructor property promotion",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.oop5.decon.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/classes.md",
+      "feature": "Property hooks",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.oop5.property-hooks.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/classes.md",
+      "feature": "Attributes",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.attributes.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/classes.md",
+      "feature": "Magic methods",
+      "notes": "See the classes page for the supported set",
+      "php": "https://www.php.net/manual/en/language.oop5.magic.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/classes.md",
+      "feature": "Static properties, methods, late static binding",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.oop5.static.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/types.md",
+      "feature": "Union & intersection types",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.types.type-system.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/functions.md",
+      "feature": "Closures & arrow functions",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/functions.anonymous.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/functions.md",
+      "feature": "First-class callable syntax",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/functions.first_class_callable_syntax.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/generators.md",
+      "feature": "Generators",
+      "notes": "Lowered onto stackful coroutines",
+      "php": "https://www.php.net/manual/en/language.generators.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/fibers.md",
+      "feature": "Fibers",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.fibers.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/control-structures.md",
+      "feature": "Exceptions (try / catch / finally)",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.exceptions.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/control-structures.md",
+      "feature": "match expressions",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/control-structures.match.php",
+      "status": "supported"
+    },
+    {
+      "docs": null,
+      "feature": "References (&)",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.references.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/namespaces.md",
+      "feature": "Namespaces",
+      "notes": null,
+      "php": "https://www.php.net/manual/en/language.namespaces.php",
+      "status": "supported"
+    },
+    {
+      "docs": null,
+      "feature": "include / require",
+      "notes": "Static, compile-time resolved paths",
+      "php": "https://www.php.net/manual/en/function.include.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/eval.md",
+      "feature": "eval()",
+      "notes": "Experimental; embeds an optional interpreter bridge when runtime parsing is required",
+      "php": "https://www.php.net/manual/en/function.eval.php",
+      "status": "partial"
+    }
+  ],
+  "limitations": [
+    {
+      "notes": "The generated eval() counts are zero for gd, exif, mysqli, PDO, and session because their functions use injected PHP preludes without interpreter bindings. OPcache has a separate supported route through native prelude declarations or dedicated interpreter handlers, including the live script cache and API restrictions. The remaining module gaps are tracked by mysqli #746, PDO #748, session #1211, gd and exif #1212, with #906 as the umbrella; call those functions from compiled code and pass the results into the fragment until their eval() surfaces are implemented.",
+      "title": "eval() coverage of the prelude-implemented modules"
+    },
+    {
+      "notes": "Ordinary source is compiled ahead of time with no opcode fallback; runtime code loading exists only through the experimental eval() interpreter bridge.",
+      "title": "Static subset, AOT only"
+    },
+    {
+      "notes": "Builtin percentages are computed against the vendored PHP CLI snapshot (version and extension set recorded in the page header). PHP modules outside that snapshot are not counted.",
+      "title": "Coverage measured against a pinned baseline"
+    },
+    {
+      "notes": "Standalone binaries target macOS ARM64, Linux ARM64, and Linux x86_64; macOS also cross-compiles libraries for iOS ARM64 devices and the iOS ARM64 Simulator. PHP itself runs on many more platforms.",
+      "title": "Five native compile targets"
+    },
+    {
+      "notes": "An object pulled out of an array, an array property, or other `mixed`-typed storage is rejected at a class-typed by-value parameter until an `instanceof` guard narrows it; PHP would defer that check to runtime. Once narrowed, elephc unboxes the object and passes it correctly. A variable passed by reference is the exception: when it already uses a shared boxed cell, elephc emits a runtime class guard and preserves the cell so callee writes remain visible to aliases. The curl multi wrappers accept `mixed` plus a runtime guard because `curl_multi_info_read()` returns its handle inside an array and canonical callers do not add a separate narrowing guard. Pinned by `test_mixed_sourced_object_through_typed_param_is_unboxed` and the object-reference entry-guard regressions.",
+      "title": "A Mixed-sourced object usually needs explicit narrowing before a typed object parameter"
+    }
+  ],
+  "missing_bundled": [],
+  "modules": [
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": null,
+      "docs": "docs/php/bcmath.md#functions",
+      "extension": "bcmath",
+      "functions": {
+        "eval": 14,
+        "have": 14,
+        "total": 14
+      },
+      "name": "bcmath",
+      "tier": "optional"
+    },
+    {
+      "classes": null,
+      "constants": null,
+      "docs": null,
+      "extension": "bz2",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 10
+      },
+      "name": "bz2",
+      "tier": "optional"
+    },
+    {
+      "classes": null,
+      "constants": {
+        "eval": 21,
+        "have": 21,
+        "total": 21
+      },
+      "docs": "docs/php/calendar.md#functions",
+      "extension": "calendar",
+      "functions": {
+        "eval": 18,
+        "have": 18,
+        "total": 18
+      },
+      "name": "calendar",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 40,
+        "have": 40,
+        "total": 40
+      },
+      "constants": {
+        "eval": 86,
+        "have": 89,
+        "total": 89
+      },
+      "docs": null,
+      "extension": "core",
+      "functions": {
+        "eval": 62,
+        "have": 62,
+        "total": 62
+      },
+      "name": "core",
+      "tier": "always"
+    },
+    {
+      "classes": null,
+      "constants": null,
+      "docs": null,
+      "extension": "ctype",
+      "functions": {
+        "eval": 4,
+        "have": 4,
+        "total": 11
+      },
+      "name": "ctype",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 6,
+        "have": 6,
+        "total": 6
+      },
+      "constants": {
+        "eval": 689,
+        "have": 689,
+        "total": 689
+      },
+      "docs": "docs/php/curl.md#functions",
+      "extension": "curl",
+      "functions": {
+        "eval": 34,
+        "have": 34,
+        "total": 35
+      },
+      "name": "curl",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 15,
+        "have": 15,
+        "total": 15
+      },
+      "constants": {
+        "eval": 3,
+        "have": 3,
+        "total": 17
+      },
+      "docs": "docs/php/datetime.md#functions",
+      "extension": "date",
+      "functions": {
+        "eval": 48,
+        "have": 48,
+        "total": 48
+      },
+      "name": "date",
+      "tier": "always"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "constants": null,
+      "docs": null,
+      "extension": "dba",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 15
+      },
+      "name": "dba",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 9,
+        "have": 9,
+        "total": 50
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 61
+      },
+      "docs": "docs/php/dom-html.md#functions",
+      "extension": "dom",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 2
+      },
+      "name": "dom",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 2
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 3
+      },
+      "docs": null,
+      "extension": "enchant",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 25
+      },
+      "name": "enchant",
+      "tier": "optional"
+    },
+    {
+      "classes": null,
+      "constants": {
+        "eval": 0,
+        "have": 1,
+        "total": 1
+      },
+      "docs": "docs/php/image.md#functions",
+      "extension": "exif",
+      "functions": {
+        "eval": 0,
+        "have": 4,
+        "total": 4
+      },
+      "name": "exif",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 5
+      },
+      "constants": null,
+      "docs": null,
+      "extension": "ffi",
+      "functions": null,
+      "name": "ffi",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": {
+        "eval": 11,
+        "have": 11,
+        "total": 11
+      },
+      "docs": "docs/php/fileinfo.md#functions",
+      "extension": "fileinfo",
+      "functions": {
+        "eval": 6,
+        "have": 6,
+        "total": 6
+      },
+      "name": "fileinfo",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 2
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 56
+      },
+      "docs": null,
+      "extension": "filter",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 7
+      },
+      "name": "filter",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 11
+      },
+      "docs": null,
+      "extension": "ftp",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 36
+      },
+      "name": "ftp",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 2
+      },
+      "constants": {
+        "eval": 0,
+        "have": 67,
+        "total": 89
+      },
+      "docs": "docs/php/image.md#functions",
+      "extension": "gd",
+      "functions": {
+        "eval": 0,
+        "have": 83,
+        "total": 106
+      },
+      "name": "gd",
+      "tier": "optional"
+    },
+    {
+      "classes": null,
+      "constants": null,
+      "docs": null,
+      "extension": "gettext",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 10
+      },
+      "name": "gettext",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": {
+        "eval": 0,
+        "have": 9,
+        "total": 9
+      },
+      "docs": null,
+      "extension": "gmp",
+      "functions": {
+        "eval": 51,
+        "have": 51,
+        "total": 51
+      },
+      "name": "gmp",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 40
+      },
+      "docs": null,
+      "extension": "hash",
+      "functions": {
+        "eval": 9,
+        "have": 9,
+        "total": 20
+      },
+      "name": "hash",
+      "tier": "always"
+    },
+    {
+      "classes": null,
+      "constants": {
+        "eval": 4,
+        "have": 4,
+        "total": 4
+      },
+      "docs": "docs/php/iconv.md#functions",
+      "extension": "iconv",
+      "functions": {
+        "eval": 10,
+        "have": 10,
+        "total": 10
+      },
+      "name": "iconv",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 22
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 170
+      },
+      "docs": null,
+      "extension": "intl",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 187
+      },
+      "name": "intl",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 2,
+        "have": 2,
+        "total": 2
+      },
+      "constants": {
+        "eval": 29,
+        "have": 29,
+        "total": 29
+      },
+      "docs": null,
+      "extension": "json",
+      "functions": {
+        "eval": 5,
+        "have": 5,
+        "total": 5
+      },
+      "name": "json",
+      "tier": "always"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 3
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 92
+      },
+      "docs": null,
+      "extension": "ldap",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 55
+      },
+      "name": "ldap",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "constants": {
+        "eval": 17,
+        "have": 17,
+        "total": 28
+      },
+      "docs": null,
+      "extension": "libxml",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 8
+      },
+      "name": "libxml",
+      "tier": "default"
+    },
+    {
+      "classes": null,
+      "constants": {
+        "eval": 9,
+        "have": 9,
+        "total": 9
+      },
+      "docs": null,
+      "extension": "mbstring",
+      "functions": {
+        "eval": 65,
+        "have": 65,
+        "total": 65
+      },
+      "name": "mbstring",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 4,
+        "have": 4,
+        "total": 6
+      },
+      "constants": {
+        "eval": 0,
+        "have": 52,
+        "total": 110
+      },
+      "docs": "docs/php/mysqli.md#functions",
+      "extension": "mysqli",
+      "functions": {
+        "eval": 0,
+        "have": 84,
+        "total": 106
+      },
+      "name": "mysqli",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 2
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 57
+      },
+      "docs": null,
+      "extension": "odbc",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 48
+      },
+      "name": "odbc",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 3
+      },
+      "constants": {
+        "eval": 3,
+        "have": 3,
+        "total": 70
+      },
+      "docs": null,
+      "extension": "openssl",
+      "functions": {
+        "eval": 4,
+        "have": 4,
+        "total": 64
+      },
+      "name": "openssl",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 129
+      },
+      "docs": "docs/php/pcntl.md#functions",
+      "extension": "pcntl",
+      "functions": {
+        "eval": 28,
+        "have": 28,
+        "total": 28
+      },
+      "name": "pcntl",
+      "tier": "optional"
+    },
+    {
+      "classes": null,
+      "constants": {
+        "eval": 7,
+        "have": 7,
+        "total": 19
+      },
+      "docs": "docs/php/regex.md#functions",
+      "extension": "pcre",
+      "functions": {
+        "eval": 5,
+        "have": 5,
+        "total": 11
+      },
+      "name": "pcre",
+      "tier": "always"
+    },
+    {
+      "classes": {
+        "eval": 4,
+        "have": 4,
+        "total": 4
+      },
+      "constants": null,
+      "docs": "docs/php/pdo.md#functions",
+      "extension": "pdo",
+      "functions": {
+        "eval": 0,
+        "have": 1,
+        "total": 1
+      },
+      "name": "pdo",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": null,
+      "docs": "docs/php/pdo.md#functions",
+      "extension": "pdo_dblib",
+      "functions": null,
+      "name": "pdo_dblib",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": null,
+      "docs": "docs/php/pdo.md#functions",
+      "extension": "pdo_firebird",
+      "functions": null,
+      "name": "pdo_firebird",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": null,
+      "docs": "docs/php/pdo.md#functions",
+      "extension": "pdo_mysql",
+      "functions": null,
+      "name": "pdo_mysql",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "docs": "docs/php/pdo.md#functions",
+      "extension": "pdo_odbc",
+      "functions": null,
+      "name": "pdo_odbc",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": null,
+      "docs": "docs/php/pdo.md#functions",
+      "extension": "pdo_pgsql",
+      "functions": null,
+      "name": "pdo_pgsql",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": null,
+      "docs": "docs/php/pdo.md#functions",
+      "extension": "pdo_sqlite",
+      "functions": null,
+      "name": "pdo_sqlite",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 3
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 76
+      },
+      "docs": null,
+      "extension": "pgsql",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 123
+      },
+      "name": "pgsql",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 3,
+        "have": 3,
+        "total": 4
+      },
+      "constants": null,
+      "docs": null,
+      "extension": "phar",
+      "functions": null,
+      "name": "phar",
+      "tier": "default"
+    },
+    {
+      "classes": null,
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 43
+      },
+      "docs": "docs/php/pcntl.md#functions",
+      "extension": "posix",
+      "functions": {
+        "eval": 2,
+        "have": 2,
+        "total": 41
+      },
+      "name": "posix",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 11,
+        "have": 11,
+        "total": 11
+      },
+      "constants": {
+        "eval": 2,
+        "have": 2,
+        "total": 2
+      },
+      "docs": null,
+      "extension": "random",
+      "functions": {
+        "eval": 3,
+        "have": 9,
+        "total": 9
+      },
+      "name": "random",
+      "tier": "always"
+    },
+    {
+      "classes": null,
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "docs": null,
+      "extension": "readline",
+      "functions": {
+        "eval": 1,
+        "have": 1,
+        "total": 13
+      },
+      "name": "readline",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 16,
+        "have": 16,
+        "total": 26
+      },
+      "constants": null,
+      "docs": null,
+      "extension": "reflection",
+      "functions": null,
+      "name": "reflection",
+      "tier": "always"
+    },
+    {
+      "classes": {
+        "eval": 4,
+        "have": 4,
+        "total": 4
+      },
+      "constants": {
+        "eval": 3,
+        "have": 3,
+        "total": 3
+      },
+      "docs": "docs/php/sessions.md#functions",
+      "extension": "session",
+      "functions": {
+        "eval": 0,
+        "have": 23,
+        "total": 23
+      },
+      "name": "session",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "constants": null,
+      "docs": null,
+      "extension": "shmop",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 6
+      },
+      "name": "shmop",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 2,
+        "have": 2,
+        "total": 2
+      },
+      "constants": null,
+      "docs": "docs/php/xml.md#functions",
+      "extension": "simplexml",
+      "functions": {
+        "eval": 3,
+        "have": 3,
+        "total": 3
+      },
+      "name": "simplexml",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 2
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 21
+      },
+      "docs": null,
+      "extension": "snmp",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 24
+      },
+      "name": "snmp",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 8
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 81
+      },
+      "docs": null,
+      "extension": "soap",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 2
+      },
+      "name": "soap",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 2
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 243
+      },
+      "docs": null,
+      "extension": "sockets",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 37
+      },
+      "name": "sockets",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 94
+      },
+      "docs": null,
+      "extension": "sodium",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 104
+      },
+      "name": "sodium",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 54,
+        "have": 54,
+        "total": 55
+      },
+      "constants": null,
+      "docs": "docs/php/spl.md#functions",
+      "extension": "spl",
+      "functions": {
+        "eval": 15,
+        "have": 15,
+        "total": 15
+      },
+      "name": "spl",
+      "tier": "always"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 4
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 12
+      },
+      "docs": null,
+      "extension": "sqlite3",
+      "functions": null,
+      "name": "sqlite3",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 3,
+        "have": 3,
+        "total": 6
+      },
+      "constants": {
+        "eval": 142,
+        "have": 163,
+        "total": 400
+      },
+      "docs": null,
+      "extension": "standard",
+      "functions": {
+        "eval": 350,
+        "have": 390,
+        "total": 545
+      },
+      "name": "standard",
+      "tier": "always"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 5
+      },
+      "docs": null,
+      "extension": "sysvmsg",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 7
+      },
+      "name": "sysvmsg",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "constants": null,
+      "docs": null,
+      "extension": "sysvsem",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 4
+      },
+      "name": "sysvsem",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "constants": null,
+      "docs": null,
+      "extension": "sysvshm",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 7
+      },
+      "name": "sysvshm",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 2
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 161
+      },
+      "docs": null,
+      "extension": "tidy",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 24
+      },
+      "name": "tidy",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": {
+        "eval": 154,
+        "have": 154,
+        "total": 154
+      },
+      "docs": "docs/php/tokenizer.md#functions",
+      "extension": "tokenizer",
+      "functions": {
+        "eval": 2,
+        "have": 2,
+        "total": 2
+      },
+      "name": "tokenizer",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 9
+      },
+      "constants": null,
+      "docs": null,
+      "extension": "uri",
+      "functions": null,
+      "name": "uri",
+      "tier": "always"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": {
+        "eval": 28,
+        "have": 28,
+        "total": 28
+      },
+      "docs": "docs/php/xml.md#functions",
+      "extension": "xml",
+      "functions": {
+        "eval": 22,
+        "have": 22,
+        "total": 22
+      },
+      "name": "xml",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "constants": null,
+      "docs": null,
+      "extension": "xmlreader",
+      "functions": null,
+      "name": "xmlreader",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 1,
+        "have": 1,
+        "total": 1
+      },
+      "constants": null,
+      "docs": "docs/php/xml.md#functions",
+      "extension": "xmlwriter",
+      "functions": {
+        "eval": 42,
+        "have": 42,
+        "total": 42
+      },
+      "name": "xmlwriter",
+      "tier": "default"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 14
+      },
+      "docs": null,
+      "extension": "xsl",
+      "functions": null,
+      "name": "xsl",
+      "tier": "optional"
+    },
+    {
+      "classes": null,
+      "constants": null,
+      "docs": "docs/php/opcache.md#functions",
+      "extension": "opcache",
+      "functions": {
+        "eval": 8,
+        "have": 8,
+        "total": 8
+      },
+      "name": "zend opcache",
+      "tier": "always"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 1
+      },
+      "constants": null,
+      "docs": null,
+      "extension": "zip",
+      "functions": {
+        "eval": 0,
+        "have": 0,
+        "total": 10
+      },
+      "name": "zip",
+      "tier": "optional"
+    },
+    {
+      "classes": {
+        "eval": 0,
+        "have": 0,
+        "total": 2
+      },
+      "constants": {
+        "eval": 0,
+        "have": 0,
+        "total": 27
+      },
+      "docs": null,
+      "extension": "zlib",
+      "functions": {
+        "eval": 4,
+        "have": 4,
+        "total": 30
+      },
+      "name": "zlib",
+      "tier": "optional"
+    }
+  ],
+  "newer_than_baseline": {
+    "classes": [
+      {
+        "name": "SortDirection",
+        "since": "8.6"
+      }
+    ],
+    "constants": [],
+    "functions": []
+  },
+  "pecl": [
+    {
+      "classes": 26,
+      "constants": 0,
+      "functions": 48,
+      "name": "cairo"
+    },
+    {
+      "classes": 6,
+      "constants": 0,
+      "functions": 0,
+      "name": "gmagick"
+    },
+    {
+      "classes": 10,
+      "constants": 0,
+      "functions": 0,
+      "name": "imagick"
+    },
+    {
+      "classes": 1,
+      "constants": 0,
+      "functions": 0,
+      "name": "pdo_ibm"
+    }
+  ],
+  "schema_version": 1,
+  "symbolless_extensions": [
+    "lexbor",
+    "mysqlnd"
+  ],
+  "unavailable_on_baseline": [
+    {
+      "kind": "functions",
+      "name": "pcntl_getcpu",
+      "reason": "PHP build guard HAVE_SCHED_GETCPU"
+    },
+    {
+      "kind": "functions",
+      "name": "pcntl_getqos_class",
+      "reason": "target-specific"
+    },
+    {
+      "kind": "functions",
+      "name": "pcntl_setns",
+      "reason": "PHP build guard HAVE_PIDFD_OPEN"
+    },
+    {
+      "kind": "functions",
+      "name": "pcntl_setqos_class",
+      "reason": "target-specific"
+    }
+  ]
+}

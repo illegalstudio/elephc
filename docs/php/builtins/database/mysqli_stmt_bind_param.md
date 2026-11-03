@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_bind_param()"
 description: "Binds variables to a prepared statement's placeholders."
-sidebar:
-  order: 164
 ---
 
 ## mysqli_stmt_bind_param()
@@ -22,8 +20,9 @@ Binds variables to a prepared statement's placeholders.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

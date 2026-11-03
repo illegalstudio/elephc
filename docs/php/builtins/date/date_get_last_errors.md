@@ -1,8 +1,6 @@
 ---
 title: "date_get_last_errors()"
 description: "Returns the warnings and errors from the last date parse."
-sidebar:
-  order: 203
 ---
 
 ## date_get_last_errors()
@@ -19,8 +17,9 @@ Returns the warnings and errors from the last date parse.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

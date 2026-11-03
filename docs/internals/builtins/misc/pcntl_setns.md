@@ -1,8 +1,6 @@
 ---
 title: "pcntl_setns() - internals"
 description: "Compiler internals for pcntl_setns(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 728
 ---
 
 ## `pcntl_setns()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_setns.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_setns.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

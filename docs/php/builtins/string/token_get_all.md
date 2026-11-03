@@ -1,8 +1,6 @@
 ---
 title: "token_get_all()"
 description: "Split PHP source into tokens while preserving its original bytes."
-sidebar:
-  order: 1014
 ---
 
 ## token_get_all()
@@ -21,8 +19,9 @@ Split PHP source into tokens while preserving its original bytes.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected tokenizer prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/tokenizer/token_get_all.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/tokenizer/token_get_all.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

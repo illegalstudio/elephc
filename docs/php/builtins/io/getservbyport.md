@@ -1,8 +1,6 @@
 ---
 title: "getservbyport()"
 description: "Gets the Internet service that corresponds to a port and protocol."
-sidebar:
-  order: 347
 ---
 
 ## getservbyport()
@@ -21,8 +19,9 @@ Gets the Internet service that corresponds to a port and protocol.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/getservbyport.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/getservbyport.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

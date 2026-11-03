@@ -1,8 +1,6 @@
 ---
 title: "gmp_div_qr()"
 description: "Divides two GMP numbers and returns quotient and remainder."
-sidebar:
-  order: 598
 ---
 
 ## gmp_div_qr()
@@ -22,8 +20,9 @@ Divides two GMP numbers and returns quotient and remainder.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_div_qr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_div_qr.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

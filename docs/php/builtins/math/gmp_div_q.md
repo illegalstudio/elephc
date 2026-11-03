@@ -1,8 +1,6 @@
 ---
 title: "gmp_div_q()"
 description: "Divides two GMP numbers."
-sidebar:
-  order: 597
 ---
 
 ## gmp_div_q()
@@ -22,8 +20,9 @@ Divides two GMP numbers.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_div_q.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_div_q.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

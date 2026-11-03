@@ -1,8 +1,6 @@
 ---
 title: "curl_errno()"
 description: "Returns the last error number for a cURL session."
-sidebar:
-  order: 768
 ---
 
 ## curl_errno()
@@ -20,8 +18,9 @@ Returns the last error number for a cURL session.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_errno.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_errno.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "simplexml_load_file() - internals"
 description: "Compiler internals for simplexml_load_file(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1084
 ---
 
 ## `simplexml_load_file()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/simplexml_prelude/surface.rs`:876](https://github.com/illegalstudio/elephc/blob/main/src/simplexml_prelude/surface.rs#L876) (`simplexml_load_file`)
+- **Lowering**: [`src/simplexml_prelude/surface.rs`](https://github.com/illegalstudio/elephc/blob/main/src/simplexml_prelude/surface.rs) (`simplexml_load_file`)
 - **Function symbol**: `simplexml_load_file()`
 
 

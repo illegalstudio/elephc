@@ -1,8 +1,6 @@
 ---
 title: "timezone_identifiers_list() - internals"
 description: "Compiler internals for timezone_identifiers_list(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 248
 ---
 
 ## `timezone_identifiers_list()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:1010](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L1010) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

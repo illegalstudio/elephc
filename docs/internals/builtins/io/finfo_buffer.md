@@ -1,8 +1,6 @@
 ---
 title: "finfo_buffer() - internals"
 description: "Compiler internals for finfo_buffer(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 323
 ---
 
 ## `finfo_buffer()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/fileinfo_prelude/build.rs`:163](https://github.com/illegalstudio/elephc/blob/main/src/fileinfo_prelude/build.rs#L163) (`finfo_buffer`)
+- **Lowering**: [`src/fileinfo_prelude/build.rs`](https://github.com/illegalstudio/elephc/blob/main/src/fileinfo_prelude/build.rs) (`finfo_buffer`)
 - **Function symbol**: `finfo_buffer()`
 
 

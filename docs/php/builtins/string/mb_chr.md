@@ -1,8 +1,6 @@
 ---
 title: "mb_chr()"
 description: "Encodes a Unicode codepoint, or returns false when it cannot be represented."
-sidebar:
-  order: 905
 ---
 
 ## mb_chr()
@@ -21,8 +19,9 @@ Encodes a Unicode codepoint, or returns false when it cannot be represented.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_chr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_chr.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

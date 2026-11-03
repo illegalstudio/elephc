@@ -1,8 +1,6 @@
 ---
 title: "gettimeofday()"
 description: "Returns the current time as an array of parts, or as a float."
-sidebar:
-  order: 224
 ---
 
 ## gettimeofday()
@@ -20,8 +18,9 @@ Returns the current time as an array of parts, or as a float.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

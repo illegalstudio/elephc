@@ -1,8 +1,6 @@
 ---
 title: "token_name()"
 description: "Get the symbolic name of a PHP token identifier."
-sidebar:
-  order: 1015
 ---
 
 ## token_name()
@@ -20,8 +18,9 @@ Get the symbolic name of a PHP token identifier.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected tokenizer prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/tokenizer/token_name.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/tokenizer/token_name.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

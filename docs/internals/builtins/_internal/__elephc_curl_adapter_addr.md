@@ -1,8 +1,6 @@
 ---
 title: "__elephc_curl_adapter_addr() - internals"
 description: "Compiler internals for __elephc_curl_adapter_addr(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1171
 ---
 
 ## `__elephc_curl_adapter_addr()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_adapter_addr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_adapter_addr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

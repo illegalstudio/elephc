@@ -1,8 +1,6 @@
 ---
 title: "hex2bin() - internals"
 description: "Compiler internals for hex2bin(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 882
 ---
 
 ## `hex2bin()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/hex2bin.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hex2bin.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

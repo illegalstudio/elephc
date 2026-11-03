@@ -1,8 +1,6 @@
 ---
 title: "array_multisort()"
 description: "Sorts exactly two equal-length indexed arrays in ascending tuple order. AOT accepts either two concrete integer arrays or two boxed scalar arrays, not a mixed pair. Concrete string/float arrays, sort flags, associative arrays, and eval are unsupported."
-sidebar:
-  order: 28
 ---
 
 ## array_multisort()
@@ -21,8 +19,9 @@ Sorts exactly two equal-length indexed arrays in ascending tuple order. AOT acce
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

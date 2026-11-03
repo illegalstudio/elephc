@@ -1,8 +1,6 @@
 ---
 title: "opcache_is_script_cached() - internals"
 description: "Compiler internals for opcache_is_script_cached(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 712
 ---
 
 ## `opcache_is_script_cached()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:737](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L737) (`opcache_is_script_cached`)
+- **Lowering**: [`src/opcache_prelude/build.rs`](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs) (`opcache_is_script_cached`)
 - **Function symbol**: `opcache_is_script_cached()`
 
 

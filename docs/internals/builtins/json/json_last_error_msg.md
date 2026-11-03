@@ -1,8 +1,6 @@
 ---
 title: "json_last_error_msg() - internals"
 description: "Compiler internals for json_last_error_msg(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 553
 ---
 
 ## `json_last_error_msg()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/json_last_error_msg.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/json_last_error_msg.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

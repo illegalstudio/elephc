@@ -1,8 +1,6 @@
 ---
 title: "__elephc_opcache_rt_in_file_cache() - internals"
 description: "Compiler internals for __elephc_opcache_rt_in_file_cache(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1231
 ---
 
 ## `__elephc_opcache_rt_in_file_cache()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_opcache_rt_in_file_cache.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_in_file_cache.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

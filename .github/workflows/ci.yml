@@ -3044,7 +3044,8 @@ jobs:
         # Joins the freshly regenerated builtin and symbol registries with the
         # vendored php_baseline.json snapshot and the curated
         # comparison_catalog.toml. Validates catalog evidence and baseline
-        # consistency; the committed page must come back byte-identical.
+        # consistency; the committed page and its compatibility.json twin (read
+        # by the elephc.dev site) must come back byte-identical.
         run: python3 scripts/docs/gen_php_comparison.py
 
       - name: Test builtin contract documentation pipeline

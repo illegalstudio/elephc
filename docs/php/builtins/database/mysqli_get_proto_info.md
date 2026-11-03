@@ -1,8 +1,6 @@
 ---
 title: "mysqli_get_proto_info()"
 description: "Returns the MySQL protocol version in use."
-sidebar:
-  order: 136
 ---
 
 ## mysqli_get_proto_info()
@@ -20,8 +18,9 @@ Returns the MySQL protocol version in use.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

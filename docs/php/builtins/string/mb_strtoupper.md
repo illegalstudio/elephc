@@ -1,8 +1,6 @@
 ---
 title: "mb_strtoupper()"
 description: "Converts every character to its Unicode uppercase mapping."
-sidebar:
-  order: 961
 ---
 
 ## mb_strtoupper()
@@ -21,8 +19,9 @@ Converts every character to its Unicode uppercase mapping.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_strtoupper.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_strtoupper.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

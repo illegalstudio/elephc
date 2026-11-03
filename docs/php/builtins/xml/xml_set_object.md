@@ -1,8 +1,6 @@
 ---
 title: "xml_set_object()"
 description: "Binds an object whose methods are looked up for string handler names."
-sidebar:
-  order: 1104
 ---
 
 ## xml_set_object()
@@ -21,8 +19,9 @@ Binds an object whose methods are looked up for string handler names.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xml_set_object.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xml_set_object.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

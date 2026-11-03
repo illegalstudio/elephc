@@ -1,8 +1,6 @@
 ---
 title: "gmp_sqrt()"
 description: "Integer square root."
-sidebar:
-  order: 634
 ---
 
 ## gmp_sqrt()
@@ -20,8 +18,9 @@ Integer square root.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_sqrt.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_sqrt.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

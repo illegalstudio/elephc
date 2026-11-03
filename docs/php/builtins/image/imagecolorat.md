@@ -1,8 +1,6 @@
 ---
 title: "imagecolorat()"
 description: "Returns the color index or packed color of one pixel."
-sidebar:
-  order: 475
 ---
 
 ## imagecolorat()
@@ -22,8 +20,9 @@ Returns the color index or packed color of one pixel.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

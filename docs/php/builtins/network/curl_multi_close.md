@@ -1,8 +1,6 @@
 ---
 title: "curl_multi_close()"
 description: "Closes a set of cURL handles."
-sidebar:
-  order: 775
 ---
 
 ## curl_multi_close()
@@ -20,8 +18,9 @@ Closes a set of cURL handles.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_close.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_close.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

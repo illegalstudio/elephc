@@ -1,8 +1,6 @@
 ---
 title: "gmp_neg() - internals"
 description: "Compiler internals for gmp_neg(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 616
 ---
 
 ## `gmp_neg()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_neg.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_neg.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,8 +1,6 @@
 ---
 title: "gmp_export()"
 description: "Exports a GMP number as a binary string."
-sidebar:
-  order: 601
 ---
 
 ## gmp_export()
@@ -22,8 +20,9 @@ Exports a GMP number as a binary string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_export.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_export.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

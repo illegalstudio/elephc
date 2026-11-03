@@ -1,8 +1,6 @@
 ---
 title: "mysqli_real_connect()"
 description: "Connects an object created by mysqli_init(), with the full option set."
-sidebar:
-  order: 151
 ---
 
 ## mysqli_real_connect()
@@ -27,8 +25,9 @@ Connects an object created by mysqli_init(), with the full option set.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "cairo_matrix_transform_point() - internals"
 description: "Compiler internals for cairo_matrix_transform_point(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 427
 ---
 
 ## `cairo_matrix_transform_point()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13885](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13885) (`cairo_matrix_transform_point`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`cairo_matrix_transform_point`)
 - **Function symbol**: `cairo_matrix_transform_point()`
 
 

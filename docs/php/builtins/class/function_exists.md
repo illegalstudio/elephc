@@ -1,8 +1,6 @@
 ---
 title: "function_exists()"
 description: "Returns true if the given function has been defined."
-sidebar:
-  order: 86
 ---
 
 ## function_exists()
@@ -20,8 +18,9 @@ Returns true if the given function has been defined.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/function_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/function_exists.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

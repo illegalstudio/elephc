@@ -1,8 +1,6 @@
 ---
 title: "mysqli_release_savepoint() - internals"
 description: "Compiler internals for mysqli_release_savepoint(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 154
 ---
 
 ## `mysqli_release_savepoint()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:353](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L353) (`mysqli_release_savepoint`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_release_savepoint`)
 - **Function symbol**: `mysqli_release_savepoint()`
 
 

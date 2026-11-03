@@ -1,8 +1,6 @@
 ---
 title: "finfo_buffer()"
 description: "Identifies the type and encoding of binary string contents."
-sidebar:
-  order: 323
 ---
 
 ## finfo_buffer()
@@ -23,8 +21,9 @@ Identifies the type and encoding of binary string contents.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/fileinfo/finfo_buffer.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/fileinfo/finfo_buffer.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

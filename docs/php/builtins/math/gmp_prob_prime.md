@@ -1,8 +1,6 @@
 ---
 title: "gmp_prob_prime()"
 description: "Probable-prime test."
-sidebar:
-  order: 624
 ---
 
 ## gmp_prob_prime()
@@ -21,8 +19,9 @@ Probable-prime test.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_prob_prime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_prob_prime.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

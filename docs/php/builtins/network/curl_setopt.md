@@ -1,8 +1,6 @@
 ---
 title: "curl_setopt()"
 description: "Sets an option for a cURL transfer."
-sidebar:
-  order: 788
 ---
 
 ## curl_setopt()
@@ -22,8 +20,9 @@ Sets an option for a cURL transfer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_setopt.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_setopt.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

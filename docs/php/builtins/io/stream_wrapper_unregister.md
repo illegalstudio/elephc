@@ -1,8 +1,6 @@
 ---
 title: "stream_wrapper_unregister()"
 description: "Unregisters a previously registered URL wrapper."
-sidebar:
-  order: 406
 ---
 
 ## stream_wrapper_unregister()
@@ -20,8 +18,9 @@ Unregisters a previously registered URL wrapper.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_unregister.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_unregister.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

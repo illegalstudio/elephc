@@ -1,8 +1,6 @@
 ---
 title: "gmp_scan0()"
 description: "Finds the first zero bit."
-sidebar:
-  order: 630
 ---
 
 ## gmp_scan0()
@@ -21,8 +19,9 @@ Finds the first zero bit.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_scan0.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_scan0.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

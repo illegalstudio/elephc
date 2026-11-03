@@ -803,12 +803,11 @@ class LoweringInfo:
     """Where the builtin is implemented in the compiler source."""
 
     sig_file: Optional[str] = None
-    sig_line: Optional[int] = None
     sig_arm: Optional[str] = None  # e.g. "\"strlen\" => Some(fixed(&[\"string\"]))"
     checker_file: Optional[str] = None
-    checker_line: Optional[int] = None
+    # No line numbers on purpose: they shift with every unrelated edit above the
+    # definition and turn the generated docs into a merge-conflict magnet.
     codegen_file: Optional[str] = None
-    codegen_line: Optional[int] = None
     codegen_function: Optional[str] = None  # e.g. "lower_strlen"
     runtime_helpers: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)  # pulled from the /// doc comment of the lowering fn

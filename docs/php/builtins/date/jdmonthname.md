@@ -1,8 +1,6 @@
 ---
 title: "jdmonthname()"
 description: "Returns the month name for a Julian Day count in the requested calendar."
-sidebar:
-  order: 232
 ---
 
 ## jdmonthname()
@@ -21,8 +19,9 @@ Returns the month name for a Julian Day count in the requested calendar.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

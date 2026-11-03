@@ -1,8 +1,6 @@
 ---
 title: "_imagick_fmt_from_path() - internals"
 description: "Compiler internals for _imagick_fmt_from_path(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1281
 ---
 
 ## `_imagick_fmt_from_path()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:4485](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4485) (`_imagick_fmt_from_path`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`_imagick_fmt_from_path`)
 - **Function symbol**: `_imagick_fmt_from_path()`
 
 

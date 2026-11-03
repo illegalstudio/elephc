@@ -1,8 +1,6 @@
 ---
 title: "gmp_clrbit()"
 description: "Clears a bit in a GMP number."
-sidebar:
-  order: 593
 ---
 
 ## gmp_clrbit()
@@ -21,8 +19,9 @@ Clears a bit in a GMP number.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_clrbit.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_clrbit.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "curl_error() - internals"
 description: "Compiler internals for curl_error(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 769
 ---
 
 ## `curl_error()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1145](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1145) (`curl_error`)
+- **Lowering**: [`src/curl_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs) (`curl_error`)
 - **Function symbol**: `curl_error()`
 
 

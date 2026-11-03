@@ -1,8 +1,6 @@
 ---
 title: "__elephc_opcache_rt_script_path() - internals"
 description: "Compiler internals for __elephc_opcache_rt_script_path(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1235
 ---
 
 ## `__elephc_opcache_rt_script_path()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_opcache_rt_script_path.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_opcache_rt_script_path.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

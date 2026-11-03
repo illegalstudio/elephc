@@ -1,8 +1,6 @@
 ---
 title: "set_error_handler() - internals"
 description: "Compiler internals for set_error_handler(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 758
 ---
 
 ## `set_error_handler()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/set_error_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/set_error_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

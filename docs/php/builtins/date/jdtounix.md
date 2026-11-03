@@ -1,8 +1,6 @@
 ---
 title: "jdtounix()"
 description: "Converts a Julian Day count into a Unix timestamp."
-sidebar:
-  order: 237
 ---
 
 ## jdtounix()
@@ -20,8 +18,9 @@ Converts a Julian Day count into a Unix timestamp.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

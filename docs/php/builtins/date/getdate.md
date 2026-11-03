@@ -1,8 +1,6 @@
 ---
 title: "getdate()"
 description: "Returns date/time information."
-sidebar:
-  order: 223
 ---
 
 ## getdate()
@@ -20,8 +18,9 @@ Returns date/time information.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/getdate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/getdate.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

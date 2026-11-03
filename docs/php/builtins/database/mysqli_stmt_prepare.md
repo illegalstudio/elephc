@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_prepare()"
 description: "Prepares SQL on a statement created by mysqli_stmt_init()."
-sidebar:
-  order: 177
 ---
 
 ## mysqli_stmt_prepare()
@@ -21,8 +19,9 @@ Prepares SQL on a statement created by mysqli_stmt_init().
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

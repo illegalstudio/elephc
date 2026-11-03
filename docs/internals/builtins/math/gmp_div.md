@@ -1,8 +1,6 @@
 ---
 title: "gmp_div() - internals"
 description: "Compiler internals for gmp_div(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 596
 ---
 
 ## `gmp_div()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_div.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_div.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

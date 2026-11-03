@@ -1,8 +1,6 @@
 ---
 title: "xmlwriter_end_document()"
 description: "Ends the document, closing every open node."
-sidebar:
-  order: 1111
 ---
 
 ## xmlwriter_end_document()
@@ -20,8 +18,9 @@ Ends the document, closing every open node.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_document.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_end_document.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

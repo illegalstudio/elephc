@@ -1,8 +1,6 @@
 ---
 title: "session_start()"
 description: "Starts a new session or resumes the one the request identifies."
-sidebar:
-  order: 1077
 ---
 
 ## session_start()
@@ -20,8 +18,9 @@ Starts a new session or resumes the one the request identifies.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

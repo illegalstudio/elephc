@@ -1,8 +1,6 @@
 ---
 title: "cairo_translate() - internals"
 description: "Compiler internals for cairo_translate(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 455
 ---
 
 ## `cairo_translate()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13654](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13654) (`cairo_translate`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`cairo_translate`)
 - **Function symbol**: `cairo_translate()`
 
 

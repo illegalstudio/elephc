@@ -1,8 +1,6 @@
 ---
 title: "date_create()"
 description: "Creates a DateTime from a date/time string."
-sidebar:
-  order: 194
 ---
 
 ## date_create()
@@ -21,8 +19,9 @@ Creates a DateTime from a date/time string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "simplexml_import_dom() - internals"
 description: "Compiler internals for simplexml_import_dom(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1083
 ---
 
 ## `simplexml_import_dom()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/simplexml_prelude/surface.rs`:937](https://github.com/illegalstudio/elephc/blob/main/src/simplexml_prelude/surface.rs#L937) (`simplexml_import_dom`)
+- **Lowering**: [`src/simplexml_prelude/surface.rs`](https://github.com/illegalstudio/elephc/blob/main/src/simplexml_prelude/surface.rs) (`simplexml_import_dom`)
 - **Function symbol**: `simplexml_import_dom()`
 
 

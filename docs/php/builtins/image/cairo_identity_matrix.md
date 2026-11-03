@@ -1,8 +1,6 @@
 ---
 title: "cairo_identity_matrix()"
 description: "Resets the context's transformation to the identity matrix."
-sidebar:
-  order: 416
 ---
 
 ## cairo_identity_matrix()
@@ -20,8 +18,9 @@ Resets the context's transformation to the identity matrix.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

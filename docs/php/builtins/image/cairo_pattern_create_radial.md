@@ -1,8 +1,6 @@
 ---
 title: "cairo_pattern_create_radial()"
 description: "Creates a radial gradient pattern between two circles."
-sidebar:
-  order: 435
 ---
 
 ## cairo_pattern_create_radial()
@@ -25,8 +23,9 @@ Creates a radial gradient pattern between two circles.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

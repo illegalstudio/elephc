@@ -1,8 +1,6 @@
 ---
 title: "is_subclass_of()"
 description: "Checks if the object has a given class as one of its parents or implements it."
-sidebar:
-  order: 98
 ---
 
 ## is_subclass_of()
@@ -22,8 +20,9 @@ Checks if the object has a given class as one of its parents or implements it.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/is_subclass_of.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/is_subclass_of.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

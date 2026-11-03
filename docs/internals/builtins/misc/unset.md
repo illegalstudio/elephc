@@ -1,8 +1,6 @@
 ---
 title: "unset() - internals"
 description: "Compiler internals for unset(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 762
 ---
 
 ## `unset()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:148](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L148) (`lower_unset_builtin`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs) (`lower_unset_builtin`)
 - **Function symbol**: `lower_unset_builtin()`
 
 

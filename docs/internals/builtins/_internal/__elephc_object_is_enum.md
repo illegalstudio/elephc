@@ -1,8 +1,6 @@
 ---
 title: "__elephc_object_is_enum() - internals"
 description: "Compiler internals for __elephc_object_is_enum(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1224
 ---
 
 ## `__elephc_object_is_enum()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/__elephc_object_is_enum.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/__elephc_object_is_enum.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

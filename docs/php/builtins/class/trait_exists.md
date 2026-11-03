@@ -1,8 +1,6 @@
 ---
 title: "trait_exists()"
 description: "Checks whether the trait exists."
-sidebar:
-  order: 101
 ---
 
 ## trait_exists()
@@ -21,8 +19,9 @@ Checks whether the trait exists.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/trait_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/trait_exists.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

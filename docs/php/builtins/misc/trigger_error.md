@@ -1,8 +1,6 @@
 ---
 title: "trigger_error()"
 description: "Raises a user-level error, warning, or notice."
-sidebar:
-  order: 760
 ---
 
 ## trigger_error()
@@ -21,8 +19,9 @@ Raises a user-level error, warning, or notice.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/trigger_error.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/trigger_error.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

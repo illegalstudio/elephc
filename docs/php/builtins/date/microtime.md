@@ -1,8 +1,6 @@
 ---
 title: "microtime()"
 description: "Returns the current Unix timestamp with microseconds."
-sidebar:
-  order: 241
 ---
 
 ## microtime()
@@ -20,8 +18,9 @@ Returns the current Unix timestamp with microseconds.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/microtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/microtime.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

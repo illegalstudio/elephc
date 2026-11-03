@@ -1,8 +1,6 @@
 ---
 title: "xmlwriter_start_attribute_ns() - internals"
 description: "Compiler internals for xmlwriter_start_attribute_ns(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1126
 ---
 
 ## `xmlwriter_start_attribute_ns()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1065](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1065) (`xmlwriter_start_attribute_ns`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs) (`xmlwriter_start_attribute_ns`)
 - **Function symbol**: `xmlwriter_start_attribute_ns()`
 
 

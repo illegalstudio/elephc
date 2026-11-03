@@ -1,8 +1,6 @@
 ---
 title: "gmp_sqrt() - internals"
 description: "Compiler internals for gmp_sqrt(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 634
 ---
 
 ## `gmp_sqrt()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_sqrt.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_sqrt.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

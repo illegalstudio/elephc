@@ -1,8 +1,6 @@
 ---
 title: "timezone_open()"
 description: "Creates a DateTimeZone from an identifier."
-sidebar:
-  order: 253
 ---
 
 ## timezone_open()
@@ -20,8 +18,9 @@ Creates a DateTimeZone from an identifier.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

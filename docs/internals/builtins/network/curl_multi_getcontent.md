@@ -1,8 +1,6 @@
 ---
 title: "curl_multi_getcontent() - internals"
 description: "Compiler internals for curl_multi_getcontent(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 779
 ---
 
 ## `curl_multi_getcontent()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1639](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1639) (`curl_multi_getcontent`)
+- **Lowering**: [`src/curl_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs) (`curl_multi_getcontent`)
 - **Function symbol**: `curl_multi_getcontent()`
 
 

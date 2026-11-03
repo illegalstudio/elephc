@@ -1,8 +1,6 @@
 ---
 title: "gmp_div_r()"
 description: "Returns the remainder of a GMP division."
-sidebar:
-  order: 599
 ---
 
 ## gmp_div_r()
@@ -22,8 +20,9 @@ Returns the remainder of a GMP division.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_div_r.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_div_r.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

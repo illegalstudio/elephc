@@ -1,8 +1,6 @@
 ---
 title: "pathinfo()"
 description: "Returns information about a file path."
-sidebar:
-  order: 294
 ---
 
 ## pathinfo()
@@ -21,8 +19,9 @@ Returns information about a file path.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/pathinfo.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/pathinfo.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

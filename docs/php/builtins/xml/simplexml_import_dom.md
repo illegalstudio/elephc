@@ -1,8 +1,6 @@
 ---
 title: "simplexml_import_dom()"
 description: "Imports a DOM node as a SimpleXML element."
-sidebar:
-  order: 1083
 ---
 
 ## simplexml_import_dom()
@@ -21,8 +19,9 @@ Imports a DOM node as a SimpleXML element.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/simplexml_import_dom.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/simplexml_import_dom.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "imagefill()"
 description: "Flood-fills from a point with a color."
-sidebar:
-  order: 509
 ---
 
 ## imagefill()
@@ -23,8 +21,9 @@ Flood-fills from a point with a color.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
