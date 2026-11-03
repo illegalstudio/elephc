@@ -157,20 +157,30 @@ class NativeCycleCastCallback {
     public function __invoke(): void { Fiber::suspend(9); }
 }
 class NativeCycleCastConsumer {
+    public function __construct(callable $callback, bool $pause) { if ($pause) { $callback(); } }
     public function apply(callable $callback): void { $callback(); }
+    public static function applyStatic(callable $callback): void { $callback(); }
 }
-$callback = new NativeCycleCastCallback();
-$fiber = new Fiber(static function () use ($callback): void {
-    eval('$consumer = new NativeCycleCastConsumer(); $consumer->apply($callback);');
-});
-$callback->fiber = $fiber;
-echo $fiber->start(), '|';
-unset($callback, $fiber);
-gc_collect_cycles();
+for ($mode = 0; $mode < 3; $mode++) {
+    $callback = new NativeCycleCastCallback();
+    $fiber = new Fiber(static function () use ($callback, $mode): void {
+        eval('
+            if ($mode === 0) { $consumer = new NativeCycleCastConsumer($callback, true); }
+            elseif ($mode === 1) {
+                $consumer = new NativeCycleCastConsumer($callback, false);
+                $consumer->apply($callback);
+            } else { NativeCycleCastConsumer::applyStatic($callback); }
+        ');
+    });
+    $callback->fiber = $fiber;
+    echo $fiber->start(), '|';
+    unset($callback, $fiber);
+    gc_collect_cycles();
+}
 echo 'done';
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "9|done");
+    assert_eq!(output.stdout, "9|9|9|done");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
