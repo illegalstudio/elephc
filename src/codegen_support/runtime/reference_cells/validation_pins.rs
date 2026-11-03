@@ -5,7 +5,7 @@
 //! - Reference validation publishers and reference-sharing readers.
 //!
 //! Key details:
-//! - Each caller-owned record contains previous/next links, the pinned value and padding.
+//! - Each caller-owned record contains previous/next links, the pinned value and authenticated kind.
 //! - Removal works in any activation order, including interleaved suspended fibers.
 //! - Every native throw must be contained until the owning publisher removes its records.
 
@@ -81,20 +81,26 @@ fn subtract_unowned_cell_child(
     let count_next = format!("{prefix}_pin_cell_count_next");
     let counted = format!("{prefix}_pin_cell_counted");
     branch_zero(emitter, scratch, skip);
+    abi::emit_load_from_address(emitter, owners, outer, RECORD_BYTES - 8);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {owners}, #8"));                  // the record authenticates an exact live managed cell
+            emitter.instruction(&format!("b.ne {skip}"));                       // static or ordinary boxed roots grant no cell-header access
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {owners}, 8"));                   // the record authenticates an exact live managed cell
+            emitter.instruction(&format!("jne {skip}"));                        // static or ordinary boxed roots grant no cell-header access
+        }
+    }
     abi::emit_reg_move(emitter, cell, scratch);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldurb {}, [{cell}, #-8]", low_word(emitter, owners)));// inspect the managed root's allocation kind
-            emitter.instruction(&format!("cmp {owners}, #8"));                  // only native cells can own an indirect invisible child
-            emitter.instruction(&format!("b.ne {skip}"));                       // ordinary boxed roots have already been compared directly
             emitter.instruction(&format!("ldur {owners}, [{cell}, #-8]"));      // inspect the cell's physical descriptor
             emitter.instruction(&format!("ubfx {owners}, {owners}, #8, #7"));   // isolate the owned payload shape
             emitter.instruction(&format!("cmp {owners}, #7"));                  // only Mixed descriptor cells own a wrapper pointer
             emitter.instruction(&format!("b.ne {skip}"));                       // raw scalar bits are never interpreted as child owners
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("cmp BYTE PTR [{cell} - 8], 8"));      // inspect the managed root's allocation kind
-            emitter.instruction(&format!("jne {skip}"));                        // ordinary boxed roots have already been compared directly
             emitter.instruction(&format!("mov {owners}, QWORD PTR [{cell} - 8]"));// inspect the cell's physical descriptor
             emitter.instruction(&format!("shr {owners}, 8"));                   // position its owned payload shape
             emitter.instruction(&format!("and {owners}, 127"));                 // remove heap and collector flags
@@ -211,6 +217,16 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_reg_move(emitter, result, abi::int_arg_reg_name(emitter.target, 1));
     abi::store_at_offset(emitter, result, 16);
     abi::emit_call_label(emitter, "__rt_incref");
+    // Static Mixed constants can be rooted too; authenticate before any later header inspection.
+    abi::load_at_offset(emitter, result, 16);
+    abi::emit_call_label(emitter, "__rt_gc_candidate_live");
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_reference_validation_pin_enter_kind_ready");
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("ldurb w0, [x0, #-8]"),            // remember the exact live allocation's physical kind
+        Arch::X86_64 => emitter.instruction("movzx eax, BYTE PTR [rax - 8]"),   // remember the exact live allocation's physical kind
+    }
+    emitter.label("__rt_reference_validation_pin_enter_kind_ready");
+    abi::store_at_offset(emitter, result, 24);
     abi::emit_symbol_address(emitter, previous, TOP);
     abi::emit_load_from_address(emitter, previous, previous, 0);
     abi::load_at_offset(emitter, record, 8);
@@ -218,7 +234,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_store_to_address(emitter, previous, record, 8);
     abi::load_at_offset(emitter, result, 16);
     abi::emit_store_to_address(emitter, result, record, 16);
-    abi::emit_store_zero_to_address(emitter, record, RECORD_BYTES - 8);
+    abi::load_at_offset(emitter, result, 24);
+    abi::emit_store_to_address(emitter, result, record, RECORD_BYTES - 8);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("cbz x11, __rt_reference_validation_pin_enter_head");// the first lease has no successor to relink
@@ -274,6 +291,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_store_zero_to_address(emitter, record, 0);
     abi::emit_store_zero_to_address(emitter, record, 8);
     abi::emit_store_zero_to_address(emitter, record, 16);
+    abi::emit_store_zero_to_address(emitter, record, RECORD_BYTES - 8);
     abi::load_at_offset(emitter, result, 8);
     abi::emit_frame_restore(emitter, 32);
     abi::emit_return(emitter);
@@ -302,6 +320,9 @@ mod tests {
             let (enter, rest) = assembly.split_once("__rt_reference_validation_pin_take:").unwrap();
             let (take, leave) = rest.split_once("__rt_reference_validation_pin_leave:").unwrap();
             assert!(enter.find("__rt_incref").unwrap() < enter.find(TOP).unwrap(), "{name}: retain before publishing the record");
+            assert!(enter.find("__rt_incref").unwrap() < enter.find("__rt_gc_candidate_live").unwrap()
+                && enter.find("__rt_gc_candidate_live").unwrap() < enter.find(TOP).unwrap(),
+                "{name}: authenticate a retained allocation before publishing its kind");
             assert!(take.contains(TOP) && !take.contains("__rt_decref"),
                 "{name}: taking a root unlinks it without running PHP");
             assert!(leave.find("__rt_reference_validation_pin_take").unwrap() < leave.find("__rt_decref_any").unwrap(),

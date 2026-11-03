@@ -634,7 +634,8 @@ publishers, protected callbacks, invisible keepalive pins and binding lifecycle
 still need integration before typed canonical references can be enabled.
 
 Native validation roots use caller-owned 32-byte records containing previous and
-next links, a managed owner pointer, and padding. Each record retains one boxed
+next links, an owner pointer, and its authenticated allocation kind. Static boxed
+constants have kind zero and never grant permission to read an allocation header. Each record retains one boxed
 value or native cell owner. Cell clone and projection checks exclude native-cell
 roots as well as the wrapper roots excluded by value-sharing checks. Sharing
 checks subtract these artificial owners before deciding whether a PHP reference

@@ -387,7 +387,18 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     instruction(&mut asm, "str x0, [x9]", "mov QWORD PTR [r10], rax");
     enter(&mut asm, 160, 304);
     enter(&mut asm, 192, 304);
+    // A borrowed frame with forged cell-like words cannot contribute an invisible child owner.
+    instruction(&mut asm, "mov x9, #0x708", "mov r10, 0x708");
+    instruction(&mut asm, "str x9, [sp, #264]", "mov QWORD PTR [rsp + 264], r10");
+    instruction(&mut asm, "mov w9, #1", "mov r10d, 1");
+    instruction(&mut asm, "str w9, [sp, #260]", "mov DWORD PTR [rsp + 260], r10d");
+    load(&mut asm, 0);
+    store(&mut asm, 272);
+    instruction(&mut asm, "add x9, sp, #272", "lea r10, [rsp + 272]");
+    instruction(&mut asm, "str x9, [sp, #288]", "mov QWORD PTR [rsp + 288], r10");
+    enter(&mut asm, 224, 288);
     expect_shared_native_clone(&mut asm);
+    leave(&mut asm, 224);
     load(&mut asm, 304);
     call(&mut asm, "__rt_reference_cell_release");
     // A separate PHP alias remains visible despite both roots naming the same staging cell.
