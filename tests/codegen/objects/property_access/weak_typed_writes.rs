@@ -26,7 +26,8 @@ class NumericBooleanUnion {
 }
 function boxedNumericBooleanUnion(mixed $value): mixed { return $value; }
 function showNumericBooleanUnion(mixed $value): void {
-    echo get_debug_type($value), ':', (string)$value, '|';
+    $type = is_int($value) ? 'int' : (is_float($value) ? 'float' : (is_bool($value) ? 'bool' : gettype($value)));
+    echo $type, ':', (string)$value, '|';
 }
 set_error_handler(function (int $code, string $message): bool { echo 'dep|'; return true; });
 $box = new NumericBooleanUnion();
