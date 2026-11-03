@@ -1889,6 +1889,12 @@ fn lower_body_into_function(
             ctx.mark_ref_bound_local(name);
         }
     }
+    // Parameter slots must remain the contiguous ABI prefix before hidden owners are appended.
+    for (index, (name, _)) in params.iter().enumerate() {
+        let incoming_cell = ctx.builder.function().params.get(index)
+            .is_some_and(|parameter| parameter.by_ref && !parameter.variadic);
+        if incoming_cell { ctx.retain_incoming_ref_cell(name); }
+    }
     if let Some(name) = reference_variadic {
         ctx.mark_reference_marker_array_local(&name);
     }

@@ -699,6 +699,14 @@ from declared PHP types and tagged nullable integers. Normal function object
 references use the normalized Mixed ABI. A closure descriptor can instead expose
 a raw object or container payload and receives detached concrete-box adaptation.
 Only a physical Mixed pointer slot can share the live staging wrapper.
+
+A native frame retains an incoming managed reference cell in a hidden owner slot
+for each regular by-reference parameter. The cell is authenticated before its
+owner is acquired; borrowed frame addresses leave the hidden owner empty.
+`unset`, normal return and unwinding retire that parameter binding independently
+of the caller and property owners. Hidden owners are appended after every ABI
+parameter slot, preserving argument positions. Variadic reference marker arrays
+keep their existing container path.
 Constructor, instance-method and static-method bridges likewise preserve an
 existing Mixed PHP wrapper instead of copying its child into detached staging.
 Native stores update that wrapper's child, and return cleanup releases the

@@ -860,8 +860,8 @@ pub enum Op {
     StoreRefCell,
     PromoteLocalRefCell,
     AliasLocalRefCell,
-    /// Retains the nullable cell in one hidden owner slot into another hidden owner slot.
-    /// Immediate: source/destination owner slots. Inline borrowed references remain null owners.
+    /// Retains a nullable owner or authenticates an incoming managed by-ref parameter cell.
+    /// Immediate: source/destination slots. Borrowed frame arguments produce null owners.
     RetainLocalRefCell,
     ReleaseLocalRefCell,
     ReleaseLocalSlot,
@@ -1378,7 +1378,7 @@ impl Op {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
-            RetainLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
+            RetainLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             // The last cell owner can run an arbitrary payload destructor.
             ReleaseLocalRefCell => E::all(),
             // Retiring the slot can invoke an arbitrary PHP destructor after clearing its owner.

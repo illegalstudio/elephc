@@ -53,6 +53,7 @@ mod object_property_indices;
 mod promoted_constructor_references;
 mod native_reference_validators;
 mod native_reference_store_modes;
+mod native_reference_parameter_leases;
 mod source_variadic_calls;
 mod erased_xml_presence;
 mod ordinary_prefix_storage;

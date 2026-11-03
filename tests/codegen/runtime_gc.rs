@@ -229,6 +229,8 @@ mod native_property_unset;
 mod native_mixed_property_aliases;
 #[path = "runtime_gc/native_reference_validation_pins.rs"]
 mod native_reference_validation_pins;
+#[path = "runtime_gc/native_reference_parameter_leases.rs"]
+mod native_reference_parameter_leases;
 mod eval_closure_receivers;
 mod eval_alias_unwind;
 mod eval_call_result_owners;

@@ -2081,6 +2081,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.ref_cell_owner_locals.get(variable).copied()
     }
 
+    /// Gives an incoming managed reference its own PHP parameter binding until unset or exit.
+    /// Borrowed frame addresses acquire no heap owner; the backend authenticates the source.
+    pub(crate) fn retain_incoming_ref_cell(&mut self, variable: &str) {
+        let ty = self.local_type(variable);
+        let source = self.declare_local(variable, ty.clone());
+        let owner = self.declare_ref_cell_owner(variable, ty);
+        self.emit_void(
+            Op::RetainLocalRefCell, Vec::new(),
+            Some(Immediate::LocalSlotPair { first: source, second: owner }),
+            Op::RetainLocalRefCell.default_effects(), None,
+        );
+        self.initialized_slots.insert(owner);
+    }
+
     /// Returns the physical payload type a store through `variable`'s ref-cell must publish.
     ///
     /// Recursive closures deliberately expose a narrower logical `Callable` view while their

@@ -271,13 +271,21 @@ pub(super) fn lower_alias_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &I
     Ok(())
 }
 
-/// Copies a nullable owned cell into another owner slot, preserving aliases beyond source retirement.
+/// Retains an owner slot or an authenticated incoming parameter cell into a hidden owner.
 pub(super) fn lower_retain_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let (source, target) = expect_local_slot_pair(inst)?;
     let source_offset = ctx.local_offset(source)?;
     let target_offset = ctx.local_offset(target)?;
     let result = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, result, source_offset);
+    if !matches!(ctx.local_kind(source)?, crate::ir::LocalKind::RefCell | crate::ir::LocalKind::ReturnRefCell) {
+        if !ctx.function.params.get(source.as_raw() as usize).is_some_and(|parameter|
+            parameter.by_ref && !parameter.variadic)
+        {
+            return Err(CodegenIrError::invalid_module("reference owner source must be an owner or incoming reference parameter"));
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
+    }
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     abi::store_at_offset(ctx.emitter, result, target_offset);
     Ok(())
