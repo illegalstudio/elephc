@@ -323,6 +323,16 @@ fn native_commit(out: &mut String, candidate: usize, expected: usize) {
     instruction(out, &format!("str xzr, [sp, #{candidate}]"), &format!("mov QWORD PTR [rsp + {candidate}], 0"));
 }
 
+/// A real native binding or independent PHPRef owner keeps a canonical clone shared.
+fn expect_shared_native_clone(out: &mut String) {
+    load(out, 8);
+    call(out, "__rt_reference_cell_clone");
+    instruction(out, "ldr x9, [sp, #8]", "mov r10, QWORD PTR [rsp + 8]");
+    instruction(out, "cmp x0, x9", "cmp rax, r10");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    call(out, "__rt_reference_cell_release");
+}
+
 /// Real nested pins preserve singleton copy semantics, unlink in any order and leave no heap owners.
 #[test]
 fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
@@ -367,6 +377,25 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     enter(&mut asm, 64, 0);
     enter(&mut asm, 96, 16);
     enter(&mut asm, 128, 8);
+    // Two invisible staging leases on another cell must hide its child owner only once.
+    instruction(&mut asm, "mov x0, #7", "mov edi, 7");
+    call(&mut asm, "__rt_reference_cell_new");
+    store(&mut asm, 304);
+    load(&mut asm, 0);
+    call(&mut asm, "__rt_incref");
+    instruction(&mut asm, "ldr x9, [sp, #304]", "mov r10, QWORD PTR [rsp + 304]");
+    instruction(&mut asm, "str x0, [x9]", "mov QWORD PTR [r10], rax");
+    enter(&mut asm, 160, 304);
+    enter(&mut asm, 192, 304);
+    expect_shared_native_clone(&mut asm);
+    load(&mut asm, 304);
+    call(&mut asm, "__rt_reference_cell_release");
+    // A separate PHP alias remains visible despite both roots naming the same staging cell.
+    load(&mut asm, 0);
+    call(&mut asm, "__rt_incref");
+    expect_shared_native_clone(&mut asm);
+    load(&mut asm, 0);
+    call(&mut asm, "__rt_decref_mixed");
     expect_detached_array_copy(&mut asm);
     // A singleton canonical clone must contain a different wrapper with the same value.
     load(&mut asm, 8);
@@ -388,6 +417,9 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     instruction(&mut asm, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
     load(&mut asm, 24);
     call(&mut asm, "__rt_reference_cell_release");
+    leave(&mut asm, 160);
+    expect_detached_array_copy(&mut asm);
+    leave(&mut asm, 192);
     // Retire a middle record and the oldest record while the unrelated head remains live.
     leave(&mut asm, 64);
     expect_detached_array_copy(&mut asm);

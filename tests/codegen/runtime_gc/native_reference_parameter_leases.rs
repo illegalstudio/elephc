@@ -43,3 +43,47 @@ echo $throwCopy->value, '|';
     assert_eq!(output.stdout, "after|before|caught|written|");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// Eval staging stays invisible after parameter unset while live PHP aliases still preserve sharing.
+#[test]
+fn test_eval_native_reference_parameter_leases_bundle() {
+    let source = r#"<?php
+class EvalNativeParameterLeaseProbe { public mixed $value = 'before'; }
+function copyWithEvalNativeLease(mixed &$value, EvalNativeParameterLeaseProbe $object, bool $detach): EvalNativeParameterLeaseProbe {
+    if ($detach) { unset($value); }
+    return clone $object;
+}
+function throwWithEvalNativeLease(mixed &$value): void {
+    $value = 'written';
+    throw new Exception('caught');
+}
+$code = $argc > 0 ? '
+$active = new EvalNativeParameterLeaseProbe();
+$activeCopy = copyWithEvalNativeLease($active->value, $active, false);
+$active->value = "after";
+echo $activeCopy->value, "|";
+$detached = new EvalNativeParameterLeaseProbe();
+$detachedCopy = copyWithEvalNativeLease($detached->value, $detached, true);
+$detached->value = "after";
+echo $detachedCopy->value, "|";
+$shared = new EvalNativeParameterLeaseProbe();
+$alias =& $shared->value;
+$sharedCopy = copyWithEvalNativeLease($shared->value, $shared, true);
+$alias = "after";
+echo $sharedCopy->value, "|";
+$throwing = new EvalNativeParameterLeaseProbe();
+try { throwWithEvalNativeLease($throwing->value); }
+catch (Exception $error) { echo $error->getMessage(), "|"; }
+$throwCopy = clone $throwing;
+$throwing->value = "after";
+echo $throwCopy->value, "|";
+unset($activeCopy, $active, $detachedCopy, $detached, $sharedCopy, $shared, $alias,
+    $error, $throwCopy, $throwing);
+' : '';
+eval($code); unset($code);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "after|before|after|caught|written|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

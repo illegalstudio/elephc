@@ -132,8 +132,8 @@ pub(in crate::interpreter) fn cleanup_native_function_ref_args(
     let mut result = Ok(());
     for ref_slot in &bound_args.ref_slots {
         let released = match ref_slot {
-            BoundNativeFunctionRefSlot::ManagedMixed { cell, .. } => {
-                values.release_native_mixed_reference_cell(*cell)
+            BoundNativeFunctionRefSlot::ManagedMixed { cell, pin, .. } => {
+                values.release_native_mixed_reference_cell(*cell, pin.get().cast())
             }
             BoundNativeFunctionRefSlot::RawString { slot, .. } => {
                 let words = **slot;
@@ -176,7 +176,7 @@ fn write_back_native_function_ref_slot(
     match ref_slot {
         // Native stores already published through the caller's live PHPRef. Only
         // retire staging's cell lease; constructors may have retained another one.
-        BoundNativeFunctionRefSlot::ManagedMixed { cell, .. } => values.release_native_mixed_reference_cell(*cell),
+        BoundNativeFunctionRefSlot::ManagedMixed { cell, pin, .. } => values.release_native_mixed_reference_cell(*cell, pin.get().cast()),
         BoundNativeFunctionRefSlot::Mixed {
             original,
             slot,

@@ -476,6 +476,7 @@ fn native_ref_cleanup_consumes_every_slot_after_a_release_error() {
                 },
                 BoundNativeFunctionRefSlot::ManagedMixed {
                     original: caller, cell: managed.as_ptr() as u64,
+                    pin: Box::new(std::cell::UnsafeCell::new([0; 4])),
                 },
             ],
         };

@@ -843,12 +843,15 @@ pub trait RuntimeValueOps {
     fn native_mixed_reference_cell(
         &mut self,
         _reference: RuntimeCellHandle,
+        _pin: *mut c_void,
     ) -> Result<Option<u64>, EvalStatus> {
         Ok(None)
     }
 
     /// Consumes a native staging-cell lease, containing any destructor exception in the host ABI.
-    fn release_native_mixed_reference_cell(&mut self, cell: u64) -> Result<(), EvalStatus> {
+    fn release_native_mixed_reference_cell(
+        &mut self, cell: u64, _pin: *mut c_void,
+    ) -> Result<(), EvalStatus> {
         self.release_raw_heap_word(cell)
     }
 

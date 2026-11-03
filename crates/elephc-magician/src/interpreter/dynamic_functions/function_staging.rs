@@ -94,7 +94,7 @@ pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
         && values.is_reference(original)?
     {
         for existing in &mut staged.ref_slots {
-            if let BoundNativeFunctionRefSlot::ManagedMixed { original: first, cell } = existing {
+            if let BoundNativeFunctionRefSlot::ManagedMixed { original: first, cell, .. } = existing {
                 if !guarded_writeback && first.as_ptr() == original.as_ptr() {
                     return values.invoker_ref_cell(*cell as *mut *mut crate::value::RuntimeCell)
                         .map(|marker| (marker, None));
@@ -107,15 +107,17 @@ pub(in crate::interpreter) fn stage_native_function_shared_ref_arg(
             }
         }
         if !guarded_writeback {
-            if let Some(cell) = values.native_mixed_reference_cell(original)? {
+            let pin = Box::new(std::cell::UnsafeCell::new([0u64; 4]));
+            let record = pin.get().cast();
+            if let Some(cell) = values.native_mixed_reference_cell(original, record)? {
                 let marker = match values.invoker_ref_cell(cell as *mut *mut crate::value::RuntimeCell) {
                     Ok(marker) => marker,
                     Err(status) => {
-                        let _ = values.release_native_mixed_reference_cell(cell);
+                        let _ = values.release_native_mixed_reference_cell(cell, record);
                         return Err(status);
                     }
                 };
-                return Ok((marker, Some(BoundNativeFunctionRefSlot::ManagedMixed { original, cell })));
+                return Ok((marker, Some(BoundNativeFunctionRefSlot::ManagedMixed { original, cell, pin })));
             }
         }
     }

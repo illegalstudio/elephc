@@ -460,6 +460,12 @@ unsafe extern "C" {
     /// Allocates a managed native Mixed slot that owns the existing PHP reference.
     pub(super) fn __elephc_eval_value_native_mixed_reference_cell(
         reference: *mut RuntimeCell,
+        pin: *mut c_void,
+    ) -> u64;
+    /// Unlinks a staging root before consuming its owner and updating the boxed Throwable chain.
+    pub(super) fn __elephc_eval_value_native_reference_pin_release_v1(
+        pin: *mut c_void,
+        thrown: *mut *mut RuntimeCell,
     ) -> u64;
     /// Wraps a typed raw slot for native callable reference binding.
     pub(super) fn __elephc_eval_value_invoker_raw_ref_cell(

@@ -171,14 +171,17 @@ macro_rules! impl_construction_raw_ops {
     fn native_mixed_reference_cell(
         &mut self,
         reference: RuntimeCellHandle,
+        pin: *mut std::ffi::c_void,
     ) -> Result<Option<u64>, EvalStatus> {
-        let cell = unsafe { __elephc_eval_value_native_mixed_reference_cell(reference.as_ptr()) };
+        let cell = unsafe { __elephc_eval_value_native_mixed_reference_cell(reference.as_ptr(), pin) };
         if cell == 0 { Err(EvalStatus::RuntimeFatal) } else { Ok(Some(cell)) }
     }
 
     /// Uses the protected generic release ABI so a final cell cannot throw across Rust frames.
-    fn release_native_mixed_reference_cell(&mut self, cell: u64) -> Result<(), EvalStatus> {
-        self.release(RuntimeCellHandle::from_raw(cell as *mut crate::value::RuntimeCell))
+    fn release_native_mixed_reference_cell(
+        &mut self, _cell: u64, pin: *mut std::ffi::c_void,
+    ) -> Result<(), EvalStatus> {
+        self.release_reference_pin(pin)
     }
 
     /// Creates an invoker-only by-reference marker for a staged raw one-word slot.

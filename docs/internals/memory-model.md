@@ -642,7 +642,10 @@ has another visible owner. The checks scan only
 active validation records and do not call PHP or acquire another owner. Records
 can retire in any order, allowing interleaved suspended activations. A record is
 unlinked before protected generic release can run a destructor. A final native
-cell root releases its descriptor-selected child and allocation. Web request reset clears
+cell root releases its descriptor-selected child and allocation. A cell kept alive
+only by temporary pins also contributes no visible owner of its boxed child.
+Sharing checks count each such cell once, even with several pins, and continue to
+count its child while a real native parameter or property binding owns the cell. Web request reset clears
 the registry before cleanup can inspect a retired request stack. Generated
 publishers still need to enter and leave these roots on every path; cancellation
 must retire a record before releasing its activation's stack.
@@ -702,6 +705,13 @@ from declared PHP types and tagged nullable integers. Normal function object
 references use the normalized Mixed ABI. A closure descriptor can instead expose
 a raw object or container payload and receives detached concrete-box adaptation.
 Only a physical Mixed pointer slot can share the live staging wrapper.
+
+Eval-to-native Mixed argument staging keeps each temporary cell through an
+invisible root whose stable record is owned by Rust. Foreign mutation of the
+record uses `UnsafeCell`; the record remains allocated until the root is unlinked.
+Cleanup takes the root owner without running PHP, then retires that owner inside
+the eval ABI's boxed Throwable accumulator. A destructor cannot bypass Rust
+cleanup or leave a record referring to retired foreign storage.
 
 A native frame retains an incoming managed reference cell in a hidden owner slot
 for each regular by-reference parameter. The cell is authenticated before its

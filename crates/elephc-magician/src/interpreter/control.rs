@@ -64,6 +64,8 @@ pub(super) enum BoundNativeFunctionRefSlot {
     ManagedMixed {
         original: RuntimeCellHandle,
         cell: u64,
+        /// Stable foreign-mutable record remains allocated until native pin retirement completes.
+        pin: Box<std::cell::UnsafeCell<[u64; 4]>>,
     },
     Mixed {
         original: RuntimeCellHandle,

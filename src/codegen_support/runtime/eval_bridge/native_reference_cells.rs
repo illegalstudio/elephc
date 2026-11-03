@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Descriptor seven owns the existing PHPRef without copying its current child.
+//! - Staging owns an invisible pin; real native parameter and property bindings own the cell.
 //! - The ordinary Mixed invoker marker keeps its established pointer-slot layout.
 
 use super::*;
@@ -14,8 +15,9 @@ use super::*;
 pub(super) fn emit(emitter: &mut Emitter) {
     emitter.blank();
     label_c_global(emitter, "__elephc_eval_value_native_mixed_reference_cell");
-    abi::emit_frame_prologue(emitter, 32);
+    abi::emit_frame_prologue(emitter, 48);
     let result = abi::int_result_reg(emitter);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
     abi::emit_reg_move(emitter, result, abi::int_arg_reg_name(emitter.target, 0));
     abi::emit_call_label(emitter, "__rt_incref");
     abi::store_at_offset(emitter, result, 8);
@@ -24,8 +26,17 @@ pub(super) fn emit(emitter: &mut Emitter) {
     let reference = abi::secondary_scratch_reg(emitter);
     abi::load_at_offset(emitter, reference, 8);
     abi::emit_store_to_address(emitter, reference, result, 0);
-    abi::emit_frame_restore(emitter, 32);
+    abi::store_at_offset(emitter, result, 24);
+    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 1), result);
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 16);
+    abi::emit_call_label(emitter, "__rt_reference_validation_pin_enter");
+    // Transfer the fresh allocation's owner to its pin, which now keeps the cell alive.
+    abi::load_at_offset(emitter, result, 24);
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    abi::load_at_offset(emitter, result, 24);
+    abi::emit_frame_restore(emitter, 48);
     abi::emit_return(emitter);
+    super::release_boundary::emit_reference_pin_release(emitter);
 }
 
 #[cfg(test)]
@@ -43,6 +54,9 @@ mod tests {
             let allocate = assembly.find("__rt_reference_cell_new").unwrap();
             assert!(retain < allocate, "{name}: the live PHPRef must remain owned across allocation");
             assert!(!assembly.contains("__rt_mixed_clone"), "{name}: staging must preserve reference identity");
+            assert!(assembly.find("__rt_reference_validation_pin_enter").unwrap()
+                < assembly.find("__rt_decref_any").unwrap(), "{name}: transfer the allocation owner only after pinning");
+            assert!(assembly.contains("__rt_reference_validation_pin_take"), "{name}: staging cleanup retires the pin");
             assert!(assembly.contains(if name == "linux-x86_64" { "mov rdi, 7" } else { "mov x0, #7" }),
                 "{name}: native cells must release and trace the PHPRef as Mixed");
         }
