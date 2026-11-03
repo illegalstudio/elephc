@@ -710,7 +710,7 @@ fn pcntl_int_output_local_slot(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
         return Err(CodegenIrError::unsupported(format!(
             "{name} status argument that is not a local variable",
         )));
@@ -794,7 +794,7 @@ pub(super) fn pcntl_optional_output_local_slot(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
         return Ok(None);
     }
     let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {

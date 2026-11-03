@@ -688,7 +688,11 @@ fn prepare_openssl_encrypt_tag_local(ctx: &mut LoweringContext<'_, '_>, args: &[
     else {
         return;
     };
-    ctx.set_local_type(name, PhpType::Str);
+    // A native reference can already expose a canonical value whose runtime tag differs
+    // from its entry declaration. Output preparation must preserve that boxed view.
+    if !ctx.is_ref_bound_local(name) || ctx.local_type(name).codegen_repr() != PhpType::Mixed {
+        ctx.set_local_type(name, PhpType::Str);
+    }
 }
 
 /// Lowers plain positional builtin operands without materializing omitted defaults or packing tails.

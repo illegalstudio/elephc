@@ -32,6 +32,9 @@ canonical children are cloned, and raw concrete payloads are boxed once. The cop
 has explicit allocation and reference-count effects, and its cleanup survives
 local-load borrowing finalization. Scalar reference parameter writes also invalidate
 the entry value view, so later body reads copy the actual published PHP value.
+Output builtin arguments recover the original local from that load's slot metadata;
+regex captures, OpenSSL tags and PCNTL outputs keep writing through the shared place.
+Preparing an OpenSSL output preserves an already boxed native reference value view.
 When eval still shares the imported canonical
 wrapper, reload preserves that identity and skips the legacy scalar projection.
 

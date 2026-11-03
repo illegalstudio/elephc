@@ -235,7 +235,7 @@ fn openssl_output_local_slot(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
         return Err(CodegenIrError::unsupported(
             "openssl_encrypt tag argument that is not a local variable",
         ));

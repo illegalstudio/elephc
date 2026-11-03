@@ -578,7 +578,7 @@ fn optional_matches_local_slot(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
         if inst_ref.op == Op::ConstNull
             || (inst_ref.op == Op::ArrayNew
                 && inst_ref.immediate == Some(Immediate::Capacity(0)))
@@ -611,7 +611,7 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
         return Err(CodegenIrError::unsupported(
             "preg_match matches argument that is not a local variable",
         ));
