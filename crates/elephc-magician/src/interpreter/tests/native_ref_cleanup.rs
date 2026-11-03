@@ -45,10 +45,17 @@ fn native_argument_evaluation_owners_transfer_and_cleanup_exact_leases() {
             assert!(values.native_argument_pin_events.is_empty(), "source evaluation stays PHP-visible");
             pin_native_call_evaluation_owners(&bound, &mut context, &mut values).unwrap();
             pin_native_call_evaluation_owners(&bound, &mut context, &mut values).unwrap();
+            let source_slots = slots.clone();
             slots.clear();
             owners.visit_owned_slots(&mut |slot| slots.push(slot as usize));
-            assert_eq!(slots.len(), if pins { 1 } else { 3 },
-                "a transferred native pin must not leave a fictitious source-cell owner");
+            assert_eq!(slots.len(), 3, "pending pins still own the source leases before native entry");
+            assert_eq!(slots.iter().copied().collect::<std::collections::HashSet<_>>().len(), 3,
+                "the collector sees each actual owner once after transfer into pending pins");
+            if pins {
+                assert!(!slots.contains(&source_slots[0]) && !slots.contains(&source_slots[1]),
+                    "stale Rust descriptors must not duplicate the actual native pin owners");
+                assert!(slots.contains(&source_slots[2]), "the scalar owner never transferred");
+            }
             assert_eq!(values.native_argument_pin_events.len(), if pins { 2 } else { 0 },
                 "each distinct lease pins once even when the value pointer is repeated");
             assert_eq!(values.cell_owners[&(reference.as_ptr() as usize)], 3,

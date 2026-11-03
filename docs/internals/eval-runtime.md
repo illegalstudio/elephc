@@ -416,8 +416,10 @@ The visitor adds no retain and does not treat copied borrowed handles as owners.
 The same inventory covers independently acquired source argument leases and
 temporary reference receivers through dispatch, writeback and cleanup. Each
 source field disappears before its release can reenter PHP. Shared reference
-provenance reports its original field only until ownership moves into a native
-pin; borrowed descriptors do not add another graph edge.
+provenance follows ownership from its original field into the native pin's
+owning field. That field remains visible while argument preparation is pending;
+native parameter entry clears it before consuming the lease. Borrowed descriptors
+do not add another graph edge.
 
 ## Runtime generic specialization
 

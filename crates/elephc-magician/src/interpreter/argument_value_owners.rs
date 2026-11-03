@@ -42,14 +42,21 @@ impl ArgumentCleanupOwner {
 }
 
 impl RuntimeOwners for ArgumentCleanupOwner {
-    /// Reports the original source lease, excluding borrowed descriptors and consumed pin leases.
+    /// Reports the current real lease, following its transfer into a still-pending native pin.
     fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
         match self {
             Self::Value(value) => value.visit_owned_slots(visit),
             Self::Reference(owner) => {
                 let lease = owner.0.borrow();
-                if let Some(lease) = lease.as_ref().filter(|lease| lease.pin.is_none()) {
-                    lease.value.visit_owned_slots(visit);
+                if let Some(lease) = lease.as_ref() {
+                    if let Some(pin) = &lease.pin {
+                        // The six-word C ABI stores its owning cell at byte16. Native entry
+                        // clears that word before consuming the lease; the old Rust field is stale.
+                        let slot = unsafe { pin.get().cast::<u64>().add(2) }.cast::<*mut RuntimeCell>();
+                        if !unsafe { *slot }.is_null() { visit(slot); }
+                    } else {
+                        lease.value.visit_owned_slots(visit);
+                    }
                 }
             }
         }
@@ -184,4 +191,30 @@ pub(super) fn finish_eval_argument_owners(
             (Ok(value), Ok(())) => Ok(value),
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pending native pins expose their actual owner field, and native consumption removes it.
+    #[test]
+    fn pending_argument_pin_owner_slot_disappears_at_native_consumption() {
+        let value = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let pin = Box::new(UnsafeCell::new([0, 0, value.as_ptr() as u64, 0x105, 16, 32]));
+        let record = pin.get();
+        let owner = ArgumentCleanupOwner::Reference(ArgumentValueOwner(Rc::new(RefCell::new(
+            Some(ArgumentValueLease { value, pin: Some(pin) }),
+        ))));
+        let mut slots = Vec::new();
+        owner.visit_owned_slots(&mut |slot| {
+            assert_eq!(unsafe { *slot }, value.as_ptr());
+            slots.push(slot as usize);
+        });
+        assert_eq!(slots, [unsafe { record.cast::<u64>().add(2) } as usize],
+            "only the native pin field owns the transferred source lease");
+        // This is the native activate transition, which clears before releasing the source.
+        unsafe { (*record)[2] = 0; (*record)[3] = 0x205; }
+        owner.visit_owned_slots(&mut |_| panic!("the consumed pin and stale descriptor own no value"));
+    }
 }
