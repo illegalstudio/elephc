@@ -1669,13 +1669,14 @@ fn append_macos_signal_diagnostics(
         "[print('sp+%04x 0x%x %s' % (i, w, n[:240])) for i, w, n in v[:32]]"
     );
     let mut cmd = Command::new("lldb");
-    if std::thread::current().name().is_some_and(|name|
+    let trace_spl_boundary = std::thread::current().name().is_some_and(|name|
         name.ends_with("test_opaque_eval_spl_nested_write_keeps_attached_storage_through_reentry")
-            || name.ends_with("test_simplexml_eval_indirect_dimension_copies_bundle"))
-    {
+            || name.ends_with("test_simplexml_eval_indirect_dimension_copies_bundle"));
+    if trace_spl_boundary {
         // Inspect the linked runtime, since the user assembly artifact omits cached helpers.
         // Bound each disassembly and the raw stack dump even when the frame chain is damaged.
         cmd.args([
+            "-o", "breakpoint set --skip-prologue false --name __elephc_eval_spl_storage_write_v1",
             "-k", "thread backtrace all",
             "-k", "register read",
             "-k", stack_symbols,
@@ -1720,9 +1721,30 @@ fn append_macos_signal_diagnostics(
         "disassemble --name _rt_gc_request_start",
         "-k",
         "disassemble --name _rt_gc_collector_begin",
-        "--",
-    ])
-    .arg(bin_path)
+    ]);
+    if trace_spl_boundary {
+        // Stop at the exact return PC rather than trusting an already damaged frame chain.
+        cmd.args([
+            "-o", concat!(
+                "script spl_frame = lldb.debugger.GetSelectedTarget().GetProcess().GetSelectedThread().GetFrameAtIndex(0); ",
+                "spl_names = ['sp'] + ['x%d' % i for i in range(19, 30)]; ",
+                "spl_before = {n: spl_frame.FindRegister(n).GetValueAsUnsigned() for n in spl_names}; ",
+                "print('SPL C ABI entry:', spl_before); ",
+                "spl_return = spl_frame.FindRegister('lr').GetValueAsUnsigned(); ",
+                "lldb.debugger.HandleCommand('breakpoint disable'); ",
+                "lldb.debugger.HandleCommand('breakpoint set --one-shot true --address 0x%x' % spl_return)",
+            ),
+            "-o", "continue",
+            "-o", concat!(
+                "script spl_frame = lldb.debugger.GetSelectedTarget().GetProcess().GetSelectedThread().GetFrameAtIndex(0); ",
+                "spl_after = {n: spl_frame.FindRegister(n).GetValueAsUnsigned() for n in spl_names}; ",
+                "print('SPL C ABI return mismatches:', [(n, hex(spl_before[n]), hex(spl_after[n])) ",
+                "for n in spl_names if spl_before[n] != spl_after[n]])",
+            ),
+            "-o", "continue",
+        ]);
+    }
+    cmd.arg("--").arg(bin_path)
     .args(args)
     .current_dir(dir)
     .envs(env.iter().copied());
