@@ -855,6 +855,8 @@ pub enum Op {
     UnsetLocal,
     ZeroLocalSlot,
     LoadRefCell,
+    /// Stores an original RHS through a reference. An optional second I64 PHP bool records
+    /// assignment-site strictness for canonical publishers; legacy hand-built IR defaults weak.
     StoreRefCell,
     PromoteLocalRefCell,
     AliasLocalRefCell,

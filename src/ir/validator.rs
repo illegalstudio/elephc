@@ -924,8 +924,13 @@ fn validate_opcode_rules(
                 Ok(())
             } else { check_count(inst_id, inst, 1, "1 or 2") }
         }
+        StoreRefCell => {
+            if inst.operands.len() == 2 {
+                check_operand_type(function, inst_id, inst, 1, IrType::I64, "assignment-site bool (I64)")
+            } else { check_count(inst_id, inst, 1, "original RHS and optional assignment-site Bool") }
+        }
         StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal
-        | ExternGlobalStore | StoreRefCell | BindRefCellPtr | AdoptRefCellPtr
+        | ExternGlobalStore | BindRefCellPtr | AdoptRefCellPtr
         | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue | PrintValue | WriteStdout
         | WriteStrStdout | VarDump | PrintR | ThrowException | GeneratorReturn
         | ThrowNamedParameterOverwrite | PtrCheckNonnull => {

@@ -5025,7 +5025,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots.insert(slot);
     }
 
-    /// Emits a ref-cell store that carries the alias target type for backend dereference.
+    /// Keeps the original RHS and assignment-site mode beside the alias's physical target type.
     fn store_ref_cell_slot(
         &mut self,
         slot: LocalSlotId,
@@ -5033,6 +5033,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         alias_ty: PhpType,
         span: Option<Span>,
     ) {
+        let strict_types = self.builder.emit_const_bool(crate::source::current_strict_types());
         self.invalidate_callable_facts_after_user_code(
             Op::StoreRefCell,
             &[value.value],
@@ -5041,7 +5042,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
         self.builder.emit_with_effects(
             Op::StoreRefCell,
-            vec![value.value],
+            vec![value.value, strict_types],
             Some(Immediate::LocalSlot(slot)),
             IrType::Void,
             alias_ty,

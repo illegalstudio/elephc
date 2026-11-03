@@ -685,6 +685,12 @@ Throwable only after retiring those roots. The ABI fixture checks successful
 publication and an unchanged value after strict rejection; generated property
 publishers still need to call this primitive from their complete lifecycle paths.
 
+Lowered `StoreRefCell` instructions preserve the original RHS and carry an
+explicit PHP bool operand for assignment-site strictness. The physical alias
+type remains separate. Hand-built legacy EIR with only the RHS is still accepted
+as weak mode. Canonical publisher lowering still needs to consume the mode
+before the legacy raw-slot conversion runs.
+
 Native function parameter flags carry physical boxed-reference storage separately
 from declared PHP types and tagged nullable integers. Normal function object
 references use the normalized Mixed ABI. A closure descriptor can instead expose
