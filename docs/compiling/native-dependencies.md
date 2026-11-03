@@ -11,7 +11,8 @@ records immutable catalog metadata, and `elephc native` builds verified static
 archives into a target- and toolchain-specific cache.
 
 The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0,
-libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, and GMP 6.3.0.
+libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, GMP 6.3.0,
+bzip2 1.0.8, XZ Utils 5.8.1, and libzip 1.11.4.
 Programs using `preg_*`, `RegexIterator`, or `RecursiveRegexIterator` require
 PCRE2 at final link time. Mbstring uses the same managed package only when a
 program selects its custom output MIME-pattern provider. The contract-owned
@@ -44,6 +45,15 @@ library php-src links, with no system `-lgmp` fallback and no catalog
 dependencies. The pinned tarball is verified by SHA-256 and size before it is
 built; a missing package fails closed with the `elephc native add gmp`
 recovery.
+
+libzip is the engine behind PHP's `ext/zip`: `--with-zip`, or any program whose
+link plan pulls in `elephc_zip`, requires the managed `libzip.a` plus its
+`bzip2`, `xz` (LZMA), `zlib`, and OpenSSL dependency archives at final link
+time. `elephc native add libzip` declares the whole chain; its recipe builds
+libzip with CMake, so `cmake` must be available when the package is first
+materialized. The build is hermetic: every compression and crypto backend is
+resolved from the catalog prefixes, never a system `-lzip`, `-lbz2`, `-llzma`,
+or `-lcrypto`.
 
 `elephc native add oniguruma` installs the pinned Oniguruma library and the
 versioned mbregex provider, with the provider archive before `libonig.a` in link

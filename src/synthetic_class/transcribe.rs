@@ -644,6 +644,15 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             expr(index, depth),
             expr(value, depth)
         ),
+        StmtKind::Global { vars } => format!(
+            "s_global({})",
+            lit(&vars.join(","))
+        ),
+        StmtKind::NestedArrayAssign { target, value } => format!(
+            "s_nested_array_assign({}, {})",
+            expr(target, depth),
+            expr(value, depth)
+        ),
         StmtKind::PropertyAssign {
             object,
             property,

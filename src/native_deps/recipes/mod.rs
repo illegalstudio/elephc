@@ -8,13 +8,16 @@
 //! - Each recipe consumes only catalog constants and selected toolchain data.
 
 pub(super) mod util;
+pub mod bzip2;
 pub mod curl;
 pub mod gmp;
 pub mod libssh2;
 pub mod libxml2;
 pub mod libmagic;
+pub mod libzip;
 pub mod nghttp2;
 pub mod oniguruma;
 pub mod openssl;
 pub mod pcre2;
+pub mod xz;
 pub mod zlib;

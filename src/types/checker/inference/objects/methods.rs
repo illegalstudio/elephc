@@ -19,6 +19,24 @@ use super::super::super::Checker;
 use super::super::syntactic::wider_type_syntactic;
 
 impl Checker {
+    /// Returns the resource-or-false shape of `ZipArchive` stream getters.
+    ///
+    /// The prelude implements `getStream*` in PHP over `fopen()`, but a method with no
+    /// declared return type infers the codegen representation (`int|false`) and loses
+    /// the stream resource kind that `feof()`/`fread()` require. PHP has no `resource`
+    /// return type syntax to spell this, so the built-in class contract lives here.
+    fn zip_stream_method_return(class_name: &str, method: &str) -> Option<PhpType> {
+        let class_name = class_name.trim_start_matches('\\');
+        if class_name != "ZipArchive" {
+            return None;
+        }
+        if matches!(method.to_ascii_lowercase().as_str(), "getstream" | "getstreamname" | "getstreamindex") {
+            Some(PhpType::Union(vec![PhpType::stream_resource(), PhpType::False]))
+        } else {
+            None
+        }
+    }
+
     /// Infers the type of a method call expression (`$obj->method(...)`).
     ///
     /// Dispatches to `infer_method_call_on_class_type` for `Object` types,
@@ -42,6 +60,10 @@ impl Checker {
             if self.interfaces.contains_key(class_name) {
                 return self
                     .infer_method_call_on_interface_type(class_name, method, args, expr, env);
+            }
+            if let Some(stream_type) = Self::zip_stream_method_return(&class_name, method) {
+                self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
+                return Ok(stream_type);
             }
             let return_ty = self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
             return Ok(self
@@ -69,6 +91,10 @@ impl Checker {
                         expr,
                         env,
                     );
+                }
+                if let Some(stream_type) = Self::zip_stream_method_return(&class_name, method) {
+                    self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;
+                    return Ok(stream_type);
                 }
                 let return_ty =
                     self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;

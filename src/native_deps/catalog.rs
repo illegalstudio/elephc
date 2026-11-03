@@ -107,10 +107,10 @@ const ZLIB_HEADERS: &[&str] = &["include/zlib.h", "include/zconf.h"];
 const GMP_ARCHIVES: &[&str] = &["lib/libgmp.a"];
 const GMP_HEADERS: &[&str] = &["include/gmp.h"];
 const OPENSSL_ARCHIVES: &[&str] = &["lib/libssl.a", "lib/libcrypto.a"];
-/// Every public OpenSSL 3.5.8 header curl's TLS backend transitively includes: the static headers
-/// shipped in the release tarball plus the ones OpenSSL's own `Configure`/`make build_libs`
-/// generates from `.h.in` templates. Verified against a real `no-shared no-legacy` build (see
-/// `openssl_catalog_snapshot_is_exact`).
+/// Every public OpenSSL 3.5.8 header curl's TLS backend and libzip's AES backend transitively
+/// include: the static headers shipped in the release tarball plus the ones OpenSSL's own
+/// `Configure`/`make build_libs` generates from `.h.in` templates. Verified against a real
+/// `no-shared no-legacy` build (see `openssl_catalog_snapshot_is_exact`).
 const OPENSSL_HEADERS: &[&str] = &[
     "include/openssl/aes.h", "include/openssl/asn1.h", "include/openssl/asn1err.h", "include/openssl/asn1t.h",
     "include/openssl/async.h", "include/openssl/asyncerr.h", "include/openssl/bio.h", "include/openssl/bioerr.h",
@@ -381,6 +381,81 @@ const LIBMAGIC_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: &["include/magic.h"],
     provides: &["libmagic"],
 }];
+/// bzip2's single static archive and public header, used by libzip's `CM_BZIP2` backend.
+const BZIP2_ARCHIVES: &[&str] = &["lib/libbz2.a"];
+const BZIP2_HEADERS: &[&str] = &["include/bzlib.h"];
+/// XZ Utils' single static archive and the complete public `lzma.h` header set.
+const XZ_ARCHIVES: &[&str] = &["lib/liblzma.a"];
+const XZ_HEADERS: &[&str] = &[
+    "include/lzma.h",
+    "include/lzma/base.h",
+    "include/lzma/bcj.h",
+    "include/lzma/block.h",
+    "include/lzma/check.h",
+    "include/lzma/container.h",
+    "include/lzma/delta.h",
+    "include/lzma/filter.h",
+    "include/lzma/hardware.h",
+    "include/lzma/index.h",
+    "include/lzma/index_hash.h",
+    "include/lzma/lzma12.h",
+    "include/lzma/stream_flags.h",
+    "include/lzma/version.h",
+    "include/lzma/vli.h",
+];
+/// libzip's static archive and its two public headers (`zip.h` plus the generated
+/// `zipconf.h`).
+const LIBZIP_ARCHIVES: &[&str] = &["lib/libzip.a"];
+const LIBZIP_HEADERS: &[&str] = &["include/zip.h", "include/zipconf.h"];
+const BZIP2_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "1.0.8",
+    source: SourceArchive {
+        https_url: "https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz",
+        sha256: "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269",
+        exact_size: 810_029,
+        body_limit: 16 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &[],
+    supported_targets: TARGETS,
+    ordered_link_outputs: BZIP2_ARCHIVES,
+    retained_headers: BZIP2_HEADERS,
+    provides: &["bzip2"],
+}];
+const XZ_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "5.8.1",
+    source: SourceArchive {
+        https_url: "https://github.com/tukaani-project/xz/releases/download/v5.8.1/xz-5.8.1.tar.gz",
+        sha256: "507825b599356c10dca1cd720c9d0d0c9d5400b9de300af00e4d1ea150795543",
+        exact_size: 2_587_189,
+        body_limit: 32 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &[],
+    supported_targets: TARGETS,
+    ordered_link_outputs: XZ_ARCHIVES,
+    retained_headers: XZ_HEADERS,
+    provides: &["xz"],
+}];
+/// libzip is the engine behind PHP's `ext/zip`. DEPENDENCY ORDER IS LINK ORDER: `libzip.a`
+/// references bzip2, LZMA, zlib, and libcrypto, so each dependency's archive follows it in
+/// the resolver's pre-order walk.
+const LIBZIP_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "1.11.4",
+    source: SourceArchive {
+        https_url: "https://github.com/nih-at/libzip/releases/download/v1.11.4/libzip-1.11.4.tar.gz",
+        sha256: "82e9f2f2421f9d7c2466bbc3173cd09595a88ea37db0d559a9d0a2dc60dc722e",
+        exact_size: 1_301_153,
+        body_limit: 16 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &["bzip2", "xz", "zlib", "openssl"],
+    supported_targets: TARGETS,
+    ordered_link_outputs: LIBZIP_ARCHIVES,
+    retained_headers: LIBZIP_HEADERS,
+    provides: &["libzip"],
+}];
+
 const PACKAGES: &[PackageSpec] = &[
     PackageSpec { name: "libmagic", default_version: "5.46", versions: LIBMAGIC_VERSIONS },
     PackageSpec {
@@ -427,6 +502,21 @@ const PACKAGES: &[PackageSpec] = &[
         name: "gmp",
         default_version: "6.3.0",
         versions: GMP_VERSIONS,
+    },
+    PackageSpec {
+        name: "bzip2",
+        default_version: "1.0.8",
+        versions: BZIP2_VERSIONS,
+    },
+    PackageSpec {
+        name: "xz",
+        default_version: "5.8.1",
+        versions: XZ_VERSIONS,
+    },
+    PackageSpec {
+        name: "libzip",
+        default_version: "1.11.4",
+        versions: LIBZIP_VERSIONS,
     },
 ];
 
@@ -550,7 +640,7 @@ mod tests {
     fn catalog_rejects_unknown_selection() {
         assert_eq!(
             package("libfoo").unwrap_err().to_string(),
-            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, nghttp2, libssh2, curl, oniguruma, libxml2, gmp"
+            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, nghttp2, libssh2, curl, oniguruma, libxml2, gmp, bzip2, xz, libzip"
         );
         assert!(version("pcre2", Some("10.46")).is_err());
     }
@@ -677,6 +767,51 @@ mod tests {
         assert_eq!(version.recipe_revision, 2);
         assert!(version.dependencies.is_empty());
         assert_eq!(version.supported_targets, TARGETS);
+    }
+
+    /// Verifies libzip's exact source identity, the bzip2/LZMA/zlib/OpenSSL dependency order,
+    /// and the two retained public headers.
+    #[test]
+    fn libzip_catalog_snapshot_is_exact() {
+        let version = version("libzip", None).expect("catalogue entry");
+        assert_eq!(version.version, "1.11.4");
+        assert_eq!(version.source.exact_size, 1_301_153);
+        assert_eq!(
+            version.source.sha256,
+            "82e9f2f2421f9d7c2466bbc3173cd09595a88ea37db0d559a9d0a2dc60dc722e"
+        );
+        assert_eq!(version.ordered_link_outputs, LIBZIP_ARCHIVES);
+        assert_eq!(version.retained_headers, LIBZIP_HEADERS);
+        assert_eq!(version.dependencies, &["bzip2", "xz", "zlib", "openssl"]);
+        assert_eq!(version.recipe_revision, 1);
+        assert_eq!(version.supported_targets, TARGETS);
+    }
+
+    /// Verifies the bzip2 and XZ Utils source identities and their single-archive contracts.
+    #[test]
+    fn libzip_compression_dependency_snapshots_are_exact() {
+        let bzip2 = version("bzip2", None).expect("bzip2 entry");
+        assert_eq!(bzip2.version, "1.0.8");
+        assert_eq!(bzip2.source.exact_size, 810_029);
+        assert_eq!(
+            bzip2.source.sha256,
+            "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269"
+        );
+        assert_eq!(bzip2.ordered_link_outputs, &["lib/libbz2.a"]);
+        assert_eq!(bzip2.retained_headers, &["include/bzlib.h"]);
+        assert!(bzip2.dependencies.is_empty());
+
+        let xz = version("xz", None).expect("xz entry");
+        assert_eq!(xz.version, "5.8.1");
+        assert_eq!(xz.source.exact_size, 2_587_189);
+        assert_eq!(
+            xz.source.sha256,
+            "507825b599356c10dca1cd720c9d0d0c9d5400b9de300af00e4d1ea150795543"
+        );
+        assert_eq!(xz.ordered_link_outputs, &["lib/liblzma.a"]);
+        assert_eq!(xz.retained_headers, XZ_HEADERS);
+        assert!(xz.retained_headers.contains(&"include/lzma.h"));
+        assert!(xz.dependencies.is_empty());
     }
 
     /// Verifies every catalogued source carries a recognised archive suffix, so the cache name and

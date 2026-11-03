@@ -11,8 +11,9 @@
 //!   avoiding source-mtime rebuilds and network access on test runners.
 //! - Translates typed runtime requirements through `LinkPlan` and supplies a test-only,
 //!   system-header-aligned build of the embedded PCRE2 shim.
-//! - Supplies the managed native curl chain and the managed native libxml2 artifact as
-//!   exact archives (`curl_native`, `xml_native`) whenever a fixture links those bridges.
+//! - Supplies the managed native curl chain, the managed native libxml2 artifact, and the
+//!   managed libzip chain as exact archives (`curl_native`, `xml_native`, `zip_native`)
+//!   whenever a fixture links those bridges.
 //! - Per-test assembly is fed to `as` over stdin so no intermediate `test.s`
 //!   file is written, which shaves ~1/3 of the file-system events the macOS
 //!   `syspolicyd` / on-access AV scans inspect during a full `cargo test`.
@@ -152,6 +153,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         lib_name: "elephc_curl",
         package: "elephc-curl",
         php_extensions: &["curl"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_zip",
+        package: "elephc-zip",
+        php_extensions: &["zip"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_fileinfo",
@@ -1338,6 +1344,15 @@ fn test_link_plan(
     if named.contains("elephc_xml") && !xml_pushed {
         push_xml_native_if_available(&mut plan);
     }
+    // Same shape for the zip bridge: `elephc_zip` is a thin FFI layer over the managed
+    // `libzip` package and its bzip2/LZMA/zlib/OpenSSL chain. A fixture whose chain is
+    // missing skips (or, under `ELEPHC_TEST_REQUIRE_ZIP_NATIVE`, panics) before it reaches
+    // this point.
+    if named.contains("elephc_zip") {
+        if let Some(packages) = zip_native_packages() {
+            push_zip_native_archives(&mut plan, packages);
+        }
+    }
     // The gmp bridge declares libgmp's `__gmpz_*` symbols without linking them; the
     // managed `gmp` package supplies the single `libgmp.a` archive at final link time.
     // The harness reads the same durable cache structurally (see `super::gmp_native`).
@@ -1377,6 +1392,28 @@ fn test_link_plan(
 fn push_curl_native_archives(
     plan: &mut elephc::link_plan::LinkPlan,
     packages: &[super::curl_native::CurlNativePackage],
+) {
+    use elephc::link_plan::LinkItem;
+
+    for package in packages {
+        plan.push(LinkItem::SearchPath(package.library_dir.clone()));
+    }
+    for package in packages {
+        for archive in &package.archives {
+            plan.push(LinkItem::managed_archive(archive, package.name));
+        }
+    }
+}
+
+/// Appends the managed libzip chain as EXACT ARCHIVES, in catalog dependency order.
+///
+/// The order is the static link order: `libzip.a` references bzip2, LZMA, zlib and libcrypto;
+/// `libssl.a` references libcrypto. No deduping against the `named` set, for the reason
+/// `push_curl_native_archives` documents: a `-l` name can be suppressed or mis-resolved,
+/// while an absolute archive path can neither.
+fn push_zip_native_archives(
+    plan: &mut elephc::link_plan::LinkPlan,
+    packages: &[ZipNativePackage],
 ) {
     use elephc::link_plan::LinkItem;
 

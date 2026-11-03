@@ -36,7 +36,8 @@ requirements against the nearest project's `elephc.toml`, deterministic
 static archive paths to the linker; compilation never downloads or builds them.
 
 The current catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2
-1.70.0, libssh2 1.11.1, curl 8.21.0, and libxml2 2.15.3. Regex use links PCRE2's
+1.70.0, libssh2 1.11.1, curl 8.21.0, libxml2 2.15.3, GMP 6.3.0, bzip2 1.0.8,
+XZ Utils 5.8.1, and libzip 1.11.4. Regex use links PCRE2's
 managed archives in the fixed shim/POSIX/8-bit order and has no production
 system-library fallback:
 
@@ -217,6 +218,16 @@ elephc native add libxml2
 elephc app.php --with-xml
 ```
 
+`--with-zip` is the same shape: `elephc_zip` is a thin FFI layer over libzip,
+so the final link also needs the managed `libzip` package and its bzip2, XZ,
+zlib, and OpenSSL archives. `elephc native add libzip` declares and builds the
+whole chain; auto-detected `ZipArchive`/`zip_*`/`zip://` use requires it too.
+
+```bash
+elephc native add libzip
+elephc app.php --with-zip
+```
+
 `--with-web` is an alias for [`--web`](../beyond-php/web.md) (the full server
 mode, which owns the program entry point). An unknown capability name is
 rejected with the list of valid names. Forcing a bridge increases binary size,
@@ -226,7 +237,8 @@ Bridge crates are Elephc's optional Rust workspace components. They are not
 installed or versioned by `elephc native`. A bridge or runtime-capability flag
 may require a separately declared managed package: `--with-regex` requires
 `pcre2`, `--with-curl` requires `curl` (which in turn declares `openssl` and
-`zlib`), `--with-mbstring` requires `oniguruma` and `pcre2`, and `--with-xml`
+`zlib`), `--with-mbstring` requires `oniguruma` and `pcre2`, `--with-zip`
+requires `libzip` (which declares bzip2, xz, zlib, and openssl), and `--with-xml`
 requires `libxml2`. Ordinary mbstring and opaque eval use the contract-owned
 default MIME matcher without PCRE2. Custom MIME expressions in opaque eval need
 the complete `--with-mbstring` capability. These flags do not

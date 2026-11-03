@@ -2,7 +2,7 @@
 //! Compares observable conversion and contextual casing partitions with PHP's decoder baseline.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test batches`.
+//! - `cargo test -p elephc-mbstring --test engine batches::`.
 //!
 //! Key details:
 //! - Mobile JIS emoji lookahead ends at the source decoder's 128-word partitions.

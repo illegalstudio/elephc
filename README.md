@@ -38,6 +38,12 @@ PHP file information is available through `finfo`, the six fileinfo functions an
 all eleven `FILEINFO_*` constants. Run `elephc native add libmagic` in the project;
 use `--with-fileinfo` for opaque dynamic eval. See [fileinfo](docs/php/fileinfo.md).
 
+PHP archive handling is available through `ZipArchive` and the deprecated
+`zip_*` API, backed by libzip 1.11.4 from the managed native catalog with AES
+encryption, extraction, comments, mtimes, external attributes, and glob/pattern
+adds. Run `elephc native add libzip` in the project; use `--with-zip` for opaque
+dynamic eval. See [Zip](docs/php/zip.md).
+
 ## Support the project
 
 elephc is built and maintained independently. You can support the project by either:
@@ -358,7 +364,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, gmp, random, mbstring, iconv, phar, tz, image, pcntl, xml, fileinfo, tokenizer, eval, regex, curl, web)
+# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, gmp, random, mbstring, iconv, phar, tz, image, pcntl, xml, fileinfo, zip, tokenizer, eval, regex, curl, web)
 elephc app.php --with-pdo --with-crypto
 # Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
 elephc app.php --with-mysqli
@@ -432,7 +438,8 @@ elephc main.php
 
 `elephc native` manages a small, runtime/builtin-oriented catalog of verified C
 sources: PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0, libssh2 1.11.1,
-curl 8.21.0, Oniguruma 6.9.10, and libxml2 2.15.3. Adding curl declares and links its complete
+curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, bzip2 1.0.8, XZ Utils 5.8.1, and
+libzip 1.11.4. Adding curl declares and links its complete
 pinned dependency closure. This is intentionally **not** the mechanism used for
 Composer packages, Rust bridge crates, compilers/SDKs, or arbitrary FFI
 libraries:
@@ -813,6 +820,7 @@ crates/
 ├── elephc-pcntl/        # Unix process control, wait, exec, and signal bridge
 ├── elephc-pdo/          # Multi-driver PDO bridge
 ├── elephc-phar/         # PHAR/tar/zip bridge
+├── elephc-zip/          # ext/zip bridge over the catalog's static libzip
 ├── elephc-probe/        # Sampled profiling and authenticated service endpoint
 ├── elephc-random/       # PHP ext/random engines, CSPRNG, and global Mt19937 state bridge
 ├── elephc-tls/          # TLS stream bridge

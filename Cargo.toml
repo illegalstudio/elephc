@@ -21,8 +21,8 @@ categories = ["compilers", "command-line-utilities"]
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
 # listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo),
 # libelephc_web.a (--web prefork HTTP server), libelephc_pcntl.a (process
-# control), libelephc_magician.a (optional eval runtime), and libelephc_curl.a
-# (ext/curl bridge)
+# control), libelephc_magician.a (optional eval runtime), libelephc_curl.a
+# (ext/curl bridge), and libelephc_zip.a (libzip-backed ext/zip bridge)
 # into target/<profile>/, where linker.rs locates
 # them for programs that use those features. elephc-curl declares libcurl's
 # `extern "C"` symbols without linking them, so being a default member never
@@ -30,8 +30,8 @@ categories = ["compilers", "command-line-utilities"]
 # see crates/elephc-curl/build.rs for how its own gated tests opt into a real
 # link.
 [workspace]
-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-process-context", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-gmp", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml", "crates/elephc-fileinfo", "crates/elephc-tokenizer", "crates/elephc-tokenizer-engine", "crates/elephc-random", "crates/elephc-zend"]
-default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-process-context", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-gmp", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml", "crates/elephc-fileinfo", "crates/elephc-tokenizer", "crates/elephc-tokenizer-engine", "crates/elephc-random", "crates/elephc-zend"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-process-context", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-gmp", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml", "crates/elephc-fileinfo", "crates/elephc-tokenizer", "crates/elephc-tokenizer-engine", "crates/elephc-random", "crates/elephc-zend", "crates/elephc-zip"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-process-context", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-gmp", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml", "crates/elephc-fileinfo", "crates/elephc-tokenizer", "crates/elephc-tokenizer-engine", "crates/elephc-random", "crates/elephc-zend", "crates/elephc-zip"]
 resolver = "2"
 
 [[bin]]
@@ -127,8 +127,8 @@ serde_json = "1"
 # success coverage does not depend on outbound network access.
 rustls = { version = "0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2"
-# The php-src GMP PHPT runner compiles `--EXPECTF--` placeholders into an anchored
-# pattern; `regex` is already in the lock through the workspace's existing tooling.
+# The php-src GMP and zip PHPT runners compile `--EXPECTF--` placeholders into an
+# anchored pattern; `regex` is already in the lock through the workspace's existing tooling.
 regex = "1"
 
 [features]
@@ -184,8 +184,23 @@ curl = ["elephc-magician/curl", "elephc-builtin-contract/curl"]
 # the six test binaries. `line-tables-only` keeps file:line in panic backtraces
 # (so test failures stay legible) while cutting the debug info the assembler and
 # linker chew through on every edit -> `cargo test` cycle.
+# The test suites compile and run thousands of PHP programs through the dev build, so the
+# compiler's own speed dominates test time. opt-level 1 cut CPU time per codegen test by about
+# 40% (control_flow: 52s -> 30s user; eval_undefined_functions: 82s -> 52s) for about 2s more
+# per incremental rebuild; a cold build takes longer. Optimizing only dependencies gained ~5%.
+# The bridge libraries linked into compiled programs are optimized too: the eval interpreter
+# they carry is a large part of eval test time. For step-by-step debugging, build with
+# CARGO_PROFILE_DEV_OPT_LEVEL=0.
 [profile.dev]
 debug = "line-tables-only"
+opt-level = 1
+
+# build.rs runs before the crate compiles after every src/ edit: it hashes all of src/ into the
+# runtime build identity and parses crates/elephc-zend with syn to generate the extension ABI
+# header. Unoptimized, that script and syn spend most of their time in debug code; optimizing
+# build scripts and their dependencies (a one-time rebuild) shortens that serial step.
+[profile.dev.build-override]
+opt-level = 3
 
 [workspace.dependencies]
 elephc-fileinfo = { path = "crates/elephc-fileinfo" }
