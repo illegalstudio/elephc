@@ -16,6 +16,7 @@ mod codegen;
 mod codegen_support;
 mod compiler_stack;
 mod conditional;
+mod date_time_zone;
 mod curl_prelude;
 mod dom_html_prelude;
 mod errors;

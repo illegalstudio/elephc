@@ -2743,6 +2743,16 @@ struct CalendarObject : IntlObject {
             out = Value::boolean(gregorian->isLeapYear(int32_t(year)));
             return U_ZERO_ERROR;
         }
+        if (method == "__elephc_set_error") {
+            int64_t code = 0;
+            std::string message;
+            if (!argument_int(args, 0, code) || !argument_string(args, 1, message)) {
+                return U_ILLEGAL_ARGUMENT_ERROR;
+            }
+            record_error(*this, UErrorCode(code), message);
+            out = Value::null();
+            return U_ZERO_ERROR;
+        }
         if (method == "error_code") {
             out = Value::from_int(error_code);
             return U_ZERO_ERROR;

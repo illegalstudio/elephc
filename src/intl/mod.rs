@@ -899,9 +899,114 @@ fn helper_functions() -> Vec<Stmt> {
                     s_return(e_cast(CastType::String, e_method_call(e_var("timezone"), "getID", vec![]))),
                 ], vec![], None),
                 s_if(e_instance_of(e_var("timezone"), "DateTimeZone"), vec![
-                    s_return(e_cast(CastType::String, e_method_call(e_var("timezone"), "getName", vec![]))),
+                    s_assign("_name", e_cast(CastType::String, e_method_call(e_var("timezone"), "getName", vec![]))),
+                    // ICU names a fixed offset `GMT+03:40`; a DateTimeZone parsed from a
+                    // numeric suffix keeps PHP's `+03:40` spelling.
+                    s_if(e_binop(
+                        e_binop(e_call("substr", vec![e_var("_name"), e_int(0), e_int(1)]), BinOp::StrictEq, e_str("+")),
+                        BinOp::Or,
+                        e_binop(e_call("substr", vec![e_var("_name"), e_int(0), e_int(1)]), BinOp::StrictEq, e_str("-")),
+                    ), vec![
+                        s_return(e_concat(e_str("GMT"), e_var("_name"))),
+                    ], vec![], None),
+                    s_return(e_var("_name")),
                 ], vec![], None),
-                s_return(e_cast(CastType::String, e_var("timezone"))),
+                s_assign("_text", e_cast(CastType::String, e_var("timezone"))),
+                s_if(e_binop(
+                    e_binop(e_call("substr", vec![e_var("_text"), e_int(0), e_int(1)]), BinOp::StrictEq, e_str("+")),
+                    BinOp::Or,
+                    e_binop(e_call("substr", vec![e_var("_text"), e_int(0), e_int(1)]), BinOp::StrictEq, e_str("-")),
+                ), vec![s_return(e_concat(e_str("GMT"), e_var("_text")))], vec![], None),
+                s_return(e_var("_text")),
+            ])
+            .build(),
+    );
+    helpers.push(
+        function("__elephc_intl_calendar_zone_error")
+            .param("caller", TypeExpr::Str)
+            .param("name", TypeExpr::Str)
+            .param("too_large", TypeExpr::Bool)
+            .body(vec![
+                s_if(e_var("too_large"), vec![
+                    s_assign("_message", e_concat_all(vec![
+                        e_var("caller"),
+                        e_str(": object has an time zone offset that's too large"),
+                    ])),
+                ], vec![], Some(vec![
+                    s_assign("_message", e_concat_all(vec![
+                        e_var("caller"),
+                        e_str(": time zone id '"),
+                        e_var("name"),
+                        e_str("' extracted from ext/date DateTimeZone not recognized"),
+                    ])),
+                ])),
+                s_expr(e_call("__elephc_intl_invoke", vec![
+                    e_str("intl"), e_str("intl_set_error"),
+                    e_array(vec![e_int(1), e_var("_message")]),
+                ])),
+                s_if(e_call("__elephc_intl_use_exceptions", vec![]), vec![
+                    s_throw(e_new("IntlException", vec![e_var("_message")])),
+                ], vec![], None),
+            ])
+            .build(),
+    );
+    helpers.push(
+        function("__elephc_intl_calendar_zone_message")
+            .param("caller", TypeExpr::Str)
+            .param("name", TypeExpr::Str)
+            .param("too_large", TypeExpr::Bool)
+            .returns(TypeExpr::Str)
+            .body(vec![
+                s_if(e_var("too_large"), vec![
+                    s_return(e_concat(e_var("caller"), e_str(": object has an time zone offset that's too large"))),
+                ], vec![], None),
+                s_return(e_concat_all(vec![
+                    e_var("caller"),
+                    e_str(": time zone id '"),
+                    e_var("name"),
+                    e_str("' extracted from ext/date DateTimeZone not recognized"),
+                ])),
+            ])
+            .build(),
+    );
+    helpers.push(
+        function("__elephc_intl_calendar_object_zone_error")
+            .param("object", t_mixed())
+            .param("caller", TypeExpr::Str)
+            .param("name", TypeExpr::Str)
+            .param("too_large", TypeExpr::Bool)
+            .body(vec![
+                s_assign("_message", e_call("__elephc_intl_calendar_zone_message", vec![
+                    e_var("caller"), e_var("name"), e_var("too_large"),
+                ])),
+                s_expr(e_method_call(e_var("object"), "__elephc_call", vec![
+                    e_str("__elephc_set_error"),
+                    e_array(vec![e_int(1), e_var("_message")]),
+                ])),
+                s_if(e_call("__elephc_intl_use_exceptions", vec![]), vec![
+                    s_throw(e_new("IntlException", vec![e_var("_message")])),
+                ], vec![], None),
+            ])
+            .build(),
+    );
+    helpers.push(
+        function("__elephc_intl_calendar_zone_ok")
+            .param("name", TypeExpr::Str)
+            .returns(TypeExpr::Bool)
+            .body(vec![
+                s_assign("_tz", e_static_call("IntlTimeZone", "createTimeZone", vec![e_var("name")])),
+                s_if(e_binop(e_var("_tz"), BinOp::StrictEq, e_null()), vec![s_return(crate::synthetic_class::e_bool(false))], vec![], None),
+                s_if(
+                    e_binop(
+                        e_binop(e_method_call(e_var("_tz"), "getID", vec![]), BinOp::StrictEq, e_str("Etc/Unknown")),
+                        BinOp::And,
+                        e_binop(e_var("name"), BinOp::StrictNotEq, e_str("Etc/Unknown")),
+                    ),
+                    vec![s_return(crate::synthetic_class::e_bool(false))],
+                    vec![],
+                    None,
+                ),
+                s_return(crate::synthetic_class::e_bool(true)),
             ])
             .build(),
     );
@@ -1089,7 +1194,8 @@ fn helper_functions() -> Vec<Stmt> {
             .body(vec![
                 s_assign("_plus", e_call("strpos", vec![e_var("value"), e_str("+"), e_int(1)])),
                 s_assign("_minus", e_call("strpos", vec![e_var("value"), e_str("-"), e_int(1)])),
-                s_assign("_pos", crate::synthetic_class::e_bool(false)),
+                s_assign("_pos", e_int(0)),
+                s_assign("_found", crate::synthetic_class::e_bool(false)),
                 s_if(e_binop(
                     e_binop(e_var("_plus"), BinOp::StrictNotEq, crate::synthetic_class::e_bool(false)),
                     BinOp::And,
@@ -1099,13 +1205,15 @@ fn helper_functions() -> Vec<Stmt> {
                         e_binop(e_var("_plus"), BinOp::Lt, e_var("_minus")),
                     ),
                 ), vec![
-                    s_assign("_pos", e_var("_plus")),
+                    s_assign("_pos", e_cast(CastType::Int, e_var("_plus"))),
+                    s_assign("_found", crate::synthetic_class::e_bool(true)),
                 ], vec![], Some(vec![
                     s_if(e_binop(e_var("_minus"), BinOp::StrictNotEq, crate::synthetic_class::e_bool(false)), vec![
-                        s_assign("_pos", e_var("_minus")),
+                        s_assign("_pos", e_cast(CastType::Int, e_var("_minus"))),
+                        s_assign("_found", crate::synthetic_class::e_bool(true)),
                     ], vec![], None),
                 ])),
-                s_if(e_binop(e_var("_pos"), BinOp::StrictEq, crate::synthetic_class::e_bool(false)), vec![
+                s_if(e_not(e_var("_found")), vec![
                     s_return(e_str("")),
                 ], vec![], None),
                 s_assign("_offset", e_call("substr", vec![e_var("value"), e_var("_pos")])),
@@ -1217,16 +1325,7 @@ fn helper_functions() -> Vec<Stmt> {
             .param("timezone", t_mixed())
             .returns(TypeExpr::Str)
             .body(vec![
-                s_if(e_binop(e_var("timezone"), BinOp::StrictEq, e_null()), vec![
-                    s_return(e_call("date_default_timezone_get", vec![])),
-                ], vec![], None),
-                s_if(e_instance_of(e_var("timezone"), "DateTimeZone"), vec![
-                    s_return(e_cast(CastType::String, e_method_call(e_var("timezone"), "getName", vec![]))),
-                ], vec![], None),
-                s_if(e_instance_of(e_var("timezone"), "IntlTimeZone"), vec![
-                    s_return(e_cast(CastType::String, e_method_call(e_var("timezone"), "getID", vec![]))),
-                ], vec![], None),
-                s_return(e_cast(CastType::String, e_var("timezone"))),
+                s_return(e_call("__elephc_intl_timezone_name", vec![e_var("timezone")])),
             ])
             .build(),
     );
@@ -1962,7 +2061,7 @@ fn typed_intl_override(spec: &IntlFunction) -> Option<(TypeExpr, Vec<Stmt>)> {
             ], vec![], None),
             s_return(e_static_call("IntlCalendar", "createInstance", args())),
         ])),
-        "intlcal_from_date_time" => Some((t_class("IntlCalendar"), vec![
+        "intlcal_from_date_time" => Some((t_nullable(t_class("IntlCalendar")), vec![
             s_return(e_static_call("IntlCalendar", "fromDateTime", args())),
         ])),
         "intlcal_to_date_time" => Some((t_class("DateTime"), vec![
@@ -3022,20 +3121,7 @@ fn date_formatter_constructor_body() -> Vec<Stmt> {
             vec![],
             None,
         ),
-        s_assign("_zone", e_str("")),
-        s_if(e_binop(e_var("timezone"), BinOp::StrictEq, e_null()), vec![
-            s_assign("_zone", e_call("date_default_timezone_get", vec![])),
-        ], vec![], Some(vec![
-            s_if(e_instance_of(e_var("timezone"), "DateTimeZone"), vec![
-                s_assign("_zone", e_cast(CastType::String, e_method_call(e_var("timezone"), "getName", vec![]))),
-            ], vec![], Some(vec![
-                s_if(e_instance_of(e_var("timezone"), "IntlTimeZone"), vec![
-                    s_assign("_zone", e_cast(CastType::String, e_method_call(e_var("timezone"), "getID", vec![]))),
-                ], vec![], Some(vec![
-                    s_assign("_zone", e_cast(CastType::String, e_var("timezone"))),
-                ])),
-            ])),
-        ])),
+        s_assign("_zone", e_call("__elephc_intl_date_zone", vec![e_var("timezone")])),
         s_expr(e_call("__elephc_intl_validate_timezone", vec![
             e_var("_zone"), e_str("IntlDateFormatter::__construct()"),
         ])),
@@ -3089,6 +3175,18 @@ fn date_formatter_constructor_body() -> Vec<Stmt> {
         s_expr(e_call("__elephc_intl_validate_pattern", vec![
             e_var("_pattern"), e_str("IntlDateFormatter::__construct()"),
         ])),
+        s_if(
+            e_binop(
+                e_binop(e_var("dateType"), BinOp::StrictEq, e_int(-2)),
+                BinOp::And,
+                e_binop(e_var("timeType"), BinOp::StrictNotEq, e_int(-2)),
+            ),
+            vec![s_throw(e_new("IntlException", vec![e_str(
+                "IntlDateFormatter::__construct(): datefmt_create: time format must be IntlDateFormatter::PATTERN if date format is IntlDateFormatter::PATTERN",
+            )]))],
+            vec![],
+            None,
+        ),
         s_assign("_locale", e_ternary(
             e_binop(e_var("locale"), BinOp::StrictEq, e_null()),
             e_str(""),
@@ -4008,10 +4106,42 @@ fn build_time_zone_class() -> Stmt {
             ]))
         .method(method("fromDateTimeZone").static_().param("timezone", t_class("DateTimeZone"))
             .returns(t_nullable(t_class("IntlTimeZone")))
-            .body(vec![s_return(e_self_call(
-                "createTimeZone",
-                vec![e_method_call(e_var("timezone"), "getName", vec![])],
-            ))]))
+            .body(vec![
+                s_assign("_name", e_cast(CastType::String, e_method_call(e_var("timezone"), "getName", vec![]))),
+                s_assign("_offset", e_prop(e_var("timezone"), "__elephc_fixed_offset")),
+                s_if(
+                    e_binop(
+                        e_prop(e_var("timezone"), "__elephc_fixed"),
+                        BinOp::And,
+                        e_binop(
+                            e_binop(e_var("_offset"), BinOp::GtEq, e_int(86400)),
+                            BinOp::Or,
+                            e_binop(e_var("_offset"), BinOp::LtEq, e_int(-86400)),
+                        ),
+                    ),
+                    vec![
+                        s_expr(e_call("__elephc_intl_calendar_zone_error", vec![
+                            e_str("IntlTimeZone::fromDateTimeZone()"), e_var("_name"), crate::synthetic_class::e_bool(true),
+                        ])),
+                        s_return(e_null()),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_assign("_icu", e_call("__elephc_intl_timezone_name", vec![e_var("timezone")])),
+                s_if(
+                    e_not(e_call("__elephc_intl_calendar_zone_ok", vec![e_var("_icu")])),
+                    vec![
+                        s_expr(e_call("__elephc_intl_calendar_zone_error", vec![
+                            e_str("IntlTimeZone::fromDateTimeZone()"), e_var("_name"), crate::synthetic_class::e_bool(false),
+                        ])),
+                        s_return(e_null()),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_return(e_self_call("createTimeZone", vec![e_var("_icu")])),
+            ]))
         .method(method("toDateTimeZone").returns(t_union(vec![t_class("DateTimeZone"), TypeExpr::False]))
             .body(vec![
                 s_assign("_id", e_method_call(e_var("this"), "getID", vec![])),
@@ -4699,8 +4829,13 @@ fn build_calendar_class() -> Stmt {
         .method(method("fromDateTime").static_()
             .param("datetime", t_union(vec![t_class("DateTime"), TypeExpr::Str]))
             .param_default("locale", t_nullable(TypeExpr::Str), e_null())
-            .returns(t_class("IntlCalendar"))
+            .returns(t_nullable(t_class("IntlCalendar")))
             .body(from_date_time_body()))
+        .method(method("__elephc_from_datetime").static_()
+            .param("datetime", t_class("DateTime"))
+            .param_default("locale", t_nullable(TypeExpr::Str), e_null())
+            .returns(t_nullable(t_class("IntlCalendar")))
+            .body(from_date_time_object_body()))
         .method(method("toDateTime").returns(t_class("DateTime")).body(vec![
             s_assign("_millis", e_method_call(e_var("this"), "getTime", vec![])),
             s_assign("_seconds", e_cast(CastType::Int, e_binop(e_cast(CastType::Float, e_var("_millis")), BinOp::Div, e_float(1000.0)))),
@@ -4888,6 +5023,56 @@ fn build_calendar_class() -> Stmt {
                 vec![],
                 None,
             ));
+            body.push(s_assign("_name", e_str("")));
+            body.push(s_assign("_offset", e_int(0)));
+            body.push(s_assign("_fixed", crate::synthetic_class::e_bool(false)));
+            body.push(s_if(e_instance_of(e_var("timezone"), "IntlTimeZone"), vec![
+                s_assign("_name", e_cast(CastType::String, e_method_call(e_var("timezone"), "getID", vec![]))),
+            ], vec![], Some(vec![
+                s_if(e_instance_of(e_var("timezone"), "DateTimeZone"), vec![
+                    s_assign("_name", e_cast(CastType::String, e_method_call(e_var("timezone"), "getName", vec![]))),
+                    s_assign("_offset", e_prop(e_var("timezone"), "__elephc_fixed_offset")),
+                    s_assign("_fixed", e_prop(e_var("timezone"), "__elephc_fixed")),
+                ], vec![], Some(vec![
+                    s_assign("_name", e_cast(CastType::String, e_var("timezone"))),
+                ])),
+            ])));
+            body.push(s_assign("_icu", e_call("__elephc_intl_timezone_name", vec![e_var("_name")])));
+            body.push(s_if(
+                e_binop(
+                    e_var("_fixed"),
+                    BinOp::And,
+                    e_binop(
+                        e_binop(e_var("_offset"), BinOp::GtEq, e_int(86400)),
+                        BinOp::Or,
+                        e_binop(e_var("_offset"), BinOp::LtEq, e_int(-86400)),
+                    ),
+                ),
+                vec![
+                    s_expr(e_call("__elephc_intl_calendar_object_zone_error", vec![
+                        e_var("this"), e_str("IntlCalendar::setTimeZone()"), e_var("_name"), crate::synthetic_class::e_bool(true),
+                    ])),
+                    s_return(crate::synthetic_class::e_bool(false)),
+                ],
+                vec![],
+                None,
+            ));
+            body.push(s_if(
+                e_not(e_call("__elephc_intl_calendar_zone_ok", vec![e_var("_icu")])),
+                vec![
+                    s_expr(e_call("__elephc_intl_calendar_object_zone_error", vec![
+                        e_var("this"), e_str("IntlCalendar::setTimeZone()"), e_var("_name"), crate::synthetic_class::e_bool(false),
+                    ])),
+                    s_return(crate::synthetic_class::e_bool(false)),
+                ],
+                vec![],
+                None,
+            ));
+            body.push(s_return(e_method_call(e_var("this"), "__elephc_call", vec![
+                e_str("set_timezone"), e_array(vec![e_var("_icu")]),
+            ])));
+            builder = builder.method(instance_method(name, params, body).returns(calendar_method_return(name)));
+            continue;
         }
         match name {
             "get" | "isSet" | "getActualMaximum" | "getActualMinimum" | "getMinimum" |
@@ -5122,45 +5307,86 @@ fn calendar_roll_body() -> Vec<Stmt> {
 /// Builds `IntlCalendar::fromDateTime()`, preserving the source timezone and instant.
 fn from_date_time_body() -> Vec<Stmt> {
     vec![
-        s_assign("_zone", e_str("")),
-        s_assign("_timestamp", e_int(0)),
-        s_if(e_call("is_string", vec![e_var("datetime")]), vec![
-            s_assign("_text", e_cast(CastType::String, e_call("trim", vec![e_var("datetime")]))),
-            s_assign("_space", e_call("strrpos", vec![e_var("_text"), e_str(" ")])),
-            s_if(e_binop(e_var("_space"), BinOp::StrictNotEq, crate::synthetic_class::e_bool(false)), vec![
-                s_assign("_zone", e_cast(CastType::String, e_call("substr", vec![e_var("_text"), e_binop(e_var("_space"), BinOp::Add, e_int(1))]))),
-                s_assign("_text", e_cast(CastType::String, e_call("substr", vec![e_var("_text"), e_int(0), e_var("_space")]))),
-                s_if(e_not(e_call("__elephc_intl_is_timezone", vec![e_var("_zone")])), vec![
-                    // A trailing numeric offset (`+03:00`) is the DateTime's fixed zone;
-                    // keep the full text so strtotime() still applies the offset.
-                    s_assign("_offset_zone", e_call("__elephc_intl_offset_zone", vec![e_var("_zone")])),
-                    s_if(e_binop(e_var("_offset_zone"), BinOp::StrictNotEq, e_str("")), vec![
-                        s_assign("_zone", e_var("_offset_zone")),
-                        s_assign("_text", e_cast(CastType::String, e_call("trim", vec![e_var("datetime")]))),
-                    ], vec![], Some(vec![
-                        s_assign("_text", e_cast(CastType::String, e_call("trim", vec![e_var("datetime")]))),
-                        s_assign("_zone", e_str("")),
-                    ])),
+        s_if(
+            e_call("is_string", vec![e_var("datetime")]),
+            vec![s_return(e_static_call(
+                "IntlCalendar",
+                "__elephc_from_datetime",
+                vec![e_new("DateTime", vec![e_var("datetime")]), e_var("locale")],
+            ))],
+            vec![],
+            None,
+        ),
+        s_return(e_static_call(
+            "IntlCalendar",
+            "__elephc_from_datetime",
+            vec![e_var("datetime"), e_var("locale")],
+        )),
+    ]
+}
+
+/// Builds `IntlCalendar::__elephc_from_datetime(DateTime $datetime, ?string $locale)`.
+///
+/// Validates the ext/date zone against ICU before opening the calendar: an abbreviation ICU
+/// does not know (`WEST`) and an offset beyond the representable range (`+24:00`) are the two
+/// errors php-src expects here, recorded globally and surfaced as `null`.
+fn from_date_time_object_body() -> Vec<Stmt> {
+    vec![
+        s_if(
+            e_not(e_call("__elephc_intl_datetime_initialized", vec![e_var("datetime")])),
+            vec![
+                s_assign("_message", e_str("IntlCalendar::fromDateTime(): DateTime object is unconstructed")),
+                s_expr(e_call("__elephc_intl_invoke", vec![
+                    e_str("intl"), e_str("intl_set_error"),
+                    e_array(vec![e_int(1), e_var("_message")]),
+                ])),
+                s_if(e_call("__elephc_intl_use_exceptions", vec![]), vec![
+                    s_throw(e_new("IntlException", vec![e_var("_message")])),
                 ], vec![], None),
-            ], vec![], None),
-            s_assign("_saved", e_call("date_default_timezone_get", vec![])),
-            s_if(e_binop(e_var("_zone"), BinOp::StrictNotEq, e_str("")), vec![
-                s_expr(e_call("date_default_timezone_set", vec![e_var("_zone")])),
-            ], vec![], None),
-            s_assign("_timestamp", e_cast(CastType::Int, e_call("strtotime", vec![e_var("_text")]))),
-            s_expr(e_call("date_default_timezone_set", vec![e_var("_saved")])),
-        ], vec![], Some(vec![
-            s_assign("_timestamp", e_method_call(e_var("datetime"), "getTimestamp", vec![])),
-            s_assign("_zone", e_cast(CastType::String, e_method_call(e_method_call(e_var("datetime"), "getTimezone", vec![]), "getName", vec![]))),
-        ])),
-        s_if(e_binop(e_var("_zone"), BinOp::StrictEq, e_str("")), vec![
-            s_assign("_zone", e_call("date_default_timezone_get", vec![])),
-        ], vec![], None),
-        s_assign("_object", e_static_call("IntlGregorianCalendar", "__elephc_open", vec![e_var("_zone"), e_var("locale")])),
+                s_return(e_null()),
+            ],
+            vec![],
+            None,
+        ),
+        s_assign("_zone", e_method_call(e_var("datetime"), "getTimezone", vec![])),
+        s_assign("_name", e_cast(CastType::String, e_method_call(e_var("_zone"), "getName", vec![]))),
+        s_assign("_offset", e_prop(e_var("_zone"), "__elephc_fixed_offset")),
+        s_if(
+            e_binop(
+                e_prop(e_var("_zone"), "__elephc_fixed"),
+                BinOp::And,
+                e_binop(
+                    e_binop(e_var("_offset"), BinOp::GtEq, e_int(86400)),
+                    BinOp::Or,
+                    e_binop(e_var("_offset"), BinOp::LtEq, e_int(-86400)),
+                ),
+            ),
+            vec![
+                s_expr(e_call("__elephc_intl_calendar_zone_error", vec![
+                    e_str("IntlCalendar::fromDateTime()"), e_var("_name"), crate::synthetic_class::e_bool(true),
+                ])),
+                s_return(e_null()),
+            ],
+            vec![],
+            None,
+        ),
+        s_assign("_icu", e_call("__elephc_intl_timezone_name", vec![e_var("_zone")])),
+        s_if(
+            e_not(e_call("__elephc_intl_calendar_zone_ok", vec![e_var("_icu")])),
+            vec![
+                s_expr(e_call("__elephc_intl_calendar_zone_error", vec![
+                    e_str("IntlCalendar::fromDateTime()"), e_var("_name"), crate::synthetic_class::e_bool(false),
+                ])),
+                s_return(e_null()),
+            ],
+            vec![],
+            None,
+        ),
+        s_assign("_object", e_static_call("IntlGregorianCalendar", "__elephc_open", vec![e_var("_icu"), e_var("locale")])),
         s_if(e_binop(e_var("_object"), BinOp::StrictEq, e_null()), vec![
             s_throw(e_new("IntlException", vec![e_str("IntlCalendar::fromDateTime(): error creating ICU Calendar object")])),
         ], vec![], None),
-        s_expr(e_method_call(e_var("_object"), "setTime", vec![e_binop(e_cast(CastType::Float, e_var("_timestamp")), BinOp::Mul, e_float(1000.0))])),
+        s_expr(e_method_call(e_var("_object"), "setTime", vec![e_binop(e_cast(CastType::Float, e_method_call(e_var("datetime"), "getTimestamp", vec![])), BinOp::Mul, e_float(1000.0))])),
         s_return(e_var("_object")),
     ]
 }

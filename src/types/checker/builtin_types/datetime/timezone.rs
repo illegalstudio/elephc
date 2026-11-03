@@ -91,10 +91,100 @@ pub(super) fn datetime_zone_constructor() -> ClassMethod {
                     },
                     dummy(),
                 ),
+                // A tzdb abbreviation or numeric offset keeps its fixed offset on the zone:
+                // PHP's `CET` is +01:00 even in August, and libc's `TZ` cannot express it.
+                Stmt::assign(
+                    "__token",
+                    crate::synthetic_class::e_static_call(
+                        "DateTime",
+                        "__elephc_parse_zone_token",
+                        vec![var("__name")],
+                    ),
+                ),
+                Stmt::new(
+                    StmtKind::If {
+                        condition: binop(
+                            binop(var("__token"), BinOp::StrictNotEq, Expr::new(ExprKind::BoolLiteral(false), dummy())),
+                            BinOp::And,
+                            binop(
+                                Expr::new(ExprKind::ArrayAccess {
+                                    array: Box::new(var("__token")),
+                                    index: Box::new(int(2)),
+                                }, dummy()),
+                                BinOp::StrictEq,
+                                int(0),
+                            ),
+                        ),
+                        then_body: vec![
+                            Stmt::assign(
+                                "__name",
+                                Expr::new(ExprKind::ArrayAccess {
+                                    array: Box::new(var("__token")),
+                                    index: Box::new(int(0)),
+                                }, dummy()),
+                            ),
+                            assign_this_property("__elephc_fixed", Expr::new(ExprKind::BoolLiteral(true), dummy())),
+                            assign_this_property(
+                                "__elephc_fixed_offset",
+                                Expr::new(ExprKind::ArrayAccess {
+                                    array: Box::new(var("__token")),
+                                    index: Box::new(int(1)),
+                                }, dummy()),
+                            ),
+                        ],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    dummy(),
+                ),
                 assign_this_property("name", var("__name")),
             ]
         },
     )
+}
+
+/// `DateTimeZone::__elephc_from_parts(string $name, int $offset, bool $fixed): DateTimeZone`.
+///
+/// Rebuilds the zone carried by a `DateTime` without re-parsing the name, so abbreviation and
+/// fixed-offset zones keep their PHP-visible offset even when libc cannot reproduce it.
+pub(super) fn datetime_zone_from_parts() -> ClassMethod {
+    let var = |n: &str| Expr::new(ExprKind::Variable(n.to_string()), dummy());
+    let assign_prop = |object: Expr, name: &str, value: Expr| {
+        Stmt::new(
+            StmtKind::PropertyAssign {
+                object: Box::new(object),
+                property: name.to_string(),
+                value,
+            },
+            dummy(),
+        )
+    };
+    let mut built = method(
+        "__elephc_from_parts",
+        vec![
+            ("name".to_string(), Some(TypeExpr::Str), None, false),
+            ("offset".to_string(), Some(TypeExpr::Int), None, false),
+            ("fixed".to_string(), Some(TypeExpr::Bool), None, false),
+        ],
+        Some(TypeExpr::Named(Name::unqualified("DateTimeZone"))),
+        vec![
+            Stmt::assign(
+                "__zone",
+                Expr::new(
+                    ExprKind::NewObject {
+                        class_name: Name::unqualified("DateTimeZone"),
+                        args: vec![var("name")],
+                    },
+                    dummy(),
+                ),
+            ),
+            assign_prop(var("__zone"), "__elephc_fixed", var("fixed")),
+            assign_prop(var("__zone"), "__elephc_fixed_offset", var("offset")),
+            return_expr(var("__zone")),
+        ],
+    );
+    built.is_static = true;
+    built
 }
 
 /// `DateTimeZone::getName(): string` — returns the stored identifier.
@@ -139,6 +229,17 @@ pub(super) fn datetime_zone_get_offset() -> ClassMethod {
         )],
         Some(TypeExpr::Int),
         vec![
+            // Abbreviation/fixed-offset zones carry their offset; the `TZ` switch below would
+            // otherwise reinterpret `CET` as Europe/Berlin DST or invert `+03:40`.
+            Stmt::new(
+                StmtKind::If {
+                    condition: this_property("__elephc_fixed"),
+                    then_body: vec![return_expr(this_property("__elephc_fixed_offset"))],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy(),
+            ),
             // Fixed-offset zones (`+04:05`, `GMT+04:05`) are valid DateTimeZone identifiers
             // but are not IANA names the date runtime's `TZ` switch understands. Parse them
             // directly instead of falling back to the process default.

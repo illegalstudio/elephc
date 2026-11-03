@@ -18,6 +18,15 @@ pub(super) fn datetime_backing_properties() -> Vec<ClassProperty> {
             TypeExpr::Str,
             Expr::new(ExprKind::StringLiteral("UTC".to_string()), dummy()),
         ),
+        // A fixed-offset zone (tzdb abbreviation or `±HH:MM`) keeps its offset on the object:
+        // libc's `TZ` switch cannot reproduce PHP's fixed abbreviation offsets (CET is +01:00
+        // even in August, WEST is not a TZ name, and `+03:40` would invert its sign).
+        property("timezone_offset", TypeExpr::Int, Expr::new(ExprKind::IntLiteral(0), dummy())),
+        property(
+            "timezone_fixed",
+            TypeExpr::Bool,
+            Expr::new(ExprKind::BoolLiteral(false), dummy()),
+        ),
         // Sub-second component (0..999999) preserved across operations; surfaced by getMicrosecond()
         // and the `u`/`v` format specifiers. elephc otherwise works at libc second resolution.
         property("microsecond", TypeExpr::Int, Expr::new(ExprKind::IntLiteral(0), dummy())),
@@ -101,6 +110,17 @@ pub(super) fn datetime_get_offset() -> ClassMethod {
         Vec::new(),
         Some(TypeExpr::Int),
         vec![
+            // Fixed abbreviation/fixed-offset zones carry their offset; libc's `TZ` switch
+            // cannot reproduce PHP's fixed abbreviation offsets (CET in August, WEST, `+03:40`).
+            Stmt::new(
+                StmtKind::If {
+                    condition: this_property("timezone_fixed"),
+                    then_body: vec![return_expr(this_property("timezone_offset"))],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy(),
+            ),
             // $__saved = date_default_timezone_get();
             Stmt::assign("__saved", call("date_default_timezone_get", Vec::new())),
             // date_default_timezone_set($this->timezone_name);

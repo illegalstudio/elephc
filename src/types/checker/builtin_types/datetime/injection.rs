@@ -86,17 +86,30 @@ pub(crate) fn inject_builtin_datetime(
                 is_abstract: false,
                 is_final: false,
                 is_readonly_class: false,
-                properties: vec![property(
-                    "name",
-                    TypeExpr::Str,
-                    Expr::new(ExprKind::StringLiteral("UTC".to_string()), dummy()),
-                )],
+                properties: vec![
+                    property(
+                        "name",
+                        TypeExpr::Str,
+                        Expr::new(ExprKind::StringLiteral("UTC".to_string()), dummy()),
+                    ),
+                    property(
+                        "__elephc_fixed",
+                        TypeExpr::Bool,
+                        Expr::new(ExprKind::BoolLiteral(false), dummy()),
+                    ),
+                    property(
+                        "__elephc_fixed_offset",
+                        TypeExpr::Int,
+                        Expr::new(ExprKind::IntLiteral(0), dummy()),
+                    ),
+                ],
                 methods: {
                     let mut methods = vec![
                         datetime_zone_constructor(),
                         datetime_zone_get_name(),
                         datetime_zone_get_offset(),
                         datetime_zone_list_identifiers(),
+                        datetime_zone_from_parts(),
                     ];
                     // getLocation/getTransitions/listAbbreviations call the
                     // tz_prelude marshalling helpers, which are only declared when
@@ -166,6 +179,13 @@ pub(crate) fn inject_builtin_datetime(
         methods.push(datetime_strftime());
         methods.push(datetime_extract_micros());
         methods.push(datetime_strip_micros());
+        methods.push(datetime_split_trailing_zone());
+        methods.push(datetime_date_malformed_message());
+        methods.push(datetime_parse_zone_token());
+        methods.push(datetime_zone_offset_parts());
+        methods.push(datetime_abbreviation_offsets());
+        methods.push(datetime_timezone_ids());
+        methods.push(datetime_construct_state());
         methods.push(datetime_extract_modify_micros());
         methods.push(datetime_strip_modify_micros());
         methods.push(datetime_sun_rs());

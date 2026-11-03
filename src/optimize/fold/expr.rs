@@ -191,6 +191,50 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
         ExprKind::FunctionCall { name, args } => {
             let args = args.into_iter().map(fold_expr).collect::<Vec<_>>();
+            // The runtime `strtotime` parser does not know tzdb abbreviations and cannot
+            // combine a textual date with a trailing numeric offset. A literal argument can
+            // be split here: parse the zone-free text and apply the fixed offset.
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("strtotime")
+            {
+                if let Some(Expr {
+                    kind: ExprKind::StringLiteral(literal),
+                    span: arg_span,
+                }) = args.first()
+                {
+                    if let Some(zone) = crate::date_time_zone::split_fixed_zone(literal) {
+                        let mut rewritten = args.clone();
+                        rewritten[0] = Expr::new(
+                            ExprKind::StringLiteral(zone.stripped),
+                            *arg_span,
+                        );
+                        let call = Expr::new(
+                            ExprKind::FunctionCall {
+                                name,
+                                args: rewritten,
+                            },
+                            span,
+                        );
+                        return if zone.offset == 0 {
+                            call
+                        } else {
+                            Expr::new(
+                                ExprKind::BinaryOp {
+                                    left: Box::new(call),
+                                    op: BinOp::Sub,
+                                    right: Box::new(Expr::new(
+                                        ExprKind::IntLiteral(zone.offset),
+                                        span,
+                                    )),
+                                },
+                                span,
+                            )
+                        };
+                    }
+                }
+            }
             if let Some(rebound) = namespace_fallbacks::resolve_call(&name, &args, span) {
                 return fold_expr(rebound);
             }
