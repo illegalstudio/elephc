@@ -1211,14 +1211,21 @@ impl BridgeStaticlib {
         };
         if !rebuild_replaces(&archive, &rebuild_output_dir(&workspace)) {
             // The rebuild can only ever write Cargo's own output directory, so an archive
-            // found anywhere else is one it cannot refresh. That is normal after unpacking a
-            // nextest archive on a CI shard, and the stale-looking timestamp there says nothing
-            // about the checkout beside it — which is exactly what this skip exists to stop
-            // paying for. But it is ALSO what a `build.target-dir` in a Cargo config or a custom
-            // profile looks like, and then a genuinely stale bridge would be linked silently.
-            // Say so once per bridge, and only when the sources really are newer, so the common
-            // up-to-date path and the CI shard stay quiet.
-            if self.sources_are_newer_than(&workspace, &archive)
+            // found anywhere else is one it cannot refresh. Two very different situations
+            // reach this point and they must not be reported the same way:
+            //
+            // - A CI shard unpacks the bridges somewhere under the runner's temp directory and
+            //   clones the checkout beside them, so every archive here looks stale. That is the
+            //   case this skip exists for, and the tests on those shards assert an empty
+            //   stderr, so saying anything breaks them.
+            // - A `build.target-dir` in a Cargo config, or a custom profile, means Cargo writes
+            //   somewhere this function does not guess, and a genuinely stale bridge would be
+            //   linked without a word.
+            //
+            // They are indistinguishable without resolving Cargo's own configuration, so the
+            // diagnostic is opt-in: silent by default, and available on request.
+            if std::env::var_os(UNREBUILDABLE_BRIDGE_DIAGNOSTIC).is_some()
+                && self.sources_are_newer_than(&workspace, &archive)
                 && self.warn_once_about_unrebuildable_archive()
             {
                 eprintln!(
@@ -1371,6 +1378,15 @@ fn rebuild_output_dir(workspace: &Path) -> PathBuf {
         "debug"
     })
 }
+
+/// Environment variable that makes a skipped bridge rebuild explain itself.
+///
+/// An archive found outside Cargo's output directory cannot be refreshed, which is normal on
+/// a CI shard that unpacks the bridges into the runner's temp directory. It is ALSO what a
+/// `build.target-dir` in a Cargo config or a custom profile looks like, where the skip hides
+/// a genuinely stale bridge. The two are indistinguishable without resolving Cargo's own
+/// configuration, and shard tests assert an empty stderr, so the explanation is opt-in.
+const UNREBUILDABLE_BRIDGE_DIAGNOSTIC: &str = "ELEPHC_WARN_UNREBUILDABLE_BRIDGE";
 
 /// Returns whether a rebuild writing into `output_dir` would replace `archive`.
 ///
