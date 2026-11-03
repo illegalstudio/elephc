@@ -51,7 +51,11 @@ fn validate(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
     // (numbers become their decimal representation, true → "1",
     // false/null → ""). Dynamic inputs first use the ordinary EIR
     // string-cast operation, then the same string-length operation.
-    if !matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
+    // A weak-mode file also passes an int, float or bool, which the call's argument lowering
+    // converts to a string first (`strlen(1.5)` is 3).
+    let weak_scalar = !crate::source::current_strict_types()
+        && matches!(ty.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::Bool);
+    if !weak_scalar && !matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
         return Err(CompileError::new(
             input.span,
             "strlen() argument must be string",

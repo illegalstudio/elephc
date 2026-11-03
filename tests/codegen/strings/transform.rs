@@ -939,3 +939,26 @@ echo (int)$finite, ",";
         "0,0,0,0,0,9223372036854775807,"
     );
 }
+
+/// Verifies a weak-mode file passes an `int`, `float` or `bool` to a builtin's `string`
+/// parameter as php-src does, converting it first: `strlen()` accepts it, and `str_repeat()` and
+/// `strtoupper()` no longer fail in the backend (AIC #226).
+#[test]
+fn test_weak_scalar_arguments_reach_string_builtins() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function f(): float { return 1.5; }
+function i(): int { return 42; }
+function b(): bool { return true; }
+echo strlen(f()), strlen(i()), strlen(b()), "|";
+echo str_repeat(f(), 2), "|", strtoupper(b()), "|", strtolower(i()), "|", ucfirst(f()), "|";
+echo trim(i()), "|", str_pad(f(), 5, "*"), "|", substr(i(), 1), "|", strrev(f()), "|", md5(i()), "\n";
+"#,
+    );
+    assert!(output.success, "stdout={:?}\nstderr={}", output.stdout, output.stderr);
+    assert_eq!(
+        output.stdout,
+        "321|1.51.5|1|42|1.5|42|1.5**|2|5.1|a1d0c6e83f027327d8461063f4ac58a6\n"
+    );
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

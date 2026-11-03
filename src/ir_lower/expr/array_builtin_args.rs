@@ -159,6 +159,7 @@ pub(super) fn lower_builtin_call_args(
     let operands = borrowed_string_args::try_lower(ctx, name, sig, args)
         .unwrap_or_else(|| lower_planned_builtin_call_args(ctx, name, sig, args));
     let canonical = php_symbol_key(name.trim_start_matches('\\'));
+    let operands = coerce_weak_scalar_string_args(ctx, &canonical, sig, args, operands);
     let lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering);
     match lowering {
@@ -170,6 +171,64 @@ pub(super) fn lower_builtin_call_args(
         }
         _ => operands,
     }
+}
+
+/// Converts an `int`, `float` or `bool` argument at a builtin's declared `string` parameter to a
+/// string in a weak-mode file, as php-src does before the builtin runs (`strlen(1.5)` is 3,
+/// `strtoupper(true)` is `"1"`).
+///
+/// Builtins whose argument lowering keeps raw values (`PreserveValues`, `PreserveUncoerced`
+/// and the other specialised modes) decide for themselves, and a by-reference parameter keeps
+/// the caller's storage. `null` is left alone: php-src deprecates it there rather than casting.
+fn coerce_weak_scalar_string_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    mut operands: Vec<crate::ir::ValueId>,
+) -> Vec<crate::ir::ValueId> {
+    let Some(sig) = sig else {
+        return operands;
+    };
+    if crate::source::current_strict_types() {
+        return operands;
+    }
+    // A result that may alias an argument (`trim()`) keeps that argument alive for the result's
+    // lifetime, so a converted copy there would never be released; those builtins already
+    // convert a scalar argument themselves.
+    let standard = crate::builtins::registry::lookup(canonical).is_some_and(|def| {
+        matches!(
+            def.spec.semantics.argument_lowering,
+            crate::builtins::semantics::BuiltinArgumentLowering::Standard
+                | crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults
+        ) && !matches!(
+            def.spec.semantics.result_ownership,
+            crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments
+        )
+    });
+    if !standard {
+        return operands;
+    }
+    for (index, operand) in operands.iter_mut().enumerate() {
+        let declares_string = sig
+            .params
+            .get(index)
+            .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Str);
+        if !declares_string || sig.ref_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        if !matches!(
+            ctx.builder.value_php_type(*operand).codegen_repr(),
+            PhpType::Int | PhpType::Float | PhpType::Bool
+        ) {
+            continue;
+        }
+        let span = args.get(index).map_or_else(crate::span::Span::dummy, |arg| arg.span);
+        let value = lowered_value_from_id(ctx, *operand);
+        let converted = coerce_to_string_at_span(ctx, value, Some(span));
+        *operand = root_evaluated_call_argument(ctx, converted, span).value;
+    }
+    operands
 }
 
 /// Lowers a string literal naming a BUILTIN, at a `callable` parameter, as that builtin's
