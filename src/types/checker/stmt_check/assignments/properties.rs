@@ -208,7 +208,11 @@ pub(super) fn check_property_array_push(
                 )?;
                 return Ok(());
             }
-            if object_property_write_is_dynamic(checker, class_name, property) {
+            if object_property_write_is_dynamic(checker, class_name, property)
+                || scope_dynamic_storage::claim_undeclared_property_creation(
+                    checker, class_name, property, span,
+                )?
+            {
                 return Ok(());
             }
             refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
@@ -396,7 +400,11 @@ pub(super) fn check_property_array_assign(
                 )?;
                 return Ok(());
             }
-            if object_property_write_is_dynamic(checker, class_name, property) {
+            if object_property_write_is_dynamic(checker, class_name, property)
+                || scope_dynamic_storage::claim_undeclared_property_creation(
+                    checker, class_name, property, span,
+                )?
+            {
                 if !is_php_array_key_type(&normalized_idx_ty) {
                     return Err(CompileError::new(span, "Array index must be integer"));
                 }
@@ -683,10 +691,16 @@ fn check_object_property_write(
             if !checker.descendant_declared_property_types(class_name, property).is_empty() {
                 return Ok(());
             }
-            return Err(CompileError::new(
-                span,
-                &format!("Undefined property: {}::{}", class_name, property),
-            ));
+            // php 8.2+ still CREATES the property on an ordinary class, after
+            // `Deprecated: Creation of dynamic property C::$p is deprecated`; only a readonly
+            // class refuses (`Cannot create dynamic property`). The site reserves the instance's
+            // dynamic-property hash on this class and its subclasses, which is where the backend
+            // stores the name and reports the deprecation.
+            refuse_dynamic_property_on_readonly_class(checker, class_name, property, span)?;
+            scope_dynamic_storage::record_undeclared_property_creation(
+                checker, class_name, property,
+            );
+            return Ok(());
         }
         let expected_ty = class_info
             .visible_property(property)

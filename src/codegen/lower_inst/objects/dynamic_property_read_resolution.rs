@@ -45,11 +45,11 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_ref_cell(
     // the miss arm's answer, `0`, which the consumer already takes as "no reference cell". The
     // refusal this replaced sent Symfony's validator `XmlFileLoader` to the interpreter and cost
     // the Symfony demo a whole second compile.
-    let slots = if ctx
+    let known_class = ctx
         .module
         .class_infos
-        .contains_key(class_name.trim_start_matches('\\'))
-    {
+        .contains_key(class_name.trim_start_matches('\\'));
+    let slots = if known_class {
         declared_dynamic_property_slots(ctx, &class_name, inst)?
             .into_iter()
             .filter(|slot| slot.is_reference)
@@ -57,7 +57,21 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_ref_cell(
     } else {
         Vec::new()
     };
-    if slots.is_empty() {
+    // A name no declared slot matches lives in the runtime class's dynamic-property hash, when
+    // it has one (`#[AllowDynamicProperties]`): php creates the entry and binds the reference to
+    // it. Answering `0` there bound the alias to nothing, so writes through it were lost.
+    let hash_plan = if known_class {
+        dynamic_property_runtime_plan_for_class(
+            ctx,
+            &class_name,
+            "",
+            PropertyAccessKind::RuntimeWrite,
+            inst,
+        )?
+    } else {
+        None
+    };
+    if slots.is_empty() && hash_plan.is_none() {
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         return store_ref_cell_pointer_result(ctx, inst);
     }
@@ -91,10 +105,113 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_ref_cell(
     }
 
     ctx.emitter.label(&miss_label);
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    match &hash_plan {
+        // The receiver is stacked at offset 16 and the name at 0; each arm releases the block.
+        Some(plan) => emit_property_runtime_dispatch(
+            ctx,
+            plan,
+            "dyn_propref_hash",
+            DispatchStackCleanup(32),
+            |ctx, class_id, label| {
+                emit_branch_if_stacked_object_class_matches(ctx, class_id, 16, label)
+            },
+            |ctx, arm| emit_dynamic_hash_ref_cell_arm(ctx, arm, inst),
+        )?,
+        None => {
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+    }
     ctx.emitter.label(&done_label);
     store_ref_cell_pointer_result(ctx, inst)
+}
+
+/// One arm of a by-class dispatch over dynamic-property storage, for a reference to a name no
+/// declared slot holds. The receiver is stacked at offset 16 and the name (pointer, length) at
+/// 0; the arm releases that 32-byte block and leaves the cell (or `0`) in the result register.
+pub(super) fn emit_dynamic_hash_ref_cell_arm(
+    ctx: &mut FunctionContext<'_>,
+    arm: &PropertyRuntimeArm,
+    inst: &Instruction,
+) -> Result<()> {
+    if let PropertyRuntimeAction::DynamicHash { hash_offset, .. } = &arm.action {
+        emit_dynamic_property_creation_deprecation(
+            ctx,
+            &arm.class_name,
+            *hash_offset,
+            16,
+            0,
+            inst.span.map_or(0, |span| span.line),
+        )?;
+        let target = ctx.emitter.target;
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 0), 16);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), 0);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 2), 8);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 3), *hash_offset as i64);
+        abi::emit_call_label(ctx.emitter, "__rt_object_hash_prop_ref_cell");
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+    } else {
+        // No per-instance storage (or a magic `__get` class): no cell, as before.
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    }
+    Ok(())
+}
+
+/// Binds a reference to the constant-named dynamic property `$object->name` of a declared class
+/// with per-instance storage (`#[AllowDynamicProperties]`), publishing the cell as `inst`'s
+/// result. Returns `false`, emitting nothing, when no class in the receiver's subtree has that
+/// storage.
+pub(super) fn lower_named_dynamic_hash_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    class_name: &str,
+    property: &str,
+) -> Result<bool> {
+    let Some(plan) = dynamic_property_runtime_plan_for_class(
+        ctx,
+        class_name,
+        property,
+        PropertyAccessKind::DirectWrite,
+        inst,
+    )?
+    else {
+        return Ok(false);
+    };
+    if !plan_has_dynamic_hash(&plan) {
+        return Ok(false);
+    }
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    let (name_label, name_len) = ctx.data.add_string(property.as_bytes());
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &name_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, name_len as i64);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    emit_property_runtime_dispatch(
+        ctx,
+        &plan,
+        "named_propref_hash",
+        DispatchStackCleanup(32),
+        |ctx, class_id, label| emit_branch_if_stacked_object_class_matches(ctx, class_id, 16, label),
+        |ctx, arm| emit_dynamic_hash_ref_cell_arm(ctx, arm, inst),
+    )?;
+    store_ref_cell_pointer_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Whether any arm of `plan` stores into a per-instance dynamic-property hash.
+fn plan_has_dynamic_hash(plan: &PropertyRuntimePlan) -> bool {
+    match plan {
+        PropertyRuntimePlan::ByClassId(arms) => arms
+            .iter()
+            .any(|arm| matches!(arm.action, PropertyRuntimeAction::DynamicHash { .. })),
+        other => other
+            .fixed_arm()
+            .is_some_and(|arm| matches!(arm.action, PropertyRuntimeAction::DynamicHash { .. })),
+    }
 }
 
 /// Loads the reference cell `$object->$name` selects when the receiver is a boxed `Mixed`

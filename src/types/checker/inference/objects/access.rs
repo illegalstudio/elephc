@@ -404,6 +404,15 @@ impl Checker {
             ) {
                 return Ok(PhpType::Mixed);
             }
+            // A name this program creates on the class (php 8.2+'s deprecated dynamic property)
+            // is read back from the instance's hash, unless `__get` answers undeclared reads.
+            if !class_info.methods.contains_key("__get")
+                && super::super::super::scope_dynamic_storage::created_property_is_readable(
+                    self, class_name, property,
+                )
+            {
+                return Ok(PhpType::Mixed);
+            }
             // A class that also allows dynamic properties stores some names itself, and php reads
             // an existing dynamic property without calling `__get`: guzzle's `FnStream` keeps
             // its `_fn_*` callables that way behind a throwing `__get(): void`.

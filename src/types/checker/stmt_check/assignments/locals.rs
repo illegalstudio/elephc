@@ -388,6 +388,13 @@ pub(super) fn check_ref_assign(
         }
         ExprKind::PropertyAccess { object, property } => {
             let object_ty = checker.infer_type(object, env)?;
+            // `$r = &$o->undeclared` creates the property (php 8.2+'s deprecated dynamic one), so
+            // it is claimed before the read below asks whether the name exists.
+            if let Some(class) = crate::types::checker::single_object_class_name(&object_ty) {
+                crate::types::checker::scope_dynamic_storage::claim_undeclared_property_creation(
+                    checker, &class, property, span,
+                )?;
+            }
             let target_ty = checker.infer_type(source, env)?;
             let known_class = crate::types::checker::single_object_class_name(&object_ty)
                 .filter(|_| !receiver_is_untyped_parameter(checker, object));
@@ -671,10 +678,33 @@ fn check_ref_assign_dynamic_property(
     let exact_name = exact_name.as_deref();
     let suffix = suffix.as_deref();
     if exact_name.is_none() && suffix.is_none() {
-        return Err(CompileError::new(
-            property.span,
-            "Dynamic property reference requires a literal name or a locally known string suffix",
-        ));
+        // A name known only at run time (`$r = &$o->$name`): any property of the receiver's
+        // runtime class may be the one referenced, so each becomes a boxed cell the runtime name
+        // ladder resolves -- the unknown-receiver contract, limited to this class and its
+        // subclasses. An undeclared name lands in the instance's dynamic-property hash.
+        let normalized_class = class_name.trim_start_matches('\\').to_string();
+        let receivers = checker
+            .classes
+            .keys()
+            .filter(|candidate| {
+                candidate.as_str() == normalized_class
+                    || checker.is_subclass_of(candidate, &normalized_class)
+            })
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        super::super::control_flow::widen_properties_for_receiver_reference(
+            checker,
+            Some(&receivers),
+            |_| true,
+        );
+        checker.dynamic_ref_local_types.insert(
+            (checker.current_loop_storage_scope.clone(), target.to_string()),
+            PhpType::Mixed,
+        );
+        env.insert(target.to_string(), PhpType::Mixed);
+        checker.active_ref_params.insert(target.to_string());
+        clear_callable_metadata(checker, target);
+        return Ok(());
     }
 
     let normalized_class = class_name.trim_start_matches('\\');

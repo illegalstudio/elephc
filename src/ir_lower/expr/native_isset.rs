@@ -376,7 +376,10 @@ pub(super) fn property_isset_action(
         return Some(IssetPropertyAction::Fallback);
     }
     let class_info = ctx.classes.get(class_name.as_str())?;
-    if class_info.allow_dynamic_properties {
+    if class_info.allow_dynamic_properties
+        || (class_info.dynamic_property_hash_is_name_addressable()
+            && class_info.visible_property(property).is_none())
+    {
         return Some(IssetPropertyAction::Fallback);
     }
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {

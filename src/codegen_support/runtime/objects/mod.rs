@@ -71,7 +71,7 @@ pub(crate) use class_id_by_name::emit_class_id_by_name;
 pub(crate) use prop_scope_denied::emit_prop_scope_denied;
 pub(crate) use object_to_array::emit_object_to_array;
 pub(crate) use object_vars::emit_object_to_hash;
-pub(crate) use stdclass_prop_ref_cell::emit_stdclass_prop_ref_cell;
+pub(crate) use stdclass_prop_ref_cell::{emit_object_hash_prop_ref_cell, emit_stdclass_prop_ref_cell};
 pub(crate) use stdclass::{
     emit_json_encode_stdclass, emit_mixed_property_get, emit_mixed_property_set,
     emit_stdclass_from_hash, emit_stdclass_get, emit_stdclass_new, emit_stdclass_set,

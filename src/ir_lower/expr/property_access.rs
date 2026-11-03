@@ -48,10 +48,15 @@ pub(crate) fn lower_ref_assign_property(
     };
     // A stdClass property's cell is held by its hash entry, which a later rebinding
     // (`$o->{$k} = &$other`) drops: the alias needs its own share, as a php reference has.
+    // So is an undeclared name on a declared class with a dynamic-property hash: its cell is
+    // that hash's entry (`__rt_object_hash_prop_ref_cell`), not a slot the object owns.
     let owns_cell = match receiver_repr {
         PhpType::Object(class) => crate::types::checker::builtin_stdclass::is_stdclass(&class)
-            || ctx.classes.get(class.as_str())
-                .is_some_and(|info| info.owned_reference_properties.contains(property)),
+            || ctx.classes.get(class.trim_start_matches('\\')).is_some_and(|info| {
+                info.owned_reference_properties.contains(property)
+                    || (info.dynamic_property_hash_is_name_addressable()
+                        && info.visible_property(property).is_none())
+            }),
         _ => false,
     };
     let data = ctx.intern_string(property);
@@ -641,7 +646,7 @@ fn class_receiver_reads_through_descendant_magic_get(
     };
     if info.visible_property(property).is_some()
         || info.methods.contains_key("__get")
-        || info.allow_dynamic_properties
+        || info.dynamic_property_hash_is_name_addressable()
     {
         return false;
     }
@@ -655,7 +660,8 @@ fn class_receiver_reads_through_descendant_magic_get(
         if info.visible_property(property).is_some() {
             return false;
         }
-        answers_magic |= info.methods.contains_key("__get") || info.allow_dynamic_properties;
+        answers_magic |=
+            info.methods.contains_key("__get") || info.dynamic_property_hash_is_name_addressable();
     }
     answers_magic
 }

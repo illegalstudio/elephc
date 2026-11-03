@@ -409,17 +409,6 @@ fn test_error_override_attribute_on_static_with_no_parent() {
     );
 }
 
-/// Verifies that `#[AllowDynamicProperties]` inside a namespace is treated as a
-/// user-defined attribute (not the built-in), so dynamic properties are rejected
-/// with "Undefined property".
-#[test]
-fn test_allow_dynamic_properties_namespaced_unqualified_lookalike_is_not_builtin() {
-    expect_error(
-        "<?php namespace N; #[AllowDynamicProperties] class Bag {} $b = new Bag(); $b->x = 1;",
-        "Undefined property: N\\Bag::x",
-    );
-}
-
 // --- class_attribute_names() argument validation ---
 
 /// Verifies that `class_attribute_names()` with an undefined class reports

@@ -431,9 +431,16 @@ fn typed_receiver_reference_slot(
             Ok(None)
         }
         // php binds the reference to a DISTINCT dynamic property here, never to the ancestor's
-        // slot. Binding into the per-instance hash is not a capability this backend has yet, for
-        // any class, so the honest answer is the same `unsupported` diagnostic `stdClass` already
-        // produces rather than a slot this scope may not see.
+        // slot: an entry of the per-instance hash, when the runtime class has one
+        // (`#[AllowDynamicProperties]`). Without that storage the honest answer is the
+        // `unsupported` diagnostic rather than a slot this scope may not see.
+        Some(PropertyNameArm::ScopeDynamic) | None
+            if super::dynamic_property_read_resolution::lower_named_dynamic_hash_ref_cell(
+                ctx, inst, object, &class_name, property,
+            )? =>
+        {
+            Ok(None)
+        }
         Some(PropertyNameArm::ScopeDynamic)
         | Some(PropertyNameArm::MagicDeferred)
         | None => Err(CodegenIrError::unsupported(format!(
@@ -1018,6 +1025,24 @@ pub(super) fn emit_scope_dynamic_property_read(
     }
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())
 }
+/// Replaces the boxed hash entry in the result register by the value it holds when the entry is
+/// a reference marker (`$r = &$object->name` made it one): a read yields the referenced value,
+/// as `__rt_stdclass_get` does for stdClass, not the marker (which read as an empty string).
+fn emit_follow_dynamic_hash_ref_marker(ctx: &mut FunctionContext<'_>) {
+    let local = ctx.next_label("dyn_hash_ref_follow");
+    let retry = format!("{local}_retry");
+    let value = format!("{local}_value");
+    let (box_reg, scratch) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x9"),
+        Arch::X86_64 => ("rax", "r10"),
+    };
+    ctx.emitter.label(&retry);
+    crate::codegen_support::ref_markers::emit_follow_boxed_ref_marker(
+        ctx.emitter, box_reg, scratch, &retry, &value, &local,
+    );
+    ctx.emitter.label(&value);
+}
+
 
 /// The probe half of the read above, leaving the answer as a BOXED Mixed pointer.
 ///
@@ -1058,6 +1083,7 @@ pub(super) fn emit_scope_dynamic_property_hash_probe(
             ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
         }
     }
+    emit_follow_dynamic_hash_ref_marker(ctx);
     abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -1247,6 +1273,7 @@ fn emit_dynamic_hash_read_or_magic_get(
             ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
         }
     }
+    emit_follow_dynamic_hash_ref_marker(ctx);
     abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)?;
@@ -1305,6 +1332,7 @@ pub(super) fn lower_runtime_allow_dynamic_prop_get(
             ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
         }
     }
+    emit_follow_dynamic_hash_ref_marker(ctx);
     abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&miss_label);

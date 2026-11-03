@@ -177,38 +177,17 @@ pub(super) fn emit_property_warning_fragment(ctx: &mut FunctionContext<'_>, byte
     abi::emit_call_label(ctx.emitter, if complete { "__rt_diag_warning" } else { "__rt_diag_warning_fragment" });
 }
 
-/// Appends PHP's ` in FILE on line N` suffix to the pending diagnostic.
+/// Publishes the raise site of the pending property diagnostic.
 ///
-/// The static message fragment already sits in the warning buffer; these raw writes add the
-/// location PHP's CLI formatter reports for a statement in the main script. The caller finishes
-/// the diagnostic with its newline fragment so one warning is dispatched exactly once.
+/// The static message fragment already sits in the warning buffer. Warning dispatch renders the
+/// default output as php's CLI does, `message in FILE on line N`, from the published site
+/// (`emit_located_display`), so this records where the message ends (what a handler receives)
+/// and publishes the site; appending the suffix here as well printed it twice. The caller
+/// finishes the diagnostic with its newline fragment so one warning is dispatched exactly once.
 pub(super) fn emit_property_warning_location(ctx: &mut FunctionContext<'_>, line: u32) {
-    // Record where the message ends before the location suffix is appended. Warning
-    // dispatch hands PHP error handlers only that prefix, while the default output keeps
-    // the complete buffered line including ` in <file> on line <n>`.
     let scratch = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_pending_len", 0);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_rt_diag_warning_message_len", 0);
-    emit_property_warning_fragment(ctx, b" in ", false);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x1", "_script_source_file");
-            abi::emit_load_symbol_to_reg(ctx.emitter, "x2", "_script_source_file_len", 0);
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rdi", "_script_source_file");
-            abi::emit_load_symbol_to_reg(ctx.emitter, "rsi", "_script_source_file_len", 0);
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
-    emit_property_warning_fragment(ctx, b" on line ", false);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), i64::from(line));
-    abi::emit_call_label(ctx.emitter, "__rt_itoa");
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                               // pass the formatted line-number pointer to the warning fragment buffer
-        ctx.emitter.instruction("mov rsi, rdx");                               // pass the formatted line-number length to the warning fragment buffer
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
     // Publish the real caller location for a user error handler: one `php_site` record
     // `{file descriptor, line}`, whose zero descriptor names the entry file (see
     // `prepare_call_site`); warning dispatch expands it into the `_php_diagnostic_*` words.

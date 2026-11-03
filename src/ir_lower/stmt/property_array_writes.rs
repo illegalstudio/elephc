@@ -1440,7 +1440,10 @@ fn receiver_stores_property_dynamically(
         return true;
     }
     ctx.classes.get(class_name).is_some_and(|class_info| {
-        class_info.allow_dynamic_properties && class_info.visible_property(property).is_none()
+        // Any per-instance hash: `#[AllowDynamicProperties]`, or the one this program reserves
+        // for a name it creates on an ordinary class (php 8.2+'s deprecated dynamic property).
+        class_info.dynamic_property_hash_is_name_addressable()
+            && class_info.visible_property(property).is_none()
     })
 }
 

@@ -814,3 +814,125 @@ forward(['x' => 1, 'y' => 2]);
     assert_eq!(out.stdout, "v0 v1\nv0 v1\nm n\n2:v0,v1\nv0 v1\n2:1,2\n2:a,b\n2:1,2\n2:1,2\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// php 8.2+ still CREATES an undeclared property on an ordinary class, after
+/// `Deprecated: Creation of dynamic property C::$p is deprecated` (once per object and name):
+/// a constructor's `$this->made = ...`, a `??` read-modify-write, an element push, a compound
+/// assignment, `isset`/`unset`, and a reference binding all reach the instance's hash, which the
+/// program reserves for the classes it creates names on. elephc refused all of them as
+/// `Undefined property`.
+#[test]
+fn test_undeclared_property_creation_on_an_ordinary_class() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Legacy {
+    public $declared = 1;
+    public function __construct() { $this->made = 'ctor'; }
+    public function bump() { $this->count = ($this->count ?? 0) + 1; return $this->count; }
+}
+class Child extends Legacy {}
+$l = new Legacy();
+echo $l->made, "\n";
+echo $l->bump(), $l->bump(), "\n";
+$c = new Child();
+$c->extra = [1];
+$c->extra[] = 2;
+echo json_encode($c), "\n";
+var_dump(isset($c->extra), isset($c->none));
+unset($c->extra);
+echo json_encode($c), "\n";
+$c->counter = 5;
+$c->counter += 2;
+$c->counter++;
+echo $c->counter, "\n";
+$q = &$l->aliased;
+$q = 'via-ref';
+echo $l->aliased, "\n";
+var_dump($l);
+unset($q);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "ctor\n12\n{\"declared\":1,\"made\":\"ctor\",\"extra\":[1,2]}\nbool(true)\nbool(false)\n\
+         {\"declared\":1,\"made\":\"ctor\"}\n8\nvia-ref\nobject(Legacy)#1 (4) {\n  [\"declared\"]=>\n  \
+         int(1)\n  [\"made\"]=>\n  string(4) \"ctor\"\n  [\"count\"]=>\n  int(2)\n  [\"aliased\"]=>\n  \
+         &string(7) \"via-ref\"\n}\n"
+    );
+    for created in [
+        "Legacy::$made", "Legacy::$count", "Child::$made", "Child::$extra", "Child::$counter",
+        "Legacy::$aliased",
+    ] {
+        let notice = format!("Deprecated: Creation of dynamic property {created} is deprecated");
+        assert_eq!(out.stderr.matches(&notice).count(), 1, "{notice}\n{}", out.stderr);
+    }
+    assert!(!out.stderr.contains("on line 4 in "), "location printed twice: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// `#[AllowDynamicProperties]` inside a namespace resolves to `N\AllowDynamicProperties`, a
+/// user attribute, not the built-in: the class stays an ordinary one, so creating `$x` reports
+/// php's deprecation (and still stores the value) instead of being silently allowed.
+#[test]
+fn test_namespaced_allow_dynamic_properties_lookalike_keeps_the_deprecation() {
+    let out = compile_and_run_capture(
+        "<?php namespace N; #[AllowDynamicProperties] class Bag {} $b = new Bag(); $b->x = 1; echo $b->x, \"\\n\";",
+    );
+    assert_eq!(out.stdout, "1\n");
+    assert!(
+        out.stderr.contains("Deprecated: Creation of dynamic property N\\Bag::$x is deprecated"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// A reference to a runtime-named property of a declared class binds that property: a declared
+/// slot (every one this class and its subclasses hold), or, on `#[AllowDynamicProperties]`, the
+/// entry of the instance's dynamic-property hash, created on first use -- also for a constant
+/// undeclared name (`&$a->extra`), which the backend refused. nette/utils' `Arrays` binds
+/// `$x = &$x->{$key}` this way.
+#[test]
+fn test_reference_to_runtime_named_property_of_a_declared_class() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+#[AllowDynamicProperties]
+class A { public $p = 0; public $q = 'q'; }
+class B extends A { public $own = 'o'; }
+class Plain { public $p = 0; public $q = 'q'; }
+function fill(A $a, array $names): void {
+    foreach ($names as $name) {
+        $s = &$a->$name;
+        $s = is_array($s) ? $s : "set-$name";
+        unset($s);
+    }
+}
+$a = new A();
+$a->seen = 'before';
+$lit = &$a->extra;
+$lit = ['x'];
+$lit[] = 'y';
+$n = 'dyn';
+$r = &$a->$n;
+$r = [1];
+$r[] = 2;
+fill($a, ['p', 'q', 'seen']);
+echo json_encode($a), "\n";
+$b = new B();
+fill($b, ['own', 'p', 'extra']);
+echo json_encode($b), "\n";
+$c = new Plain();
+foreach (['p', 'q'] as $name) {
+    $u = &$c->$name;
+    $u .= '!';
+    unset($u);
+}
+echo json_encode($c), "\n";
+unset($lit, $r);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"p\":\"set-p\",\"q\":\"set-q\",\"seen\":\"set-seen\",\"extra\":[\"x\",\"y\"],\"dyn\":[1,2]}\n\
+         {\"p\":\"set-p\",\"q\":\"q\",\"own\":\"set-own\",\"extra\":\"set-extra\"}\n\
+         {\"p\":\"0!\",\"q\":\"q!\"}\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

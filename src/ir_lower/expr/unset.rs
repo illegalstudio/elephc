@@ -1250,7 +1250,9 @@ pub(super) fn property_unset_action(
         }
         return Some(UnsetPropertyAction::RemoveDynamic);
     }
-    if class_info.allow_dynamic_properties && class_info.visible_property(property).is_none() {
+    if class_info.dynamic_property_hash_is_name_addressable()
+        && class_info.visible_property(property).is_none()
+    {
         return Some(dynamic_property_unset_action(ctx, &class_name));
     }
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {

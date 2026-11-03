@@ -123,6 +123,82 @@ pub(in crate::types::checker) fn record_scope_dynamic_mutation(
     );
 }
 
+/// Records a write that CREATES an undeclared property on an ordinary class (`$c->p = v` where
+/// no class in the receiver's hierarchy declares `p`): php 8.2+ stores it after the creation
+/// deprecation, so the class and its subclasses need the per-instance hash.
+pub(in crate::types::checker) fn record_undeclared_property_creation(
+    checker: &mut Checker,
+    class_name: &str,
+    property: &str,
+) {
+    record_site(checker, class_name, Some(property.to_string()), "__set", false);
+}
+
+/// Claims a mutation of `$object->property` on `class_name` (an element write, a reference
+/// binding) as the CREATION of a php 8.2+ deprecated dynamic property, recording its site.
+///
+/// Answers `false`, recording nothing, wherever php would not create one here: the name is
+/// visible or a descendant declares it, the class answers through `__set`/`__get`, it is a
+/// builtin with its own layout, or the scope resolves the name to a slot. A readonly class is
+/// php's `Cannot create dynamic property` error.
+pub(in crate::types::checker) fn claim_undeclared_property_creation(
+    checker: &mut Checker,
+    class_name: &str,
+    property: &str,
+    span: crate::span::Span,
+) -> Result<bool, crate::errors::CompileError> {
+    let class_name = class_name.trim_start_matches('\\');
+    let Some(info) = checker.classes.get(class_name) else {
+        return Ok(false);
+    };
+    if info.visible_property(property).is_some()
+        || info.methods.contains_key("__set")
+        || info.methods.contains_key("__get")
+        || elephc_builtin_contract::lookup_class(class_name).is_some()
+        || !checker.descendant_declared_property_types(class_name, property).is_empty()
+        || crate::types::resolve_property_name(
+            &checker.classes,
+            class_name,
+            property,
+            checker.current_class.as_deref(),
+        ) != crate::types::PropertyNameResolution::Dynamic
+    {
+        return Ok(false);
+    }
+    if info.is_readonly_class {
+        return Err(crate::errors::CompileError::new(
+            span,
+            &format!("Cannot create dynamic property {}::${}", class_name, property),
+        ));
+    }
+    record_undeclared_property_creation(checker, class_name, property);
+    Ok(true)
+}
+
+/// Returns whether a read of the undeclared `property` on `class_name` can find a property a
+/// recorded creation stores (on this class or an ancestor the receiver inherits from).
+///
+/// php reads an undeclared name as `Undefined property` + null when nothing created it, so the
+/// read is admitted (typed `mixed`) only where this program writes the name: the backend reads
+/// the instance's hash, which answers the stored value or the warning.
+pub(in crate::types::checker) fn created_property_is_readable(
+    checker: &Checker,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    let class_name = class_name.trim_start_matches('\\');
+    checker.scope_dynamic_mutation_targets.sites.iter().any(|site| {
+        !site.same_pair_set_reentry
+            && site.property.as_deref() == Some(property)
+            && (site.class_name == class_name
+                || checker.is_subclass_of(class_name, &site.class_name)
+                || checker.is_subclass_of(&site.class_name, class_name))
+    }) || checker
+        .classes
+        .get(class_name)
+        .is_some_and(|info| info.scope_dynamic_property_storage)
+}
+
 /// Inserts one site, normalized, with the scope it was written in.
 fn record_site(
     checker: &mut Checker,
@@ -454,12 +530,19 @@ fn site_needs_storage_on_class(
         });
     }
     match &site.property {
+        // A strict ancestor's private name, or a name no class here declares at all: php makes
+        // both a dynamic property of this class (a subclass that declares the name keeps it).
         Some(property) => crate::types::property_name_shadows_ancestor_private_slot(
             &checker.classes,
             class_name,
             property,
             site.scope.as_deref(),
-        ),
+        ) || crate::types::resolve_property_name(
+            &checker.classes,
+            class_name,
+            property,
+            site.scope.as_deref(),
+        ) == crate::types::PropertyNameResolution::Dynamic,
         None => true,
     }
 }

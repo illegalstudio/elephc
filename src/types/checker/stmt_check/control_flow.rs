@@ -386,9 +386,22 @@ pub(in crate::types::checker) fn widen_properties_for_unknown_receiver_reference
     checker: &mut Checker,
     selects: impl Fn(&str) -> bool,
 ) -> bool {
+    widen_properties_for_receiver_reference(checker, None, selects)
+}
+
+/// [`widen_properties_for_unknown_receiver_reference`] limited to `receivers` (a known class
+/// and its subclasses) when given: `&$known->$name` can only reach a property of the runtime
+/// class, so widening every class in scope would change layouts the receiver never has.
+pub(in crate::types::checker) fn widen_properties_for_receiver_reference(
+    checker: &mut Checker,
+    receivers: Option<&HashSet<String>>,
+    selects: impl Fn(&str) -> bool,
+) -> bool {
     let mut selected = Vec::new();
     for (class_name, info) in &checker.classes {
-        if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        if crate::types::checker::builtin_stdclass::is_stdclass(class_name)
+            || receivers.is_some_and(|receivers| !receivers.contains(class_name))
+        {
             continue;
         }
         for (property, _) in &info.properties {

@@ -454,7 +454,9 @@ fn lower_known_missing_property_probe(
         .iter()
         .any(|(name, _)| name == property)
         || class_info.methods.contains_key("__get")
-        || class_info.allow_dynamic_properties
+        // Any per-instance hash can hold the name: `#[AllowDynamicProperties]`, or the storage
+        // this program reserves for a name it creates (php 8.2+'s deprecated dynamic property).
+        || class_info.dynamic_property_hash_is_name_addressable()
     {
         return None;
     }

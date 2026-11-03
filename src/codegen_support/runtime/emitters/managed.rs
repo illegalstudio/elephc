@@ -319,6 +319,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_class_id_by_name(emitter);
     objects::emit_class_alias(emitter);
     objects::emit_stdclass_prop_ref_cell(emitter);
+    objects::emit_object_hash_prop_ref_cell(emitter);
     objects::emit_prop_scope_denied(emitter);
     objects::emit_call_object_destructor(emitter);
     // PHP `==` walkers: one boxed-Mixed dispatcher plus the array and object
