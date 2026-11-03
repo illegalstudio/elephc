@@ -8,6 +8,7 @@
 //! - `__invoke`, `__call`, and `__callStatic` receive normalized argument arrays.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::with_runtime_owners;
 
 /// Dispatches an invokable object through `__invoke()` without enforcing hook visibility.
 pub(in crate::interpreter) fn eval_invokable_object_call_result(
@@ -193,14 +194,16 @@ pub(in crate::interpreter) fn eval_magic_static_method_call(
     }
     let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
     let owners: Vec<_> = magic_args.iter().map(|argument| argument.value).collect();
-    let result = eval_dynamic_static_method_with_values(
-        &declaring_class,
-        called_class_name,
-        &method,
-        magic_args,
-        context,
-        values,
-    );
+    let result = with_runtime_owners(&owners, || {
+        eval_dynamic_static_method_with_values(
+            &declaring_class,
+            called_class_name,
+            &method,
+            magic_args,
+            context,
+            values,
+        )
+    });
     finish_synthesized_method_arguments(result, owners, context, values).map(Some)
 }
 

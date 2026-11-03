@@ -164,17 +164,40 @@ class NativeCycleCastConsumer {
     public function apply(callable $callback): void { $callback(); }
     public static function applyStatic(callable $callback): void { $callback(); }
 }
+class NativeCycleMagicConsumer {
+    public function __call(string $name, array $arguments): mixed { return $arguments[0](); }
+    public static function __callStatic(string $name, array $arguments): mixed { return $arguments[0](); }
+}
 function nativeCycleCastFunction(callable $callback): void { $callback(); }
-for ($mode = 0; $mode < 4; $mode++) {
+$function = nativeCycleCastFunction(...);
+for ($mode = 0; $mode < 9; $mode++) {
     $callback = new NativeCycleCastCallback();
-    $fiber = new Fiber(static function () use ($callback, $mode): void {
+    $fiber = new Fiber(static function () use ($callback, $mode, $function): void {
         eval('
             if ($mode === 0) { $consumer = new NativeCycleCastConsumer($callback, true); }
             elseif ($mode === 1) {
                 $consumer = new NativeCycleCastConsumer($callback, false);
                 $consumer->apply($callback);
             } elseif ($mode === 2) { NativeCycleCastConsumer::applyStatic($callback); }
-            else { nativeCycleCastFunction($callback); }
+            elseif ($mode === 3) { nativeCycleCastFunction($callback); }
+            elseif ($mode === 4) {
+                $consumer = new NativeCycleMagicConsumer(); $consumer->missing($callback);
+            } elseif ($mode === 5) { NativeCycleMagicConsumer::missing($callback); }
+            elseif ($mode === 7) { call_user_func($function, $callback); }
+            else {
+                if (!class_exists("EvalCycleMagicConsumer", false)) {
+                    class EvalCycleMagicConsumer {
+                        public static function __callStatic(string $name, array $arguments): mixed {
+                            return $arguments[0]();
+                        }
+                        public function __call(string $name, array $arguments): mixed {
+                            return $arguments[0]();
+                        }
+                    }
+                }
+                if ($mode === 6) { EvalCycleMagicConsumer::missing($callback); }
+                else { $consumer = new EvalCycleMagicConsumer(); $consumer->missing($callback); }
+            }
         ');
     });
     $callback->fiber = $fiber;
@@ -186,7 +209,7 @@ echo 'done';
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
-    assert_eq!(output.stdout, "9|9|9|9|done");
+    assert_eq!(output.stdout, "9|9|9|9|9|9|9|9|9|done");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 

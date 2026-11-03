@@ -8,6 +8,7 @@
 //! - Called-class scope, reference modes, positional extraction, and writeback stay paired.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::with_runtime_owners;
 
 /// Calls a wrapper hook while consuming only the fresh operands synthesized by its caller.
 pub(in crate::interpreter) fn eval_dynamic_method_with_owned_values(
@@ -17,9 +18,11 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_owned_values(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let owners: Vec<_> = arguments.iter().map(|argument| argument.value).collect();
     for argument in &mut arguments { argument.value = argument.value.borrowed(); }
-    let result = eval_dynamic_method_with_values(
-        class_name, called_class_name, method, object, arguments, context, values,
-    );
+    let result = with_runtime_owners(&owners, || {
+        eval_dynamic_method_with_values(
+            class_name, called_class_name, method, object, arguments, context, values,
+        )
+    });
     finish_synthesized_method_arguments(result, owners, context, values)
 }
 

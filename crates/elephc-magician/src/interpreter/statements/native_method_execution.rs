@@ -517,14 +517,16 @@ pub(in crate::interpreter) fn eval_native_magic_instance_method_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
     let owners: Vec<_> = magic_args.iter().map(|argument| argument.value).collect();
-    let result = eval_native_method_with_evaluated_args_unchecked(
-        object,
-        class_name,
-        "__call",
-        magic_args,
-        context,
-        values,
-    );
+    let result = with_runtime_owners(&owners, || {
+        eval_native_method_with_evaluated_args_unchecked(
+            object,
+            class_name,
+            "__call",
+            magic_args,
+            context,
+            values,
+        )
+    });
     finish_synthesized_method_arguments(result, owners, context, values)
 }
 
@@ -538,12 +540,14 @@ pub(in crate::interpreter) fn eval_native_magic_static_method_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
     let owners: Vec<_> = magic_args.iter().map(|argument| argument.value).collect();
-    let result = eval_native_static_method_with_evaluated_args_unchecked(
-        class_name,
-        "__callStatic",
-        magic_args,
-        context,
-        values,
-    );
+    let result = with_runtime_owners(&owners, || {
+        eval_native_static_method_with_evaluated_args_unchecked(
+            class_name,
+            "__callStatic",
+            magic_args,
+            context,
+            values,
+        )
+    });
     finish_synthesized_method_arguments(result, owners, context, values)
 }

@@ -426,6 +426,8 @@ publish their Rust-owned argument array, independently of its retained entries.
 Argument cleanup moves its obligations into stable slots and clears each slot
 before release. The promoted call result has a separate slot until cleanup ends,
 so a destructor that suspends cannot turn the held result into an external root.
+Synthesized wrapper and magic-method arguments expose their original owner vectors
+through dispatch, then transfer those obligations to the shared cleanup slots.
 
 ## Runtime generic specialization
 
