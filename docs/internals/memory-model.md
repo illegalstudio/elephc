@@ -634,12 +634,15 @@ publishers, protected callbacks, invisible keepalive pins and binding lifecycle
 still need integration before typed canonical references can be enabled.
 
 Native validation roots use caller-owned 32-byte records containing previous and
-next links, a boxed value, and padding. Each record retains one physical value
-owner, which clone, projection, array-copy and eval sharing checks subtract when
-deciding whether a PHP reference has another visible owner. The checks scan only
+next links, a managed owner pointer, and padding. Each record retains one boxed
+value or native cell owner. Cell clone and projection checks exclude native-cell
+roots as well as the wrapper roots excluded by value-sharing checks. Sharing
+checks subtract these artificial owners before deciding whether a PHP reference
+has another visible owner. The checks scan only
 active validation records and do not call PHP or acquire another owner. Records
 can retire in any order, allowing interleaved suspended activations. A record is
-unlinked before protected release can run a destructor. Web request reset clears
+unlinked before protected generic release can run a destructor. A final native
+cell root releases its descriptor-selected child and allocation. Web request reset clears
 the registry before cleanup can inspect a retired request stack. Generated
 publishers still need to enter and leave these roots on every path; cancellation
 must retire a record before releasing its activation's stack.

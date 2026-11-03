@@ -1,5 +1,5 @@
 //! Purpose:
-//! Roots native reference values during coercion without changing PHP alias sharing.
+//! Roots boxed values and managed native cells without changing PHP alias sharing.
 //!
 //! Called from:
 //! - Reference validation publishers and reference-sharing readers.
@@ -130,7 +130,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_store_zero_to_address(emitter, record, 8);
     abi::emit_store_zero_to_address(emitter, record, 16);
     abi::load_at_offset(emitter, result, 8);
-    abi::emit_decref_preserving_exception(emitter, &PhpType::Mixed);
+    abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_any", result);
     abi::emit_frame_restore(emitter, 32);
     abi::emit_return(emitter);
 }
@@ -150,7 +150,7 @@ mod tests {
             let assembly = emitter.output();
             let (enter, leave) = assembly.split_once("__rt_reference_validation_pin_leave:").unwrap();
             assert!(enter.find("__rt_incref").unwrap() < enter.find(TOP).unwrap(), "{name}: retain before publishing the record");
-            assert!(leave.find(TOP).unwrap() < leave.find("__rt_decref_mixed").unwrap(), "{name}: remove the record before protected release");
+            assert!(leave.find(TOP).unwrap() < leave.find("__rt_decref_any").unwrap(), "{name}: remove the record before protected generic release");
             assert!(leave.contains("__rt_cleanup"), "{name}: final retirement must contain PHP exceptions");
         }
     }

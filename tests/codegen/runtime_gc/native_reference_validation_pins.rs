@@ -373,6 +373,7 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     enter(&mut asm, 32, 0);
     enter(&mut asm, 64, 0);
     enter(&mut asm, 96, 16);
+    enter(&mut asm, 128, 8);
     expect_detached_array_copy(&mut asm);
     // A singleton canonical clone must contain a different wrapper with the same value.
     load(&mut asm, 8);
@@ -400,11 +401,14 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     leave(&mut asm, 32);
     expect_detached_array_copy(&mut asm);
     leave(&mut asm, 96);
-    expect_zero(&mut asm, "_rt_reference_validation_pins_top");
     load(&mut asm, 16);
     call(&mut asm, "__rt_decref_mixed");
     load(&mut asm, 8);
     call(&mut asm, "__rt_reference_cell_release");
+    instruction(&mut asm, "str xzr, [sp, #8]", "mov QWORD PTR [rsp + 8], 0");
+    // The final invisible native-cell owner must dispatch by heap kind and release its child.
+    leave(&mut asm, 128);
+    expect_zero(&mut asm, "_rt_reference_validation_pins_top");
     expect_zero(&mut asm, "_gc_live");
     instruction(&mut asm, "mov x0, #1", "mov eax, 1");
     instruction(&mut asm, "b Lvalidation_pin_print", "jmp Lvalidation_pin_print");

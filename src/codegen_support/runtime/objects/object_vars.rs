@@ -257,6 +257,9 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x17, #-8]");                                 // inspect collector-only cell ownership
     emitter.instruction("ubfx x10, x10, #18, #1");                              // isolate the artificial destructor pin
     emitter.instruction("sub w9, w9, w10");                                     // count only PHP-visible cell owners
+    super::super::reference_cells::subtract_validation_pins(
+        emitter, "x17", "x9", "x10", "x11", "__rt_object_to_hash_cell",
+    );
     emitter.instruction("cmp w9, #1");                                          // a live native alias keeps the projected reference shared
     emitter.instruction("b.ls __rt_object_to_hash_wrapper_owners");             // singleton native cells need an independently shared wrapper
     emitter.instruction("mov x0, x17");                                         // promote the shared native slot before projecting its value
@@ -553,6 +556,9 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r11, 18");                                         // position the artificial destructor pin
     emitter.instruction("and r11d, 1");                                         // isolate the artificial destructor pin
     emitter.instruction("sub r9d, r11d");                                       // count only PHP-visible cell owners
+    super::super::reference_cells::subtract_validation_pins(
+        emitter, "r10", "r9", "r11", "rcx", "__rt_object_to_hash_cell_x",
+    );
     emitter.instruction("cmp r9d, 1");                                          // a live native alias keeps the projected reference shared
     emitter.instruction("jbe __rt_object_to_hash_wrapper_owners_x");            // singleton native cells need an independently shared wrapper
     emitter.instruction("mov rax, r10");                                        // promote the shared native slot before projecting its value

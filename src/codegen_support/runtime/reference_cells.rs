@@ -194,6 +194,7 @@ fn emit_clone(emitter: &mut Emitter) {
             emitter.instruction("ldr x10, [x0, #-8]");                          // inspect transient ownership held by the cycle collector
             emitter.instruction("ubfx x10, x10, #18, #1");                      // isolate the artificial destructor pin
             emitter.instruction("sub w9, w9, w10");                             // PHP alias sharing excludes collector-only ownership
+            subtract_validation_pins(emitter, "x0", "x9", "x10", "x11", "__rt_reference_cell_clone_cell");
             emitter.instruction("cmp w9, #1");                                  // singleton references separate when their object is cloned
             emitter.instruction("b.hi __rt_reference_cell_clone_shared");       // preserve sharing while another alias owns the reference
         }
@@ -203,6 +204,7 @@ fn emit_clone(emitter: &mut Emitter) {
             emitter.instruction("shr r9, 18");                                  // position the artificial destructor pin
             emitter.instruction("and r9d, 1");                                  // isolate collector-only ownership
             emitter.instruction("sub ecx, r9d");                                // PHP alias sharing excludes collector pins
+            subtract_validation_pins(emitter, "rax", "rcx", "r10", "r11", "__rt_reference_cell_clone_cell");
             emitter.instruction("cmp ecx, 1");                                  // singleton references separate when their object is cloned
             emitter.instruction("ja __rt_reference_cell_clone_shared");         // preserve sharing while another alias owns the reference
         }
