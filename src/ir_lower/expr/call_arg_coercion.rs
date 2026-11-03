@@ -370,7 +370,7 @@ pub(super) fn lower_tracked_callable_array_param(
             ..
         } => return None,
     };
-    Some(lower_first_class_callable(ctx, &target, arg))
+    Some(lower_callable_value(ctx, &target, arg))
 }
 
 /// Gives an escaping by-reference return a managed owner for a caller local.

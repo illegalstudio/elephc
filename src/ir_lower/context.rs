@@ -3782,6 +3782,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     // Binding creates a fresh descriptor that owns its receiver capture.
                     | Op::ClosureBind
                     | Op::FirstClassCallableNew
+                    | Op::CallableValueNew
                     | Op::CallableArrayNew
                     | Op::BufferNew
                     | Op::GeneratorNew

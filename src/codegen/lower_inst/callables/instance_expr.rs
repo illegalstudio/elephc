@@ -282,7 +282,7 @@ fn expr_callable_local_source_instruction<'a>(
 
 /// Verifies that the recovered producer materializes a first-class callable descriptor.
 fn require_expr_callable_source<'a>(inst: &'a Instruction, owner: &str) -> Result<&'a Instruction> {
-    if inst.op == Op::FirstClassCallableNew {
+    if matches!(inst.op, Op::FirstClassCallableNew | Op::CallableValueNew) {
         Ok(inst)
     } else {
         Err(CodegenIrError::unsupported(format!(

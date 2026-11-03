@@ -11,12 +11,23 @@
 
 use super::*;
 
-/// Lowers a call parameter's literal storage and exposes its numeric integer conversion.
+/// Lowers parameter storage, preserving implicit callable identity and integer destinations.
 pub(super) fn lower_expr_for_parameter(
     ctx: &mut LoweringContext<'_, '_>,
     expr: &Expr,
     destination: &PhpType,
 ) -> LoweredValue {
+    if destination.codegen_repr() == PhpType::Callable {
+        let source = match &expr.kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => expr,
+        };
+        if let ExprKind::StringLiteral(name) = &source.kind {
+            if let Some(target) = crate::types::param_binding::callable_target_from_name(name) {
+                return lower_callable_value(ctx, &target, source);
+            }
+        }
+    }
     let value = lower_expr_for_destination(ctx, expr, destination);
     coerce_integer_arithmetic(ctx, value, destination, expr.span)
 }

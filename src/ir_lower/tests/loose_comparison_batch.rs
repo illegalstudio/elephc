@@ -31,13 +31,19 @@ function referenceSwitch(): int {
     restore_error_handler();
     return $result;
 }
-echo boolSwitch(true), boolLabels(2), iterableSwitch([1]), mixedSwitch(new stdClass()), referenceSwitch();
+function callableNumber(callable $callback): bool { return $callback == 1; }
+echo boolSwitch(true), boolLabels(2), iterableSwitch([1]), mixedSwitch(new stdClass()), referenceSwitch(),
+    callableNumber("strlen"), callableNumber(callback: "strlen"), callableNumber(strlen(...));
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = crate::codegen::platform::Target::parse(target).unwrap();
         let module = super::lower_source_at_for_target(
             source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
         );
+        let constructors: Vec<_> = module.functions.iter().flat_map(|f| &f.instructions).map(|i| i.op).collect();
+        assert_eq!(constructors.iter().filter(|op| **op == Op::CallableValueNew).count(), 2,
+            "{target:?}: positional and named implicit string callables");
+        assert!(constructors.contains(&Op::FirstClassCallableNew), "{target:?}: actual Closure object");
         for name in ["boolSwitch", "boolLabels", "iterableSwitch", "mixedSwitch"] {
             let function = module.functions.iter().find(|f| f.name == name).unwrap();
             assert!(!function.blocks.iter().any(|b| matches!(b.terminator, Some(Terminator::Switch { .. }))),

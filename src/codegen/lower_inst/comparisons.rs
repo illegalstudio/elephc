@@ -494,7 +494,7 @@ fn emit_mixed_numeric_compare(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&object_label);
-    emit_mixed_numeric_object_compare(ctx, numeric_ty, is_equal);
+    emit_mixed_numeric_object_compare(ctx, numeric_ty, is_equal, &non_scalar_label);
     abi::emit_jump(ctx.emitter, &done_label);
 
     if let Some(label) = integer_label {
@@ -510,7 +510,22 @@ fn emit_mixed_numeric_object_compare(
     ctx: &mut FunctionContext<'_>,
     numeric_ty: &PhpType,
     is_equal: bool,
+    non_object: &str,
 ) {
+    let checked = ctx.next_label("mixed_numeric_object_checked");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #10");                             // ordinary objects already have PHP object identity
+            ctx.emitter.instruction(&format!("b.ne {checked}"));                // only callable descriptors need their object handle checked
+            crate::codegen_support::callable_descriptor::emit_require_object_handle(ctx.emitter, "x1", non_object);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 10");                             // ordinary objects already have PHP object identity
+            ctx.emitter.instruction(&format!("jne {checked}"));                 // only callable descriptors need their object handle checked
+            crate::codegen_support::callable_descriptor::emit_require_object_handle(ctx.emitter, "rdi", non_object);
+        }
+    }
+    ctx.emitter.label(&checked);
     let kind = i64::from(*numeric_ty == PhpType::Float);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

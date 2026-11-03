@@ -39,7 +39,11 @@ the complete equality table then compares it with the updated operand. This also
 handles new strings, arrays, objects and Closure descriptors, including a second
 conversion warning or throw. Scalar conversion keeps the structural recursion depth.
 Closure descriptors use the shared warning helper's fixed class spelling in both
-the generic table and specialized Mixed/number comparisons. Each global runtime
+the generic table and specialized Mixed/number comparisons. Implicit string and
+array callables use `CallableValueNew` instead of `FirstClassCallableNew`, retaining
+the same invocation descriptor and captures without PHP object identity. Numeric
+comparison checks the descriptor's object handle before selecting Closure conversion;
+invocation target kinds alone do not distinguish these PHP value forms. Each global runtime
 entry explicitly branches to its shared body so linker section collection retains it.
 
 ## Pipeline Position

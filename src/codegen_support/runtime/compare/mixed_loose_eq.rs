@@ -754,6 +754,25 @@ fn emit_null_float_compare(emitter: &mut Emitter) {
 
 /// Reports object or Closure numeric conversion using the opposite operand's numeric tag.
 fn emit_object_numeric_warning(emitter: &mut Emitter, left_object: bool) {
+    let checked = if left_object { "__rt_mle_left_numeric_object_checked" } else { "__rt_mle_right_numeric_object_checked" };
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let (object, tag) = if left_object { (32, 24) } else { (56, 48) };
+            emitter.instruction(&format!("ldr x0, [sp, #{tag}]"));              // identify the value form before any warning can run PHP
+            emitter.instruction("cmp x0, #10");                                 // only descriptors can represent non-object callables
+            emitter.instruction(&format!("b.ne {checked}"));                    // ordinary objects keep their numeric conversion
+            emitter.instruction(&format!("ldr x0, [sp, #{object}]"));           // borrow the descriptor for the allocation-free handle lookup
+            crate::codegen_support::callable_descriptor::emit_require_object_handle(emitter, "x0", "__rt_mle_false");
+        }
+        Arch::X86_64 => {
+            let (object, tag) = if left_object { (40, 32) } else { (64, 56) };
+            emitter.instruction(&format!("cmp QWORD PTR [rbp - {tag}], 10"));   // only descriptors can represent non-object callables
+            emitter.instruction(&format!("jne {checked}"));                     // ordinary objects keep their numeric conversion
+            emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {object}]")); // borrow the descriptor for the allocation-free handle lookup
+            crate::codegen_support::callable_descriptor::emit_require_object_handle(emitter, "rax", "__rt_mle_false");
+        }
+    }
+    emitter.label(checked);
     match emitter.target.arch {
         Arch::AArch64 => {
             let (object, object_tag, numeric_tag) = if left_object { (32, 24, 48) } else { (56, 48, 24) };
