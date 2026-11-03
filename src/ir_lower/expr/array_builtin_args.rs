@@ -159,6 +159,7 @@ pub(super) fn lower_builtin_call_args(
     let operands = borrowed_string_args::try_lower(ctx, name, sig, args)
         .unwrap_or_else(|| lower_planned_builtin_call_args(ctx, name, sig, args));
     let canonical = php_symbol_key(name.trim_start_matches('\\'));
+    let operands = box_array_map_mixed_hash_source(ctx, &canonical, args, operands);
     let lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering);
     match lowering {
@@ -170,6 +171,40 @@ pub(super) fn lower_builtin_call_args(
         }
         _ => operands,
     }
+}
+
+/// Boxes the source of `array_map($callback, $hash)` when the hash's values are not `int`,
+/// `bool` or `string` (objects of different classes, a union, `mixed`), and of
+/// `array_map($callback, $list)` when the list holds objects.
+///
+/// `__rt_hash_map` takes its callback argument ABI from those three value types only, so such a
+/// hash maps through the boxed-array path a declared `array` source already takes, where every
+/// callback input is a `mixed` cell. The checker types the call the same way (`array_map`'s
+/// `check`). The box is rooted like any evaluated argument, so the call's cleanup releases it.
+fn box_array_map_mixed_hash_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    args: &[Expr],
+    mut operands: Vec<crate::ir::ValueId>,
+) -> Vec<crate::ir::ValueId> {
+    if canonical != "array_map" || operands.len() != 2 {
+        return operands;
+    }
+    let boxes = match ctx.builder.value_php_type(operands[1]).codegen_repr() {
+        PhpType::AssocArray { value, .. } => {
+            !matches!(value.codegen_repr(), PhpType::Int | PhpType::Bool | PhpType::Str)
+        }
+        PhpType::Array(element) => matches!(element.as_ref(), PhpType::Object(_)),
+        _ => false,
+    };
+    if !boxes {
+        return operands;
+    }
+    let span = args.get(1).map_or_else(crate::span::Span::dummy, |arg| arg.span);
+    let source = lowered_value_from_id(ctx, operands[1]);
+    let boxed = coerce_value_for_temp(ctx, source, &PhpType::Mixed, span);
+    operands[1] = root_evaluated_call_argument(ctx, boxed, span).value;
+    operands
 }
 
 /// Lowers a string literal naming a BUILTIN, at a `callable` parameter, as that builtin's

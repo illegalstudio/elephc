@@ -139,11 +139,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let callback_is_string = callback_reaches_eir_as_string(cx)?;
     match arr_ty {
         PhpType::Array(elem_ty) => {
+            // A list of objects maps through the boxed-array path too (the lowering boxes it).
             if matches!(elem_ty.as_ref(), PhpType::Object(_)) {
-                return Err(CompileError::new(
-                    cx.span,
-                    "array_map() does not yet support object array elements",
-                ));
+                check_map_callback(cx, elem_ty.as_ref())?;
+                return Ok(PhpType::php_array());
             }
             let callback_ret_ty = check_map_callback(cx, elem_ty.as_ref())?;
             Ok(PhpType::Array(Box::new(mapped_element_type(
@@ -152,11 +151,12 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             ))))
         }
         PhpType::AssocArray { key, value } => {
-            if matches!(value.as_ref(), PhpType::Object(_)) {
-                return Err(CompileError::new(
-                    cx.span,
-                    "array_map() does not yet support object array elements",
-                ));
+            // A hash whose values are objects (of one class or of several), a union or `mixed`
+            // maps through the boxed-array path, as a declared `array` does (the lowering boxes
+            // the source), so its result is a declared `array` too.
+            if !matches!(value.codegen_repr(), PhpType::Int | PhpType::Bool | PhpType::Str) {
+                check_map_callback(cx, value.as_ref())?;
+                return Ok(PhpType::php_array());
             }
             let callback_ret_ty = check_map_callback(cx, value.as_ref())?;
             Ok(PhpType::AssocArray {
