@@ -10,6 +10,7 @@
 mod callables;
 mod classes;
 mod dynamic_references;
+mod native_references;
 mod static_members;
 
 use super::function_variants;
@@ -24,3 +25,5 @@ pub(super) use callables::*;
 pub(super) use classes::*;
 pub(super) use dynamic_references::*;
 pub(super) use static_members::*;
+
+pub(super) use native_references::emit_native_reference_metadata;

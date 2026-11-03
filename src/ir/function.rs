@@ -320,4 +320,6 @@ pub struct FunctionFlags {
     /// property-default init thunks and builtin class methods (Reflection, SPL,
     /// DateTime) lowered into the module. Consumed by source-map emission.
     pub is_synthetic: bool,
+    /// Native C-ABI property declaration callback with a context and original boxed RHS.
+    pub is_native_reference_validator: bool,
 }

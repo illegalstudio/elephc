@@ -561,6 +561,7 @@ fn finalize_user_asm(
     }
     user_asm.push('\n');
     user_asm.push_str(&user_data);
+    user_asm.push_str(&emit_native_reference_metadata(module)?);
     let mut exported: HashSet<String> = exported_functions
         .values()
         .map(|export| module.target.extern_symbol(&export.c_name))

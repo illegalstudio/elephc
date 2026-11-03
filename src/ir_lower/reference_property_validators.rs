@@ -71,6 +71,7 @@ fn lower_callback(class_id: u64, slot: u32, is_static: bool) -> Function {
     let mut function = Function::new(callback_name(class_id, slot, is_static), boxed, PhpType::Mixed);
     function.flags.is_internal = true;
     function.flags.is_synthetic = true;
+    function.flags.is_native_reference_validator = true;
     for (name, ir_type, php_type) in [
         ("context", IrType::I64, PhpType::Int), ("original", boxed, PhpType::Mixed),
     ] {

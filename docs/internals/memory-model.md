@@ -604,6 +604,14 @@ dereference no receiver, cell, value or validator address. Binding hooks must
 remove each source after the receiver destructor and before releasing its cell;
 ordinary reference parameters add no property source. Publisher and lifecycle
 wiring is required before this registry can enforce typed canonical references.
+Selected EIR declaration callbacks have an explicit native-validator function role.
+User assembly emits immutable, aligned descriptors containing the native entry,
+class identifier, physical slot index and static flag. Owned instance binding
+rows contain a byte offset and descriptor pointer for each physical slot,
+including hidden parent-private slots. Borrowed slots have no owned-instance row;
+static declarations keep a separate descriptor namespace. Metadata emission
+rejects callbacks with PHP argument conventions. These rows are available for
+native lifecycle hooks to register the physical bindings.
 Weak indexes select sources by exact native cell or canonical PHP wrapper. Several
 cells may name one wrapper, and each physical property still contributes its own
 source token. Native hooks bind a property before reporting its authenticated

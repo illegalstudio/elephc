@@ -48,6 +48,7 @@ debug_backtrace();
             RuntimeCallTarget::ReferencePropertyCoerce { .. }))))).collect::<Vec<_>>();
     assert_eq!(callbacks.len(), 8, "{target}: seven instance declarations and one static");
     for callback in callbacks {
+        assert!(callback.flags.is_native_reference_validator, "{target}: typed native entry role");
         assert_eq!(callback.params.len(), 2, "{target}: native ABI, without hidden PHP parameters");
         assert!(callback.signature.is_none(), "{target}: no PHP argument normalization");
         assert_eq!(callback.no_epilogue_cleanup_slots.len(), 2, "{target}: borrowed inputs");
