@@ -62,6 +62,16 @@ pub(super) fn emit_reflection_owner_object(
     class_name: &str,
     metadata: &ReflectionOwnerMetadata,
 ) -> Result<()> {
+    emit_reflection_owner_allocation(ctx, class_name)?;
+    emit_reflection_owner_metadata(ctx, class_name, metadata)
+}
+
+/// Allocates an empty Reflection owner object of `class_name` into the integer result
+/// register, before any metadata slot is populated.
+pub(super) fn emit_reflection_owner_allocation(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+) -> Result<()> {
     let (class_id, property_count, uninitialized_marker_offsets) = {
         let class_info = ctx
             .module
@@ -81,8 +91,7 @@ pub(super) fn emit_reflection_owner_object(
         false,
         &uninitialized_marker_offsets,
         &[],
-    )?;
-    emit_reflection_owner_metadata(ctx, class_name, metadata)
+    )
 }
 
 /// Populates Reflection metadata on an object already held in the integer result register.

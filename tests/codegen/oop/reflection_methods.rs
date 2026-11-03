@@ -413,3 +413,60 @@ echo (new ReflectionMethod("ReflectCasingEvalDeclared", "evalmatch"))->getName()
     );
     assert_eq!(out, "Match|Match|Match,StaticOne|Match,StaticOne|EvalMatch");
 }
+
+/// `getDeclaringClass()` / `getParentClass()` return complete reflectors, like php: their
+/// own `getMethods()`, `getProperties()`, `getConstants()` and nested `getDeclaringClass()`
+/// work, two calls return distinct objects, and the declaring classes of a class's members
+/// share one reflector per class (memory stays bounded). Expected output is php 8.3's.
+#[test]
+fn test_declaring_class_reflectors_are_complete() {
+    let out = compile_and_run(
+        r#"<?php
+interface Shape { public function area(): float; }
+class Base implements Shape { public int $a = 1; const K = 3; public function area(): float { return 1.0; } public function f(int $x, Base $b): int { return $x; } }
+class Child extends Base { public string $c = "c"; public function g(?Child $y = null): void {} }
+function names(array $items): string { $out = []; foreach ($items as $item) { $out[] = $item->getName(); } return implode(",", $out); }
+$r = new ReflectionClass("Child");
+$g = $r->getMethod("g");
+$f = $r->getMethod("f");
+$dg = $g->getDeclaringClass(); $df = $f->getDeclaringClass();
+echo $dg->getName(), ":", names($dg->getMethods()), "\n";
+echo $df->getName(), ":", names($df->getMethods()), "\n";
+echo implode(",", array_keys($df->getConstants())), "|", names($df->getProperties()), "\n";
+echo $df->getMethod("f")->getDeclaringClass()->getName(), "|", $df->getMethod("f")->getDeclaringClass()->getMethod("area")->getName(), "\n";
+echo $r->getParentClass()->getName(), ":", count($r->getParentClass()->getMethods()), "|", $dg === $g->getDeclaringClass() ? "same" : "fresh", "\n";
+echo $r->getProperty("a")->getDeclaringClass()->getName(), ":", count($r->getProperty("a")->getDeclaringClass()->getProperties()), "\n";
+$p = $f->getParameters()[1]; echo $p->getDeclaringClass()->getName(), ":", count($p->getDeclaringClass()->getMethods()), "\n";
+echo memory_get_usage() < 4000000 ? "ok" : "big", "\n";
+"#,
+    );
+    assert_eq!(out, r#"Child:g,area,f
+Base:area,f
+K|a
+Base|area
+Base:2|fresh
+Base:1
+Base:2
+ok
+"#);
+}
+
+/// `getMethods()` and `get_class_methods()` follow Zend's function-table order: a class's
+/// own methods, then its parent's table (overridden ones keep the child's position), then
+/// the methods its traits contribute. Expected output is php 8.3's.
+#[test]
+fn test_method_lists_follow_zend_table_order() {
+    let out = compile_and_run(
+        r#"<?php
+trait T { public function t1() {} }
+abstract class A { abstract public function ab(); public function a1() {} public static function s1() {} }
+class B extends A { use T; public function ab() {} public function b1() {} public function a1() {} }
+function names(array $items): string { $out = []; foreach ($items as $item) { $out[] = $item->getName() . "@" . $item->getDeclaringClass()->getName(); } return implode(",", $out); }
+echo names((new ReflectionClass("B"))->getMethods()), "\n";
+echo implode(",", get_class_methods("B")), "\n";
+"#,
+    );
+    assert_eq!(out, r#"ab@B,b1@B,a1@B,s1@A,t1@B
+ab,b1,a1,s1,t1
+"#);
+}

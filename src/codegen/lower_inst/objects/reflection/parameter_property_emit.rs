@@ -334,7 +334,7 @@ pub(super) fn emit_reflection_parameter_declaring_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(declaring_class_name) = parameter.declaring_class_name.as_deref() {
-        emit_shared_shallow_reflection_class(ctx, declaring_class_name)?;
+        emit_shared_reflection_class(ctx, declaring_class_name, true)?;
         emit_box_current_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
@@ -378,7 +378,7 @@ pub(super) fn emit_reflection_parameter_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(class_name) = reflection_parameter_class_name(parameter) {
-        emit_shared_shallow_reflection_class(ctx, class_name)?;
+        emit_shared_reflection_class(ctx, class_name, false)?;
         emit_box_current_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),

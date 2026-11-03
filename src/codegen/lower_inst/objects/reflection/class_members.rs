@@ -13,38 +13,50 @@ use super::*;
 pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_name: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let mut current = Some(class_name.to_string());
-    while let Some(current_name) = current {
-        let Some((resolved_name, info)) = resolve_reflection_class(ctx, &current_name) else {
-            break;
-        };
-        push_unique_method_names(
-            info.methods.keys().filter(|method| {
-                // Inherited builtin implementation methods stay hidden in subclasses too.
-                let declaring = info.method_declaring_classes.get(*method).map(String::as_str).unwrap_or(resolved_name);
-                [resolved_name, declaring].iter().all(|owner| {
-                    elephc_builtin_contract::lookup_class(owner)
-                        .is_none_or(|class| class.method_is_php_visible(method))
-                })
-            }),
-            &mut names,
-            &mut seen,
+    let visible = |info: &crate::types::ClassInfo, resolved_name: &str, method: &str, is_static: bool| {
+        // Inherited builtin implementation methods stay hidden in subclasses too.
+        let declaring = if is_static {
+            info.static_method_declaring_classes.get(method)
+        } else {
+            info.method_declaring_classes.get(method)
+        }
+        .map(String::as_str)
+        .unwrap_or(resolved_name);
+        [resolved_name, declaring].iter().all(|owner| {
+            elephc_builtin_contract::lookup_class(owner)
+                .is_none_or(|class| class.method_is_php_visible(method))
+        })
+    };
+    // Zend's function-table order (`crate::types::method_order`), restricted to the
+    // methods this class actually has and php exposes.
+    if let Some((resolved_name, info)) = resolve_reflection_class(ctx, class_name) {
+        let ordered = crate::types::method_order::zend_method_table_order(
+            resolved_name,
+            &ctx.module.class_infos,
+            &|class| {
+                crate::types::method_order::trait_imported_method_keys(
+                    class,
+                    &ctx.module.declared_trait_methods,
+                )
+            },
         );
-        push_unique_method_names(
-            info.static_methods.keys().filter(|method| {
-                // Inherited builtin implementation methods stay hidden in subclasses too.
-                let declaring = info.static_method_declaring_classes.get(*method).map(String::as_str).unwrap_or(resolved_name);
-                [resolved_name, declaring].iter().all(|owner| {
-                    elephc_builtin_contract::lookup_class(owner)
-                        .is_none_or(|class| class.method_is_php_visible(method))
-                })
-            }),
-            &mut names,
-            &mut seen,
-        );
-        current = info.parent.clone();
-        if current.as_deref() == Some(resolved_name) {
-            break;
+        let present = |key: &String| info.methods.contains_key(key) || info.static_methods.contains_key(key);
+        let filtered: Vec<String> = ordered
+            .into_iter()
+            .filter(|key| present(key))
+            .filter(|key| {
+                let is_static = !info.methods.contains_key(key);
+                visible(info, resolved_name, key, is_static)
+            })
+            .collect();
+        push_unique_method_names(filtered.iter(), &mut names, &mut seen);
+        // Anything the declarations did not cover keeps its table order after them.
+        for (map, is_static) in [(&info.methods, false), (&info.static_methods, true)] {
+            push_unique_method_names(
+                map.keys().filter(|method| visible(info, resolved_name, method, is_static)),
+                &mut names,
+                &mut seen,
+            );
         }
     }
     // A reviewed internal surface reports php-src's declaration order. GMP's synthetic
@@ -601,4 +613,5 @@ pub(super) fn push_unique_listed_constant_member(
         members.push(member);
     }
 }
+
 

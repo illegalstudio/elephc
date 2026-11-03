@@ -146,11 +146,32 @@ pub(super) fn reflection_class_method_names_for_filter(
     }
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for name in class_info
-        .methods
-        .keys()
-        .chain(class_info.static_methods.keys())
-    {
+    // Zend's function-table order first (own methods, the parent's table, trait methods),
+    // then anything the declarations did not cover.
+    let ordered = crate::types::method_order::zend_method_table_order(
+        class_name.trim_start_matches('\\'),
+        ctx.classes,
+        &|class| {
+            crate::types::method_order::trait_imported_method_keys(class, ctx.declared_trait_methods)
+        },
+    );
+    let ordered: Vec<String> = ordered
+        .into_iter()
+        .filter_map(|key| {
+            class_info
+                .methods
+                .keys()
+                .chain(class_info.static_methods.keys())
+                .find(|name| php_symbol_key(name) == key)
+                .cloned()
+        })
+        .collect();
+    for name in ordered.iter().chain(
+        class_info
+            .methods
+            .keys()
+            .chain(class_info.static_methods.keys()),
+    ) {
         // Builtin implementation methods a subclass inherits stay hidden (mysqli's `__destruct`).
         let declaring = class_info
             .method_declaring_classes
