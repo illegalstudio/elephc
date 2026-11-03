@@ -35,6 +35,7 @@ use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 #[cfg(test)]
 mod tests;
 mod shared_cast;
+pub(super) mod argument_owners;
 pub(super) use shared_cast::{emit_aarch64_cast_eval_callable_arg, emit_x86_64_cast_eval_callable_arg};
 
 const EVAL_RECEIVER_CAPTURE_PARAM: &str = "__elephc_eval_callable_receiver";
@@ -214,6 +215,7 @@ pub(super) fn emit_eval_callable_descriptor_support(
         dynamic_descriptor_label,
     };
     shared_cast::emit(module, emitter, data, &support);
+    argument_owners::emit(emitter);
     support
 }
 

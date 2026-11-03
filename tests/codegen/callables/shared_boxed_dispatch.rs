@@ -81,6 +81,8 @@ class NativeSharedCastConsumer {
     public function __construct(callable $callback) { $this->callback = $callback; }
     public function saved(int $value): int { $callback = $this->callback; return $callback($value); }
     public function apply(callable $callback, int $value): int { return $callback($value); }
+    public static function applyStatic(callable $callback, int $value): int { return $callback($value); }
+    public function reject(callable $first, callable $second): void { throw new Exception('rejected'); }
 }
 $nativeCallback = new NativeSharedCastTarget();
 $code = $argc > 0 ? '
@@ -91,7 +93,11 @@ class EvalSharedCastTarget {
 $callbacks = [$nativeCallback, "evalSharedCastCallback", new EvalSharedCastTarget()];
 foreach ($callbacks as $callback) {
     $consumer = new NativeSharedCastConsumer($callback);
-    echo $consumer->saved(1), ":", $consumer->apply($callback, 2), "|";
+    echo $consumer->saved(1), ":", $consumer->apply($callback, 2), ":",
+        NativeSharedCastConsumer::applyStatic($callback, 3), "|";
+    try { $consumer->reject($callback, $callback); }
+    catch (Exception $error) { echo $error->getMessage(), "|"; }
+    unset($error);
     unset($consumer);
 }
 unset($callbacks, $callback);
@@ -101,6 +107,38 @@ unset($nativeCallback, $code);
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "2:3|3:4|4:5|");
+    assert_eq!(output.stdout, "2:3:4|rejected|3:4:5|rejected|4:5:6|rejected|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Cancelling suspended native constructor, instance and static bridges retires adapted callbacks.
+#[test]
+fn test_eval_callable_argument_owners_retire_abandoned_bridge_frames_bundle() {
+    let source = r#"<?php
+class NativeSharedPausedCast {
+    public function __construct(callable $callback, bool $pause) { if ($pause) { $callback(); } }
+    public function pause(callable $callback): void { $callback(); }
+    public static function pauseStatic(callable $callback): void { $callback(); }
+}
+eval('function evalSharedPausedCast(): void { Fiber::suspend(7); }');
+for ($mode = 0; $mode < 3; $mode++) {
+    $fiber = new Fiber(static function () use ($mode): void {
+        eval('
+            if ($mode === 0) { $consumer = new NativeSharedPausedCast("evalSharedPausedCast", true); }
+            elseif ($mode === 1) {
+                $consumer = new NativeSharedPausedCast("evalSharedPausedCast", false);
+                $consumer->pause("evalSharedPausedCast");
+            } else { NativeSharedPausedCast::pauseStatic("evalSharedPausedCast"); }
+        ');
+    });
+    echo $fiber->start(), '|';
+    gc_collect_cycles();
+    unset($fiber);
+}
+echo 'done';
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "7|7|7|done");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }

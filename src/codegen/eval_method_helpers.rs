@@ -122,10 +122,10 @@ const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
 const BUILTIN_THROWABLE_GET_MESSAGE_LABEL: &str = "__elephc_eval_builtin_throwable_getmessage";
 const BUILTIN_THROWABLE_GET_CODE_LABEL: &str = "__elephc_eval_builtin_throwable_getcode";
 const BUILTIN_THROWABLE_GET_PREVIOUS_LABEL: &str = "__elephc_eval_builtin_throwable_getprevious";
-const METHOD_HELPER_BASE_FRAME_SIZE: usize = 80;
+const METHOD_HELPER_BASE_FRAME_SIZE: usize = 128;
 const METHOD_HELPER_HANDLER_OFFSET: usize = METHOD_HELPER_BASE_FRAME_SIZE;
 const METHOD_HELPER_FRAME_SIZE: usize = METHOD_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
-const STATIC_METHOD_HELPER_BASE_FRAME_SIZE: usize = 96;
+const STATIC_METHOD_HELPER_BASE_FRAME_SIZE: usize = 144;
 const STATIC_METHOD_HELPER_HANDLER_OFFSET: usize = STATIC_METHOD_HELPER_BASE_FRAME_SIZE;
 const STATIC_METHOD_HELPER_FRAME_SIZE: usize =
     STATIC_METHOD_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
@@ -622,6 +622,7 @@ fn emit_static_method_call_aarch64(
     emitter.instruction("str x3, [sp, #40]");                                   // save the requested method-name length
     emitter.instruction("str x6, [sp, #48]");                                   // save the active eval class-scope length
     emitter.instruction("str x7, [sp, #80]");                                   // save the active eval context for callable descriptors
+    super::eval_callable_helpers::argument_owners::begin(emitter, 72, 64);
     emit_aarch64_static_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("b {}", fail_label));                          // no supported static method matched the request
     emit_aarch64_static_method_bodies(
@@ -636,6 +637,9 @@ fn emit_static_method_call_aarch64(
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
+    super::eval_callable_helpers::argument_owners::finish(
+        emitter, 72, 64, STATIC_METHOD_HELPER_FRAME_SIZE, true, done_label,
+    );
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the Rust caller frame
     emitter.instruction(                                                        // release the helper frame and boundary handler
         &format!("add sp, sp, #{}", STATIC_METHOD_HELPER_FRAME_SIZE)
@@ -668,6 +672,7 @@ fn emit_static_method_call_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the active eval class-scope length
     emitter.instruction("mov rax, QWORD PTR [rbp + 24]");                       // load the active eval context stack argument
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the active eval context for callable descriptors
+    super::eval_callable_helpers::argument_owners::begin(emitter, 72, 64);
     emit_x86_64_static_method_dispatch(module, emitter, data, slots, fail_label);
     emitter.instruction(&format!("jmp {}", fail_label));                        // no supported static method matched the request
     emit_x86_64_static_method_bodies(
@@ -682,6 +687,9 @@ fn emit_static_method_call_x86_64(
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
+    super::eval_callable_helpers::argument_owners::finish(
+        emitter, 72, 64, STATIC_METHOD_HELPER_FRAME_SIZE, true, done_label,
+    );
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed static method result to Rust
@@ -707,6 +715,7 @@ fn emit_method_call_aarch64(
     emitter.instruction("str x4, [sp, #32]");                                   // save the active eval class-scope pointer
     emitter.instruction("str x5, [sp, #40]");                                   // save the active eval class-scope length
     emitter.instruction("str x6, [sp, #64]");                                   // save the active eval context for callable descriptors
+    super::eval_callable_helpers::argument_owners::begin(emitter, 64, 48);
     abi::emit_branch_if_zero_wide(emitter, "x0", fail_label);                    // null Mixed receiver cannot dispatch a method
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
@@ -733,6 +742,9 @@ fn emit_method_call_aarch64(
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
+    super::eval_callable_helpers::argument_owners::finish(
+        emitter, 64, 48, METHOD_HELPER_FRAME_SIZE, true, done_label,
+    );
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
     emitter.instruction(&format!("add sp, sp, #{}", METHOD_HELPER_FRAME_SIZE)); // release the helper frame and boundary handler
     emitter.instruction("ret");                                                 // return the boxed method result to Rust
@@ -759,6 +771,7 @@ fn emit_method_call_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // save the active eval class-scope length
     emitter.instruction("mov rax, QWORD PTR [rbp + 16]");                       // load the active eval context stack argument
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the active eval context for callable descriptors
+    super::eval_callable_helpers::argument_owners::begin(emitter, 64, 48);
     emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", fail_label));                         // null Mixed receiver cannot dispatch a method
     emitter.instruction("mov rax, rdi");                                        // move the receiver into the mixed-unbox input register
@@ -787,6 +800,9 @@ fn emit_method_call_x86_64(
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
     emitter.label(done_label);
+    super::eval_callable_helpers::argument_owners::finish(
+        emitter, 64, 48, METHOD_HELPER_FRAME_SIZE, true, done_label,
+    );
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed method result to Rust

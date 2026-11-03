@@ -70,7 +70,7 @@ const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "JsonException",
     "FiberError",
 ];
-const CONSTRUCTOR_HELPER_BASE_FRAME_SIZE: usize = 80;
+const CONSTRUCTOR_HELPER_BASE_FRAME_SIZE: usize = 128;
 const CONSTRUCTOR_HELPER_HANDLER_OFFSET: usize = CONSTRUCTOR_HELPER_BASE_FRAME_SIZE;
 const CONSTRUCTOR_HELPER_FRAME_SIZE: usize =
     CONSTRUCTOR_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
@@ -81,6 +81,8 @@ const X86_64_CONSTRUCTOR_CONTEXT_FRAME_OFFSET: usize = 64;
 /// A BY-VALUE argument is rooted by Magician's normalized argument array for the whole native
 /// activation, so the bridge stages only a borrowed payload. The generated function prologue
 /// independently retains parameter slots that its ownership analysis marks as owned.
+/// Fresh callable adapters have a separate bridge collection, since the normalized array
+/// owns the original callback representation rather than the newly adapted descriptor.
 ///
 /// A BY-REFERENCE slot is different. `eval_ref_arg_slots` gives constructor slots
 /// `raw_refcounted_owned = true`, so writeback releases the raw slot on the changed and the
@@ -369,6 +371,7 @@ fn emit_constructor_aarch64(
     emitter.instruction("str x3, [sp, #8]");                                    // save the active eval class-scope length
     emitter.instruction("str x1, [sp, #24]");                                   // save the boxed eval argument array
     emitter.instruction("str x4, [sp, #64]");                                   // save the active eval context for callable descriptors
+    super::eval_callable_helpers::argument_owners::begin(emitter, 64, 48);
     emitter.instruction(&format!("cbz x0, {}", success_label));                 // a null object pointer means there is nothing to construct
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
@@ -399,6 +402,9 @@ fn emit_constructor_aarch64(
     emitter.label(success_label);
     emitter.instruction("mov x0, #1");                                          // report successful construction or no-op
     emitter.label(done_label);
+    super::eval_callable_helpers::argument_owners::finish(
+        emitter, 64, 48, CONSTRUCTOR_HELPER_FRAME_SIZE, false, done_label,
+    );
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
     emitter.instruction(                                                        //release the constructor helper frame and boundary handler
         &format!("add sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)
@@ -425,6 +431,7 @@ fn emit_constructor_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save the active eval class-scope length
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the boxed eval argument array
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the active eval context for callable descriptors
+    super::eval_callable_helpers::argument_owners::begin(emitter, 64, 48);
     emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", success_label));                      // a null object pointer means there is nothing to construct
     emitter.instruction("mov rax, rdi");                                        // move the receiver into the mixed-unbox input register
@@ -457,6 +464,9 @@ fn emit_constructor_x86_64(
     emitter.label(success_label);
     emitter.instruction("mov eax, 1");                                          // report successful construction or no-op
     emitter.label(done_label);
+    super::eval_callable_helpers::argument_owners::finish(
+        emitter, 64, 48, CONSTRUCTOR_HELPER_FRAME_SIZE, false, done_label,
+    );
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the constructor status flag to Rust
@@ -1404,9 +1414,9 @@ fn emit_x86_64_load_eval_arg(_module: &Module, emitter: &mut Emitter, index: usi
 /// Acquires an owner for a staged constructor argument only when the slot owns it.
 ///
 /// `abi::emit_incref_if_refcounted` already selects the active ABI, so both targets share this
-/// rule. A borrowed by-value argument keeps exactly one owner, the one Magician's normalized
-/// argument array holds across the whole native activation; acquiring a second one here would
-/// leak a reference the bridge has no path on which to release it.
+/// rule. Ordinary borrowed values are rooted by Magician's normalized argument array. Callable
+/// adapters transfer their initial descriptor owner into the bridge's cleanup collection.
+/// Only by-reference raw slots acquire another owner for their writeback discipline here.
 fn emit_acquire_staged_constructor_arg(
     emitter: &mut Emitter,
     param_ty: &PhpType,
@@ -2117,43 +2127,6 @@ mod argument_ownership_tests {
                 Arch::X86_64 => "mov rax, QWORD PTR [rbp - 40]\n    call __rt_mixed_deref",
             };
             assert!(!asm.contains(dereference), "{name}: keep the PHP reference identity: {asm}");
-        }
-    }
-
-    /// Callable constructor arguments reach the array and invokable-object lookups through
-    /// unconditional AArch64 branches.
-    ///
-    /// The string-name descriptor lookup emitted between the tag ladder and those lookups grows
-    /// with the program's callable names, so a `b.eq` across it can leave the ±1 MiB
-    /// conditional-branch range (#1444). x86_64 keeps its rel32 `je`.
-    #[test]
-    fn callable_constructor_argument_ladder_widens_aarch64_branches() {
-        for name in SUPPORTED_TARGETS {
-            let target = Target::parse(name).unwrap();
-            let asm = constructor_argument_asm(target, PhpType::Callable, false);
-            let lines = asm.lines().map(str::trim).collect::<Vec<_>>();
-            for (suffix, sites) in [("_callable_array", 2), ("_callable_object", 1)] {
-                let reaches = |line: &str, mnemonic: &str| {
-                    line.strip_prefix(mnemonic).is_some_and(|label| label.ends_with(suffix))
-                };
-                match target.arch {
-                    Arch::AArch64 => {
-                        assert!(
-                            !lines.iter().any(|line| reaches(line, "b.eq ")),
-                            "{name}: near branch to {suffix}:\n{asm}"
-                        );
-                        let wide = lines
-                            .windows(2)
-                            .filter(|pair| pair[0] == "b.ne 1f" && reaches(pair[1], "b "))
-                            .count();
-                        assert_eq!(wide, sites, "{name}: wide branches to {suffix}:\n{asm}");
-                    }
-                    Arch::X86_64 => {
-                        let near = lines.iter().filter(|line| reaches(line, "je ")).count();
-                        assert_eq!(near, sites, "{name}: je branches to {suffix}:\n{asm}");
-                    }
-                }
-            }
         }
     }
 

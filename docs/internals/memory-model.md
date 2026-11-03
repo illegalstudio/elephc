@@ -783,8 +783,14 @@ Eval method and constructor bridges share one callable argument resolver. Each
 site supplies its borrowed boxed callback and active eval context explicitly;
 the resolver preserves the existing static, receiver-bound and dynamic adapter
 ownership rules. A selected native invokable descriptor returns directly without
-falling through into dynamic adapter allocation. Callers retain their existing
-failure and descriptor cleanup paths.
+falling through into dynamic adapter allocation. A successful cast transfers its
+fresh descriptor owner into a private bridge collection. The normalized argument
+array keeps the original callback alive; its owner does not cover that descriptor.
+The collection has a fixed native cleanup record, so it survives partial argument
+staging and is drained when a suspended Fiber frame is retired. Normal and failed
+bridge exits unlink this record and drain every descriptor under a protected
+cleanup boundary. Each node detaches before retirement, and cleanup exceptions
+return as pending native Throwables through the Rust bridge's usual failure path.
 
 Source argument evaluation has its own owner in addition to native staging.
 Reference candidates carry shared Rust provenance for that exact owner; ordinary

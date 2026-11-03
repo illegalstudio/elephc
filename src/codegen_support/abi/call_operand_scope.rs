@@ -32,6 +32,13 @@ pub(crate) fn emit_link_call_operand_owner_at_stack(
     emit_link_owner_with_cleanup(emitter, owner_address, cleanup, record_offset);
 }
 
+/// Links an owner slot whose bounded cleanup drains a bridge-specific collection of values.
+pub(crate) fn emit_link_call_operand_custom_cleanup_at_stack(
+    emitter: &mut Emitter, owner_address: &str, cleanup: &str, record_offset: usize,
+) {
+    emit_link_owner_with_cleanup(emitter, owner_address, cleanup, record_offset);
+}
+
 /// Links a pending reference argument whose existing owner can become the native parameter owner.
 pub(crate) fn emit_push_call_reference_argument_owner(emitter: &mut Emitter, owner_address: &str) {
     emit_reserve_temporary_stack(emitter, CALL_OPERAND_OWNER_RECORD_BYTES);
