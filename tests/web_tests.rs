@@ -20,7 +20,6 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Once;
 use std::time::{Duration, Instant};
 
 #[path = "web/application.rs"]
@@ -59,42 +58,8 @@ fn elephc_bin() -> String {
     })
 }
 
-/// Builds the bridge archives a `--web` binary needs before tests compile in parallel.
-///
-/// The compiler auto-builds a stale or missing bridge archive on demand. Several
-/// test threads compiling at once can race that rebuild (one process links the
-/// archive while another replaces it), so warm the two archives once per test
-/// process before the first compile.
-fn ensure_web_bridge_staticlibs() {
-    static BUILD_ONCE: Once = Once::new();
-    BUILD_ONCE.call_once(|| {
-        let root = std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-        let archives = ["libelephc_web.a", "libelephc_phar.a"];
-        let present = |profile: &str| {
-            archives.iter().all(|name| {
-                root.join("target")
-                    .join(profile)
-                    .join(name)
-                    .metadata()
-                    .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
-            })
-        };
-        if present("debug") || present("release") {
-            return;
-        }
-        let status = Command::new("cargo")
-            .args(["build", "-p", "elephc-web", "-p", "elephc-phar"])
-            .current_dir(root)
-            .status()
-            .expect("failed to build web bridge staticlibs");
-        assert!(status.success(), "failed to build web bridge staticlibs");
-    });
-}
-
 /// Compiles `source` in web mode with extra compiler flags and returns the binary path.
 fn compile_web_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> PathBuf {
-    ensure_web_bridge_staticlibs();
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
