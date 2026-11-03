@@ -31,7 +31,7 @@ $object = new SharedBoxedCallback('receiver');
 $callbacks = ['sharedBoxedFunction', [$object, 'instance'],
     ['SharedBoxedCallback', 'staticCall'], $object, sharedBoxedFunction(...)];
 foreach ($callbacks as $callback) { echo invokeSharedBoxed($callback, ['tail' => '!']), '|'; }
-$value = 'before'; $arguments = [&$value];
+$arguments = ['before']; $value =& $arguments[0];
 echo invokeSharedBoxed('sharedBoxedReference', $arguments), ':', $value, '|';
 try { invokeSharedBoxed('sharedBoxedThrow', []); }
 catch (Exception $error) { echo $error->getMessage(), '|'; }
@@ -59,12 +59,48 @@ function runRetiredForeachObject(array $values): void {
     try { foreach ($values as $value) { return; } }
     catch (Exception $error) {
         try { needRetiredForeachObject($value); }
-        catch (TypeError $guard) { echo $error->getMessage(), ':', get_debug_type($value), '|'; }
+        catch (TypeError $guard) { echo $error->getMessage(), ':', $value, '|'; }
     }
 }
 runRetiredForeachObject([7]);
 "#);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "retired:int|");
+    assert_eq!(output.stdout, "retired:7|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Native and eval callbacks keep their context and retire one descriptor through both bridges.
+#[test]
+fn test_eval_callable_argument_shared_bridge_contexts_bundle() {
+    let source = r#"<?php
+class NativeSharedCastTarget {
+    public function __invoke(int $value): int { return $value + 1; }
+}
+class NativeSharedCastConsumer {
+    private mixed $callback;
+    public function __construct(callable $callback) { $this->callback = $callback; }
+    public function saved(int $value): int { $callback = $this->callback; return $callback($value); }
+    public function apply(callable $callback, int $value): int { return $callback($value); }
+}
+$nativeCallback = new NativeSharedCastTarget();
+$code = $argc > 0 ? '
+function evalSharedCastCallback(int $value): int { return $value + 2; }
+class EvalSharedCastTarget {
+    public function __invoke(int $value): int { return $value + 3; }
+}
+$callbacks = [$nativeCallback, "evalSharedCastCallback", new EvalSharedCastTarget()];
+foreach ($callbacks as $callback) {
+    $consumer = new NativeSharedCastConsumer($callback);
+    echo $consumer->saved(1), ":", $consumer->apply($callback, 2), "|";
+    unset($consumer);
+}
+unset($callbacks, $callback);
+' : '';
+eval($code);
+unset($nativeCallback, $code);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "2:3|3:4|4:5|");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }

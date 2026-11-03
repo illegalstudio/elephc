@@ -54,7 +54,7 @@ supported_target_cases!(native_reference_parameter_leases, verify_native_referen
 /// Eager generator guards cannot consume the source or staging owners before capture.
 fn verify_generator_reference_parameter_guard_borrows(target: &str) {
     let source = "<?php class GuardedReferenceProbe {} \
-        function guardedReferenceGenerator(mixed &$value, GuardedReferenceProbe $object): Generator { \
+        function guardedReferenceGenerator(mixed &$value, GuardedReferenceProbe &$object): Generator { \
             yield $value; }";
     let module = super::lower_source_at_for_target(
         source, std::path::Path::new("main.php"), std::path::Path::new("."),

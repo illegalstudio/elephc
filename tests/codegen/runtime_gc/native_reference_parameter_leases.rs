@@ -64,8 +64,11 @@ function dropEvalNativeLease(mixed &$value, EvalNativeParameterLeaseProbe $objec
     } catch (Exception $error) { echo 'inner:', $error->getMessage(), '|'; }
     echo 'after-inner|';
 }
-function generatorWithEvalNativeLease(mixed &$value, EvalNativeParameterLeaseProbe $object): Generator {
+function generatorWithEvalNativeLease(mixed &$value, EvalNativeParameterLeaseProbe &$object): Generator {
     yield $value;
+}
+function currentEvalNativeLeaseGenerator(Generator $generator): mixed {
+    return $generator->current();
 }
 function copyAfterDuplicateEvalLeases(mixed &$first, mixed &$second, EvalNativeParameterLeaseProbe $object): EvalNativeParameterLeaseProbe {
     unset($first, $second); return clone $object;
@@ -140,7 +143,7 @@ catch (Exception $error) { echo "outer:", $error->getMessage(), "|"; }
 $generatorObject = new EvalNativeParameterLeaseProbe();
 $generator = generatorWithEvalNativeLease($generatorObject->value, $generatorObject);
 $generatorObject->value = "generated";
-echo $generator->current(), "|";
+echo currentEvalNativeLeaseGenerator($generator), "|";
 unset($generator, $generatorObject);
 unset($activeCopy, $active, $detachedCopy, $detached, $sharedCopy, $shared, $alias,
     $descriptor, $callbackObject, $callbackCopy,

@@ -1736,10 +1736,10 @@ echo dispatch(["Handler", "greet"]);
 }
 
 /// Regression: a boxed callable array shorter than two elements must take a
-/// deterministic fatal path before codegen reads receiver/method slots out of bounds.
+/// catchable TypeError path before reading receiver/method slots out of bounds.
 #[test]
 fn test_call_user_func_rejects_short_boxed_mixed_callable_array_without_oob() {
-    let out = compile_and_run_capture(
+    let out = compile_and_run_with_heap_debug(
         r#"<?php
 class Handler {
     public function greet(string $id): string { return $id; }
@@ -1751,15 +1751,17 @@ class Adapter {
 }
 $handler = new Handler();
 $adapter = new Adapter([$handler]);
-echo $adapter->run();
+try { echo $adapter->run(); }
+catch (TypeError $error) { echo 'caught:', get_class($error), '|'; }
+unset($adapter, $handler, $error);
 "#,
     );
 
-    assert!(!out.success, "short callable array unexpectedly ran: {}", out.stdout);
+    assert!(out.success, "short callable array error was not caught: stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught:TypeError|");
     assert!(
-        out.stderr
-            .contains("Fatal error: callable array did not resolve to an invokable target"),
-        "short callable array should fail cleanly, got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "short callable array must retire its temporary owners: {}",
         out.stderr
     );
 }

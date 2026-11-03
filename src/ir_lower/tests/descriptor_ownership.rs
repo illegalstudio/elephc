@@ -356,7 +356,8 @@ fn boxed_array_read_direct_calls_lower_through_descriptors_on_all_targets() {
         }).count();
         assert_eq!(calls, 2, "{target}");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        assert!(asm.contains("mixed_callable_closure"), "{target}");
+        assert!(asm.contains("_eir_callable_argument_normalizer"), "{target}");
+        assert!(asm.contains("mixed_callable_value_descriptor"), "{target}: shared tag-checked selection");
     }
 }
 
