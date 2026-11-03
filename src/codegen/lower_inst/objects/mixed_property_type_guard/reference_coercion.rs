@@ -164,12 +164,6 @@ mod tests {
         assert!(matches!(plans[3], TagAction::FalseOrScalar(None)));
         assert!(matches!(plans[7], TagAction::Accept));
     }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     /// Inherited and hidden declarations retain their owners independently of receiver class names.
     #[test]
