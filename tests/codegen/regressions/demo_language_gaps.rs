@@ -869,6 +869,31 @@ unset($q);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A class constant defined by an identity comparison of scalars (nette/utils'
+/// `IsWindows = PHP_OS_FAMILY === 'Windows'`) reflects with php's type-and-value answer; the
+/// backend's reflection metadata refused `===` and failed the Symfony Demo's build.
+#[test]
+fn test_reflected_class_constants_from_identity_comparisons() {
+    let out = compile_and_run(r#"<?php
+final class Helpers {
+    public const IsWindows = PHP_OS_FAMILY === 'Windows';
+    public const NotWindows = PHP_OS_FAMILY !== 'Windows';
+    public const IntFloat = 1 === 1.0;
+    public const Same = 'a' === 'a';
+    public const NullSame = null === null;
+}
+echo json_encode((new ReflectionClass('Helpers'))->getConstants()), "\n";
+"#);
+    let windows = cfg!(windows);
+    assert_eq!(
+        out,
+        format!(
+            "{{\"IsWindows\":{windows},\"NotWindows\":{},\"IntFloat\":false,\"Same\":true,\"NullSame\":true}}\n",
+            !windows
+        )
+    );
+}
+
 /// A class constant initialized from a global constant the program never defines
 /// (`private const TYPE_BLOB = SQLITE3_BLOB;` in doctrine/dbal's SQLite3 driver) compiles, the
 /// class runs, and reflecting its constants raises php's `Error: Undefined constant`. The backend

@@ -352,6 +352,27 @@ pub(super) fn reflection_constant_value(
     }
 }
 
+/// Answers `left === right` for two scalar (or null) constant values, or `None` when either
+/// side is not a scalar the evaluator decides (arrays, enum cases, undefined constants).
+fn reflection_scalar_identity(
+    left: &ReflectionConstantValue,
+    right: &ReflectionConstantValue,
+) -> Option<bool> {
+    use ReflectionConstantValue as V;
+    let scalar = |value: &V| matches!(value, V::Int(_) | V::Bool(_) | V::Float(_) | V::Str(_) | V::Null);
+    if !scalar(left) || !scalar(right) {
+        return None;
+    }
+    Some(match (left, right) {
+        (V::Int(a), V::Int(b)) => a == b,
+        (V::Bool(a), V::Bool(b)) => a == b,
+        (V::Float(a), V::Float(b)) => a == b,
+        (V::Str(a), V::Str(b)) => a == b,
+        (V::Null, V::Null) => true,
+        _ => false,
+    })
+}
+
 /// Evaluates one supported binary operator in a static Reflection constant expression.
 pub(super) fn reflection_binary_constant_value(
     ctx: &FunctionContext<'_>,
@@ -410,10 +431,24 @@ pub(super) fn reflection_binary_constant_value(
                 reflection_constant_value_kind(right)
             ))
         }),
+        // Identity of two scalars (`const IsWindows = PHP_OS_FAMILY === 'Windows'` in
+        // nette/utils): php compares type and value, so `1 === 1.0` is false.
+        (left, BinOp::StrictEq | BinOp::StrictNotEq, right)
+            if reflection_scalar_identity(left, right).is_some() =>
+        {
+            let identical = reflection_scalar_identity(left, right).unwrap_or(false);
+            Ok(ReflectionConstantValue::Bool(if matches!(op, BinOp::StrictEq) {
+                identical
+            } else {
+                !identical
+            }))
+        }
         (left, _, right) => Err(CodegenIrError::unsupported(format!(
-            "ReflectionClass constant metadata binary value {:?} {:?}",
+            "ReflectionClass constant metadata binary value {:?} {:?} {:?} in {}",
             reflection_constant_value_kind(left),
-            reflection_constant_value_kind(right)
+            op,
+            reflection_constant_value_kind(right),
+            current_class,
         ))),
     }
 }
