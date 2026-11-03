@@ -701,8 +701,8 @@ code, transfers one owned Mixed result on success, and contains a thrown native
 exception in the context's second word. The caller's active exception is restored
 separately. A context that already owns a contained Throwable stops before another
 validator runs. The descriptor entry must return a boxed owner without PHP hidden
-argument collectors or scalar-result markers. Scalar, nullable and scalar-union
-declaration callbacks are generated through the typed EIR
+argument collectors or scalar-result markers. Scalar, array, iterable and native
+object declarations, including nullable and union types, have callbacks generated through the typed EIR
 `reference.property_coerce` operation when
 `ir_lower::enable_native_reference_validation` selects the capability. Ordinary
 lowering emits no unused callbacks for the opaque-eval class catalog. Selection
@@ -710,6 +710,8 @@ is idempotent and validates the resulting EIR. They borrow their two inputs and 
 owned boxed candidate. Context bit zero selects assignment-site strictness;
 strict assignments preserve exact members and permit integer-to-float widening.
 Weak candidates reuse the property guard's coercions and diagnostics. Reference
+object candidates use the shared native class-acceptance plan; eval-defined
+class ancestry remains part of the activation audit. Reference
 errors name the original physical declaration independently of candidate storage
 or receiver class, including hidden parent-private slots and inherited statics. The
 native ABI harness calls a generated callback through the protected adapter.

@@ -73,3 +73,46 @@ debug_backtrace();
 
 supported_target_cases!(native_reference_validator_contract,
     verify_native_reference_validator_contract);
+
+/// Native declarations also retain array, iterable, object and nullable union constraints.
+fn verify_native_reference_container_validator_contract(target: &str) {
+    let source = r#"<?php
+class NativeContainerBase {}
+class NativeContainerChild extends NativeContainerBase {}
+class NativeContainerDeclarations {
+    public array $values = [];
+    public iterable $items = [];
+    public NativeContainerBase $item;
+    public object $any;
+    public NativeContainerBase|array|null $choice = null;
+    public static ?NativeContainerBase $shared = null;
+}
+$owner = new NativeContainerDeclarations();
+$a =& $owner->values; $b =& $owner->items; $c =& $owner->item;
+$d =& $owner->any; $e =& $owner->choice;
+echo NativeContainerDeclarations::$shared;
+"#;
+    let mut module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    crate::ir_lower::enable_native_reference_validation(&mut module).unwrap();
+    let owner = module.class_infos["NativeContainerDeclarations"].class_id;
+    let declarations = module.functions.iter().flat_map(|function| function.instructions.iter())
+        .filter_map(|inst| match inst.immediate {
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ReferencePropertyCoerce {
+                class_id, slot, is_static,
+            })) if class_id == owner => Some((slot, is_static)),
+            _ => None,
+        }).collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(declarations, [(0, false), (1, false), (2, false), (3, false),
+        (4, false), (0, true)].into_iter().collect(),
+        "{target}: every physical PHP constraint has its own native declaration callback");
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    assert!(assembly.contains("reference_validator_weak"), "{target}: assignment-site strictness remains explicit");
+    assert!(assembly.contains("NativeContainerBase"), "{target}: diagnostics retain the declared class");
+}
+
+supported_target_cases!(native_reference_container_validator_contract,
+    verify_native_reference_container_validator_contract);

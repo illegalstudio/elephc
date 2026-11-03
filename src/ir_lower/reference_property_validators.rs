@@ -21,11 +21,12 @@ pub(crate) fn callback_name(class_id: u64, slot: u32, is_static: bool) -> String
     format!("__eir_reference_property_{class_id}_{slot}_{storage}")
 }
 
-/// Limits the first callback slice to scalar declarations, nullable scalars and their unions.
+/// Selects PHP declaration shapes covered by the shared boxed property acceptance planner.
 fn supports_declaration(ty: &PhpType) -> bool {
     match ty {
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
-        | PhpType::Void | PhpType::Never => true,
+        | PhpType::Void | PhpType::Never | PhpType::Object(_) | PhpType::Array(_)
+        | PhpType::AssocArray { .. } | PhpType::Iterable => true,
         PhpType::Union(members) => members.iter().all(supports_declaration),
         _ => false,
     }
