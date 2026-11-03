@@ -283,6 +283,8 @@ pub(super) fn reflection_parameter_default_from_constant_value(
         }
         ReflectionConstantValue::Str(value) => Some(ReflectionParameterDefaultValue::Str(value)),
         ReflectionConstantValue::Null => Some(ReflectionParameterDefaultValue::Null),
+        // No static default to hand out: the value only exists as php's `Error`.
+        ReflectionConstantValue::Undefined(_) => None,
         ReflectionConstantValue::EnumCase { enum_name, case_name } => {
             Some(ReflectionParameterDefaultValue::EnumCase { enum_name, case_name })
         }

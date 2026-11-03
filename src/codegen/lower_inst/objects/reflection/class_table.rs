@@ -318,6 +318,8 @@ fn float_node(data: &mut DataSection, number: f64) -> Vec<DataWord> {
 /// Encodes one class-constant value as a value node; `None` for a shape the decoder lacks.
 pub(super) fn encode_constant(data: &mut DataSection, constant: &ReflectionConstantValue) -> Option<Vec<DataWord>> {
     Some(match constant {
+        // The table decoder has no raising node: the extras filler materializes it.
+        ReflectionConstantValue::Undefined(_) => return None,
         ReflectionConstantValue::Null => node(value::NULL, DataWord::U64(0), DataWord::U64(0)),
         ReflectionConstantValue::Bool(flag) => {
             node(value::BOOL, DataWord::U64(u64::from(*flag)), DataWord::U64(0))

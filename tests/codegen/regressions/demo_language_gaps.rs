@@ -869,6 +869,30 @@ unset($q);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A class constant initialized from a global constant the program never defines
+/// (`private const TYPE_BLOB = SQLITE3_BLOB;` in doctrine/dbal's SQLite3 driver) compiles, the
+/// class runs, and reflecting its constants raises php's `Error: Undefined constant`. The backend
+/// refused the reflection metadata and failed the Symfony Demo's whole build.
+#[test]
+fn test_class_constant_from_an_undefined_global_constant_reflects_as_php_error() {
+    let out = compile_and_run(r#"<?php
+final class St {
+    public const OK = 7;
+    private const TYPE_BLOB = NO_SUCH_EXTENSION_CONSTANT;
+    public static function ok(): int { return self::OK; }
+}
+echo St::ok(), "\n";
+try {
+    $r = new ReflectionClass('St');
+    var_dump($r->getConstants());
+} catch (Error $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+echo "end\n";
+"#);
+    assert_eq!(out, "7\nError: Undefined constant \"NO_SUCH_EXTENSION_CONSTANT\"\nend\n");
+}
+
 /// An element write, decrement and `unset()` of a property only a SUBCLASS declares, through a
 /// receiver typed with the parent class, reach the run-time object's property, as in php.
 /// symfony/http-client's `NativeResponse::perform()` does `--$multi->hosts[$host]` and

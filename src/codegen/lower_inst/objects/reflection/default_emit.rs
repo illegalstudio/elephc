@@ -22,6 +22,13 @@ pub(super) fn emit_reflection_constant_value_as_mixed(
             emit_boxed_string_literal_default_to_result(ctx, value)
         }
         ReflectionConstantValue::Null => emit_boxed_null_literal_to_result(ctx),
+        // php evaluates the initializer here and raises its undefined-constant `Error`.
+        ReflectionConstantValue::Undefined(name) => {
+            crate::codegen::lower_inst::exceptions::emit_error(
+                ctx,
+                &format!("Undefined constant \"{name}\""),
+            );
+        }
         ReflectionConstantValue::EnumCase {
             enum_name,
             case_name,

@@ -510,18 +510,19 @@ pub(super) fn reflection_global_constant_value(
     span: crate::span::Span,
     depth: usize,
 ) -> Result<ReflectionConstantValue> {
-    let expr_kind = ctx
+    let Some(expr_kind) = ctx
         .module
         .global_constants
         .get(name.as_str())
         .or_else(|| ctx.module.global_constants.get(name.as_str().trim_start_matches('\\')))
         .map(|(expr_kind, _)| expr_kind.clone())
-        .ok_or_else(|| {
-            CodegenIrError::unsupported(format!(
-                "ReflectionClass constant metadata for global constant {}",
-                name.as_str().trim_start_matches('\\')
-            ))
-        })?;
+    else {
+        // php resolves a class constant's initializer lazily: an undefined name fails only
+        // when the value is materialized, which is where this variant raises php's `Error`.
+        return Ok(ReflectionConstantValue::Undefined(
+            name.as_str().trim_start_matches('\\').to_string(),
+        ));
+    };
     let expr = crate::parser::ast::Expr::new(expr_kind, span);
     reflection_constant_value(ctx, "", None, &expr, depth + 1)
 }
@@ -588,6 +589,7 @@ pub(super) fn reflection_constant_value_kind(value: &ReflectionConstantValue) ->
         ReflectionConstantValue::EnumCase { .. } => "enum-case",
         ReflectionConstantValue::Array(_) => "array",
         ReflectionConstantValue::AssocArray(_) => "assoc-array",
+        ReflectionConstantValue::Undefined(_) => "undefined-constant",
     }
 }
 

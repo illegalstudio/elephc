@@ -369,6 +369,11 @@ enum ReflectionConstantValue {
     },
     Array(Vec<ReflectionConstantValue>),
     AssocArray(Vec<ReflectionConstantAssocEntry>),
+    /// A global constant this program never defines (`private const TYPE_BLOB = SQLITE3_BLOB;`
+    /// in doctrine/dbal's SQLite3 driver, an extension elephc lacks). php evaluates a class
+    /// constant lazily, so reflecting the class works and only MATERIALIZING this value raises
+    /// `Error: Undefined constant "NAME"`.
+    Undefined(String),
 }
 
 /// Metadata for one key/value pair in a Reflection constant associative array value.
