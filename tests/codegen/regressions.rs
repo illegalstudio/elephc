@@ -41,6 +41,8 @@ mod loose_comparison_batch;
 mod loose_comparison_ref_cells;
 #[path = "regressions/loose_comparison_callable_values.rs"]
 mod loose_comparison_callable_values;
+#[path = "regressions/loose_comparison_checker_flow.rs"]
+mod loose_comparison_checker_flow;
 #[path = "regressions/return_this_ownership.rs"]
 mod return_this_ownership;
 #[path = "regressions/symbol_collisions.rs"]

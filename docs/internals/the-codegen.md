@@ -20,6 +20,8 @@ rules and object-to-number warnings. Float comparisons with null test numeric ze
 without the NAN warning emitted by an explicit boolean conversion.
 Owned operands and temporary comparison boxes publish exception cleanup records
 until normal retirement, including when a warning handler throws into a local catch.
+The checker records a switch comparison's exception state after evaluating its label
+and before entering an arm, so catch bindings and pre-arm values join correctly.
 Recursive array/property comparisons use the same ABI guard builder for their owned
 cells. A scalar fallback publishes each source owner once. Simple variable switch
 subjects reload their storage between labels so callbacks can update later matches.

@@ -583,6 +583,7 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
         retired_type: Option<&PhpType>,
     ) -> ThrownTypes {
+        // The checker publishes switch comparison throws at each evaluated label prefix.
         if !include_operands && !matches!(stmt.kind,
             StmtKind::Echo(_) | StmtKind::ExprStmt(_) | StmtKind::StaticVar { .. }
             | StmtKind::ListUnpack { .. } | StmtKind::Assign { .. } | StmtKind::TypedAssign { .. }
