@@ -2,7 +2,7 @@
 title: "acos()"
 description: "Returns the arccosine of a number in radians."
 sidebar:
-  order: 571
+  order: 573
 ---
 
 ## acos()

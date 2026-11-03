@@ -2,7 +2,7 @@
 title: "explode()"
 description: "Splits a string by a separator into an array of substrings."
 sidebar:
-  order: 905
+  order: 907
 ---
 
 ## explode()

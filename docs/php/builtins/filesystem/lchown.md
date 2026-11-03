@@ -2,7 +2,7 @@
 title: "lchown()"
 description: "Changes user ownership of a symlink."
 sidebar:
-  order: 302
+  order: 304
 ---
 
 ## lchown()

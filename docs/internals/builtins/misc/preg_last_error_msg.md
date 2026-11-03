@@ -2,7 +2,7 @@
 title: "preg_last_error_msg() - internals"
 description: "Compiler internals for preg_last_error_msg(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 779
+  order: 781
 ---
 
 ## `preg_last_error_msg()` - internals

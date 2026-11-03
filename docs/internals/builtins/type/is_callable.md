@@ -2,7 +2,7 @@
 title: "is_callable() - internals"
 description: "Compiler internals for is_callable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1097
+  order: 1099
 ---
 
 ## `is_callable()` - internals

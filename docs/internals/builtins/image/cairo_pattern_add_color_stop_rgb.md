@@ -2,7 +2,7 @@
 title: "cairo_pattern_add_color_stop_rgb() - internals"
 description: "Compiler internals for cairo_pattern_add_color_stop_rgb(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 447
+  order: 449
 ---
 
 ## `cairo_pattern_add_color_stop_rgb()` - internals

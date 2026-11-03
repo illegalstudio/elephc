@@ -2,7 +2,7 @@
 title: "unixtojd() - internals"
 description: "Compiler internals for unixtojd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 269
+  order: 271
 ---
 
 ## `unixtojd()` - internals

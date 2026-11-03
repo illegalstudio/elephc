@@ -2,7 +2,7 @@
 title: "xml_set_notation_decl_handler() - internals"
 description: "Compiler internals for xml_set_notation_decl_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1162
+  order: 1164
 ---
 
 ## `xml_set_notation_decl_handler()` - internals

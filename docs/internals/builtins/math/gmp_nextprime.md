@@ -2,7 +2,7 @@
 title: "gmp_nextprime() - internals"
 description: "Compiler internals for gmp_nextprime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 632
+  order: 634
 ---
 
 ## `gmp_nextprime()` - internals

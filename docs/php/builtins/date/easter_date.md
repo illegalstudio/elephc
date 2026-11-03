@@ -2,7 +2,7 @@
 title: "easter_date()"
 description: "Returns the Unix timestamp of midnight on Easter Sunday of a year."
 sidebar:
-  order: 233
+  order: 235
 ---
 
 ## easter_date()

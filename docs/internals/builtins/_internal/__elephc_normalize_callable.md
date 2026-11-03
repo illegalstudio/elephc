@@ -2,7 +2,7 @@
 title: "__elephc_normalize_callable() - internals"
 description: "Compiler internals for __elephc_normalize_callable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1288
+  order: 1290
 ---
 
 ## `__elephc_normalize_callable()` - internals

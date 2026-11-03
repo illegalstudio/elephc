@@ -2,7 +2,7 @@
 title: "system() - internals"
 description: "Compiler internals for system(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 869
+  order: 871
 ---
 
 ## `system()` - internals

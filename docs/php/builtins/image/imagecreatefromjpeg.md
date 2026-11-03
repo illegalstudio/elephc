@@ -2,7 +2,7 @@
 title: "imagecreatefromjpeg()"
 description: "Creates an image from a JPEG file."
 sidebar:
-  order: 513
+  order: 515
 ---
 
 ## imagecreatefromjpeg()

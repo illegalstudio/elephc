@@ -2,7 +2,7 @@
 title: "date_date_set()"
 description: "Sets a DateTime's year, month, and day."
 sidebar:
-  order: 211
+  order: 213
 ---
 
 ## date_date_set()

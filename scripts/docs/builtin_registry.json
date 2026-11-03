@@ -111968,7 +111968,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_execute",
-      "codegen_line": 1591,
+      "codegen_line": 1636,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112628,7 +112628,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_fetch_lengths",
-      "codegen_line": 1629,
+      "codegen_line": 1674,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112919,7 +112919,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_field_seek",
-      "codegen_line": 1648,
+      "codegen_line": 1693,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112990,7 +112990,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_field_tell",
-      "codegen_line": 1668,
+      "codegen_line": 1713,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113118,7 +113118,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_get_charset",
-      "codegen_line": 1687,
+      "codegen_line": 1732,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115319,6 +115319,140 @@
           "name": "mysql",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "key",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "certificate",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "ca_certificate",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "ca_path",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "cipher_algos",
+          "optional": false,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 6,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_ssl_set",
+    "description": "Records the TLS key, certificate and CA files a MYSQLI_CLIENT_SSL connection uses.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_ssl_set",
+      "codegen_line": 1284,
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "mysqli",
+    "name": "mysqli_ssl_set",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "key",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "certificate",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "ca_certificate",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "ca_path",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "cipher_algos",
+          "optional": false,
+          "type": "?string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_ssl_set",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -115408,7 +115542,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_affected_rows",
-      "codegen_line": 1380,
+      "codegen_line": 1425,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115614,7 +115748,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_close",
-      "codegen_line": 1361,
+      "codegen_line": 1406,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115678,7 +115812,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_errno",
-      "codegen_line": 1399,
+      "codegen_line": 1444,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115742,7 +115876,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_error",
-      "codegen_line": 1418,
+      "codegen_line": 1463,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115806,7 +115940,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_error_list",
-      "codegen_line": 1532,
+      "codegen_line": 1577,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115877,7 +116011,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_execute",
-      "codegen_line": 1284,
+      "codegen_line": 1329,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116012,7 +116146,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_field_count",
-      "codegen_line": 1494,
+      "codegen_line": 1539,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116076,7 +116210,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_free_result",
-      "codegen_line": 1551,
+      "codegen_line": 1596,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116140,7 +116274,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_get_result",
-      "codegen_line": 1304,
+      "codegen_line": 1349,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116204,7 +116338,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_init",
-      "codegen_line": 1610,
+      "codegen_line": 1655,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116268,7 +116402,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_insert_id",
-      "codegen_line": 1513,
+      "codegen_line": 1558,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116332,7 +116466,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_num_rows",
-      "codegen_line": 1437,
+      "codegen_line": 1482,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116396,7 +116530,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_param_count",
-      "codegen_line": 1456,
+      "codegen_line": 1501,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116467,7 +116601,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_prepare",
-      "codegen_line": 1570,
+      "codegen_line": 1615,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116538,7 +116672,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_reset",
-      "codegen_line": 1342,
+      "codegen_line": 1387,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116577,6 +116711,98 @@
           "name": "statement",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "param_num",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 3,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_stmt_send_long_data",
+    "description": "Sends a parameter's data in chunks; execute() binds the accumulated chunks.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_send_long_data",
+      "codegen_line": 1308,
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_send_long_data",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "param_num",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_stmt_send_long_data",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -116602,7 +116828,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_sqlstate",
-      "codegen_line": 1475,
+      "codegen_line": 1520,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116666,7 +116892,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_store_result",
-      "codegen_line": 1323,
+      "codegen_line": 1368,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116864,7 +117090,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_thread_safe",
-      "codegen_line": 1707,
+      "codegen_line": 1752,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],

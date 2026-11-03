@@ -2,7 +2,7 @@
 title: "mysqli_thread_safe()"
 description: "Reports whether the client library is thread-safe."
 sidebar:
-  order: 196
+  order: 198
 ---
 
 ## mysqli_thread_safe()

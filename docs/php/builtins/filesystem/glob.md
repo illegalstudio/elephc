@@ -2,7 +2,7 @@
 title: "glob()"
 description: "Finds pathnames matching a pattern."
 sidebar:
-  order: 293
+  order: 295
 ---
 
 ## glob()

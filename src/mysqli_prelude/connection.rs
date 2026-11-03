@@ -69,6 +69,13 @@ class mysqli {
     private int $optConnectTimeout = 0;
     private string $optInitCommand = "";
     private string $optCharsetName = "";
+    // ssl_set() values, applied by a real_connect() that asks for MYSQLI_CLIENT_SSL: like
+    // mysqlnd, ssl_set() alone does not turn TLS on.
+    private string $sslKey = "";
+    private string $sslCert = "";
+    private string $sslCa = "";
+    private string $sslCapath = "";
+    private string $sslCipher = "";
     // Buffered result produced by real_query() and picked up by store_result()
     // (and, in the multi_query path, by next_result()).
     private ?mysqli_result $pendingResult = null;
@@ -103,11 +110,6 @@ class mysqli {
         ?string $socket = null,
         int $flags = 0
     ): bool {
-        if (($flags & 2048) != 0) {
-            // MYSQLI_CLIENT_SSL is declared but unsupported: fail loudly rather
-            // than silently connecting in cleartext.
-            return $this->connectFailure(2054, "elephc mysqli does not support MYSQLI_CLIENT_SSL; use PDO MySQL TLS attributes", "HY000");
-        }
         if ($this->conn >= 0) {
             // php-src reconnect semantics: mysqlnd closes the existing
             // connection before dialing the new one, so a second real_connect
@@ -177,7 +179,30 @@ class mysqli {
             $_driverConfig = $_driverConfig . "ignore=1;";
         }
         $_foundRows = (($flags & 2) != 0) ? 1 : 0;
-        $_conn = elephc_pdo_open_persistent($_dsn, $_persistent, 0, $this->optInitCommand, "", $_foundRows, "", $_driverConfig);
+        // MYSQLI_CLIENT_SSL opens TLS with the ssl_set() files, packed as PDO packs its
+        // Pdo\Mysql::ATTR_SSL_* options. mysqlnd verifies the server certificate only
+        // against a CA it was given, and never under MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT.
+        $_sslConfig = "";
+        if (($flags & 2048) != 0) {
+            if ($this->sslCa !== "") {
+                $_sslConfig = $_sslConfig . "ca=" . $this->sslCa . ";";
+            }
+            if ($this->sslCert !== "") {
+                $_sslConfig = $_sslConfig . "cert=" . $this->sslCert . ";";
+            }
+            if ($this->sslKey !== "") {
+                $_sslConfig = $_sslConfig . "key=" . $this->sslKey . ";";
+            }
+            $_verify = ($this->sslCa !== "" && ($flags & 64) == 0) ? "1" : "0";
+            $_sslConfig = $_sslConfig . "verify=" . $_verify . ";";
+            if ($this->sslCapath !== "") {
+                $_driverConfig = $_driverConfig . "capath=" . str_replace("=", "%3D", str_replace(";", "%3B", str_replace("%", "%25", $this->sslCapath))) . ";";
+            }
+            if ($this->sslCipher !== "") {
+                $_driverConfig = $_driverConfig . "cipher=" . str_replace("=", "%3D", str_replace(";", "%3B", str_replace("%", "%25", $this->sslCipher))) . ";";
+            }
+        }
+        $_conn = elephc_pdo_open_persistent($_dsn, $_persistent, 0, $this->optInitCommand, $_sslConfig, $_foundRows, "", $_driverConfig);
         if ($_conn < 0) {
             $_message = elephc_pdo_last_open_error();
             $_state = elephc_pdo_last_open_sqlstate();
@@ -468,6 +493,15 @@ class mysqli {
             return $this->opFailed();
         }
         $this->clearError();
+        return true;
+    }
+
+    public function ssl_set(?string $key, ?string $certificate, ?string $ca_certificate, ?string $ca_path, ?string $cipher_algos): bool {
+        $this->sslKey = $key === null ? "" : $key;
+        $this->sslCert = $certificate === null ? "" : $certificate;
+        $this->sslCa = $ca_certificate === null ? "" : $ca_certificate;
+        $this->sslCapath = $ca_path === null ? "" : $ca_path;
+        $this->sslCipher = $cipher_algos === null ? "" : $cipher_algos;
         return true;
     }
 

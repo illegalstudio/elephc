@@ -24960,6 +24960,24 @@
       "extension": false,
       "internal": false,
       "module": "mysqli",
+      "name": "MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT",
+      "route": "prelude",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "mysqli",
       "name": "MYSQLI_INIT_COMMAND",
       "route": "prelude",
       "since": null,

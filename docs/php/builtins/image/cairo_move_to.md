@@ -2,7 +2,7 @@
 title: "cairo_move_to()"
 description: "Begins a new subpath at the given point."
 sidebar:
-  order: 443
+  order: 445
 ---
 
 ## cairo_move_to()

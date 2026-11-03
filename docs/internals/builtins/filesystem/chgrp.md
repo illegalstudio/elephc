@@ -2,7 +2,7 @@
 title: "chgrp() - internals"
 description: "Compiler internals for chgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 272
+  order: 274
 ---
 
 ## `chgrp()` - internals

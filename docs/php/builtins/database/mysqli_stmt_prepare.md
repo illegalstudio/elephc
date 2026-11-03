@@ -2,7 +2,7 @@
 title: "mysqli_stmt_prepare()"
 description: "Prepares SQL on a statement created by mysqli_stmt_init()."
 sidebar:
-  order: 190
+  order: 191
 ---
 
 ## mysqli_stmt_prepare()

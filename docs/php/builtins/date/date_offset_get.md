@@ -2,7 +2,7 @@
 title: "date_offset_get()"
 description: "Returns a date's UTC offset in seconds."
 sidebar:
-  order: 221
+  order: 223
 ---
 
 ## date_offset_get()

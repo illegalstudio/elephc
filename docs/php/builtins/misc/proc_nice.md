@@ -2,7 +2,7 @@
 title: "proc_nice()"
 description: "Changes the priority of the current process."
 sidebar:
-  order: 784
+  order: 786
 ---
 
 ## proc_nice()

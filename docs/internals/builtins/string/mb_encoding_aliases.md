@@ -2,7 +2,7 @@
 title: "mb_encoding_aliases() - internals"
 description: "Compiler internals for mb_encoding_aliases(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 957
+  order: 959
 ---
 
 ## `mb_encoding_aliases()` - internals

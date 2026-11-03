@@ -2,7 +2,7 @@
 title: "user_error()"
 description: "Alias of trigger_error."
 sidebar:
-  order: 799
+  order: 801
 ---
 
 ## user_error()

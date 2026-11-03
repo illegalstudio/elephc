@@ -2,7 +2,7 @@
 title: "date()"
 description: "Formats a local time/date."
 sidebar:
-  order: 205
+  order: 207
 ---
 
 ## date()

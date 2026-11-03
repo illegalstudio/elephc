@@ -2,7 +2,7 @@
 title: "date_modify()"
 description: "Applies a relative modifier such as \"+1 day\" to a DateTime."
 sidebar:
-  order: 220
+  order: 222
 ---
 
 ## date_modify()

@@ -2,7 +2,7 @@
 title: "gettimeofday()"
 description: "Returns the current time as an array of parts, or as a float."
 sidebar:
-  order: 237
+  order: 239
 ---
 
 ## gettimeofday()

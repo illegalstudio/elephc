@@ -2,7 +2,7 @@
 title: "gmp_div_q()"
 description: "Divides two GMP numbers."
 sidebar:
-  order: 612
+  order: 614
 ---
 
 ## gmp_div_q()

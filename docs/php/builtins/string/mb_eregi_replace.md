@@ -2,7 +2,7 @@
 title: "mb_eregi_replace()"
 description: "Replaces multibyte regex matches without case sensitivity."
 sidebar:
-  order: 969
+  order: 971
 ---
 
 ## mb_eregi_replace()

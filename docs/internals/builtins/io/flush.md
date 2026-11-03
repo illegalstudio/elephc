@@ -2,7 +2,7 @@
 title: "flush() - internals"
 description: "Compiler internals for flush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 342
+  order: 344
 ---
 
 ## `flush()` - internals

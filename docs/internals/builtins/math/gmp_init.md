@@ -2,7 +2,7 @@
 title: "gmp_init() - internals"
 description: "Compiler internals for gmp_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 622
+  order: 624
 ---
 
 ## `gmp_init()` - internals

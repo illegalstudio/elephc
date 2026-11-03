@@ -2,7 +2,7 @@
 title: "strstr()"
 description: "Returns the portion of a string starting at the first occurrence of a substring, or false."
 sidebar:
-  order: 1063
+  order: 1065
 ---
 
 ## strstr()

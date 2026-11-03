@@ -2,7 +2,7 @@
 title: "proc_get_status() - internals"
 description: "Compiler internals for proc_get_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 783
+  order: 785
 ---
 
 ## `proc_get_status()` - internals

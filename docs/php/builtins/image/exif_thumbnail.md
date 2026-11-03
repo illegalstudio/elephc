@@ -2,7 +2,7 @@
 title: "exif_thumbnail()"
 description: "Returns the embedded thumbnail of an image, with its size and type."
 sidebar:
-  order: 474
+  order: 476
 ---
 
 ## exif_thumbnail()

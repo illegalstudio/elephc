@@ -2,7 +2,7 @@
 title: "cal_days_in_month()"
 description: "Returns the number of days in a month of the given calendar and year."
 sidebar:
-  order: 200
+  order: 202
 ---
 
 ## cal_days_in_month()

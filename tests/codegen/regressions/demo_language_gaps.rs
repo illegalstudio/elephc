@@ -869,6 +869,41 @@ unset($q);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// An element write, decrement and `unset()` of a property only a SUBCLASS declares, through a
+/// receiver typed with the parent class, reach the run-time object's property, as in php.
+/// symfony/http-client's `NativeResponse::perform()` does `--$multi->hosts[$host]` and
+/// `unset($multi->hosts[$host])` on a `ClientState` whose `NativeClientState` declares `hosts`;
+/// the refusal sent the class to the interpreter and broke the Demo's `--closed-world` build.
+#[test]
+fn test_element_writes_of_a_property_only_a_subclass_declares() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ClientState { public array $openHandles = []; }
+class NativeClientState extends ClientState { public array $hosts = []; }
+final class R {
+    public static function settle(ClientState $multi, ?string $host): void {
+        if (null !== $host && isset($multi->hosts[$host]) && 0 >= --$multi->hosts[$host]) {
+            unset($multi->hosts[$host]);
+        }
+    }
+    public static function track(ClientState $multi, string $host): void {
+        $multi->hosts[$host] = ($multi->hosts[$host] ?? 0) + 1;
+        $multi->hosts[] = 'pushed';
+    }
+}
+$s = new NativeClientState();
+R::track($s, 'a');
+R::track($s, 'a');
+R::track($s, 'b');
+R::settle($s, 'a');
+R::settle($s, 'b');
+R::settle($s, null);
+echo json_encode($s->hosts), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"a\":1,\"0\":\"pushed\",\"1\":\"pushed\",\"2\":\"pushed\"}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// `#[AllowDynamicProperties]` inside a namespace resolves to `N\AllowDynamicProperties`, a
 /// user attribute, not the built-in: the class stays an ordinary one, so creating `$x` reports
 /// php's deprecation (and still stores the value) instead of being silently allowed.

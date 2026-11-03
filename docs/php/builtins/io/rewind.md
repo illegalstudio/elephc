@@ -2,7 +2,7 @@
 title: "rewind()"
 description: "Rewind the position of a file pointer."
 sidebar:
-  order: 379
+  order: 381
 ---
 
 ## rewind()

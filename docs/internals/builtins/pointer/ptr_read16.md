@@ -2,7 +2,7 @@
 title: "ptr_read16() - internals"
 description: "Compiler internals for ptr_read16(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 842
+  order: 844
 ---
 
 ## `ptr_read16()` - internals

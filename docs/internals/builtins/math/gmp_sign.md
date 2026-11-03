@@ -2,7 +2,7 @@
 title: "gmp_sign() - internals"
 description: "Compiler internals for gmp_sign(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 648
+  order: 650
 ---
 
 ## `gmp_sign()` - internals

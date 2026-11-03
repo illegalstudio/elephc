@@ -2,7 +2,7 @@
 title: "mb_ucfirst() - internals"
 description: "Compiler internals for mb_ucfirst(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1008
+  order: 1010
 ---
 
 ## `mb_ucfirst()` - internals

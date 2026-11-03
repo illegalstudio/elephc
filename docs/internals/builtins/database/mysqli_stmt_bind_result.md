@@ -2,7 +2,7 @@
 title: "mysqli_stmt_bind_result() - internals"
 description: "Compiler internals for mysqli_stmt_bind_result(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 176
+  order: 177
 ---
 
 ## `mysqli_stmt_bind_result()` - internals

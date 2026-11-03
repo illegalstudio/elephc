@@ -2,7 +2,7 @@
 title: "asin() - internals"
 description: "Compiler internals for asin(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 572
+  order: 574
 ---
 
 ## `asin()` - internals

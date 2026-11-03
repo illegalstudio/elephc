@@ -2,7 +2,7 @@
 title: "password_get_info() - internals"
 description: "Compiler internals for password_get_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1020
+  order: 1022
 ---
 
 ## `password_get_info()` - internals

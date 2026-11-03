@@ -2,7 +2,7 @@
 title: "gmp_rootrem() - internals"
 description: "Compiler internals for gmp_rootrem(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 644
+  order: 646
 ---
 
 ## `gmp_rootrem()` - internals

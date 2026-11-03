@@ -2,7 +2,7 @@
 title: "pcntl_getqos_class() - internals"
 description: "Compiler internals for pcntl_getqos_class(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 747
+  order: 749
 ---
 
 ## `pcntl_getqos_class()` - internals

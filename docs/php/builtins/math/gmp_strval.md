@@ -2,7 +2,7 @@
 title: "gmp_strval()"
 description: "Formats a GMP number in a base."
 sidebar:
-  order: 651
+  order: 653
 ---
 
 ## gmp_strval()

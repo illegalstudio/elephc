@@ -2,7 +2,7 @@
 title: "finfo_file()"
 description: "Identifies the type and encoding of a file or stream URL."
 sidebar:
-  order: 338
+  order: 340
 ---
 
 ## finfo_file()

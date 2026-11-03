@@ -2,7 +2,7 @@
 title: "mysqli_stmt_reset()"
 description: "Resets a prepared statement so it can be executed again."
 sidebar:
-  order: 191
+  order: 192
 ---
 
 ## mysqli_stmt_reset()

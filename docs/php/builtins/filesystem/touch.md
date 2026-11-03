@@ -2,7 +2,7 @@
 title: "touch()"
 description: "Sets access and modification time of a file."
 sidebar:
-  order: 322
+  order: 324
 ---
 
 ## touch()

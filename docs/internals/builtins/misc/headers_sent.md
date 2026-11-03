@@ -2,7 +2,7 @@
 title: "headers_sent() - internals"
 description: "Compiler internals for headers_sent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 720
+  order: 722
 ---
 
 ## `headers_sent()` - internals

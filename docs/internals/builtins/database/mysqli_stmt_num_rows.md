@@ -2,7 +2,7 @@
 title: "mysqli_stmt_num_rows() - internals"
 description: "Compiler internals for mysqli_stmt_num_rows(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 188
+  order: 189
 ---
 
 ## `mysqli_stmt_num_rows()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1437](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1437) (`mysqli_stmt_num_rows`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1482](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1482) (`mysqli_stmt_num_rows`)
 - **Function symbol**: `mysqli_stmt_num_rows()`
 
 

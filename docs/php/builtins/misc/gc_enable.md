@@ -2,7 +2,7 @@
 title: "gc_enable()"
 description: "Enables automatic collection of circular references."
 sidebar:
-  order: 700
+  order: 702
 ---
 
 ## gc_enable()

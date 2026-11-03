@@ -2,7 +2,7 @@
 title: "fnmatch() - internals"
 description: "Compiler internals for fnmatch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 290
+  order: 292
 ---
 
 ## `fnmatch()` - internals

@@ -2,7 +2,7 @@
 title: "cal_from_jd() - internals"
 description: "Compiler internals for cal_from_jd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 201
+  order: 203
 ---
 
 ## `cal_from_jd()` - internals

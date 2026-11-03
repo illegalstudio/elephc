@@ -2,7 +2,7 @@
 title: "strlen() - internals"
 description: "Compiler internals for strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1053
+  order: 1055
 ---
 
 ## `strlen()` - internals

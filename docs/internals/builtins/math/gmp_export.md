@@ -2,7 +2,7 @@
 title: "gmp_export() - internals"
 description: "Compiler internals for gmp_export(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 616
+  order: 618
 ---
 
 ## `gmp_export()` - internals

@@ -2,7 +2,7 @@
 title: "getdate()"
 description: "Returns date/time information."
 sidebar:
-  order: 236
+  order: 238
 ---
 
 ## getdate()

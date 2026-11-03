@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_ceil() - internals"
 description: "Compiler internals for __elephc_bcnumber_ceil(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1211
+  order: 1213
 ---
 
 ## `__elephc_bcnumber_ceil()` - internals

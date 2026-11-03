@@ -2,7 +2,7 @@
 title: "getmypid() - internals"
 description: "Compiler internals for getmypid(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 716
+  order: 718
 ---
 
 ## `getmypid()` - internals

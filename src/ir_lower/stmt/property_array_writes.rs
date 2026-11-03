@@ -32,16 +32,24 @@ fn own_property_container(
 ///
 /// The retyped value is a borrowed view: the receiver lease (`PropertyWriteReceiver`) keeps
 /// owning, and releasing, the original.
-fn interface_receiver_as_generic_object(
+///
+/// So is a class that does not declare the property while a descendant does: the receiver holds
+/// that descendant at run time (symfony/http-client's `--$multi->hosts[$host]` on a
+/// `ClientState` whose `NativeClientState` declares `hosts`), the case the checker admits in
+/// `property_declared_only_by_descendants`.
+pub(in crate::ir_lower) fn interface_receiver_as_generic_object(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
+    property: &str,
     span: Span,
 ) -> LoweredValue {
     let PhpType::Object(class_name) = ctx.builder.value_php_type(object.value) else {
         return object;
     };
     let name = class_name.trim_start_matches('\\');
-    if name.is_empty() || ctx.classes.contains_key(name) || !ctx.interfaces.contains_key(name) {
+    let interface_only = !ctx.classes.contains_key(name) && ctx.interfaces.contains_key(name);
+    let descendant_only = property_declared_only_by_descendants(ctx, name, property);
+    if name.is_empty() || !(interface_only || descendant_only) {
         return object;
     }
     let view = ctx.emit_value(
@@ -93,7 +101,7 @@ pub(super) fn lower_property_array_push(
 fn lower_property_array_push_value(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, value: LoweredValue, span: Span,
 ) {
-    let object = interface_receiver_as_generic_object(ctx, object, span);
+    let object = interface_receiver_as_generic_object(ctx, object, property, span);
     if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
         lower_php_array_property_write(ctx, object, property, None, value, span, false);
         return;
@@ -629,7 +637,7 @@ fn lower_property_array_assign_value(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, index: LoweredValue,
     value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
-    let object = interface_receiver_as_generic_object(ctx, object, span);
+    let object = interface_receiver_as_generic_object(ctx, object, property, span);
     if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
         lower_php_array_property_write(
             ctx,
@@ -1414,9 +1422,36 @@ pub(in crate::ir_lower) fn is_generic_object_receiver(
             return true
         }
         PhpType::Mixed | PhpType::Union(_) => return true,
+        PhpType::Object(class_name)
+            if property_declared_only_by_descendants(
+                ctx, class_name.trim_start_matches('\\'), property,
+            ) =>
+        {
+            return true
+        }
         _ => {}
     }
     receiver_stores_property_dynamically(ctx, object, property)
+}
+
+/// Whether `class_name` does not hold `property` itself (no slot, no `__set`, no dynamic hash)
+/// while a descendant declares it: the receiver holds that descendant at run time, so the
+/// element write resolves the property on the run-time object, as through an interface.
+pub(in crate::ir_lower) fn property_declared_only_by_descendants(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    ctx.classes.get(class_name).is_some_and(|info| {
+        info.visible_property(property).is_none()
+            && !info.methods.contains_key("__set")
+            && !info.dynamic_property_hash_is_name_addressable()
+            && ctx.classes.iter().any(|(candidate, candidate_info)| {
+                candidate.as_str() != class_name
+                    && crate::types::class_inherits_from(ctx.classes, candidate, class_name)
+                    && candidate_info.visible_property(property).is_some()
+            })
+    })
 }
 
 /// Returns whether this receiver keeps `property` in its dynamic side table rather than a slot.

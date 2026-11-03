@@ -2,7 +2,7 @@
 title: "mysqli_stmt_bind_result()"
 description: "Binds variables to a prepared statement's result columns."
 sidebar:
-  order: 176
+  order: 177
 ---
 
 ## mysqli_stmt_bind_result()

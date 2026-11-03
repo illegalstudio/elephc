@@ -2,7 +2,7 @@
 title: "mysqli_stmt_fetch()"
 description: "Fetches the next result row into the variables bound by mysqli_stmt_bind_result()."
 sidebar:
-  order: 182
+  order: 183
 ---
 
 ## mysqli_stmt_fetch()

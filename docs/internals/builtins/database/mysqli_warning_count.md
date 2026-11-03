@@ -2,7 +2,7 @@
 title: "mysqli_warning_count() - internals"
 description: "Compiler internals for mysqli_warning_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 198
+  order: 200
 ---
 
 ## `mysqli_warning_count()` - internals

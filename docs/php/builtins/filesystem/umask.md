@@ -2,7 +2,7 @@
 title: "umask()"
 description: "Changes the current umask."
 sidebar:
-  order: 323
+  order: 325
 ---
 
 ## umask()

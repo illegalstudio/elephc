@@ -2,7 +2,7 @@
 title: "strcspn()"
 description: "Returns the length of the initial byte span containing none of the selected characters."
 sidebar:
-  order: 1049
+  order: 1051
 ---
 
 ## strcspn()

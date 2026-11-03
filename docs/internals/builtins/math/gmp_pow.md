@@ -2,7 +2,7 @@
 title: "gmp_pow() - internals"
 description: "Compiler internals for gmp_pow(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 637
+  order: 639
 ---
 
 ## `gmp_pow()` - internals

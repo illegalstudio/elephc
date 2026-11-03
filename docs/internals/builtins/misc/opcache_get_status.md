@@ -2,7 +2,7 @@
 title: "opcache_get_status() - internals"
 description: "Compiler internals for opcache_get_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 731
+  order: 733
 ---
 
 ## `opcache_get_status()` - internals

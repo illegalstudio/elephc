@@ -2,7 +2,7 @@
 title: "bccomp()"
 description: "Compares two arbitrary-precision decimal numbers."
 sidebar:
-  order: 578
+  order: 580
 ---
 
 ## bccomp()

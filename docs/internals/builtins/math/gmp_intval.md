@@ -2,7 +2,7 @@
 title: "gmp_intval() - internals"
 description: "Compiler internals for gmp_intval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 623
+  order: 625
 ---
 
 ## `gmp_intval()` - internals

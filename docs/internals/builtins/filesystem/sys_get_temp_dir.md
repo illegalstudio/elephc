@@ -2,7 +2,7 @@
 title: "sys_get_temp_dir() - internals"
 description: "Compiler internals for sys_get_temp_dir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 319
+  order: 321
 ---
 
 ## `sys_get_temp_dir()` - internals

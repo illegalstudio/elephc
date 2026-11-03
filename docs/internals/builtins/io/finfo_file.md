@@ -2,7 +2,7 @@
 title: "finfo_file() - internals"
 description: "Compiler internals for finfo_file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 338
+  order: 340
 ---
 
 ## `finfo_file()` - internals

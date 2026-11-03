@@ -2,7 +2,7 @@
 title: "hash_pbkdf2()"
 description: "Generates a PBKDF2 key derivation of a supplied password."
 sidebar:
-  order: 918
+  order: 920
 ---
 
 ## hash_pbkdf2()

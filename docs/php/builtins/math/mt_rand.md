@@ -2,7 +2,7 @@
 title: "mt_rand()"
 description: "Generate a random value via the Mersenne Twister Random Number Generator."
 sidebar:
-  order: 668
+  order: 670
 ---
 
 ## mt_rand()

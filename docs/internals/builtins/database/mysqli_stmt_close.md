@@ -2,7 +2,7 @@
 title: "mysqli_stmt_close() - internals"
 description: "Compiler internals for mysqli_stmt_close(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 177
+  order: 178
 ---
 
 ## `mysqli_stmt_close()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1361](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1361) (`mysqli_stmt_close`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1406](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1406) (`mysqli_stmt_close`)
 - **Function symbol**: `mysqli_stmt_close()`
 
 

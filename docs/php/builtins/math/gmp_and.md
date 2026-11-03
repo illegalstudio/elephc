@@ -2,7 +2,7 @@
 title: "gmp_and()"
 description: "Bitwise AND of two GMP numbers."
 sidebar:
-  order: 606
+  order: 608
 ---
 
 ## gmp_and()

@@ -45,6 +45,10 @@ class mysqli_stmt {
     private string $bindTypes = "";
     private array $boundParams = [];
 
+    // send_long_data() state: the chunks sent for each parameter, by index; execute() binds
+    // them as the parameter's blob and forgets them, as mysqlnd does.
+    private array $longData = [];
+
     // bind_result state: the caller variables fetch() writes each row into.
     private array $boundResults = [];
 
@@ -228,6 +232,22 @@ class mysqli_stmt {
         return true;
     }
 
+    public function send_long_data(int $param_num, string $data): bool {
+        if ($this->stmt < 0) {
+            $this->syntheticFailure(2006, "mysqli_stmt object is already closed", "HY000");
+            return false;
+        }
+        if ($param_num < 0) {
+            throw new ValueError("mysqli_stmt::send_long_data(): Argument #1 (\$param_num) must be greater than or equal to 0");
+        }
+        if ($param_num >= $this->param_count) {
+            $this->syntheticFailure(2034, "Invalid parameter number", "HY000");
+            return false;
+        }
+        $this->longData[$param_num] = ($this->longData[$param_num] ?? "") . $data;
+        return true;
+    }
+
     public function execute(?array $params = null): bool {
         if ($this->stmt < 0) {
             $this->syntheticFailure(2006, "mysqli_stmt object is already closed", "HY000");
@@ -273,7 +293,11 @@ class mysqli_stmt {
                 // The bound variable's value now, as php reads it.
                 $_value = $this->boundParams[$_i];
                 $_char = substr($this->bindTypes, $_i, 1);
-                if ($_value === null) {
+                if (isset($this->longData[$_i])) {
+                    // The chunks send_long_data() accumulated are the parameter's value.
+                    $_blob = $this->longData[$_i];
+                    elephc_pdo_bind_blob($this->stmt, $_i + 1, $_blob, strlen($_blob));
+                } elseif ($_value === null) {
                     elephc_pdo_bind_null($this->stmt, $_i + 1);
                 } elseif ($_char === "i") {
                     elephc_pdo_bind_int($this->stmt, $_i + 1, (int) $_value);
@@ -291,6 +315,7 @@ class mysqli_stmt {
             $this->syntheticFailure(2031, "No data supplied for parameters in prepared statement", "HY000");
             return false;
         }
+        $this->longData = [];
         $_rc = elephc_pdo_step($this->stmt);
         if ($_rc < 0) {
             return $this->opFailed();
@@ -444,6 +469,7 @@ class mysqli_stmt {
         elephc_pdo_reset($this->stmt);
         elephc_pdo_clear_bindings($this->stmt);
         $this->hasPending = false;
+        $this->longData = [];
         $this->stored = false;
         $this->storedCells = [];
         $this->storedCursor = 0;

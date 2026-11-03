@@ -2,7 +2,7 @@
 title: "preg_quote()"
 description: "Escapes the PCRE metacharacters in a string, plus the delimiter when one is given."
 sidebar:
-  order: 1024
+  order: 1026
 ---
 
 ## preg_quote()

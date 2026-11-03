@@ -2,7 +2,7 @@
 title: "imagesavealpha()"
 description: "Controls whether full alpha channel information is saved with the image."
 sidebar:
-  order: 550
+  order: 552
 ---
 
 ## imagesavealpha()

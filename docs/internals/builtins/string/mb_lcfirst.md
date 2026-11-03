@@ -2,7 +2,7 @@
 title: "mb_lcfirst() - internals"
 description: "Compiler internals for mb_lcfirst(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 975
+  order: 977
 ---
 
 ## `mb_lcfirst()` - internals

@@ -2,7 +2,7 @@
 title: "clearstatcache()"
 description: "Clears file status cache."
 sidebar:
-  order: 275
+  order: 277
 ---
 
 ## clearstatcache()

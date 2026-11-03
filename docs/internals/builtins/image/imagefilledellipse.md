@@ -2,7 +2,7 @@
 title: "imagefilledellipse() - internals"
 description: "Compiler internals for imagefilledellipse(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 526
+  order: 528
 ---
 
 ## `imagefilledellipse()` - internals

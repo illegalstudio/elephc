@@ -2,7 +2,7 @@
 title: "register_shutdown_function()"
 description: "Registers a callback to run when the script terminates."
 sidebar:
-  order: 1119
+  order: 1121
 ---
 
 ## register_shutdown_function()

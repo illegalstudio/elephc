@@ -2,7 +2,7 @@
 title: "inet_pton() - internals"
 description: "Compiler internals for inet_pton(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 938
+  order: 940
 ---
 
 ## `inet_pton()` - internals

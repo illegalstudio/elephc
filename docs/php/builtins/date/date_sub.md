@@ -2,7 +2,7 @@
 title: "date_sub()"
 description: "Subtracts an interval from a DateTime, modifying it in place."
 sidebar:
-  order: 224
+  order: 226
 ---
 
 ## date_sub()

@@ -2,7 +2,7 @@
 title: "__elephc_sodium_status() - internals"
 description: "Compiler internals for __elephc_sodium_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1336
+  order: 1338
 ---
 
 ## `__elephc_sodium_status()` - internals

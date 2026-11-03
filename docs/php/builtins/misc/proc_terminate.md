@@ -2,7 +2,7 @@
 title: "proc_terminate()"
 description: "Kills a process opened by proc_open()."
 sidebar:
-  order: 786
+  order: 788
 ---
 
 ## proc_terminate()

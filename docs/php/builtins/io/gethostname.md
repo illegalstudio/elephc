@@ -2,7 +2,7 @@
 title: "gethostname()"
 description: "Gets the standard host name for the local machine."
 sidebar:
-  order: 357
+  order: 359
 ---
 
 ## gethostname()

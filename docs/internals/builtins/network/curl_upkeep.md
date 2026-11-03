@@ -2,7 +2,7 @@
 title: "curl_upkeep() - internals"
 description: "Compiler internals for curl_upkeep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 834
+  order: 836
 ---
 
 ## `curl_upkeep()` - internals

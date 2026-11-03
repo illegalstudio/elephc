@@ -2,7 +2,7 @@
 title: "fflush() - internals"
 description: "Compiler internals for fflush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 329
+  order: 331
 ---
 
 ## `fflush()` - internals

@@ -2,7 +2,7 @@
 title: "gmp_clrbit() - internals"
 description: "Compiler internals for gmp_clrbit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 608
+  order: 610
 ---
 
 ## `gmp_clrbit()` - internals

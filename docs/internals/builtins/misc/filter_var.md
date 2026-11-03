@@ -2,7 +2,7 @@
 title: "filter_var() - internals"
 description: "Compiler internals for filter_var(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 694
+  order: 696
 ---
 
 ## `filter_var()` - internals

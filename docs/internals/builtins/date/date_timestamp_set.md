@@ -2,7 +2,7 @@
 title: "date_timestamp_set() - internals"
 description: "Compiler internals for date_timestamp_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 230
+  order: 232
 ---
 
 ## `date_timestamp_set()` - internals

@@ -2,7 +2,7 @@
 title: "gmp_sqrtrem() - internals"
 description: "Compiler internals for gmp_sqrtrem(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 650
+  order: 652
 ---
 
 ## `gmp_sqrtrem()` - internals

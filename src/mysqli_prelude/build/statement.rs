@@ -35,6 +35,7 @@ use crate::synthetic_class::{
     e_const,
     e_index,
     e_int,
+    e_null_coalesce,
     e_method_call,
     e_neg,
     e_new,
@@ -87,6 +88,9 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
         // bind_param state: the type string and the caller variables, by reference.
         .private_prop("bindTypes", TypeExpr::Str, Some(e_str("")))
         .private_prop("boundParams", t_array(), Some(e_array(vec![])))
+        // send_long_data() state: the chunks sent for each parameter, bound as its blob
+        // by execute() and then forgotten, as mysqlnd does.
+        .private_prop("longData", t_array(), Some(e_array(vec![])))
         // bind_result state: the caller variables fetch() writes each row into.
         .private_prop("boundResults", t_array(), Some(e_array(vec![])))
         // store_result buffer: every buffered row's cells, read by fetch() in order.
@@ -397,6 +401,42 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                 ]),
         )
         .method(
+            method("send_long_data")
+                .param("param_num", TypeExpr::Int)
+                .param("data", TypeExpr::Str)
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("stmt"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2006), e_str("mysqli_stmt object is already closed"), e_str("HY000")])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("param_num"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_throw(e_new("ValueError", vec![e_str("mysqli_stmt::send_long_data(): Argument #1 ($param_num) must be greater than or equal to 0")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("param_num"), BinOp::GtEq, e_this_prop("param_count")),
+                        vec![
+                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2034), e_str("Invalid parameter number"), e_str("HY000")])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_array_assign(e_this(), "longData", e_var("param_num"), e_binop(e_null_coalesce(e_index(e_this_prop("longData"), e_var("param_num")), e_str("")), BinOp::Concat, e_var("data"))),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
             method("execute")
                 .param_default("params", t_nullable(t_array()), e_null())
                 .returns(TypeExpr::Bool)
@@ -477,11 +517,15 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                                 s_assign("_value", e_index(e_this_prop("boundParams"), e_var("_i"))),
                                 s_assign("_char", e_call("substr", vec![e_this_prop("bindTypes"), e_var("_i"), e_int(1)])),
                                 s_if(
-                                    e_binop(e_var("_value"), BinOp::StrictEq, e_null()),
+                                    e_call("isset", vec![e_index(e_this_prop("longData"), e_var("_i"))]),
                                     vec![
-                                        s_expr(e_call("elephc_pdo_bind_null", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1))])),
+                                        s_assign("_blob", e_index(e_this_prop("longData"), e_var("_i"))),
+                                        s_expr(e_call("elephc_pdo_bind_blob", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_var("_blob"), e_call("strlen", vec![e_var("_blob")])])),
                                     ],
                                     vec![
+                                    (e_binop(e_var("_value"), BinOp::StrictEq, e_null()), vec![
+                                        s_expr(e_call("elephc_pdo_bind_null", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1))])),
+                                    ]),
                                     (e_binop(e_var("_char"), BinOp::StrictEq, e_str("i")), vec![
                                         s_expr(e_call("elephc_pdo_bind_int", vec![e_this_prop("stmt"), e_binop(e_var("_i"), BinOp::Add, e_int(1)), e_cast(CastType::Int, e_var("_value"))])),
                                     ]),
@@ -507,6 +551,7 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                     ],
                         None,
                     ),
+                    s_prop_assign(e_this(), "longData", e_array(vec![])),
                     s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
                     s_if(
                         e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
@@ -730,6 +775,7 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                     s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
                     s_expr(e_call("elephc_pdo_clear_bindings", vec![e_this_prop("stmt")])),
                     s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                    s_prop_assign(e_this(), "longData", e_array(vec![])),
                     s_prop_assign(e_this(), "stored", e_bool(false)),
                     s_prop_assign(e_this(), "storedCells", e_array(vec![])),
                     s_prop_assign(e_this(), "storedCursor", e_int(0)),

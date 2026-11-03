@@ -2,7 +2,7 @@
 title: "curl_pause()"
 description: "Pauses and unpauses a connection."
 sidebar:
-  order: 822
+  order: 824
 ---
 
 ## curl_pause()

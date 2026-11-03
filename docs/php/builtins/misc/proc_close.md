@@ -2,7 +2,7 @@
 title: "proc_close()"
 description: "Closes a process opened by proc_open() and returns its exit code."
 sidebar:
-  order: 782
+  order: 784
 ---
 
 ## proc_close()

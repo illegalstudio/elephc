@@ -2,7 +2,7 @@
 title: "gmp_mod() - internals"
 description: "Compiler internals for gmp_mod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 629
+  order: 631
 ---
 
 ## `gmp_mod()` - internals

@@ -2,7 +2,7 @@
 title: "gmp_fact() - internals"
 description: "Compiler internals for gmp_fact(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 617
+  order: 619
 ---
 
 ## `gmp_fact()` - internals

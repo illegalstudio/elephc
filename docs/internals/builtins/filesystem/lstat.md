@@ -2,7 +2,7 @@
 title: "lstat() - internals"
 description: "Compiler internals for lstat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 305
+  order: 307
 ---
 
 ## `lstat()` - internals

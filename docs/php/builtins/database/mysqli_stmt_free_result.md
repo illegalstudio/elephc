@@ -2,7 +2,7 @@
 title: "mysqli_stmt_free_result()"
 description: "Releases the result a prepared statement buffered."
 sidebar:
-  order: 184
+  order: 185
 ---
 
 ## mysqli_stmt_free_result()

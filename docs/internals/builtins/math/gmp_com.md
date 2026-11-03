@@ -2,7 +2,7 @@
 title: "gmp_com() - internals"
 description: "Compiler internals for gmp_com(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 610
+  order: 612
 ---
 
 ## `gmp_com()` - internals

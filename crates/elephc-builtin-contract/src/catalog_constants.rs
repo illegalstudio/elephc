@@ -491,6 +491,7 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("MYSQLI_CLIENT_IGNORE_SPACE", Mysqli, ConstValue::Int(256), route: Prelude),
     constant!("MYSQLI_CLIENT_INTERACTIVE", Mysqli, ConstValue::Int(1024), route: Prelude),
     constant!("MYSQLI_CLIENT_SSL", Mysqli, ConstValue::Int(2048), route: Prelude),
+    constant!("MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT", Mysqli, ConstValue::Int(64), route: Prelude),
     constant!("MYSQLI_INIT_COMMAND", Mysqli, ConstValue::Int(3), route: Prelude),
     constant!("MYSQLI_NUM", Mysqli, ConstValue::Int(2), route: Prelude),
     constant!("MYSQLI_OPT_CONNECT_TIMEOUT", Mysqli, ConstValue::Int(0), route: Prelude),

@@ -2,7 +2,7 @@
 title: "stream_socket_sendto() - internals"
 description: "Compiler internals for stream_socket_sendto(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 414
+  order: 416
 ---
 
 ## `stream_socket_sendto()` - internals

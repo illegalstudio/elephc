@@ -2,7 +2,7 @@
 title: "mb_eregi()"
 description: "Searches without case sensitivity and optionally writes multibyte captures by reference."
 sidebar:
-  order: 968
+  order: 970
 ---
 
 ## mb_eregi()

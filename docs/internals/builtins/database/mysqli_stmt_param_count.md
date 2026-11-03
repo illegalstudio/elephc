@@ -2,7 +2,7 @@
 title: "mysqli_stmt_param_count() - internals"
 description: "Compiler internals for mysqli_stmt_param_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 189
+  order: 190
 ---
 
 ## `mysqli_stmt_param_count()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1456](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1456) (`mysqli_stmt_param_count`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1501](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1501) (`mysqli_stmt_param_count`)
 - **Function symbol**: `mysqli_stmt_param_count()`
 
 

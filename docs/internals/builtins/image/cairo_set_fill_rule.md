@@ -2,7 +2,7 @@
 title: "cairo_set_fill_rule() - internals"
 description: "Compiler internals for cairo_set_fill_rule(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 458
+  order: 460
 ---
 
 ## `cairo_set_fill_rule()` - internals

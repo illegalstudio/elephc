@@ -2,7 +2,7 @@
 title: "strtok()"
 description: "Tokenizes a string by a set of delimiter bytes."
 sidebar:
-  order: 1064
+  order: 1066
 ---
 
 ## strtok()

@@ -2,7 +2,7 @@
 title: "date_create_immutable_from_format()"
 description: "Creates a DateTimeImmutable by parsing a string against an explicit format."
 sidebar:
-  order: 210
+  order: 212
 ---
 
 ## date_create_immutable_from_format()

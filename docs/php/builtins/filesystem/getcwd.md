@@ -2,7 +2,7 @@
 title: "getcwd()"
 description: "Gets the current working directory."
 sidebar:
-  order: 291
+  order: 293
 ---
 
 ## getcwd()

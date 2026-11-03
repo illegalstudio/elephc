@@ -2,7 +2,7 @@
 title: "password_hash()"
 description: "Creates a bcrypt password hash with a random salt."
 sidebar:
-  order: 1021
+  order: 1023
 ---
 
 ## password_hash()

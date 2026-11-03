@@ -2,7 +2,7 @@
 title: "gmp_div()"
 description: "Alias of gmp_div_q()."
 sidebar:
-  order: 611
+  order: 613
 ---
 
 ## gmp_div()

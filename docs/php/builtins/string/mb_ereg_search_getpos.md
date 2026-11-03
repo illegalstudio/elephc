@@ -2,7 +2,7 @@
 title: "mb_ereg_search_getpos()"
 description: "Reads the current byte position in the retained multibyte regex subject."
 sidebar:
-  order: 962
+  order: 964
 ---
 
 ## mb_ereg_search_getpos()

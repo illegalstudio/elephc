@@ -2,7 +2,7 @@
 title: "ptr_read16()"
 description: "Reads one unsigned 16-bit word through a raw pointer and returns it as an integer."
 sidebar:
-  order: 842
+  order: 844
 ---
 
 ## ptr_read16()

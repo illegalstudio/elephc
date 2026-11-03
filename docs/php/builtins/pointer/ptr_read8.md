@@ -2,7 +2,7 @@
 title: "ptr_read8()"
 description: "Reads one unsigned byte through a raw pointer and returns it as an integer."
 sidebar:
-  order: 844
+  order: 846
 ---
 
 ## ptr_read8()

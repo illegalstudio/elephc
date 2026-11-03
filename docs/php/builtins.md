@@ -183,6 +183,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mysqli_set_charset()`](./builtins/database/mysqli_set_charset.md) | `(mixed $mysql, string $charset): bool` | `bool` | ✓ | - |
 | [`mysqli_set_opt()`](./builtins/database/mysqli_set_opt.md) | `(mixed $mysql, int $option, mixed $value): bool` | `bool` | ✓ | - |
 | [`mysqli_sqlstate()`](./builtins/database/mysqli_sqlstate.md) | `(mixed $mysql): string` | `string` | ✓ | - |
+| [`mysqli_ssl_set()`](./builtins/database/mysqli_ssl_set.md) | `(mixed $mysql, ?string $key, ?string $certificate, ?string $ca_certificate, ?string $ca_path, ?string $cipher_algos): bool` | `bool` | ✓ | - |
 | [`mysqli_stat()`](./builtins/database/mysqli_stat.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | - |
 | [`mysqli_stmt_affected_rows()`](./builtins/database/mysqli_stmt_affected_rows.md) | `(mixed $statement): int` | `int` | ✓ | - |
 | [`mysqli_stmt_bind_param()`](./builtins/database/mysqli_stmt_bind_param.md) | `(mixed $statement, string $types, ...$vars): bool` | `bool` | ✓ | - |
@@ -202,6 +203,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mysqli_stmt_param_count()`](./builtins/database/mysqli_stmt_param_count.md) | `(mixed $statement): int` | `int` | ✓ | - |
 | [`mysqli_stmt_prepare()`](./builtins/database/mysqli_stmt_prepare.md) | `(mixed $statement, string $query): bool` | `bool` | ✓ | - |
 | [`mysqli_stmt_reset()`](./builtins/database/mysqli_stmt_reset.md) | `(mixed $statement): bool` | `bool` | ✓ | - |
+| [`mysqli_stmt_send_long_data()`](./builtins/database/mysqli_stmt_send_long_data.md) | `(mixed $statement, int $param_num, string $data): bool` | `bool` | ✓ | - |
 | [`mysqli_stmt_sqlstate()`](./builtins/database/mysqli_stmt_sqlstate.md) | `(mixed $statement): string` | `string` | ✓ | - |
 | [`mysqli_stmt_store_result()`](./builtins/database/mysqli_stmt_store_result.md) | `(mixed $statement): bool` | `bool` | ✓ | - |
 | [`mysqli_store_result()`](./builtins/database/mysqli_store_result.md) | `(mixed $mysql, int $mode = 0): mixed` | `mixed` | ✓ | - |

@@ -2,7 +2,7 @@
 title: "posix_kill()"
 description: "Sends a signal to a process; signal 0 only checks that the process exists."
 sidebar:
-  order: 773
+  order: 775
 ---
 
 ## posix_kill()

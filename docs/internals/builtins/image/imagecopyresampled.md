@@ -2,7 +2,7 @@
 title: "imagecopyresampled() - internals"
 description: "Compiler internals for imagecopyresampled(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 508
+  order: 510
 ---
 
 ## `imagecopyresampled()` - internals

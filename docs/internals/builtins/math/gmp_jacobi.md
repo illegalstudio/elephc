@@ -2,7 +2,7 @@
 title: "gmp_jacobi() - internals"
 description: "Compiler internals for gmp_jacobi(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 625
+  order: 627
 ---
 
 ## `gmp_jacobi()` - internals

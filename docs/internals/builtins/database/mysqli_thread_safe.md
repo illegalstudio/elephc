@@ -2,7 +2,7 @@
 title: "mysqli_thread_safe() - internals"
 description: "Compiler internals for mysqli_thread_safe(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 196
+  order: 198
 ---
 
 ## `mysqli_thread_safe()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1707](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1707) (`mysqli_thread_safe`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1752](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1752) (`mysqli_thread_safe`)
 - **Function symbol**: `mysqli_thread_safe()`
 
 

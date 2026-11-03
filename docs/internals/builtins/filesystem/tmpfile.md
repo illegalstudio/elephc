@@ -2,7 +2,7 @@
 title: "tmpfile() - internals"
 description: "Compiler internals for tmpfile(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 321
+  order: 323
 ---
 
 ## `tmpfile()` - internals

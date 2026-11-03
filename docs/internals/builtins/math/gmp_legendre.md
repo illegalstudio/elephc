@@ -2,7 +2,7 @@
 title: "gmp_legendre() - internals"
 description: "Compiler internals for gmp_legendre(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 628
+  order: 630
 ---
 
 ## `gmp_legendre()` - internals

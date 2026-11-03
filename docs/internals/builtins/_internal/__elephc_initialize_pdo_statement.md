@@ -2,7 +2,7 @@
 title: "__elephc_initialize_pdo_statement() - internals"
 description: "Compiler internals for __elephc_initialize_pdo_statement(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1281
+  order: 1283
 ---
 
 ## `__elephc_initialize_pdo_statement()` - internals

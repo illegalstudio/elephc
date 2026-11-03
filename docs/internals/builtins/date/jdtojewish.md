@@ -2,7 +2,7 @@
 title: "jdtojewish() - internals"
 description: "Compiler internals for jdtojewish(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 248
+  order: 250
 ---
 
 ## `jdtojewish()` - internals

@@ -2,7 +2,7 @@
 title: "gmp_sqrt() - internals"
 description: "Compiler internals for gmp_sqrt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 649
+  order: 651
 ---
 
 ## `gmp_sqrt()` - internals

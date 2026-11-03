@@ -2,7 +2,7 @@
 title: "mysqli_stmt_store_result()"
 description: "Buffers a prepared statement's whole result on the client."
 sidebar:
-  order: 193
+  order: 195
 ---
 
 ## mysqli_stmt_store_result()

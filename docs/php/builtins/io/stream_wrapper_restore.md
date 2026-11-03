@@ -2,7 +2,7 @@
 title: "stream_wrapper_restore()"
 description: "Restores a previously unregistered built-in wrapper."
 sidebar:
-  order: 419
+  order: 421
 ---
 
 ## stream_wrapper_restore()

@@ -2,7 +2,7 @@
 title: "zval_type()"
 description: "Returns the PHP zval type byte for a zval pointer."
 sidebar:
-  order: 858
+  order: 860
 ---
 
 ## zval_type()

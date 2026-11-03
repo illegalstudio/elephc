@@ -2,7 +2,7 @@
 title: "imagecreatefrompng() - internals"
 description: "Compiler internals for imagecreatefrompng(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 514
+  order: 516
 ---
 
 ## `imagecreatefrompng()` - internals

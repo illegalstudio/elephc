@@ -2,7 +2,7 @@
 title: "chunk_split() - internals"
 description: "Compiler internals for chunk_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 902
+  order: 904
 ---
 
 ## `chunk_split()` - internals

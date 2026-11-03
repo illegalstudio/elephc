@@ -146,6 +146,22 @@ fn unset_array_access_has_generic_object_property_receiver(
     ) {
         return true;
     }
+    // A receiver class that holds no `$property` while a descendant declares it resolves the
+    // property on the run-time object, like a gradual receiver (symfony/http-client's
+    // `unset($multi->hosts[$host])` on a `ClientState`).
+    let receiver_ty = match &object.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        _ => unset_operand_type(ctx, object),
+    };
+    if let PhpType::Object(class_name) = &receiver_ty {
+        if crate::ir_lower::stmt::property_array_writes::property_declared_only_by_descendants(
+            ctx,
+            class_name.trim_start_matches('\\'),
+            property,
+        ) {
+            return true;
+        }
+    }
     let ExprKind::Variable(name) = &object.kind else {
         // A chained receiver whose own type is gradual (`unset($this->store->locks[$name])` over an
         // untyped `$store`, illuminate/cache's `ArrayLock::forceRelease()`) is read and written
@@ -501,10 +517,17 @@ fn lower_unset_property_array_element_on(
     expr: &Expr,
 ) -> bool {
     let object = *object;
-    let declared_array_property =
-        crate::ir_lower::stmt::object_property_type(ctx, object.value, property)
-            .map(|ty| ty.codegen_repr())
-            .filter(|ty| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }));
+    // A receiver class that holds no `$property` itself while a descendant declares it has no
+    // slot to walk: the property is resolved on the run-time object (the generic path below).
+    let declared_array_property = (!crate::ir_lower::stmt::property_array_writes::is_generic_object_receiver(
+        ctx,
+        object.value,
+        property,
+    ))
+    .then(|| crate::ir_lower::stmt::object_property_type(ctx, object.value, property))
+    .flatten()
+    .map(|ty| ty.codegen_repr())
+    .filter(|ty| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }));
     let Some(property_ty) = declared_array_property else {
         // No declared ARRAY slot to walk, but the property may still be one boxed cell — either
         // because the receiver's class is unknown (Symfony's generated container) or because the
@@ -698,6 +721,20 @@ fn lower_unset_gradual_property_element(
     if !receiver_is_generic && !property_is_gradual {
         return false;
     }
+    // A receiver whose class holds the name only through a descendant is read and written back
+    // through a boxed `Mixed` view, as an untyped receiver is: the property ops resolve the slot
+    // from the run-time class. The box is this site's own temporary, retired at the merge.
+    let descendant_box = match ctx.builder.value_php_type(object.value) {
+        PhpType::Object(class_name)
+            if crate::ir_lower::stmt::property_array_writes::property_declared_only_by_descendants(
+                ctx, class_name.trim_start_matches('\\'), property,
+            ) =>
+        {
+            Some(ctx.box_value_as_mixed(*object, PhpType::Mixed, Some(expr.span)))
+        }
+        _ => None,
+    };
+    let object = descendant_box.as_ref().unwrap_or(object);
     let data = ctx.intern_string(property);
     // PHP evaluates the dimension even when the unset turns out to be a no-op.
     let key = lower_expr(ctx, index);
@@ -778,6 +815,9 @@ fn lower_unset_gradual_property_element(
         crate::ir_lower::ownership::release_if_owned(ctx, key, Some(expr.span));
     } else {
         crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, expr.span);
+    }
+    if let Some(boxed) = descendant_box {
+        crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(expr.span));
     }
     true
 }

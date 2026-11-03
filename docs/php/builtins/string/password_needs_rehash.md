@@ -2,7 +2,7 @@
 title: "password_needs_rehash()"
 description: "Reports whether a hash does not match the given algorithm and options."
 sidebar:
-  order: 1022
+  order: 1024
 ---
 
 ## password_needs_rehash()

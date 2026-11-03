@@ -2,7 +2,7 @@
 title: "gmp_testbit() - internals"
 description: "Compiler internals for gmp_testbit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 653
+  order: 655
 ---
 
 ## `gmp_testbit()` - internals

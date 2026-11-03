@@ -2,7 +2,7 @@
 title: "pcntl_daemon() - internals"
 description: "Compiler internals for pcntl_daemon(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 739
+  order: 741
 ---
 
 ## `pcntl_daemon()` - internals

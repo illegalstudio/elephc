@@ -2,7 +2,7 @@
 title: "get_required_files() - internals"
 description: "Compiler internals for get_required_files(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 714
+  order: 716
 ---
 
 ## `get_required_files()` - internals

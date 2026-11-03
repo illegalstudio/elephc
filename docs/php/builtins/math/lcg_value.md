@@ -2,7 +2,7 @@
 title: "lcg_value()"
 description: "Combined linear congruential generator."
 sidebar:
-  order: 661
+  order: 663
 ---
 
 ## lcg_value()

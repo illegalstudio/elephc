@@ -2,7 +2,7 @@
 title: "chdir() - internals"
 description: "Compiler internals for chdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 271
+  order: 273
 ---
 
 ## `chdir()` - internals

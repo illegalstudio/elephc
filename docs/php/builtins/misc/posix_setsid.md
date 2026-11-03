@@ -2,7 +2,7 @@
 title: "posix_setsid()"
 description: "Creates a new session and makes the current process its leader."
 sidebar:
-  order: 775
+  order: 777
 ---
 
 ## posix_setsid()

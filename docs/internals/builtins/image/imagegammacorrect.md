@@ -2,7 +2,7 @@
 title: "imagegammacorrect() - internals"
 description: "Compiler internals for imagegammacorrect(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 534
+  order: 536
 ---
 
 ## `imagegammacorrect()` - internals

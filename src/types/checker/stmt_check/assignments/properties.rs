@@ -202,6 +202,7 @@ pub(super) fn check_property_array_push(
         PhpType::Object(class_name) => {
             if class_name.trim_start_matches('\\').is_empty()
                 || receiver_is_interface_only(checker, class_name)
+                || property_declared_only_by_descendants(checker, class_name, property)
             {
                 check_generic_object_property_array_push(
                     checker, property, &val_ty, span,
@@ -386,6 +387,7 @@ pub(super) fn check_property_array_assign(
             // class", and the driver went to the interpreter.
             if class_name.trim_start_matches('\\').is_empty()
                 || receiver_is_interface_only(checker, class_name)
+                || property_declared_only_by_descendants(checker, class_name, property)
             {
                 if !is_php_array_key_type(&normalized_idx_ty) {
                     return Err(CompileError::new(span, "Array index must be integer"));
@@ -1471,6 +1473,20 @@ fn object_property_write_is_dynamic(checker: &Checker, class_name: &str, propert
 /// Returns an error if the class or property is undefined.
 /// Whether `class_name` names an interface (and no class): a property write through it is
 /// resolved on the run-time object, as for an untyped object.
+/// Whether `property` is declared only by descendants of `class_name`, not by the class itself:
+/// the receiver holds one of them at run time (symfony/http-client's `NativeResponse::perform()`
+/// decrements `$multi->hosts[$host]` on a `ClientState` whose `NativeClientState` subclass
+/// declares `hosts`), so the element write is resolved on the run-time object as for an
+/// interface receiver.
+fn property_declared_only_by_descendants(checker: &Checker, class_name: &str, property: &str) -> bool {
+    let name = class_name.trim_start_matches('\\');
+    checker
+        .classes
+        .get(name)
+        .is_some_and(|info| info.visible_property(property).is_none())
+        && !checker.descendant_declared_property_types(name, property).is_empty()
+}
+
 fn receiver_is_interface_only(checker: &Checker, class_name: &str) -> bool {
     let name = class_name.trim_start_matches('\\');
     !checker.classes.contains_key(name) && checker.interfaces.contains_key(name)

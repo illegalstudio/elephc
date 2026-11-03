@@ -2,7 +2,7 @@
 title: "stream_context_create()"
 description: "Creates a stream context."
 sidebar:
-  order: 383
+  order: 385
 ---
 
 ## stream_context_create()

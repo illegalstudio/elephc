@@ -2,7 +2,7 @@
 title: "implode()"
 description: "Joins array elements into a single string using a separator."
 sidebar:
-  order: 936
+  order: 938
 ---
 
 ## implode()

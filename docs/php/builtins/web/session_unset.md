@@ -2,7 +2,7 @@
 title: "session_unset()"
 description: "Removes every variable from the session without destroying it."
 sidebar:
-  order: 1141
+  order: 1143
 ---
 
 ## session_unset()

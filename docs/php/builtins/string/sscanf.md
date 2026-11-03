@@ -2,7 +2,7 @@
 title: "sscanf()"
 description: "Parses a string according to a format."
 sidebar:
-  order: 1037
+  order: 1039
 ---
 
 ## sscanf()

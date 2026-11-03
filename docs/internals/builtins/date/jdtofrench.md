@@ -2,7 +2,7 @@
 title: "jdtofrench() - internals"
 description: "Compiler internals for jdtofrench(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 246
+  order: 248
 ---
 
 ## `jdtofrench()` - internals

@@ -2,7 +2,7 @@
 title: "highlight_file() - internals"
 description: "Compiler internals for highlight_file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 921
+  order: 923
 ---
 
 ## `highlight_file()` - internals

@@ -2,7 +2,7 @@
 title: "opcache_jit_blacklist() - internals"
 description: "Compiler internals for opcache_jit_blacklist(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 735
+  order: 737
 ---
 
 ## `opcache_jit_blacklist()` - internals

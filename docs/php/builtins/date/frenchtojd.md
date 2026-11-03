@@ -2,7 +2,7 @@
 title: "frenchtojd()"
 description: "Converts a French Republican date into a Julian Day count."
 sidebar:
-  order: 235
+  order: 237
 ---
 
 ## frenchtojd()

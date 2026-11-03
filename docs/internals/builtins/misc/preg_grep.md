@@ -2,7 +2,7 @@
 title: "preg_grep() - internals"
 description: "Compiler internals for preg_grep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 777
+  order: 779
 ---
 
 ## `preg_grep()` - internals

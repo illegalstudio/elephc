@@ -2,7 +2,7 @@
 title: "imagefilledpolygon() - internals"
 description: "Compiler internals for imagefilledpolygon(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 527
+  order: 529
 ---
 
 ## `imagefilledpolygon()` - internals

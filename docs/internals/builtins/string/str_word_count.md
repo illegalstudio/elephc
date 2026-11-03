@@ -2,7 +2,7 @@
 title: "str_word_count() - internals"
 description: "Compiler internals for str_word_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1046
+  order: 1048
 ---
 
 ## `str_word_count()` - internals

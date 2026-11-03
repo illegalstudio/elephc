@@ -12,9 +12,9 @@
 //!   the oracle `built_declarations_match_the_php_for_every_version` compares each
 //!   built node against that PHP.
 //! - Values match php-src's mysqli exactly.
-//! - `MYSQLI_CLIENT_SSL` is declared but rejected at connect time with a clear
-//!   error: elephc's mysqli does not support the SSL client flag (documented
-//!   divergence; PDO MySQL TLS attributes are the supported TLS path).
+//! - `MYSQLI_CLIENT_SSL` opens TLS with the `ssl_set()` files (through the PDO
+//!   bridge's MySQL TLS support); `MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT`
+//!   skips the server-certificate check.
 
 use crate::parser::ast::{Stmt};
 use crate::synthetic_class::{
@@ -76,8 +76,7 @@ pub(super) fn decl_const_mysqli_report_all() -> Stmt {
     s_const("MYSQLI_REPORT_ALL", e_int(255))
 }
 
-// real_connect() client flags. MYSQLI_CLIENT_SSL is declared so programs that pass it compile, but
-// connect rejects it with a clear error (no TLS support in elephc's mysqli surface).
+// real_connect() client flags.
 /// `MYSQLI_CLIENT_COMPRESS` — transcribed from the PHP form.
 pub(super) fn decl_const_mysqli_client_compress() -> Stmt {
     s_const("MYSQLI_CLIENT_COMPRESS", e_int(32))
@@ -101,6 +100,11 @@ pub(super) fn decl_const_mysqli_client_interactive() -> Stmt {
 /// `MYSQLI_CLIENT_SSL` — transcribed from the PHP form.
 pub(super) fn decl_const_mysqli_client_ssl() -> Stmt {
     s_const("MYSQLI_CLIENT_SSL", e_int(2048))
+}
+
+/// `MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT` — transcribed from the PHP form.
+pub(super) fn decl_const_mysqli_client_ssl_dont_verify_server_cert() -> Stmt {
+    s_const("MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT", e_int(64))
 }
 
 // mysqli_options() option ids (the three the v1 subset honors).

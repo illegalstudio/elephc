@@ -2,7 +2,7 @@
 title: "date_create_immutable() - internals"
 description: "Compiler internals for date_create_immutable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 209
+  order: 211
 ---
 
 ## `date_create_immutable()` - internals

@@ -2,7 +2,7 @@
 title: "token_name()"
 description: "Get the symbolic name of a PHP token identifier."
 sidebar:
-  order: 1073
+  order: 1075
 ---
 
 ## token_name()

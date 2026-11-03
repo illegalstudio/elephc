@@ -2,7 +2,7 @@
 title: "gmp_or() - internals"
 description: "Compiler internals for gmp_or(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 633
+  order: 635
 ---
 
 ## `gmp_or()` - internals

@@ -2,7 +2,7 @@
 title: "curl_share_errno() - internals"
 description: "Compiler internals for curl_share_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 827
+  order: 829
 ---
 
 ## `curl_share_errno()` - internals

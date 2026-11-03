@@ -2,7 +2,7 @@
 title: "stream_set_blocking() - internals"
 description: "Compiler internals for stream_set_blocking(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 403
+  order: 405
 ---
 
 ## `stream_set_blocking()` - internals

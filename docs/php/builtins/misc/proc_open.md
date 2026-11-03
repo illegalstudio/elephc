@@ -2,7 +2,7 @@
 title: "proc_open()"
 description: "Executes a command and opens file pointers for input/output."
 sidebar:
-  order: 785
+  order: 787
 ---
 
 ## proc_open()

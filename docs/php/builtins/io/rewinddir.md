@@ -2,7 +2,7 @@
 title: "rewinddir()"
 description: "Rewind directory handle."
 sidebar:
-  order: 380
+  order: 382
 ---
 
 ## rewinddir()

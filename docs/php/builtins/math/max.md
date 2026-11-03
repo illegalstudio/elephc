@@ -2,7 +2,7 @@
 title: "max()"
 description: "Find highest value."
 sidebar:
-  order: 665
+  order: 667
 ---
 
 ## max()

@@ -2,7 +2,7 @@
 title: "finfo_set_flags() - internals"
 description: "Compiler internals for finfo_set_flags(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 340
+  order: 342
 ---
 
 ## `finfo_set_flags()` - internals

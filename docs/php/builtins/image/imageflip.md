@@ -2,7 +2,7 @@
 title: "imageflip()"
 description: "Flips an image horizontally, vertically, or both."
 sidebar:
-  order: 531
+  order: 533
 ---
 
 ## imageflip()

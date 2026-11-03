@@ -833,6 +833,79 @@ $db->query("DROP TABLE msi");
 /// variables at `execute()`. Includes doctrine/dbal's `Mysqli\Result` shape
 /// (`$refs = &$this->boundValues; bind_result(...$refs)`), the procedural forms, and the
 /// column-count `ArgumentCountError`.
+/// `ssl_set()` records the TLS files and `real_connect(..., MYSQLI_CLIENT_SSL)` opens TLS over
+/// the bridge, as mysqlnd does: `ssl_set()` alone (doctrine/dbal's `Initializer\Secure` with no
+/// flags) stays plain, and without a CA the server certificate is not verified.
+#[test]
+#[ignore]
+fn test_mysqli_ssl_set_and_client_ssl() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function cipher(mysqli $link): string {
+    $r = $link->query("SHOW SESSION STATUS LIKE 'Ssl_cipher'");
+    return $r ? ($r->fetch_row()[1] === '' ? 'plain' : 'tls') : 'query failed';
+}
+$a = mysqli_init();
+var_dump($a->ssl_set(null, null, null, null, null));
+$a->real_connect($host, $user, $pass, $dbname, $port);
+echo "ssl_set only: ", $a->connect_errno ? "error {$a->connect_errno}" : cipher($a), "\n";
+$b = mysqli_init();
+var_dump(mysqli_ssl_set($b, '', '', '', '', ''));
+$b->real_connect($host, $user, $pass, $dbname, $port, null, MYSQLI_CLIENT_SSL | MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT);
+echo "flag no-verify: ", $b->connect_errno ? "error {$b->connect_errno}" : cipher($b), "\n";
+$d = mysqli_init();
+$ok = $d->real_connect($host, $user, $pass, $dbname, $port, null, MYSQLI_CLIENT_SSL);
+echo "flag: ", $ok ? cipher($d) : "error {$d->connect_errno}", "\n";
+echo "plain: ", cipher($db), "\n";
+"#,
+    ));
+    assert_eq!(out, "bool(true)\nssl_set only: plain\nbool(true)\nflag no-verify: tls\nflag: tls\nplain: plain\n");
+}
+
+/// `send_long_data()` streams a parameter in chunks (doctrine/dbal's `Mysqli\Statement` sends
+/// LOB streams this way); `execute()` binds the accumulated chunks and forgets them, `reset()`
+/// drops pending ones, and an out-of-range or negative parameter number fails as php does.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_send_long_data() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS b4ld");
+$db->query("CREATE TABLE b4ld (id INT PRIMARY KEY, body BLOB NULL)");
+$ins = $db->prepare("INSERT INTO b4ld (id, body) VALUES (?, ?)");
+$id = 1; $null = null;
+$ins->bind_param("ib", $id, $null);
+var_dump($ins->send_long_data(1, "hello, "));
+var_dump($ins->send_long_data(1, "world"));
+$ins->execute();
+$id = 2;
+$ins->execute();
+$id = 3;
+mysqli_stmt_send_long_data($ins, 1, "dropped");
+$ins->reset();
+$ins->bind_param("ib", $id, $null);
+$ins->send_long_data(1, "kept");
+$ins->execute();
+mysqli_report(MYSQLI_REPORT_OFF);
+var_dump($ins->send_long_data(5, "x"));
+echo $ins->errno, "\n";
+try {
+    $ins->send_long_data(-1, "x");
+} catch (ValueError $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+$res = $db->query("SELECT id, body FROM b4ld ORDER BY id");
+while ($row = $res->fetch_row()) {
+    echo $row[0], "=", var_export($row[1], true), "\n";
+}
+$db->query("DROP TABLE b4ld");
+echo "done\n";
+"#,
+    ));
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(false)\n2034\nValueError: mysqli_stmt::send_long_data(): Argument #1 ($param_num) must be greater than or equal to 0\n1='hello, world'\n2=NULL\n3='kept'\ndone\n");
+}
+
 #[test]
 #[ignore]
 fn test_mysqli_stmt_bind_result_and_fetch() {

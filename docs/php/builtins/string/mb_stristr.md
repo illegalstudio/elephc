@@ -2,7 +2,7 @@
 title: "mb_stristr()"
 description: "Returns text before or from the first case-insensitive substring match, or false."
 sidebar:
-  order: 993
+  order: 995
 ---
 
 ## mb_stristr()

@@ -2,7 +2,7 @@
 title: "json_encode() - internals"
 description: "Compiler internals for json_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 566
+  order: 568
 ---
 
 ## `json_encode()` - internals

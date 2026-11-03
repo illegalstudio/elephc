@@ -2,7 +2,7 @@
 title: "highlight_file()"
 description: "Syntax highlighting of a file."
 sidebar:
-  order: 921
+  order: 923
 ---
 
 ## highlight_file()

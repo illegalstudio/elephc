@@ -2,7 +2,7 @@
 title: "date_parse()"
 description: "Parses a date/time string into its components, warnings, and errors."
 sidebar:
-  order: 222
+  order: 224
 ---
 
 ## date_parse()

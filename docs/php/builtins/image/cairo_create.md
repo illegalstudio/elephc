@@ -2,7 +2,7 @@
 title: "cairo_create()"
 description: "Creates a drawing context for a surface."
 sidebar:
-  order: 426
+  order: 428
 ---
 
 ## cairo_create()

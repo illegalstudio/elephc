@@ -2,7 +2,7 @@
 title: "gmp_setbit() - internals"
 description: "Compiler internals for gmp_setbit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 647
+  order: 649
 ---
 
 ## `gmp_setbit()` - internals

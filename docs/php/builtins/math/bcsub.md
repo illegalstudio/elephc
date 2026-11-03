@@ -2,7 +2,7 @@
 title: "bcsub()"
 description: "Subtracts two arbitrary-precision decimal numbers."
 sidebar:
-  order: 589
+  order: 591
 ---
 
 ## bcsub()

@@ -2,7 +2,7 @@
 title: "fgets() - internals"
 description: "Compiler internals for fgets(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 332
+  order: 334
 ---
 
 ## `fgets()` - internals

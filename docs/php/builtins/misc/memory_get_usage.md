@@ -2,7 +2,7 @@
 title: "memory_get_usage()"
 description: "Returns live native heap bytes, including block headers and allocator rounding. With real_usage=true returns the fixed heap arena capacity, including unused space. Excludes concat scratch, libc, and Rust bridge allocations."
 sidebar:
-  order: 727
+  order: 729
 ---
 
 ## memory_get_usage()

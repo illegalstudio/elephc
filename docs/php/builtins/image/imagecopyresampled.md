@@ -2,7 +2,7 @@
 title: "imagecopyresampled()"
 description: "Copies and resizes a rectangle with pixel interpolation."
 sidebar:
-  order: 508
+  order: 510
 ---
 
 ## imagecopyresampled()

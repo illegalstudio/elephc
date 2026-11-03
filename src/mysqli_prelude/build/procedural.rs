@@ -1279,6 +1279,51 @@ function("mysqli_stmt_fetch")
     .build()
 }
 
+/// `mysqli_ssl_set` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_ssl_set() -> Stmt {
+    function("mysqli_ssl_set")
+        .param("mysql", t_mixed())
+        .param("key", t_nullable(TypeExpr::Str))
+        .param("certificate", t_nullable(TypeExpr::Str))
+        .param("ca_certificate", t_nullable(TypeExpr::Str))
+        .param("ca_path", t_nullable(TypeExpr::Str))
+        .param("cipher_algos", t_nullable(TypeExpr::Str))
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("mysql"), "mysqli")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_ssl_set(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("mysql"), "ssl_set", vec![e_var("key"), e_var("certificate"), e_var("ca_certificate"), e_var("ca_path"), e_var("cipher_algos")])),
+        ])
+        .build()
+}
+
+/// `mysqli_stmt_send_long_data` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_send_long_data() -> Stmt {
+    function("mysqli_stmt_send_long_data")
+        .param("statement", t_mixed())
+        .param("param_num", TypeExpr::Int)
+        .param("data", TypeExpr::Str)
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_send_long_data(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("statement"), "send_long_data", vec![e_var("param_num"), e_var("data")])),
+        ])
+        .build()
+}
+
 /// `mysqli_stmt_execute` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_stmt_execute() -> Stmt {
     function("mysqli_stmt_execute")

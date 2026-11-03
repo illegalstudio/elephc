@@ -2,7 +2,7 @@
 title: "memory_get_allocations()"
 description: "Returns the cumulative number of successful native heap allocations, including reused blocks. Direct native reads do not allocate; eval boxes the sampled count."
 sidebar:
-  order: 724
+  order: 726
 ---
 
 ## memory_get_allocations()

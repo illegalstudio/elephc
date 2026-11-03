@@ -2,7 +2,7 @@
 title: "mb_substr() - internals"
 description: "Compiler internals for mb_substr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1005
+  order: 1007
 ---
 
 ## `mb_substr()` - internals

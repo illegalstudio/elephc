@@ -2,7 +2,7 @@
 title: "get_resources()"
 description: "Returns currently active resources, optionally filtered by type."
 sidebar:
-  order: 715
+  order: 717
 ---
 
 ## get_resources()

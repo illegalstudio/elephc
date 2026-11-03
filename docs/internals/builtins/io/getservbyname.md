@@ -2,7 +2,7 @@
 title: "getservbyname() - internals"
 description: "Compiler internals for getservbyname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 360
+  order: 362
 ---
 
 ## `getservbyname()` - internals

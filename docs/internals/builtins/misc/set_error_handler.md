@@ -2,7 +2,7 @@
 title: "set_error_handler() - internals"
 description: "Compiler internals for set_error_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 791
+  order: 793
 ---
 
 ## `set_error_handler()` - internals

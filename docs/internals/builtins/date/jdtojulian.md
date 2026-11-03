@@ -2,7 +2,7 @@
 title: "jdtojulian() - internals"
 description: "Compiler internals for jdtojulian(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 249
+  order: 251
 ---
 
 ## `jdtojulian()` - internals

@@ -2,7 +2,7 @@
 title: "gmp_kronecker()"
 description: "Kronecker symbol."
 sidebar:
-  order: 626
+  order: 628
 ---
 
 ## gmp_kronecker()

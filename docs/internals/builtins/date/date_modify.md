@@ -2,7 +2,7 @@
 title: "date_modify() - internals"
 description: "Compiler internals for date_modify(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 220
+  order: 222
 ---
 
 ## `date_modify()` - internals

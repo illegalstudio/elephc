@@ -2,7 +2,7 @@
 title: "gc_mem_caches()"
 description: "Drains runtime small-block allocator caches and returns the number of cached bytes released."
 sidebar:
-  order: 702
+  order: 704
 ---
 
 ## gc_mem_caches()

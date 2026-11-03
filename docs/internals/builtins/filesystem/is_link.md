@@ -2,7 +2,7 @@
 title: "is_link() - internals"
 description: "Compiler internals for is_link(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 297
+  order: 299
 ---
 
 ## `is_link()` - internals

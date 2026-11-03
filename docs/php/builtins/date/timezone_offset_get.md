@@ -2,7 +2,7 @@
 title: "timezone_offset_get()"
 description: "Returns a timezone's UTC offset in seconds at the given date."
 sidebar:
-  order: 265
+  order: 267
 ---
 
 ## timezone_offset_get()

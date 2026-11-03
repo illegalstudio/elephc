@@ -2,7 +2,7 @@
 title: "get_mangled_object_vars()"
 description: "Returns an object's properties using PHP's visibility-mangled keys."
 sidebar:
-  order: 713
+  order: 715
 ---
 
 ## get_mangled_object_vars()

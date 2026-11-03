@@ -2,7 +2,7 @@
 title: "mysqli_stmt_close()"
 description: "Closes a prepared statement and frees its resources."
 sidebar:
-  order: 177
+  order: 178
 ---
 
 ## mysqli_stmt_close()

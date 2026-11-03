@@ -2,7 +2,7 @@
 title: "is_integer() - internals"
 description: "Compiler internals for is_integer(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1102
+  order: 1104
 ---
 
 ## `is_integer()` - internals

@@ -2,7 +2,7 @@
 title: "date_get_last_errors()"
 description: "Returns the warnings and errors from the last date parse."
 sidebar:
-  order: 216
+  order: 218
 ---
 
 ## date_get_last_errors()

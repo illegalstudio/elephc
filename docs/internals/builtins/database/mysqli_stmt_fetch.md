@@ -2,7 +2,7 @@
 title: "mysqli_stmt_fetch() - internals"
 description: "Compiler internals for mysqli_stmt_fetch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 182
+  order: 183
 ---
 
 ## `mysqli_stmt_fetch()` - internals

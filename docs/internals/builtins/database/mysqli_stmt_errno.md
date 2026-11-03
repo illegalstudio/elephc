@@ -2,7 +2,7 @@
 title: "mysqli_stmt_errno() - internals"
 description: "Compiler internals for mysqli_stmt_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 178
+  order: 179
 ---
 
 ## `mysqli_stmt_errno()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1399](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1399) (`mysqli_stmt_errno`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1444](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1444) (`mysqli_stmt_errno`)
 - **Function symbol**: `mysqli_stmt_errno()`
 
 

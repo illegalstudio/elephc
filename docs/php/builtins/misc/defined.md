@@ -2,7 +2,7 @@
 title: "defined()"
 description: "Checks whether a given named constant exists."
 sidebar:
-  order: 689
+  order: 691
 ---
 
 ## defined()

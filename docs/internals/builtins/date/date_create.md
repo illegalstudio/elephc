@@ -2,7 +2,7 @@
 title: "date_create() - internals"
 description: "Compiler internals for date_create(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 207
+  order: 209
 ---
 
 ## `date_create()` - internals

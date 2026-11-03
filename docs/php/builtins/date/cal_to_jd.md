@@ -2,7 +2,7 @@
 title: "cal_to_jd()"
 description: "Converts a date in the given calendar into a Julian Day count."
 sidebar:
-  order: 203
+  order: 205
 ---
 
 ## cal_to_jd()

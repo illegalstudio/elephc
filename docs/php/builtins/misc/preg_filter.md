@@ -2,7 +2,7 @@
 title: "preg_filter()"
 description: "Performs a regular expression search and replace, keeping only the subjects that matched."
 sidebar:
-  order: 776
+  order: 778
 ---
 
 ## preg_filter()

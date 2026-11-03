@@ -2,7 +2,7 @@
 title: "iconv_get_encoding() - internals"
 description: "Compiler internals for iconv_get_encoding(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 927
+  order: 929
 ---
 
 ## `iconv_get_encoding()` - internals

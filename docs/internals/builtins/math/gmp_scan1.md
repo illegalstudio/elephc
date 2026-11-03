@@ -2,7 +2,7 @@
 title: "gmp_scan1() - internals"
 description: "Compiler internals for gmp_scan1(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 646
+  order: 648
 ---
 
 ## `gmp_scan1()` - internals

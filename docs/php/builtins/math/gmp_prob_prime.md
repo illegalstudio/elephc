@@ -2,7 +2,7 @@
 title: "gmp_prob_prime()"
 description: "Probable-prime test."
 sidebar:
-  order: 639
+  order: 641
 ---
 
 ## gmp_prob_prime()

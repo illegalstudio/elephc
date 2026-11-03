@@ -2,7 +2,7 @@
 title: "strspn()"
 description: "Returns the length of the initial byte span containing only selected characters."
 sidebar:
-  order: 1062
+  order: 1064
 ---
 
 ## strspn()

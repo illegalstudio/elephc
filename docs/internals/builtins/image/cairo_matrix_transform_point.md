@@ -2,7 +2,7 @@
 title: "cairo_matrix_transform_point() - internals"
 description: "Compiler internals for cairo_matrix_transform_point(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 442
+  order: 444
 ---
 
 ## `cairo_matrix_transform_point()` - internals

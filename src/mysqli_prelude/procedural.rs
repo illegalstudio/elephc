@@ -491,6 +491,20 @@ function mysqli_stmt_fetch(mixed $statement): ?bool {
     return $statement->fetch();
 }
 
+function mysqli_ssl_set(mixed $mysql, ?string $key, ?string $certificate, ?string $ca_certificate, ?string $ca_path, ?string $cipher_algos): bool {
+    if (!($mysql instanceof mysqli)) {
+        throw new TypeError("mysqli_ssl_set(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
+    }
+    return $mysql->ssl_set($key, $certificate, $ca_certificate, $ca_path, $cipher_algos);
+}
+
+function mysqli_stmt_send_long_data(mixed $statement, int $param_num, string $data): bool {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_send_long_data(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->send_long_data($param_num, $data);
+}
+
 function mysqli_stmt_execute(mixed $statement, ?array $params = null): bool {
     if (!($statement instanceof mysqli_stmt)) {
         throw new TypeError("mysqli_stmt_execute(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");

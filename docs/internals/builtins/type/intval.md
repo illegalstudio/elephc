@@ -2,7 +2,7 @@
 title: "intval() - internals"
 description: "Compiler internals for intval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1094
+  order: 1096
 ---
 
 ## `intval()` - internals

@@ -2,7 +2,7 @@
 title: "setcookie() - internals"
 description: "Compiler internals for setcookie(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1143
+  order: 1145
 ---
 
 ## `setcookie()` - internals

@@ -2,7 +2,7 @@
 title: "curl_multi_exec() - internals"
 description: "Compiler internals for curl_multi_exec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 813
+  order: 815
 ---
 
 ## `curl_multi_exec()` - internals

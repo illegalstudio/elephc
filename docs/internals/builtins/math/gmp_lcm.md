@@ -2,7 +2,7 @@
 title: "gmp_lcm() - internals"
 description: "Compiler internals for gmp_lcm(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 627
+  order: 629
 ---
 
 ## `gmp_lcm()` - internals

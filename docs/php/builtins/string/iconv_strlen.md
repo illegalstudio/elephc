@@ -2,7 +2,7 @@
 title: "iconv_strlen()"
 description: "Returns the character count of a string in the requested encoding."
 sidebar:
-  order: 932
+  order: 934
 ---
 
 ## iconv_strlen()

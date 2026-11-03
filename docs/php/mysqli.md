@@ -37,9 +37,11 @@ $db->close();
   `localhost`; any other host connects over TCP. The default port is `3306`.
 - `real_connect()` accepts the `MYSQLI_CLIENT_FOUND_ROWS`,
   `MYSQLI_CLIENT_COMPRESS`, and `MYSQLI_CLIENT_IGNORE_SPACE` flags.
-  `MYSQLI_CLIENT_SSL` is **rejected with a clear error** — elephc's mysqli has
-  no TLS path; use PDO MySQL's `Pdo\Mysql::ATTR_SSL_*` attributes when you
-  need TLS.
+  `MYSQLI_CLIENT_SSL` opens a TLS connection with the files `ssl_set()`
+  recorded (key, certificate, CA file, CA directory, cipher list). As with
+  mysqlnd, `ssl_set()` alone does not turn TLS on, and the server certificate
+  is verified only against a given CA and never under
+  `MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT`.
 - `mysqli_options()` honors `MYSQLI_OPT_CONNECT_TIMEOUT`,
   `MYSQLI_INIT_COMMAND`, and `MYSQLI_SET_CHARSET_NAME` (collected before
   `real_connect`, applied at connect time).
@@ -119,6 +121,10 @@ $row = $result->fetch_assoc();
   that execution.
 - `get_result()` drains the result set into an independent `mysqli_result`
   and leaves the statement re-executable.
+- `send_long_data($param, $data)` streams a parameter in chunks; `execute()`
+  binds the accumulated chunks as that parameter's value and then forgets them,
+  and `reset()` drops pending ones (the procedural form is
+  `mysqli_stmt_send_long_data()`).
 - `store_result()` buffers the pending rows so `$stmt->num_rows` is valid and
   `fetch()` reads that buffer.
 - `bind_result(...$vars)` binds one variable per result column, by reference
@@ -249,8 +255,6 @@ never leaving a quote reachable. Under `NO_BACKSLASH_ESCAPES` only `'` is double
   is the more lenient side of that divergence. (The 2014 guard still fires for
   an unconsumed `query()`/`multi_query()`/`real_query()` result — those DO hold
   connection-level state.)
-- **`MYSQLI_CLIENT_SSL` is rejected** with
-  `"elephc mysqli does not support MYSQLI_CLIENT_SSL; use PDO MySQL TLS attributes"`.
 - **No `mysqlnd`**: `extension_loaded('mysqlnd')` is `false`, and
   `mysqli_get_client_info()` reports the bridge's own client string, not a
   mysqlnd version.
@@ -328,7 +332,6 @@ The v1 subset deliberately omits — calls fail to compile
 
 - `mysqli_poll` / `mysqli_reap_async_query` / async connect
 - `change_user`, `kill`, `dump_debug_info`, `refresh`, embedded server
-- `mysqli_ssl_set` (and `MYSQLI_CLIENT_SSL`, rejected at connect)
 - true unbuffered `use_result`
 - the `mysqli_driver` and `mysqli_warning` objects
 - `mysqli_stmt_data_seek` and `mysqli_stmt_result_metadata` (the statement does
@@ -413,6 +416,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`mysqli_set_charset()`](./builtins/database/mysqli_set_charset.md) | `(mixed $mysql, string $charset): bool` | `bool` | ✓ | - |
 | [`mysqli_set_opt()`](./builtins/database/mysqli_set_opt.md) | `(mixed $mysql, int $option, mixed $value): bool` | `bool` | ✓ | - |
 | [`mysqli_sqlstate()`](./builtins/database/mysqli_sqlstate.md) | `(mixed $mysql): string` | `string` | ✓ | - |
+| [`mysqli_ssl_set()`](./builtins/database/mysqli_ssl_set.md) | `(mixed $mysql, ?string $key, ?string $certificate, ?string $ca_certificate, ?string $ca_path, ?string $cipher_algos): bool` | `bool` | ✓ | - |
 | [`mysqli_stat()`](./builtins/database/mysqli_stat.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | - |
 | [`mysqli_stmt_affected_rows()`](./builtins/database/mysqli_stmt_affected_rows.md) | `(mixed $statement): int` | `int` | ✓ | - |
 | [`mysqli_stmt_bind_param()`](./builtins/database/mysqli_stmt_bind_param.md) | `(mixed $statement, string $types, ...$vars): bool` | `bool` | ✓ | - |
@@ -432,6 +436,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`mysqli_stmt_param_count()`](./builtins/database/mysqli_stmt_param_count.md) | `(mixed $statement): int` | `int` | ✓ | - |
 | [`mysqli_stmt_prepare()`](./builtins/database/mysqli_stmt_prepare.md) | `(mixed $statement, string $query): bool` | `bool` | ✓ | - |
 | [`mysqli_stmt_reset()`](./builtins/database/mysqli_stmt_reset.md) | `(mixed $statement): bool` | `bool` | ✓ | - |
+| [`mysqli_stmt_send_long_data()`](./builtins/database/mysqli_stmt_send_long_data.md) | `(mixed $statement, int $param_num, string $data): bool` | `bool` | ✓ | - |
 | [`mysqli_stmt_sqlstate()`](./builtins/database/mysqli_stmt_sqlstate.md) | `(mixed $statement): string` | `string` | ✓ | - |
 | [`mysqli_stmt_store_result()`](./builtins/database/mysqli_stmt_store_result.md) | `(mixed $statement): bool` | `bool` | ✓ | - |
 | [`mysqli_store_result()`](./builtins/database/mysqli_store_result.md) | `(mixed $mysql, int $mode = 0): mixed` | `mixed` | ✓ | - |
@@ -442,6 +447,6 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 
 Classes: `mysqli`, `mysqli_result`, `mysqli_sql_exception`, `mysqli_stmt`.
 
-Constants: `MYSQLI_ASSOC`, `MYSQLI_BOTH`, `MYSQLI_CLIENT_COMPRESS`, `MYSQLI_CLIENT_FOUND_ROWS`, `MYSQLI_CLIENT_IGNORE_SPACE`, `MYSQLI_CLIENT_INTERACTIVE`, `MYSQLI_CLIENT_SSL`, `MYSQLI_INIT_COMMAND`, `MYSQLI_NUM`, `MYSQLI_OPT_CONNECT_TIMEOUT`, `MYSQLI_REPORT_ALL`, `MYSQLI_REPORT_ERROR`, `MYSQLI_REPORT_INDEX`, `MYSQLI_REPORT_OFF`, `MYSQLI_REPORT_STRICT`, `MYSQLI_SET_CHARSET_NAME`, `MYSQLI_STORE_RESULT`, `MYSQLI_TRANS_COR_AND_CHAIN`, `MYSQLI_TRANS_COR_AND_NO_CHAIN`, `MYSQLI_TRANS_COR_NO_RELEASE`, `MYSQLI_TRANS_COR_RELEASE`, `MYSQLI_TRANS_START_READ_ONLY`, `MYSQLI_TRANS_START_READ_WRITE`, `MYSQLI_TRANS_START_WITH_CONSISTENT_SNAPSHOT`, `MYSQLI_TYPE_BIT`, `MYSQLI_TYPE_BLOB`, `MYSQLI_TYPE_DATE`, `MYSQLI_TYPE_DATETIME`, `MYSQLI_TYPE_DECIMAL`, `MYSQLI_TYPE_DOUBLE`, `MYSQLI_TYPE_ENUM`, `MYSQLI_TYPE_FLOAT`, `MYSQLI_TYPE_GEOMETRY`, `MYSQLI_TYPE_INT24`, `MYSQLI_TYPE_JSON`, `MYSQLI_TYPE_LONG`, `MYSQLI_TYPE_LONGLONG`, `MYSQLI_TYPE_LONG_BLOB`, `MYSQLI_TYPE_MEDIUM_BLOB`, `MYSQLI_TYPE_NEWDATE`, `MYSQLI_TYPE_NEWDECIMAL`, `MYSQLI_TYPE_NULL`, `MYSQLI_TYPE_SET`, `MYSQLI_TYPE_SHORT`, `MYSQLI_TYPE_STRING`, `MYSQLI_TYPE_TIME`, `MYSQLI_TYPE_TIMESTAMP`, `MYSQLI_TYPE_TINY`, `MYSQLI_TYPE_TINY_BLOB`, `MYSQLI_TYPE_VAR_STRING`, `MYSQLI_TYPE_YEAR`, `MYSQLI_USE_RESULT`.
+Constants: `MYSQLI_ASSOC`, `MYSQLI_BOTH`, `MYSQLI_CLIENT_COMPRESS`, `MYSQLI_CLIENT_FOUND_ROWS`, `MYSQLI_CLIENT_IGNORE_SPACE`, `MYSQLI_CLIENT_INTERACTIVE`, `MYSQLI_CLIENT_SSL`, `MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT`, `MYSQLI_INIT_COMMAND`, `MYSQLI_NUM`, `MYSQLI_OPT_CONNECT_TIMEOUT`, `MYSQLI_REPORT_ALL`, `MYSQLI_REPORT_ERROR`, `MYSQLI_REPORT_INDEX`, `MYSQLI_REPORT_OFF`, `MYSQLI_REPORT_STRICT`, `MYSQLI_SET_CHARSET_NAME`, `MYSQLI_STORE_RESULT`, `MYSQLI_TRANS_COR_AND_CHAIN`, `MYSQLI_TRANS_COR_AND_NO_CHAIN`, `MYSQLI_TRANS_COR_NO_RELEASE`, `MYSQLI_TRANS_COR_RELEASE`, `MYSQLI_TRANS_START_READ_ONLY`, `MYSQLI_TRANS_START_READ_WRITE`, `MYSQLI_TRANS_START_WITH_CONSISTENT_SNAPSHOT`, `MYSQLI_TYPE_BIT`, `MYSQLI_TYPE_BLOB`, `MYSQLI_TYPE_DATE`, `MYSQLI_TYPE_DATETIME`, `MYSQLI_TYPE_DECIMAL`, `MYSQLI_TYPE_DOUBLE`, `MYSQLI_TYPE_ENUM`, `MYSQLI_TYPE_FLOAT`, `MYSQLI_TYPE_GEOMETRY`, `MYSQLI_TYPE_INT24`, `MYSQLI_TYPE_JSON`, `MYSQLI_TYPE_LONG`, `MYSQLI_TYPE_LONGLONG`, `MYSQLI_TYPE_LONG_BLOB`, `MYSQLI_TYPE_MEDIUM_BLOB`, `MYSQLI_TYPE_NEWDATE`, `MYSQLI_TYPE_NEWDECIMAL`, `MYSQLI_TYPE_NULL`, `MYSQLI_TYPE_SET`, `MYSQLI_TYPE_SHORT`, `MYSQLI_TYPE_STRING`, `MYSQLI_TYPE_TIME`, `MYSQLI_TYPE_TIMESTAMP`, `MYSQLI_TYPE_TINY`, `MYSQLI_TYPE_TINY_BLOB`, `MYSQLI_TYPE_VAR_STRING`, `MYSQLI_TYPE_YEAR`, `MYSQLI_USE_RESULT`.
 
 <!-- elephc:generated:symbols:end -->

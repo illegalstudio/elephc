@@ -2,7 +2,7 @@
 title: "imagewebp()"
 description: "Writes an image as WebP, to a file or to the output buffer."
 sidebar:
-  order: 561
+  order: 563
 ---
 
 ## imagewebp()

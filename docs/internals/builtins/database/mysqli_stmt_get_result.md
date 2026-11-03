@@ -2,7 +2,7 @@
 title: "mysqli_stmt_get_result() - internals"
 description: "Compiler internals for mysqli_stmt_get_result(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 185
+  order: 186
 ---
 
 ## `mysqli_stmt_get_result()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1304](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1304) (`mysqli_stmt_get_result`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1349](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1349) (`mysqli_stmt_get_result`)
 - **Function symbol**: `mysqli_stmt_get_result()`
 
 

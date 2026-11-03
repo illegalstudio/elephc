@@ -2,7 +2,7 @@
 title: "version_compare() - internals"
 description: "Compiler internals for version_compare(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1080
+  order: 1082
 ---
 
 ## `version_compare()` - internals

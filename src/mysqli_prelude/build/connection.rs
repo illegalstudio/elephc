@@ -120,6 +120,12 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .private_prop("optConnectTimeout", TypeExpr::Int, Some(e_int(0)))
         .private_prop("optInitCommand", TypeExpr::Str, Some(e_str("")))
         .private_prop("optCharsetName", TypeExpr::Str, Some(e_str("")))
+        // ssl_set() values, applied by a real_connect() that asks for MYSQLI_CLIENT_SSL.
+        .private_prop("sslKey", TypeExpr::Str, Some(e_str("")))
+        .private_prop("sslCert", TypeExpr::Str, Some(e_str("")))
+        .private_prop("sslCa", TypeExpr::Str, Some(e_str("")))
+        .private_prop("sslCapath", TypeExpr::Str, Some(e_str("")))
+        .private_prop("sslCipher", TypeExpr::Str, Some(e_str("")))
         // Buffered result produced by real_query() and picked up by store_result() (and, in the
         // multi_query path, by next_result()).
         .private_prop("pendingResult", t_nullable(t_class("mysqli_result")), Some(e_null()))
@@ -160,19 +166,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .param_default("flags", TypeExpr::Int, e_int(0))
                 .returns(TypeExpr::Bool)
                 .body(vec![
-                    // MYSQLI_CLIENT_SSL is declared but unsupported: fail loudly rather than
-                    // silently connecting in cleartext.
-                    s_if(
-                        e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(2048)), BinOp::NotEq, e_int(0)),
-                        vec![
-                            s_return(e_method_call(e_this(), "connectFailure", vec![e_int(2054), e_str("elephc mysqli does not support MYSQLI_CLIENT_SSL; use PDO MySQL TLS attributes"), e_str("HY000")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    // php-src reconnect semantics: mysqlnd closes the existing connection before
-                    // dialing the new one, so a second real_connect never strands the previous
-                    // bridge handle (or leaves a persistent handle checked out of the pool).
                     s_if(
                         e_binop(e_this_prop("conn"), BinOp::GtEq, e_int(0)),
                         vec![
@@ -194,8 +187,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     ),
                     s_assign("_host", e_ternary(e_binop(e_var("hostname"), BinOp::StrictEq, e_null()), e_str("localhost"), e_var("hostname"))),
                     s_assign("_persistent", e_int(0)),
-                    // php-src compares the `p:` persistent-connection prefix case-insensitively,
-                    // so `P:host` is persistent too; the real host is the remainder.
                     s_if(
                         e_binop(e_binop(e_call("strlen", vec![e_var("_host")]), BinOp::GtEq, e_int(2)), BinOp::And, e_binop(e_call("strtolower", vec![e_call("substr", vec![e_var("_host"), e_int(0), e_int(2)])]), BinOp::StrictEq, e_str("p:"))),
                         vec![
@@ -207,13 +198,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     ),
                     s_assign("_port", e_ternary(e_binop(e_var("port"), BinOp::StrictEq, e_null()), e_int(3306), e_var("port"))),
                     s_assign("_socket", e_ternary(e_binop(e_var("socket"), BinOp::StrictEq, e_null()), e_str(""), e_var("socket"))),
-                    // SECURITY: host, dbname, and unix_socket are folded verbatim into the bridge
-                    // DSN, which splits on ';' and applies the LAST duplicate of a directive;
-                    // unlike user/password these three are NOT percent-decoded by the bridge, so a
-                    // ';' in any of them would inject a second directive (e.g.
-                    // host="localhost;host=attacker" redirects the connection). None of the three
-                    // ever legitimately contains a ';', so reject it rather than silently trusting
-                    // the crafted value.
                     s_if(
                         e_binop(e_binop(e_binop(e_call("strpos", vec![e_var("_host"), e_str(";")]), BinOp::StrictNotEq, e_bool(false)), BinOp::Or, e_binop(e_binop(e_var("database"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_call("strpos", vec![e_var("database"), e_str(";")]), BinOp::StrictNotEq, e_bool(false)))), BinOp::Or, e_binop(e_call("strpos", vec![e_var("_socket"), e_str(";")]), BinOp::StrictNotEq, e_bool(false))),
                         vec![
@@ -222,8 +206,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    // php-src mysqli honors the socket only when the host is empty or exactly
-                    // "localhost"; any other host goes over TCP.
                     s_assign("_dsn", e_str("mysql:")),
                     s_if(
                         e_binop(e_binop(e_var("_socket"), BinOp::StrictNotEq, e_str("")), BinOp::And, e_binop(e_binop(e_var("_host"), BinOp::StrictEq, e_str("")), BinOp::Or, e_binop(e_var("_host"), BinOp::StrictEq, e_str("localhost")))),
@@ -243,10 +225,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    // '%' first, so the '%' introduced by encoding ';' is not itself re-encoded;
-                    // the bridge percent-decodes user=/password= DSN values (F-CORE-02), so a ';'
-                    // or '%' inside a credential survives the DSN's split on ';'. An
-                    // explicitly-passed empty credential is still transmitted (no !== "" gate).
                     s_if(
                         e_binop(e_var("username"), BinOp::StrictNotEq, e_null()),
                         vec![
@@ -271,8 +249,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    // Client flags map onto the bridge's packed driver config (same format PDO
-                    // packs for $my_driver_config); FOUND_ROWS rides its own argument.
                     s_assign("_driverConfig", e_str("")),
                     s_if(
                         e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(32)), BinOp::NotEq, e_int(0)),
@@ -291,7 +267,57 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_assign("_foundRows", e_ternary(e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(2)), BinOp::NotEq, e_int(0)), e_int(1), e_int(0))),
-                    s_assign("_conn", e_call("elephc_pdo_open_persistent", vec![e_var("_dsn"), e_var("_persistent"), e_int(0), e_this_prop("optInitCommand"), e_str(""), e_var("_foundRows"), e_str(""), e_var("_driverConfig")])),
+                    s_assign("_sslConfig", e_str("")),
+                    s_if(
+                        e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(2048)), BinOp::NotEq, e_int(0)),
+                        vec![
+                            s_if(
+                                e_binop(e_this_prop("sslCa"), BinOp::StrictNotEq, e_str("")),
+                                vec![
+                                    s_assign("_sslConfig", e_binop(e_binop(e_binop(e_var("_sslConfig"), BinOp::Concat, e_str("ca=")), BinOp::Concat, e_this_prop("sslCa")), BinOp::Concat, e_str(";"))),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_if(
+                                e_binop(e_this_prop("sslCert"), BinOp::StrictNotEq, e_str("")),
+                                vec![
+                                    s_assign("_sslConfig", e_binop(e_binop(e_binop(e_var("_sslConfig"), BinOp::Concat, e_str("cert=")), BinOp::Concat, e_this_prop("sslCert")), BinOp::Concat, e_str(";"))),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_if(
+                                e_binop(e_this_prop("sslKey"), BinOp::StrictNotEq, e_str("")),
+                                vec![
+                                    s_assign("_sslConfig", e_binop(e_binop(e_binop(e_var("_sslConfig"), BinOp::Concat, e_str("key=")), BinOp::Concat, e_this_prop("sslKey")), BinOp::Concat, e_str(";"))),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_assign("_verify", e_ternary(e_binop(e_binop(e_this_prop("sslCa"), BinOp::StrictNotEq, e_str("")), BinOp::And, e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(64)), BinOp::Eq, e_int(0))), e_str("1"), e_str("0"))),
+                            s_assign("_sslConfig", e_binop(e_binop(e_binop(e_var("_sslConfig"), BinOp::Concat, e_str("verify=")), BinOp::Concat, e_var("_verify")), BinOp::Concat, e_str(";"))),
+                            s_if(
+                                e_binop(e_this_prop("sslCapath"), BinOp::StrictNotEq, e_str("")),
+                                vec![
+                                    s_assign("_driverConfig", e_binop(e_binop(e_binop(e_var("_driverConfig"), BinOp::Concat, e_str("capath=")), BinOp::Concat, e_call("str_replace", vec![e_str("="), e_str("%3D"), e_call("str_replace", vec![e_str(";"), e_str("%3B"), e_call("str_replace", vec![e_str("%"), e_str("%25"), e_this_prop("sslCapath")])])])), BinOp::Concat, e_str(";"))),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_if(
+                                e_binop(e_this_prop("sslCipher"), BinOp::StrictNotEq, e_str("")),
+                                vec![
+                                    s_assign("_driverConfig", e_binop(e_binop(e_binop(e_var("_driverConfig"), BinOp::Concat, e_str("cipher=")), BinOp::Concat, e_call("str_replace", vec![e_str("="), e_str("%3D"), e_call("str_replace", vec![e_str(";"), e_str("%3B"), e_call("str_replace", vec![e_str("%"), e_str("%25"), e_this_prop("sslCipher")])])])), BinOp::Concat, e_str(";"))),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_conn", e_call("elephc_pdo_open_persistent", vec![e_var("_dsn"), e_var("_persistent"), e_int(0), e_this_prop("optInitCommand"), e_var("_sslConfig"), e_var("_foundRows"), e_str(""), e_var("_driverConfig")])),
                     s_if(
                         e_binop(e_var("_conn"), BinOp::Lt, e_int(0)),
                         vec![
@@ -300,8 +326,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                             s_if(
                                 e_binop(e_var("_state"), BinOp::StrictEq, e_str("")),
                                 vec![
-                                    // Connect-time network failure default, same class the PDO
-                                    // mysql driver falls back to.
                                     s_assign("_state", e_str("HY000")),
                                 ],
                                 vec![],
@@ -311,7 +335,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                             s_if(
                                 e_binop(e_var("_code"), BinOp::Eq, e_int(0)),
                                 vec![
-                                    // CR_CONN_HOST_ERROR: generic client-side connect failure.
                                     s_assign("_code", e_int(2002)),
                                 ],
                                 vec![],
@@ -322,8 +345,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    // Cannot happen while the DSN prefix is forced to mysql:, but keep the guard:
-                    // a non-mysql handle must never become a mysqli connection.
                     s_if(
                         e_binop(e_call("elephc_pdo_driver_name", vec![e_var("_conn")]), BinOp::StrictNotEq, e_str("mysql")),
                         vec![
@@ -339,24 +360,16 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_static_prop_assign("mysqli", "lastConnectErrno", e_int(0)),
                     s_static_prop_assign("mysqli", "lastConnectError", e_str("")),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
-                    // Connection information, refreshed once per connect.
                     s_prop_assign(e_this(), "host_info", e_call("elephc_pdo_connection_status", vec![e_var("_conn")])),
                     s_prop_assign(e_this(), "server_info", e_call("elephc_pdo_server_version", vec![e_var("_conn")])),
                     s_prop_assign(e_this(), "server_version", e_method_call(e_this(), "versionStringToInt", vec![e_this_prop("server_info")])),
                     s_prop_assign(e_this(), "client_info", e_call("elephc_pdo_client_version", vec![e_var("_conn")])),
                     s_prop_assign(e_this(), "client_version", e_method_call(e_this(), "versionStringToInt", vec![e_this_prop("client_info")])),
-                    // Both come from the handshake with ZERO round-trips, like php-src (which
-                    // reads them off the handshake packet): the server thread id straight from the
-                    // bridge, and the negotiated client charset is utf8mb4 (the charset the mysql
-                    // client sends in its handshake response for any server >= 5.5.3).
-                    // character_set_name() then answers from this client-side state without ever
-                    // issuing a statement (so it stays usable mid-batch).
                     s_prop_assign(e_this(), "thread_id", e_call("elephc_pdo_mysql_thread_id", vec![e_var("_conn")])),
                     s_prop_assign(e_this(), "warning_count", e_call("elephc_pdo_warning_count", vec![e_var("_conn")])),
                     s_if(
                         e_binop(e_this_prop("optCharsetName"), BinOp::StrictNotEq, e_str("")),
                         vec![
-                            // MYSQLI_SET_CHARSET_NAME collected before connect applies now.
                             s_expr(e_method_call(e_this(), "set_charset", vec![e_this_prop("optCharsetName")])),
                         ],
                         vec![],
@@ -850,6 +863,23 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("ssl_set")
+                .param("key", t_nullable(TypeExpr::Str))
+                .param("certificate", t_nullable(TypeExpr::Str))
+                .param("ca_certificate", t_nullable(TypeExpr::Str))
+                .param("ca_path", t_nullable(TypeExpr::Str))
+                .param("cipher_algos", t_nullable(TypeExpr::Str))
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_prop_assign(e_this(), "sslKey", e_ternary(e_binop(e_var("key"), BinOp::StrictEq, e_null()), e_str(""), e_var("key"))),
+                    s_prop_assign(e_this(), "sslCert", e_ternary(e_binop(e_var("certificate"), BinOp::StrictEq, e_null()), e_str(""), e_var("certificate"))),
+                    s_prop_assign(e_this(), "sslCa", e_ternary(e_binop(e_var("ca_certificate"), BinOp::StrictEq, e_null()), e_str(""), e_var("ca_certificate"))),
+                    s_prop_assign(e_this(), "sslCapath", e_ternary(e_binop(e_var("ca_path"), BinOp::StrictEq, e_null()), e_str(""), e_var("ca_path"))),
+                    s_prop_assign(e_this(), "sslCipher", e_ternary(e_binop(e_var("cipher_algos"), BinOp::StrictEq, e_null()), e_str(""), e_var("cipher_algos"))),
                     s_return(e_bool(true)),
                 ]),
         )

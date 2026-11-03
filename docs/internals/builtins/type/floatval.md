@@ -2,7 +2,7 @@
 title: "floatval() - internals"
 description: "Compiler internals for floatval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1089
+  order: 1091
 ---
 
 ## `floatval()` - internals

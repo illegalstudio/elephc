@@ -2,7 +2,7 @@
 title: "gmmktime() - internals"
 description: "Compiler internals for gmmktime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 239
+  order: 241
 ---
 
 ## `gmmktime()` - internals

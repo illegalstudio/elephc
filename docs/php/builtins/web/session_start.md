@@ -2,7 +2,7 @@
 title: "session_start()"
 description: "Starts a new session or resumes the one the request identifies."
 sidebar:
-  order: 1139
+  order: 1141
 ---
 
 ## session_start()

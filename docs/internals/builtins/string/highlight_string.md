@@ -2,7 +2,7 @@
 title: "highlight_string() - internals"
 description: "Compiler internals for highlight_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 922
+  order: 924
 ---
 
 ## `highlight_string()` - internals

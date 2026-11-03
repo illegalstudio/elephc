@@ -2,7 +2,7 @@
 title: "zval_pack() - internals"
 description: "Compiler internals for zval_pack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 857
+  order: 859
 ---
 
 ## `zval_pack()` - internals

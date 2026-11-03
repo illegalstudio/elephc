@@ -2,7 +2,7 @@
 title: "hash_init() - internals"
 description: "Compiler internals for hash_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 917
+  order: 919
 ---
 
 ## `hash_init()` - internals

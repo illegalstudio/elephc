@@ -2,7 +2,7 @@
 title: "pcntl_exec()"
 description: "Replaces the current process image with a program and optional arguments and environment."
 sidebar:
-  order: 741
+  order: 743
 ---
 
 ## pcntl_exec()

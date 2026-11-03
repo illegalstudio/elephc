@@ -2,7 +2,7 @@
 title: "parse_str()"
 description: "Parses a query string into an array of variables."
 sidebar:
-  order: 1017
+  order: 1019
 ---
 
 ## parse_str()

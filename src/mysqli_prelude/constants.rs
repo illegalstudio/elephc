@@ -10,9 +10,9 @@
 //! Key details:
 //! - Values match php-src's mysqli exactly (fetch modes, report flags, client
 //!   flags, option ids, transaction flags).
-//! - `MYSQLI_CLIENT_SSL` is declared but rejected at connect time with a clear
-//!   error: elephc's mysqli does not support the SSL client flag (documented
-//!   divergence; PDO MySQL TLS attributes are the supported TLS path).
+//! - `MYSQLI_CLIENT_SSL` opens TLS with the `ssl_set()` files (through the PDO
+//!   bridge's MySQL TLS support); `MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT`
+//!   skips the server-certificate check.
 
 /// The `MYSQLI_*` constant declarations (fragment without a `<?php` header).
 pub(super) const SRC: &str = r#"
@@ -35,14 +35,13 @@ const MYSQLI_REPORT_STRICT = 2;
 const MYSQLI_REPORT_INDEX = 4;
 const MYSQLI_REPORT_ALL = 255;
 
-// real_connect() client flags. MYSQLI_CLIENT_SSL is declared so programs that
-// pass it compile, but connect rejects it with a clear error (no TLS support
-// in elephc's mysqli surface).
+// real_connect() client flags.
 const MYSQLI_CLIENT_COMPRESS = 32;
 const MYSQLI_CLIENT_FOUND_ROWS = 2;
 const MYSQLI_CLIENT_IGNORE_SPACE = 256;
 const MYSQLI_CLIENT_INTERACTIVE = 1024;
 const MYSQLI_CLIENT_SSL = 2048;
+const MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT = 64;
 
 // mysqli_options() option ids (the three the v1 subset honors).
 const MYSQLI_OPT_CONNECT_TIMEOUT = 0;

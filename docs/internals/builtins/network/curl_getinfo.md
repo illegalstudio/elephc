@@ -2,7 +2,7 @@
 title: "curl_getinfo() - internals"
 description: "Compiler internals for curl_getinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 808
+  order: 810
 ---
 
 ## `curl_getinfo()` - internals

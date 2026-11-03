@@ -2,7 +2,7 @@
 title: "get_defined_functions() - internals"
 description: "Compiler internals for get_defined_functions(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 706
+  order: 708
 ---
 
 ## `get_defined_functions()` - internals

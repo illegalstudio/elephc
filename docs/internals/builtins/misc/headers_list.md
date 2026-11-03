@@ -2,7 +2,7 @@
 title: "headers_list() - internals"
 description: "Compiler internals for headers_list(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 719
+  order: 721
 ---
 
 ## `headers_list()` - internals

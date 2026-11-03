@@ -2,7 +2,7 @@
 title: "quotemeta() - internals"
 description: "Compiler internals for quotemeta(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1027
+  order: 1029
 ---
 
 ## `quotemeta()` - internals

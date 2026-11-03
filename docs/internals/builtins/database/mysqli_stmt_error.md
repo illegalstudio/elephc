@@ -2,7 +2,7 @@
 title: "mysqli_stmt_error() - internals"
 description: "Compiler internals for mysqli_stmt_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 179
+  order: 180
 ---
 
 ## `mysqli_stmt_error()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1418](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1418) (`mysqli_stmt_error`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1463](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1463) (`mysqli_stmt_error`)
 - **Function symbol**: `mysqli_stmt_error()`
 
 

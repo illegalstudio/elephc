@@ -2,7 +2,7 @@
 title: "imagecreatefromjpeg() - internals"
 description: "Compiler internals for imagecreatefromjpeg(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 513
+  order: 515
 ---
 
 ## `imagecreatefromjpeg()` - internals
