@@ -25,7 +25,6 @@ use crate::synthetic_class::{
     e_call,
     e_cast,
     e_closure_call,
-    e_const,
     e_index,
     e_int,
     e_method_call,
@@ -1275,7 +1274,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_this(), "errno", e_static_call("mysqli", "__elephcClientErrno", vec![e_call("elephc_pdo_stmt_errcode", vec![e_this_prop("stmt")]), e_this_prop("error")])),
                     s_prop_assign(e_this(), "sqlstate", e_call("elephc_pdo_stmt_sqlstate", vec![e_this_prop("stmt")])),
                     s_if(
-                        e_binop(e_binop(e_this_prop("errno"), BinOp::Eq, e_int(0)), BinOp::And, e_binop(e_this_prop("conn"), BinOp::GtEq, e_int(0))),
+                        e_binop(e_binop(e_binop(e_this_prop("errno"), BinOp::Eq, e_int(0)), BinOp::Or, e_binop(e_this_prop("stmt"), BinOp::Lt, e_int(0))), BinOp::And, e_binop(e_this_prop("conn"), BinOp::GtEq, e_int(0))),
                         vec![
                             s_prop_assign(e_this(), "error", e_static_call("mysqli", "__elephcServerMessage", vec![e_call("elephc_pdo_errmsg", vec![e_this_prop("conn")])])),
                             s_prop_assign(e_this(), "errno", e_static_call("mysqli", "__elephcClientErrno", vec![e_call("elephc_pdo_errcode", vec![e_this_prop("conn")]), e_this_prop("error")])),
@@ -1327,7 +1326,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_binop(e_static_prop("mysqli", "reportMode"), BinOp::BitAnd, e_int(1)), BinOp::NotEq, e_int(0)),
                         vec![
-                            s_expr(e_call("fwrite", vec![e_const("STDERR"), e_binop(e_binop(e_str("mysqli error: "), BinOp::Concat, e_var("message")), BinOp::Concat, e_str("\n"))])),
+                            s_expr(e_static_call("mysqli", "__elephcWarn", vec![e_binop(e_binop(e_binop(e_binop(e_binop(e_str("("), BinOp::Concat, e_var("sqlstate")), BinOp::Concat, e_str("/")), BinOp::Concat, e_var("errno")), BinOp::Concat, e_str("): ")), BinOp::Concat, e_var("message"))])),
                         ],
                         vec![],
                         None,

@@ -708,3 +708,29 @@ echo get_class($db), "|", MYSQLI_NUM;');
     );
     assert_eq!(out, "loaded|version|listed|class|func|mysqli|2");
 }
+
+/// `MYSQLI_REPORT_ERROR` without STRICT raises a real `E_WARNING`, like php-src's
+/// `php_error_docref()`: `set_error_handler()` receives it, its message carries the
+/// PHP-visible entry point the program called (`mysqli::__construct(): ` or
+/// `mysqli_connect(): `) before `(SQLSTATE/errno): message`, and it is reported at the
+/// user's call-site line, not inside the prelude.
+#[test]
+fn test_mysqli_report_error_raises_e_warning() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_ERROR);
+set_error_handler(function (int $no, string $str, string $file, int $line): bool {
+    $head = substr($str, 0, strpos($str, "/2002)") + 6);
+    echo $no === E_WARNING ? "W" : $no, ":", $head, ":", $line, "|";
+    return true;
+});
+$db = new mysqli("127.0.0.1", "u", "p", "d", 1);
+$link = mysqli_connect("127.0.0.1", "u", "p", "d", 1);
+echo $db->connect_errno, "|", $link === false ? "false" : "link";
+"#,
+    );
+    assert_eq!(
+        out,
+        "W:mysqli::__construct(): (HY000/2002):8|W:mysqli_connect(): (HY000/2002):9|2002|false"
+    );
+}

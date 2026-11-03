@@ -3047,6 +3047,19 @@ pub extern "C" fn elephc_pdo_mysql_refresh(conn_id: i64, options: i64) -> i64 {
     })
 }
 
+/// Sends `COM_SET_OPTION` on a MySQL connection (`0` multi-statements on, `1` off). `1` on
+/// success, `-1` (error recorded) on failure or for a non-MySQL / unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_set_server_option(conn_id: i64, option: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.set_server_option(option),
+            _ => -1,
+        }
+    })
+}
+
 /// Sends `COM_DEBUG` on a MySQL connection, backing `mysqli::dump_debug_info()`. `1` on
 /// success, `-1` (error recorded) on failure or for a non-MySQL / unknown handle.
 #[no_mangle]

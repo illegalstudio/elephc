@@ -118,6 +118,10 @@ struct MyDriverOptions {
     server_public_key: Option<PathBuf>,
     /// Socket read/write timeout in seconds (mysqli's `MYSQLI_OPT_READ_TIMEOUT`).
     io_timeout_secs: Option<u64>,
+    /// Whether the handshake requests `CLIENT_MULTI_STATEMENTS`. PDO keeps it; a mysqli link
+    /// connects without it (unless `MYSQLI_CLIENT_MULTI_STATEMENTS`), like mysqlnd, and
+    /// toggles the server option around `multi_query()`.
+    handshake_multi_statements: bool,
 }
 
 impl Default for MyDriverOptions {
@@ -133,6 +137,7 @@ impl Default for MyDriverOptions {
             ssl_ca_path: None,
             ssl_cipher: None,
             server_public_key: None,
+            handshake_multi_statements: true,
             io_timeout_secs: None,
         }
     }
@@ -738,6 +743,7 @@ fn parse_driver_options(config: &str) -> Result<MyDriverOptions, String> {
             }
             "ignore" => options.ignore_space = value == "1",
             "multi" => options.multi_statements = value != "0",
+            "servermulti" => options.handshake_multi_statements = value != "0",
             "buffered" => options.buffered_query = value != "0",
             "capath" if !value.is_empty() => options.ssl_ca_path = Some(PathBuf::from(value)),
             "cipher" if !value.is_empty() => options.ssl_cipher = Some(value),
@@ -1932,6 +1938,7 @@ impl MyConn {
         if driver_options.compress {
             opts = opts.compress(Some(mysql::Compression::default()));
         }
+        opts = opts.multi_statements(driver_options.handshake_multi_statements);
         if let Some(secs) = driver_options.io_timeout_secs {
             // mysqlnd applies MYSQLI_OPT_READ_TIMEOUT to the socket stream, so a
             // stalled server fails the read (and a stalled write) instead of hanging.
@@ -2615,6 +2622,22 @@ impl MyConn {
                 self.sqlstate = "00000".to_string();
                 1
             }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
+    /// Sends `COM_SET_OPTION` (`0` multi-statements on, `1` off), the toggle mysqli wraps
+    /// around `multi_query()` / `query()` like mysqlnd. `1` on success, `-1` with the error
+    /// recorded.
+    pub fn set_server_option(&mut self, option: i64) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        match self.conn.set_server_option(option as u16) {
+            Ok(()) => 1,
             Err(error) => {
                 self.record_mysql_error(&error);
                 -1

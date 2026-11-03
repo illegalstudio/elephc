@@ -187,7 +187,11 @@ while ($sel->fetch()) {            // writes the row into $id / $userName
 
 `multi_query()` sends the whole batch in one server round-trip; the retained
 result sets are walked with `store_result()` / `more_results()` /
-`next_result()`:
+`next_result()`. Like a mysqlnd link, a mysqli session has multi-statements
+off: `multi_query()` turns them on with `COM_SET_OPTION` and the next
+`query()` / `real_query()` turns them off again, so a multi-statement string
+through `query()` gets the server's own 1064 syntax error (compound-body DDL
+such as `CREATE PROCEDURE … BEGIN …; … END` is one statement and runs):
 
 ```php
 $db->multi_query("SELECT 1 AS a; INSERT INTO t (v) VALUES (5); SELECT 2 AS b");
@@ -315,14 +319,21 @@ default is `MYSQLI_REPORT_OFF`).
 | Mode | Failure behavior |
 |---|---|
 | `MYSQLI_REPORT_STRICT` set | throw `mysqli_sql_exception` (extends `RuntimeException`) |
-| `MYSQLI_REPORT_ERROR` only | write the message to STDERR, return `false` |
+| `MYSQLI_REPORT_ERROR` only | raise an `E_WARNING`, return `false` |
 | `MYSQLI_REPORT_OFF` | silent `false` |
 
 `MYSQLI_REPORT_INDEX` (part of `MYSQLI_REPORT_ALL`) reads the server status
 flags of each statement's final OK/EOF packet: a query or prepared statement
 the server ran without a (good) index raises php's "No index used in
 query/prepared statement …" / "Bad index used …" — a `mysqli_sql_exception`
-(code 0, SQLSTATE `00000`) under `STRICT`, a STDERR warning otherwise.
+(code 0, SQLSTATE `00000`) under `STRICT`, an `E_WARNING` otherwise.
+
+Those warnings are real `E_WARNING`s with php's exact text — the entry point
+the program called, then the detail: `mysqli::query(): (42S02/1146): Table
+'db.t' doesn't exist`, `mysqli_connect(): (HY000/1045): Access denied …`,
+`mysqli::query(): No index used in query/prepared statement …`. They reach
+`set_error_handler()`, honour `error_reporting()` and `@`, and are reported at
+the user's call-site line.
 
 After a failure, `errno`, `error`, `sqlstate`, and `error_list` are populated
 on the connection (and on the statement). `mysqli_sql_exception` is `final`,
@@ -391,18 +402,6 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
 - **Property writes stick**: the public `mysqli` / `mysqli_result` /
   `mysqli_stmt` properties are refreshed after operations but are not
   write-barriered; assigning to them is not rejected.
-- **`MYSQLI_REPORT_ERROR` (without STRICT) writes to STDERR**, not a real
-  `E_WARNING`: php raises an `E_WARNING` visible to `set_error_handler()`,
-  `error_get_last()`, and log routing. `STRICT` (the default) is unaffected.
-- **`query()` rejects multi-statement strings client-side** (errno 1064 with
-  an elephc-worded message) instead of php-src's server-side rejection: the
-  bridge keeps multi-statements enabled for the whole connection, so without
-  the client-side scan a classic `"1; DROP TABLE …"` injection would execute.
-  The scan is **charset-aware** (the same per-charset table the escape uses,
-  over the raw query bytes), skips string literals, backtick identifiers, and
-  comments, and treats MySQL's `/*! … */` and MariaDB's `/*M! … */` executable
-  comments as live SQL. Compound-body DDL (`CREATE PROCEDURE … BEGIN …; … END`)
-  through `query()` is rejected too — run it through `multi_query()`.
 - **`insert_id` / `affected_rows` / `num_rows` are `int|string`**, as php
   declares them. elephc type-checks calls statically, so passing one straight
   to an `int` parameter needs an `(int)` cast where php would coerce at run

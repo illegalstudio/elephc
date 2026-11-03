@@ -834,6 +834,10 @@ impl Conn {
             | CapabilityFlags::CLIENT_PS_MULTI_RESULTS
             | CapabilityFlags::CLIENT_PLUGIN_AUTH
             | (self.0.capability_flags & CapabilityFlags::CLIENT_LONG_FLAG);
+        if !self.0.opts.get_multi_statements() {
+            // elephc patch: see `OptsBuilder::multi_statements`.
+            client_flags.remove(CapabilityFlags::CLIENT_MULTI_STATEMENTS);
+        }
         if self.0.opts.get_compress().is_some() {
             client_flags.insert(CapabilityFlags::CLIENT_COMPRESS);
         }
@@ -1323,6 +1327,15 @@ impl Conn {
     /// (mysqli's `mysqli::dump_debug_info()`).
     pub fn dump_debug_info(&mut self) -> Result<(), Error> {
         self.write_command(Command::COM_DEBUG, &[])?;
+        self.drop_packet()
+    }
+
+    /// elephc patch: executes
+    /// [`COM_SET_OPTION`](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_set_option.html)
+    /// (`0` = `MYSQL_OPTION_MULTI_STATEMENTS_ON`, `1` = `_OFF`), which mysqli toggles around
+    /// `multi_query()` like mysqlnd.
+    pub fn set_server_option(&mut self, option: u16) -> Result<(), Error> {
+        self.write_command(Command::COM_SET_OPTION, &option.to_le_bytes())?;
         self.drop_packet()
     }
 

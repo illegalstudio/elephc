@@ -272,6 +272,11 @@ pub(crate) struct InnerOpts {
     /// pointless or may broke the connection, so this option should be used with caution.
     additional_capabilities: CapabilityFlags,
 
+    /// elephc patch: whether the handshake requests `CLIENT_MULTI_STATEMENTS` (defaults to
+    /// `true`). mysqli connects without it, like a mysqlnd link, and toggles multi-statements
+    /// per `multi_query()` with `COM_SET_OPTION`.
+    multi_statements: bool,
+
     /// Connect attributes
     connect_attrs: Option<HashMap<String, String>>,
 
@@ -333,6 +338,7 @@ impl Default for InnerOpts {
             stmt_cache_size: DEFAULT_STMT_CACHE_SIZE,
             compress: None,
             additional_capabilities: CapabilityFlags::empty(),
+            multi_statements: true,
             connect_attrs: Some(HashMap::new()),
             secure_auth: true,
             enable_cleartext_plugin: false,
@@ -529,6 +535,11 @@ impl Opts {
     /// pointless or may broke the connection, so this option should be used with caution.
     pub fn get_additional_capabilities(&self) -> CapabilityFlags {
         self.0.additional_capabilities
+    }
+
+    /// elephc patch: whether the handshake requests `CLIENT_MULTI_STATEMENTS`.
+    pub fn get_multi_statements(&self) -> bool {
+        self.0.multi_statements
     }
 
     /// Connect attributes (the default connect attributes are sent by default).
@@ -1272,6 +1283,13 @@ impl OptsBuilder {
             | CapabilityFlags::CLIENT_PS_MULTI_RESULTS;
 
         self.opts.0.additional_capabilities = additional_capabilities & !forbidden_flags;
+        self
+    }
+
+    /// elephc patch: whether the handshake requests `CLIENT_MULTI_STATEMENTS` (defaults to
+    /// `true`).
+    pub fn multi_statements(mut self, multi_statements: bool) -> Self {
+        self.opts.0.multi_statements = multi_statements;
         self
     }
 

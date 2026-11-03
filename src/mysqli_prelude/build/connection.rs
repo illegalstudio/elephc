@@ -122,6 +122,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .private_prop("streaming", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("multiMore", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("asyncPending", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("multiStatementsOn", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("asyncUnbuffered", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("connStats", t_array(), Some(e_array(vec![])))
         .method(
@@ -295,6 +296,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_assign("_driverConfig", e_str("")),
+                    s_assign("_driverConfig", e_binop(e_var("_driverConfig"), BinOp::Concat, e_str("servermulti=0;"))),
                     s_if(
                         e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(32)), BinOp::NotEq, e_int(0)),
                         vec![
@@ -373,7 +375,8 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_var("_conn"), BinOp::Lt, e_int(0)),
                         vec![
-                            s_assign("_message", e_static_call("mysqli", "__elephcServerMessage", vec![e_call("elephc_pdo_last_open_error", vec![])])),
+                            s_assign("_raw", e_call("elephc_pdo_last_open_error", vec![])),
+                            s_assign("_message", e_static_call("mysqli", "__elephcServerMessage", vec![e_var("_raw")])),
                             s_assign("_state", e_call("elephc_pdo_last_open_sqlstate", vec![])),
                             s_if(
                                 e_binop(e_var("_state"), BinOp::StrictEq, e_str("")),
@@ -384,6 +387,22 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                                 None,
                             ),
                             s_assign("_code", e_call("elephc_pdo_last_open_native_code", vec![])),
+                            s_if(
+                                e_binop(e_var("_code"), BinOp::Eq, e_int(0)),
+                                vec![
+                                    s_assign("_marker", e_call("strpos", vec![e_var("_raw"), e_str("ERROR ")])),
+                                    s_if(
+                                        e_binop(e_var("_marker"), BinOp::StrictNotEq, e_bool(false)),
+                                        vec![
+                                            s_assign("_code", e_cast(CastType::Int, e_call("substr", vec![e_var("_raw"), e_binop(e_var("_marker"), BinOp::Add, e_int(6)), e_int(5)]))),
+                                        ],
+                                        vec![],
+                                        None,
+                                    ),
+                                ],
+                                vec![],
+                                None,
+                            ),
                             s_if(
                                 e_binop(e_var("_code"), BinOp::Eq, e_int(0)),
                                 vec![
@@ -408,6 +427,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_prop_assign(e_this(), "conn", e_var("_conn")),
+                    s_prop_assign(e_this(), "multiStatementsOn", e_bool(false)),
                     s_prop_assign(e_this(), "persistent", e_binop(e_var("_persistent"), BinOp::Eq, e_int(1))),
                     s_prop_assign(e_this(), "connect_errno", e_int(0)),
                     s_prop_assign(e_this(), "connect_error", e_null()),
@@ -1732,12 +1752,15 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
+                    s_expr(e_method_call(e_this(), "enableMultiStatements", vec![])),
                     s_expr(e_method_call(e_this(), "bump", vec![e_str("com_query")])),
                     s_assign("_stmt", e_method_call(e_this(), "prepareText", vec![e_var("query"), e_bool(true)])),
                     s_if(
                         e_binop(e_var("_stmt"), BinOp::Lt, e_int(0)),
                         vec![
-                            s_return(e_method_call(e_this(), "opFailed", vec![])),
+                            s_expr(e_method_call(e_this(), "opFailed", vec![])),
+                            s_expr(e_method_call(e_this(), "disableMultiStatements", vec![])),
+                            s_return(e_bool(false)),
                         ],
                         vec![],
                         None,
@@ -2001,7 +2024,41 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_expr(e_call("fwrite", vec![e_const("STDERR"), e_binop(e_binop(e_str("mysqli warning: (00000/0): "), BinOp::Concat, e_var("_message")), BinOp::Concat, e_str("\n"))])),
+                    s_expr(e_static_call("mysqli", "__elephcWarn", vec![e_var("_message")])),
+                ]),
+        )
+        .method(
+            method("enableMultiStatements")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_not(e_this_prop("multiStatementsOn")),
+                        vec![
+                            s_expr(e_method_call(e_this(), "bump", vec![e_str("com_stmt_set_option")])),
+                            s_expr(e_call("elephc_pdo_mysql_set_server_option", vec![e_this_prop("conn"), e_int(0)])),
+                            s_prop_assign(e_this(), "multiStatementsOn", e_bool(true)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
+        )
+        .method(
+            method("disableMultiStatements")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_this_prop("multiStatementsOn"),
+                        vec![
+                            s_expr(e_method_call(e_this(), "bump", vec![e_str("com_stmt_set_option")])),
+                            s_expr(e_call("elephc_pdo_mysql_set_server_option", vec![e_this_prop("conn"), e_int(1)])),
+                            s_prop_assign(e_this(), "multiStatementsOn", e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
                 ]),
         )
         .method(
@@ -2148,15 +2205,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_if(
-                        e_binop(e_binop(e_call("strpos", vec![e_var("query"), e_str(";")]), BinOp::StrictNotEq, e_bool(false)), BinOp::And, e_binop(e_call("elephc_pdo_sql_has_multiple_statements", vec![e_this_prop("conn"), e_var("query"), e_call("strlen", vec![e_var("query")])]), BinOp::NotEq, e_int(0))),
-                        vec![
-                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(1064), e_str("elephc mysqli does not support multiple statements in mysqli::query(); use mysqli::multi_query()"), e_str("42000")])),
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
+                    s_expr(e_method_call(e_this(), "disableMultiStatements", vec![])),
                     s_expr(e_method_call(e_this(), "bump", vec![e_str("com_query")])),
                     s_if(
                         e_binop(e_call("elephc_pdo_mysql_async_send", vec![e_this_prop("conn"), e_var("query")]), BinOp::Lt, e_int(0)),
@@ -2472,11 +2521,38 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_binop(e_static_prop("mysqli", "reportMode"), BinOp::BitAnd, e_int(1)), BinOp::NotEq, e_int(0)),
                         vec![
-                            s_expr(e_call("fwrite", vec![e_const("STDERR"), e_binop(e_binop(e_str("mysqli error: "), BinOp::Concat, e_var("message")), BinOp::Concat, e_str("\n"))])),
+                            s_expr(e_static_call("mysqli", "__elephcWarn", vec![e_binop(e_binop(e_binop(e_binop(e_binop(e_str("("), BinOp::Concat, e_var("sqlstate")), BinOp::Concat, e_str("/")), BinOp::Concat, e_var("errno")), BinOp::Concat, e_str("): ")), BinOp::Concat, e_var("message"))])),
                         ],
                         vec![],
                         None,
                     ),
+                ]),
+        )
+        .method(
+            method("__elephcWarn")
+                .private()
+                .static_()
+                .param("message", TypeExpr::Str)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("_entry", e_str("")),
+                    s_foreach(e_call("debug_backtrace", vec![e_const("DEBUG_BACKTRACE_IGNORE_ARGS")]), None, "_frame", vec![
+                        s_assign("_function", e_cast(CastType::String, e_null_coalesce(e_index(e_var("_frame"), e_str("function")), e_str("")))),
+                        s_assign("_class", e_cast(CastType::String, e_null_coalesce(e_index(e_var("_frame"), e_str("class")), e_str("")))),
+                        s_if(
+                            e_binop(e_binop(e_binop(e_binop(e_var("_class"), BinOp::StrictEq, e_str("mysqli")), BinOp::Or, e_binop(e_var("_class"), BinOp::StrictEq, e_str("mysqli_stmt"))), BinOp::Or, e_binop(e_var("_class"), BinOp::StrictEq, e_str("mysqli_result"))), BinOp::Or, e_binop(e_var("_class"), BinOp::StrictEq, e_str("mysqli_driver"))),
+                            vec![
+                                s_assign("_entry", e_binop(e_binop(e_var("_class"), BinOp::Concat, e_str("::")), BinOp::Concat, e_var("_function"))),
+                            ],
+                            vec![
+                            (e_binop(e_binop(e_var("_class"), BinOp::StrictEq, e_str("")), BinOp::And, e_binop(e_call("strncmp", vec![e_var("_function"), e_str("mysqli_"), e_int(7)]), BinOp::Eq, e_int(0))), vec![
+                                s_assign("_entry", e_var("_function")),
+                            ]),
+                        ],
+                            None,
+                        ),
+                    ]),
+                    s_expr(e_call("__elephc_builtin_warning", vec![e_ternary(e_binop(e_var("_entry"), BinOp::StrictEq, e_str("")), e_var("message"), e_binop(e_binop(e_var("_entry"), BinOp::Concat, e_str("(): ")), BinOp::Concat, e_var("message")))])),
                 ]),
         )
         .method(
@@ -2502,15 +2578,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_if(
-                        e_binop(e_binop(e_call("strpos", vec![e_var("query"), e_str(";")]), BinOp::StrictNotEq, e_bool(false)), BinOp::And, e_binop(e_call("elephc_pdo_sql_has_multiple_statements", vec![e_this_prop("conn"), e_var("query"), e_call("strlen", vec![e_var("query")])]), BinOp::NotEq, e_int(0))),
-                        vec![
-                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(1064), e_str("elephc mysqli does not support multiple statements in mysqli::query(); use mysqli::multi_query()"), e_str("42000")])),
-                            s_return(e_int(0)),
-                        ],
-                        vec![],
-                        None,
-                    ),
+                    s_expr(e_method_call(e_this(), "disableMultiStatements", vec![])),
                     s_expr(e_method_call(e_this(), "bump", vec![e_str("com_query")])),
                     s_assign("_stmt", e_method_call(e_this(), "prepareText", vec![e_var("query"), e_var("unbuffered")])),
                     s_if(

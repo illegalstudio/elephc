@@ -643,21 +643,21 @@ echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : ("no:" . $db->er
     assert_eq!(out, "F|1242|nores|nomore|7");
 }
 
-/// Compound-body DDL is NOT exempt from the multi-statement scan: through
-/// `query()` it fails 1064 (including the `... END; DROP ...` injection-tail
-/// shape), while `multi_query()` runs it as one statement and `CALL` works.
+/// Multi-statements are off on a mysqli session, like mysqlnd's: compound-body DDL is ONE
+/// statement, so `query()` creates the procedure, while a `... END; DROP ...` injection
+/// tail is rejected by the server itself (1064). `multi_query()` turns them on, `CALL`
+/// walks both result sets, and the next `query()` is back to single statements.
 #[test]
 #[ignore]
-fn test_mysqli_compound_ddl_requires_multi_query() {
+fn test_mysqli_session_runs_without_multi_statements() {
     let out = compile_and_run(&my_program(
         r#"
 mysqli_report(MYSQLI_REPORT_OFF);
 $db->query("DROP PROCEDURE IF EXISTS mproc");
-echo $db->query("CREATE PROCEDURE mproc() BEGIN SELECT 41; SELECT 42 AS v; END") === false ? "F" : "leaked";
-echo "|", $db->errno;
-echo "|", $db->query("CREATE PROCEDURE mproc() BEGIN SELECT 1; END; DROP TABLE users") === false ? "F" : "leaked";
-echo "|", $db->errno;
-echo "|", $db->multi_query("CREATE PROCEDURE mproc() BEGIN SELECT 41; SELECT 42 AS v; END") ? "ddl" : ("no:" . $db->errno);
+echo $db->query("CREATE PROCEDURE mproc() BEGIN SELECT 41; SELECT 42 AS v; END") === true ? "created" : ("F:" . $db->errno);
+echo "|", $db->query("CREATE PROCEDURE mproc2() BEGIN SELECT 1; END; DROP TABLE users") === false ? "F" : "leaked";
+echo "|", $db->errno, "|", $db->sqlstate;
+echo "|", $db->query("SELECT 1; SELECT 2") === false ? "F" : "leaked", "|", $db->errno;
 echo "|", $db->multi_query("CALL mproc()") ? "call" : "no";
 $r1 = $db->store_result();
 echo "|", ($r1 instanceof mysqli_result) ? $r1->fetch_column(0) : "no";
@@ -668,11 +668,20 @@ while ($db->more_results()) {
         echo "|", $rn->fetch_column(0);
     }
 }
+echo "|", $db->multi_query("SELECT 5; SELECT 6") ? "mq" : "no";
+do {
+    $set = $db->store_result();
+    if ($set instanceof mysqli_result) {
+        $set->free();
+    }
+} while ($db->next_result());
+echo "|", $db->query("SELECT 7; SELECT 8") === false ? "F" : "leaked", "|", $db->errno;
+echo "|", $db->get_connection_stats()["com_stmt_set_option"];
 $db->query("DROP PROCEDURE mproc");
 echo "|done";
 "#,
     ));
-    assert_eq!(out, "F|1064|F|1064|ddl|call|41|42|done");
+    assert_eq!(out, "created|F|1064|42000|F|1064|call|41|42|mq|F|1064|2|done");
 }
 
 /// `fetch_field_direct()->decimals` carries MySQL's wire "decimals" byte
@@ -1447,4 +1456,47 @@ echo "|", $show($db->get_charset());
         out,
         "utf8mb4/utf8mb4_general_ci/45/1-4/1//UTF-8 Unicode|latin1/latin1_swedish_ci/8/1-1/1//|utf8mb4/utf8mb4_general_ci/45/1-4/1//UTF-8 Unicode"
     );
+}
+
+/// Against a live server, `MYSQLI_REPORT_ERROR` / `MYSQLI_REPORT_INDEX` warnings are real
+/// `E_WARNING`s with php's exact text: the method or procedural entry point, then
+/// `(SQLSTATE/errno): message` (a failed `prepare()` reports the server's own error, not a
+/// statement placeholder), or the "No index used …" notice; `@` silences them.
+#[test]
+#[ignore]
+fn test_mysqli_report_warnings_are_php_warnings() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_ERROR);
+set_error_handler(function (int $no, string $str): bool {
+    echo $no === E_WARNING ? "W:" : "?:", $str, "\n";
+    return true;
+});
+$db->query("SELECT * FROM mwarn_missing");
+mysqli_query($db, "SELECT * FROM mwarn_missing");
+$db->prepare("SELECT mwarn_nope FROM dual");
+mysqli_report(MYSQLI_REPORT_INDEX);
+$db->query("DROP TABLE IF EXISTS mwarn");
+$db->query("CREATE TABLE mwarn (id INT PRIMARY KEY, v INT)");
+$db->query("SELECT * FROM mwarn WHERE v = 1");
+mysqli_report(MYSQLI_REPORT_ERROR);
+restore_error_handler();
+set_error_handler(function (int $no, string $str): bool {
+    echo "silenced-but-seen:", error_reporting() === 0 ? "0" : "mask", "\n";
+    return true;
+});
+@$db->query("SELECT * FROM mwarn_missing");
+$db->query("DROP TABLE mwarn");
+"#,
+    ));
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "W:mysqli::query(): (42S02/1146): Table 'testdb.mwarn_missing' doesn't exist");
+    assert_eq!(lines[1], "W:mysqli_query(): (42S02/1146): Table 'testdb.mwarn_missing' doesn't exist");
+    assert!(
+        lines[2].starts_with("W:mysqli::prepare(): (42S22/1054): Unknown column 'mwarn_nope'"),
+        "{}",
+        lines[2]
+    );
+    assert_eq!(lines[3], "W:mysqli::query(): No index used in query/prepared statement SELECT * FROM mwarn WHERE v = 1");
+    assert_eq!(lines.len(), 5, "{out}");
 }

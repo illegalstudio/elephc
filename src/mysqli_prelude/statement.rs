@@ -796,7 +796,9 @@ class mysqli_stmt {
         $this->error = mysqli::__elephcServerMessage(elephc_pdo_stmt_errmsg($this->stmt));
         $this->errno = mysqli::__elephcClientErrno(elephc_pdo_stmt_errcode($this->stmt), $this->error);
         $this->sqlstate = elephc_pdo_stmt_sqlstate($this->stmt);
-        if ($this->errno == 0 && $this->conn >= 0) {
+        // Without a statement handle (a failed prepare) the bridge's per-statement
+        // accessors answer -1 / "": the error lives on the connection.
+        if (($this->errno == 0 || $this->stmt < 0) && $this->conn >= 0) {
             $this->error = mysqli::__elephcServerMessage(elephc_pdo_errmsg($this->conn));
             $this->errno = mysqli::__elephcClientErrno(elephc_pdo_errcode($this->conn), $this->error);
             $this->sqlstate = elephc_pdo_sqlstate($this->conn);
@@ -818,13 +820,13 @@ class mysqli_stmt {
     }
 
     // mysqli_report dispatch: STRICT throws mysqli_sql_exception, ERROR alone
-    // writes to STDERR, OFF is silent (same contract as mysqli::report).
+    // raises php's E_WARNING, OFF is silent (same contract as mysqli::report).
     private function report(string $message, int $errno, string $sqlstate): void {
         if ((mysqli::$reportMode & 2) != 0) {
             throw mysqli_sql_exception::__elephcCreate($message, $errno, $sqlstate);
         }
         if ((mysqli::$reportMode & 1) != 0) {
-            fwrite(STDERR, "mysqli error: " . $message . "\n");
+            mysqli::__elephcWarn("(" . $sqlstate . "/" . $errno . "): " . $message);
         }
     }
 }

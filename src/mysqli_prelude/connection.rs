@@ -107,6 +107,8 @@ class mysqli {
     // thread (the link is busy until reap_async_query() collects it), and
     // whether its result is wanted unbuffered (MYSQLI_USE_RESULT).
     private bool $asyncPending = false;
+    // Whether this link turned multi-statements on (mysqlnd's mysql->multi_query).
+    private bool $multiStatementsOn = false;
     private bool $asyncUnbuffered = false;
     // Per-connection mysqlnd-style statistics (mysqli::get_connection_stats()).
     private array $connStats = [];
@@ -227,6 +229,11 @@ class mysqli {
         // (the format PDO packs for $my_driver_config); values are
         // percent-encoded because the bridge decodes them after splitting on ';'.
         $_driverConfig = "";
+        // Like a mysqlnd link, the session starts without multi-statements —
+        // php-src masks CLIENT_MULTI_STATEMENTS out of $flags ("don't allow
+        // multi_queries via connect parameter"); multi_query() turns them on with
+        // COM_SET_OPTION, and query() / real_query() turn them off again.
+        $_driverConfig = $_driverConfig . "servermulti=0;";
         if (($flags & 32) != 0) {
             $_driverConfig = $_driverConfig . "compress=1;";
         }
@@ -261,14 +268,23 @@ class mysqli {
         }
         $_conn = elephc_pdo_open_persistent($_dsn, $_persistent, 0, $_initCommand, $_sslConfig, $_foundRows, "", $_driverConfig);
         if ($_conn < 0) {
-            $_message = mysqli::__elephcServerMessage(elephc_pdo_last_open_error());
+            $_raw = elephc_pdo_last_open_error();
+            $_message = mysqli::__elephcServerMessage($_raw);
             $_state = elephc_pdo_last_open_sqlstate();
             if ($_state === "") {
-                // Connect-time network failure default, same class the PDO
-                // mysql driver falls back to.
+                // mysqlnd records a connect/authentication failure with the
+                // generic SQLSTATE: "(HY000/1045): Access denied …".
                 $_state = "HY000";
             }
             $_code = elephc_pdo_last_open_native_code();
+            if ($_code == 0) {
+                // The server's ERR packet code, kept in the bridge's
+                // "MySqlError { ERROR 1045 (28000): … }" rendering.
+                $_marker = strpos($_raw, "ERROR ");
+                if ($_marker !== false) {
+                    $_code = (int) substr($_raw, $_marker + 6, 5);
+                }
+            }
             if ($_code == 0) {
                 // CR_CONN_HOST_ERROR: generic client-side connect failure.
                 $_code = 2002;
@@ -283,6 +299,7 @@ class mysqli {
             return $this->connectFailure(2002, "elephc mysqli opened a non-mysql bridge connection", "HY000");
         }
         $this->conn = $_conn;
+        $this->multiStatementsOn = false;
         $this->persistent = $_persistent == 1;
         $this->connect_errno = 0;
         $this->connect_error = null;
@@ -1069,13 +1086,16 @@ class mysqli {
         if (!$this->requireNoPendingResults()) {
             return false;
         }
-        // One server round-trip for the whole batch: the bridge executes the
-        // string with multi-statements enabled and streams its result sets,
-        // walked with store_result() / use_result() / next_result().
+        // One server round-trip for the whole batch, after mysqlnd's
+        // COM_SET_OPTION(MULTI_STATEMENTS_ON); its result sets are walked with
+        // store_result() / use_result() / next_result().
+        $this->enableMultiStatements();
         $this->bump("com_query");
         $_stmt = $this->prepareText($query, true);
         if ($_stmt < 0) {
-            return $this->opFailed();
+            $this->opFailed();
+            $this->disableMultiStatements();
+            return false;
         }
         $_rc = elephc_pdo_step($_stmt);
         if ($_rc < 0) {
@@ -1229,7 +1249,25 @@ class mysqli {
         if ((mysqli::$reportMode & 2) != 0) {
             throw mysqli_sql_exception::__elephcCreate($_message, 0, "00000");
         }
-        fwrite(STDERR, "mysqli warning: (00000/0): " . $_message . "\n");
+        mysqli::__elephcWarn($_message);
+    }
+
+    // mysqlnd's MYSQLI_ENABLE_MQ / MYSQLI_DISABLE_MQ: COM_SET_OPTION only when
+    // the link's recorded state changes (counted as com_stmt_set_option).
+    private function enableMultiStatements(): void {
+        if (!$this->multiStatementsOn) {
+            $this->bump("com_stmt_set_option");
+            elephc_pdo_mysql_set_server_option($this->conn, 0);
+            $this->multiStatementsOn = true;
+        }
+    }
+
+    private function disableMultiStatements(): void {
+        if ($this->multiStatementsOn) {
+            $this->bump("com_stmt_set_option");
+            elephc_pdo_mysql_set_server_option($this->conn, 1);
+            $this->multiStatementsOn = false;
+        }
     }
 
     // Increments one per-connection statistic and its process-wide twin.
@@ -1317,11 +1355,7 @@ class mysqli {
         if (!$this->requireNoPendingResults()) {
             return false;
         }
-        if (strpos($query, ";") !== false
-            && elephc_pdo_sql_has_multiple_statements($this->conn, $query, strlen($query)) != 0) {
-            $this->syntheticFailure(1064, "elephc mysqli does not support multiple statements in mysqli::query(); use mysqli::multi_query()", "42000");
-            return false;
-        }
+        $this->disableMultiStatements();
         $this->bump("com_query");
         if (elephc_pdo_mysql_async_send($this->conn, $query) < 0) {
             return $this->opFailed();
@@ -1520,8 +1554,28 @@ class mysqli {
             throw mysqli_sql_exception::__elephcCreate($message, $errno, $sqlstate);
         }
         if ((mysqli::$reportMode & 1) != 0) {
-            fwrite(STDERR, "mysqli error: " . $message . "\n");
+            mysqli::__elephcWarn("(" . $sqlstate . "/" . $errno . "): " . $message);
         }
+    }
+
+    // php_error_docref(NULL, E_WARNING, ...): a real E_WARNING (set_error_handler,
+    // error_get_last, error_reporting) prefixed with the PHP-visible mysqli entry
+    // point the program called — "mysqli::query(): " or "mysqli_query(): " — and
+    // reported at the user's call-site line. The entry is the outermost mysqli
+    // frame of the current trace (helpers and nested calls are inner frames).
+    private static function __elephcWarn(string $message): void {
+        $_entry = "";
+        foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $_frame) {
+            $_function = (string) ($_frame["function"] ?? "");
+            $_class = (string) ($_frame["class"] ?? "");
+            if ($_class === "mysqli" || $_class === "mysqli_stmt" || $_class === "mysqli_result"
+                || $_class === "mysqli_driver") {
+                $_entry = $_class . "::" . $_function;
+            } elseif ($_class === "" && strncmp($_function, "mysqli_", 7) == 0) {
+                $_entry = $_function;
+            }
+        }
+        __elephc_builtin_warning($_entry === "" ? $message : $_entry . "(): " . $message);
     }
 
     // Executes one statement through the bridge. Returns 0 = failure (error
@@ -1537,16 +1591,10 @@ class mysqli {
         if (!$this->requireNoPendingResults()) {
             return 0;
         }
-        // php-src rejects multi-statement strings in mysqli_query (mysqlnd
-        // toggles CLIENT_MULTI_STATEMENTS per multi_query call; the bridge keeps
-        // it enabled), so a classic "1; DROP TABLE …" injection would otherwise
-        // EXECUTE here. The rejection uses the ONE authoritative bridge scanner;
-        // a fast strpos skips the scan for statements with no ';' at all.
-        if (strpos($query, ";") !== false
-            && elephc_pdo_sql_has_multiple_statements($this->conn, $query, strlen($query)) != 0) {
-            $this->syntheticFailure(1064, "elephc mysqli does not support multiple statements in mysqli::query(); use mysqli::multi_query()", "42000");
-            return 0;
-        }
+        // Like mysqlnd, query() / real_query() switch a multi_query()-enabled
+        // session back to single statements, so the SERVER rejects a "1; DROP
+        // TABLE …" string with its own 1064 syntax error.
+        $this->disableMultiStatements();
         $this->bump("com_query");
         $_stmt = $this->prepareText($query, $unbuffered);
         if ($_stmt < 0) {
