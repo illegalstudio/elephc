@@ -298,6 +298,36 @@ pub(super) fn reflection_constant_value(
             name,
             depth + 1,
         ),
+        // php 8.2: an enum case's `->value` / `->name` in a constant expression
+        // (monolog's `const DEBUG = Level::Debug->value`).
+        ExprKind::PropertyAccess { object, property }
+            if matches!(property.as_str(), "value" | "name") =>
+        {
+            let case = reflection_constant_value(ctx, current_class, current_info, object, depth + 1)?;
+            let ReflectionConstantValue::EnumCase { enum_name, case_name } = &case else {
+                return Err(CodegenIrError::unsupported(format!(
+                    "ReflectionClass constant metadata property ->{} of a {} value",
+                    property,
+                    reflection_constant_value_kind(&case)
+                )));
+            };
+            if property == "name" {
+                return Ok(ReflectionConstantValue::Str(case_name.clone()));
+            }
+            let backing = ctx
+                .module
+                .enum_infos
+                .get(enum_name)
+                .and_then(|info| info.cases.iter().find(|candidate| &candidate.name == case_name))
+                .and_then(|case| case.value.clone());
+            match backing {
+                Some(crate::types::EnumCaseValue::Int(value)) => Ok(ReflectionConstantValue::Int(value)),
+                Some(crate::types::EnumCaseValue::Str(value)) => Ok(ReflectionConstantValue::Str(value)),
+                None => Err(CodegenIrError::unsupported(format!(
+                    "ReflectionClass constant metadata ->value of pure enum case {enum_name}::{case_name}"
+                ))),
+            }
+        }
         ExprKind::ConstRef(name) => {
             reflection_global_constant_value(ctx, name, expr.span, depth)
         }

@@ -869,6 +869,31 @@ unset($q);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// php 8.2 lets a constant expression read an enum case's `->value` / `->name` (monolog's
+/// `Logger::DEBUG = Level::Debug->value`); reflecting such constants failed the backend's
+/// metadata evaluator and the Symfony Demo's build.
+#[test]
+fn test_reflected_class_constants_from_enum_case_properties() {
+    let out = compile_and_run(r#"<?php
+enum Level: int { case Debug = 100; case Info = 200; }
+enum Tag: string { case A = 'alpha'; }
+enum Pure { case One; }
+final class Logger {
+    public const DEBUG = Level::Debug->value;
+    public const INFO_NAME = Level::Info->name;
+    public const TAG = Tag::A->value;
+    public const PURE_NAME = Pure::One->name;
+    public const LEVELS = [Level::Debug->value => 'debug', Level::Info->value => 'info'];
+}
+echo json_encode((new ReflectionClass('Logger'))->getConstants()), "\n";
+echo Logger::DEBUG, " ", Logger::LEVELS[200], "\n";
+"#);
+    assert_eq!(
+        out,
+        "{\"DEBUG\":100,\"INFO_NAME\":\"Info\",\"TAG\":\"alpha\",\"PURE_NAME\":\"One\",\"LEVELS\":{\"100\":\"debug\",\"200\":\"info\"}}\n100 info\n"
+    );
+}
+
 /// A class constant defined by an identity comparison of scalars (nette/utils'
 /// `IsWindows = PHP_OS_FAMILY === 'Windows'`) reflects with php's type-and-value answer; the
 /// backend's reflection metadata refused `===` and failed the Symfony Demo's build.
