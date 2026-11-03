@@ -16,8 +16,9 @@ use crate::support::*;
 fn test_native_reference_body_write_uses_current_boxed_payload() {
     let dir = FixtureDir(make_cli_test_dir("elephc_native_reference_body_view"));
     let source = r#"<?php
+function nativeCanonicalReplacement(): mixed { return 'changed'; }
 function nativeCanonicalBodyView(int &$target): void {
-    $target = 'changed'; echo gettype($target), ':', $target, '|';
+    $target = nativeCanonicalReplacement(); echo gettype($target), ':', $target, '|';
 }
 if ($argc < 0) { $target = 1; nativeCanonicalBodyView($target); unset($target); }
 "#;

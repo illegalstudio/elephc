@@ -47,8 +47,9 @@ supported_target_cases!(native_reference_store_modes, verify_native_reference_st
 /// A typed parameter's body observes the published value without changing its entry payload ABI.
 #[test]
 fn native_scalar_reference_writes_refresh_body_value_views_on_every_target() {
-    let source = "<?php function nativeScalarBodyView(int &$value): void { \
-        $value = 'changed'; echo gettype($value), ':', $value; } \
+    let source = "<?php function nativeScalarReplacement(): mixed { return 'changed'; } \
+        function nativeScalarBodyView(int &$value): void { \
+        $value = nativeScalarReplacement(); echo gettype($value), ':', $value; } \
         function &nativeScalarReferenceReturn(int &$value): int { $value = 3; return $value; }";
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let mut module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),

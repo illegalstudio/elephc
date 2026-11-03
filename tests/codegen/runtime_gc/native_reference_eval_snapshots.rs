@@ -67,6 +67,8 @@ if ($argc < 0) { $target = 1; nativeCanonicalEvalSnapshot($target, ''); unset($t
             code.bytes().map(|b| b.to_string()).collect::<Vec<_>>().join(",")));
     }
     let runtime = runtime_obj_for_asm(&runtime);
-    let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
-    assert_eq!(output, "integer:41|integer:41|string:changed|1");
+    let output = assemble_and_run_capture(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
+    assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "integer:41|integer:41|string:changed|1", "stderr: {}", output.stderr);
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
