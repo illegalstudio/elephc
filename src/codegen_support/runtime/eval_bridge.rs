@@ -95,6 +95,8 @@ fn emit_magic_set_guard_eval_exports(emitter: &mut Emitter) {
 
 mod aarch64_values_classes;
 mod aarch64_arrays;
+#[cfg(test)]
+mod key_normalization_tests;
 mod array_iter_value;
 pub(crate) mod array_next_index;
 mod reference_values;
