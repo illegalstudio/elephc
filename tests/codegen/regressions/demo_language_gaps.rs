@@ -869,6 +869,40 @@ unset($q);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A generator closure with more than sixteen parameters and captures (symfony/http-client's
+/// `CachingHttpClient::request()` returns one with nineteen) compiles and runs: the coroutine has
+/// 32 start-argument slots. It was refused at 16 and the class went to the interpreter.
+#[test]
+fn test_generator_closure_with_many_captures() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+final class Client {
+    private string $tag = 'c';
+    public function request(): Closure {
+        $a = 1; $b = 2; $c = 3; $d = 4; $e = 5; $f = 6; $g = 7; $h = 8; $i = 9; $j = 10; $k = 11; $l = 12; $m = 13; $n = 14;
+        $count = 0;
+        return function (string $chunk, array $context) use ($a, $b, $c, $d, $e, $f, $g, $h, $i, $j, $k, $l, $m, $n, &$count): Generator {
+            foreach ([$a, $b, $c, $d, $e, $f, $g, $h, $i, $j, $k, $l, $m, $n] as $v) {
+                $count++;
+                yield "{$this->tag}:$chunk:$v:" . count($context);
+            }
+            return $count;
+        };
+    }
+}
+$make = (new Client())->request();
+$gen = $make('x', [1, 2]);
+$out = [];
+foreach ($gen as $line) { $out[] = $line; }
+echo implode(',', $out), "\n", $gen->getReturn(), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "c:x:1:2,c:x:2:2,c:x:3:2,c:x:4:2,c:x:5:2,c:x:6:2,c:x:7:2,c:x:8:2,c:x:9:2,c:x:10:2,c:x:11:2,c:x:12:2,c:x:13:2,c:x:14:2\n14\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// `class_alias()` of an INTERFACE (nette/utils' `compatibility.php` aliases `Translator` as
 /// `ITranslator` in an `elseif`) compiles: the alias is synthesized as an interface. It was a
 /// class extending the interface, which the checker refuses, and the file went to the

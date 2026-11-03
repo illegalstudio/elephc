@@ -113,9 +113,12 @@ pub(crate) const FIBER_FLOAT_ARGS_MAX: i32 = 6;
 /// first runs. Seven were too few: Laravel's `Query\Builder::orderedLazyById()` returns a
 /// generator closure with ten, and the whole query builder fell back to the interpreter.
 /// `Fiber::start()` keeps its seven, since they mirror the argument registers it forwards.
+/// Sixteen were too few too: symfony/http-client's `CachingHttpClient::request()` returns a
+/// generator closure with nineteen (two parameters, `$this`, fourteen captures and by-ref boxes),
+/// which sent the class to the interpreter and failed the Symfony Demo's closed-world build.
 pub(crate) const GENERATOR_EXTRA_ARGS_OFFSET: i32 = 240;
-/// Number of trailing generator-only start-argument slots.
-pub(crate) const GENERATOR_EXTRA_ARGS_MAX: i32 = 9;
+/// Number of trailing generator-only start-argument slots (32 start slots in all).
+pub(crate) const GENERATOR_EXTRA_ARGS_MAX: i32 = 25;
 /// Total start-argument slots a generator may fill: the Fiber ones, then the trailing ones.
 pub(crate) const GENERATOR_START_ARGS_MAX: i32 = FIBER_START_ARGS_MAX + GENERATOR_EXTRA_ARGS_MAX;
 /// Total size of the Fiber object payload in bytes (heap-allocated; class_id at offset 0, followed by all runtime-managed fields).
