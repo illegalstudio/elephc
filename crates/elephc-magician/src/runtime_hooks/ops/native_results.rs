@@ -9,6 +9,8 @@
 //! - Null without a pending Throwable remains a runtime fatal error.
 
 use super::*;
+#[cfg(not(test))]
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 #[cfg(not(test))]
 impl ElephcRuntimeOps {
@@ -31,14 +33,21 @@ impl ElephcRuntimeOps {
         result: *mut RuntimeCell,
         arguments: impl FnOnce() -> RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        let outcome = self.handle_native_call_result(result);
-        if let Err(status) = self.release_cells([arguments()]) {
-            if let Ok(value) = outcome {
-                self.release_cells([value])?;
+        let outcome = self.handle_native_call_result(result).map(RuntimeOwnerSlot::new);
+        // The native result already owns its lease while argument destruction can suspend.
+        // Its actual slot must remain an edge of this activation until it is transferred.
+        with_runtime_owners(&outcome.as_ref().ok(), || {
+            if let Err(status) = self.release_cells([arguments()]) {
+                if let Ok(value) = &outcome {
+                    self.release_cells([value.take()])?;
+                }
+                return Err(status);
             }
-            return Err(status);
-        }
-        outcome
+            match &outcome {
+                Ok(value) => Ok(value.take()),
+                Err(status) => Err(*status),
+            }
+        })
     }
 
     /// Converts a generated native method-call result into an eval result status.
