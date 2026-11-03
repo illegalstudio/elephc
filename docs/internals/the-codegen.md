@@ -690,7 +690,8 @@ Function `static` locals are `.comm` symbols (`_static_<fn>_<name>`, 16 bytes)
 paired with a one-time init-marker symbol (`<symbol>_init`); the `--web` reset
 generator walks these records to release and re-arm persistent statics between
 requests. Static properties live behind per-class user-data symbols
-(`crate::names::static_property_symbol`), with late-bound `static::` receivers
+(`crate::names::static_property_symbol`), reserving 24 bytes for the value,
+initialization marker and optional reference-layout word. Late-bound `static::` receivers are
 resolved through native class-id branches. `global` variables load and store
 through `_eir_global_<mangled_fqn>` symbols emitted for the EIR `LoadGlobal` /
 `StoreGlobal` instructions.

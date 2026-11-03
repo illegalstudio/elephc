@@ -34,6 +34,8 @@ pub(super) use validation_commit::emit as emit_validation_commit;
 mod validation_publish;
 pub(super) use validation_publish::emit as emit_validation_publish;
 mod source_lifecycle;
+mod static_cells;
+pub(crate) use static_cells::BINDING_BYTES as STATIC_BINDING_BYTES;
 pub(super) use source_lifecycle::emit as emit_source_lifecycle;
 pub(super) use source_lifecycle::require_success as require_source_success;
 pub(crate) use validation_pins::subtract as subtract_validation_pins;
@@ -95,6 +97,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter, native_validation: boo
         "_tagged_reference_argument_msg", TAGGED_REFERENCE_ARGUMENT_MSG.len() as i64);
     emit_reference_escape_error(emitter, "__rt_tagged_reference_assignment_error",
         "_tagged_reference_assignment_msg", TAGGED_REFERENCE_ASSIGNMENT_MSG.len() as i64);
+    if native_validation { static_cells::emit(emitter); }
 }
 
 /// Allocates a zeroed two-word cell; C argument zero supplies its payload descriptor tag.

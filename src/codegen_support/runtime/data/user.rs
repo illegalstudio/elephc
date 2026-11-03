@@ -125,7 +125,8 @@ pub(crate) fn emit_runtime_data_user(
     let mut static_property_symbols: Vec<String> = static_property_symbols.into_iter().collect();
     static_property_symbols.sort();
     for symbol in static_property_symbols {
-        out.push_str(&comm_directive(&symbol, 16, target));
+        out.push_str(&comm_directive(&symbol,
+            crate::codegen_support::runtime::reference_cells::STATIC_BINDING_BYTES, target));
     }
 
     let mut sorted_enum_names: Vec<&String> = enums.keys().collect();

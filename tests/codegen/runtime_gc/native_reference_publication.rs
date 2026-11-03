@@ -418,23 +418,6 @@ if ($argc < 0) { $value = ''; nativeFreshHeapAssign($value); unset($value); }
     }
 }
 
-/// Prints the harness predicate after any failure jumps to the shared zero-result label.
-fn append_status_output(asm: &mut String, bytes: usize) {
-    instruction(asm, "mov x0, #1", "mov eax, 1");
-    instruction(asm, "b Lnative_publisher_print", "jmp Lnative_publisher_print");
-    asm.push_str("Lvalidation_pin_fail:\n");
-    instruction(asm, "mov x0, #0", "xor eax, eax");
-    asm.push_str("Lnative_publisher_print:\n");
-    call(asm, "__rt_itoa");
-    if target().arch == Arch::AArch64 {
-        instruction(asm, "mov x0, #1", "");
-        if target().platform == Platform::Linux {
-            instruction(asm, "mov x8, #64", ""); instruction(asm, "svc #0", "");
-        } else { instruction(asm, "mov x16, #4", ""); instruction(asm, "svc #0x80", ""); }
-    } else { asm.push_str("    mov rsi, rax\n    mov edi, 1\n    mov eax, 1\n    syscall\n"); }
-    instruction(asm, &format!("add sp, sp, #{bytes}"), &format!("add rsp, {bytes}"));
-}
-
 /// Observes the real published string from inside the Stringable RHS destructor.
 fn append_verify_callback(user: &mut String) {
     let entry = target().extern_symbol("native_publisher_verify_new");

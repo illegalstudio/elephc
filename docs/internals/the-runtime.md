@@ -1879,7 +1879,7 @@ _principal_lookup_read_mode:
 .comm _static_func_var, 16   ; 16 bytes for persisted value
 .comm _static_func_var_init, 8 ; 8-byte initialization flag
 ; Per-program: static property storage (one slot per effective declaring class property)
-.comm _static_prop_Class_prop, 16 ; 16 bytes for the static property value
+.comm _static_prop_Class_prop, 24 ; value, initialization and reference-layout words
 ```
 
 Additionally, the runtime emits static data tables:
@@ -1917,7 +1917,7 @@ Additionally, the runtime emits static data tables:
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used by late static binding
 - `_class_destruct_ptrs` — class_id-indexed `__destruct` method pointers (or `0`) consulted by `__rt_call_object_destructor` during object deep-free
 - `_classes_by_name`, `_classes_by_name_count` — case-insensitive `name -> (class_id, object size)` lookup table used by `__rt_new_by_name` for `new $variable()`
-- `static_property_symbol(...)`-derived `.comm` slots — 16-byte storage slots for effective declaring static properties, shared by inherited static properties until a subclass redeclares the property
+- `static_property_symbol(...)`-derived `.comm` slots: 24-byte storage slots for effective declaring static properties, shared by inherited static properties until a subclass redeclares the property
 - `enum_case_symbol(...)`-derived `.comm` slots — singleton backing storage for enum cases emitted from user program metadata
 
 When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, and `__rt_heap_debug_report`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list or bin state, poison freed payload bytes with `0xA5`, and print an end-of-process summary with alloc/free counts, live block count, live bytes, leak summary, and the peak live-byte watermark.

@@ -759,6 +759,10 @@ rejection, unchanged RHS representation, source removal and an empty root list.
 Two executable regressions also verify incoming destruction inside the displaced
 destructor and a Stringable snapshot destructor observing the published string
 before its exception returns through the protected context.
+On an inconsistent conversion, the publisher constructs an owned `TypeError` in
+`context.pending` before releasing the last RHS snapshot lease. A throwing RHS
+destructor can then chain that error as its previous exception. A conflict returns
+status three with that pending error; a newer cleanup throw returns status two.
 This helper remains behind the explicit capability until property lifecycle and
 store lowering select it together.
 
@@ -1720,13 +1724,25 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 
 ### Static properties (`ClassName::$prop`)
 
-Static properties are class-scoped storage rather than object fields. During `emit_runtime_data_user()`, each effective declaring class property gets one 16-byte BSS slot:
+Static properties are class-scoped storage rather than object fields. During `emit_runtime_data_user()`, each effective declaring class property gets one 24-byte BSS slot:
 
 ```asm
-.comm _static_prop_Counter_count, 16, 3 ; 16 bytes for Counter::$count
+.comm _static_prop_Counter_count, 24, 3 ; value, initialization and reference-layout words
 ```
 
 The naming pattern comes from `static_property_symbol(...)`. Inherited static properties point back to the declaring class slot, so `Base::$count` and `Child::$count` share storage when the property is declared only on `Base`. When a subclass redeclares the static property, that subclass receives its own slot and `static::$count` dispatches to it through the called-class id at runtime. `_main` evaluates static-property defaults before user statements run, and later reads/writes load from or store to the resolved slot directly.
+
+The optional native-reference runtime provides three C-ABI primitives for Mixed
+static bindings. `__rt_reference_static_mixed_promote(binding)` transfers the raw
+Mixed owner into an allocated managed cell and sets the layout word at byte 16.
+Repeated promotion returns the same cell. `__rt_reference_static_mixed_payload`
+returns either the raw binding or the managed cell as a borrowed payload address.
+`__rt_reference_static_mixed_release` clears the binding and layout word, restores
+the uninitialized marker and removes its weak type source before retiring the
+cell. Escaped native aliases keep that cell alive independently. The BSS address
+itself never has a managed header. These primitives have explicit ABI coverage;
+ordinary static lowering keeps the raw layout until all readers, writers and
+teardown consumers are connected.
 
 A `buffer<T>`, `ptr` or `ptr<T>` static property keeps its handle or address in the slot's low word, as an instance property does. The word owns nothing: overwriting it frees no buffer, and shutdown releases nothing for it. Element writes (`Class::$buf[$i] = $v`) resolve the handle the slot holds and store into the buffer payload without writing the slot back. A typed pointer slot whose default is `null` is initialized to the zero word, while a typed buffer or pointer slot without a default carries the uninitialized marker in its high word until the first store.
 
