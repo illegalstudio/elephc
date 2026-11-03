@@ -18,19 +18,24 @@ class SharedReturnOwner {
     public function __construct(public string $name) {}
     public function __destruct() { echo 'destroy:', $this->name, '|'; }
 }
-function chooseSharedNativeReturn(int $choice): mixed {
+function chooseSharedNativeReturn(int $choice): SharedReturnOwner {
     $first = new SharedReturnOwner('first');
     $second = new SharedReturnOwner('second');
     if ($choice === 0) { return $first; }
-    if ($choice === 1) { return $second; }
+    return $second;
+}
+function chooseSharedNativeScalar(int $choice): int {
+    $first = new SharedReturnOwner('first');
+    $second = new SharedReturnOwner('second');
     if ($choice === 2) { return 11; }
     return 22;
 }
-foreach ([0, 1, 2, 3] as $choice) {
+foreach ([0, 1] as $choice) {
     $result = chooseSharedNativeReturn($choice);
-    echo is_object($result) ? $result->name : $result, '|';
+    echo $result->name, '|';
     unset($result); echo '#';
 }
+foreach ([2, 3] as $choice) { echo chooseSharedNativeScalar($choice), '|#'; }
 "#;
     let expected = concat!(
         "destroy:second|first|destroy:first|#",

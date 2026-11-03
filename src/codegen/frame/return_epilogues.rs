@@ -50,15 +50,15 @@ pub(super) fn emit(
 mod tests {
     use super::*;
 
-    /// Many scalar returns reuse frame cleanup while a returned local keeps its distinct transfer.
+    /// Fresh container returns reuse cleanup while a returned local keeps its distinct transfer.
     #[test]
     fn equivalent_return_cleanup_is_bounded_on_every_supported_target() {
         let branches = (0..24).map(|index| format!(
-            "if ($choice === {index}) {{ return {index}; }}\n",
+            "if ($choice === {index}) {{ return [$seed]; }}\n",
         )).collect::<String>();
-        let source = format!("<?php function sharedNativeCleanup(int $choice, mixed $seed): mixed {{ \
+        let source = format!("<?php function sharedNativeCleanup(int $choice, mixed $seed): array {{ \
             $owned = [$seed]; {branches} return $owned; }} \
-            echo sharedNativeCleanup($argc, 'seed');");
+            echo count(sharedNativeCleanup($argc, 'seed'));");
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let module = crate::ir_lower::tests::lower_source_at_for_target(
                 &source, std::path::Path::new("main.php"), std::path::Path::new("."),
