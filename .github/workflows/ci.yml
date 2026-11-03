@@ -49,6 +49,7 @@ env:
     -p elephc-fileinfo
     -p elephc-tokenizer
     -p elephc-magician
+    -p elephc-reference
     -p elephc-web
     -p elephc-instr
     -p elephc-probe
@@ -3224,6 +3225,9 @@ jobs:
 
       - name: Magician eval bindings with the curl surface published
         run: cargo test -p elephc-magician --features curl
+
+      - name: Native reference source and validation ABI
+        run: cargo test -p elephc-reference
 
       # The root `curl` feature (Cargo.toml) relays both edges, which is what puts
       # the shared catalog's curl contracts and Magician's eval bindings in ONE

@@ -2,14 +2,14 @@
 //! Verifies original-RHS coercion agreement, reentrant source changes and candidate ownership.
 //!
 //! Called from:
-//! - Native reference validation ABI unit tests in the Magician library.
+//! - Native reference validation ABI unit tests in the reference bridge.
 //!
 //! Key details:
 //! - Opaque value identities model native owners without dereferencing runtime heap memory.
 //! - Callback source mutations exercise the same exported metadata APIs as native hooks.
 
 use super::*;
-use crate::ffi::native_reference_sources::{
+use crate::native_reference_sources::{
     __elephc_reference_sources_bind_v1, __elephc_reference_sources_reset_v1,
     __elephc_reference_sources_set_reference_v1, __elephc_reference_sources_unbind_v1,
 };

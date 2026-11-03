@@ -162,6 +162,12 @@ runtime calls. Statically visible `pcntl_*` calls auto-link it. See
 [PCNTL](../php/pcntl.md) for target availability, fork/signal semantics, and
 documented limits.
 
+`--with-reference` force-links `elephc_reference`, the native property-reference
+metadata and validation bridge. Native reference validation selects it
+automatically through its runtime capability. It exposes no PHP functions or
+classes and has no interpreter dependencies. Native and eval publishers share
+its weak source registry when both runtimes are present.
+
 `--with-eval` force-links `elephc_magician`; it does not enable new syntax or
 change which fragments are eligible for AOT lowering. Normal eval usage is
 detected automatically. See [Eval](../php/eval.md) for language semantics and

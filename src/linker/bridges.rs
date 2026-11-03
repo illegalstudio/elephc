@@ -333,6 +333,20 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_reference",
+        env_var: "ELEPHC_REFERENCE_LIB_DIR",
+        crate_name: "elephc-reference",
+        flag_name: "reference",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        php_extensions: &[],
+        monitoring: MonitoringPolicy::Infrastructure {
+            reason: "native reference metadata and protected validation coordination",
+        },
+    },
+    BridgeStaticlib {
         lib_name: "elephc_curl",
         env_var: "ELEPHC_CURL_LIB_DIR",
         crate_name: "elephc-curl",
@@ -1743,6 +1757,9 @@ mod tests {
         }
         assert_eq!(bridge_lib_for_flag("bogus"), None);
         assert_eq!(crate_flag_names().len(), BRIDGES.len());
+        assert_eq!(bridge_lib_for_flag("reference"), Some("elephc_reference"));
+        assert_eq!(archive_filename_for_flag("reference").as_deref(), Some("libelephc_reference.a"));
+        assert!(php_extensions_for_lib("elephc_reference").is_empty());
     }
 
     /// Verifies adding a bridge requires an explicit, machine-audited monitoring decision.

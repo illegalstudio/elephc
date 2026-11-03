@@ -222,14 +222,14 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         requirements.push(LinkRequirement::SystemLibrary("z".to_string()));
         requirements.push(LinkRequirement::SystemLibrary("bz2".to_string()));
     }
-    if features.descriptor_invoker && !features.eval_bridge && !features.native_reference_validation {
+    if features.descriptor_invoker && !features.eval_bridge {
         // The dynamic builtin dispatcher emits md5/sha1/hash wrappers that reference
         // `elephc_crypto_hash`; force the crate to link when Magician is absent. The
         // Magician staticlib already carries its crypto dependency, and adding the
         // standalone archive beside it produces duplicate C exports on macOS.
         requirements.push(LinkRequirement::Bridge("elephc_crypto"));
     }
-    if features.eval_bridge || features.native_reference_validation {
+    if features.eval_bridge {
         // The interpreter remains an ordinary table-driven Elephc bridge. Its BCMath
         // registry calls the standalone C ABI so AOT and eval share one process scale
         // instead of embedding a second staticlib copy. Keep bcmath after magician so
@@ -237,6 +237,9 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         // Regex is a separate optional capability registered only when enabled.
         requirements.push(LinkRequirement::Bridge("elephc_magician"));
         requirements.push(LinkRequirement::Bridge("elephc_bcmath"));
+    }
+    if features.native_reference_validation {
+        requirements.push(LinkRequirement::Bridge("elephc_reference"));
     }
     if features.mbstring || features.mbregex || features.eval_bridge {
         requirements.push(LinkRequirement::Bridge("elephc_mbstring"));
@@ -1155,11 +1158,16 @@ mod tests {
         let features = RuntimeFeatures { native_reference_validation: true, ..RuntimeFeatures::none() };
         assert!(!features.eval_bridge);
         assert_eq!(features.cache_key_bits(), 1 << 16);
-        let expected = vec![LinkRequirement::Bridge("elephc_magician"), LinkRequirement::Bridge("elephc_bcmath")];
+        let expected = vec![LinkRequirement::Bridge("elephc_reference")];
         assert_eq!(link_requirements_for_runtime_features(features), expected);
         assert_eq!(link_requirements_for_runtime_features(RuntimeFeatures {
             descriptor_invoker: true, ..features
-        }), expected, "Magician already supplies the crypto dependency");
+        }), vec![LinkRequirement::Bridge("elephc_crypto"), LinkRequirement::Bridge("elephc_reference")],
+            "native coordination does not carry the interpreter's crypto dependency");
+        let combined = link_requirements_for_runtime_features(RuntimeFeatures {
+            eval_bridge: true, ..features
+        });
+        assert_eq!(combined.iter().filter(|entry| **entry == LinkRequirement::Bridge("elephc_reference")).count(), 1);
     }
 
     /// Verifies eval plus regex requests PCRE2 and both eval bridge archives.

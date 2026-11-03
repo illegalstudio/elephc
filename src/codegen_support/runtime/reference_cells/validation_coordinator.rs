@@ -22,7 +22,10 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     for (index, offset) in [8, 16, 24, 32].into_iter().enumerate() {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
-    for (offset, value) in [(OPS, 1), (OPS - 8, 48)] {
+    let version = elephc_reference::native_reference_validation::VALIDATION_ABI_VERSION as i64;
+    let bytes = std::mem::size_of::<elephc_reference::native_reference_validation::NativeReferenceValidationOps>() as i64;
+    debug_assert_eq!(bytes, 48, "the native operation frame follows validation ABI version one");
+    for (offset, value) in [(OPS, version), (OPS - 8, bytes)] {
         abi::emit_load_int_immediate(emitter, result, value);
         abi::store_at_offset(emitter, result, offset);
     }

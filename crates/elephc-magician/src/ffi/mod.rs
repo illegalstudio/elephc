@@ -12,8 +12,6 @@
 #[cfg(not(test))]
 pub mod callables;
 pub(crate) mod array_references;
-mod native_reference_sources;
-mod native_reference_validation;
 #[cfg(not(test))]
 mod mbstring_array_references;
 pub mod context;

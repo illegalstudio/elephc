@@ -1292,6 +1292,16 @@ mod tests {
         assert!(!config.web);
     }
 
+    /// Retains the standalone native reference bridge without enabling eval or web modes.
+    #[test]
+    fn with_reference_records_forced_crate() {
+        let args = vec!["elephc".into(), "--with-reference".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("reference"));
+        assert!(!config.with_crates.contains("eval"));
+        assert!(!config.web);
+    }
+
     /// Verifies `--with-regex` records the dynamic-code regex capability without web mode.
     #[test]
     fn with_regex_records_runtime_capability() {

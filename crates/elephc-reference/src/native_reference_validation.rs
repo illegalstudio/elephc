@@ -15,7 +15,7 @@ use std::ffi::c_void;
 use super::native_reference_sources::{snapshot_reference_sources, NativeReferenceTypeSource};
 
 /// Version of this native-only operation table, independent of the eval execution status ABI.
-const VALIDATION_ABI_VERSION: u64 = 1;
+pub const VALIDATION_ABI_VERSION: u64 = 1;
 /// A protected callback completed normally.
 const SUCCESS: i32 = 0;
 /// A malformed operation or failed native callback cannot publish a replacement.
