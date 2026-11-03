@@ -1,5 +1,5 @@
 //! Purpose:
-//! Reflection arrays, hashes, constants, and static-property collections.
+//! Reflection arrays, hashes, constants, and declaration collections.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::objects::reflection`.
@@ -294,71 +294,3 @@ pub(super) fn emit_reflection_default_property_array(
         emit_reflection_constant_hash_insert(ctx, &member.name);
     }
 }
-
-/// Allocates and populates current static-property values for ReflectionClass.
-pub(super) fn emit_reflection_static_property_array(
-    ctx: &mut FunctionContext<'_>,
-    members: &[ReflectionStaticPropertyMember],
-) {
-    emit_reflection_assoc_array_to_result(ctx, &PhpType::Mixed, members.len());
-    for member in members {
-        let skip_label = emit_skip_if_static_property_uninitialized(ctx, member);
-        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        let symbol = static_property_symbol(&member.declaring_class_name, &member.name);
-        if member.php_type.codegen_repr() == PhpType::Mixed {
-            crate::codegen_support::runtime::reference_cells::load_mixed_static_value(
-                ctx.emitter, &symbol, ctx.module.required_runtime_features.native_reference_validation,
-            );
-        } else {
-            abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &member.php_type);
-        }
-        let storage_type = crate::types::mixed_box_php_type(&member.php_type);
-        if matches!(storage_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-            // Boxing an existing Mixed cell is a no-op. The metadata hash needs its own
-            // reference so destroying the reflector cannot retire the static slot's owner.
-            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-        }
-        emit_box_current_value_as_mixed(ctx.emitter, &storage_type);
-        emit_reflection_static_property_hash_insert(ctx, &member.name);
-        if let Some(skip_label) = skip_label {
-            ctx.emitter.label(&skip_label);
-        }
-    }
-}
-
-/// Emits a branch over uninitialized typed static properties, matching PHP reflection.
-#[rustfmt::skip]
-pub(super) fn emit_skip_if_static_property_uninitialized(
-    ctx: &mut FunctionContext<'_>,
-    member: &ReflectionStaticPropertyMember,
-) -> Option<String> {
-    if !member.is_declared {
-        return None;
-    }
-    let skip_label = ctx.next_label("reflection_static_uninitialized");
-    let symbol = static_property_symbol(&member.declaring_class_name, &member.name);
-    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
-    let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
-    abi::emit_load_symbol_to_reg(ctx.emitter, marker_reg, &symbol, 8);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        sentinel_reg,
-        UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
-    );
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(
-                &format!("cmp {}, {}", marker_reg, sentinel_reg)
-            );                                                                  // compare the static property marker against the uninitialized sentinel
-            ctx.emitter.instruction(&format!("b.eq {}", skip_label));           // omit uninitialized typed static properties from the reflection map
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(
-                &format!("cmp {}, {}", marker_reg, sentinel_reg)
-            );                                                                  // compare the static property marker against the uninitialized sentinel
-            ctx.emitter.instruction(&format!("je {}", skip_label));             // omit uninitialized typed static properties from the reflection map
-        }
-    }
-    Some(skip_label)
-}
-

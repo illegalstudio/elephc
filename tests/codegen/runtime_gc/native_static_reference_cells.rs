@@ -242,7 +242,8 @@ if ($argc < 0) { nativeStaticInitializeOld(); nativeStaticReplaceDirect(); nativ
         &user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
     assert!(captured.success, "{}: {}", captured.status, captured.stderr);
     let output = captured.stdout;
-    let owner_counts = captured.stderr;
+    let stderr = captured.stderr;
+    let owner_counts = stderr.lines().last().unwrap_or("").trim();
     let reflection = user.split_once("@fn name=nativeStaticReplaceReflection ")
         .map(|(_, body)| body.split_once("@endfn name=nativeStaticReplaceReflection")
             .map_or(body, |(body, _)| body))

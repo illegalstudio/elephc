@@ -490,6 +490,9 @@ pub(crate) fn lower_property_get_from_value(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(value) = super::reflection_current_statics::lower(ctx, object, property, op, expr) {
+        return value;
+    }
     let object = refine_member_receiver(ctx, object, expr);
     let object = box_opaque_property_receiver(ctx, object, expr.span);
     let ty = ctx.builder.value_php_type(object.value);

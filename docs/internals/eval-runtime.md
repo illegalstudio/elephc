@@ -25,6 +25,11 @@ payload layout. The current boxed child supplies the PHP tag for the requested
 logical view, including a Mixed read after eval changes a typed parameter's value.
 Raw and headerless references continue to load through their original physical ABI.
 
+AOT reflector construction retains declaration metadata without copying current
+static-property values. Builtin reflector accessors materialize a fresh current
+map through EIR, selecting the reflected class at runtime and omitting uninitialized
+properties. A reflector therefore does not extend a displaced static object's life.
+
 Owned property value reads detach array boxes even when the getter already returned
 an owning lease. Retaining the same property box is insufficient: a COW write replaces
 the payload in that box. The copy preserves array and callable metadata; object reads

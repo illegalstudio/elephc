@@ -24,15 +24,24 @@ pub(super) fn lower_reflection_class_get_static_properties(
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
+    let owner = ctx.declare_owned_hidden_temp(hash_ty.clone());
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
         Some(Immediate::Capacity(properties.len() as u32)),
-        hash_ty,
+        hash_ty.clone(),
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
+    ctx.store_local(&owner, hash, hash_ty, Some(expr.span));
     for (property, declaring_class, property_ty) in properties {
+        let initialized = lower_reflection_static_property_initialized_by_class_name(
+            ctx, &declaring_class, &property, expr);
+        let present = ctx.builder.create_named_block("reflection.statics.present", Vec::new());
+        let next = ctx.builder.create_named_block("reflection.statics.omitted", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr { cond: initialized.value,
+            then_target: present, then_args: Vec::new(), else_target: next, else_args: Vec::new() });
+        ctx.builder.position_at_end(present);
         let key_expr = Expr::new(ExprKind::StringLiteral(property.clone()), expr.span);
         let key = lower_string_literal(ctx, &property, &key_expr);
         let value = lower_reflection_static_property_get_by_class_name(
@@ -50,8 +59,10 @@ pub(super) fn lower_reflection_class_get_static_properties(
             Op::HashSet.default_effects(),
             Some(expr.span),
         );
+        branch_to(ctx, next);
+        ctx.builder.position_at_end(next);
     }
-    Some(hash)
+    Some(take_owned_temp(ctx, &owner, expr.span))
 }
 
 /// Lowers `ReflectionClass::getStaticPropertyValue()` to a live static-property read.

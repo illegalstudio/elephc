@@ -144,6 +144,7 @@ mod reference_cells;
 mod reference_detach;
 mod reference_property_payload;
 mod reflection_mirror_ownership;
+mod reflection_static_lifetimes;
 mod reflection_branch_targets;
 mod reference_return_boundaries;
 mod reference_return_siblings;

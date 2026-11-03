@@ -139,6 +139,7 @@ mod reflection_property_calls;
 mod reflection_filters;
 mod reflection_constructors;
 mod reflection_static_properties;
+mod reflection_current_statics;
 mod class_introspection;
 mod class_introspection_mixed;
 mod core_introspection;

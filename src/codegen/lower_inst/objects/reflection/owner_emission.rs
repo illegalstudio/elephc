@@ -189,12 +189,6 @@ pub(super) fn emit_reflection_owner_metadata(
             }) {
                 emit_reflection_owner_string_property_by_name(ctx, class_name, "__default_error", message)?;
             }
-            emit_reflection_static_property_array_property_by_name(
-                ctx,
-                class_name,
-                "__static_properties",
-                &metadata.static_property_members,
-            )?;
             emit_reflection_member_array_property_by_name(
                 ctx,
                 class_name,
