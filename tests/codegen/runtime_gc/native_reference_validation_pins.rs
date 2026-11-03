@@ -234,6 +234,9 @@ fn validation_physical_source(out: &mut String) {
 
 /// Registers a real Rust type source and validates through generated native callbacks.
 fn native_coordinator(out: &mut String, callback: &str) {
+    load(out, 0);
+    call(out, "__rt_mixed_clone");
+    store(out, 304);
     for offset in [128, 136] {
         instruction(out, &format!("str xzr, [sp, #{offset}]"), &format!("mov QWORD PTR [rsp + {offset}], 0"));
     }
@@ -274,24 +277,50 @@ fn native_coordinator(out: &mut String, callback: &str) {
             call(out, "__rt_mixed_cast_int");
             instruction(out, "cmp x0, #1", "cmp rax, 1");
             instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
-            load(out, 224);
-            call(out, "__rt_decref_mixed");
+            native_commit(out, 224, 0);
         } else {
             instruction(out, "cmp x0, #0", "test rax, rax");
             instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
             load(out, 136);
             instruction(out, "cmp x0, #0", "test rax, rax");
             instruction(out, "b.eq Lvalidation_pin_fail", "je Lvalidation_pin_fail");
+            // A pending validation error consumes a supplied candidate without publishing it.
+            load(out, 208);
+            call(out, "__rt_mixed_clone");
+            store(out, 224);
+            native_commit(out, 224, 2);
+            load(out, 136);
             instruction(out, "str xzr, [sp, #136]", "mov QWORD PTR [rsp + 136], 0");
             call(out, "__rt_decref_any");
         }
     }
+    load(out, 0);
+    call(out, "__rt_mixed_unbox");
+    instruction(out, "cmp x0, #2", "cmp rax, 2");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    load(out, 0);
+    call(out, "__rt_mixed_cast_int");
+    instruction(out, "cmp x0, #1", "cmp rax, 1");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
     instruction(out, "add x0, sp, #8", "lea rdi, [rsp + 8]");
     call(out, &target().extern_symbol("__elephc_reference_sources_unbind_v1"));
     instruction(out, "cmp x0, #0", "test rax, rax");
     instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    // With no source left, restore the original detached owner for the later clone checks.
+    native_commit(out, 304, 0);
     load(out, 208);
     call(out, "__rt_decref_mixed");
+}
+
+/// Transfers one candidate owner, then clears the consumed output instead of releasing it twice.
+fn native_commit(out: &mut String, candidate: usize, expected: usize) {
+    instruction(out, "add x0, sp, #128", "lea rdi, [rsp + 128]");
+    instruction(out, "ldr x1, [sp]", "mov rsi, QWORD PTR [rsp]");
+    instruction(out, &format!("ldr x2, [sp, #{candidate}]"), &format!("mov rdx, QWORD PTR [rsp + {candidate}]"));
+    call(out, "__rt_reference_commit_native");
+    instruction(out, &format!("cmp x0, #{expected}"), &format!("cmp rax, {expected}"));
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    instruction(out, &format!("str xzr, [sp, #{candidate}]"), &format!("mov QWORD PTR [rsp + {candidate}], 0"));
 }
 
 /// Real nested pins preserve singleton copy semantics, unlink in any order and leave no heap owners.

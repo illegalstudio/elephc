@@ -676,6 +676,15 @@ source and exercises weak success and strict failure through generated EIR.
 Production publishers still need to select this capability when their lifecycle
 and commit paths are connected.
 
+`__rt_reference_commit_native` consumes a validated boxed candidate and publishes
+its owner before protected retirement of the previous child. A pending validation
+exception consumes the supplied candidate without changing the wrapper. Failed
+wrapper checks also retire the candidate. The caller keeps its context, wrapper
+and original RHS rooted through the operation and propagates a contained
+Throwable only after retiring those roots. The ABI fixture checks successful
+publication and an unchanged value after strict rejection; generated property
+publishers still need to call this primitive from their complete lifecycle paths.
+
 Native function parameter flags carry physical boxed-reference storage separately
 from declared PHP types and tagged nullable integers. Normal function object
 references use the normalized Mixed ABI. A closure descriptor can instead expose

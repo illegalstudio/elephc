@@ -23,6 +23,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     super::super::reference_cells::emit_reference_cells(emitter);
     if features.native_reference_validation {
         super::super::reference_cells::emit_validation_coordinator(emitter);
+        super::super::reference_cells::emit_validation_commit(emitter);
     }
     arrays::emit_heap_debug_fail(emitter);
     arrays::emit_heap_debug_check_live(emitter);
