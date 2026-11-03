@@ -323,8 +323,11 @@ impl Checker {
         if existing == new_ty {
             return Some(existing.clone());
         }
+        // An empty-array local takes any array, the any-array union of a bare `array` (or of an
+        // `is_array()` narrowing) included.
         if matches!(existing, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Never))
-            && matches!(new_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            && (matches!(new_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                || new_ty.is_php_array())
         {
             return Some(new_ty.clone());
         }
