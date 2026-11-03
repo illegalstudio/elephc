@@ -174,7 +174,9 @@ class NativeCycleOwnedReceiver {
 }
 function nativeCycleCastFunction(callable $callback): void { $callback(); }
 $function = nativeCycleCastFunction(...);
+$selectedMode = $argc > 1 ? (int)$argv[1] : -1;
 for ($mode = 0; $mode < 10; $mode++) {
+    if ($selectedMode >= 0 && $mode !== $selectedMode) { continue; }
     $callback = new NativeCycleCastCallback();
     $fiber = new Fiber(static function () use ($callback, $mode, $function): void {
         eval('
@@ -212,10 +214,20 @@ for ($mode = 0; $mode < 10; $mode++) {
 }
 echo 'done';
 "#;
-    let output = compile_and_run_with_heap_debug(source);
-    assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
-    assert_eq!(output.stdout, "9|9|9|9|9|9|9|9|9|9|done");
-    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    let argvs: &[&[&str]] = &[&[], &["0"], &["1"], &["2"], &["3"], &["4"],
+        &["5"], &["6"], &["7"], &["8"], &["9"]];
+    let outputs = compile_and_run_with_heap_debug_per_argv(source, argvs);
+    let diagnostics = outputs.iter().zip(argvs).filter(|(output, _)|
+        !output.success || !output.stderr.contains("HEAP DEBUG: leak summary: clean"))
+        .map(|(output, args)| format!("argv={args:?} status={} stdout={} stderr={}",
+            output.status, output.stdout, output.stderr)).collect::<Vec<_>>().join("\n");
+    for (index, output) in outputs.iter().enumerate() {
+        assert!(output.success, "argv={:?}: {diagnostics}", argvs[index]);
+        assert_eq!(output.stdout, if index == 0 { "9|9|9|9|9|9|9|9|9|9|done" }
+            else { "9|done" }, "argv={:?}: {diagnostics}", argvs[index]);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "argv={:?}: {diagnostics}", argvs[index]);
+    }
 }
 
 /// A result held while an internal default's destructor suspends is an edge of that Fiber.
