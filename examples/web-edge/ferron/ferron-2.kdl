@@ -22,10 +22,13 @@ example.com {
         // 127.0.0.1:8080 instead of a Unix socket):
         // proxy "http://127.0.0.1:8080/"
 
-        // Ferron 2 does not set the full forwarded-header set by itself; these
-        // replace any client-supplied values with the peer facts Ferron sees.
+        // The origin prefers Forwarded over X-Forwarded-*. Remove the client
+        // chain and replace every fact the origin reads with the peer facts
+        // Ferron sees.
+        proxy_request_header_remove "Forwarded"
         proxy_request_header_replace "X-Forwarded-For" "{client_ip}"
         proxy_request_header_replace "X-Forwarded-Proto" "{scheme}"
+        proxy_request_header_replace "X-Forwarded-Host" "{header:Host}"
         proxy_request_header_replace "X-Forwarded-Port" "{server_port}"
         proxy_request_header_replace "X-Real-IP" "{client_ip}"
 

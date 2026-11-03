@@ -366,3 +366,23 @@ async fn read_bytes_async(
     reader.read_exact(&mut bytes).await?;
     Ok(bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// Rejects a request frame carrying the pre-scheme protocol marker.
+    #[test]
+    fn rejects_the_previous_request_marker() {
+        let error = match read_request(&mut Cursor::new(b"ELEWEB01".to_vec())) {
+            Ok(_) => panic!("the previous request marker must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error.to_string().contains("invalid broker request marker"),
+            "{error}"
+        );
+    }
+}

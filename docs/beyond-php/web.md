@@ -409,12 +409,14 @@ present and well-formed. The chain is walked right-to-left, so trusted
 intermediates are skipped and the rightmost untrusted client address is used.
 `X-Forwarded-Proto` drives `REQUEST_SCHEME` and `HTTPS=on` (`HTTPS` is absent for
 HTTP), while `X-Forwarded-Port`, a forwarded `host=` port, or the scheme default
-(443/80) drives `SERVER_PORT`. `X-Forwarded-Host` is not used as a port
-authority. `HTTP_HOST` is not rewritten; the raw `HTTP_FORWARDED` and
-`HTTP_X_FORWARDED_*` keys remain visible exactly as sent. The edge must overwrite
-or remove client-supplied forwarded headers, including `X-Forwarded-Port`,
-`X-Forwarded-Host`, and `X-Real-IP`; otherwise a client can choose
-`SERVER_PORT` or the apparent authority.
+(443/80) drives `SERVER_PORT`. Repeated scalar headers use the last line and its
+rightmost token, so a proxy that appends wins over the client-supplied value.
+`X-Forwarded-Host` is not used as a port authority. `HTTP_HOST` is not rewritten;
+the raw `HTTP_FORWARDED` and `HTTP_X_FORWARDED_*` keys remain visible exactly as
+sent. The edge must overwrite or remove client-supplied forwarded headers,
+including `Forwarded`, `X-Forwarded-Port`, `X-Forwarded-Host`, and `X-Real-IP`;
+otherwise a client can choose `REMOTE_ADDR`, `SERVER_PORT`, or the apparent
+authority.
 
 The closest PHP-FPM/nginx equivalents are:
 

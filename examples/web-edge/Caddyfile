@@ -11,9 +11,16 @@ example.com {
 
 	handle {
 		reverse_proxy unix//run/elephc/app.sock {
-			# Caddy sets X-Forwarded-For/Proto/Host but not Port; set it so a
-			# client-supplied X-Forwarded-Port cannot survive.
-			header_up X-Forwarded-Port {http.request.port}
+			# The origin prefers RFC 7239 Forwarded over X-Forwarded-*.
+			# Caddy passes unrecognized request headers through by default,
+			# so remove the client-supplied chain and replace every fact the
+			# origin reads.
+			header_up -Forwarded
+			header_up X-Forwarded-For {http.request.remote.host}
+			header_up X-Forwarded-Proto {http.request.scheme}
+			header_up X-Forwarded-Host {http.request.host}
+			header_up X-Forwarded-Port {http.request.local.port}
+			header_up X-Real-IP {http.request.remote.host}
 			health_uri /healthz
 			health_interval 10s
 		}

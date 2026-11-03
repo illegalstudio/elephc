@@ -22,12 +22,11 @@ use std::io;
 use std::net::SocketAddr;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, UnixListener};
 
@@ -313,7 +312,13 @@ impl PeerInfo {
 /// accepts connections is not stale and is refused instead of stolen.
 pub(crate) fn bind_unix_master(path: &Path) -> io::Result<std::os::unix::net::UnixListener> {
     remove_stale_socket(path)?;
-    let listener = std::os::unix::net::UnixListener::bind(path)?;
+    // Restrict the create mode before bind so the socket is never exposed with
+    // the process umask between bind and chmod. The master is single-threaded
+    // at this point, so changing and restoring the process umask is safe.
+    let previous_umask = unsafe { libc::umask(0o117) };
+    let bound = std::os::unix::net::UnixListener::bind(path);
+    unsafe { libc::umask(previous_umask) };
+    let listener = bound?;
     if let Err(error) = listener.set_nonblocking(true) {
         let _ = std::fs::remove_file(path);
         return Err(error);
@@ -343,23 +348,15 @@ pub(crate) fn remove_unix_socket(path: &Path) {
 /// Removes a previous socket file, refusing a non-socket or live-socket path.
 fn remove_stale_socket(path: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_socket() => {
-            match UnixStream::connect(path) {
-                Ok(_) => Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    format!("socket is already in use: {}", path.display()),
-                )),
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
-                    ) =>
-                {
-                    std::fs::remove_file(path)
-                }
-                Err(error) => Err(error),
-            }
-        }
+        Ok(metadata) if metadata.file_type().is_socket() => match unix_socket_is_live(path) {
+            Ok(true) => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("socket is already in use: {}", path.display()),
+            )),
+            Ok(false) => remove_socket_file(path),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        },
         Ok(_) => Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             format!(
@@ -367,6 +364,46 @@ fn remove_stale_socket(path: &Path) -> io::Result<()> {
                 path.display()
             ),
         )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Probes a Unix socket without blocking on a full listener backlog.
+///
+/// A successful or in-progress non-blocking `connect` means a listener exists;
+/// `ECONNREFUSED` and `ENOENT` mean the socket file is stale.
+fn unix_socket_is_live(path: &Path) -> io::Result<bool> {
+    let socket = Socket::new(Domain::UNIX, Type::STREAM, None)?;
+    socket.set_nonblocking(true)?;
+    set_close_on_exec(socket.as_raw_fd())?;
+    let address = SockAddr::unix(path)?;
+    match socket.connect(&address) {
+        Ok(()) => Ok(true),
+        Err(error)
+            if matches!(
+                error.raw_os_error(),
+                Some(libc::EINPROGRESS) | Some(libc::EAGAIN)
+            ) =>
+        {
+            Ok(true)
+        }
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Removes a stale socket file, treating an already-unlinked path as success.
+fn remove_socket_file(path: &Path) -> io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
@@ -459,5 +496,32 @@ mod tests {
         let error = ListenAddr::parse("not-a-listener").expect_err("garbage must fail");
         assert!(error.contains("HOST:PORT"), "{error}");
         assert!(error.contains("unix:/PATH"), "{error}");
+    }
+
+    /// The worker clone keeps `FD_CLOEXEC` after `try_clone`.
+    #[test]
+    fn worker_clone_stays_close_on_exec() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+
+        let path = std::env::temp_dir().join(format!(
+            "elephc-cloexec-{}-{}.sock",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_file(&path);
+        let master = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let source =
+            ListenSource::for_worker(&ListenAddr::Unix(path.clone()), Some(&master)).unwrap();
+        let listener = match source {
+            ListenSource::Unix(listener) => listener,
+            ListenSource::Tcp(_) => panic!("a Unix listen target must produce a Unix source"),
+        };
+        let flags = unsafe { libc::fcntl(listener.as_raw_fd(), libc::F_GETFD) };
+        assert!(flags >= 0, "F_GETFD failed for the worker listener clone");
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+        drop(listener);
+        drop(master);
+        let _ = std::fs::remove_file(&path);
     }
 }

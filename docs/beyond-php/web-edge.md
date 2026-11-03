@@ -77,17 +77,23 @@ origin.
 ```text
 example.com {
     reverse_proxy unix//run/elephc/app.sock {
-        header_up X-Forwarded-Port {http.request.port}
+        header_up -Forwarded
+        header_up X-Forwarded-For {http.request.remote.host}
+        header_up X-Forwarded-Proto {http.request.scheme}
+        header_up X-Forwarded-Host {http.request.host}
+        header_up X-Forwarded-Port {http.request.local.port}
+        header_up X-Real-IP {http.request.remote.host}
         health_uri /healthz
         health_interval 10s
     }
 }
 ```
 
-Caddy sets `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host`
-automatically; `X-Forwarded-Port` is set explicitly so a client-supplied value
-cannot survive. Use `reverse_proxy 127.0.0.1:8080` for loopback TCP; the
-container TCP variant mounts [`Caddyfile.tcp`](../../examples/web-edge/Caddyfile.tcp).
+`header_up -Forwarded` removes the client-supplied RFC 7239 chain; Caddy passes
+unrecognized request headers through by default. The `X-Forwarded-*` values are
+set explicitly too, so every fact the origin reads is replaced. Use
+`reverse_proxy 127.0.0.1:8080` for loopback TCP; the container TCP variant mounts
+[`Caddyfile.tcp`](../../examples/web-edge/Caddyfile.tcp).
 
 ### nginx
 
@@ -102,7 +108,8 @@ location / {
     proxy_http_version 1.1;
     proxy_set_header Connection "";
     proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Forwarded "";
+    proxy_set_header X-Forwarded-For $remote_addr;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Forwarded-Port $server_port;
@@ -110,6 +117,10 @@ location / {
 }
 ```
 
+An empty `proxy_set_header` value removes the header instead of forwarding it.
+The example replaces, rather than appends to, `X-Forwarded-For`. If nginx is
+itself behind another trusted proxy, preserve that chain with
+`$proxy_add_x_forwarded_for` and add the upstream proxy to `--trusted-proxy`.
 Use an `upstream` with `server 127.0.0.1:8080;` for loopback TCP. Keep
 `proxy_http_version 1.1` and `Connection ""` so the upstream connection is
 reusable.
@@ -120,9 +131,11 @@ reusable.
 frontend https
     bind :80
     bind :443 ssl crt /etc/ssl/private/example.com.pem
+    http-request del-header Forwarded
     http-request set-header X-Forwarded-For %[src]
     http-request set-header X-Forwarded-Proto https if { ssl_fc }
     http-request set-header X-Forwarded-Proto http if !{ ssl_fc }
+    http-request set-header X-Forwarded-Host %[req.hdr(Host)]
     http-request set-header X-Forwarded-Port %[dst_port]
     http-request set-header X-Real-IP %[src]
     default_backend elephc
@@ -143,6 +156,14 @@ http:
     app:
       rule: Host(`example.com`)
       service: app
+      middlewares:
+        - forwarded
+  middlewares:
+    forwarded:
+      headers:
+        customRequestHeaders:
+          Forwarded: ""
+          X-Forwarded-Port: "443"
   services:
     app:
       loadBalancer:
@@ -150,25 +171,36 @@ http:
           - url: "http://127.0.0.1:8080"
 ```
 
-The file-provider example uses loopback TCP because Unix-socket backend support
-varies by Traefik version. Set `--trusted-proxy 127.0.0.1/32` on the origin when
-using this layout.
+Traefik sets `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, and
+`X-Real-IP` automatically; the middleware removes the client `Forwarded` chain
+and pins `X-Forwarded-Port`. Empty `customRequestHeaders` values remove a
+header. The file-provider example uses loopback TCP because Unix-socket backend
+support varies by Traefik version. Set `--trusted-proxy 127.0.0.1/32` on the
+origin when using this layout.
 
 ### Apache httpd
 
 ```text
 <VirtualHost *:443>
     SSLEngine on
+    ProxyPreserveHost On
+    ProxyAddHeaders Off
     ProxyPass / unix:/run/elephc/app.sock|http://localhost/
     ProxyPassReverse / unix:/run/elephc/app.sock|http://localhost/
+    RequestHeader unset Forwarded
+    RequestHeader set X-Forwarded-For "%{REMOTE_ADDR}s"
     RequestHeader set X-Forwarded-Proto "https"
+    RequestHeader set X-Forwarded-Host "%{HTTP_HOST}s"
     RequestHeader set X-Forwarded-Port "443"
+    RequestHeader set X-Real-IP "%{REMOTE_ADDR}s"
 </VirtualHost>
 ```
 
-Requires `mod_proxy`, `mod_proxy_http`, `mod_headers`, and `mod_ssl`. Redirect
-the `:80` vhost to HTTPS instead of marking plaintext requests as secure. Use
-`http://127.0.0.1:8080/` for loopback TCP.
+Requires `mod_proxy`, `mod_proxy_http`, `mod_headers`, and `mod_ssl`.
+`ProxyAddHeaders Off` prevents `mod_proxy` from appending duplicate
+`X-Forwarded-For`/`X-Forwarded-Host` values after the explicit replacements.
+Redirect the `:80` vhost to HTTPS instead of marking plaintext requests as
+secure. Use `http://127.0.0.1:8080/` for loopback TCP.
 
 ### Ferron
 
@@ -182,9 +214,13 @@ on purpose:
   `.conf`, verified against Ferron 3.0.0-rc.10.
 
 Both terminate TLS with ACME, serve `/static`, and proxy everything else to the
-Unix socket. Ferron 3 sets the forwarded headers automatically; the Ferron 2
-file sets them explicitly with `proxy_request_header_replace`. Do not mix the
-two syntaxes in one file.
+Unix socket. Ferron 2 removes the client `Forwarded` chain and replaces the
+`X-Forwarded-*` values with `proxy_request_header_remove` /
+`proxy_request_header_replace`. Ferron 3 overwrites `Forwarded`,
+`X-Forwarded-For`, and `X-Forwarded-Proto` automatically, but preserves
+client-supplied `X-Forwarded-Host` and `X-Forwarded-Port`; the example removes
+the client chain and replaces the full set with `request_header`. Do not mix
+the two syntaxes in one file.
 
 ## Trust boundary
 
@@ -207,7 +243,9 @@ The flag is repeatable and accepts IPv4/IPv6 addresses, CIDRs, or `unix`. Only
 peers in the allowlist may supply `Forwarded` or `X-Forwarded-*`; other peers are
 ignored entirely. RFC 7239 `Forwarded` wins over `X-Forwarded-*` when it is
 well-formed. The chain is walked right-to-left through trusted hops, so the
-rightmost untrusted client address becomes `REMOTE_ADDR`; `X-Forwarded-Proto`
+rightmost untrusted client address becomes `REMOTE_ADDR`. Repeated
+`X-Forwarded-Proto`/`X-Forwarded-Port` values use the last line and its
+rightmost token, matching the proxy closest to the origin. `X-Forwarded-Proto`
 drives `REQUEST_SCHEME`, `HTTPS=on` is exposed only for HTTPS, and
 `X-Forwarded-Port`, a forwarded `host=` port, or the scheme default drives
 `SERVER_PORT`. `HTTP_HOST` is not rewritten, and the raw forwarded headers stay
@@ -217,7 +255,10 @@ Do not trust `0.0.0.0/0`. Use the narrowest CIDR that contains the proxy, or the
 `unix` token when the proxy connects over a socket. The edge must overwrite or
 remove client-supplied `Forwarded` / `X-Forwarded-*` values, including
 `X-Forwarded-Port`, `X-Forwarded-Host`, and `X-Real-IP`; passing them through
-lets a client choose `REMOTE_ADDR`, `REQUEST_SCHEME`, or `SERVER_PORT`. See
+lets a client choose `REMOTE_ADDR`, `REQUEST_SCHEME`, or `SERVER_PORT`. Because
+the origin prefers RFC 7239 `Forwarded` over `X-Forwarded-*`, removing only the
+`X-Forwarded-*` family is not sufficient: the client chain must be deleted or
+replaced as shown in every example above. See
 [Trusted proxies](web.md#trusted-proxies) for the full PHP-FPM parity table.
 
 ## Health checks
@@ -302,9 +343,10 @@ The container files live in
 
 The stacks use a one-shot init service to make the socket and session volumes
 writable by the shared uid. Adapt the ids to your host policy. The Caddy and
-Ferron variants run both services as uid 10001; the nginx image runs as root by
-default, so it reaches the socket through the shared volume. Use an unprivileged
-nginx image with high ports behind a load balancer if root is not acceptable.
+Ferron variants run both services as `10001:10001`, matching the socket's
+`0660` owner/group; the nginx image runs as root by default, so it reaches the
+socket through the shared volume. Use an unprivileged nginx image with high
+ports behind a load balancer if root is not acceptable.
 
 ## Out of scope
 

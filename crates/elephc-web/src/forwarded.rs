@@ -14,6 +14,8 @@
 //!   well-formed; malformed or obfuscated identifiers fall back to the
 //!   `X-Forwarded-*` family when it is present, then to the peer.
 //! - The chain is walked right-to-left, so only trusted hops are skipped.
+//! - Repeated scalar headers use the last line and its rightmost token, which
+//!   is the value added by the proxy closest to the origin.
 
 use std::borrow::Cow;
 use std::net::{IpAddr, Ipv6Addr};
@@ -220,7 +222,7 @@ pub(crate) fn apply(
         }
     }
     let scheme_forwarded = header_last(headers, "x-forwarded-proto")
-        .and_then(first_token)
+        .and_then(last_token)
         .and_then(normalize_scheme)
         .map(|scheme| {
             facts.request_scheme = scheme.to_string();
@@ -229,7 +231,9 @@ pub(crate) fn apply(
         .is_some();
     // `X-Forwarded-Host` is not a port authority. Only an explicit
     // X-Forwarded-Port or an RFC 7239 `host=` parameter may set SERVER_PORT.
-    let forwarded_port = header_last(headers, "x-forwarded-port").and_then(parse_port);
+    let forwarded_port = header_last(headers, "x-forwarded-port")
+        .and_then(last_token)
+        .and_then(parse_port);
     if let Some(port) = forwarded_port {
         facts.server_port = port;
     } else if scheme_forwarded {
@@ -437,13 +441,16 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
     }
 }
 
-/// Returns the first non-empty comma-separated token.
-fn first_token(value: &str) -> Option<&str> {
+/// Returns the rightmost non-empty comma-separated token.
+///
+/// A proxy that appends to an existing scalar header puts its own value last;
+/// choosing the first token would let a client-supplied value win.
+fn last_token(value: &str) -> Option<&str> {
     value
         .split(',')
-        .next()
         .map(str::trim)
         .filter(|token| !token.is_empty())
+        .last()
 }
 
 /// Normalizes `http`/`https` case-insensitively.
@@ -758,6 +765,22 @@ mod tests {
         assert_eq!(facts.request_scheme, "https");
         assert!(facts.https);
         assert_eq!(facts.server_port, 443);
+    }
+
+    /// A comma-separated scalar uses its rightmost token, not its first.
+    #[test]
+    fn same_line_scalar_uses_the_rightmost_token() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[
+                ("X-Forwarded-Proto", "https, http"),
+                ("X-Forwarded-Port", "8443, 8080"),
+            ]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.request_scheme, "http");
+        assert!(!facts.https);
+        assert_eq!(facts.server_port, 8080);
     }
 
     /// Repeated RFC 7239 fields are merged before the chain walk.
