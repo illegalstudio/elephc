@@ -142,6 +142,16 @@ pub(crate) fn classify_param_binding(
     if *expected == PhpType::Callable {
         return classify_callable_string_binding(actual, arg);
     }
+    // Compound guards can expose several scalar alternatives instead of an opaque Mixed.
+    // A float member still needs the same explicit conversion as a standalone float.
+    if expected.codegen_repr() == PhpType::Int
+        && matches!(actual, PhpType::Union(members)
+            if members.contains(&PhpType::Float)
+                && members.iter().all(|member| matches!(member,
+                    PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False)))
+    {
+        return classify_numeric_binding(expected, arg);
+    }
     // A union that names the declared class plus exactly one of `false`/`null` is accepted by
     // PHP at compile time; the call throws `TypeError` at runtime when the other alternative is
     // the one supplied. EIR lowering inserts that instance guard.

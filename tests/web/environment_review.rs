@@ -87,6 +87,16 @@ function dispatch_callback<T>(callable $callback, T $left, T $right): void {{ $c
         "dispatch_callback<int>('hidden_' . 'compare', 1, 2);");
 }
 
+/// An opaque sibling call invalidates the helper's literal input proof and keeps fresh ENV.
+#[test]
+fn web_environment_parameter_unknown_sibling_retains_population() {
+    let declarations = format!(r#"{OBSERVER}
+function through_environment(callable $factory): int {{ return $factory(1, 2); }}
+"#);
+    assert_callback_environment("environment_parameter_unknown_sibling", &declarations,
+        "through_environment(fn(int $left, int $right): int => 0); through_environment('hidden_' . 'compare');");
+}
+
 /// Scoped parent construction preserves callbacks that are invoked by native iterator methods.
 #[test]
 fn web_environment_parent_constructor_callback_retains_population() {

@@ -223,19 +223,28 @@ impl Checker {
         call_span: Span,
         env: &TypeEnv,
     ) {
+        // A narrowed value can still occupy a nullable or union slot. Use that slot for
+        // layout decisions and restore its full view after a callee can write through it.
+        let array_value = actual.is_php_array()
+            || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. });
+        let guarded_storage = self.guarded_local_storage_type(arg, env).cloned();
+        let actual = guarded_storage.as_ref().unwrap_or(actual);
         let output_ty = if expected.is_php_array()
-            && matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. })
+            && array_value
         {
             PhpType::php_array()
         } else if (expected.codegen_repr() == PhpType::Mixed
             || matches!(expected, PhpType::Object(_)))
-            && actual.codegen_repr() != PhpType::Mixed
+            && (actual.codegen_repr() != PhpType::Mixed
+                || (guarded_storage.is_some() && matches!(expected, PhpType::Object(_) | PhpType::Mixed)))
         {
             PhpType::Mixed
         } else if crate::types::is_nullable_pointer_type(expected)
             && matches!(actual.codegen_repr(), PhpType::Void | PhpType::Never)
         {
             expected.clone()
+        } else if let Some(storage) = guarded_storage {
+            storage
         } else {
             return;
         };
@@ -304,11 +313,22 @@ impl Checker {
             .is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
     }
 
+    /// Finds an earlier boxed-layout promotion without reusing it after explicit reference rebinding.
+    pub(crate) fn boxed_reference_layout_precedes(&self, arg: &Expr) -> bool {
+        let ExprKind::Variable(name) = &arg.kind else { return false; };
+        !self.ref_assign_aliased_locals.contains(name) && arg.span.identifies_a_node()
+            && self.boxed_reference_promotion_sites.iter().any(|((scope, span), names)|
+                scope == &self.current_loop_storage_scope && span.identifies_a_node()
+                    && (span.line, span.col) < (arg.span.line, arg.span.col) && names.contains(name))
+    }
+
     /// Applies one successful call's storage changes before checking subsequent expressions.
     pub(crate) fn apply_boxed_reference_outputs(&mut self, span: Span, env: &mut TypeEnv) {
         let key = (self.current_loop_storage_scope.clone(), span);
         if let Some(outputs) = self.boxed_reference_outputs.remove(&key) {
             for (name, output_ty) in outputs {
+                self.record_local_storage_effect(&name, &output_ty);
+                self.definitely_bound_locals.insert(name.clone());
                 env.insert(name, output_ty);
             }
         }

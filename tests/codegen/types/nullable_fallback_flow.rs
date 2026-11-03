@@ -1,0 +1,2830 @@
+//! Purpose:
+//! Runs nullable fallback guards and coalesced object receivers through native EIR.
+//!
+//! Called from:
+//! - The `codegen_tests` integration test harness.
+//!
+//! Key details:
+//! - Each fixture runs with EIR optimization enabled and disabled.
+
+use super::*;
+
+/// Production match labels, arms and defaults preserve active guards and clean ownership.
+#[test]
+fn test_nullable_fallback_flow_r62_match_guard_views_runtime() {
+    assert_nullable_flow_cli_heap_output(include_str!("../../fixtures/nullable_fallback_match_guard_views.php"),
+        "int(7)\nint(0)\nint(0)\nint(7)\nint(0)\nint(0)\nlabel1\nlabel1\nlabel2\nlabel1\nlabel2\nint(7)\nint(7)\nint(7)\nint(0)\nint(7)\nint(0)\nfinally:7\nfinally:7\nint(1)\nint(1)\nint(0)\nsafe\n");
+}
+
+/// Production CLI preserves active interface guards through catch, finally and loop exits.
+#[test]
+fn test_nullable_fallback_flow_r61_exception_guard_views_runtime() {
+    assert_nullable_flow_cli_heap_output(include_str!("../../fixtures/nullable_fallback_exception_guard_views.php"),
+        "marker\nint(1)\nint(0)\nmarker\nint(1)\nint(0)\nmarker\nmarker\nmarker\nmarker\nint(1)\nint(1)\nmarker\nmarker\nmarker\nint(1)\nint(0)\n");
+}
+
+/// Continue snapshots retain logical reads, physical slots and actual writes in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_r59_loop_guard_views_runtime() {
+    assert_nullable_flow_cli_heap_output(include_str!("../../fixtures/nullable_fallback_loop_guard_views.php"),
+        "for-int\ndo-int\nfor-array\nwidget\nsingle\nchild\nnested-fallback\nNULL\nNULL\nNULL\nint(5)\nNULL\nNULL\nint(2)\nint(5)\n");
+}
+
+/// Guard views preserve reference layouts and actual in-arm writes in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_r58_guard_value_containment_runtime() {
+    assert_nullable_flow_cli_heap_output(include_str!("../../fixtures/nullable_fallback_guard_views.php"),
+        "or:widget\ns-int:value\ns-array:value\ns-if:value\nf-int:float(1.5)\nf-array:float(1.5)\nn-array:int(2)\nn-array:NULL\nn-if:int(2)\nn-if:NULL\nint(2)\nint(9)\nNULL\nint(5)\nNULL\n");
+}
+
+/// Object guard capabilities leave the existing example's later typed calls intact.
+#[test]
+fn test_nullable_fallback_flow_r57_instanceof_ternary_runtime() {
+    assert_nullable_flow_cli_heap_output_with_native(include_str!("../../../examples/instanceof/main.php"),
+        "button\nwidget\nrenderable\nnot missing\ndynamic class\ndynamic interface\ndynamic object\nnot late\nlate\nrule accepts button\nrule rejects widget\n", true);
+}
+
+/// Nullable boxing alone cannot admit object iteration by reference through the production CLI.
+#[test]
+fn test_nullable_fallback_flow_r55_nullable_iterable_cli_refusal() {
+    /// Owns this diagnostic fixture and every compiler artifact on assertion failure too.
+    struct FixtureDirectory(std::path::PathBuf);
+    impl Drop for FixtureDirectory {
+        /// Removes only this test's source and compiler outputs.
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let directory = FixtureDirectory(make_cli_test_dir("elephc_nullable_iterable_refusal"));
+    let path = directory.0.join("main.php");
+    std::fs::write(&path, r#"<?php
+class R55Items implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+    public function current(): mixed { return null; }
+    public function key(): mixed { return null; }
+    public function next(): void {}
+}
+function run(?iterable $items): void {
+    if ($items === null) { return; }
+    foreach ($items as &$value) { $value = 1; }
+}
+run(new R55Items());"#).unwrap();
+    for mode in ["on", "off"] {
+        let output = elephc_cli_command(&directory.0).arg(format!("--ir-opt={mode}"))
+            .arg(&path).output().unwrap();
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "nullable Iterator reference iteration was accepted");
+        assert!(error.contains("by-reference foreach") && error.contains("not supported"), "{error}");
+        assert!(!path.with_extension("").exists(), "rejected source produced an executable");
+    }
+}
+
+/// Iterator callbacks precede publication and fetched owners survive a throwing key callback.
+#[test]
+fn test_nullable_fallback_flow_r53_foreach_protocol_runtime() {
+    let source = r#"<?php
+class R53Probe implements Iterator {
+    private bool $valid = true;
+    public function rewind(): void {}
+    public function valid(): bool { return $this->valid; }
+    public function current(): string { echo "current\n"; return 'v'; }
+    public function key(): int {
+        global $protocolValue;
+        echo 'key sees ', gettype($protocolValue), "\n";
+        return 7;
+    }
+    public function next(): void { $this->valid = false; }
+}
+class R53InterfaceProbe extends R53Probe {
+    public function key(): int {
+        global $interfaceValue;
+        echo 'key sees ', gettype($interfaceValue), "\n";
+        return 7;
+    }
+}
+class R53Payload { public function __destruct() { echo "drop\n"; } }
+class R53ThrowKey implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return true; }
+    public function current(): R53Payload { echo "current\n"; return new R53Payload(); }
+    public function key(): int { echo "key\n"; throw new Exception('key'); }
+    public function next(): void {}
+}
+function throughR53Interface(Iterator $items): void {
+    global $interfaceValue;
+    foreach ($items as $key => $interfaceValue) { echo $key, ':', $interfaceValue, "\n"; }
+}
+function r53ExistingKeyReference(): void {
+    $key = 0;
+    $alias = &$key;
+    foreach ([7 => 'v'] as $key => $value) { echo $key, ':', $value, "\n"; break; }
+    var_dump($alias);
+}
+$protocolValue = 5;
+foreach (new R53Probe() as $key => $protocolValue) { echo $key, ':', $protocolValue, "\n"; }
+$interfaceValue = 5;
+throughR53Interface(new R53InterfaceProbe());
+$throwValue = 5;
+try { foreach (new R53ThrowKey() as $throwKey => $throwValue) { break; } }
+catch (Exception $c) { echo 'catch ', gettype($throwValue), "\n"; }
+echo "end\n";
+r53ExistingKeyReference();
+"#;
+    assert_nullable_flow_cli_heap_output(source,
+        "current\nkey sees integer\n7:v\ncurrent\nkey sees integer\n7:v\ncurrent\nkey\ndrop\ncatch integer\nend\n7:v\nint(7)\n");
+}
+
+/// A same-name reference retires its element only after publishing the key into that cell.
+#[test]
+fn test_nullable_fallback_flow_r53_foreach_reference_retirement_runtime() {
+    let source = r#"<?php
+class R53Element { public function __destruct() { throw new Exception('delem'); } }
+function needR53Int(int $value): void { echo 'need ', $value, "\n"; }
+$e = 1;
+$xs = [7 => new R53Element()];
+try { foreach ($xs as $e => &$e) { echo "body\n"; } }
+catch (Exception $c) { echo 'C e=', $e, ' xs=', $xs[7], "\n"; needR53Int($e); }
+"#;
+    assert_nullable_flow_cli_heap_output(source, "C e=7 xs=7\nneed 7\n");
+}
+
+/// Foreach publishes value then key before retiring the displaced owner in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_r52_foreach_binding_publication_runtime() {
+    let source = r#"<?php
+class R52Value { public int $n = 5; }
+class R52Retired {
+    public function __destruct() { throw new Exception('d'); }
+}
+function needR52Int(int $value): void { echo $value; }
+function needR52String(string $value): void { echo ':', $value, "\n"; }
+function sameR52Name(): void {
+    foreach ([7 => new R52Value()] as $e => $e) { needR52Int($e); echo "\n"; }
+}
+function sameR52Reference(): void {
+    $xs = [7 => 9];
+    foreach ($xs as $e => &$e) { needR52Int($e); echo "\n"; break; }
+    var_dump($xs[7]);
+}
+function retireR52Key(): void {
+    $key = new R52Retired();
+    $value = 5;
+    try { foreach ([7 => 'v'] as $key => $value) { break; } }
+    catch (Exception $c) { needR52Int($key); needR52String($value); }
+}
+function retireR52Value(): void {
+    $key = 3;
+    $value = new R52Retired();
+    try { foreach ([7 => 'v'] as $key => $value) { break; } }
+    catch (Exception $c) { needR52Int($key); needR52String($value); }
+}
+function retireR52Reference(): void {
+    $xs = [9];
+    $value = new R52Retired();
+    try { foreach ($xs as &$value) { return; } }
+    catch (Exception $c) { needR52Int($value); echo "\n"; }
+    var_dump($xs[0]);
+}
+sameR52Name();
+sameR52Reference();
+retireR52Key();
+retireR52Value();
+retireR52Reference();
+"#;
+    assert_nullable_flow_cli_heap_output(source, "7\n7\nint(7)\n7:v\n3:v\n9\nint(9)\n");
+}
+
+/// The production CLI refuses a stale subclass contract before native property access.
+#[test]
+fn test_nullable_fallback_flow_r51_foreach_retirement_cli_refusal() {
+    /// Owns compiler artifacts from this source-level refusal regression.
+    struct FixtureDirectory(std::path::PathBuf);
+    impl Drop for FixtureDirectory {
+        /// Removes this fixture after a successful assertion or an unwind.
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let directory = FixtureDirectory(make_cli_test_dir("elephc_foreach_retirement_refusal"));
+    let path = directory.0.join("main.php");
+    std::fs::write(&path, "<?php class Base {} class D extends Base { public int $n = 5; public function __destruct() { throw new Exception('d'); } } function needD(D $x): void { echo $x->n; } function run(): void { $e = new D(); try { foreach ([new Base()] as $e) { break; } } catch (Exception $c) { needD($e); } } run();").unwrap();
+    for mode in ["on", "off"] {
+        let output = elephc_cli_command(&directory.0).arg(format!("--ir-opt={mode}"))
+            .arg(&path).output().unwrap();
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "stale subclass property access was accepted");
+        assert!(error.contains("expects D") && error.contains("Base"), "{error}");
+        assert!(!error.contains("EIR backend error"), "{error}");
+    }
+}
+
+/// A first catch binding in a loop publishes before retiring the previous iteration's value.
+#[test]
+fn test_nullable_fallback_flow_r49_loop_catch_publication_runtime() {
+    let source = r#"<?php
+class LoopCatchException extends Exception {
+    public function __destruct() {
+        if ($this->getMessage() === 'a0') { throw new Exception('d'); }
+    }
+}
+class GlobalCatchException extends Exception {
+    public function __destruct() {
+        echo 'destroy ', $this->getMessage(), "\n";
+        if ($this->getMessage() === 'old') { throw new Exception('global d'); }
+    }
+}
+function needLoopCatch(LoopCatchException $value): void {
+    echo get_class($value), ':', $value->getMessage(), "\n";
+}
+function showTopLoopCatch(): void {
+    global $top;
+    if ($top instanceof LoopCatchException) { needLoopCatch($top); } else { echo "missing\n"; }
+}
+function seedGlobalCatch(): void {
+    global $globalCatch;
+    $globalCatch = new GlobalCatchException('old');
+}
+function showGlobalCatch(): void {
+    global $globalCatch;
+    if ($globalCatch instanceof GlobalCatchException) {
+        echo 'global=', $globalCatch->getMessage(), "\n";
+    } else {
+        echo "global missing\n";
+    }
+}
+function firstLoopCatch(): void {
+    for ($i = 0; $i < 2; $i++) {
+        try {
+            try { throw new LoopCatchException('a' . $i); } catch (LoopCatchException $e) {}
+        } catch (Exception $c) { echo $c->getMessage(), ':'; needLoopCatch($e); }
+    }
+    echo "end\n";
+}
+firstLoopCatch();
+foreach ([0, 1] as $i) {
+    try {
+        try { throw new LoopCatchException('a' . $i); } catch (LoopCatchException $top) {}
+    } catch (Exception $c) {
+        echo $c->getMessage(), ':';
+        showTopLoopCatch();
+    }
+}
+echo "end\n";
+seedGlobalCatch();
+try {
+    try { throw new GlobalCatchException('new'); } catch (GlobalCatchException $globalCatch) {}
+} catch (Exception $c) {
+    echo 'outer ', $c->getMessage(), "\n";
+    showGlobalCatch();
+}
+echo "global end\n";
+"#;
+    assert_nullable_flow_cli_heap_output(source,
+        &format!("{}destroy old\nouter global d\nglobal=new\nglobal end\ndestroy new\n",
+            "d:LoopCatchException:a1\nend\n".repeat(2)));
+}
+
+/// The production CLI rejects object-to-integer backedge projections in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_cli_rejection() {
+    /// Owns only the temporary compiler artifacts from these refusal fixtures.
+    struct FixtureDirectory(std::path::PathBuf);
+    impl Drop for FixtureDirectory {
+        /// Removes this fixture after a successful assertion or an unwind.
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let directory = FixtureDirectory(make_cli_test_dir("elephc_nullable_catch_rejection"));
+    let path = directory.0.join("main.php");
+    for body in [
+        "foreach ([1, 2] as $x) { need($e); try { throw new Exception('x'); } catch (Exception $e) {} }",
+        "$i = 0; while ($i < 2) { $i++; need($e); try { throw new Exception('x'); } catch (Exception $e) {} }",
+    ] {
+        let source = format!("<?php function need(int $e): void {{ var_dump($e); }} function run(?int $e): void {{ $e ??= 1; {body} }} run(null);");
+        std::fs::write(&path, source).unwrap();
+        for mode in ["on", "off"] {
+            let output = elephc_cli_command(&directory.0)
+                .args(["--heap-debug", &format!("--ir-opt={mode}")]).arg(&path).output().unwrap();
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "an exception object reached an integer-only call");
+            assert!(error.contains("expects int"), "{error}");
+        }
+    }
+}
+
+/// Terminal or distinct catch bindings keep valid integer calls and balanced ownership.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_precision_runtime() {
+    let source = r#"<?php
+function needCatchInt(int $e): void { var_dump($e); }
+function catchBreak(?int $e): void {
+    $e ??= 1; foreach ([1, 2] as $x) {
+        needCatchInt($e); try { throw new Exception('x'); } catch (Exception $e) { break; }
+    }
+}
+function catchReturn(?int $e): void {
+    $e ??= 1; foreach ([1, 2] as $x) {
+        needCatchInt($e); try { throw new Exception('x'); } catch (Exception $e) { return; }
+    }
+}
+function catchOther(?int $e): void {
+    $e ??= 1; foreach ([1, 2] as $x) {
+        needCatchInt($e); try { throw new Exception('x'); } catch (Exception $other) {}
+    }
+}
+function catchUnnamed(?int $e): void {
+    $e ??= 1; foreach ([1, 2] as $x) {
+        needCatchInt($e); try { throw new Exception('x'); } catch (Exception) {}
+    }
+}
+catchBreak(null); catchReturn(null); catchOther(null); catchUnnamed(null);
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"int(1)\n".repeat(6));
+}
+
+/// Unused throwing destructors do not make scalar loop catches reachable.
+#[test]
+fn test_nullable_fallback_flow_r47_scalar_cleanup_runtime() {
+    let source = r#"<?php
+class ColdLoopDestructor { public function __destruct() { throw new Exception('x'); } }
+function needScalarCleanup(int $e): void { var_dump($e); }
+function scalarCleanup(?int $e): void {
+    if ($e === null) return;
+    foreach ([1, 2] as $x) {
+        needScalarCleanup($e);
+        try { $safe = 1; } catch (Exception $e) {}
+        try { $e = 1; } catch (Exception $e) {}
+        try { ($safe = 1); } catch (Exception $e) {}
+        try { unset($safe); } catch (Exception $e) {}
+    }
+}
+scalarCleanup(1);
+"#;
+    assert_nullable_flow_cli_heap_output(source, "int(1)\nint(1)\n");
+}
+
+/// Destruction during catch binding keeps the enclosing handler through AST pruning.
+#[test]
+fn test_nullable_fallback_flow_r48_catch_retirement_runtime() {
+    let source = r#"<?php
+class R48RuntimeDestructor { public function __destruct() { throw new Exception('d'); } }
+function r48UnsetCleanup(): void {
+    $e = new R48RuntimeDestructor();
+    try { unset($e); } catch (Exception $c) { echo 'assign caught ', $c->getMessage(), "\n"; }
+}
+function r48CatchCleanup(): void {
+    $e = new R48RuntimeDestructor();
+    try {
+        try { throw new Exception('a'); } catch (Exception $e) { echo "inner\n"; }
+    } catch (Exception $c) { echo 'bind caught ', $c->getMessage(), ':', $e->getMessage(), "\n"; }
+    echo "after\n";
+}
+r48UnsetCleanup(); r48CatchCleanup(); echo "done\n";
+"#;
+    assert_nullable_flow_cli_heap_output(source, "assign caught d\nbind caught d:a\nafter\ndone\n");
+}
+
+/// Guarded nullable array mutations preserve arguments, typed returns and runtime contents.
+#[test]
+fn test_nullable_fallback_flow_r46_guarded_array_runtime() {
+    let mut source = String::from("<?php function needArray(array $a): void { echo count($a), ':'; }\n");
+    let mut expected = String::new();
+    for (index, (body, output)) in [
+        ("sort($a); rsort($a);", "3,2,1"),
+        ("array_push($a, 9); array_pop($a);", "3,1,2"),
+        ("array_unshift($a, 9); array_shift($a);", "3,1,2"),
+        ("array_splice($a, 1, 1, [4]); sort($a);", "2,3,4"),
+        ("usort($a, fn($x, $y) => $x <=> $y); sort($a);", "1,2,3"),
+    ].into_iter().enumerate() {
+        source.push_str(&format!("function guardedArray{index}(?array $a): array {{ if ($a === null) {{ return []; }} {body} needArray($a); return $a; }}\necho implode(',', guardedArray{index}([3, 1, 2])), \"\\n\";\necho count(guardedArray{index}(null)), \"\\n\";\n"));
+        expected.push_str(&format!("3:{output}\n0\n"));
+    }
+    source.push_str("class GuardedArrayBox { public function run(?array $a): array { if ($a !== null) { ksort($a); return $a; } return []; } }\n$box = new GuardedArrayBox(); echo implode(',', array_keys($box->run(['b' => 2, 'a' => 1]))), \"\\n\";\n");
+    expected.push_str("a,b\n");
+    assert_nullable_flow_cli_heap_output(&source, &expected);
+}
+
+/// Successive array mutations retain their native array layouts and PHP results.
+#[test]
+fn test_nullable_fallback_flow_r45_mutating_array_runtime() {
+    let source = r#"<?php
+$a = [3, 1, 2]; sort($a); rsort($a); echo implode(',', $a), "\n";
+$m = ['b' => 2, 'a' => 1]; ksort($m); asort($m); echo implode(',', array_keys($m)), "\n";
+$q = [1, 2]; array_push($q, 3); var_dump(array_pop($q));
+$j = [4, 5]; array_unshift($j, 3); var_dump(array_shift($j));
+"#;
+    assert_nullable_flow_cli_heap_output(source, "3,2,1\na,b\nint(3)\nint(3)\n");
+}
+
+/// Structural stores remain non-null through declared returns, arguments and loop headers.
+#[test]
+fn test_nullable_fallback_flow_r45_structural_store_runtime() {
+    let mut source = String::from("<?php class C { const K = 7; public static int $s = 8; public int $n = 9; }\n");
+    let mut expected = String::new();
+    for (index, (value, result)) in [
+        ("$v > 100 ? 100 : $v", 5), ("$flag ? 1 : 2", 2), ("$w ?: 4", 4), ("$w ?? 4", 4),
+        ("match ($a) { 1 => 10, default => 20 }", 20), ("$a & 1", 0), ("$a % 3", 0), ("$a <=> 3", 1),
+        ("C::K", 7), ("C::$s", 8), ("$c->n", 9), ("@($flag ? 1 : 2)", 2), ("($copy = $flag ? 1 : 2)", 2),
+    ].into_iter().enumerate() {
+        source.push_str(&format!("function structural{index}(?int $v, int $a, bool $flag, ?int $w, C $c): int {{ if ($v === null) {{ return 0; }} $v = {value}; return $v; }}\nvar_dump(structural{index}(5, 6, false, null, new C()));\n"));
+        expected.push_str(&format!("int({result})\n"));
+    }
+    source.push_str(r#"function joinedString(?string $s): string {
+    if ($s === null) { return 'none'; } $s = $s . '!'; return $s;
+}
+function interpolatedString(?string $s, int $n): string {
+    if ($s === null) { return 'none'; } $s = "n={$n}"; return $s;
+}
+function needValue(int $v): void { var_dump($v); }
+function expressionStore(?int $v, bool $flag): void { $v ??= 1; needValue($v = $flag ? 1 : 2); }
+function loopStore(?int $v, bool $flag): int {
+    if ($v === null) { return 0; }
+    foreach ([1, 2] as $i) { needValue($v); $v = $flag ? 1 : 2; }
+    return $v;
+}
+var_dump(joinedString('a'), interpolatedString('a', 6));
+expressionStore(null, false); var_dump(loopStore(5, false));
+"#);
+    expected.push_str("string(2) \"a!\"\nstring(3) \"n=6\"\nint(2)\nint(5)\nint(2)\nint(2)\n");
+    assert_nullable_flow_cli_heap_output(&source, &expected);
+}
+
+/// Continuing nullable stores retain null payloads and reachable float exits in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_r44_backedge_runtime() {
+    let mut source = String::from("<?php\n");
+    let mut expected = String::new();
+    for (index, (entry, tail, guard, store)) in [
+        ("if ($value !== null) {", "}", "$value !== null", "$value = $ints[$key];"),
+        ("if ($value === null) { return 0; }", "", "$value !== null", "$value = $ints[$key];"),
+        ("if ($value !== null) {", "}", "!is_null($value)", "$value = $ints[$key];"),
+        ("$other ??= 3; if ($value !== null) {", "}", "$value !== null", "$other = $ints[$key]; $value = $other;"),
+    ].into_iter().enumerate() {
+        source.push_str(&format!("function backedge{index}(?int $value, ?int $other, int $key) {{ $ints = [10]; $result = 1; {entry} foreach ([1, 2] as $item) {{ if ({guard}) {{ {store} continue; }} $result = 2.5; break; }} {tail} return $result; }}\nvar_dump(backedge{index}(5, 1, 4)); echo backedge{index}(5, 1, 0), \"\\n\";\n"));
+        // Base already promotes a skipped float alternative on an integer hit.
+        expected.push_str("float(2.5)\n1\n");
+    }
+    source.push_str(r#"function showBackedge(?int $value, int $key): void {
+    $ints = [10];
+    if ($value !== null) {
+        foreach ([1, 2] as $item) { var_dump($value); $value = $ints[$key]; }
+    }
+}
+showBackedge(5, 4); showBackedge(5, 0);
+"#);
+    expected.push_str("int(5)\nNULL\nint(5)\nint(10)\n");
+    for (index, store) in ["$value = 7;", "$value = $other;"].into_iter().enumerate() {
+        source.push_str(&format!("function provenBackedge{index}(?int $value, ?int $other) {{ $other ??= 3; $result = 1; if ($value !== null) {{ foreach ([1, 2] as $item) {{ if ($value !== null) {{ {store} continue; }} $result = 2.5; break; }} }} return $result; }}\nvar_dump(provenBackedge{index}(5, 1));\n"));
+        expected.push_str("int(1)\n");
+    }
+    assert_nullable_flow_cli_heap_output(&source, &expected);
+}
+
+/// Strict assignment guards preserve float exits in loops, switches and sibling chains.
+#[test]
+fn test_nullable_fallback_flow_r43_entry_guard_runtime() {
+    let bodies = [
+        "foreach ([1, 2] as $item) { $value = 7; if (($value = $ints[$key]) !== null) { continue; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = 7; if (null !== ($value = $ints[$key])) { continue; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = 7; if (!(($value = $ints[$key]) === null)) { continue; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = 7; if (($value = $ints[$key]) === null) {} elseif ($value !== null) { continue; } $result = 2.5; break; }",
+        "$value = 7; switch ($subject) { case 1: if (($value = $ints[$key]) !== null) { break; } $result = 2.5; break; }",
+    ];
+    let mut source = String::from("<?php\n");
+    let mut expected = String::new();
+    for (index, body) in bodies.into_iter().enumerate() {
+        source.push_str(&format!("function entryGuard{index}(int $subject, int $key) {{ $ints = [10]; $result = 1; {body} return $result; }}\nvar_dump(entryGuard{index}(1, 5)); echo entryGuard{index}(1, 0), \"\\n\";\n"));
+        // Base already promotes a skipped float alternative on an integer hit.
+        expected.push_str("float(2.5)\n1\n");
+    }
+    source.push_str(r#"function staleNull(int $key) {
+    $ints = [10]; $result = 1;
+    foreach ([1, 2] as $item) {
+        $value = null;
+        if (($value = $ints[$key]) === null) { continue; }
+        $result = 2.5; break;
+    }
+    return $result;
+}
+var_dump(staleNull(0)); echo staleNull(5), "\n";
+"#);
+    expected.push_str("float(2.5)\n1\n");
+    assert_nullable_flow_cli_heap_output(&source, &expected);
+}
+
+/// Condition effects reach else and elseif bodies without resurrecting earlier raw proofs.
+#[test]
+fn test_nullable_fallback_flow_r42_condition_prefix_runtime() {
+    let body = "foreach ([1, 2] as $item) { if ($value !== null) { continue; } $result = 2.5; break; }";
+    let mut source = String::from("<?php\n");
+    let mut expected = String::new();
+    for (index, (prefix, branch)) in [
+        ("", "else"), ("", "elseif ($key > -1)"),
+        ("$value = $ints[$key]; $value = 7;", "else"),
+        ("$value = $ints[$key]; $value = 7;", "elseif ($key > -1)"),
+    ].into_iter().enumerate() {
+        source.push_str(&format!("function condition{index}(int $value, int $key) {{ $ints = [10]; $result = 1; {prefix} if (($value = $ints[$key]) > 100) {{ $result = 0; }} {branch} {{ {body} }} return $result; }}\nvar_dump(condition{index}(7, 5)); echo condition{index}(7, 0), \"\\n\";\n"));
+        // Base already promotes the skipped float alternative on an integer hit.
+        expected.push_str("float(2.5)\n1\n");
+    }
+    source.push_str(&format!("function laterCondition(int $value, int $key) {{ $ints = [10]; $result = 1; if ($key < 0) {{ $result = 0; }} elseif (($value = $ints[$key]) > 100) {{ $result = 0; }} else {{ {body} }} return $result; }}\nvar_dump(laterCondition(7, 5)); echo laterCondition(7, 0), \"\\n\";\n"));
+    expected.push_str("float(2.5)\n1\n");
+    source.push_str(&format!("function freshCondition(int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; if (($value = 7) > 100) {{ $result = 0; }} else {{ {body} }} return $result; }}\nvar_dump(freshCondition(5));\n"));
+    expected.push_str("int(1)\n");
+    assert_nullable_flow_cli_heap_output(&source, &expected);
+}
+
+/// Switch dispatch preserves a miss before a skipped label and evaluated effects in own/default arms.
+#[test]
+fn test_nullable_fallback_flow_r41_switch_prefix_runtime() {
+    let source = r#"<?php
+function switchPrefix(int $subject, int $key) {
+    $ints = [10]; $result = 1; $value = $ints[$key];
+    switch ($subject) {
+        case 1:
+            foreach ([1, 2] as $item) {
+                if ($value !== null) { continue; }
+                $result = 2.5; break;
+            }
+            break;
+        case ($value = 7): break;
+    }
+    return $result;
+}
+function ownLabel(int $subject, int $key) {
+    $ints = [10]; $result = 1; $value = $ints[$key];
+    switch ($subject) {
+        case ($value = 7):
+            foreach ([1, 2] as $item) {
+                if ($value !== null) { continue; }
+                $result = 2.5; break;
+            }
+            break;
+        default: break;
+    }
+    return $result;
+}
+function defaultLabel(int $subject, int $key) {
+    $ints = [10]; $result = 1; $value = $ints[$key];
+    switch ($subject) {
+        default:
+            foreach ([1, 2] as $item) {
+                if ($value !== null) { continue; }
+                $result = 2.5; break;
+            }
+            break;
+        case ($value = 7): break;
+    }
+    return $result;
+}
+var_dump(switchPrefix(1, 5)); echo switchPrefix(1, 0), "\n";
+var_dump(ownLabel(7, 5), defaultLabel(3, 5));
+"#;
+    assert_nullable_flow_cli_heap_output(source, "float(2.5)\n1\nint(1)\nint(1)\n");
+}
+
+/// Else and elseif bodies observe the original array miss rather than a sibling's fresh store.
+#[test]
+fn test_nullable_fallback_flow_r40_sibling_runtime() {
+    for branch in ["else", "elseif (!$flag)"] {
+        let source = format!("<?php function run(bool $flag, int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; if ($flag) {{ $value = 7; }} {branch} {{ foreach ([1, 2] as $item) {{ if ($value !== null) {{ continue; }} $result = 2.5; break; }} }} return $result; }} var_dump(run(false, 5)); echo run(false, 0), \"\\n\", run(true, 5), \"\\n\";");
+        assert_nullable_flow_cli_heap_output(&source, "float(2.5)\n1\n1\n");
+    }
+}
+
+/// Compatible raw defaults compile and skipped default assignments keep their side effects skipped.
+#[test]
+fn test_nullable_fallback_flow_r40_raw_coalesce_runtime() {
+    for assignment in ["$x ??=", "$x = $x ??"] {
+        let source = format!("<?php class P {{ public int $n = 4; }} function property(bool $flag, P $p): void {{ if ($flag) {{ $x = 3; }} {assignment} $p->n; var_dump($x); }} function skipped(): void {{ $x = 3; $y = 0; {assignment} ($y = 7); var_dump($x, $y); }} property(false, new P()); property(true, new P()); skipped();");
+        assert_nullable_flow_cli_heap_output(&source, "int(4)\nint(3)\nint(3)\nint(0)\n");
+    }
+}
+
+/// Raw proofs do not survive skipped stores, unproved parameter writes or finally continuations.
+#[test]
+fn test_nullable_fallback_flow_r39_raw_proof_runtime() {
+    for (body, receiver, outer_for) in [
+        ("$value = $ints[$key]; if ($flag) { $value = 7; }", "$value", false),
+        ("$value = $ints[$key]; if ($flag) { $value = 7; }", "$value", true),
+        ("$value = $ints[$key]; switch ($key) { case 1: $value = 7; break; }", "$value", false),
+        ("$value = $ints[$key]; if ($flag) { $value = 7; } $copy = $value;", "$copy", false),
+        ("$default = $ints[$key]; $copy = $default;", "$copy", false),
+        ("do { try { $value = 7; continue; } finally { $value = $ints[$key]; } } while (false);", "$value", false),
+        ("$value = $ints[$key]; do { try { $value = 7; continue; } finally { $value = $ints[$key]; } } while (false);", "$value", false),
+    ] {
+        let header = if outer_for { "for ($item = 0; $item < 2; $item++)" }
+            else { "foreach ([1, 2] as $item)" };
+        // Compare the hit's numeric output: base already promotes its skipped float alternative.
+        let source = format!("<?php function run(int $default, bool $flag, int $key) {{ $ints = [10]; $result = 1; {header} {{ {body} if ({receiver} !== null) {{ continue; }} $result = 2.5; break; }} return $result; }} var_dump(run(7, false, 5)); echo run(7, false, 0), \"\\n\";");
+        assert_nullable_flow_cli_heap_output(&source, "float(2.5)\n1\n");
+    }
+}
+
+/// Each function-like scope retains its declared parameter proof until a write invalidates it.
+#[test]
+fn test_nullable_fallback_flow_r39_parameter_proofs_runtime() {
+    let source = r#"<?php
+function readFallback(?int $value, int $default): int { $value ??= $default; return $value; }
+final class FallbackOwner {
+    public function read(?int $value, int $default): int { $value ??= $default; return $value; }
+}
+$owner = new FallbackOwner();
+$read = function (?int $value, int $default): int { $value ??= $default; return $value; };
+var_dump(readFallback(null, 7), $owner->read(null, 8), $read(null, 9));
+"#;
+    assert_nullable_flow_cli_heap_output(source, "int(7)\nint(8)\nint(9)\n");
+}
+
+/// Fallible stores preserve null through conditional bindings, guards and prior fallbacks.
+#[test]
+fn test_nullable_fallback_flow_r38_fallible_store_runtime() {
+    for body in [
+        "if ($flag) { $value = $input; } $value = $ints[$key];",
+        "$value = $input; if ($value === null) { $value = $ints[$key]; }",
+        "$value = $input; $value ??= $ints[$key];",
+        "$value = $input; $value ??= 7; $value = $ints[$key];",
+    ] {
+        let source = format!("<?php function run(?int $input, bool $flag, int $key): void {{ $ints = [10]; {body} var_dump($value); }} run(null, false, 5); run(null, false, 0);");
+        assert_nullable_flow_cli_heap_output(&source, "NULL\nint(10)\n");
+    }
+}
+
+/// Strict guards over fallible array reads retain reachable float-valued break edges.
+#[test]
+fn test_nullable_fallback_flow_r38_array_guard_runtime() {
+    for guard in [
+        "if ($value !== null) { continue; }",
+        "if ($value === null) {} else { continue; }",
+        "if (!($value === null)) { continue; }",
+    ] {
+        let source = format!("<?php function loopMiss(int $key) {{ $ints = [10]; $result = 1; foreach ([1, 2] as $item) {{ $value = $ints[$key]; {guard} $result = 2.5; break; }} return $result; }} var_dump(loopMiss(5));");
+        assert_nullable_flow_cli_heap_output(&source, "float(2.5)\n");
+    }
+}
+
+/// Reused counters lose the absent-branch null while retaining their physical numeric slots.
+#[test]
+fn test_nullable_fallback_flow_ci_rebound_counter_runtime() {
+    let source = r#"<?php
+function emitCounter(int $index): void { echo $index; }
+function forCounter(int $count, bool $flag): void {
+    if ($flag) { for ($i = 0; $i < $count; $i++) { emitCounter($i); } return; }
+    for ($i = 0; $i < $count; $i++) { emitCounter($i); }
+}
+function whileCounter(int $count, bool $flag): void {
+    if ($flag) { $i = 0; $i++; return; }
+    $i = 0;
+    while ($i < $count) { emitCounter($i); $i++; }
+}
+function reopenedStream(bool $flag): void {
+    if ($flag) {
+        $stream = fopen('php://temp', 'w+b');
+        if ($stream === false) { return; }
+        fwrite($stream, 'a'); rewind($stream); echo stream_get_contents($stream);
+        fclose($stream); return;
+    }
+    $stream = fopen('php://temp', 'w+b');
+    if ($stream === false) { return; }
+    fwrite($stream, 'b'); rewind($stream); echo stream_get_contents($stream);
+    fclose($stream);
+}
+forCounter(3, true); echo '|'; forCounter(3, false); echo '|';
+whileCounter(3, false); echo '|';
+reopenedStream(true); reopenedStream(false); echo "\n";
+"#;
+    assert_nullable_flow_cli_heap_output(source, "012|012|012|ab\n");
+}
+
+/// Loop back edges retract facts killed by unset before captures, arrays and direct reads.
+#[test]
+fn test_nullable_fallback_flow_review_r35_loop_unset_runtime() {
+    for fallback in ["$value ??= 7;", "if ($value === null) { $value = 7; }"] {
+        let source = format!(r#"<?php
+function snapshotLoop(?int $parameter): void {{
+    $value = $parameter;
+    {fallback}
+    for ($i = 0; $i < 2; $i++) {{
+        $show = function () use ($value) {{ var_dump($value); }}; $show();
+        unset($value);
+    }}
+}}
+function arrayLoop(?int $parameter): void {{
+    $value = $parameter;
+    {fallback}
+    foreach ([1, 2] as $item) {{ $items = [$value]; var_dump($items[0]); unset($value); }}
+}}
+function plainLoop(?int $parameter): void {{
+    $value = $parameter;
+    {fallback}
+    for ($i = 0; $i < 2; $i++) {{ var_dump($value); unset($value); }}
+}}
+snapshotLoop(null); arrayLoop(null); plainLoop(null);
+"#);
+        assert_nullable_flow_cli_heap_output(&source, &"int(7)\nNULL\n".repeat(3));
+    }
+}
+
+/// Aliased snapshots preserve actual values and verify declared scalar boundaries at invocation.
+#[test]
+fn test_nullable_fallback_flow_review_r35_alias_snapshot_runtime() {
+    let source = r#"<?php
+function needSnapshotInt(int $value): int { return $value; }
+function arrowSnapshot(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { return fn(): int => $value; } return fn(): int => 0;
+}
+function explicitSnapshot(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { return function () use ($value): int { return $value; }; }
+    return fn(): int => 0;
+}
+function argumentSnapshot(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { return fn() => needSnapshotInt($value); } return fn(): int => 0;
+}
+function detachedSnapshot(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { $show = fn(): int => $value; $alias = null; return $show; }
+    return fn(): int => 0;
+}
+function invalidSnapshot(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { $alias = null; return fn(): int => $value; }
+    return fn(): int => 0;
+}
+function untypedSnapshot(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { $alias = null; return fn() => $value; }
+    return fn() => null;
+}
+function runSnapshots(): void {
+    $arrow = arrowSnapshot(4); var_dump($arrow());
+    $explicit = explicitSnapshot(4); var_dump($explicit());
+    $argument = argumentSnapshot(4); var_dump($argument());
+    $detached = detachedSnapshot(4); var_dump($detached());
+    $invalid = invalidSnapshot(4);
+    try { $invalid(); } catch (TypeError $error) { echo "return rejected\n"; }
+    $untyped = untypedSnapshot(4); var_dump($untyped());
+}
+runSnapshots();
+"#;
+    assert_nullable_flow_cli_heap_output(source,
+        "int(4)\nint(4)\nint(4)\nint(4)\nreturn rejected\nNULL\n");
+}
+
+/// Tagged captures retain integer, boolean and float payloads and null tags through invocation.
+#[test]
+fn test_nullable_fallback_flow_tagged_capture_abi_runtime() {
+    let source = r#"<?php
+function integerSnapshot(?int $value): Closure { return fn() => var_dump($value); }
+function booleanSnapshot(?bool $value): Closure { return fn() => var_dump($value); }
+function floatSnapshot(?float $value): Closure { return fn() => var_dump($value); }
+function guardedBooleanSnapshot(?bool $value): Closure {
+    if ($value !== null) { return fn(): bool => $value; } return fn(): bool => false;
+}
+function guardedFloatSnapshot(?float $value): Closure {
+    if ($value !== null) { return fn(): float => $value; } return fn(): float => 0.0;
+}
+function runSnapshots(): void {
+    $a = integerSnapshot(null); $a(); $b = integerSnapshot(5); $b();
+    $c = booleanSnapshot(null); $c(); $d = booleanSnapshot(true); $d();
+    $e = booleanSnapshot(false); $e();
+    $f = floatSnapshot(null); $f(); $g = floatSnapshot(2.5); $g();
+    $h = guardedBooleanSnapshot(true); var_dump($h());
+    $i = guardedFloatSnapshot(2.5); var_dump($i());
+}
+runSnapshots();
+"#;
+    assert_nullable_flow_cli_heap_output(source,
+        "NULL\nint(5)\nNULL\nbool(true)\nbool(false)\nNULL\nfloat(2.5)\nbool(true)\nfloat(2.5)\n");
+}
+
+
+/// Zero-iteration, switch and exception edges preserve missing nullable bindings.
+#[test]
+fn test_nullable_fallback_flow_definite_binding_control_edges_runtime() {
+    let source = r#"<?php
+function skippedWhile(?int $parameter, bool $choose): void {
+    while ($choose) { $value = $parameter; $value ??= 5; break; } var_dump($value);
+}
+function requiredDo(?int $parameter): void {
+    do { $value = $parameter; $value ??= 5; } while (false); var_dump($value);
+}
+function skippedForeach(?int $parameter, bool $choose): void {
+    foreach ($choose ? [1] : [] as $item) { $value = $parameter; $value ??= 5; } var_dump($value);
+}
+function skippedSwitch(?int $parameter, bool $choose): void {
+    switch ($choose) { case true: $value = $parameter; $value ??= 5; break; } var_dump($value);
+}
+function boundSwitch(?int $parameter, bool $choose): void {
+    switch ($choose) { case true: $value = $parameter; $value ??= 5; break; default: $value = 5; } var_dump($value);
+}
+function boundFinally(?int $parameter): void {
+    try {} finally { $value = $parameter; $value ??= 5; } var_dump($value);
+}
+skippedWhile(null, false); skippedWhile(null, true); requiredDo(null);
+skippedForeach(null, false); skippedForeach(null, true);
+skippedSwitch(null, false); skippedSwitch(null, true);
+boundSwitch(null, false); boundFinally(null);
+"#;
+    assert_nullable_flow_cli_heap_output(source, "NULL\nint(5)\nint(5)\nNULL\nint(5)\nNULL\nint(5)\nint(5)\nint(5)\n");
+}
+
+
+/// Conditional nullable bindings and uncertain value captures preserve their null tag.
+#[test]
+fn test_nullable_fallback_flow_review_maybe_unbound_reads_runtime() {
+    let source = r#"<?php
+function conditionalBinding(?int $parameter, bool $choose): void {
+    if ($choose) { $value = $parameter; $value ??= 5; }
+    var_dump($value);
+}
+function siblingBinding(?int $parameter, bool $choose): void {
+    if ($choose) { $value = $parameter; $value ??= 5; } else { var_dump($value); }
+}
+function capturedBinding(?int $parameter, bool $choose): void {
+    if ($choose) { $value = $parameter; $value ??= 5; }
+    $show = fn() => var_dump($value); $show();
+}
+function capturedAlias(?int $value): void {
+    $alias = &$value;
+    if ($value !== null) { $alias = null; $show = fn() => var_dump($value); $show(); }
+}
+function insideBinding(?int $parameter, bool $choose): void {
+    if ($choose) {
+        $value = $parameter; $value ??= 5;
+        $show = fn() => var_dump($value); $show();
+        $items = []; $items[] = $value; echo json_encode($items), "\n";
+    }
+}
+function stopBinding(bool $stop): void { if ($stop) { throw new Exception('stop'); } }
+function caughtBinding(?int $parameter, bool $stop): void {
+    try { stopBinding($stop); $value = $parameter; $value ??= 5; } catch (Exception $error) {}
+    var_dump($value);
+}
+conditionalBinding(null, false); conditionalBinding(null, true);
+siblingBinding(null, false);
+capturedBinding(null, false); capturedBinding(null, true);
+capturedAlias(5);
+insideBinding(null, true); caughtBinding(null, true); caughtBinding(null, false);
+"#;
+    let expected = "NULL\nint(5)\nNULL\nNULL\nint(5)\nNULL\nint(5)\n[5]\nNULL\nint(5)\n";
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source, expected);
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+    assert_nullable_flow_cli_heap_output(source, expected);
+}
+
+/// Relative class entry guards retain the nullable continuation through the production CLI.
+#[test]
+fn test_nullable_fallback_flow_review_relative_object_guard_cli_runtime() {
+    for (declaration, receiver, call) in [
+        ("class Node { static function accept(self $other): int { return 1; } }", "Node", "Node::accept($maybe)"),
+        ("class Node { function accept(self $other): int { return 1; } }", "Node", "(new Node())->accept($maybe)"),
+        ("class Root {} class Node extends Root { static function accept(parent $other): int { return 1; } }", "Root", "Node::accept($maybe)"),
+    ] {
+        let source = format!("<?php {declaration} function run(?{receiver} $maybe, ?int $value): mixed {{ $value ??= 7; try {{ $value = null; {call}; return 1; }} catch (TypeError $error) {{ echo \"caught\\n\"; }} var_dump($value); return $value; }} var_dump(run(null, 7)); var_dump(run(new {receiver}(), 7));");
+        assert_nullable_flow_cli_heap_output(&source, "caught\nNULL\nNULL\nint(1)\n");
+    }
+}
+
+/// Writes through aliases do not turn a stale integer guard into an integer value read.
+#[test]
+fn test_nullable_fallback_flow_review_aliased_integer_reads_runtime() {
+    let source = r#"<?php
+function localAliasRead(?int $value): void {
+    $alias = &$value;
+    if ($value !== null) { $alias = null; var_dump($value); var_dump([$value]); }
+}
+function parameterAliasRead(?int &$value, ?int &$alias): void {
+    if ($value !== null) { $alias = null; var_dump([$value]); }
+}
+function invokeParameterAlias(?int $value): void { parameterAliasRead($value, $value); }
+localAliasRead($argc > 0 ? 5 : null);
+invokeParameterAlias($argc > 0 ? 5 : null);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source,
+            "NULL\narray(1) {\n  [0]=>\n  NULL\n}\narray(1) {\n  [0]=>\n  NULL\n}\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// The production CLI preserves catch exits for builtin Error and Throwable parents.
+#[test]
+fn test_nullable_fallback_flow_review_builtin_catch_parents_cli_runtime() {
+    for parent in ["Error", "Throwable"] {
+        let source = format!("<?php function run(mixed $value): int {{ $local = $value === 0 ? 1 : null; if ($local === null) {{ $local = 7; }} try {{ $local = null; return $value; }} catch ({parent} $error) {{ var_dump($local); }} var_dump($local); return 0; }} echo run('abc'), \"\\n\";");
+        assert_nullable_flow_cli_heap_output(&source, "NULL\nNULL\n0\n");
+    }
+}
+
+/// Opaque alternative guards preserve nullable and Stringable parameter/property conversions.
+#[test]
+fn test_nullable_fallback_flow_review_opaque_alternative_boundaries_runtime() {
+    let source = r#"<?php
+class AlternativeTextA implements Stringable { function __toString(): string { return 'obj'; } }
+class AlternativeTextB implements Stringable { function __toString(): string { return 'other'; } }
+class AlternativeBox { public ?string $text = null; public static ?string $shared = null; }
+function alternativeString(?string $value): string { return $value === null ? 'null' : '['.$value.']'; }
+function nullableAlternative(mixed $value): string {
+    if ($value === null || is_int($value)) { return alternativeString($value); }
+    return 'other';
+}
+function propertyAlternative(mixed $value): string {
+    if (!is_int($value) && $value !== null) { return 'other'; }
+    $box = new AlternativeBox(); $box->text = $value; AlternativeBox::$shared = $value;
+    return alternativeString($box->text).alternativeString(AlternativeBox::$shared);
+}
+function capturedAlternative(mixed $value): string {
+    if ($value === null || is_int($value) || is_string($value)) {
+        $copy = $value; $closure = fn(): string => alternativeString($copy); return $closure();
+    }
+    return 'other';
+}
+function stringObjectAlternative(mixed $value): string {
+    if (is_string($value) || $value instanceof Stringable) { return alternativeString($value); }
+    return 'other';
+}
+function objectAlternative(mixed $value): string {
+    if ($value instanceof AlternativeTextA || $value instanceof AlternativeTextB) { return alternativeString($value); }
+    return 'other';
+}
+function nullObjectAlternative(mixed $value): string {
+    if ($value === null || $value instanceof AlternativeTextA) { return alternativeString($value); }
+    return 'other';
+}
+echo nullableAlternative(5), nullableAlternative(null), nullableAlternative('x'), "\n";
+echo propertyAlternative(5), propertyAlternative(null), "\n";
+echo capturedAlternative(5), capturedAlternative(null), capturedAlternative('x'), "\n";
+echo stringObjectAlternative('x'), stringObjectAlternative(new AlternativeTextA()), stringObjectAlternative(5), "\n";
+echo objectAlternative(new AlternativeTextA()), objectAlternative(new AlternativeTextB()), "\n";
+echo nullObjectAlternative(null), nullObjectAlternative(new AlternativeTextA()), "\n";
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source,
+            "[5]nullother\n[5][5]nullnull\n[5]null[x]\n[x][obj]other\n[obj][other]\nnull[obj]\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Proven integer reads retain values in escaped captures and every array consumer.
+#[test]
+fn test_nullable_fallback_flow_review_tagged_value_consumers_runtime() {
+    let template = r#"<?php
+class TaggedValueHolder {
+    public static int $value = 0;
+    function captured(?int $value): Closure { STORE return fn(): int => $value + 2; }
+}
+function returnedArrow(?int $value): Closure { STORE return fn(): int => $value + 2; }
+function returnedClosure(?int $value): Closure { STORE return function () use ($value): int { return $value + 2; }; }
+function callTaggedClosure(Closure $closure): int { return $closure(); }
+function argumentCapture(?int $value): int { STORE return callTaggedClosure(fn(): int => $value + 2); }
+function arrayCapture(?int $value): int { STORE $items = [fn(): int => $value + 2]; return $items[0](); }
+function delayedCapture(?int $value): Closure { STORE $closure = fn(): int => $value + 2; return $closure; }
+function inferredCapture(?int $value) { STORE return fn(): int => $value + 2; }
+function taggedArrayConsumers(?int $value): void {
+    STORE
+    $items = []; $items[] = $value;
+    $pairs = [$value, 'key' => $value];
+    echo count($items), ':', count($pairs), ':', json_encode([$value]), ':';
+    $mapped = array_map(fn($item) => $item + $value, [1, 2]);
+    echo implode(' ', $mapped), ':';
+    TaggedValueHolder::$value = $value; echo TaggedValueHolder::$value, "\n";
+}
+function resetTaggedValue(?int &$value): void { $value = null; }
+function detachedCapture(?int $value): Closure {
+    STORE $closure = fn(): int => $value + 2; resetTaggedValue($value); return $closure;
+}
+function taggedReferenceControl(?int $value): void {
+    STORE echo json_encode([$value]), ':'; resetTaggedValue($value); var_dump($value);
+}
+echo returnedArrow(null)(), ':', returnedArrow(1)(), "\n";
+echo returnedClosure(null)(), ':', returnedClosure(1)(), "\n";
+echo inferredCapture(null)(), ':', inferredCapture(1)(), "\n";
+$holder = new TaggedValueHolder();
+echo $holder->captured(null)(), ':', $holder->captured(1)(), "\n";
+unset($holder);
+echo detachedCapture(null)(), ':', detachedCapture(1)(), "\n";
+echo argumentCapture(null), ':', arrayCapture(1), ':', delayedCapture(null)(), "\n";
+taggedArrayConsumers(null); taggedArrayConsumers(1);
+taggedReferenceControl(null); taggedReferenceControl(1);
+"#;
+    for store in ["$value ??= 40;", "$value = $value ?? 40;", "if ($value === null) { $value = 40; }"] {
+        let source = template.replace("STORE", store);
+        for optimized in [true, false] {
+            let run = || assert_nullable_flow_heap_output(&source,
+                "42:3\n42:3\n42:3\n42:3\n42:3\n42:3:42\n1:2:[40]:41 42:40\n1:2:[1]:2 3:1\n[40]:NULL\n[1]:NULL\n");
+            if optimized { run(); } else { without_ir_opt(run); }
+        }
+    }
+}
+
+/// Generator captures preserve the integer independently of the existing yielded-owner leak.
+#[test]
+fn test_nullable_fallback_flow_review_tagged_generator_capture_runtime() {
+    for store in ["$value ??= 40;", "$value = $value ?? 40;", "if ($value === null) { $value = 40; }"] {
+        let source = format!("<?php function generatedCapture(?int $value): Generator {{ {store} yield fn(): int => $value + 1; }} foreach (generatedCapture(null) as $closure) {{ echo $closure(), ':'; }} foreach (generatedCapture(1) as $closure) {{ echo $closure(); }}");
+        for optimized in [true, false] {
+            let run = || assert_eq!(compile_and_run(&source), "41:2");
+            if optimized { run(); } else { without_ir_opt(run); }
+        }
+    }
+}
+
+/// Total scalar conversions keep parameters, declared returns and properties PHP-equivalent.
+#[test]
+fn test_nullable_fallback_flow_review_total_scalar_boundaries_runtime() {
+    let source = r#"<?php
+class ScalarBoundaryHolder { public string $text = ''; public static string $shared = ''; }
+function scalarString(string $value): string { return $value; }
+function scalarInteger(int $value): int { return $value; }
+function callScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) { return scalarString($value); }
+    return 'other';
+}
+function clauseScalarString(mixed $value): string {
+    if (!is_int($value) && !is_string($value)) { return 'other'; }
+    return scalarString(value: $value);
+}
+function returnScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) { return $value; }
+    return 'other';
+}
+function propertyScalarString(mixed $value): string {
+    $box = new ScalarBoundaryHolder();
+    if (is_int($value) || is_string($value)) { $box->text = $value; }
+    return $box->text;
+}
+function callScalarInteger(mixed $value): int {
+    if (is_int($value) || is_bool($value)) { return scalarInteger($value); }
+    return -1;
+}
+function floatScalarString(mixed $value): string {
+    if (is_float($value) || is_bool($value)) { return scalarString($value); }
+    return 'other';
+}
+function copiedScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) { $copy = $value; return scalarString($copy); }
+    return 'other';
+}
+function capturedScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) {
+        $closure = function () use ($value): string { return scalarString($value); };
+        return $closure();
+    }
+    return 'other';
+}
+function arrowScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) {
+        $closure = fn(): string => scalarString($value);
+        return $closure();
+    }
+    return 'other';
+}
+function staticScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) { ScalarBoundaryHolder::$shared = $value; }
+    return ScalarBoundaryHolder::$shared;
+}
+function assignedScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) { return ($value = $value); }
+    return 'other';
+}
+function inferredScalarValue(mixed $value) {
+    if (is_int($value) || is_string($value)) { return $value; }
+    return 0;
+}
+function floatScalarInteger(mixed $value): int {
+    if (is_float($value) || is_bool($value)) { return scalarInteger($value); }
+    return -1;
+}
+echo callScalarString(42), ':', callScalarString('ok'), "\n";
+echo clauseScalarString(42), ':', clauseScalarString('ok'), ':', clauseScalarString(null), "\n";
+echo returnScalarString(42), ':', returnScalarString('ok'), "\n";
+echo propertyScalarString(42), ':', propertyScalarString('ok'), "\n";
+var_dump(callScalarInteger(true), callScalarInteger(false), callScalarInteger(7));
+echo floatScalarString(2.5), ':', floatScalarString(true), ':', floatScalarString(false), "\n";
+echo copiedScalarString(42), ':', copiedScalarString('ok'), "\n";
+echo capturedScalarString(42), ':', capturedScalarString('ok'), "\n";
+echo arrowScalarString(42), ':', arrowScalarString('ok'), "\n";
+echo staticScalarString(42), ':', staticScalarString('ok'), "\n";
+echo assignedScalarString(42), ':', assignedScalarString('ok'), "\n";
+echo scalarString(inferredScalarValue(42)), ':', scalarString(inferredScalarValue('ok')), "\n";
+var_dump(floatScalarInteger(2.0), floatScalarInteger(true), floatScalarInteger(false));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source,
+            "42:ok\n42:ok:other\n42:ok\n42:ok\nint(1)\nint(0)\nint(7)\n2.5:1:\n42:ok\n42:ok\n42:ok\n42:ok\n42:ok\n42:ok\nint(2)\nint(1)\nint(0)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// A nullable object invalidated on a loop back edge reaches the runtime guard before entry.
+#[test]
+fn test_nullable_fallback_flow_review_loop_object_argument_guard_runtime() {
+    let source = r#"<?php
+final class LoopArgumentService {}
+function needLoopArgument(LoopArgumentService $value): void { echo "called\n"; }
+function resetLoopArgument(?LoopArgumentService &$value): void { $value = null; }
+function runLoopArgument(?LoopArgumentService $value, array $items): void {
+    $value = $value ?? new LoopArgumentService();
+    foreach ($items as $item) { needLoopArgument($value); WRITE }
+}
+try { runLoopArgument(null, [1, 2]); echo "missing\n"; }
+catch (TypeError $error) { echo "caught\n"; }
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            for write in ["$value = null;", "resetLoopArgument($value);"] {
+                let source = source.replace("WRITE", write);
+                for source in [source.clone(), source.replace("$value = $value ??", "$value ??=")] {
+                    assert_nullable_flow_heap_output(&source, "called\ncaught\n");
+                }
+            }
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Conditional unset retires a coalesced receiver proof before an inferred return or new fallback.
+#[test]
+fn test_nullable_fallback_flow_review_conditional_unset_runtime() {
+    let source = r#"<?php
+class ConditionalUnsetBox { public function __construct(public readonly string $name = 'live') {} }
+function unsetObject(?ConditionalUnsetBox $box, int $key) {
+    $box = $box ?? new ConditionalUnsetBox();
+    if ($key > 1) { unset($box); }
+    return $box;
+}
+function fallbackAfterUnset(?ConditionalUnsetBox $box, int $key, ?ConditionalUnsetBox $default) {
+    $box = $box ?? new ConditionalUnsetBox();
+    if ($key > 1) { unset($box); }
+    $box = $box ?? $default;
+    return $box;
+}
+function initializeInteger(int $key): int {
+    if ($key > 1) { $value = 5; }
+    $value = $value ?? 7;
+    return $value;
+}
+function guardedUnset(?ConditionalUnsetBox $box, int $key) {
+    if ($box === null) { throw new RuntimeException('missing'); }
+    if ($key > 1) { unset($box); }
+    return $box;
+}
+var_dump(unsetObject(null, 1) === null, unsetObject(null, 2) === null);
+var_dump(fallbackAfterUnset(null, 1, null) === null, fallbackAfterUnset(null, 2, null) === null);
+var_dump(initializeInteger(1), initializeInteger(2));
+var_dump(guardedUnset(new ConditionalUnsetBox(), 1) === null, guardedUnset(new ConditionalUnsetBox(), 2) === null);
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            for source in [source.to_string(), source.replace("$box = $box ??", "$box ??=")
+                .replace("$value = $value ??", "$value ??=")]
+            {
+                assert_nullable_flow_heap_output(&source, "bool(false)\nbool(true)\nbool(false)\nbool(true)\nint(7)\nint(5)\nbool(false)\nbool(true)\n");
+            }
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// An unconditional fallback defines a conditional binding; a skipped fallback cannot prove that.
+#[test]
+fn test_nullable_fallback_flow_review_conditional_coalesce_binding_runtime() {
+    let source = r#"<?php
+class ConditionalBindingBox {}
+function nullableBinding(int $key): ?ConditionalBindingBox { return $key > 2 ? new ConditionalBindingBox() : null; }
+function boundOutside(int $key) {
+    if ($key > 1) { $box = nullableBinding($key); }
+    $box = $box ?? new ConditionalBindingBox();
+    $box = $box ?? nullableBinding(1);
+    return $box;
+}
+function boundInside(int $key) {
+    if ($key > 1) {
+        $box = nullableBinding($key);
+        $box = $box ?? new ConditionalBindingBox();
+    }
+    $box = $box ?? nullableBinding(1);
+    return $box;
+}
+var_dump(boundOutside(1) === null, boundOutside(2) === null);
+var_dump(boundInside(1) === null, boundInside(2) === null);
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            for source in [source.to_string(), source.replace("$box = $box ??", "$box ??=")] {
+                assert_nullable_flow_heap_output(&source, "bool(false)\nbool(false)\nbool(true)\nbool(false)\n");
+            }
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Repeated coalescing preserves a proven value and skips nullable defaults in both forms.
+#[test]
+fn test_nullable_fallback_flow_review_recoalesce_runtime() {
+    let source = r#"<?php
+class RecoalesceBox { public function __construct(public readonly string $name = 'dflt') {} }
+function nullableBox(int $key): ?RecoalesceBox { echo 'default-called'; return null; }
+function resetBox(?RecoalesceBox &$box): void { $box = null; }
+function repeatedObject(?RecoalesceBox $box, int $key): string {
+    $box = $box ?? new RecoalesceBox();
+    $box = $box ?? nullableBox($key);
+    return $box->name;
+}
+function repeatedObjectVariable(?RecoalesceBox $box, ?RecoalesceBox $default): string {
+    $box = $box ?? new RecoalesceBox();
+    $box = $box ?? $default;
+    return $box->name;
+}
+function repeatedString(?string $value, ?string $default): string {
+    $value = $value ?? 'x';
+    $value = $value ?? $default;
+    return $value;
+}
+function invalidatedObject(?RecoalesceBox $box, int $key): ?RecoalesceBox {
+    $box = $box ?? new RecoalesceBox();
+    resetBox($box);
+    $box = $box ?? nullableBox($key);
+    return $box;
+}
+echo repeatedObject(null, 2), ' ', repeatedObject(new RecoalesceBox('x'), 1), "\n";
+echo repeatedObjectVariable(null, null), "\n";
+var_dump(repeatedString(null, null), repeatedString('a', 'b'));
+var_dump(invalidatedObject(null, 2));
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            for source in [source.to_string(), source
+                .replace("$box = $box ??", "$box ??=")
+                .replace("$value = $value ??", "$value ??=")]
+            {
+                assert_nullable_flow_heap_output(&source,
+                    "dflt x\ndflt\nstring(1) \"x\"\nstring(1) \"a\"\ndefault-calledNULL\n");
+            }
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Independent switch reads retain accepted boxed assignment storage from preceding arms.
+#[test]
+fn test_nullable_fallback_flow_review_switch_assignment_storage_runtime() {
+    let source = r#"<?php
+function switchedValue(int $key) {
+    $value = 0;
+    switch ($key) {
+        case 1: $value = 2.5; break;
+        case 2: $value = 'two'; break;
+        default: $value = $key;
+    }
+    return $value;
+}
+var_dump(switchedValue(1), switchedValue(2), switchedValue(3));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source, "float(2.5)\nstring(3) \"two\"\nint(3)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// A nullsafe write retains the existing nullable pointer ABI and its skipped null value.
+#[test]
+fn test_nullable_fallback_flow_review_nullsafe_pointer_storage_runtime() {
+    let source = r#"<?php
+packed class NullsafeFlowRow { public int $value; }
+class NullsafePointerSink { public function take(?ptr<NullsafeFlowRow> $value): void {} }
+function choosePointer(?NullsafePointerSink $receiver, buffer<NullsafeFlowRow> $rows): ?ptr<NullsafeFlowRow> {
+    $value = null;
+    $receiver?->take($value = $rows[0]);
+    return $value;
+}
+$rows = buffer_new<NullsafeFlowRow>(1);
+$rows[0]->value = 9;
+$present = choosePointer(new NullsafePointerSink(), $rows);
+$missing = choosePointer(null, $rows);
+var_dump($present === null, $missing === null);
+if ($present !== null) { echo $present->value, "\n"; }
+buffer_free($rows);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source, "bool(false)\nbool(true)\n9\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Nullsafe arguments and dynamic names join evaluated writes with the skipped receiver path.
+#[test]
+fn test_nullable_fallback_flow_review_nullsafe_raw_writes_runtime() {
+    let source = r#"<?php
+class RawNullsafeFlow {
+    public string $property = 'ok';
+    public ?RawNullsafeFlow $next = null;
+    public function take(mixed $value): void {}
+    public function step(mixed $value): ?RawNullsafeFlow { return $this->next; }
+}
+function nullsafeFloat(?RawNullsafeFlow $receiver) {
+    $value = 1;
+    $receiver?->take($value = 2.5);
+    return $value;
+}
+function nullsafeInteger(?RawNullsafeFlow $receiver) {
+    $value = null;
+    $receiver?->take($value = 5);
+    return $value;
+}
+function nullsafePropertyName(?RawNullsafeFlow $receiver) {
+    $value = 1;
+    $ignored = $receiver?->{($value = 2.5) ? 'property' : 'property'};
+    return $value;
+}
+function nullsafeIntermediate(?RawNullsafeFlow $receiver) {
+    $value = 1;
+    $receiver?->step($value = 2.5)?->take($value = 7);
+    return $value;
+}
+$receiver = new RawNullsafeFlow();
+var_dump(nullsafeFloat($receiver), nullsafeFloat(null));
+var_dump(nullsafeInteger($receiver), nullsafeInteger(null));
+var_dump(nullsafePropertyName($receiver), nullsafePropertyName(null));
+var_dump(nullsafeIntermediate($receiver), nullsafeIntermediate(null));
+$receiver->next = new RawNullsafeFlow();
+var_dump(nullsafeIntermediate($receiver));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source,
+            "float(2.5)\nint(1)\nint(5)\nNULL\nfloat(2.5)\nint(1)\nfloat(2.5)\nint(1)\nint(7)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Dynamic method-name effects survive the same nullsafe skip join.
+#[test]
+fn test_nullable_fallback_flow_review_nullsafe_method_name_runtime() {
+    let source = "<?php class RawMethodNameFlow { function take(mixed $value): void {} } function run(?RawMethodNameFlow $receiver) { $value = 1; $receiver?->{($value = 2.5) ? 'take' : 'take'}(0); return $value; } var_dump(run(new RawMethodNameFlow()), run(null));";
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "float(2.5)\nint(1)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Raw writes on nested jumps survive restored try, catch and switch entry snapshots.
+#[test]
+fn test_nullable_fallback_flow_review_raw_loop_exits_runtime() {
+    let source = r#"<?php
+function rawTryBreak(int $n) {
+    $value = 1;
+    for ($i = 0; $i < 3; $i++) {
+        if ($i != $n) { continue; }
+        try { $value = 2.5; break; } catch (Exception $error) {}
+    }
+    return $value;
+}
+function rawCatchBreak(int $n) {
+    $value = 1;
+    for ($i = 0; $i < 3; $i++) {
+        try { if ($i == $n) { throw new Exception('stop'); } $value = 3; }
+        catch (Exception $error) { $value = 2.5; break; }
+    }
+    return $value;
+}
+function rawForeachCatch(array $input) {
+    $value = 1;
+    foreach ($input as $item) {
+        try { if ($item > 1) { throw new Exception('stop'); } }
+        catch (Exception $error) { $value = 2.5; break; }
+    }
+    return $value;
+}
+function rawSwitchBreak(int $key) {
+    $value = 1;
+    foreach ([1] as $_) {
+        switch ($key) { case 1: $value = 2.5; break 2; default: break; }
+    }
+    return $value;
+}
+function rawWhileContinue(int $n) {
+    $value = 1; $i = 0;
+    while ($i < 3) {
+        $i++;
+        try { if ($i == $n) { throw new Exception('stop'); } }
+        catch (Exception $error) { $value = 2.5; continue; }
+    }
+    return $value;
+}
+function rawSwitchContinue(array $input) {
+    $value = 1;
+    foreach ($input as $item) {
+        switch ($item) { case 5: $value = 2.5; continue 2; default: break; }
+    }
+    return $value;
+}
+function rawDoBreak(int $n) {
+    $value = 1;
+    do {
+        try { if ($n > 0) { throw new Exception('stop'); } }
+        catch (Exception $error) { $value = 2.5; break; }
+    } while (false);
+    return $value;
+}
+function unpackTryBreak() {
+    $value = 1;
+    foreach ([1] as $_) {
+        try { [$value] = [2.5]; break; } catch (Exception $error) {}
+    }
+    return $value;
+}
+function unpackSwitchBreak(int $key) {
+    $value = 1;
+    foreach ([1] as $_) {
+        switch ($key) { case 1: [$value] = [2.5]; break 2; default: break; }
+    }
+    return $value;
+}
+function unpackCatchBreak() {
+    $value = 1;
+    while (true) {
+        try { throw new Exception('stop'); }
+        catch (Exception $error) { [$value] = [2.5]; break; }
+    }
+    return $value;
+}
+function unpackPairBreak() {
+    $value = 1;
+    foreach ([1] as $_) {
+        try { [$value, $other] = [2.5, 3]; break; } catch (Exception $error) {}
+    }
+    return $value;
+}
+var_dump(rawTryBreak(1), rawCatchBreak(1), rawForeachCatch([1, 5]), rawSwitchBreak(1));
+var_dump(rawWhileContinue(2), rawSwitchContinue([1, 5]), rawDoBreak(1));
+var_dump(unpackTryBreak(), unpackSwitchBreak(1), unpackCatchBreak(), unpackPairBreak());
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source, &"float(2.5)\n".repeat(11));
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Checks PHP output and the ownership balance of a nullable flow fixture.
+fn assert_nullable_flow_heap_output(source: &str, expected: &str) {
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Checks production exception pruning and read views with owned fixture cleanup in both IR modes.
+fn assert_nullable_flow_cli_heap_output(source: &str, expected: &str) {
+    assert_nullable_flow_cli_heap_output_with_native(source, expected, false);
+}
+
+/// Supplies a hermetic PCRE2 project when dynamic class metadata emits regex iterators.
+fn assert_nullable_flow_cli_heap_output_with_native(source: &str, expected: &str, managed_pcre2: bool) {
+    /// Owns only the CLI artifacts created for this fixture.
+    struct FixtureDirectory(std::path::PathBuf);
+    impl Drop for FixtureDirectory {
+        /// Removes this fixture on both assertion failure and successful completion.
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let directory = FixtureDirectory(make_cli_test_dir("elephc_nullable_flow_catch"));
+    let path = directory.0.join("main.php");
+    std::fs::write(&path, source).unwrap();
+    for mode in ["on", "off"] {
+        let mut command = if managed_pcre2 {
+            elephc_cli_command_with_managed_pcre2(&directory.0)
+        } else { elephc_cli_command(&directory.0) };
+        let compiled = command.args(["--heap-debug", &format!("--ir-opt={mode}")])
+            .arg(&path).output().unwrap();
+        assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+        let output = run_binary(&path.with_extension(""), &directory.0);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+            "{}", String::from_utf8_lossy(&output.stderr));
+    }
+}
+
+/// Exhaustive switch return inference includes broken arms and fresh bindings.
+#[test]
+fn test_nullable_fallback_flow_review_switch_raw_exit_runtime() {
+    let source = r#"<?php
+function initializedSwitch(int $key) {
+    $value = 1;
+    switch ($key) { case 1: $value = 2.5; break; default: $value = 3; }
+    return $value;
+}
+function freshSwitch(int $key) {
+    switch ($key) { case 1: $value = 2; break; default: $value = 3.5; }
+    return $value;
+}
+var_dump(initializedSwitch(1), initializedSwitch(2), freshSwitch(1), freshSwitch(2));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source,
+            "float(2.5)\nint(3)\nint(2)\nfloat(3.5)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Session-style option unions and interface probes retain their continuing value contracts.
+#[test]
+fn test_nullable_fallback_flow_ci_session_joins_runtime() {
+    let source = r#"<?php
+interface CIFlowSink { public function write(): void; public function close(): void; }
+interface CIFlowWatch { public function touch(): void; }
+class CIFlowBoth implements CIFlowSink, CIFlowWatch {
+    public function write(): void { echo 'w'; }
+    public function close(): void { echo 'c'; }
+    public function touch(): void { echo 't'; }
+}
+class CIFlowSinkOnly implements CIFlowSink {
+    public function write(): void { echo 'w'; }
+    public function close(): void { echo 'c'; }
+}
+function ciOptionValue(array $options): mixed {
+    $flag = false;
+    foreach ($options as $key => $value) {
+        if (!is_string($value) && !is_int($value) && !is_bool($value)) { continue; }
+        if ($key === 'read_and_close') { $flag = $value; }
+    }
+    return $flag;
+}
+function ciUseHandler(?CIFlowSink $handler, bool $lazy): void {
+    if ($handler !== null) {
+        $done = false;
+        if ($lazy) { if ($handler instanceof CIFlowWatch) { $handler->touch(); $done = true; } }
+        if (!$done) { $handler->write(); }
+        $handler->close();
+    }
+}
+$input = $argc > 0 ? 'yes' : 2;
+var_dump(ciOptionValue([]), ciOptionValue(['read_and_close' => $input]), ciOptionValue(['read_and_close' => false]), ciOptionValue(['read_and_close' => 2]));
+ciUseHandler(new CIFlowBoth(), true); echo '|';
+ciUseHandler(new CIFlowBoth(), false); echo '|';
+ciUseHandler(new CIFlowSinkOnly(), true); echo '|';
+ciUseHandler(null, true); echo "\n";
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            let out = compile_and_run_with_heap_debug(source);
+            assert!(out.success, "{}", out.stderr);
+            assert_eq!(out.stdout, "bool(false)\nstring(3) \"yes\"\nbool(false)\nint(2)\ntc|wc|wc|\n");
+            assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Boxed concrete arrays keep element and key layouts across value-reading builtins.
+#[test]
+fn test_nullable_fallback_flow_review_typed_array_builtins_runtime() {
+    let source = r#"<?php
+function typedChunkDefault(bool $flag): void {
+    $a = $flag ? [1, 2, 2] : null;
+    $a ??= [3, 3];
+    $saved = $a;
+    foreach (array_chunk($a, 2) as $chunk) { echo $chunk[0] + 1, ","; }
+    echo "|";
+    foreach (array_chunk($a, 2, true) as $chunk) {
+        foreach ($chunk as $key => $value) { echo $key, ":", $value, ";"; }
+    }
+    echo "|", min($a), ":", max($a), "|", $saved[0], "\n";
+}
+function typedHashDefault(bool $flag): void {
+    $a = $flag ? ['one' => 1, 'two' => 2] : null;
+    $a = $a ?? ['fallback' => 3];
+    foreach (array_chunk($a, 1, true) as $chunk) {
+        foreach ($chunk as $key => $value) { echo $key, ":", $value, ";"; }
+    }
+    echo "|";
+    foreach (array_chunk($a, 1) as $chunk) {
+        foreach ($chunk as $key => $value) { echo $key, ":", $value, ";"; }
+    }
+    echo "|";
+    foreach (array_count_values($a) as $key => $count) { echo $key, ":", $count, ";"; }
+    echo "\n";
+}
+function typedStringsDefault(bool $flag): void {
+    $a = $flag ? ['x', 'y'] : null;
+    $a ??= ['a', 'b'];
+    echo $a[0], $a[1], "|";
+    vprintf("%s:%s\n", $a);
+}
+function guardedChunks(bool $flag): void {
+    $a = $flag ? [4, 5] : null;
+    if ($a === null) { return; }
+    foreach (array_chunk($a, 1) as $chunk) { echo $chunk[0]; }
+    echo "\n";
+}
+$flag = $argc > 0;
+typedChunkDefault($flag); typedChunkDefault(!$flag);
+typedHashDefault($flag); typedHashDefault(!$flag);
+typedStringsDefault($flag); typedStringsDefault(!$flag);
+guardedChunks($flag); guardedChunks(!$flag);
+"#;
+    let expected = "2,3,|0:1;1:2;2:2;|1:2|1\n4,|0:3;1:3;|3:3|3\none:1;two:2;|0:1;0:2;|1:1;2:1;\nfallback:3;|0:3;|3:1;\nxy|x:y\nab|a:b\n45\n";
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), expected);
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Dynamic int-return validation stays observable and catchable in every callable body.
+#[test]
+fn test_nullable_fallback_flow_review_return_boundaries_runtime() {
+    let source = r#"<?php
+function checkedReturnBoundary(mixed $input): int { return $input; }
+class ReturnBoundaryRuntimeBox {
+    public static function read(mixed $input): int { return $input; }
+}
+function recoverReturnBoundary(?int $value, mixed $input): int {
+    $value ??= 1;
+    $ignored = 0;
+    try { $ignored = checkedReturnBoundary($input); }
+    catch (TypeError $error) { $value = null; $value ??= 2; }
+    echo $ignored, "\n";
+    return $value;
+}
+function explicitReturnBoundary(?int $value, mixed $input): int {
+    $value = $value ?? 1;
+    $ignored = 0;
+    try { $ignored = ReturnBoundaryRuntimeBox::read($input); }
+    catch (TypeError $error) { $value = null; $value = $value ?? 2; }
+    echo $ignored, "\n";
+    return $value;
+}
+function localReturnBoundary(?int $value, mixed $input): int {
+    try { return $input; }
+    catch (TypeError $error) { $value ??= 2; return $value; }
+}
+function closureReturnBoundary(?int $value, mixed $input): int {
+    $callback = fn(mixed $item): int => $item;
+    $value ??= 1;
+    $ignored = 0;
+    try { $ignored = $callback($input); }
+    catch (TypeError $error) { $value = null; $value ??= 2; }
+    echo $ignored, "\n";
+    return $value;
+}
+function discardedReturnBoundary(?int $value, mixed $input): int {
+    $value ??= 1;
+    try { checkedReturnBoundary($input); }
+    catch (TypeError $error) { $value = null; $value ??= 2; }
+    return $value;
+}
+$input = $argc > 0 ? 'bad' : 42;
+var_dump(recoverReturnBoundary(null, $input), recoverReturnBoundary(null, 7));
+var_dump(explicitReturnBoundary(null, $input), explicitReturnBoundary(null, 7));
+var_dump(localReturnBoundary(null, $input), localReturnBoundary(null, 7));
+var_dump(closureReturnBoundary(null, $input), closureReturnBoundary(null, 7));
+var_dump(discardedReturnBoundary(null, $input), discardedReturnBoundary(null, 7));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "0\n7\nint(2)\nint(1)\n0\n7\nint(2)\nint(1)\nint(2)\nint(7)\n0\n7\nint(2)\nint(1)\nint(2)\nint(1)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Guarded and coalesced array reads convert boxed storage before native min/max reduction.
+#[test]
+fn test_nullable_fallback_flow_review_boxed_array_reductions_runtime() {
+    let source = r#"<?php
+function coalescedArrayReduction(?array $value): void {
+    $value ??= [];
+    $value[] = 5;
+    var_dump(min($value), max($value));
+}
+function explicitArrayReduction(?array $value): void {
+    $value = $value ?? [];
+    $value[2] = 5;
+    var_dump(min($value), max($value));
+}
+function guardedArrayReduction(?array $value): void {
+    if ($value === null) { return; }
+    $value[] = 5;
+    var_dump(min($value), max($value));
+}
+coalescedArrayReduction(null); coalescedArrayReduction([1, 2]);
+coalescedArrayReduction(['first' => 3, 'second' => 1]);
+explicitArrayReduction(null); explicitArrayReduction([1, 2]);
+guardedArrayReduction(null); guardedArrayReduction([1, 2]);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "int(5)\nint(5)\nint(1)\nint(5)\nint(1)\nint(5)\nint(5)\nint(5)\nint(1)\nint(5)\nint(1)\nint(5)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Appends and indexed stores in finally widen nullable containers on the continuing path.
+#[test]
+fn test_nullable_fallback_flow_review_finally_container_runtime() {
+    let source = r#"<?php
+function appendFinallyContainer(bool $flag): int {
+    $value = $flag ? [1, 2] : null;
+    try { if ($value === null) { return 0; } }
+    finally { $value[] = 'abc'; }
+    return strlen($value[2]);
+}
+function keyedFinallyContainer(bool $flag): int {
+    $value = $flag ? [1, 2] : null;
+    try { if ($value === null) { return 0; } }
+    finally { $value[2] = 'abc'; }
+    return strlen($value[2]);
+}
+function expressionFinallyContainer(bool $flag): int {
+    $value = $flag ? [1, 2] : null;
+    try { if ($value === null) { return 0; } }
+    finally { $ignored = ($value[2] = 'abc'); }
+    return strlen($value[2]);
+}
+function genericFinallyContainer(?array $value): array {
+    try { if ($value === null) { return []; } }
+    finally { $value[] = 1; }
+    return $value;
+}
+var_dump(count(genericFinallyContainer([2])), count(genericFinallyContainer(null)));
+var_dump(appendFinallyContainer(true), appendFinallyContainer(false));
+var_dump(keyedFinallyContainer(true), keyedFinallyContainer(false));
+var_dump(expressionFinallyContainer(true), expressionFinallyContainer(false));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "int(2)\nint(0)\nint(3)\nint(0)\nint(3)\nint(0)\nint(3)\nint(0)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Finally sees every exit while only its continuing path reaches the following consumer.
+#[test]
+fn test_nullable_fallback_flow_review_finally_continuation_runtime() {
+    let source = r#"<?php
+function returnFinallyContinuation(?int $value, bool $closed): int {
+    try { if ($closed || $value === null) { return 0; } }
+    finally { echo "return\n"; }
+    return $value;
+}
+final class FinallyContinuationService {}
+function serviceFinallyContinuation(?FinallyContinuationService $value, bool $closed): FinallyContinuationService {
+    try { if ($closed || $value === null) { throw new LogicException('exit'); } }
+    finally { echo "service\n"; }
+    return $value;
+}
+function continueFinallyContinuation(?int $value): int {
+    $total = 0;
+    foreach ([1, 2] as $index) {
+        try { if ($value === null) { continue; } }
+        finally { echo "continue\n"; }
+        $total += $value;
+    }
+    return $total;
+}
+function breakFinallyContinuation(?int $value): int {
+    $total = 0;
+    foreach ([1, 2] as $index) {
+        try { if ($value === null) { break; } }
+        finally { echo "break\n"; }
+        $total += $value;
+    }
+    return $total;
+}
+function assignedFinallyContinuation(?int $value, bool $flag): int {
+    $value ??= 1;
+    try { if ($flag) { $value = null; return 0; } }
+    finally { echo "assigned\n"; }
+    return $value;
+}
+function explicitFinallyContinuation(?int $value, bool $flag): int {
+    $value = $value ?? 1;
+    try { if ($flag) { $value = null; return 0; } }
+    finally { echo "explicit\n"; }
+    return $value;
+}
+function storeFinallyContinuation(?int $value, bool $flag): int {
+    try { if ($value === null) { return 0; } }
+    finally { if ($flag) { $value = 7; } }
+    return $value;
+}
+function copyFinallyContinuation(?int $value, ?int $other): int {
+    try { if ($value === null) { return 0; } if ($other === null) { return 0; } }
+    finally { $other = 7; $value = $other; }
+    return $value;
+}
+function referenceFinallyContinuation(?int &$value): int {
+    try { if ($value === null) { return 0; } }
+    finally { echo "reference\n"; }
+    return $value;
+}
+function invokeReferenceFinallyContinuation(?int $value): int {
+    return referenceFinallyContinuation($value);
+}
+function refinedFinallyContinuation(?int $value): int {
+    try { echo "refined\n"; }
+    finally { if ($value === null) { return 0; } }
+    return $value;
+}
+var_dump(returnFinallyContinuation(null, false), returnFinallyContinuation(3, false));
+echo get_class(serviceFinallyContinuation(new FinallyContinuationService(), false)), "\n";
+try { serviceFinallyContinuation(null, false); } catch (LogicException $error) { echo "caught\n"; }
+var_dump(continueFinallyContinuation(null), continueFinallyContinuation(3));
+var_dump(breakFinallyContinuation(null), breakFinallyContinuation(3));
+var_dump(assignedFinallyContinuation(null, true), assignedFinallyContinuation(null, false));
+var_dump(explicitFinallyContinuation(null, true), explicitFinallyContinuation(null, false));
+var_dump(storeFinallyContinuation(2, true), storeFinallyContinuation(2, false));
+var_dump(copyFinallyContinuation(2, 3));
+var_dump(invokeReferenceFinallyContinuation(5));
+var_dump(invokeReferenceFinallyContinuation(null));
+var_dump(refinedFinallyContinuation(6), refinedFinallyContinuation(null));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "return\nreturn\nint(0)\nint(3)\nservice\nFinallyContinuationService\nservice\ncaught\ncontinue\ncontinue\ncontinue\ncontinue\nint(0)\nint(6)\nbreak\nbreak\nbreak\nint(0)\nint(6)\nassigned\nassigned\nint(0)\nint(1)\nexplicit\nexplicit\nint(0)\nint(1)\nint(7)\nint(2)\nint(7)\nreference\nint(5)\nreference\nint(0)\nrefined\nrefined\nint(6)\nint(0)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Defaults preserve evaluated null stores, skipped values and Mixed return checks.
+#[test]
+fn test_nullable_fallback_flow_review_coalesce_default_runtime() {
+    let source = r#"<?php
+function resetCoalesceDefault(?int &$value): bool { $value = null; return true; }
+function consumeCoalesceDefault(bool $flag): void {}
+function assignedCoalesceDefault(?int $value, ?bool $other): ?int {
+    $value ??= 1;
+    $other ??= resetCoalesceDefault($value);
+    return $value;
+}
+function explicitCoalesceDefault(?int $value, ?bool $other): ?int {
+    $value = $value ?? 1;
+    $other = $other ?? resetCoalesceDefault($value);
+    return $value;
+}
+function guardedCoalesceDefault(?int $value, ?bool $other, bool $closed): ?int {
+    if ($closed || $value === null) { return 7; }
+    consumeCoalesceDefault($other ??= resetCoalesceDefault($value));
+    return $value;
+}
+function directCoalesceDefault(?int $value, ?bool $other): ?int {
+    $value ??= 1;
+    $other ??= (($value = null) === null);
+    return $value;
+}
+function skippedCoalesceDefault(?int $value, bool $other): int {
+    $value ??= 1;
+    $other ??= resetCoalesceDefault($value);
+    return $value;
+}
+var_dump(assignedCoalesceDefault(null, null), assignedCoalesceDefault(null, false));
+var_dump(explicitCoalesceDefault(null, null), explicitCoalesceDefault(null, true));
+var_dump(guardedCoalesceDefault(2, null, false), guardedCoalesceDefault(2, false, false));
+var_dump(directCoalesceDefault(null, null), directCoalesceDefault(null, true));
+var_dump(skippedCoalesceDefault(null, false));
+"#;
+    let mixed = r#"<?php
+function resetMixedCoalesceDefault(mixed &$value): bool { $value = null; return true; }
+function checkedCoalesceDefault(?int $value, ?bool $other): int {
+    $value ??= 1;
+    $other ??= resetMixedCoalesceDefault($value);
+    return $value;
+}
+checkedCoalesceDefault(null, null);
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            assert_eq!(compile_and_run(source), "NULL\nint(1)\nNULL\nint(1)\nNULL\nint(2)\nNULL\nint(1)\nint(1)\n");
+            let error = compile_and_run_expect_failure(mixed);
+            assert!(error.contains("Return value must be of type int, null returned"), "{error}");
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Do-while, infinite-loop breaks, exhaustive switches and object references keep exit views.
+#[test]
+fn test_nullable_fallback_flow_review_must_run_runtime() {
+    let source = r#"<?php
+function once(?int $value): int {
+    do { if ($value === null) { return 0; } } while (false);
+    return $value;
+}
+function forever(?int $value): int {
+    while (true) { if ($value === null) { return 0; } break; }
+    return $value;
+}
+function exhaustive(?int $value, int $key): int {
+    switch ($key) {
+        case 1: if ($value === null) { return 0; } break;
+        default: if ($value === null) { return 0; } break;
+    }
+    return $value;
+}
+class Box { public int $value = 1; }
+function swapBox(Box &$box): void { $box = new Box(); $box->value = 9; }
+function replaced(?Box $box): int {
+    if ($box === null) { return -1; }
+    swapBox($box);
+    return $box->value;
+}
+function finalized(?int $value, bool $flag): ?int {
+    $value ??= 1;
+    foreach ([1] as $i) {
+        try { if ($flag) { $value = null; break; } }
+        finally { var_dump($value); }
+    }
+    return $value;
+}
+function returnedGuard(?int $value): void {
+    $value ??= 1;
+    try { if ($value !== null) { $value = null; return; } }
+    finally { var_dump($value); }
+}
+function thrownGuard(?int $value): void {
+    $value ??= 1;
+    try { if ($value !== null) { $value = null; throw new RuntimeException('failed'); } }
+    finally { var_dump($value); }
+}
+function showInt(int $value): void { var_dump($value); }
+function caughtGuard(?int $value): void {
+    $value ??= 1;
+    try { if ($value !== null) { $value = null; throw new RuntimeException('failed'); } }
+    catch (RuntimeException $error) { $value ??= 2; }
+    finally { showInt($value); }
+}
+function isolatedScope(?int $value): void {
+    $value ??= 1;
+    try { $noop = function (?int $value): void { $value = null; return; }; $noop(null); }
+    finally { showInt($value); }
+}
+var_dump(once(5), once(null), forever(6), forever(null));
+var_dump(exhaustive(7, 1), exhaustive(null, 2), replaced(new Box()));
+var_dump(finalized(3, true), finalized(3, false));
+returnedGuard(3);
+try { thrownGuard(3); } catch (RuntimeException $error) { echo get_class($error), "\n"; }
+caughtGuard(3); isolatedScope(4);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "int(5)\nint(0)\nint(6)\nint(0)\nint(7)\nint(0)\nint(9)\nNULL\nint(3)\nNULL\nint(3)\nNULL\nNULL\nRuntimeException\nint(2)\nint(4)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Catch entries and never-call unwinding observe the payload written before the throw.
+#[test]
+fn test_nullable_fallback_flow_review_catch_unwind_runtime() {
+    let source = r#"<?php
+function failFlow(): never { throw new RuntimeException('failed'); }
+function needFlow(int $v): void { var_dump($v); }
+function caughtFlow(?int $value): void {
+    $value ??= 4;
+    try { if ($value !== null) { $value = null; FAILFLOW(); } }
+    catch (RuntimeException $error) { echo $value === null ? "NULL\n" : "wrong\n"; $value ??= 2; needFlow($value); }
+    finally { needFlow($value); }
+    needFlow($value);
+}
+function unwindFlow(?int $value): void {
+    $value = $value ?? 4;
+    try { if ($value !== null) { $value = null; failFlow(); } }
+    finally { var_dump($value); }
+}
+caughtFlow(null);
+try { unwindFlow(null); } catch (RuntimeException $error) { echo "caught\n"; }
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "NULL\nint(2)\nint(2)\nint(2)\nNULL\ncaught\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Statement callbacks preserve nullable payloads while repaired handlers expose typed reads.
+#[test]
+fn test_nullable_fallback_flow_review_statement_callbacks_runtime() {
+    let source = r#"<?php
+class CallbackLabelFlow { public function __toString(): string { throw new RuntimeException('label'); } }
+class CallbackBagFlow { public function __set(string $name, mixed $value): void { throw new RuntimeException('set'); } }
+function callbackRowsFlow(): iterable { yield 1; throw new RuntimeException('rows'); }
+function callbackLabelFlow(?int $value): int {
+    $value ??= 5;
+    try { $value = null; echo new CallbackLabelFlow(); }
+    catch (Throwable $error) { $value ??= 7; return $value; }
+    return 0;
+}
+function callbackBagFlow(?int $value): int {
+    $value ??= 5;
+    $bag = new CallbackBagFlow();
+    try { $value = null; $bag->missing = 1; }
+    catch (Throwable $error) { $value ??= 8; return $value; }
+    return 0;
+}
+function callbackRowsValueFlow(?int $value): int {
+    $value ??= 5;
+    try { foreach (callbackRowsFlow() as $row) { $value = null; continue; } }
+    catch (Throwable $error) { $value ??= 9; return $value; }
+    return 0;
+}
+function callbackFlagFlow(?int $value): ?int {
+    $value ??= 5;
+    $flag = null;
+    $set = function () use (&$flag) { $flag = 1; };
+    try { $set(); if ($flag === null) { return -1; } $value = null; }
+    catch (RuntimeException $error) {}
+    return $value;
+}
+function callbackSwitchFlow(?int $value, int $key): ?int {
+    switch ($key) { case 1: $value = null; case 2: return $value; default: return 4; }
+}
+var_dump(callbackLabelFlow(null), callbackBagFlow(null), callbackRowsValueFlow(null));
+var_dump(callbackFlagFlow(null), callbackSwitchFlow(3, 1), callbackSwitchFlow(3, 2));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "int(7)\nint(8)\nint(9)\nNULL\nNULL\nint(3)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Declaration initializers and reference-source calls preserve caught null writes at runtime.
+#[test]
+fn test_nullable_fallback_flow_review_initializer_runtime() {
+    let source = r#"<?php
+function failInitializerFlow(): int { throw new RuntimeException('init'); }
+class ReferenceInitializerFlow {
+    public function &item(): int { throw new RuntimeException('ref'); }
+}
+function indexInitializerFlow(?int $value): ?int {
+    $value ??= 4;
+    $array = [1, 2];
+    try { $reference = &$array[failInitializerFlow()]; }
+    catch (RuntimeException $error) { $value = null; }
+    return $value;
+}
+function methodInitializerFlow(?int $value): ?int {
+    $value ??= 4;
+    $holder = new ReferenceInitializerFlow();
+    try { $reference = &$holder->item(); }
+    catch (RuntimeException $error) { $value = null; }
+    return $value;
+}
+function typedInitializerFlow(?int $value): ?int {
+    $value ??= 4;
+    try { int $local = failInitializerFlow(); }
+    catch (RuntimeException $error) { $value = null; }
+    return $value;
+}
+function staticInitializerFlow(?int $value): ?int {
+    $value ??= 4;
+    try { static $saved = failInitializerFlow(); }
+    catch (RuntimeException $error) { $value = null; }
+    return $value;
+}
+var_dump(indexInitializerFlow(1), methodInitializerFlow(1));
+var_dump(typedInitializerFlow(1), staticInitializerFlow(1));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "NULL\nNULL\nNULL\nNULL\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Nested stores retain nullable payloads and skipped nullsafe arguments preserve the entry value.
+#[test]
+fn test_nullable_fallback_flow_review_eager_runtime() {
+    let source = r#"<?php
+class EagerRuntimeFlow {
+    public mixed $item = null;
+    public function __construct(mixed $arg = null) {}
+    public function take(int $value): void {}
+    public function accept(int $value): bool { return true; }
+    public function __set(string $name, mixed $value): void { throw new RuntimeException('set'); }
+}
+function eagerInstanceFlow(?int $value): ?int {
+    $value ??= 4;
+    if (($value = null) instanceof EagerRuntimeFlow) { echo "wrong\n"; }
+    return $value;
+}
+function eagerCloneFlow(?int $value): ?int {
+    $value ??= 4;
+    $copy = clone (($value = null) ?? new EagerRuntimeFlow());
+    return $value;
+}
+function eagerFilterFlow(?int $value): ?int {
+    $value ??= 4;
+    $kept = array_filter([1, 0, 2], $value = null);
+    echo count($kept), "\n";
+    return $value;
+}
+function eagerReceiverFlow(?int $unused): EagerRuntimeFlow { return new EagerRuntimeFlow(); }
+function eagerCallableFlow(?int $value): ?int {
+    $value ??= 4;
+    $kept = array_filter([1], eagerReceiverFlow($value = null)->accept(...));
+    echo count($kept), "\n";
+    return $value;
+}
+function eagerNullsafeFlow(?int $value, ?EagerRuntimeFlow $receiver): ?int {
+    $receiver?->take($value ??= 4);
+    return $value;
+}
+function eagerMatchFlow(?int $value, int $key): ?int {
+    $value ??= 4;
+    return match ($key) { ($value = null) => 0, default => $value };
+}
+function eagerSetterFlow(?int $value, EagerRuntimeFlow $receiver, string $property): ?int {
+    $value ??= 4;
+    try { $receiver->{$property} = 1; }
+    catch (RuntimeException $error) { $value = null; }
+    return $value;
+}
+var_dump(eagerInstanceFlow(2), eagerCloneFlow(2));
+var_dump(eagerFilterFlow(2), eagerCallableFlow(2));
+var_dump(eagerNullsafeFlow(null, null), eagerNullsafeFlow(null, new EagerRuntimeFlow()));
+var_dump(eagerMatchFlow(2, 1), eagerSetterFlow(2, new EagerRuntimeFlow(), 'missing'));
+"#;
+    let dynamic = "<?php class DynamicOperandFlow { public function __construct(mixed $arg = null) {} } function dynamicOperandFlow(?int $value, string $className): ?int { $value ??= 4; new $className($value = null); return $value; } var_dump(dynamicOperandFlow(2, 'DynamicOperandFlow'));";
+    for optimized in [true, false] {
+        let run = || {
+            assert_eq!(compile_and_run(source), "NULL\nNULL\n2\n1\nNULL\nNULL\nNULL\nint(4)\nNULL\nNULL\n");
+            assert_eq!(compile_and_run(dynamic), "NULL\n");
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Loop-tail locals and nullable continue-edge references survive checking in execution order.
+#[test]
+fn test_nullable_fallback_flow_review_loop_tail_runtime() {
+    let source = r#"<?php
+for ($i = 0; $i < 3; $prev = $i, $i++) { if ($i > 0) { echo $prev, "\n"; } }
+for ($i = 0, $acc = 0; $i < 3; $i++, $total = $acc) { $acc += $i; }
+echo $total, "\n";
+function nextLine(): ?string { return null; }
+do { $k = 1; } while (($line = nextLine()) !== null);
+var_dump($line);
+function bump(?int &$x): void { $x = ($x ?? 0) + 1; }
+function run(?int $value): void {
+    for ($i = 0; $i < 3; $i++, bump($value)) {
+        echo $i, ":", var_export($value, true), "\n";
+        if ($value !== null) { continue; }
+        $value = null;
+        break;
+    }
+    var_dump($value);
+}
+function switched(?int $value, int $key): ?int {
+    $value ??= 3;
+    switch ($key) { case 1: if ($key > 0) { $value = null; break; } break; }
+    return $value;
+}
+function switchedContinue(?int $value, int $key): ?int {
+    $value = $value ?? 3;
+    foreach ([1, 2] as $i) {
+        switch ($key) { case 1: if ($key > 0) { $value = null; continue 2; } break; }
+    }
+    return $value;
+}
+function resetValue(?int &$value): void { $value = null; }
+function assignedLoop(?int $value, bool $flag): void {
+    foreach ([1, 2] as $i) { $value = $flag ? null : 1; }
+    resetValue($value);
+    var_dump($value);
+}
+function defaultFirst(?int $value, int $key): ?int {
+    $value ??= 5;
+    switch ($key) { default: $value = null; case 1: return $value; }
+    return $value;
+}
+run(5); run(null); var_dump(switched(5, 1), switchedContinue(5, 1));
+assignedLoop(5, false); assignedLoop(null, true); var_dump(defaultFirst(3, 0));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "0\n1\n3\nNULL\n0:5\n1:6\n2:7\nint(8)\n0:NULL\nNULL\nNULL\nNULL\nNULL\nNULL\nNULL\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Terminal loop stores preserve following complements and joined loop-exit values.
+#[test]
+fn test_nullable_fallback_flow_review_loop_control_runtime() {
+    let source = r#"<?php
+function continued(?int $value): int {
+    foreach ([1, 2] as $x) {
+        if ($value === null) { $value = 3; continue; }
+        return $value;
+    }
+    return 0;
+}
+function broken(?int $value): int {
+    foreach ([1, 2] as $x) {
+        if ($value === null) { $value = 3; break; }
+        return $value;
+    }
+    return 0;
+}
+function nulled(?int $value): ?int {
+    $value ??= 1;
+    foreach ([1, 2] as $x) {
+        if (is_int($value)) { $value = null; break; }
+    }
+    return $value;
+}
+function updated(?int $value): int {
+    for ($i = 0; $i < 2; $i++) {
+        if ($value === null) { $value = 4; continue; }
+        return $value;
+    }
+    return 0;
+}
+function finalized(?int $value): ?int {
+    foreach ([1] as $x) {
+        try { if ($value === null) { $value = 3; break; } }
+        finally { $value = null; }
+    }
+    return $value;
+}
+var_dump(continued(null), continued(5), broken(null), broken(5));
+var_dump(nulled(null), updated(null), updated(5), finalized(null));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "int(3)\nint(5)\nint(0)\nint(5)\nNULL\nint(4)\nint(5)\nNULL\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Compound guards agree with nested guards for null, zero and false defaults.
+#[test]
+fn test_nullable_fallback_flow_scalar_runtime() {
+    let source = r#"<?php
+function intFallback(?string $raw, ?int $default = null): int {
+    if ($raw === null && $default !== null) { return $default; }
+    return 7;
+}
+function boolFallback(?string $raw, ?bool $default = null): bool {
+    if (!($raw !== null || $default === null)) { return $default; }
+    return true;
+}
+function nested(?string $raw, ?int $default = null): int {
+    if ($raw === null) { if ($default !== null) { return $default; } }
+    return 7;
+}
+foreach ([null, 'present'] as $raw) {
+    foreach ([null, 0, 42] as $default) {
+        echo intFallback($raw, $default), ':', nested($raw, $default), '|';
+    }
+    foreach ([null, false, true] as $default) {
+        echo boolFallback($raw, $default) ? 'T' : 'F';
+    }
+    echo "\n";
+}
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "7:7|0:0|42:42|TFT\n7:7|7:7|7:7|TTT\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// OR guards retain concrete object values only on the path where every operand is false.
+#[test]
+fn test_nullable_fallback_flow_object_runtime() {
+    let source = r#"<?php
+final class Service { public string $name = 'service'; }
+function service(?Service $value, bool $closed): Service {
+    if ($closed || $value === null) { throw new LogicException('unavailable'); }
+    return $value;
+}
+function attempt(?Service $value, bool $closed): void {
+    try { echo service($value, $closed)->name, "\n"; }
+    catch (LogicException $error) { echo "unavailable\n"; }
+}
+attempt(null, false); attempt(new Service(), false);
+attempt(null, true); attempt(new Service(), true);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "unavailable\nservice\nunavailable\nunavailable\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Explicit and compound coalescing assignments keep both the receiver and its property precise.
+#[test]
+fn test_nullable_fallback_flow_coalesce_runtime() {
+    let source = r#"<?php
+final class Options {
+    public readonly string $path;
+    public function __construct(string $path = 'default') { $this->path = $path; }
+}
+
+function consume(string $path): void { echo $path, "\n"; }
+function run(?Options $options = null): void {
+    $options = $options ?? new Options();
+    consume($options->path);
+}
+function compound(?Options $options = null): void {
+    $options ??= new Options();
+    consume($options->path);
+}
+run(); run(new Options('given'));
+compound(); compound(new Options('given'));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "default\ngiven\ndefault\ngiven\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Reference calls keep nullable slots addressable after short-circuit and coalescing refinement.
+#[test]
+fn test_nullable_fallback_flow_reference_runtime() {
+    let source = r#"<?php
+function resetValue(?int &$value): bool { $value = null; return true; }
+function inspect(?int $value): void {
+    echo $value !== null && resetValue($value) ? 'reset:' : 'skip:';
+    echo is_null($value) ? 'null|' : 'value|';
+    $value ??= 5;
+    resetValue($value);
+    echo is_null($value) ? "null\n" : "value\n";
+}
+inspect(null); inspect(2);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "skip:null|null\nreset:null|null\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Expression assignment results preserve nullable integer reference storage after returning a value.
+#[test]
+fn test_nullable_fallback_flow_review_expression_reference_runtime() {
+    for assignment in [
+        "consume($value = $value ?? 5);",
+        "consume($value ??= 5);",
+        "echo ($value = $value ?? 5), '|';",
+        "$assigned = ($value ??= 5); echo $assigned, '|';",
+    ] {
+        let source = format!(r#"<?php
+function consume(int $value): void {{ echo $value, '|'; }}
+function resetValue(?int &$value): void {{ $value = null; }}
+function run(?int $value = null): void {{
+    {assignment}
+    resetValue($value);
+    echo is_null($value) ? "null\n" : "value\n";
+}}
+run(); run(2);
+"#);
+        for optimized in [true, false] {
+            let run = || assert_eq!(compile_and_run(&source), "5|null\n2|null\n", "{assignment}");
+            if optimized { run(); } else { without_ir_opt(run); }
+        }
+    }
+}
+
+/// Normalization after a guard keeps its read type and the original nullable reference slot.
+#[test]
+fn test_nullable_fallback_flow_review_guarded_store_runtime() {
+    let source = r#"<?php
+function normalize(?string $value): string {
+    if ($value === null) { return ''; }
+    $value = trim($value);
+    return $value;
+}
+function resetValue(?int &$value): void { $value = null; }
+function run(?int $value): void {
+    if ($value === null) { return; }
+    $value = 5;
+    resetValue($value);
+    echo $value ?? 'null', "\n";
+}
+echo normalize(' ok '), "\n";
+run(1);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "ok\nnull\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Throwable joins on OR-true and AND-false paths preserve executable exception handling.
+#[test]
+fn test_nullable_fallback_flow_review_throwable_runtime() {
+    let source = r#"<?php
+class A extends Exception {}
+class B extends Exception {}
+function rethrow(Throwable $error): void {
+    if ($error instanceof A || $error instanceof B) { throw $error; }
+}
+function filter(Throwable $error, bool $closed): void {
+    if ($error instanceof A && $closed) { return; }
+    throw $error;
+}
+try { rethrow(new A()); } catch (A $error) { echo "a|"; }
+try { rethrow(new B()); } catch (B $error) { echo "b|"; }
+try { filter(new B(), false); } catch (B $error) { echo "filtered\n"; }
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "a|b|filtered\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// A reference capture can replace a coalesced value, while a value capture retains its copy.
+#[test]
+fn test_nullable_fallback_flow_review_capture_runtime() {
+    let source = r#"<?php
+final class S {}
+function cleared(?S $value): ?S {
+    $value ??= new S();
+    $callback = function () use (&$value) { $value = null; };
+    $callback();
+    return $value;
+}
+
+function copied(?S $value): S {
+    $value ??= new S();
+    $callback = function () use ($value) { return $value; };
+    $value = null;
+    return $callback();
+}
+echo is_null(cleared(null)) ? 'null|' : 'bad|';
+echo get_class(copied(null)), "\n";
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "null|S\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Widened values remain usable through matching mixed references and reference captures.
+#[test]
+fn test_nullable_fallback_flow_review_storage_effects_runtime() {
+    let source = r#"<?php
+function widen(mixed &$value): void { $value = 'str'; }
+function resetMixed(mixed &$value): void { $value = null; }
+function captured(?int $value): void {
+    $value ??= 1;
+    widen($value);
+    $callback = function () use (&$value) { echo $value, '|'; };
+    $callback();
+    echo gettype($value), "\n";
+}
+function incremented(?int $value): void {
+    $value ??= 1;
+    ++$value;
+    echo gettype($value), ':';
+    resetMixed($value);
+    echo is_null($value) ? "null\n" : "bad\n";
+}
+function converted(?int $value): void {
+    $value ??= 1;
+    settype($value, 'string');
+    resetMixed($value);
+    echo is_null($value) ? "null\n" : "bad\n";
+}
+captured(null); incremented(null); incremented(9223372036854775807); converted(null);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "str|string\ninteger:null\ndouble:null\nnull\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Nullable returns and mixed matches observe writes only on the selected expression path.
+#[test]
+fn test_nullable_fallback_flow_review_conditional_runtime() {
+    let source = r#"<?php
+final class S {}
+function resetObject(?S &$value): bool { $value = null; return true; }
+function resetValue(?int &$value): bool { $value = null; return true; }
+function widen(mixed &$value): bool { $value = 'str'; return true; }
+function objectRun(?S $value, bool $flag): ?S {
+    $value ??= new S();
+    $r = $flag ? resetObject($value) : false;
+    return $value;
+}
+function integerRun(?int $value, bool $flag): ?int {
+    $value ??= 1;
+    $flag && resetValue($value);
+    return $value;
+}
+function matchRun(?int $value, int $n): mixed {
+    $value ??= 1;
+    $r = match ($n) { 1 => widen($value), default => false };
+    return $value;
+}
+var_dump(is_null(objectRun(null, false)), is_null(objectRun(null, true)));
+var_dump(integerRun(null, false), integerRun(null, true));
+var_dump(matchRun(null, 0), matchRun(null, 1));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "bool(false)\nbool(true)\nint(1)\nNULL\nint(1)\nstring(3) \"str\"\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Incompatible dynamic defaults and bool stores widen an integer/null slot to boxed storage.
+#[test]
+fn test_nullable_fallback_flow_review_union_stores_runtime() {
+    let source = r#"<?php
+function explicit(?int $value, mixed $default): void {
+    $value = $value ?? $default;
+    var_dump($value);
+}
+function compound(?int $value, mixed $default): void {
+    $value ??= $default;
+    var_dump($value);
+}
+function expression(?int $value, mixed $default): void {
+    var_dump($value = $value ?? $default);
+    var_dump($value);
+}
+function booleanStore(?int $value): void {
+    if ($value !== null) { $value = true; var_dump($value); }
+}
+explicit(null, 'zz'); compound(null, 1.5); expression(null, 'zz');
+explicit(2, 'zz'); booleanStore(1);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "string(2) \"zz\"\nfloat(1.5)\nstring(2) \"zz\"\nstring(2) \"zz\"\nint(2)\nbool(true)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// A conditional mixed-reference null reaches the runtime return check instead of becoming zero.
+#[test]
+fn test_nullable_fallback_flow_review_conditional_return_error() {
+    let source = r#"<?php
+function widen(mixed &$value): bool { $value = null; return true; }
+function run(?int $value, bool $flag): int {
+    $value ??= 1;
+    $flag && widen($value);
+    return $value;
+}
+run(null, true);
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            let error = compile_and_run_expect_failure(source);
+            assert!(error.contains("Return value must be of type int, null returned"), "{error}");
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Destructuring and catch variables can replace a coalesced binding with a fresh value type.
+#[test]
+fn test_nullable_fallback_flow_review_rebinding_runtime() {
+    let source = r#"<?php
+function destructured(?int $value): void {
+    $value ??= 1;
+    [$value] = ['str'];
+    var_dump($value);
+    $value = 7;
+    var_dump($value);
+}
+function caught(?int $value): void {
+    $value ??= 1;
+    try { throw new Exception(); }
+    catch (Exception $value) {
+        $value = new Exception();
+        echo get_class($value), "\n";
+    }
+}
+function absentAfterLoop(): void {
+    $value = 1;
+    foreach ([1] as $_) { unset($value); break; }
+    var_dump(isset($value), $value ?? null);
+}
+destructured(null); caught(null); absentAfterLoop();
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "string(3) \"str\"\nint(7)\nException\nbool(false)\nNULL\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Guarded null stores and matching reference writes preserve nullable values at branch exits.
+#[test]
+fn test_nullable_fallback_flow_review_guarded_stores_runtime() {
+    let source = r#"<?php
+function nullIf(?int $value): ?int {
+    $value ??= 1;
+    if (is_int($value)) { $value = null; }
+    return $value;
+}
+function nullWhile(?int $value): ?int {
+    $value ??= 1;
+    while (is_int($value)) { $value = null; }
+    return $value;
+}
+function nullTernary(?int $value): ?int {
+    $value ??= 1;
+    $r = is_int($value) ? ($value = null) : 0;
+    return $value;
+}
+function resetValue(?int &$value): void { $value = null; }
+function nestedReference(?int $value): ?int {
+    $value ??= 1;
+    if ($value !== null) { resetValue($value); }
+    return $value;
+}
+function compatible(?int $value): int {
+    $value ??= 1;
+    if (is_int($value)) { $value = 2; }
+    return $value;
+}
+var_dump(nullIf(null), nullWhile(null), nullTernary(null), nestedReference(null), compatible(null));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "NULL\nNULL\nNULL\nNULL\nint(2)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Fresh guards publish boxed increment storage before later matching Mixed reference calls.
+#[test]
+fn test_nullable_fallback_flow_review_fresh_guard_runtime() {
+    let source = r#"<?php
+function resetValue(mixed &$value): void { $value = null; }
+function guardedIf(?int $value): mixed {
+    if ($value !== null) { $value++; }
+    return $value;
+}
+function guardedWhile(?int $value): mixed {
+    while ($value !== null) { $value++; break; }
+    resetValue($value);
+    return $value;
+}
+function guardedTernary(?int $value): mixed {
+    $r = $value !== null ? $value++ : 0;
+    resetValue($value);
+    return $value;
+}
+function guardedAnd(?int $value): mixed {
+    if ($value !== null && $value++ > 100) { echo ''; }
+    resetValue($value);
+    return $value;
+}
+var_dump(guardedIf(5), guardedIf(null));
+echo gettype(guardedIf(9223372036854775807)), "\n";
+var_dump(guardedWhile(5), guardedWhile(null), guardedTernary(5), guardedTernary(null), guardedAnd(5), guardedAnd(null));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source, "int(6)\nNULL\ndouble\nNULL\nNULL\nNULL\nNULL\nNULL\nNULL\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// A loop boxes nullable integer storage before an earlier matching Mixed reference call.
+#[test]
+fn test_nullable_fallback_flow_review_loop_reference_runtime() {
+    let source = r#"<?php
+function showValue(mixed &$value): void { var_dump($value); }
+function run(?int $value): void {
+    foreach ([1, 2, 3] as $i) {
+        showValue($value);
+        $value = $i;
+        if ($value !== null) { $value++; }
+    }
+    var_dump($value);
+}
+function coalesced(?int $value): void {
+    $value ??= 10;
+    for ($i = 0; $i < 2; $i++) {
+        showValue($value);
+        if ($value !== null) { $value++; }
+    }
+    var_dump($value);
+}
+run(10); run(null); coalesced(null);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source, "int(10)\nint(2)\nint(3)\nint(4)\nNULL\nint(2)\nint(3)\nint(4)\nint(10)\nint(11)\nint(12)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Incoming nullable references retain their tagged cell and diagnose an unrepresentable float.
+#[test]
+fn test_nullable_fallback_flow_review_incoming_reference_runtime() {
+    let source = r#"<?php
+function update(?int &$value): void { if ($value !== null) { $value++; } }
+function run(?int $value): void { update($value); var_dump($value); }
+run(5); run(null);
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            assert_nullable_flow_heap_output(source, "int(6)\nNULL\n");
+            let loop_source = source.replace("if ($value !== null) { $value++; }",
+                "foreach ([1] as $i) { if ($value !== null) { $value++; } }");
+            assert_nullable_flow_heap_output(&loop_source, "int(6)\nNULL\n");
+            for (update, initial) in [("$value++;", "9223372036854775807"), ("$value--;", "(-9223372036854775807 - 1)")] {
+                for body in [format!("if ($value !== null) {{ {update} }}"),
+                    format!("foreach ([1] as $i) {{ if ($value !== null) {{ {update} }} }}")]
+                {
+                    let overflow = format!("<?php function update(?int &$value): void {{ {body} }} function run(?int $value): void {{ update($value); var_dump($value); }} run({initial});");
+                    let error = compile_and_run_expect_failure(&overflow);
+                    assert!(error.contains("integer overflow") && error.contains("this storage cannot hold"), "{error}");
+                }
+            }
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// A completed array-values call removes the nullable input alternative from its destination.
+#[test]
+fn test_nullable_fallback_flow_ci_guarded_array_values_runtime() {
+    let source = r#"<?php
+function normalize(?array $value): array {
+    if ($value === null) { return []; }
+    $value = array_values($value);
+    return $value;
+}
+echo json_encode(normalize(null)), '|', json_encode(normalize(['key' => 7])), "\n";
+"#;
+    assert_nullable_flow_cli_heap_output(source, "[]|[7]\n");
+}
+
+/// Foreach retirement reads the previous reference payload on every backedge.
+#[test]
+fn test_nullable_fallback_flow_ci_foreach_reference_backedges() {
+    let source = r#"<?php
+function run(): void {
+    $items = [1, 2, 3];
+    foreach ($items as &$value) { $value *= 2; }
+    unset($value);
+    echo implode(',', $items), '|';
+    foreach ($items as $key => &$value) { $value += $key; }
+    unset($value);
+    echo implode(',', $items), "\n";
+}
+run(); run();
+"#;
+    assert_nullable_flow_cli_heap_output(source, "2,4,6|2,5,8\n2,4,6|2,5,8\n");
+}
+
+/// Rebinding an unset catch name pins storage without reading an object as raw null.
+#[test]
+fn test_nullable_fallback_flow_ci_unset_catch_rebinding() {
+    let source = r#"<?php
+function run(): void {
+    for ($i = 0; $i < 2; $i++) {
+        try { throw new Exception('one'); } catch (Exception $error) { echo $error->getMessage(); unset($error); }
+        try { throw new Exception('two'); } catch (Exception $error) { echo $error->getMessage(), "\n"; unset($error); }
+    }
+}
+run();
+"#;
+    assert_nullable_flow_cli_heap_output(source, "onetwo\nonetwo\n");
+}
+
+/// Fixed incoming and captured cells can be forwarded after checked integer updates.
+#[test]
+fn test_nullable_fallback_flow_review_fixed_reference_runtime() {
+    let source = r#"<?php
+function resetValue(?int &$value): void { $value = null; }
+function showValue(?int &$value): void { var_dump($value); }
+function incrementForward(?int &$value): void {
+    if ($value !== null) { $value++; }
+    resetValue($value);
+}
+function decrementForward(?int &$value): void {
+    if ($value !== null) { $value--; }
+    showValue($value);
+}
+function runIncrement(?int $value): void { incrementForward($value); var_dump($value); }
+function runDecrement(?int $value): void { decrementForward($value); }
+function captured(?int $value): void {
+    $show = function () use (&$value) { var_dump($value); };
+    if ($value !== null) { $value++; }
+    resetValue($value);
+    $show();
+}
+function capturedLoop(?int $value): void {
+    $show = function () use (&$value) { var_dump($value); };
+    foreach ([1, 2] as $i) {
+        resetValue($value);
+        $value = $i;
+        if ($value !== null) { $value++; }
+        $show();
+    }
+}
+function maybeCaptured(?int $value, bool $flag): void {
+    if ($flag) {
+        $show = function () use (&$value) { var_dump($value); };
+        $show();
+    }
+    if ($value !== null) { $value++; }
+    resetValue($value);
+    var_dump($value);
+}
+function nullableValue(?int $value): ?int { return $value; }
+function detachedCapture(?int $value): void {
+    $show = function () use (&$value) { var_dump($value); };
+    unset($value);
+    $value = nullableValue(9223372036854775807);
+    if ($value !== null) { $value++; }
+    echo gettype($value), "\n";
+    $show();
+}
+runIncrement(5); runDecrement(5); runDecrement(null); captured(5); capturedLoop(1);
+maybeCaptured(5, false); maybeCaptured(5, true); detachedCapture(5);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source, "NULL\nint(4)\nNULL\nNULL\nint(2)\nint(3)\nNULL\nint(5)\nNULL\ndouble\nint(5)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}

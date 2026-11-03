@@ -191,6 +191,11 @@ pub(crate) fn contextual_callback_arg_positions(builtin_name: &str) -> &'static 
 /// Prefix for synthetic callback arguments; PHP identifiers cannot begin with a digit.
 const CALLBACK_ARG_PLACEHOLDER_PREFIX: &str = "0__elephc_callback_arg";
 
+/// Identifies checker-owned callback arguments whose environment entries are always present.
+pub(in crate::types::checker) fn is_callback_argument_placeholder(name: &str) -> bool {
+    name.starts_with(CALLBACK_ARG_PLACEHOLDER_PREFIX)
+}
+
 /// Returns the contextual closure-parameter type for one callback argument.
 ///
 /// `Mixed` and `Never` mean the array element is statically opaque, so an unannotated

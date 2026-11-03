@@ -48,6 +48,7 @@ impl Checker {
         let saved_external_ref_bindings =
             std::mem::take(&mut self.active_external_ref_bindings);
         let mut global_env = self.seed_global_env();
+        self.definitely_bound_locals.extend(global_env.keys().cloned());
         // The pre-scan has to decide before the first statement is checked: a marked local binds
         // boxed `Mixed` at its FIRST store. Top level has no parameters, so the by-reference and
         // declared-type exclusion sets the scan consults are empty — `enter_local_binding_scope`

@@ -279,7 +279,32 @@ function describe($x): string {        // $x may be int or a Point across call s
 }
 ```
 
-Narrowing is not tracked across a reassignment of the variable inside the branch. The assignment itself is checked against the variable's own type — the one it had before the guard, not the narrowed one — so the standard fallback idiom compiles even though the narrowed view and the assigned value have nothing in common:
+Compound `&&` and `||` guards combine facts according to short-circuit evaluation. An `&&` body sees both operands as true; after a throwing `||` guard, both operands must have been false. The right operand also sees the facts established by the left operand on the path that evaluates it:
+
+```php
+function fallback(?string $raw, ?int $default = null): int {
+    if ($raw === null && $default !== null) { return $default; }
+    return 0;
+}
+```
+
+Assignments such as `$options = $options ?? new Options()` and `$options ??= new Options()` establish a non-null local receiver when the default excludes null. This also holds inside a branch after the assignment completes. A nullable default keeps the nullable type when the current value may be null. After a retained non-null coalescing fact, another coalescing assignment keeps that fact and skips its default, even when the default is nullable. The skipped expression is still checked for diagnostics. An `unset` invalidates the fact, including inside a conditional branch.
+
+A nullable local must also be bound on every path reaching its use before its read can exclude null. For example, `if ($choose) { $value = $parameter; $value ??= 5; }` establishes an integer inside that branch, but the following read or closure capture remains nullable because the branch may be skipped. Joins account for loop entry, switch alternatives and exception paths, including an exception before the first assignment. A completed assignment in `finally` can establish the binding for the continuation. These presence checks preserve the existing handling of raw scalar locals and do not enable strict undefined-variable diagnostics globally.
+
+Existing locals assigned inside nullsafe arguments or dynamic member names keep the skipped and evaluated alternatives in following reads. The assignment runs only when the receiver is non-null.
+
+An `instanceof` check against a second interface grants that interface inside the guarded branch. After the branch, the receiver keeps its original interface contract unless an assignment changes it. A receiver whose concrete subclass is already known keeps that subclass when probing a parent class or an implemented interface.
+
+When a compound guard leaves several alternatives for an original `mixed` value, the read remains `mixed`. For example, `is_int($value) || is_string($value)` preserves existing weak conversions at parameters, returns and properties, including values copied into locals or captured by closures. The same applies to nullable alternatives and objects implementing `Stringable`. A single scalar guard still narrows: `is_float($value)` requires an explicit `(int)` cast at an integer parameter because a float conversion can lose precision. Declared union contracts and by-reference storage rules are unchanged. See [Parameter type coercion](#parameter-type-coercion).
+
+A narrowed read keeps the variable's original storage representation. A nullable or union scalar cannot be passed to a concrete scalar parameter by reference when that parameter requires raw scalar storage. Declare the reference parameter nullable or `mixed` to match the variable's storage. Coalescing does not establish a persistent non-null fact for reference-aliased, global or static bindings. Inside a loop, a retained non-null fact must also hold on later iterations: a nullable write on a continuing path restores the nullable view at loop entry. Writes followed by `break` or `return` affect their exit path without changing a reachable guard complement in the loop body.
+
+After a nullable integer receives a non-null fallback, ordinary reads and by-value closure captures use the integer value while reference calls keep the nullable storage. A complete `if ($value === null) { $value = 40; }` fallback also establishes an integer read. A partial assignment or a later reference call does not retain that proof. Integer reads require a stable, definitely bound local: reference aliases and incoming reference parameters keep their nullable representation so writes through another alias remain visible. A by-value capture without that proof preserves the actual value, including null. A declared `int` return checks that snapshot when the closure is invoked. An `unset` on a continuing loop path also removes the proof for reads on later iterations; a fallback inside the body can establish it again.
+
+An incoming `?int &$value` reference keeps the caller's tagged integer/null storage. A guarded `++` or `--` works while its result fits in an integer; overflow raises an explicit runtime storage error. PHP would promote that result to float, which this reference representation cannot hold. Use `mixed &$value` when an update must support float promotion.
+
+Narrowing is not tracked across a reassignment of the variable inside the branch. The assignment itself is checked against the variable's own type, the one it had before the guard, so the standard fallback idiom compiles even though the narrowed view and the assigned value have nothing in common:
 
 ```php
 $files = glob($dir . "/*.meta");   // string[]|false
@@ -447,6 +472,7 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 
 ### Known incompatibilities with PHP
 
+- A guarded `++` or `--` on an incoming `?int &$value` reference raises a runtime storage error on integer overflow, where PHP promotes the value to float. Use `mixed &$value` when the reference must support float promotion.
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
 - Dynamic property names accept statically typed strings, integers, and `mixed` values. A statically typed `Stringable` object is still rejected rather than converted through `__toString()` as PHP does.
 - A runtime-name property lookup that misses declared object slots can return `null` without PHP's `Undefined property` warning. This separate diagnostic gap also applies when a later write correctly throws an `Error` for that null result.

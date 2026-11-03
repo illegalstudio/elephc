@@ -10,6 +10,8 @@
 
 use super::*;
 
+mod parameters;
+
 /// Collects only the generated request helper, excluding the adapter's bootstrap observers.
 fn application_request_usage(
     source: &str,

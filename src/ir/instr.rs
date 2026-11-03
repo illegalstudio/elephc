@@ -1662,6 +1662,8 @@ impl Op {
     /// `ir_lower::expr::arithmetic_effects()` drops that bit when the right operand is a literal
     /// that rules the error out, so `$x << 3` and `$x / 2` stay removable, hoistable, and
     /// CSE-able exactly as they were before the guards existed.
+    /// Runtime-selected callable, function-variant and eval targets keep their defaults:
+    /// whole-module refinement has no proof of every implementation they may invoke.
     pub fn allows_effect_refinement(self) -> bool {
         matches!(
             self,
@@ -1672,14 +1674,8 @@ impl Op {
                 | Op::IShl
                 | Op::IShrA
                 | Op::Call
-                | Op::FunctionVariantCall
                 | Op::ClosureBind
                 | Op::LanguageConstructCall
-                | Op::EvalLiteralCall
-                | Op::EvalFunctionCall
-                | Op::EvalFunctionCallArray
-                | Op::EvalObjectNew
-                | Op::EvalStaticMethodCall
                 | Op::RuntimeCall
                 | Op::ExternCall
                 | Op::MethodCall
@@ -1687,10 +1683,6 @@ impl Op {
                 | Op::PropGet
                 | Op::NullsafePropGet
                 | Op::DynamicPropGet
-                | Op::ClosureCall
-                | Op::ExprCall
-                | Op::CallableDescriptorInvoke
-                | Op::PipeCall
                 | Op::IteratorMethodCall
                 | Op::SplRuntimeCall
                 | Op::FiberRuntimeCall

@@ -35,6 +35,7 @@ mod type_annotations;
 mod nullable_array_merge;
 #[path = "types/narrowing.rs"]
 mod narrowing;
+mod nullable_fallback_flow;
 #[path = "types/narrowed_object_arguments.rs"]
 mod narrowed_object_arguments;
 mod guarded_interface_receivers;

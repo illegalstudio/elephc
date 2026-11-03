@@ -41,7 +41,7 @@ impl ThrownTypes {
     }
 
     /// Creates a constrained non-exact domain below one catch/class type.
-    fn domain(upper: &str) -> Self {
+    pub(super) fn domain(upper: &str) -> Self {
         Self {
             exact: BTreeSet::new(),
             domains: BTreeSet::from([ThrowDomain {

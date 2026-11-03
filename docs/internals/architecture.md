@@ -205,6 +205,26 @@ Source (.php or .lfc)
 └─────────┘
 ```
 
+Web environment demand runs before namespace resolution. Its declaration closure
+excludes unreferenced opaque calls while preserving whole-program direct ENV,
+eval and variable-table observers. `src/prelude_prune/environment_parameters.rs`
+also checks every syntactic caller of a source helper. Only simple literal
+callable inputs certify a parameter; escaped identities, implicit entries,
+by-reference parameters and named/spread calls prevent that proof. Method calls
+through untyped receivers are unioned by method spelling; statically named
+receivers follow source alias and inheritance edges. Binding
+facts are isolated per callable, with explicit by-value closure captures carrying
+proven identities into the child scope. This analysis only selects prelude
+population and never rewrites user calls or their argument evaluation.
+
+Invoked captures retain dependencies on the enclosing binding summary, so an
+opaque write across a loop back edge cannot leave a stale simple capture.
+Unknown captures enter the child as opaque even if a later assignment is simple.
+Reachable global declarations also invalidate top-level bindings after the
+complete walk. Dimension writes, reference aliases, lvalue arguments and
+by-reference iteration invalidate the owning array; by-value iteration keeps its
+independent element bindings.
+
 Experimental `eval()` follows the same front-end pipeline. A literal fragment
 is classified inside EIR lowering by `src/eval_aot.rs`: eligible fragments
 become native EIR, scope-backed fragments use only core runtime helpers, and

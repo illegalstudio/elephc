@@ -61,6 +61,12 @@ pub(super) fn lower_static_settype(
     let ExprKind::Variable(local_name) = &var_arg.kind else {
         return None;
     };
+    if ctx.boxed_reference_promotion_is_authorized(local_name, var_arg.span)
+        && !ctx.is_ref_bound_local(local_name)
+        && ctx.local_is_promotable_to_ref_cell(local_name)
+    {
+        ctx.promote_local_mixed_ref_cell(local_name, Some(var_arg.span));
+    }
     if ctx.is_ref_bound_local(local_name) && ctx.local_type(local_name).codegen_repr() == PhpType::Mixed {
         let target = match target_ty {
             PhpType::Int => CastType::Int,

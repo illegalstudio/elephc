@@ -864,3 +864,22 @@ fn lower_test_probe(
         call.name,
     )))
 }
+
+impl BuiltinSemantics {
+    /// Identifies reference operands whose successful runtime operation leaves an array.
+    pub const fn preserves_array_reference(self, index: usize) -> bool {
+        match self.lowering {
+            BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)) => match target {
+                RuntimeFnId::ArrayMultisort => index < 2,
+                RuntimeFnId::ArrayPop | RuntimeFnId::ArrayPush | RuntimeFnId::ArrayShift
+                | RuntimeFnId::ArraySplice | RuntimeFnId::ArrayUnshift | RuntimeFnId::ArrayPtrSeek
+                | RuntimeFnId::Arsort | RuntimeFnId::Asort | RuntimeFnId::Krsort
+                | RuntimeFnId::Ksort | RuntimeFnId::Natcasesort | RuntimeFnId::Natsort
+                | RuntimeFnId::Rsort | RuntimeFnId::Shuffle | RuntimeFnId::Sort
+                | RuntimeFnId::Uasort | RuntimeFnId::Uksort | RuntimeFnId::Usort => index == 0,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}

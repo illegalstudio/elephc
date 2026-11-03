@@ -22,6 +22,7 @@ mod bcmath_number;
 mod boxed_array_snapshots;
 mod implode_effects;
 mod spread_effects;
+mod call_effect_followups;
 mod strip_tags_effects;
 
 #[path = "optimizer/branch_simplification.rs"]

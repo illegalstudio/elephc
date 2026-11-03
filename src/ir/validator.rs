@@ -359,6 +359,26 @@ mod instruction_effect_tests {
     use super::*;
     use crate::ir::Ownership;
 
+    /// Unresolved calls accept their default effects and reject unproven purity claims.
+    #[test]
+    fn call_effect_batch_validator_rejects_unresolved_refinement() {
+        for op in [Op::FunctionVariantCall, Op::ClosureCall, Op::ExprCall,
+            Op::CallableDescriptorInvoke, Op::PipeCall, Op::EvalLiteralCall,
+            Op::EvalFunctionCall, Op::EvalFunctionCallArray, Op::EvalObjectNew,
+            Op::EvalStaticMethodCall]
+        {
+            let mut instruction = Instruction::new(
+                op, Vec::new(), None, None, IrType::Void, PhpType::Void,
+                Ownership::NonHeap, op.default_effects(), None,
+            );
+            let id = InstId::from_raw(0);
+            assert_eq!(validate_instruction_effects(id, &instruction), Ok(()), "{op:?}");
+            instruction.effects = Effects::PURE;
+            assert!(matches!(validate_instruction_effects(id, &instruction),
+                Err(ValidationError::EffectMismatch { .. })), "{op:?}");
+        }
+    }
+
     /// Unboxing a descriptor or object must retain its payload, unlike scalar extraction.
     #[test]
     fn mixed_unbox_effects_require_exact_payload_ownership_barriers() {
