@@ -410,9 +410,11 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
 - **Capability probes do not inject the surface**: like PDO,
   `class_exists('mysqli')` in a program with no other mysqli reference
   reports `false`; build with `--with-mysqli` to force the surface. A bare
-  `MYSQLI_*` constant reference *does* inject it.
-- **`eval()` never sees mysqli** (same rule as PDO):
-  `extension_loaded('mysqli')` is `false` inside `eval()`.
+  `MYSQLI_*` constant reference *does* inject it. Code inside `eval()` uses
+  the surface the program linked — classes, methods, `mysqli_*` functions,
+  and `extension_loaded('mysqli')` all behave as in compiled code — but an
+  `eval()` string is not scanned, so a program that uses mysqli *only* there
+  needs `--with-mysqli`.
 - **`get_charset()` reports only the charset name.** The returned object's
   `charset` field is exact; `collation`, `number`, `state`, `dir`,
   `min_length`, `max_length`, and `comment` are `0` / `""`.

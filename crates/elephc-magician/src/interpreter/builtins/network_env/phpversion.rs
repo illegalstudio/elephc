@@ -30,7 +30,7 @@ pub(in crate::interpreter) fn eval_builtin_phpversion(
         [] => eval_phpversion_result(values),
         [extension] => {
             let extension = eval_expr(extension, context, scope, values)?;
-            eval_phpversion_extension_result(extension, values)
+            eval_phpversion_extension_result(extension, context, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -48,16 +48,18 @@ pub(in crate::interpreter) fn eval_phpversion_result(
 /// Reference PHP reports the interpreter's own version for every bundled extension (verified
 /// on 8.5.6: `Core`, `json`, `pcre`, `Zend OPcache`, … all report `8.5.6`), and every
 /// extension eval reports as loaded is a bundled-equivalent, so there is no per-extension
-/// version to track. Membership is delegated to `eval_extension_is_loaded` so this and
-/// `extension_loaded()` cannot disagree, and it is case-insensitive like reference PHP
-/// (`phpversion('core')` and `phpversion('Core')` both answer).
+/// version to track. Membership is delegated to `eval_extension_is_loaded_in` so this and
+/// `extension_loaded()` cannot disagree (host-registered surfaces such as `mysqli` included),
+/// and it is case-insensitive like reference PHP (`phpversion('core')` and
+/// `phpversion('Core')` both answer).
 pub(in crate::interpreter) fn eval_phpversion_extension_result(
     extension: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let name = values.string_bytes(extension)?;
     let name = String::from_utf8_lossy(&name);
-    if eval_extension_is_loaded(name.as_ref()) {
+    if eval_extension_is_loaded_in(name.as_ref(), context) {
         values.string(crate::eval_php_profile::eval_php_version_string())
     } else {
         values.bool_value(false)

@@ -687,3 +687,24 @@ echo "|", $used < 2000000 ? "small" : "big:" . $used;
     );
     assert_eq!(out, "mysqli|mysqli|small");
 }
+
+/// `eval()` sees the mysqli surface the compiled program linked: the classes, methods and
+/// procedural functions resolve inside it, and `extension_loaded('mysqli')`,
+/// `phpversion('mysqli')` and `get_loaded_extensions()` answer exactly like compiled code.
+#[test]
+fn test_mysqli_is_visible_inside_eval() {
+    let out = compile_and_run(
+        r#"<?php
+$mode = MYSQLI_ASSOC;
+eval('echo extension_loaded("mysqli") ? "loaded" : "absent", "|";
+echo phpversion("mysqli") === PHP_VERSION ? "version" : "no-version", "|";
+echo in_array("mysqli", get_loaded_extensions()) ? "listed" : "unlisted", "|";
+echo class_exists("mysqli") ? "class" : "no-class", "|";
+echo function_exists("mysqli_query") ? "func" : "no-func", "|";
+mysqli_report(MYSQLI_REPORT_OFF);
+$db = mysqli_init();
+echo get_class($db), "|", MYSQLI_NUM;');
+"#,
+    );
+    assert_eq!(out, "loaded|version|listed|class|func|mysqli|2");
+}
