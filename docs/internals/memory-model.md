@@ -723,7 +723,10 @@ lowering emits no unused callbacks for the opaque-eval class catalog. Selection
 is idempotent and validates the resulting EIR. They borrow their two inputs and return one
 owned boxed candidate. Context bit zero selects assignment-site strictness;
 strict assignments preserve exact members and permit integer-to-float widening.
-Weak candidates reuse the property guard's coercions and diagnostics. Reference
+Weak candidates reuse the property guard's coercions and diagnostics. An explicit
+`mixed` declaration contributes the unchanged original candidate: it can conflict
+with a float or string source that would coerce that original value. An untyped
+property contributes no declaration constraint. Reference
 object candidates use the shared native class-acceptance plan; eval-defined
 class ancestry remains part of the activation audit. Reference
 errors name the original physical declaration independently of candidate storage

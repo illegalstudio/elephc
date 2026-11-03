@@ -26,7 +26,7 @@ fn supports_declaration(ty: &PhpType) -> bool {
     match ty {
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
         | PhpType::Void | PhpType::Never | PhpType::Object(_) | PhpType::Array(_)
-        | PhpType::AssocArray { .. } | PhpType::Iterable => true,
+        | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Mixed => true,
         PhpType::Union(members) => members.iter().all(supports_declaration),
         _ => false,
     }

@@ -116,3 +116,42 @@ echo NativeContainerDeclarations::$shared;
 
 supported_target_cases!(native_reference_container_validator_contract,
     verify_native_reference_container_validator_contract);
+
+
+/// Explicit mixed declarations preserve original candidates; untyped properties add no constraint.
+fn verify_native_reference_mixed_declaration_contract(target: &str) {
+    let source = r#"<?php
+class NativeExplicitMixedSource {
+    public mixed $declared = null;
+    public $untyped;
+    public static mixed $shared = null;
+}
+$owner = new NativeExplicitMixedSource();
+$typed =& $owner->declared; $untyped =& $owner->untyped;
+"#;
+    let mut module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    crate::ir_lower::enable_native_reference_validation(&mut module).unwrap();
+    let id = module.class_infos["NativeExplicitMixedSource"].class_id;
+    let declarations = module.functions.iter().flat_map(|function| function.instructions.iter())
+        .filter_map(|inst| match inst.immediate {
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ReferencePropertyCoerce {
+                class_id, slot, is_static,
+            })) if class_id == id => Some((slot, is_static)),
+            _ => None,
+        }).collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(declarations, [(0, false), (0, true)].into_iter().collect(),
+        "{target}: mixed is declared, but an untyped slot is unconstrained");
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    for is_static in [false, true] {
+        let name = crate::ir_lower::reference_property_validators::callback_name(id, 0, is_static);
+        let body = assembly.split_once(&format!("@fn name={name} symbol=")).unwrap().1
+            .split_once(&format!("@endfn name={name}")).unwrap().0;
+        assert!(body.contains("__rt_incref"), "{target}: retain the unchanged borrowed candidate");
+        assert!(!body.contains("__rt_mixed_cast_"), "{target}: mixed never coerces another source's RHS");
+    }
+}
+
+supported_target_cases!(native_reference_mixed_declaration_contract, verify_native_reference_mixed_declaration_contract);

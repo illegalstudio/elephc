@@ -73,6 +73,11 @@ fn declaration_slot(
 
 /// Converts ordinary store acceptance into a precise, always-boxed PHP candidate plan.
 fn declaration_actions(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> Result<Vec<TagAction>> {
+    // An explicit mixed declaration preserves the original representation. In a shared
+    // reference it can therefore conflict with another property's scalar coercion.
+    if slot.php_type == PhpType::Mixed {
+        return Ok(actions_for(|_| TagAction::Accept));
+    }
     if slot.php_type == PhpType::False {
         return Ok(actions_for(|tag| if tag == BOOL_TAG {
             TagAction::FalseOrScalar(None)
