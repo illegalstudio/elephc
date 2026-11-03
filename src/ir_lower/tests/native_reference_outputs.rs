@@ -22,6 +22,8 @@ function nativeReferenceOutputSnapshots(
     preg_match('/(a)/', 'a', $matches);
     preg_match_all('/(a)/', 'aa', $matches);
     openssl_encrypt('payload', 'aes-128-gcm', '0123456789abcdef', 0, '123456789012', $tag);
+    openssl_encrypt(data: 'payload', cipher_algo: 'aes-128-gcm',
+        passphrase: '0123456789abcdef', options: 0, iv: '123456789012', tag: $tag);
     pcntl_waitpid(-1, $status, 1, $matches);
 }
 "#;
@@ -51,6 +53,24 @@ function nativeReferenceOutputSnapshots(
                 "{target}: {builtin:?} {local}");
             let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("{target}: original place"); };
             assert_eq!(function.locals[slot.as_raw() as usize].name.as_deref(), Some(local));
+        }
+        let encrypts = function.instructions.iter().filter(|inst| inst.op == Op::RuntimeCall
+            && matches!(inst.immediate,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::OpensslEncrypt)
+                    | RuntimeCallTarget::ProfiledFunction { target: RuntimeFnId::OpensslEncrypt, .. }))))
+            .collect::<Vec<_>>();
+        assert_eq!(encrypts.len(), 2, "{target}: positional and named last-argument coverage");
+        for call in encrypts {
+            let snapshot = call.operands[5];
+            let ValueDef::Instruction { inst, .. } = function.value(snapshot).unwrap().def
+                else { panic!("{target}: last output snapshot"); };
+            assert_eq!(function.instruction(inst).unwrap().op, Op::LoadRefCellValue);
+            assert_eq!(function.instructions.iter().filter(|inst|
+                inst.op == Op::Acquire && inst.operands == [snapshot]).count(), 1,
+                "{target}: each incidental output view is protected once");
+            assert_eq!(function.instructions.iter().filter(|inst|
+                inst.op == Op::Release && inst.operands == [snapshot]).count(), 1,
+                "{target}: the last reference snapshot retires its original lease");
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: output reference snapshot: {error:?}"));

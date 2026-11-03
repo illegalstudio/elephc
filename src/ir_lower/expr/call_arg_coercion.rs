@@ -31,6 +31,17 @@ pub(super) fn lower_arg_with_signature(
     index: usize,
     arg: &Expr,
 ) -> crate::ir::ValueId {
+    let value = lower_signature_argument(ctx, sig, index, arg);
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        root_reference_value_view(ctx, value, arg.span);
+    }
+    value
+}
+
+/// Normalizes one argument while allowing recursive rewrites of addressable places.
+fn lower_signature_argument(
+    ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, index: usize, arg: &Expr,
+) -> crate::ir::ValueId {
     if sig.ref_params.get(index).copied().unwrap_or(false)
         && index < crate::types::call_args::regular_param_count(sig)
         && ctx.call_argument_evaluation_scopes.last().is_some_and(|scope|
@@ -498,6 +509,19 @@ fn promote_reference_return_local_argument(
     ctx.promote_local_ref_cell(name, Some(arg.span));
 }
 
+/// Protects a reference snapshot once while retaining its original addressable load operand.
+fn root_reference_value_view(
+    ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId, span: Span,
+) {
+    if ctx.builder.value_defining_op(value) != Some(Op::LoadRefCellValue) { return; }
+    let depth = ctx.expression_depth;
+    let Some(scope) = ctx.call_argument_evaluation_scopes.last_mut()
+        .filter(|scope| scope.expression_depth == depth) else { return; };
+    if !scope.rooted_reference_value_views.insert(value) { return; }
+    let lowered = lowered_value_from_id(ctx, value);
+    let _protected_view = root_evaluated_call_argument(ctx, lowered, span);
+}
+
 /// Protects an incidental value view of an earlier reference place without replacing the place.
 ///
 /// A local whose final frame storage widens to `Mixed` can make its narrower `LoadLocal<Str>`
@@ -514,10 +538,11 @@ fn root_prior_argument_preserving_reference_place(
 ) -> crate::ir::ValueId {
     let lowered = lowered_value_from_id(ctx, value);
     if sig.ref_params.get(index).copied().unwrap_or(false) {
-        if ctx.builder.value_defining_op(value) == Some(Op::LoadRefCellValue)
-            || (matches!(arg.kind, ExprKind::Variable(_))
+        if ctx.builder.value_defining_op(value) == Some(Op::LoadRefCellValue) {
+            root_reference_value_view(ctx, value, arg.span);
+        } else if matches!(arg.kind, ExprKind::Variable(_))
                 && sig.params.get(index).is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Str)
-                && ctx.builder.value_php_type(value).codegen_repr() == PhpType::Str)
+                && ctx.builder.value_php_type(value).codegen_repr() == PhpType::Str
         {
             let _protected_view = root_evaluated_call_argument(ctx, lowered, arg.span);
         }

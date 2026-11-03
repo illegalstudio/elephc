@@ -149,6 +149,8 @@ pub(crate) struct CallArgumentEvaluationOwner {
 pub(crate) struct CallArgumentEvaluationScope {
     pub expression_depth: usize,
     pub owners: Vec<CallArgumentEvaluationOwner>,
+    /// Original reference-place loads whose incidental owned value is already protected.
+    pub rooted_reference_value_views: HashSet<ValueId>,
     /// Direct native source functions can adopt the call's live property argument owners.
     pub live_property_reference_arguments: bool,
 }

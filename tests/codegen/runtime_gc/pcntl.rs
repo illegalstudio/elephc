@@ -24,13 +24,19 @@ function nativeOutputSnapshots(int &$status, string &$tag, array &$matches): voi
     echo $pid, ':', $status, ':', strlen($tag), ':', $matches[1], '|';
     echo openssl_decrypt($cipher, 'aes-128-gcm', '0123456789abcdef',
         OPENSSL_RAW_DATA, '123456789012', $tag), '|';
+    $tag = 'before';
+    $cipher = openssl_encrypt(data: 'payload', cipher_algo: 'aes-128-gcm',
+        passphrase: '0123456789abcdef', options: OPENSSL_RAW_DATA,
+        iv: '123456789012', tag: $tag);
+    echo strlen($tag), ':', openssl_decrypt($cipher, 'aes-128-gcm', '0123456789abcdef',
+        OPENSSL_RAW_DATA, '123456789012', $tag), '|';
 }
 $status = 7; $tag = ''; $matches = [];
 nativeOutputSnapshots($status, $tag, $matches);
 echo $status, ':', strlen($tag), ':', $matches[1];
 "#);
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "-1:0:16:a|payload|0:16:a", "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "-1:0:16:a|payload|16:payload|0:16:a", "stderr: {}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected clean heap, got: {}", out.stderr);
 }
