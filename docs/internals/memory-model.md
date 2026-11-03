@@ -727,8 +727,8 @@ references use the normalized Mixed ABI. A closure descriptor can instead expose
 a raw object or container payload and receives detached concrete-box adaptation.
 Only a physical Mixed pointer slot can share the live staging wrapper.
 
-Eval-to-native Mixed argument staging keeps each temporary cell through an
-invisible root whose stable record is owned by Rust. Foreign mutation of the
+Eval-to-native Mixed argument staging initially keeps each temporary cell through
+an invisible root whose stable record is owned by Rust. Foreign mutation of the
 record uses `UnsafeCell`; the record remains allocated until the root is unlinked.
 Cleanup takes the root owner without running PHP, then retires that owner inside
 the eval ABI's boxed Throwable accumulator. A destructor cannot bypass Rust
@@ -739,15 +739,19 @@ Reference candidates carry shared Rust provenance for that exact owner; ordinary
 value arguments use their existing cleanup without a shared allocation. After
 binding and argument-container construction, registered AOT functions and callable
 descriptors replace matching source leases with pending owned roots. These roots
-remain PHP-visible through adapter coercion. Acquiring a formal parameter activates
-only roots naming that exact native cell, making their extra owners invisible.
+remain PHP-visible through adapter coercion. After acquiring a formal parameter,
+native entry consumes the extra source owners naming that exact cell and retires
+its staging root. The parameter now owns the cell independently, so unsetting the
+last PHP binding runs its destructor at the unset, inside the native callee.
 A nested call using another native cell over the same PHP reference cannot claim
 the pending outer argument. Retiring the exact staging root cancels pending
 associations before its cell address can be reused. Pending bindings remain
 visible while later argument expressions and coercion callbacks execute.
-The original argument boundary retires the replacement root in the original
-cleanup position, including after throws and while other arguments run destructors.
-Taking a root unlinks it before ordinary eval destructor dispatch consumes the owner.
+The original argument boundary unlinks consumed source records or retires still
+pending owners in the original cleanup position, including after throws and while
+other arguments run destructors. Repeated take of a consumed staging record is
+inert. Eager generator parameter validators acquire a temporary owner without
+claiming source or staging roots before the constructor captures the arguments.
 Repeated values keep distinct lease records, while forwarded metadata can refer
 to the same lease without retaining or releasing it twice.
 

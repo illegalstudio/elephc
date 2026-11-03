@@ -864,8 +864,8 @@ pub trait RuntimeValueOps {
         Ok(false)
     }
 
-    /// Unlinks an argument root without PHP and transfers its owner back to eval cleanup.
-    fn take_native_reference_argument_owner(&mut self, _pin: *mut c_void) -> Result<RuntimeCellHandle, EvalStatus> {
+    /// Unlinks a root, returning no owner when native parameter entry already consumed it.
+    fn take_native_reference_argument_owner(&mut self, _pin: *mut c_void) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         Err(EvalStatus::UnsupportedConstruct)
     }
 

@@ -58,7 +58,14 @@ function throwWithEvalNativeLease(mixed &$value): void {
     throw new Exception('caught');
 }
 function dropEvalNativeLease(mixed &$value, EvalNativeParameterLeaseProbe $object): void {
-    unset($value); unset($object->value);
+    unset($value); echo 'after-param-unset|';
+    try {
+        unset($object->value); echo 'unreachable-after-property-unset|';
+    } catch (Exception $error) { echo 'inner:', $error->getMessage(), '|'; }
+    echo 'after-inner|';
+}
+function generatorWithEvalNativeLease(mixed &$value, EvalNativeParameterLeaseProbe $object): Generator {
+    yield $value;
 }
 function copyAfterDuplicateEvalLeases(mixed &$first, mixed &$second, EvalNativeParameterLeaseProbe $object): EvalNativeParameterLeaseProbe {
     unset($first, $second); return clone $object;
@@ -128,8 +135,13 @@ class EvalNativeLeaseDestructor {
 }
 $retiring = new EvalNativeParameterLeaseProbe();
 $retiring->value = new EvalNativeLeaseDestructor();
-try { dropEvalNativeLease($retiring->value, $retiring); }
-catch (Exception $error) { echo $error->getMessage(), "|"; }
+try { dropEvalNativeLease($retiring->value, $retiring); echo "after-call|"; }
+catch (Exception $error) { echo "outer:", $error->getMessage(), "|"; }
+$generatorObject = new EvalNativeParameterLeaseProbe();
+$generator = generatorWithEvalNativeLease($generatorObject->value, $generatorObject);
+$generatorObject->value = "generated";
+echo $generator->current(), "|";
+unset($generator, $generatorObject);
 unset($activeCopy, $active, $detachedCopy, $detached, $sharedCopy, $shared, $alias,
     $descriptor, $callbackObject, $callbackCopy,
     $coercionObject, $coercion, $coercionCallback, $coercionCopy,
@@ -140,7 +152,7 @@ eval($code); unset($code);
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "after|before|before|during|during|after|after|before|late|before|caught|written|released|retired|");
+    assert_eq!(output.stdout, "after|before|before|during|during|after|after|before|late|before|caught|written|after-param-unset|released|inner:retired|after-inner|after-call|generated|");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 

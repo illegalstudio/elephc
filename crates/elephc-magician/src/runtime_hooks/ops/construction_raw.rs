@@ -185,9 +185,10 @@ macro_rules! impl_construction_raw_ops {
         if record == 0 { Err(EvalStatus::RuntimeFatal) } else { Ok(true) }
     }
 
-    /// Transfers the unlinked owner so eval retains its ordinary dynamic destructor handling.
-    fn take_native_reference_argument_owner(&mut self, pin: *mut std::ffi::c_void) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe { __elephc_eval_value_native_reference_owner_take_v1(pin) })
+    /// Transfers a pending owner, or observes consumption by the native formal parameter.
+    fn take_native_reference_argument_owner(&mut self, pin: *mut std::ffi::c_void) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let value = unsafe { __elephc_eval_value_native_reference_owner_take_v1(pin) };
+        if value.is_null() { Ok(None) } else { Self::handle(value).map(Some) }
     }
 
     /// Uses the protected generic release ABI so a final cell cannot throw across Rust frames.

@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - An activated argument record identifies the native callee's incoming stack pointer.
-//! - Claiming clears the caller owner before transferring it, without running PHP or cleanup.
+//! - Claiming clears the caller owner before transferring it, then consumes eval staging leases.
 //! - Ordinary variables and legacy callers still acquire an independent parameter owner.
 
 use super::*;
@@ -20,6 +20,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
     let next = "__rt_reference_parameter_acquire_next";
     let advance = "__rt_reference_parameter_acquire_advance";
     let retain = "__rt_reference_parameter_acquire_retain";
+    let acquired = "__rt_reference_parameter_acquire_acquired";
+    let consume = "__rt_reference_parameter_acquire_consume";
+    let staging = "__rt_reference_parameter_acquire_staging";
     let done = "__rt_reference_parameter_acquire_done";
     emitter.blank();
     emitter.label_global("__rt_reference_parameter_acquire");
@@ -28,6 +31,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
     abi::emit_reg_move(emitter, result, abi::int_arg_reg_name(emitter.target, 0));
     abi::emit_call_label(emitter, "__rt_reference_cell_owner");
+    abi::store_at_offset(emitter, result, 40);
     abi::emit_branch_if_int_result_zero(emitter, done);
     abi::emit_symbol_address(emitter, scratch, "__rt_cleanup_call_reference_argument");
     abi::store_at_offset(emitter, scratch, 24);
@@ -46,17 +50,37 @@ pub(super) fn emit(emitter: &mut Emitter) {
     branch_not_equal(emitter, result, expected, advance);
     abi::emit_store_zero_to_address(emitter, scratch, 0);
     abi::emit_store_zero_to_address(emitter, cursor, 32);
-    abi::emit_jump(emitter, done);
+    abi::emit_jump(emitter, acquired);
     emitter.label(advance);
     abi::emit_load_from_address(emitter, cursor, cursor, 0);
     abi::emit_jump(emitter, next);
     emitter.label(retain);
     abi::load_at_offset(emitter, result, 8);
     abi::emit_call_label(emitter, "__rt_incref");
-    emitter.label(done);
+    emitter.label(acquired);
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
+    abi::emit_call_label(emitter, "__rt_reference_argument_pins_staging");
+    abi::store_at_offset(emitter, result, 32);
+    emitter.label(consume);
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
+    abi::emit_call_label(emitter, "__rt_reference_argument_pins_activate");
+    abi::emit_branch_if_int_result_zero(emitter, staging);
+    // The acquired cell still owns this source value, so dropping its extra lease cannot run PHP.
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    abi::emit_jump(emitter, consume);
+    emitter.label(staging);
+    abi::load_at_offset(emitter, result, 32);
+    abi::emit_branch_if_int_result_zero(emitter, done);
     abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
+    abi::emit_call_label(emitter, "__rt_reference_validation_pin_take");
+    // The formal owner now replaces staging, including when the last PHP binding is unset.
+    abi::emit_call_label(emitter, "__rt_decref_any");
+    emitter.label(done);
+    // Failed authentication returns null rather than adopting an arbitrary incoming address.
+    // The early branch retains that null result; successful paths reload their authenticated cell.
+    abi::load_at_offset(emitter, result, 40);
     abi::emit_frame_restore(emitter, 64);
-    abi::emit_jump(emitter, "__rt_reference_argument_pins_activate");
+    abi::emit_return(emitter);
 }
 
 /// Skips a record that belongs to another call activation or another cell owner.
@@ -106,8 +130,14 @@ mod tests {
             } else { "mov QWORD PTR [r11], 0" };
             assert!(assembly.find(cleared).is_some_and(|position| position < retain),
                 "{target}: clear the pending caller owner before returning its transferred cell");
-            assert!(!assembly.contains("__rt_decref") && !assembly.contains("__rt_throw"),
-                "{target}: acquisition cannot invoke PHP or retire the transferred owner");
+            let sources = assembly.find("__rt_reference_argument_pins_activate").unwrap();
+            let release = assembly.find("__rt_decref_any").unwrap();
+            let staging = assembly.find("__rt_reference_validation_pin_take").unwrap();
+            assert!(retain < sources && sources < release && release < staging,
+                "{target}: own the parameter before consuming source and staging leases");
+            assert_eq!(assembly.matches("__rt_decref_any").count(), 2,
+                "{target}: retire source owners and the staging owner while the parameter keeps both alive");
+            assert!(!assembly.contains("__rt_throw"), "{target}: formal acquisition cannot invoke PHP");
         }
     }
 }

@@ -23,11 +23,12 @@ macro_rules! impl_fake_construction_raw_ops {
     }
 
     /// Unlinks the fake root before ordinary eval cleanup consumes its transferred owner.
-    fn take_native_reference_argument_owner(&mut self, pin: *mut std::ffi::c_void) -> Result<RuntimeCellHandle, EvalStatus> {
+    fn take_native_reference_argument_owner(&mut self, pin: *mut std::ffi::c_void) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         let words = unsafe { std::mem::replace(&mut *pin.cast::<[u64; 6]>(), [0; 6]) };
+        if words[2] == 0 { return Ok(None); }
         let value = RuntimeCellHandle::from_raw(words[2] as *mut RuntimeCell);
         self.native_argument_pin_events.push((false, value));
-        Ok(value)
+        Ok(Some(value))
     }
 
     /// Creates one fake object for eval `new` unit tests.

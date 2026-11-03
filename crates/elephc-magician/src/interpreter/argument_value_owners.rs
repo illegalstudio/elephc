@@ -6,8 +6,8 @@
 //!
 //! Key details:
 //! - Shared Rust metadata identifies an existing owner without acquiring another PHP alias.
-//! - A pending root becomes invisible only when its exact native cell acquires a parameter binding.
-//! - The originating boundary retires the pin at the original cleanup position.
+//! - A pending owner is consumed only when its exact native cell acquires a parameter binding.
+//! - The originating boundary unlinks consumed records or retires still-pending owners.
 
 use super::*;
 use std::cell::{RefCell, UnsafeCell};
@@ -72,8 +72,10 @@ impl ArgumentValueOwner {
         let lease = self.0.borrow_mut().take();
         let Some(lease) = lease else { return Ok(()); };
         if let Some(pin) = lease.pin {
-            let value = values.take_native_reference_argument_owner(pin.get().cast())?;
-            release_expr_result(value, context, values)
+            match values.take_native_reference_argument_owner(pin.get().cast())? {
+                Some(value) => release_expr_result(value, context, values),
+                None => Ok(()),
+            }
         } else {
             release_expr_result(lease.value, context, values)
         }

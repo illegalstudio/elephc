@@ -1794,6 +1794,7 @@ fn lower_body_into_function(
         validator.display_name = Some(function.display_name.clone().unwrap_or_else(|| function.name.clone()));
         validator.flags.is_internal = true;
         validator.flags.is_synthetic = true;
+        validator.flags.is_eager_parameter_validator = true;
         validator.signature = function.signature.clone();
         if let Some(signature) = &mut validator.signature {
             signature.is_generator = false;

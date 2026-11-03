@@ -51,6 +51,29 @@ fn verify_native_reference_parameter_leases(target: &str) {
 
 supported_target_cases!(native_reference_parameter_leases, verify_native_reference_parameter_leases);
 
+/// Eager generator guards cannot consume the source or staging owners before capture.
+fn verify_generator_reference_parameter_guard_borrows(target: &str) {
+    let source = "<?php class GuardedReferenceProbe {} \
+        function guardedReferenceGenerator(mixed &$value, GuardedReferenceProbe $object): Generator { \
+            yield $value; }";
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let validator = module.closures.iter()
+        .find(|function| function.flags.is_eager_parameter_validator).unwrap();
+    assert!(!validator.flags.is_generator, "{target}: the guard is an eager ordinary function");
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let body = assembly.split_once(&format!("@fn name={} symbol=", validator.name)).unwrap().1
+        .split_once(&format!("@endfn name={}", validator.name)).unwrap().0;
+    assert!(body.contains("__rt_reference_cell_owner") && body.contains("__rt_incref"),
+        "{target}: borrow authenticated storage while validating parameters");
+    assert!(!body.contains("__rt_reference_parameter_acquire"),
+        "{target}: only the real native invocation can claim argument owners");
+}
+
+supported_target_cases!(generator_reference_parameter_guard_borrows, verify_generator_reference_parameter_guard_borrows);
+
 
 /// Direct property arguments keep their physical cell and prepublish a transferable caller owner.
 fn verify_native_property_argument_handoff(target: &str) {

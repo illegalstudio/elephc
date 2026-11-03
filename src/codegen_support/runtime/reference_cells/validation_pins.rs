@@ -266,6 +266,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_load_from_address(emitter, result, record, 16);
     abi::store_at_offset(emitter, result, 8);
     abi::emit_load_from_address(emitter, previous, record, 24);
+    abi::emit_load_int_immediate(emitter, result, 0x305);
+    branch_equal(emitter, previous, result, "__rt_reference_validation_pin_take_return");
     abi::emit_load_int_immediate(emitter, result, 8);
     branch_not_equal(emitter, previous, result, "__rt_reference_validation_pin_take_unlink");
     abi::store_at_offset(emitter, record, 16);
@@ -305,7 +307,10 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_store_zero_to_address(emitter, record, 0);
     abi::emit_store_zero_to_address(emitter, record, 8);
     abi::emit_store_zero_to_address(emitter, record, 16);
-    abi::emit_store_zero_to_address(emitter, record, RECORD_BYTES - 8);
+    // A consumed staging record can be retired again by its original foreign boundary.
+    abi::emit_load_int_immediate(emitter, result, 0x305);
+    abi::emit_store_to_address(emitter, result, record, RECORD_BYTES - 8);
+    emitter.label("__rt_reference_validation_pin_take_return");
     abi::load_at_offset(emitter, result, 8);
     abi::emit_frame_restore(emitter, 32);
     abi::emit_return(emitter);
@@ -339,6 +344,12 @@ mod tests {
                 "{name}: authenticate a retained allocation before publishing its kind");
             assert!(take.contains(TOP) && !take.contains("__rt_decref"),
                 "{name}: taking a root unlinks it without running PHP");
+            let consumed = if name == "linux-x86_64" { "cmp r11, rax" }
+                else { "cmp x11, x0" };
+            assert!(take.find(consumed).unwrap() < take.find(TOP).unwrap(),
+                "{name}: an already consumed staging record cannot change the root chain");
+            assert!(take.contains("__rt_reference_validation_pin_take_return"),
+                "{name}: repeated cleanup observes an empty owner");
             assert!(leave.find("__rt_reference_validation_pin_take").unwrap() < leave.find("__rt_decref_any").unwrap(),
                 "{name}: remove the record before protected generic release");
             assert!(leave.contains("__rt_cleanup"), "{name}: final retirement must contain PHP exceptions");

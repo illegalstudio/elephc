@@ -284,12 +284,18 @@ pub(super) fn lower_retain_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &
         {
             return Err(CodegenIrError::invalid_module("reference owner source must be an owner or incoming reference parameter"));
         }
-        abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), result);
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.emitter.instruction("add x1, x29, #16"),       // identify this native callee's incoming stack pointer
-            Arch::X86_64 => ctx.emitter.instruction("lea rsi, [rbp + 16]"),     // identify this native callee's incoming stack pointer
+        if ctx.function.flags.is_eager_parameter_validator {
+            // The generator constructor has not captured this binding yet. Its guard only borrows.
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+        } else {
+            abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), result);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction("add x1, x29, #16"),   // identify this native callee's incoming stack pointer
+                Arch::X86_64 => ctx.emitter.instruction("lea rsi, [rbp + 16]"), // identify this native callee's incoming stack pointer
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_reference_parameter_acquire");
         }
-        abi::emit_call_label(ctx.emitter, "__rt_reference_parameter_acquire");
     } else {
         abi::emit_call_label(ctx.emitter, "__rt_incref");
     }

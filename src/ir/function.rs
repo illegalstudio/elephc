@@ -325,4 +325,6 @@ pub struct FunctionFlags {
     pub is_synthetic: bool,
     /// Native C-ABI property declaration callback with a context and original boxed RHS.
     pub is_native_reference_validator: bool,
+    /// Eager generator guard borrows arguments before the constructor captures their bindings.
+    pub is_eager_parameter_validator: bool,
 }

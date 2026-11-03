@@ -6,14 +6,14 @@
 //!
 //! Key details:
 //! - Extended six-word roots append the pending native cell and its exact staging root.
-//! - Only the matching cell can activate a root; callbacks using another cell cannot claim it.
+//! - Only the matching cell can consume a root; callbacks using another cell cannot claim it.
 //! - Retiring staging cancels pending associations before the cell address can be reused.
 
 use super::*;
 
 /// Pending eval argument roots still represent a PHP-visible binding during adapter coercion.
 pub(super) const PENDING: i64 = 0x105;
-/// Acquired eval argument roots retain storage without adding another PHP alias.
+/// Acquired eval argument records no longer own their former source value.
 const ACTIVE: i64 = 0x205;
 
 /// Emits pending-root creation and the two no-PHP association transitions.
@@ -35,6 +35,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_return(emitter);
     emit_transition(emitter, "activate", true);
     emit_transition(emitter, "forget", false);
+    emit_staging_lookup(emitter);
 }
 
 /// Matches the exact cell for activation or the exact staging record for cancellation.
@@ -61,14 +62,46 @@ fn emit_transition(emitter: &mut Emitter, action: &str, activate: bool) {
     if activate {
         abi::emit_load_int_immediate(emitter, kind, ACTIVE);
         abi::emit_store_to_address(emitter, kind, cursor, 24);
+        abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), cursor, 16);
+        abi::emit_store_zero_to_address(emitter, cursor, 16);
     }
     abi::emit_store_zero_to_address(emitter, cursor, 32);
     abi::emit_store_zero_to_address(emitter, cursor, 40);
+    if activate { abi::emit_return(emitter); }
     emitter.label(&advance);
     abi::emit_load_from_address(emitter, cursor, cursor, 8);
     abi::emit_jump(emitter, &next);
     emitter.label(&done);
-    abi::emit_reg_move(emitter, abi::int_result_reg(emitter), cell);
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+    abi::emit_return(emitter);
+}
+
+/// Finds the exact staging lease before source consumption clears its associations.
+fn emit_staging_lookup(emitter: &mut Emitter) {
+    let cell = abi::int_arg_reg_name(emitter.target, 0);
+    let cursor = abi::secondary_scratch_reg(emitter);
+    let (kind, expected) = if emitter.target.arch == Arch::AArch64 {
+        ("x11", "x9")
+    } else { ("r11", "r9") };
+    let next = "__rt_reference_argument_pins_staging_next";
+    let advance = "__rt_reference_argument_pins_staging_advance";
+    let done = "__rt_reference_argument_pins_staging_done";
+    emitter.label_global("__rt_reference_argument_pins_staging");
+    abi::emit_load_symbol_to_reg(emitter, cursor, "_rt_reference_validation_pins_top", 0);
+    emitter.label(next);
+    validation_pins::branch_zero(emitter, cursor, done);
+    abi::emit_load_from_address(emitter, kind, cursor, 24);
+    abi::emit_load_int_immediate(emitter, expected, PENDING);
+    validation_pins::branch_not_equal(emitter, kind, expected, advance);
+    abi::emit_load_from_address(emitter, kind, cursor, 32);
+    validation_pins::branch_not_equal(emitter, kind, cell, advance);
+    abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), cursor, 40);
+    abi::emit_return(emitter);
+    emitter.label(advance);
+    abi::emit_load_from_address(emitter, cursor, cursor, 8);
+    abi::emit_jump(emitter, next);
+    emitter.label(done);
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
     abi::emit_return(emitter);
 }
 
