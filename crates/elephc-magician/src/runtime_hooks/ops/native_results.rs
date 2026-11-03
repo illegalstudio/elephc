@@ -25,15 +25,6 @@ impl ElephcRuntimeOps {
         }
     }
 
-    /// Cleans native arguments and discards an interrupted result without replacing a pending throw.
-    pub(super) fn finish_native_call(
-        &mut self,
-        result: *mut RuntimeCell,
-        arguments: RuntimeCellHandle,
-    ) -> Result<RuntimeCellHandle, EvalStatus> {
-        self.finish_native_call_releasing(result, || arguments)
-    }
-
     /// Keeps an argument owner visible while adopting a result, then detaches it before release.
     pub(super) fn finish_native_call_releasing(
         &mut self,

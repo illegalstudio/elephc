@@ -76,45 +76,15 @@ pub(super) fn emit_reference_property_load(
 ) -> Result<()> {
     let pointer_reg = reference_pointer_reg(ctx, base_reg);
     abi::emit_load_from_address(ctx.emitter, pointer_reg, base_reg, slot.offset);
-    if super::super::reference_payloads::load_scalar(ctx, pointer_reg, &slot.php_type) {
-        return Ok(());
+    let ty = slot.php_type.codegen_repr();
+    if !is_pointer_sized_property_type(&ty)
+        && !matches!(ty, PhpType::Str | PhpType::Float | PhpType::TaggedScalar
+            | PhpType::Bool | PhpType::Int | PhpType::Void | PhpType::Never)
+    {
+        return Err(CodegenIrError::unsupported(format!(
+            "reference property load for PHP type {:?}", ty)));
     }
-    match slot.php_type.codegen_repr() {
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_load_from_address(ctx.emitter, ptr_reg, pointer_reg, 0);
-            abi::emit_load_from_address(ctx.emitter, len_reg, pointer_reg, 8);
-        }
-        PhpType::Float => {
-            let float_reg = abi::float_result_reg(ctx.emitter);
-            abi::emit_load_from_address(ctx.emitter, float_reg, pointer_reg, 0);
-        }
-        PhpType::TaggedScalar => {
-            let int_reg = abi::int_result_reg(ctx.emitter);
-            let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
-            abi::emit_load_from_address(ctx.emitter, int_reg, pointer_reg, 0);
-            abi::emit_load_from_address(ctx.emitter, tag_reg, pointer_reg, 8);
-        }
-        ty if is_pointer_sized_property_type(&ty)
-            || matches!(
-                ty,
-                PhpType::Bool | PhpType::Int | PhpType::Void | PhpType::Never
-            ) =>
-        {
-            let int_reg = abi::int_result_reg(ctx.emitter);
-            abi::emit_load_from_address(ctx.emitter, int_reg, pointer_reg, 0);
-        }
-        ty => {
-            return Err(CodegenIrError::unsupported(format!(
-                "reference property load for PHP type {:?}",
-                ty
-            )))
-        }
-    }
-    if slot.php_type.codegen_repr() == PhpType::Mixed {
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
-    }
-    Ok(())
+    super::super::reference_payloads::load_as(ctx, pointer_reg, &slot.php_type, &slot.php_type)
 }
 
 /// Emits a compact packed-field load from a pointer to the containing packed record.
