@@ -31,6 +31,14 @@ pub(super) enum ArgumentCleanupOwner {
     Reference(ArgumentValueOwner),
 }
 
+impl RuntimeOwners for BoundMethodArg {
+    /// Defaults, conversions and variadic keys own leases independently of source descriptors.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        self.value.visit_owned_slots(visit);
+        for (key, _) in &self.variadic_ref_targets { key.visit_owned_slots(visit); }
+    }
+}
+
 impl ArgumentCleanupOwner {
     /// Consumes the original owner or its replacement pin without borrowing shared state through PHP.
     pub(super) fn release(&self, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
@@ -196,6 +204,28 @@ pub(super) fn finish_eval_argument_owners(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Binder values and variadic keys contribute only their own distinct retained fields.
+    #[test]
+    fn bound_argument_owners_exclude_borrowed_reference_metadata() {
+        let value = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let key = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let arguments = vec![
+            BoundMethodArg { value, ref_target: None, variadic_ref_targets: vec![
+                (key, EvalReferenceTarget::Cell { cell: value.borrowed() }),
+            ] },
+            BoundMethodArg { value, ref_target: None, variadic_ref_targets: Vec::new() },
+            BoundMethodArg { value: value.borrowed(), ref_target: None, variadic_ref_targets: Vec::new() },
+        ];
+        let mut slots = Vec::new();
+        arguments.visit_owned_slots(&mut |slot| slots.push(slot as usize));
+        assert_eq!(slots.len(), 3, "two independent value owners and one variadic key");
+        assert_eq!(slots.iter().copied().collect::<std::collections::HashSet<_>>().len(), 3);
+        assert!(slots.contains(&(arguments[0].value.owner_slot() as usize)));
+        assert!(slots.contains(&(arguments[0].variadic_ref_targets[0].0.owner_slot() as usize)));
+        assert!(slots.contains(&(arguments[1].value.owner_slot() as usize)));
+        assert!(!slots.contains(&(arguments[2].value.owner_slot() as usize)));
+    }
 
     /// Pending native pins expose their actual owner field, and native consumption removes it.
     #[test]

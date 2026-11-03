@@ -17,6 +17,7 @@
 
 use super::*;
 use crate::context::push_native_frame_context;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Evaluates a registered AOT function through its descriptor-compatible invoker.
 pub(in crate::interpreter) fn eval_native_function(
@@ -41,7 +42,8 @@ pub(in crate::interpreter) fn eval_native_function_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let _native_context = push_native_frame_context(context);
-    let result = invoke_native_function_with_staged_args(&function, &bound_args, context, values);
+    let result = with_runtime_owners(&bound_args.values, ||
+        invoke_native_function_with_staged_args(&function, &bound_args, context, values));
     finish_eval_argument_values(result, bound_args.values, context, values)
 }
 
@@ -69,25 +71,28 @@ fn invoke_native_function_with_staged_args(
             return Err(status);
         }
     };
-    if let Err(status) = pin_native_call_evaluation_owners(bound_args, context, values) {
-        let _ = values.release(arg_array);
-        let _ = cleanup_native_function_ref_args(bound_args, values);
-        return Err(status);
-    }
-    let result = unsafe { function.call(arg_array) };
-    // Transfer a native exception before any cleanup can run another destructor.
-    let result = values.native_call_result(result);
-    let writeback = write_back_native_function_ref_args(bound_args, context, values);
-    let result = match (result, writeback) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
+    let arg_array = RuntimeOwnerSlot::new(arg_array);
+    with_runtime_owners(&arg_array, || {
+        if let Err(status) = pin_native_call_evaluation_owners(bound_args, context, values) {
+            let _ = values.release(arg_array.take());
+            let _ = cleanup_native_function_ref_args(bound_args, values);
+            return Err(status);
         }
-        (Ok(value), Ok(())) => Ok(value),
-    };
-    let result = finish_eval_argument_values(result, [arg_array], context, values)?;
-    eval_declared_native_return_value(function.return_type(), None, None, result, context, values)
+        let result = unsafe { function.call(arg_array.borrowed()) };
+        // Transfer a native exception before any cleanup can run another destructor.
+        let result = values.native_call_result(result);
+        let writeback = write_back_native_function_ref_args(bound_args, context, values);
+        let result = match (result, writeback) {
+            (Err(status), _) => Err(status),
+            (Ok(value), Err(status)) => {
+                let _ = eval_release_value(context, values, value);
+                Err(status)
+            }
+            (Ok(value), Ok(())) => Ok(value),
+        };
+        let result = finish_eval_argument_values(result, [arg_array.take()], context, values)?;
+        eval_declared_native_return_value(function.return_type(), None, None, result, context, values)
+    })
 }
 
 /// Builds the runtime container passed to descriptor-compatible native invokers.

@@ -8,6 +8,7 @@
 //! - Checked and unchecked entry points share binding, bridge scope, and reference-mode handling.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::with_runtime_owners;
 
 /// Calls one generated/AOT method from positional values and a prevalidated bridge scope.
 pub(in crate::interpreter) fn eval_native_method_with_positional_values_unchecked_bridge_scope(
@@ -237,35 +238,38 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
     let bound_args =
         bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;
-    let result = if let Some(scope) = bridge_scope {
-        eval_native_method_call_with_scope(
-            scope,
-            called_class_scope,
-            object,
-            method_name,
-            native_bound_arg_values(&bound_args),
-            context,
-            values,
-        )
-    } else {
-        values.method_call(object, method_name, native_bound_arg_values(&bound_args))
-    };
-    let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
-    let result = match (result, writeback) {
-        (Ok(result), Err(status)) => {
-            let _ = release_expr_result(result, context, values);
-            Err(status)
-        }
-        (Err(status), _) => Err(status),
-        (Ok(result), Ok(())) => eval_declared_native_return_value(
-            return_type.as_ref(),
-            Some(signature_owner),
-            called_class_scope.or(Some(class_name)),
-            result,
-            context,
-            values,
-        ),
-    };
+    let result = with_runtime_owners(&bound_args, || {
+        let result = if let Some(scope) = bridge_scope {
+            eval_native_method_call_with_scope(
+                scope,
+                called_class_scope,
+                object,
+                method_name,
+                native_bound_arg_values(&bound_args),
+                context,
+                values,
+            )
+        } else {
+            values.method_call(object, method_name, native_bound_arg_values(&bound_args))
+        };
+        let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+        let result = match (result, writeback) {
+            (Ok(result), Err(status)) => {
+                let _ = release_expr_result(result, context, values);
+                Err(status)
+            }
+            (Err(status), _) => Err(status),
+            (Ok(result), Ok(())) => eval_declared_native_return_value(
+                return_type.as_ref(),
+                Some(signature_owner),
+                called_class_scope.or(Some(class_name)),
+                result,
+                context,
+                values,
+            ),
+        };
+        result
+    });
     finish_native_bound_call(result, &bound_args, context, values)
 }
 
@@ -430,43 +434,48 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
     let mut bound_args =
         bind_native_callable_bound_args_with_mode(signature, evaluated_args, by_ref_mode, context, values)?;
-    let result = (|| {
-        normalize_tokenizer_native_arguments(signature_owner, method_name, &mut bound_args, context, values)?;
-        if let Some(result) = eval_tokenizer_static_method(signature_owner, method_name,
-            called_class_scope.unwrap_or(class_name), &native_bound_arg_values(&bound_args),
-            context, values) {
-            return result;
-        }
-        if let Some(scope) = bridge_scope {
-            eval_native_static_method_call_with_scope(
-                scope,
-                called_class_scope,
-                class_name,
-                method_name,
-                native_bound_arg_values(&bound_args),
+    let normalized = normalize_tokenizer_native_arguments(
+        signature_owner, method_name, &mut bound_args, context, values);
+    let result = with_runtime_owners(&bound_args, || {
+        let result = (|| {
+            normalized?;
+            if let Some(result) = eval_tokenizer_static_method(signature_owner, method_name,
+                called_class_scope.unwrap_or(class_name), &native_bound_arg_values(&bound_args),
+                context, values) {
+                return result;
+            }
+            if let Some(scope) = bridge_scope {
+                eval_native_static_method_call_with_scope(
+                    scope,
+                    called_class_scope,
+                    class_name,
+                    method_name,
+                    native_bound_arg_values(&bound_args),
+                    context,
+                    values,
+                )
+            } else {
+                values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
+            }
+        })();
+        let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+        let result = match (result, writeback) {
+            (Ok(result), Err(status)) => {
+                let _ = release_expr_result(result, context, values);
+                Err(status)
+            }
+            (Err(status), _) => Err(status),
+            (Ok(result), Ok(())) => eval_declared_native_return_value(
+                return_type.as_ref(),
+                Some(signature_owner),
+                called_class_scope.or(Some(class_name)),
+                result,
                 context,
                 values,
-            )
-        } else {
-            values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
-        }
-    })();
-    let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
-    let result = match (result, writeback) {
-        (Ok(result), Err(status)) => {
-            let _ = release_expr_result(result, context, values);
-            Err(status)
-        }
-        (Err(status), _) => Err(status),
-        (Ok(result), Ok(())) => eval_declared_native_return_value(
-            return_type.as_ref(),
-            Some(signature_owner),
-            called_class_scope.or(Some(class_name)),
-            result,
-            context,
-            values,
-        ),
-    };
+            ),
+        };
+        result
+    });
     finish_native_bound_call(result, &bound_args, context, values)
 }
 

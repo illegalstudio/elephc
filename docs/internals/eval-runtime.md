@@ -420,6 +420,9 @@ provenance follows ownership from its original field into the native pin's
 owning field. That field remains visible while argument preparation is pending;
 native parameter entry clears it before consuming the lease. Borrowed descriptors
 do not add another graph edge.
+Binder-owned default values, callable conversions and variadic keys remain visible
+through native invocation and reference writeback. Native function descriptors also
+publish their Rust-owned argument array, independently of its retained entries.
 
 ## Runtime generic specialization
 

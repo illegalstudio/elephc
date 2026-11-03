@@ -164,7 +164,8 @@ class NativeCycleCastConsumer {
     public function apply(callable $callback): void { $callback(); }
     public static function applyStatic(callable $callback): void { $callback(); }
 }
-for ($mode = 0; $mode < 3; $mode++) {
+function nativeCycleCastFunction(callable $callback): void { $callback(); }
+for ($mode = 0; $mode < 4; $mode++) {
     $callback = new NativeCycleCastCallback();
     $fiber = new Fiber(static function () use ($callback, $mode): void {
         eval('
@@ -172,7 +173,8 @@ for ($mode = 0; $mode < 3; $mode++) {
             elseif ($mode === 1) {
                 $consumer = new NativeCycleCastConsumer($callback, false);
                 $consumer->apply($callback);
-            } else { NativeCycleCastConsumer::applyStatic($callback); }
+            } elseif ($mode === 2) { NativeCycleCastConsumer::applyStatic($callback); }
+            else { nativeCycleCastFunction($callback); }
         ');
     });
     $callback->fiber = $fiber;
@@ -184,7 +186,7 @@ echo 'done';
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
-    assert_eq!(output.stdout, "9|9|9|done");
+    assert_eq!(output.stdout, "9|9|9|9|done");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
