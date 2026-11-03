@@ -232,6 +232,68 @@ fn validation_physical_source(out: &mut String) {
     }
 }
 
+/// Registers a real Rust type source and validates through generated native callbacks.
+fn native_coordinator(out: &mut String, callback: &str) {
+    for offset in [128, 136] {
+        instruction(out, &format!("str xzr, [sp, #{offset}]"), &format!("mov QWORD PTR [rsp + {offset}], 0"));
+    }
+    address(out, "x0", "rax", callback);
+    store(out, 144);
+    instruction(out, "add x0, sp, #8", "lea rdi, [rsp + 8]");
+    instruction(out, "ldr x1, [sp, #8]", "mov rsi, QWORD PTR [rsp + 8]");
+    instruction(out, "add x2, sp, #144", "lea rdx, [rsp + 144]");
+    call(out, &target().extern_symbol("__elephc_reference_sources_bind_v1"));
+    instruction(out, "cmp x0, #0", "test rax, rax");
+    instruction(out, "b.eq Lvalidation_pin_fail", "je Lvalidation_pin_fail");
+    instruction(out, "ldr x0, [sp, #8]", "mov rdi, QWORD PTR [rsp + 8]");
+    instruction(out, "ldr x1, [sp]", "mov rsi, QWORD PTR [rsp]");
+    call(out, &target().extern_symbol("__elephc_reference_sources_set_reference_v1"));
+    instruction(out, "cmp x0, #0", "test rax, rax");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    instruction(out, "mov x0, #3", "mov eax, 3");
+    instruction(out, "mov x1, #1", "mov edi, 1");
+    instruction(out, "mov x2, #0", "xor esi, esi");
+    call(out, "__rt_mixed_from_value");
+    store(out, 208);
+    for (strict, expected) in [(0, 0), (1, 2)] {
+        instruction(out, &format!("mov x0, #{strict}"), &format!("mov eax, {strict}"));
+        store(out, 128);
+        instruction(out, "ldr x0, [sp]", "mov rdi, QWORD PTR [rsp]");
+        instruction(out, "ldr x1, [sp, #208]", "mov rsi, QWORD PTR [rsp + 208]");
+        instruction(out, "add x2, sp, #128", "lea rdx, [rsp + 128]");
+        instruction(out, "add x3, sp, #224", "lea rcx, [rsp + 224]");
+        call(out, "__rt_reference_validate_native");
+        instruction(out, &format!("cmp x0, #{expected}"), &format!("cmp rax, {expected}"));
+        instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+        load(out, 224);
+        if strict == 0 {
+            call(out, "__rt_mixed_unbox");
+            instruction(out, "cmp x0, #2", "cmp rax, 2");
+            instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+            load(out, 224);
+            call(out, "__rt_mixed_cast_int");
+            instruction(out, "cmp x0, #1", "cmp rax, 1");
+            instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+            load(out, 224);
+            call(out, "__rt_decref_mixed");
+        } else {
+            instruction(out, "cmp x0, #0", "test rax, rax");
+            instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+            load(out, 136);
+            instruction(out, "cmp x0, #0", "test rax, rax");
+            instruction(out, "b.eq Lvalidation_pin_fail", "je Lvalidation_pin_fail");
+            instruction(out, "str xzr, [sp, #136]", "mov QWORD PTR [rsp + 136], 0");
+            call(out, "__rt_decref_any");
+        }
+    }
+    instruction(out, "add x0, sp, #8", "lea rdi, [rsp + 8]");
+    call(out, &target().extern_symbol("__elephc_reference_sources_unbind_v1"));
+    instruction(out, "cmp x0, #0", "test rax, rax");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    load(out, 208);
+    call(out, "__rt_decref_mixed");
+}
+
 /// Real nested pins preserve singleton copy semantics, unlink in any order and leave no heap owners.
 #[test]
 fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
@@ -239,15 +301,22 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     let source = "<?php class NativeValidationDeclarationProbe { public float $value = 0.0; } \
         $object = new NativeValidationDeclarationProbe(); $alias = &$object->value; \
         unset($alias, $object);";
-    let (user, runtime, requirements) =
+    let (user, _, source_requirements) =
         compile_source_to_asm_with_options(source, &dir.0, 65_536, false, true);
+    assert!(source_requirements.is_empty(), "the ABI fixture has no PHP bridge dependencies");
+    let features = elephc::codegen::RuntimeFeatures {
+        native_reference_validation: true, ..elephc::codegen::RuntimeFeatures::none()
+    };
+    let runtime = elephc::codegen::generate_runtime_with_features(65_536, target(), features);
+    let requirements = TestLinkRequirements::new(Vec::new(),
+        elephc::codegen::link_requirements_for_runtime_features(features));
     let callback_prefix = elephc::names::function_symbol("__eir_reference_property_");
     let callback_suffix = elephc::names::mangle_fqn("_instance");
     let callback = user.lines().filter_map(|line| line.trim().strip_suffix(':'))
         .find(|line| line.starts_with(&callback_prefix) && line.ends_with(&callback_suffix))
         .expect("the typed physical reference declaration must produce a native callback");
     let mut asm = String::new();
-    instruction(&mut asm, "sub sp, sp, #224", "sub rsp, 224");
+    instruction(&mut asm, "sub sp, sp, #320", "sub rsp, 320");
     // Create a canonical native cell whose PHPRef has exactly one real owner, the cell.
     instruction(&mut asm, "mov x0, #0", "mov eax, 0");
     instruction(&mut asm, "mov x1, #41", "mov edi, 41");
@@ -268,6 +337,7 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     instruction(&mut asm, "ldr x9, [sp]", "mov r10, QWORD PTR [rsp]");
     instruction(&mut asm, "str x9, [x0]", "mov QWORD PTR [rax], r10");
     validation_physical_source(&mut asm);
+    native_coordinator(&mut asm, callback);
     load(&mut asm, 0);
     call(&mut asm, "__rt_reference_new");
     store(&mut asm, 16);
@@ -325,7 +395,7 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     } else {
         asm.push_str("    mov rsi, rax\n    mov edi, 1\n    mov eax, 1\n    syscall\n");
     }
-    instruction(&mut asm, "add sp, sp, #224", "add rsp, 224");
+    instruction(&mut asm, "add sp, sp, #320", "add rsp, 320");
     instruction(&mut asm, "b Lvalidation_pin_callbacks_end", "jmp Lvalidation_pin_callbacks_end");
     asm.push_str("Lvalidation_pin_accept:\n");
     instruction(&mut asm, "mov x0, x1", "mov rax, rsi");

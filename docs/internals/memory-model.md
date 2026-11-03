@@ -667,6 +667,15 @@ retire discarded candidates through `__rt_cleanup_invoke`. The comparison output
 is a four-byte C `int`. Protected retirement accumulates a contained Throwable in
 the same context slot as coercion and returns status two across the Rust ABI.
 
+The optional `native_reference_validation` capability emits
+`__rt_reference_validate_native` and links the Rust coordinator independently of
+the eval runtime. Its cache identity uses bit 16. The native bridge builds the
+version-one 48-byte operation table and borrows the publisher's context, roots
+and 72-byte outcome through the Rust call. The ABI fixture registers a real weak
+source and exercises weak success and strict failure through generated EIR.
+Production publishers still need to select this capability when their lifecycle
+and commit paths are connected.
+
 Native function parameter flags carry physical boxed-reference storage separately
 from declared PHP types and tagged nullable integers. Normal function object
 references use the normalized Mixed ABI. A closure descriptor can instead expose

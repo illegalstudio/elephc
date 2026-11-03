@@ -108,6 +108,8 @@ pub struct RuntimeFeatures {
     /// True when lowered native code can clone an object. The boxed clone adapter is also
     /// required by the full eval bridge, which exposes the same operation to Magician.
     pub object_clone: bool,
+    /// True when native property publishers use the weak source registry and validation coordinator.
+    pub native_reference_validation: bool,
 }
 
 impl RuntimeFeatures {
@@ -143,6 +145,7 @@ impl RuntimeFeatures {
             | ((self.object_clone as u64) << 13)
             | ((self.mbregex as u64) << 14)
             | ((self.mbstring_mime as u64) << 15)
+            | ((self.native_reference_validation as u64) << 16)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -164,6 +167,7 @@ impl RuntimeFeatures {
             directory_resource: false,
             handler_state: false,
             object_clone: false,
+            native_reference_validation: false,
         }
     }
 
@@ -187,6 +191,7 @@ impl RuntimeFeatures {
             directory_resource: true,
             handler_state: true,
             object_clone: true,
+            native_reference_validation: true,
         }
     }
 }
@@ -217,14 +222,14 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         requirements.push(LinkRequirement::SystemLibrary("z".to_string()));
         requirements.push(LinkRequirement::SystemLibrary("bz2".to_string()));
     }
-    if features.descriptor_invoker && !features.eval_bridge {
+    if features.descriptor_invoker && !features.eval_bridge && !features.native_reference_validation {
         // The dynamic builtin dispatcher emits md5/sha1/hash wrappers that reference
         // `elephc_crypto_hash`; force the crate to link when Magician is absent. The
         // Magician staticlib already carries its crypto dependency, and adding the
         // standalone archive beside it produces duplicate C exports on macOS.
         requirements.push(LinkRequirement::Bridge("elephc_crypto"));
     }
-    if features.eval_bridge {
+    if features.eval_bridge || features.native_reference_validation {
         // The interpreter remains an ordinary table-driven Elephc bridge. Its BCMath
         // registry calls the standalone C ABI so AOT and eval share one process scale
         // instead of embedding a second staticlib copy. Keep bcmath after magician so
@@ -1142,6 +1147,19 @@ mod tests {
                 LinkRequirement::Bridge("elephc_mbstring")
             ]
         );
+    }
+
+    /// Native reference coordination links its Rust owner without enabling the eval runtime.
+    #[test]
+    fn test_native_reference_validation_selects_an_independent_bridge_and_cache_bit() {
+        let features = RuntimeFeatures { native_reference_validation: true, ..RuntimeFeatures::none() };
+        assert!(!features.eval_bridge);
+        assert_eq!(features.cache_key_bits(), 1 << 16);
+        let expected = vec![LinkRequirement::Bridge("elephc_magician"), LinkRequirement::Bridge("elephc_bcmath")];
+        assert_eq!(link_requirements_for_runtime_features(features), expected);
+        assert_eq!(link_requirements_for_runtime_features(RuntimeFeatures {
+            descriptor_invoker: true, ..features
+        }), expected, "Magician already supplies the crypto dependency");
     }
 
     /// Verifies eval plus regex requests PCRE2 and both eval bridge archives.

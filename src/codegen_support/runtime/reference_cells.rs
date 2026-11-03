@@ -25,6 +25,8 @@ mod canonical;
 mod validation_pins;
 mod validation_coercion;
 mod validation_ops;
+mod validation_coordinator;
+pub(super) use validation_coordinator::emit as emit_validation_coordinator;
 pub(crate) use validation_pins::subtract as subtract_validation_pins;
 pub(crate) use canonical::resolve_scalar_property;
 pub(crate) use property_unset::emit_owned_property_unset;
