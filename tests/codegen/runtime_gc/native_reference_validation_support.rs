@@ -65,3 +65,37 @@ pub(super) fn expect_zero(out: &mut String, symbol: &str) {
     }
 }
 
+/// Adds a C-ABI count oracle that copies registry records without retaining PHP values.
+pub(super) fn append_source_counter(user: &mut String) {
+    let entry = target().extern_symbol("native_reference_source_count");
+    user.push_str(&format!("\n.text\n.p2align 2\n.globl {entry}\n{entry}:\n"));
+    if target().arch == Arch::AArch64 {
+        user.push_str("    sub sp, sp, #80\n    stp x29, x30, [sp, #64]\n    add x29, sp, #64\n");
+    } else { user.push_str("    push rbp\n    mov rbp, rsp\n    sub rsp, 64\n"); }
+    instruction(user, "mov x0, #0", "xor eax, eax");
+    store(user, 48);
+    store(user, 56);
+    user.push_str("Lnative_source_count_next:\n");
+    instruction(user, "ldr x0, [sp, #56]", "mov rdi, QWORD PTR [rsp + 56]");
+    instruction(user, "mov x1, sp", "mov rsi, rsp");
+    call(user, &target().extern_symbol("__elephc_reference_sources_next_v1"));
+    instruction(user, "cmp x0, #0", "test rax, rax");
+    instruction(user, "b.eq Lnative_source_count_done", "je Lnative_source_count_done");
+    instruction(user, "cmp x0, #1", "cmp rax, 1");
+    instruction(user, "b.ne Lnative_source_count_failed", "jne Lnative_source_count_failed");
+    load(user, 0);
+    store(user, 56);
+    load(user, 48);
+    instruction(user, "add x0, x0, #1", "add rax, 1");
+    store(user, 48);
+    instruction(user, "b Lnative_source_count_next", "jmp Lnative_source_count_next");
+    user.push_str("Lnative_source_count_failed:\n");
+    instruction(user, "mov x0, #-1", "mov rax, -1");
+    store(user, 48);
+    user.push_str("Lnative_source_count_done:\n");
+    load(user, 48);
+    if target().arch == Arch::AArch64 {
+        user.push_str("    ldp x29, x30, [sp, #64]\n    add sp, sp, #80\n    ret\n");
+    } else { user.push_str("    leave\n    ret\n"); }
+}
+

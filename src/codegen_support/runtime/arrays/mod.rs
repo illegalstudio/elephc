@@ -196,6 +196,7 @@ mod natsort;
 
 pub(super) mod deep_cleanup;
 mod object_free_deep;
+mod native_reference_source_retirement;
 mod range;
 mod incref;
 mod foreach_non_iterable_warning;

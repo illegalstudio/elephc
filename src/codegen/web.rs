@@ -174,6 +174,11 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emit_transient_pointer_reset(emitter);
     emit_extension_request_state_reset(emitter);
     emit_cstr_buffer_reset(emitter);
+    if module.required_runtime_features.native_reference_validation {
+        let entry = emitter.target.extern_symbol("__elephc_reference_sources_reset_v1");
+        abi::emit_call_label(emitter, &entry);
+        abi::emit_branch_if_int_result_nonzero(emitter, "__rt_reference_sources_failure");
+    }
     emit_heap_arena_reset(emitter);
     if module.web_application {
         abi::emit_store_imm_to_symbol(emitter, "_gc_candidates_enabled", 0, 1);
@@ -422,6 +427,27 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
 mod handler_reset_tests {
     use super::*;
     use crate::codegen::platform::{AppleVariant, Platform, Target};
+
+    /// Weak type sources expire only after PHP shutdown callbacks and before arena addresses recycle.
+    #[test]
+    fn web_native_reference_sources_reset_after_callbacks_before_arena() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut module = Module::new(target);
+            module.required_runtime_features.native_reference_validation = true;
+            let mut emitter = Emitter::new(target);
+            emit_web_reset(&mut emitter, &module, &DataSection::new());
+            let assembly = emitter.output();
+            let callbacks = assembly.find("__rt_resource_inventory_reset").unwrap();
+            let reset = assembly.find("__elephc_reference_sources_reset_v1").unwrap();
+            let heap = assembly.find("__rt_heap_bins_clear").unwrap();
+            assert!(callbacks < reset && reset < heap, "{name}");
+            module.required_runtime_features.native_reference_validation = false;
+            let mut emitter = Emitter::new(target);
+            emit_web_reset(&mut emitter, &module, &DataSection::new());
+            assert!(!emitter.output().contains("__elephc_reference_sources_reset_v1"), "{name}");
+        }
+    }
 
     /// Full arena reclamation accounts for outstanding blocks only after retiring the old heap.
     #[test]

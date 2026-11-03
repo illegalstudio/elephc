@@ -91,6 +91,9 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
             dynamic_property_hash_offset(property_count),
         );
     }
+    if !owned_reference_property_offsets.is_empty() {
+        emit_native_reference_bindings(ctx, dest_reg);
+    }
     Ok(())
 }
 

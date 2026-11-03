@@ -35,6 +35,7 @@ mod validation_publish;
 pub(super) use validation_publish::emit as emit_validation_publish;
 mod source_lifecycle;
 pub(super) use source_lifecycle::emit as emit_source_lifecycle;
+pub(super) use source_lifecycle::require_success as require_source_success;
 pub(crate) use validation_pins::subtract as subtract_validation_pins;
 pub(crate) use canonical::resolve_scalar_property;
 pub(crate) use property_unset::emit_owned_property_unset;

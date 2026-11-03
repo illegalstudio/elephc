@@ -376,9 +376,26 @@ fn expect_shared_native_cell_clone(out: &mut String) {
 #[test]
 fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     let dir = FixtureDir(make_cli_test_dir("elephc_native_reference_validation_pins"));
-    let source = "<?php class NativeValidationDeclarationProbe { public float $value = 0.0; } \
-        $object = new NativeValidationDeclarationProbe(); $alias = &$object->value; \
-        unset($alias, $object);";
+    let source = r#"<?php
+extern function native_reference_source_count(): int;
+class NativeValidationDeclarationProbe {
+    public float $value = 0.0;
+    public function __destruct() {
+        global $shouldRescue, $rescued;
+        if ($shouldRescue) { $rescued = $this; }
+    }
+}
+$shouldRescue = false;
+$object = new NativeValidationDeclarationProbe(); $alias =& $object->value;
+echo native_reference_source_count(), ':';
+$copy = clone $object; echo native_reference_source_count(), ':';
+unset($alias, $object); echo native_reference_source_count(), ':';
+unset($copy); echo native_reference_source_count(), '|';
+$shouldRescue = true;
+$revive = new NativeValidationDeclarationProbe(); $reviveAlias =& $revive->value;
+unset($reviveAlias, $revive); echo native_reference_source_count(), ':';
+$shouldRescue = false; unset($rescued); echo native_reference_source_count(), '|';
+"#;
     let (user, runtime, requirements) =
         compile_source_to_asm_with_native_reference_validation(source, &dir.0, 65_536, true);
     let callback_prefix = elephc::names::function_symbol("__eir_reference_property_");
@@ -516,8 +533,9 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     asm.push_str("Lvalidation_pin_throw:\n");
     instruction(&mut asm, "b __rt_unmanaged_reference_escape_error", "jmp __rt_unmanaged_reference_escape_error");
     asm.push_str("Lvalidation_pin_callbacks_end:\n");
-    let user = inject_main_exit_harness(&user, &asm);
+    let mut user = inject_main_exit_harness(&user, &asm);
+    append_source_counter(&mut user);
     let runtime = runtime_obj_for_asm(&runtime);
     let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
-    assert_eq!(output, "1");
+    assert_eq!(output, "1:2:1:0|1:0|1");
 }
