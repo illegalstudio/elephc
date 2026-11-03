@@ -734,7 +734,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_assign("_out", e_array(vec![])),
                     s_foreach(e_static_call("mysqli", "__elephcStatKeys", vec![]), None, "_key", vec![
                         s_assign("_name", e_cast(CastType::String, e_var("_key"))),
-                        s_array_assign("_out", e_var("_name"), e_null_coalesce(e_static_call("mysqli", "__elephcWireStat", vec![e_this_prop("conn"), e_var("_name")]), e_cast(CastType::String, e_null_coalesce(e_index(e_this_prop("connStats"), e_var("_name")), e_int(0))))),
+                        s_array_assign("_out", e_var("_name"), e_null_coalesce(e_static_call("mysqli", "__elephcWireStat", vec![e_ternary(e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0)), e_neg(e_int(2)), e_this_prop("conn")), e_var("_name")]), e_cast(CastType::String, e_null_coalesce(e_index(e_this_prop("connStats"), e_var("_name")), e_int(0))))),
                     ]),
                     s_return(e_var("_out")),
                 ]),
