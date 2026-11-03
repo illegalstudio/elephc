@@ -537,6 +537,7 @@ pub(super) fn eval_clear_evaluated_arg_ref_targets(
     evaluated_args
         .into_iter()
         .map(|arg| EvaluatedCallArg {
+            evaluation_owner: None,
             name: arg.name,
             value: arg.value,
             ref_target: None,

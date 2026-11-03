@@ -188,6 +188,7 @@ fn native_argument_ownership_raw_heap_slot_ledger() {
 /// Builds one staged raw-string argument without a caller writeback target.
 fn raw_string_ref_args(original: [u64; 2], current: [u64; 2]) -> BoundNativeFunctionArgs {
     BoundNativeFunctionArgs {
+        evaluation_owners: Vec::new(),
         values: Vec::new(),
         ref_slots: vec![BoundNativeFunctionRefSlot::RawString {
             original,
@@ -202,6 +203,7 @@ fn raw_string_ref_args(original: [u64; 2], current: [u64; 2]) -> BoundNativeFunc
 /// Builds one staged raw-heap argument without a caller writeback target.
 fn raw_heap_ref_args(original: u64, current: u64) -> BoundNativeFunctionArgs {
     BoundNativeFunctionArgs {
+        evaluation_owners: Vec::new(),
         values: Vec::new(),
         ref_slots: vec![BoundNativeFunctionRefSlot::OwnedRawWord {
             original,

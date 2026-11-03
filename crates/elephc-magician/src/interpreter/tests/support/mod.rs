@@ -113,6 +113,10 @@ pub(super) struct FakeOps {
     pub(super) releases: Vec<RuntimeCellHandle>,
     /// Zero-based release call that consumes its owner but reports an injected cleanup exception.
     pub(super) fail_release_call: Option<usize>,
+    /// Enables stable native argument roots for exact lease-transfer and cleanup tests.
+    pub(super) native_argument_pins: bool,
+    /// Records pin entry and unlink before the corresponding foreign owner is released.
+    pub(super) native_argument_pin_events: Vec<(bool, RuntimeCellHandle)>,
     /// Zero-based native reference-marker allocation that fails before acquiring its cell.
     pub(super) fail_invoker_marker_call: Option<usize>,
     pub(super) invoker_marker_calls: usize,

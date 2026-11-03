@@ -337,6 +337,7 @@ pub(in crate::interpreter) fn positional_args(
 ) -> Vec<EvaluatedCallArg> {
     args.into_iter()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value,
             ref_target: None,

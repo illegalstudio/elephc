@@ -191,6 +191,7 @@ pub(in crate::interpreter) fn eval_xml_values_result(
         .iter()
         .copied()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value,
             ref_target: None,

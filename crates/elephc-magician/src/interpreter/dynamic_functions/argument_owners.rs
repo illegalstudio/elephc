@@ -61,6 +61,7 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
                     value
                 };
                 evaluated_args.push(EvaluatedCallArg {
+                    evaluation_owner: None,
                     name: Some(name.to_string()),
                     value,
                     ref_target,
@@ -81,6 +82,7 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
                 value
             };
             evaluated_args.push(EvaluatedCallArg {
+                evaluation_owner: None,
                 name: None,
                 value,
                 ref_target,

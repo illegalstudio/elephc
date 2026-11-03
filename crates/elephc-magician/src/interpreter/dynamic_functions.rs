@@ -101,6 +101,7 @@ fn evaluate_call_arguments(
                     builtin_arguments::by_reference(contract, Some(name), evaluated_args.len()))?;
             observe(arg.value(), value);
             evaluated_args.push(EvaluatedCallArg {
+                evaluation_owner: None,
                 name: Some(name.to_string()),
                 value,
                 ref_target,
@@ -115,6 +116,7 @@ fn evaluate_call_arguments(
             builtin_arguments::by_reference(contract, None, evaluated_args.len()))?;
         observe(arg.value(), value);
         evaluated_args.push(EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value,
             ref_target,
@@ -466,6 +468,7 @@ fn append_ordered_call_arg_values(
                 let (value, ref_target) =
                     eval_invoker_ref_arg_value_and_target(value, ref_target, context, values)?;
                 EvaluatedCallArg {
+                    evaluation_owner: None,
                     name: None,
                     value,
                     ref_target,
@@ -491,6 +494,7 @@ fn append_ordered_call_arg_values(
                 let (value, ref_target) =
                     eval_invoker_ref_arg_value_and_target(value, ref_target, context, values)?;
                 EvaluatedCallArg {
+                    evaluation_owner: None,
                     name: Some(name),
                     value,
                     ref_target,

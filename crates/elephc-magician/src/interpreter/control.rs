@@ -31,6 +31,8 @@ pub enum EvalOutcome {
 /// One already evaluated function-like call argument.
 #[derive(Clone)]
 pub(super) struct EvaluatedCallArg {
+    /// Exact source-evaluation lease, preserved through binding without copying its owner.
+    pub(super) evaluation_owner: Option<ArgumentValueOwner>,
     pub(super) name: Option<String>,
     pub(super) value: RuntimeCellHandle,
     pub(super) ref_target: Option<EvalReferenceTarget>,
@@ -47,6 +49,8 @@ pub(super) struct BoundMethodArg {
 /// One native function argument list prepared for the descriptor invoker ABI.
 #[derive(Default)]
 pub(super) struct BoundNativeFunctionArgs {
+    /// Source argument leases can become invisible only after staging and coercion finish.
+    pub(super) evaluation_owners: Vec<ArgumentValueOwner>,
     pub(super) values: Vec<RuntimeCellHandle>,
     pub(super) ref_slots: Vec<BoundNativeFunctionRefSlot>,
     /// Container key of each staged value: `None` is its own position, `Some(name)` a string key.

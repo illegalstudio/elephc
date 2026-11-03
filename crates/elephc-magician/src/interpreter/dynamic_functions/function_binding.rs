@@ -57,13 +57,16 @@ pub(in crate::interpreter) fn bind_evaluated_native_function_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
-    bind_evaluated_native_function_args_with_mode(
+    let owners = evaluated_args.iter().filter_map(|arg| arg.evaluation_owner.clone()).collect();
+    let mut bound = bind_evaluated_native_function_args_with_mode(
         function,
         evaluated_args,
         EvalByRefBindingMode::RequireTarget,
         context,
         values,
-    )
+    )?;
+    bound.evaluation_owners = owners;
+    Ok(bound)
 }
 
 /// Binds native AOT function args for `call_user_func()` by-value by-ref degradation.
@@ -74,13 +77,16 @@ pub(in crate::interpreter) fn bind_evaluated_native_function_args_for_call_user_
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
-    bind_evaluated_native_function_args_with_mode(
+    let owners = evaluated_args.iter().filter_map(|arg| arg.evaluation_owner.clone()).collect();
+    let mut bound = bind_evaluated_native_function_args_with_mode(
         function,
         evaluated_args,
         EvalByRefBindingMode::WarnByValue { callable_name },
         context,
         values,
-    )
+    )?;
+    bound.evaluation_owners = owners;
+    Ok(bound)
 }
 
 /// Binds already evaluated native AOT function args using the selected by-reference mode.

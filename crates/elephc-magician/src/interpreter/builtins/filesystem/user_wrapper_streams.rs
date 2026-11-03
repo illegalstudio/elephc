@@ -447,21 +447,25 @@ fn eval_user_wrapper_stream_open_args(
     let opened_path = values.null()?;
     Ok(vec![
         EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value: path,
             ref_target: None,
         },
         EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value: mode,
             ref_target: None,
         },
         EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value: options,
             ref_target: None,
         },
         EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value: opened_path,
             ref_target: Some(EvalReferenceTarget::Cell { cell: opened_path }),

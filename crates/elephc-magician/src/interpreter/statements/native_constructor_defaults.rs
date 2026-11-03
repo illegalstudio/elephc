@@ -270,6 +270,7 @@ pub(super) fn materialize_native_callable_object_default(
     let constructed = (|| {
         for arg in args {
             constructor_args.push(EvaluatedCallArg {
+                evaluation_owner: None,
                 name: arg.name.clone(),
                 value: materialize_native_callable_default(&arg.value, context, values)?,
                 ref_target: None,

@@ -93,6 +93,7 @@ pub(super) fn eval_reflection_instance_property_set_value(
                 &hook_method,
                 object,
                 vec![EvaluatedCallArg {
+                    evaluation_owner: None,
                     name: None,
                     value,
                     ref_target: None,

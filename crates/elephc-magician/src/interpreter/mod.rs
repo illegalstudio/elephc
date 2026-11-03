@@ -12,8 +12,10 @@
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
 mod array_literals;
+mod argument_value_owners;
 mod call_argument_owners;
 
+use argument_value_owners::*;
 use call_argument_owners::*;
 pub(crate) mod array_references;
 pub mod builtin_metadata;

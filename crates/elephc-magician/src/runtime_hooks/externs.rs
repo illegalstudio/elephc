@@ -462,6 +462,12 @@ unsafe extern "C" {
         reference: *mut RuntimeCell,
         pin: *mut c_void,
     ) -> u64;
+    /// Retains an existing reference in a caller-owned invisible argument record.
+    pub(super) fn __elephc_eval_value_native_reference_owner_pin_v1(
+        reference: *mut RuntimeCell, pin: *mut c_void,
+    ) -> u64;
+    /// Unlinks an argument root and transfers its owner without running native or eval destructors.
+    pub(super) fn __elephc_eval_value_native_reference_owner_take_v1(pin: *mut c_void) -> *mut RuntimeCell;
     /// Unlinks a staging root before consuming its owner and updating the boxed Throwable chain.
     pub(super) fn __elephc_eval_value_native_reference_pin_release_v1(
         pin: *mut c_void,

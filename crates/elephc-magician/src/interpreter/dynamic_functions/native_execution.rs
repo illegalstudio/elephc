@@ -69,6 +69,11 @@ fn invoke_native_function_with_staged_args(
             return Err(status);
         }
     };
+    if let Err(status) = pin_native_call_evaluation_owners(bound_args, context, values) {
+        let _ = values.release(arg_array);
+        let _ = cleanup_native_function_ref_args(bound_args, values);
+        return Err(status);
+    }
     let result = unsafe { function.call(arg_array) };
     // Transfer a native exception before any cleanup can run another destructor.
     let result = values.native_call_result(result);

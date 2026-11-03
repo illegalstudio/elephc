@@ -165,14 +165,10 @@ pub(in crate::interpreter) fn with_eval_call_arguments_with_modes<V: RuntimeValu
         -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (arguments, receiver_owners) = eval_owned_call_arg_values(args, modes, context, scope, values)?;
-    let borrowed_arguments = arguments.iter().cloned().map(|mut argument| {
-        argument.value = argument.value.borrowed();
-        argument
-    }).collect();
+    let (borrowed_arguments, argument_owners) = own_evaluated_call_arguments(arguments,
+        |argument, index| modes.by_reference(argument.name.as_deref(), index));
     let result = consume(borrowed_arguments, context, scope, values);
-    let result = finish_eval_argument_values(
-        result, arguments.into_iter().map(|argument| argument.value), context, values,
-    );
+    let result = finish_eval_argument_owners(result, argument_owners, context, values);
     finish_synthesized_method_arguments(result, receiver_owners, context, values)
 }
 
@@ -225,14 +221,10 @@ pub(in crate::interpreter) fn with_eval_array_call_arguments<V: RuntimeValueOps>
     ) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let arguments = eval_array_call_arg_values(array, context, values)?;
-    let borrowed_arguments = arguments.iter().cloned().map(|mut argument| {
-        argument.value = argument.value.borrowed();
-        argument
-    }).collect();
+    let (borrowed_arguments, argument_owners) = own_evaluated_call_arguments(arguments,
+        |argument, _| argument.ref_target.is_some());
     let result = consume(borrowed_arguments, context, values);
-    finish_eval_argument_values(
-        result, arguments.into_iter().map(|argument| argument.value), context, values,
-    )
+    finish_eval_argument_owners(result, argument_owners, context, values)
 }
 
 /// Evaluates a condition and consumes its temporary owner after reading PHP truthiness.

@@ -177,6 +177,19 @@ macro_rules! impl_construction_raw_ops {
         if cell == 0 { Err(EvalStatus::RuntimeFatal) } else { Ok(Some(cell)) }
     }
 
+    /// Pins a source argument reference without introducing a PHP-visible alias.
+    fn pin_native_reference_argument_owner(
+        &mut self, reference: RuntimeCellHandle, pin: *mut std::ffi::c_void,
+    ) -> Result<bool, EvalStatus> {
+        let record = unsafe { __elephc_eval_value_native_reference_owner_pin_v1(reference.as_ptr(), pin) };
+        if record == 0 { Err(EvalStatus::RuntimeFatal) } else { Ok(true) }
+    }
+
+    /// Transfers the unlinked owner so eval retains its ordinary dynamic destructor handling.
+    fn take_native_reference_argument_owner(&mut self, pin: *mut std::ffi::c_void) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_native_reference_owner_take_v1(pin) })
+    }
+
     /// Uses the protected generic release ABI so a final cell cannot throw across Rust frames.
     fn release_native_mixed_reference_cell(
         &mut self, _cell: u64, pin: *mut std::ffi::c_void,

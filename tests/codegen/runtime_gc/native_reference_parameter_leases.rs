@@ -57,6 +57,15 @@ function throwWithEvalNativeLease(mixed &$value): void {
     $value = 'written';
     throw new Exception('caught');
 }
+function dropEvalNativeLease(mixed &$value, EvalNativeParameterLeaseProbe $object): void {
+    unset($value); unset($object->value);
+}
+function copyAfterDuplicateEvalLeases(mixed &$first, mixed &$second, EvalNativeParameterLeaseProbe $object): EvalNativeParameterLeaseProbe {
+    unset($first, $second); return clone $object;
+}
+function abortEvalNativeLease(): EvalNativeParameterLeaseProbe { throw new Exception('late'); }
+$shared = new EvalNativeParameterLeaseProbe();
+$alias =& $shared->value;
 $code = $argc > 0 ? '
 $active = new EvalNativeParameterLeaseProbe();
 $activeCopy = copyWithEvalNativeLease($active->value, $active, false);
@@ -66,26 +75,51 @@ $detached = new EvalNativeParameterLeaseProbe();
 $detachedCopy = copyWithEvalNativeLease($detached->value, $detached, true);
 $detached->value = "after";
 echo $detachedCopy->value, "|";
-$shared = new EvalNativeParameterLeaseProbe();
-$alias = "before";
-$shared->value =& $alias;
+$descriptor = Closure::fromCallable("copyWithEvalNativeLease");
+$callbackObject = new EvalNativeParameterLeaseProbe();
+$callbackCopy = $descriptor($callbackObject->value, $callbackObject, true);
+$callbackObject->value = "after";
+echo $callbackCopy->value, "|";
 $sharedCopy = copyWithEvalNativeLease($shared->value, $shared, true);
 $alias = "after";
 echo $sharedCopy->value, "|";
+$pending = new EvalNativeParameterLeaseProbe();
+$pendingCopy = copyWithEvalNativeLease($pending->value, clone $pending, true);
+$pending->value = "after";
+echo $pendingCopy->value, "|";
+$duplicate = new EvalNativeParameterLeaseProbe();
+$duplicateCopy = copyAfterDuplicateEvalLeases($duplicate->value, $duplicate->value, $duplicate);
+$duplicate->value = "after";
+echo $duplicateCopy->value, "|";
+$aborted = new EvalNativeParameterLeaseProbe();
+try { copyWithEvalNativeLease($aborted->value, abortEvalNativeLease(), true); }
+catch (Exception $error) { echo $error->getMessage(), "|"; }
+$abortedCopy = clone $aborted;
+$aborted->value = "after";
+echo $abortedCopy->value, "|";
 $throwing = new EvalNativeParameterLeaseProbe();
 try { throwWithEvalNativeLease($throwing->value); }
 catch (Exception $error) { echo $error->getMessage(), "|"; }
 $throwCopy = clone $throwing;
 $throwing->value = "after";
 echo $throwCopy->value, "|";
+class EvalNativeLeaseDestructor {
+    public function __destruct() { echo "released|"; throw new Exception("retired"); }
+}
+$retiring = new EvalNativeParameterLeaseProbe();
+$retiring->value = new EvalNativeLeaseDestructor();
+try { dropEvalNativeLease($retiring->value, $retiring); }
+catch (Exception $error) { echo $error->getMessage(), "|"; }
 unset($activeCopy, $active, $detachedCopy, $detached, $sharedCopy, $shared, $alias,
-    $error, $throwCopy, $throwing);
+    $descriptor, $callbackObject, $callbackCopy,
+    $pending, $pendingCopy, $duplicate, $duplicateCopy, $aborted, $abortedCopy,
+    $error, $throwCopy, $throwing, $retiring);
 ' : '';
 eval($code); unset($code);
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
-    assert_eq!(output.stdout, "after|before|after|caught|written|");
+    assert_eq!(output.stdout, "after|before|before|after|after|before|late|before|caught|written|released|retired|");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 

@@ -38,6 +38,7 @@ pub(in crate::interpreter) fn stage_native_function_invoker_args(
         "every bound native argument owns exactly one container key"
     );
     let mut staged = BoundNativeFunctionArgs {
+        evaluation_owners: Vec::new(),
         values: Vec::with_capacity(bound_args.len()),
         ref_slots: Vec::new(),
         named_keys,

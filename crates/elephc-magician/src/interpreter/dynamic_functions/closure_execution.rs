@@ -19,6 +19,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_values(
     let evaluated_args = evaluated_args
         .into_iter()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value,
             ref_target: None,

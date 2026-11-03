@@ -31,6 +31,11 @@ pub(super) fn eval_native_descriptor_with_call_args(
         }
     };
 
+    if let Err(status) = pin_native_call_evaluation_owners(&staged, context, values) {
+        let _ = cleanup_native_function_ref_args(&staged, values);
+        let result = finish_eval_argument_values(Err(status), [arg_array], context, values);
+        return finish_eval_argument_values(result, staged.values, context, values);
+    }
     let result = values.invoke_native_callable(callback, arg_array, -1);
     let writeback = write_back_native_function_ref_args(&staged, context, values);
     let result = match (result, writeback) {
@@ -53,6 +58,7 @@ fn stage_native_descriptor_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<BoundNativeFunctionArgs, EvalStatus> {
     let mut staged = BoundNativeFunctionArgs {
+        evaluation_owners: evaluated_args.iter().filter_map(|arg| arg.evaluation_owner.clone()).collect(),
         values: Vec::with_capacity(evaluated_args.len()),
         ref_slots: Vec::new(),
         named_keys: Vec::with_capacity(evaluated_args.len()),
@@ -124,6 +130,7 @@ fn stage_native_descriptor_args(
         if coerced_is_temporary {
             if let Err(status) = release_expr_result(coerced, context, values) {
                 let partial = BoundNativeFunctionArgs {
+                    evaluation_owners: Vec::new(),
                     values: vec![marker],
                     ref_slots: slot.into_iter().collect(),
                     named_keys: vec![None],

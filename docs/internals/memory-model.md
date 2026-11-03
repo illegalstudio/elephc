@@ -731,6 +731,19 @@ Cleanup takes the root owner without running PHP, then retires that owner inside
 the eval ABI's boxed Throwable accumulator. A destructor cannot bypass Rust
 cleanup or leave a record referring to retired foreign storage.
 
+Source argument evaluation has its own owner in addition to native staging.
+Reference candidates carry shared Rust provenance for that exact owner; ordinary
+value arguments use their existing cleanup without a shared allocation. After
+binding, coercion and argument-container construction, registered AOT functions
+and callable descriptors replace matching source reference leases with invisible
+owned roots. Pending bindings
+remain visible while later argument expressions and coercion callbacks execute.
+The original argument boundary retires the replacement root in the original
+cleanup position, including after throws and while other arguments run destructors.
+Taking a root unlinks it before ordinary eval destructor dispatch consumes the owner.
+Repeated values keep distinct lease records, while forwarded metadata can refer
+to the same lease without retaining or releasing it twice.
+
 A native frame owns an incoming managed reference cell in a hidden owner slot
 for each regular by-reference parameter. The cell is authenticated before its
 owner is acquired; borrowed frame addresses leave the hidden owner empty.

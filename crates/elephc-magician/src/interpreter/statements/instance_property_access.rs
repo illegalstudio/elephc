@@ -446,6 +446,7 @@ pub(crate) fn eval_property_set_result(
                     &hook_method,
                     object,
                     vec![EvaluatedCallArg {
+                        evaluation_owner: None,
                         name: None,
                         value,
                         ref_target: None,

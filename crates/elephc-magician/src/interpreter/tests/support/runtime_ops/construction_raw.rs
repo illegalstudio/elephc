@@ -11,6 +11,25 @@
 macro_rules! impl_fake_construction_raw_ops {
     () => {
 
+    /// Retains the opaque value in a stable foreign root without changing fake PHP identity.
+    fn pin_native_reference_argument_owner(
+        &mut self, value: RuntimeCellHandle, pin: *mut std::ffi::c_void,
+    ) -> Result<bool, EvalStatus> {
+        if !self.native_argument_pins { return Ok(false); }
+        let value = self.retain(value)?;
+        unsafe { *pin.cast::<[u64; 4]>() = [0, 0, value.as_ptr() as u64, 5]; }
+        self.native_argument_pin_events.push((true, value));
+        Ok(true)
+    }
+
+    /// Unlinks the fake root before ordinary eval cleanup consumes its transferred owner.
+    fn take_native_reference_argument_owner(&mut self, pin: *mut std::ffi::c_void) -> Result<RuntimeCellHandle, EvalStatus> {
+        let words = unsafe { std::mem::replace(&mut *pin.cast::<[u64; 4]>(), [0; 4]) };
+        let value = RuntimeCellHandle::from_raw(words[2] as *mut RuntimeCell);
+        self.native_argument_pin_events.push((false, value));
+        Ok(value)
+    }
+
     /// Creates one fake object for eval `new` unit tests.
     fn new_object(&mut self, _class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_new_object(_class_name)

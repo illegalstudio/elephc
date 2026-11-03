@@ -18,6 +18,7 @@ fn typed_named_variadic_binding_avoids_positional_hash_scans() {
     let mut values = FakeOps::default();
     let object = values.new_object("stdClass").expect("caller object");
     let args = (0..64).map(|index| EvaluatedCallArg {
+        evaluation_owner: None,
         name: Some(format!("arg{index}")), value: object, ref_target: None,
     }).collect();
     let bound = bind_evaluated_method_args_with_ref_mode(

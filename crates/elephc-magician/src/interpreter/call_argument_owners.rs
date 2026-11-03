@@ -50,11 +50,12 @@ fn with_array_call_argument_result<R, V: RuntimeValueOps>(
     let mut arguments = Vec::new();
     let mut saw_named = false;
     let mut preserved = None;
-    let result = append_unpacked_arguments(
+    let prepared = append_unpacked_arguments(
         copy, &mut arguments, &mut saw_named, context, values, Some(&mut owners), true,
         "Cannot use positional argument after named argument",
-    )
-    .and_then(|()| {
+    );
+    let owners = own_unpacked_call_argument_owners(&mut arguments, owners);
+    let result = prepared.and_then(|()| {
         let arguments = arguments
             .into_iter()
             .map(|argument| EvaluatedCallArg {
@@ -73,8 +74,8 @@ fn with_array_call_argument_result<R, V: RuntimeValueOps>(
         context.clear_array_metadata(copy);
     }
     let mut cleanup = Ok(());
-    for value in owners.into_iter().rev() {
-        if let Err(status) = eval_release_value(context, values, value) { cleanup = Err(status); }
+    for owner in owners.into_iter().rev() {
+        if let Err(status) = owner.release(context, values) { cleanup = Err(status); }
     }
     match (result, cleanup) {
         (Ok(value), Ok(())) => Ok(value),
@@ -146,6 +147,7 @@ fn append_unpacked_arguments(
                     if let Some(owners) = owners.as_deref_mut() { owners.push(value); }
                 }
                 EvaluatedCallArg {
+                    evaluation_owner: None,
                     name: None,
                     value,
                     ref_target,
@@ -181,6 +183,7 @@ fn append_unpacked_arguments(
                     if let Some(owners) = owners.as_deref_mut() { owners.push(value); }
                 }
                 EvaluatedCallArg {
+                    evaluation_owner: None,
                     name: Some(name),
                     value,
                     ref_target,

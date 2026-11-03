@@ -855,6 +855,19 @@ pub trait RuntimeValueOps {
         self.release_raw_heap_word(cell)
     }
 
+    /// Retains one source reference lease in an invisible root without executing PHP.
+    /// Unsupported embeddings leave the original evaluation owner unchanged.
+    fn pin_native_reference_argument_owner(
+        &mut self, _reference: RuntimeCellHandle, _pin: *mut c_void,
+    ) -> Result<bool, EvalStatus> {
+        Ok(false)
+    }
+
+    /// Unlinks an argument root without PHP and transfers its owner back to eval cleanup.
+    fn take_native_reference_argument_owner(&mut self, _pin: *mut c_void) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
     /// Creates an invoker-only marker for raw storage whose source tag identifies its full layout.
     fn invoker_raw_ref_cell(
         &mut self,

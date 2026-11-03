@@ -37,6 +37,7 @@ fn positional_native_method_args(values: Vec<RuntimeCellHandle>) -> Vec<Evaluate
     values
         .into_iter()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value,
             ref_target: None,

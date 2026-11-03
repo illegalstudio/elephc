@@ -369,7 +369,7 @@ fn bind_dynamic_positional_method_arg(
             values,
         )?;
         *next_variadic_index = following_index;
-        staged.push((argument_number, EvaluatedCallArg { name: None, value, ref_target }));
+        staged.push((argument_number, EvaluatedCallArg { evaluation_owner: None, name: None, value, ref_target }));
         return Ok(());
     }
     let param_index = *next_positional;
@@ -450,7 +450,7 @@ fn bind_dynamic_named_method_arg(
         by_ref_mode,
         values,
     )?;
-    staged.push((argument_number, EvaluatedCallArg { name: Some(name.to_string()), value, ref_target }));
+    staged.push((argument_number, EvaluatedCallArg { evaluation_owner: None, name: Some(name.to_string()), value, ref_target }));
     Ok(())
 }
 
