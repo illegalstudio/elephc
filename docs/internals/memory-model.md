@@ -782,6 +782,13 @@ On an inconsistent conversion, the publisher constructs an owned `TypeError` in
 `context.pending` before releasing the last RHS snapshot lease. A throwing RHS
 destructor can then chain that error as its previous exception. A conflict returns
 status three with that pending error; a newer cleanup throw returns status two.
+
+When an attached native reference is flushed into eval, codegen first probes its
+current canonical wrapper. Eval retains that wrapper directly, preserving its
+actual PHP tag and shared identity even when the native parameter's legacy
+physical payload type is scalar. Raw or unpromoted cells still box their typed
+payload through the ordinary fallback.
+
 AST effect and exception analysis treats writes through reference parameters or
 known aliases as fallible. Their property constraints can reject the original RHS
 or invoke a Stringable callback. Callable summaries, constant-flow pruning and

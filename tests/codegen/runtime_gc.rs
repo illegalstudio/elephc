@@ -234,6 +234,7 @@ mod native_reference_validation_support;
 mod native_reference_publication;
 mod native_static_reference_cells;
 mod native_reference_object_constraints;
+mod native_reference_eval_snapshots;
 #[path = "runtime_gc/native_reference_validation_pins.rs"]
 mod native_reference_validation_pins;
 #[path = "runtime_gc/native_reference_parameter_leases.rs"]

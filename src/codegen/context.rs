@@ -38,6 +38,7 @@ use super::{CodegenIrError, Result};
 mod machine_layout;
 mod operand_owners;
 mod ref_cell_state;
+mod eval_reference_snapshots;
 
 pub(crate) use machine_layout::MachineLayoutState;
 
@@ -939,11 +940,12 @@ impl<'a> FunctionContext<'a> {
         Ok(ty)
     }
 
-    /// Loads one eval-synchronized local as an independently owned Mixed snapshot.
+    /// Loads one eval-synchronized local as an owned Mixed snapshot.
     ///
     /// A widened slot can hold either a borrowed raw Mixed cell or a concrete payload behind an
     /// attached reference-cell pointer. Retain only the borrowed path; boxing a concrete payload
-    /// already creates the owner that the eval scope consumes.
+    /// already creates the owner that the eval scope consumes. Canonical references retain their
+    /// shared wrapper so eval observes the current PHP tag and preserves alias identity.
     pub(super) fn load_eval_local_snapshot_to_mixed(
         &mut self,
         slot: LocalSlotId,
@@ -956,8 +958,7 @@ impl<'a> FunctionContext<'a> {
         }
         let payload_ty = self.ref_cell_payload_type(slot)?;
         let Some(state_offset) = self.ref_cell_state_offset(slot) else {
-            self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
-            self.own_loaded_eval_snapshot_as_mixed(&payload_ty);
+            self.own_eval_ref_cell_snapshot_to_mixed(slot, &payload_ty)?;
             return Ok(());
         };
         let ref_cell = self.next_label("eval_snapshot_load_ref_cell");
@@ -972,15 +973,14 @@ impl<'a> FunctionContext<'a> {
             Arch::X86_64 => {
                 self.emitter
                     .instruction(&format!("test {state_reg}, {state_reg}")); // inspect the authoritative eval-time representation flag
-                self.emitter.instruction(&format!("jne {ref_cell}")); // attached aliases snapshot their physical cell payload
+                self.emitter.instruction(&format!("jne {ref_cell}"));           // attached aliases snapshot their physical cell payload
             }
         }
         self.load_raw_local_to_result(slot)?;
         self.own_loaded_eval_snapshot_as_mixed(&storage_ty);
         self.emit_branch(&done);
         self.emitter.label(&ref_cell);
-        self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
-        self.own_loaded_eval_snapshot_as_mixed(&payload_ty);
+        self.own_eval_ref_cell_snapshot_to_mixed(slot, &payload_ty)?;
         self.emitter.label(&done);
         Ok(())
     }
