@@ -1563,7 +1563,7 @@ jobs:
             --manifest-path examples/fileinfo/elephc.toml
 
       - name: Install native crash debugger
-        if: matrix.shard == 2
+        if: matrix.shard == 2 || matrix.shard == 8
         run: |
           if ! command -v gdb >/dev/null 2>&1; then
             apt-get update

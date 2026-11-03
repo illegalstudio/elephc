@@ -1604,7 +1604,7 @@ fn run_binary_with_env_and_args(
     output
 }
 
-/// Replays the shared-property regression after a native Linux signal for CI diagnosis.
+/// Replays focused property and Fiber bridge regressions after a native Linux signal.
 #[cfg(target_os = "linux")]
 fn append_linux_property_signal_diagnostics(
     output: &mut Output,
@@ -1618,7 +1618,9 @@ fn append_linux_property_signal_diagnostics(
     if target().platform != Platform::Linux || target().arch != Arch::X86_64
         || output.status.signal().is_none()
         || !std::thread::current().name().is_some_and(|name|
-            name.contains("test_shared_property_read_owners_bundle"))
+            name.contains("test_shared_property_read_owners_bundle")
+            || name.contains("test_eval_callable_argument_owners_retire_abandoned_bridge_frames_bundle")
+            || name.contains("test_eval_callable_argument_owner_fiber_cycle_is_collected"))
     { return; }
     let available = std::env::var_os("PATH").is_some_and(|paths|
         std::env::split_paths(&paths).any(|path| path.join("gdb").is_file()));

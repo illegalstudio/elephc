@@ -180,7 +180,7 @@ for ($mode = 0; $mode < 3; $mode++) {
 echo 'done';
 "#;
     let output = compile_and_run_with_heap_debug(source);
-    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
     assert_eq!(output.stdout, "9|9|9|done");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
