@@ -28,6 +28,13 @@ function readStaticLifetimeReflector(ReflectionClass $reflection): mixed {
         function.name == "ReflectionClass::getStaticProperties").unwrap();
     assert!(accessor.instructions.iter().any(|inst| inst.op == Op::ReflectionStaticPropertyInitialized),
         "{target}: generic reflection reads the current initialization state");
+    let names = accessor.instructions.iter().filter(|inst|
+        inst.op == Op::PropGet && inst.result_php_type == crate::types::PhpType::Str)
+        .filter_map(|inst| inst.result).collect::<Vec<_>>();
+    assert!(!names.is_empty(), "{target}: runtime class selection borrows the reflector name");
+    assert!(names.iter().all(|name| !accessor.instructions.iter().any(|inst|
+        inst.op == Op::Release && inst.operands.contains(name))),
+        "{target}: an eval-owned reflector must keep its name after every accessor call");
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     let constructor = assembly.split_once("@fn name=constructStaticLifetimeReflector ").unwrap().1
         .split_once("@endfn name=constructStaticLifetimeReflector").unwrap().0;

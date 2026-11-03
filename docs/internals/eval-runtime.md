@@ -39,6 +39,9 @@ AOT reflector construction retains declaration metadata without copying current
 static-property values. Builtin reflector accessors materialize a fresh current
 map through EIR, selecting the reflected class at runtime and omitting uninitialized
 properties. A reflector therefore does not extend a displaced static object's life.
+Current-map selection borrows the reflector's private name string, including the
+heap-owned name installed by eval construction. The accessor leaves that string
+owned by the reflector across repeated native calls and final teardown.
 
 Owned property value reads detach array boxes even when the getter already returned
 an owning lease. Retaining the same property box is insufficient: a COW write replaces

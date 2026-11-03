@@ -47,6 +47,5 @@ pub(super) fn lower(
     store_value_into_temp(ctx, &result, result_type, empty, expr.span);
     branch_to(ctx, merge);
     ctx.builder.position_at_end(merge);
-    crate::ir_lower::ownership::release_if_owned(ctx, name, Some(expr.span));
     Some(take_owned_temp(ctx, &result, expr.span))
 }
