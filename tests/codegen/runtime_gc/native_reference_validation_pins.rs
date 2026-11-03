@@ -184,6 +184,54 @@ fn generated_declaration_coercion(out: &mut String, callback: &str) {
     store(out, 8);
 }
 
+/// Exercises C-int output width and protected candidate retirement with a surviving RHS owner.
+fn validation_operation_callbacks(out: &mut String) {
+    instruction(out, "str xzr, [sp, #192]", "mov QWORD PTR [rsp + 192], 0");
+    instruction(out, "mov w9, #23", "mov r10d, 23");
+    instruction(out, "str w9, [sp, #196]", "mov DWORD PTR [rsp + 196], r10d");
+    instruction(out, "add x0, sp, #128", "lea rdi, [rsp + 128]");
+    instruction(out, "ldr x1, [sp, #8]", "mov rsi, QWORD PTR [rsp + 8]");
+    instruction(out, "ldr x2, [sp, #8]", "mov rdx, QWORD PTR [rsp + 8]");
+    instruction(out, "add x3, sp, #192", "lea rcx, [rsp + 192]");
+    call(out, "__rt_reference_validation_identical");
+    instruction(out, "cmp x0, #0", "test rax, rax");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    instruction(out, "ldr w9, [sp, #192]", "mov eax, DWORD PTR [rsp + 192]");
+    instruction(out, "cmp w9, #1", "cmp eax, 1");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    instruction(out, "ldr w9, [sp, #196]", "mov eax, DWORD PTR [rsp + 196]");
+    instruction(out, "cmp w9, #23", "cmp eax, 23");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    load(out, 8);
+    call(out, "__rt_incref");
+    instruction(out, "ldr x1, [sp, #8]", "mov rsi, QWORD PTR [rsp + 8]");
+    instruction(out, "add x0, sp, #128", "lea rdi, [rsp + 128]");
+    call(out, "__rt_reference_validation_release");
+    instruction(out, "cmp x0, #0", "test rax, rax");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+}
+
+/// Physical source probes accept the current cell and reject replaced copied metadata.
+fn validation_physical_source(out: &mut String) {
+    instruction(out, "mov x0, #1", "mov eax, 1");
+    store(out, 128);
+    instruction(out, "add x0, sp, #8", "lea rax, [rsp + 8]");
+    store(out, 136);
+    load(out, 8);
+    store(out, 144);
+    for expected in [1, 0] {
+        if expected == 0 {
+            instruction(out, "str xzr, [sp, #144]", "mov QWORD PTR [rsp + 144], 0");
+        }
+        instruction(out, "mov x0, #0", "xor edi, edi");
+        instruction(out, "add x1, sp, #128", "lea rsi, [rsp + 128]");
+        instruction(out, "ldr x2, [sp]", "mov rdx, QWORD PTR [rsp]");
+        call(out, "__rt_reference_validation_is_current");
+        instruction(out, &format!("cmp x0, #{expected}"), &format!("cmp rax, {expected}"));
+        instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    }
+}
+
 /// Real nested pins preserve singleton copy semantics, unlink in any order and leave no heap owners.
 #[test]
 fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
@@ -208,6 +256,7 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     store(&mut asm, 8);
     protected_coercion(&mut asm);
     generated_declaration_coercion(&mut asm, callback);
+    validation_operation_callbacks(&mut asm);
     load(&mut asm, 8);
     call(&mut asm, "__rt_reference_new");
     store(&mut asm, 0);
@@ -218,6 +267,7 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     store(&mut asm, 8);
     instruction(&mut asm, "ldr x9, [sp]", "mov r10, QWORD PTR [rsp]");
     instruction(&mut asm, "str x9, [x0]", "mov QWORD PTR [rax], r10");
+    validation_physical_source(&mut asm);
     load(&mut asm, 0);
     call(&mut asm, "__rt_reference_new");
     store(&mut asm, 16);

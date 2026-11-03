@@ -24,6 +24,7 @@ mod property_payload;
 mod canonical;
 mod validation_pins;
 mod validation_coercion;
+mod validation_ops;
 pub(crate) use validation_pins::subtract as subtract_validation_pins;
 pub(crate) use canonical::resolve_scalar_property;
 pub(crate) use property_unset::emit_owned_property_unset;
@@ -67,6 +68,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     mixed_payload::emit_retain_mixed(emitter);
     validation_pins::emit(emitter);
     validation_coercion::emit(emitter);
+    validation_ops::emit(emitter);
     property_unset::emit_property_unset(emitter);
     emit_owner_lookup(emitter);
     canonical::emit(emitter);

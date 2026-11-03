@@ -661,6 +661,12 @@ native ABI harness calls a generated callback through the protected adapter.
 Publishers still need to register these callbacks and retire the adapter's raw
 Throwable owner on every path.
 
+The native operation callbacks authenticate a source's current physical binding
+through `__rt_reference_cell_canonical`, compare borrowed PHP candidates, and
+retire discarded candidates through `__rt_cleanup_invoke`. The comparison output
+is a four-byte C `int`. Protected retirement accumulates a contained Throwable in
+the same context slot as coercion and returns status two across the Rust ABI.
+
 Native function parameter flags carry physical boxed-reference storage separately
 from declared PHP types and tagged nullable integers. Normal function object
 references use the normalized Mixed ABI. A closure descriptor can instead expose
