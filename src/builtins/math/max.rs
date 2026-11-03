@@ -35,8 +35,17 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     }
     let mut has_float = false;
     let mut has_gmp = false;
+    // A string operand is compared with php's rules by `crate::min_max_prelude` and comes back
+    // as itself: the result is a string when every operand is one, otherwise any of them.
+    let mut has_str = false;
+    let mut all_str = true;
     for arg in cx.args {
         let t = cx.checker.infer_type(arg, cx.env)?;
+        if t.codegen_repr() == PhpType::Str {
+            has_str = true;
+        } else {
+            all_str = false;
+        }
         if matches!(&t, PhpType::Object(class) if class.trim_start_matches('\\').eq_ignore_ascii_case("GMP")) {
             has_gmp = true;
         }
@@ -46,6 +55,9 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     }
     if has_gmp {
         return Ok(PhpType::Mixed);
+    }
+    if has_str {
+        return Ok(if all_str { PhpType::Str } else { PhpType::Mixed });
     }
     if has_float {
         Ok(PhpType::Float)

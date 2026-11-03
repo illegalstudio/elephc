@@ -27,6 +27,13 @@ use crate::parser::ast::{StmtKind, TypeExpr};
 use crate::synthetic_class::{e_int, e_str, extern_fn, s_const};
 
 /// Injects the GMP surface when the program references it or `--with-gmp` forces it.
+/// Whether `program` references the GMP surface: the autoload prelude probe's detector, so a
+/// vendor class the entry never names (league/uri's `IPv4\GMPCalculator`) still gets the helpers
+/// its `gmp_*` calls lower to.
+pub(crate) fn program_uses_surface(program: &[Stmt]) -> bool {
+    detect::program_uses_gmp(program)
+}
+
 pub fn inject_if_used(
     mut program: Program,
     force: bool,

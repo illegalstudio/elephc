@@ -869,6 +869,101 @@ unset($q);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// `file_get_contents()` accepts a `$context` that is not statically null (league/uri's
+/// `Uri::fromPath()` forwards its `resource|null` parameter), as `fopen()` does; the backend
+/// refused it at compile time and sent the class to the interpreter.
+#[test]
+fn test_file_get_contents_with_a_runtime_stream_context() {
+    let out = compile_and_run(r#"<?php
+$path = __DIR__ . '/fgc_data.txt';
+file_put_contents($path, "hello context");
+$read = function (string $path, $context): string|false {
+    return file_get_contents(filename: $path, context: $context);
+};
+var_dump($read($path, null));
+var_dump($read($path, stream_context_create(['http' => ['method' => 'GET']])));
+var_dump(file_get_contents($path, false, stream_context_create(), 6, 7));
+unlink($path);
+"#);
+    assert_eq!(out, "string(13) \"hello context\"\nstring(13) \"hello context\"\nstring(7) \"context\"\n");
+}
+
+/// `array_search()` with named arguments takes the same routing as the positional call (nette's
+/// `array_search(self::toKey($key), array_keys($array), strict: true)` over a gradual needle was
+/// refused by the native search).
+#[test]
+fn test_array_search_with_named_arguments() {
+    let out = compile_and_run(r#"<?php
+function toKey(string|int $k): string|int { return $k; }
+function g(array $array, string|int $key): ?int {
+    $r = array_search(toKey($key), array_keys($array), strict: true);
+    return $r === false ? null : $r;
+}
+var_dump(g(['a' => 1, 'b' => 2], 'b'), g(['a' => 1], 'z'));
+var_dump(array_search(strict: false, haystack: [1, '2', 3], needle: 2));
+var_dump(array_search(needle: '2', haystack: [1, 2, 3], strict: true));
+"#);
+    assert_eq!(out, "int(1)\nNULL\nint(1)\nbool(false)\n");
+}
+
+/// `min()` / `max()` over string operands compare with php's rules (numeric strings numerically,
+/// a direct `min($a, $b)` takes the later of two equal values, `max()` and the array/spread forms
+/// keep the first) and keep the string; symfony/http-client's
+/// `min($options['http_version'] ?: '1.1', '1.1')` had no lowering at all.
+#[test]
+fn test_min_max_over_string_operands() {
+    let out = compile_and_run(r#"<?php
+function v(array $o) { return min($o['http_version'] ?: '1.1', '1.1'); }
+var_dump(v(['http_version' => '2.0']), v(['http_version' => '']), v(['http_version' => '1.0']));
+function f(string $a, string $b) { return [min($a, $b), max($a, $b)]; }
+echo json_encode([f('10', '9'), f('abc', 'abd'), f('10', 'abc')]), "\n";
+$a = 3; $b = "3";
+var_dump(min($a, $b), max($a, $b), min($b, $a), max($b, $a), max('apple', 5), max('1e1', '9'));
+$v = [3, "3"];
+var_dump(min(...$v), max(...$v), min($v), max($v));
+"#);
+    assert_eq!(
+        out,
+        "string(3) \"1.1\"\nstring(3) \"1.1\"\nstring(3) \"1.0\"\n\
+         [[\"9\",\"10\"],[\"abc\",\"abd\"],[\"10\",\"abc\"]]\n\
+         string(1) \"3\"\nint(3)\nint(3)\nstring(1) \"3\"\nstring(5) \"apple\"\nstring(3) \"1e1\"\n\
+         int(3)\nint(3)\nint(3)\nint(3)\n"
+    );
+}
+
+/// `stream_set_chunk_size()` accepts a `?int` size (monolog's `SocketHandler` passes its
+/// `?int $chunkSize` after a `null ===` guard-and-throw the property type does not narrow); the
+/// backend refused the tagged scalar and sent the handler family to the interpreter.
+#[test]
+fn test_stream_set_chunk_size_with_a_nullable_int_size() {
+    let out = compile_and_run(r#"<?php
+class H {
+    private $resource;
+    private ?int $chunkSize = 8192;
+    public function __construct() { $this->resource = fopen('php://memory', 'r+'); }
+    public function s(): int|bool {
+        if (null === $this->chunkSize) { throw new LogicException('x'); }
+        return stream_set_chunk_size($this->resource, $this->chunkSize);
+    }
+}
+var_dump((new H)->s());
+"#);
+    assert_eq!(out, "int(8192)\n");
+}
+
+/// PDO_PGSQL registers its pre-8.4 constant spellings on `\PDO` (doctrine/dbal's
+/// `PDO\PgSQL\Driver` reads `PDO::PGSQL_ATTR_DISABLE_PREPARES`); elephc's PDO lacked them, so the
+/// driver was refused and the Symfony Demo's closed-world build failed.
+#[test]
+fn test_pdo_pgsql_constant_aliases_on_pdo() {
+    let out = compile_and_run(r#"<?php
+var_dump(defined('PDO::PGSQL_ATTR_DISABLE_PREPARES'), class_exists('Pdo\Pgsql'));
+$a = PHP_VERSION_ID >= 80400 ? Pdo\Pgsql::ATTR_DISABLE_PREPARES : PDO::PGSQL_ATTR_DISABLE_PREPARES;
+var_dump($a, PDO::PGSQL_TRANSACTION_IDLE, PDO::PGSQL_TRANSACTION_UNKNOWN);
+"#);
+    assert_eq!(out, "bool(true)\nbool(true)\nint(1000)\nint(0)\nint(4)\n");
+}
+
 /// An array union in a constant expression (`self::OPTIONS_DEFAULTS + [...]`, symfony/http-client
 /// constants and property defaults) reflects as php's union: left entries, then right entries
 /// under keys the left lacks. Constants failed the Demo's build; property defaults vanished from

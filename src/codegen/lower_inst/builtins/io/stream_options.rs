@@ -93,10 +93,15 @@ pub(crate) fn lower_stream_set_chunk_size(
     let done_label = ctx.next_label("stream_chunk_done");
     load_stream_fd_to_result(ctx, stream, "stream_set_chunk_size")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    require_int(
-        ctx.load_value_to_result(size)?.codegen_repr(),
-        "stream_set_chunk_size size",
-    )?;
+    // A `?int` size (monolog's SocketHandler guards `null === $this->chunkSize` with a throw, a
+    // narrowing the property type does not carry) is a tagged scalar: null coerces to 0, as php's
+    // int parameter coercion does.
+    match ctx.load_value_to_result(size)?.codegen_repr() {
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter)
+        }
+        other => require_int(other, "stream_set_chunk_size size")?,
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, x0");                              // keep the new chunk size while restoring the stream fd

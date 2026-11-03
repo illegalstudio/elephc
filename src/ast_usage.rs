@@ -633,9 +633,10 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             if (bare == "count" || bare == "sizeof") && args.len() == 2 {
                 record_name(usage, crate::count_recursive_prelude::COUNT_RECURSIVE_NAME);
             }
-            // A one-argument `min()` / `max()` may be routed to its gradual-operand helper; the
-            // decision needs the operand's type, so the helper is declared for every such call.
-            if (bare == "min" || bare == "max") && args.len() == 1 {
+            // A one-argument `min()` / `max()` over a gradual operand, and a multi-argument one with
+            // a string operand, may be routed to its helper; the decision needs the operand types,
+            // so the helper is declared for every such call.
+            if bare == "min" || bare == "max" {
                 record_name(usage, crate::min_max_prelude::MIN_MAX_MIXED_NAME);
             }
             // A math builtin's `string` first argument may be routed through its conversion

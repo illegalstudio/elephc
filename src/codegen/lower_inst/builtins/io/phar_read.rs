@@ -27,7 +27,9 @@ pub(crate) fn lower_file_get_contents(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_arg_count_between(inst, "file_get_contents", 1, 5)?;
-    require_absent_stream_context(ctx, inst, 2, "file_get_contents")?;
+    // A `$context` is accepted like `fopen()`'s: its options reach the network wrappers through
+    // the stream-context state `stream_context_create()` records, and php ignores it for a plain
+    // file (league/uri's `Uri::fromPath()` forwards a `resource|null` parameter here).
     let range = FileReadRange::from_operands(ctx, inst, 3, 4)?;
     range.emit_negative_length_guard(ctx, FILE_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE)?;
     let path = expect_operand(inst, 0)?;
@@ -122,53 +124,6 @@ fn emit_file_get_contents_bytes(
         },
     );
     Ok(())
-}
-
-/// Rejects a non-null `$context` argument instead of silently ignoring the stream context.
-///
-/// elephc has no stream-context plumbing on the read path, so honoring a real context is
-/// impossible. An omitted argument, a literal `null`, and the registry's `null` default all
-/// materialize a statically null operand and are accepted; anything else is a compile error
-/// naming the parameter rather than a read that quietly drops the caller's options.
-fn require_absent_stream_context(
-    ctx: &FunctionContext<'_>,
-    inst: &Instruction,
-    index: usize,
-    name: &str,
-) -> Result<()> {
-    let Some(context) = inst.operands.get(index).copied() else {
-        return Ok(());
-    };
-    if operand_is_statically_null(ctx, context)? {
-        return Ok(());
-    }
-    Err(CodegenIrError::unsupported(format!(
-        "{}() $context argument: elephc cannot honor a stream context on this read, pass null",
-        name
-    )))
-}
-
-/// Reports whether an operand is the PHP `null` value at compile time.
-///
-/// Covers both spellings the argument planner produces: a `ConstNull` instruction for a literal
-/// `null` argument or a filled-in `null` default, and a `Void`-typed value for an operand the
-/// planner materialized without a concrete constant.
-fn operand_is_statically_null(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
-    if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Void) {
-        return Ok(true);
-    }
-    let value_ref = ctx
-        .function
-        .value(value)
-        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(false);
-    };
-    let inst_ref = ctx
-        .function
-        .instruction(inst)
-        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    Ok(inst_ref.op == Op::ConstNull)
 }
 
 /// The `$offset`/`$length` window a one-shot file read applies to the bytes it produced.

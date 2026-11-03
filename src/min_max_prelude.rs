@@ -110,10 +110,16 @@ fn decl_fn_min_max_mixed() -> Stmt {
                 e_binop(
                     e_var("first"),
                     BinOp::Or,
+                    // A direct `min($a, $b)` call takes the LATER of two equal values (php
+                    // compares `$item <= $min`); `max()`, an array and a spread keep the first.
                     e_ternary(
                         e_var("want_max"),
                         e_binop(e_var("item"), BinOp::Gt, e_var("best")),
-                        e_binop(e_var("item"), BinOp::Lt, e_var("best")),
+                        e_ternary(
+                            e_var("direct"),
+                            e_binop(e_var("item"), BinOp::LtEq, e_var("best")),
+                            e_binop(e_var("item"), BinOp::Lt, e_var("best")),
+                        ),
                     ),
                 ),
                 vec![s_assign("best", e_var("item")), s_assign("first", e_bool(false))],
@@ -127,6 +133,7 @@ fn decl_fn_min_max_mixed() -> Stmt {
         .param_untyped("value")
         .param_untyped("want_max")
         .param_untyped_default("spread", e_bool(false))
+        .param_untyped_default("direct", e_bool(false))
         .body(body)
         .build()
 }

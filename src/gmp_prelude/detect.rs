@@ -16,7 +16,7 @@
 use crate::parser::ast::Program;
 
 /// Returns whether any top-level statement references the GMP surface.
-pub(super) fn program_uses_gmp(program: &Program) -> bool {
+pub(super) fn program_uses_gmp(program: &[crate::parser::ast::Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
     usage.functions.iter().any(|name| {
         name.rsplit('\\')

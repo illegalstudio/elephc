@@ -142,6 +142,16 @@ fn deprecated_alias(
     }
 }
 
+/// `#[\Deprecated]` with no message from the 8.5 profile on (PDO::PGSQL_TRANSACTION_*, which
+/// php deprecates without naming a replacement).
+fn deprecated_since_85(php_version: PhpVersion) -> Vec<crate::parser::ast::AttributeGroup> {
+    if php_version >= PhpVersion::Php85 {
+        vec![attr("\\Deprecated", vec![])]
+    } else {
+        vec![]
+    }
+}
+
 /// `__construct` — lifted out of `decl_class_pdoexception` so it builds in its own stack frame.
 fn pdoexception_construct() -> MethodBuilder {
     method("__construct")
@@ -10288,6 +10298,12 @@ fn decl_class_pdo(php_version: PhpVersion, drivers: OptionalDrivers) -> Stmt {
         .constant("SQLITE_OPEN_READONLY", e_int(1))
         .constant("SQLITE_OPEN_READWRITE", e_int(2))
         .constant("SQLITE_OPEN_CREATE", e_int(4))
+        .constant_attributed("PGSQL_ATTR_DISABLE_PREPARES", e_int(1000), deprecated_alias(php_version, "Pgsql", "ATTR_DISABLE_PREPARES"))
+        .constant_attributed("PGSQL_TRANSACTION_IDLE", e_int(0), deprecated_since_85(php_version))
+        .constant_attributed("PGSQL_TRANSACTION_ACTIVE", e_int(1), deprecated_since_85(php_version))
+        .constant_attributed("PGSQL_TRANSACTION_INTRANS", e_int(2), deprecated_since_85(php_version))
+        .constant_attributed("PGSQL_TRANSACTION_INERROR", e_int(3), deprecated_since_85(php_version))
+        .constant_attributed("PGSQL_TRANSACTION_UNKNOWN", e_int(4), deprecated_since_85(php_version))
             .when(drivers.dblib, |class| {
                 class.constant_attributed("DBLIB_ATTR_CONNECTION_TIMEOUT", e_int(1000), deprecated_alias(php_version, "Dblib", "ATTR_CONNECTION_TIMEOUT"))
             .constant_attributed("DBLIB_ATTR_QUERY_TIMEOUT", e_int(1001), deprecated_alias(php_version, "Dblib", "ATTR_QUERY_TIMEOUT"))

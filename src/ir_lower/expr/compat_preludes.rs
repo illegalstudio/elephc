@@ -203,6 +203,32 @@ pub(super) fn lower_backend_gap_builtin_shape(
             }
         }
     }
+    // `min('2.0', '1.1')` / `max($a, $b)` with a string operand (symfony/http-client's
+    // `min($options['http_version'] ?: '1.1', '1.1')`): the native forms compare numbers only. The
+    // helper compares with php's rules (numeric strings numerically), taking the arguments as the
+    // elements of one spread list.
+    if matches!(builtin.as_str(), "min" | "max")
+        && args.len() >= 2
+        && !args.iter().any(is_spread_arg)
+        && !args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+        && args.iter().any(|arg| {
+            matches!(materialized_expr_type_for_merge(ctx, arg).codegen_repr(), PhpType::Str)
+        })
+    {
+        let list = Expr::new(ExprKind::ArrayLiteral(args.to_vec()), expr.span);
+        let helper_args = vec![
+            list,
+            Expr::new(ExprKind::BoolLiteral(builtin == "max"), expr.span),
+            Expr::new(ExprKind::BoolLiteral(true), expr.span),
+            Expr::new(ExprKind::BoolLiteral(true), expr.span),
+        ];
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(crate::min_max_prelude::MIN_MAX_MIXED_NAME),
+            &helper_args,
+            expr,
+        ));
+    }
     // `count($value, COUNT_RECURSIVE)` over a receiver that can hold nested arrays goes to
     // `crate::count_recursive_prelude`: indexed storage is untagged, so the native total cannot
     // tell a nested array from a scalar slot and the lowering refuses such a receiver.
@@ -301,6 +327,19 @@ pub(super) fn lower_backend_gap_builtin_shape(
             args,
             expr,
         ));
+    }
+    // `array_search($k, $keys, strict: true)` (nette/utils' `Arrays::getKeyOffset`): its named
+    // arguments are put in parameter order, so the call takes the positional routing below
+    // instead of the bail-out, which left a gradual needle to the refusing native search.
+    if builtin == "array_search" && crate::types::call_args::has_named_args(args) {
+        if let Some(positional) = named_args_in_order(args, &["needle", "haystack", "strict"]) {
+            return Some(lower_function_call(
+                ctx,
+                &crate::names::Name::unqualified("array_search"),
+                &positional,
+                expr,
+            ));
+        }
     }
     if crate::types::call_args::has_named_args(args)
         || (builtin != "array_unshift" && args.iter().any(is_spread_arg))
@@ -1225,6 +1264,35 @@ fn native_array_column_reads_rows(array_ty: &PhpType) -> bool {
 ///
 /// The native renderers take string, int and bool slots, and boxed ones (objects included, through
 /// `__toString()`). An unboxed object, float or nested-array slot has no renderer.
+/// Puts a builtin call's arguments in `params` order: positional ones first, then each named
+/// one in its parameter's slot. `None` for a spread, an unknown or repeated name, or a hole (a
+/// named argument after a parameter nobody passed), which keep the call's original shape.
+fn named_args_in_order(args: &[Expr], params: &[&str]) -> Option<Vec<Expr>> {
+    let mut slots: Vec<Option<Expr>> = vec![None; params.len()];
+    let mut next = 0;
+    for arg in args {
+        match &arg.kind {
+            ExprKind::Spread(_) => return None,
+            ExprKind::NamedArg { name, value } => {
+                let index = params.iter().position(|param| param == name)?;
+                if slots[index].is_some() {
+                    return None;
+                }
+                slots[index] = Some(value.as_ref().clone());
+            }
+            _ => {
+                if next >= params.len() || slots[next].is_some() {
+                    return None;
+                }
+                slots[next] = Some(arg.clone());
+                next += 1;
+            }
+        }
+    }
+    let passed = slots.iter().rposition(Option::is_some).map_or(0, |last| last + 1);
+    slots.into_iter().take(passed).collect()
+}
+
 fn implode_elements_need_prelude(array_ty: &PhpType) -> bool {
     let element = match array_ty {
         PhpType::Array(element) => element,

@@ -57,6 +57,7 @@ nghttp2 = "1.70.0"
 openssl = "3.5.8"
 zlib = "1.3.2"
 libxml2 = "2.15.3"
+gmp = "6.3.0"
 ```
 
 then resolve and install them once:

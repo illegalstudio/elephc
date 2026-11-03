@@ -1272,6 +1272,15 @@ class PDO {
     const SQLITE_OPEN_READONLY = 1;
     const SQLITE_OPEN_READWRITE = 2;
     const SQLITE_OPEN_CREATE = 4;
+    // PDO_PGSQL registers its pre-8.4 spellings on the base \PDO class too
+    // (doctrine/dbal's PDO\PgSQL\Driver reads PDO::PGSQL_ATTR_DISABLE_PREPARES);
+    // deprecated since 8.5 in favour of Pdo\Pgsql, both spellings stay live.
+    const PGSQL_ATTR_DISABLE_PREPARES = 1000;
+    const PGSQL_TRANSACTION_IDLE = 0;
+    const PGSQL_TRANSACTION_ACTIVE = 1;
+    const PGSQL_TRANSACTION_INTRANS = 2;
+    const PGSQL_TRANSACTION_INERROR = 3;
+    const PGSQL_TRANSACTION_UNKNOWN = 4;
     // -- elephc optional PDO_DBLIB aliases begin --
     const DBLIB_ATTR_CONNECTION_TIMEOUT = 1000;
     const DBLIB_ATTR_QUERY_TIMEOUT = 1001;
@@ -7126,6 +7135,28 @@ fn configure_optional_drivers(
             "    // -- elephc optional PDO_CUBRID method begin --",
             "    // -- elephc optional PDO_CUBRID method end --",
         );
+    }
+
+    if php_version >= PhpVersion::Php85 {
+        for (legacy_name, namespaced_name) in [
+            ("PGSQL_ATTR_DISABLE_PREPARES", "ATTR_DISABLE_PREPARES"),
+            ("PGSQL_TRANSACTION_IDLE", ""),
+            ("PGSQL_TRANSACTION_ACTIVE", ""),
+            ("PGSQL_TRANSACTION_INTRANS", ""),
+            ("PGSQL_TRANSACTION_INERROR", ""),
+            ("PGSQL_TRANSACTION_UNKNOWN", ""),
+        ] {
+            let attribute = if namespaced_name.is_empty() {
+                "    #[\\Deprecated]\n".to_string()
+            } else {
+                format!("    #[\\Deprecated(\"use Pdo\\\\Pgsql::{namespaced_name} instead\")]\n")
+            };
+            *source = source.replacen(
+                &format!("    const {legacy_name} ="),
+                &format!("{attribute}    const {legacy_name} ="),
+                1,
+            );
+        }
     }
 
     let dblib_enabled = drivers.dblib;

@@ -121,6 +121,25 @@ fn probe_detects_tokenizer_in_autoloaded_classes() {
     }
 }
 
+/// A `gmp_*` call or a `Random\*` use only an autoloaded class makes activates its prelude
+/// (league/uri's `IPv4\GMPCalculator` lowered to a call of the missing `__elephc_gmp_init`).
+#[test]
+fn probe_detects_gmp_and_random_in_autoloaded_classes() {
+    let project = ProbeProject::new();
+    let defines = std::collections::HashSet::new();
+    for (body, group) in [
+        (r"return \gmp_strval(\gmp_init($source, 16));", "gmp"),
+        (r"return (string) (new \Random\Randomizer())->getInt(1, 2);", "random"),
+    ] {
+        fs::write(project.0.join("src/Probe.php"), format!(
+            "<?php namespace App; class Probe {{ public function scan(string $source): string {{ {body} }} }}",
+        )).unwrap();
+        let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+        let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
+        assert!(groups.contains(group), "autoloaded body was missed: {body}");
+    }
+}
+
 /// Fileinfo classes and procedural calls hidden in Composer files both activate the prelude.
 #[test]
 fn probe_detects_fileinfo_in_autoloaded_classes() {
