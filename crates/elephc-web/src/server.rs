@@ -280,7 +280,9 @@ fn run_server(
     };
     install_signal_handlers();
     // A Unix listener must be bound once, before the fork loop: SO_REUSEPORT
-    // does not balance accept() across AF_UNIX listeners. A bind failure is a
+    // does not balance accept() across AF_UNIX listeners. This runs before any
+    // worker fork or Tokio runtime, so bind_unix_master may temporarily narrow
+    // the process umask without racing another thread. A bind failure is a
     // master startup error, not a worker crash loop.
     let master_unix = match &args.listen {
         ListenAddr::Tcp(_) => None,

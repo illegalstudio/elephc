@@ -16,7 +16,8 @@ http:
       headers:
         customRequestHeaders:
           # The origin prefers Forwarded over X-Forwarded-*; remove the
-          # client chain. Traefik overwrites X-Forwarded-For/Proto/Host/Port.
+          # client chain. Traefik overwrites X-Forwarded-For/Proto/Host/Port
+          # and X-Real-IP automatically.
           Forwarded: ""
           X-Forwarded-Port: "443"
   services:

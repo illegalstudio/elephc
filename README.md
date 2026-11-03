@@ -402,7 +402,7 @@ elephc --web --web-lifecycle=application bootstrap.php # retain one application 
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4
 ./app --listen unix:/run/elephc/app.sock  # no TCP port; front it with a proxy
-# Add --trusted-proxy unix when the edge sends Forwarded / X-Forwarded-*.
+# Add --trusted-proxy unix when the edge overwrites client Forwarded / X-Forwarded-*.
 # Edge deployment examples (Caddy, nginx, HAProxy, Traefik, Apache, Ferron):
 # docs/beyond-php/web-edge.md
 

@@ -309,7 +309,9 @@ impl PeerInfo {
 ///
 /// A regular file or directory at `path` is refused: only a previous socket is
 /// removed, so a typo cannot delete arbitrary files. A socket that still
-/// accepts connections is not stale and is refused instead of stolen.
+/// accepts connections is not stale and is refused instead of stolen. Called
+/// before any worker fork or Tokio runtime, so the temporary umask change
+/// cannot race another thread.
 pub(crate) fn bind_unix_master(path: &Path) -> io::Result<std::os::unix::net::UnixListener> {
     remove_stale_socket(path)?;
     // Restrict the create mode before bind so the socket is never exposed with
@@ -452,6 +454,17 @@ fn set_close_on_exec(fd: RawFd) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    /// Returns a unique short Unix socket path for one unit test.
+    fn test_socket_path(stem: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "elephc-{stem}-{}-{}.sock",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
     /// Parses the TCP form used by the existing standalone deployment path.
     #[test]
     fn listen_parser_accepts_tcp() {
@@ -501,14 +514,7 @@ mod tests {
     /// The worker clone keeps `FD_CLOEXEC` after `try_clone`.
     #[test]
     fn worker_clone_stays_close_on_exec() {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-
-        let path = std::env::temp_dir().join(format!(
-            "elephc-cloexec-{}-{}.sock",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        let path = test_socket_path("cloexec");
         let _ = std::fs::remove_file(&path);
         let master = std::os::unix::net::UnixListener::bind(&path).unwrap();
         let source =
@@ -522,6 +528,25 @@ mod tests {
         assert_ne!(flags & libc::FD_CLOEXEC, 0);
         drop(listener);
         drop(master);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A live socket is refused, then its stale file is replaced after close.
+    #[test]
+    fn unix_probe_refuses_live_and_replaces_stale() {
+        let path = test_socket_path("probe");
+        let _ = std::fs::remove_file(&path);
+        let live = bind_unix_master(&path).unwrap();
+        let error = match bind_unix_master(&path) {
+            Ok(_) => panic!("a live socket must not be replaced"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(path.exists(), "a refused live socket must stay in place");
+
+        drop(live);
+        let stale = bind_unix_master(&path).unwrap();
+        drop(stale);
         let _ = std::fs::remove_file(&path);
     }
 }

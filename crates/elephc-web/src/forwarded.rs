@@ -799,6 +799,21 @@ mod tests {
         assert!(facts.https);
     }
 
+    /// Repeated X-Forwarded-Port lines use the last line.
+    #[test]
+    fn duplicate_x_forwarded_port_uses_the_last_line() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[
+                ("X-Forwarded-Proto", "https"),
+                ("X-Forwarded-Port", "8443"),
+                ("X-Forwarded-Port", "9443"),
+            ]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.server_port, 9443);
+    }
+
     /// A malformed XFF keeps the peer address but does not discard a valid proto.
     #[test]
     fn malformed_xff_keeps_valid_proto() {

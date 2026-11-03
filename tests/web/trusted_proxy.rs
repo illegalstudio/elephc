@@ -263,6 +263,7 @@ fn trusted_proxy_forwarded_rfc7239_wins() {
             ("Forwarded", forwarded),
             ("X-Forwarded-For", "198.51.100.1"),
             ("X-Forwarded-Proto", "http"),
+            ("X-Forwarded-Port", "9443"),
         ],
         "",
     );
