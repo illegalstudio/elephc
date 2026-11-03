@@ -734,6 +734,13 @@ Cleanup takes the root owner without running PHP, then retires that owner inside
 the eval ABI's boxed Throwable accumulator. A destructor cannot bypass Rust
 cleanup or leave a record referring to retired foreign storage.
 
+Eval method and constructor bridges share one callable argument resolver. Each
+site supplies its borrowed boxed callback and active eval context explicitly;
+the resolver preserves the existing static, receiver-bound and dynamic adapter
+ownership rules. A selected native invokable descriptor returns directly without
+falling through into dynamic adapter allocation. Callers retain their existing
+failure and descriptor cleanup paths.
+
 Source argument evaluation has its own owner in addition to native staging.
 Reference candidates carry shared Rust provenance for that exact owner; ordinary
 value arguments use their existing cleanup without a shared allocation. After
