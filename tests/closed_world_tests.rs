@@ -558,6 +558,34 @@ fn closed_world_class_file_php_refuses_to_load_is_a_note() {
     assert!(text(&run.stderr).contains("HEAP DEBUG: leak summary: clean"), "{}", text(&run.stderr));
 }
 
+/// A class file whose parent no file declares (symfony/framework-bundle's `KernelBrowser` over
+/// the dev-only browser-kit) is one php refuses to load (`Class "…" not found`), so it and its
+/// subclasses are notes, not a refused closed-world build.
+#[test]
+fn closed_world_class_file_with_a_missing_parent_is_a_note() {
+    let dir = make_test_dir("cw_missing_parent");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nspl_autoload_register(function (string $class): void {\n    $file = __DIR__ . \"/src/\" . $class . \".php\";\n    if (is_file($file)) { require $file; }\n});\nfunction never(): string { return (new Browser2())->name(); }\necho (new Base())->name(), \"\\n\";\nif ($argc > 5) { echo never(), \"\\n\"; }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("src/Base.php"),
+        "<?php\nclass Base {\n    public function name(): string { return 'base'; }\n}\n",
+    )
+    .unwrap();
+    fs::write(dir.join("src/Browser.php"), "<?php\nclass Browser extends AbstractBrowserFromDevPackage {}\n").unwrap();
+    fs::write(dir.join("src/Browser2.php"), "<?php\nclass Browser2 extends Browser {}\n").unwrap();
+    let output = compile(&dir, &["--closed-world", "--heap-debug"]);
+    let stderr = text(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("php refuses to load it"), "{stderr}");
+    let run = run(&dir);
+    assert_eq!(text(&run.stdout), php_stdout(&dir));
+    assert!(text(&run.stderr).contains("HEAP DEBUG: leak summary: clean"), "{}", text(&run.stderr));
+}
+
 #[test]
 fn closed_world_closure_from_callable_of_a_runtime_method_pair() {
     let (stdout, heap, dir) = closed_run("cw_fromcallable_pair", FROM_CALLABLE_RUNTIME_PAIR);

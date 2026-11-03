@@ -2749,9 +2749,14 @@ fn declares_only_probed_classes<V: AsRef<str>>(
 }
 
 /// Whether a checker refusal is a declaration php itself rejects when it loads the file: an
-/// override whose signature is incompatible with the method it overrides.
+/// override whose signature is incompatible with the method it overrides, or a parent class-like
+/// no file declares (symfony/framework-bundle's `KernelBrowser` over the dev-only browser-kit):
+/// php raises `Class "…" not found` when the file is loaded, and the closed world sees every file
+/// the autoloader could load.
 fn php_refuses_to_load(message: &str) -> bool {
-    message.contains("when overriding") || message.contains("must be compatible with")
+    message.contains("when overriding")
+        || message.contains("must be compatible with")
+        || message.contains("Unknown class referenced during inheritance flattening")
 }
 
 /// Whether a class declared in `path` has, among its ancestors, a class declared in a file php
