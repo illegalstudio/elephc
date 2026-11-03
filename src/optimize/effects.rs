@@ -342,10 +342,18 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 Effect::PURE.with_may_throw().with_writes_globals()
             } else { Effect::PURE })
             .with_side_effects(),
-        ExprKind::PreIncrement(_)
-        | ExprKind::PostIncrement(_)
-        | ExprKind::PreDecrement(_)
-        | ExprKind::PostDecrement(_) => Effect::PURE.with_side_effects(),
+        ExprKind::PreIncrement(target)
+        | ExprKind::PostIncrement(target)
+        | ExprKind::PreDecrement(target)
+        | ExprKind::PostDecrement(target) => {
+            let effect = expr_effect(target).with_side_effects();
+            if matches!(&target.kind,
+                ExprKind::Variable(name) if is_reference_volatile(name))
+                || matches!(target.kind, ExprKind::StaticPropertyAccess { .. })
+            {
+                effect.with_may_throw().with_writes_globals()
+            } else { effect }
+        }
         ExprKind::FunctionCall { name, args } => combine_effects(args.iter().map(expr_effect))
             .combine(function_call_effect(name.as_str(), args)),
         ExprKind::ClosureCall { var, args } => combine_effects(args.iter().map(expr_effect))

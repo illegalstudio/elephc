@@ -114,14 +114,16 @@ fn semantic_optimizer_arg_types(
         .collect()
 }
 
-/// Computes the effect for a closure body by delegating to `block_effect`.
-pub(super) fn closure_body_call_effect(
-    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
-    return_type: &Option<TypeExpr>, body: &[Stmt],
-) -> Effect {
+/// Computes a closure body's effect with its own reference parameters and captures in scope.
+fn closure_body_call_effect(callee: &Expr) -> Option<Effect> {
+    let ExprKind::Closure { params, return_type, body, variadic, variadic_by_ref,
+        capture_refs, by_ref_return, .. } = &callee.kind else { return None; };
+    let mut references = reference_parameter_names(params, variadic.as_deref(), *variadic_by_ref);
+    references.extend(capture_refs.iter().cloned());
     let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
         params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
-    with_return_boundary_facts(Some(&facts), || block_effect(body))
+    Some(with_return_boundary_facts(Some(&facts), ||
+        with_reference_parameter_scope(*by_ref_return, references, || block_effect(body))))
 }
 
 /// Computes the effect for an expression that may be called at runtime.
@@ -131,9 +133,9 @@ pub(super) fn closure_body_call_effect(
 /// - `Closure` → delegates to `closure_body_call_effect`
 /// - All other expressions → conservatively returns an observable, throwing call barrier
 pub(in crate::optimize) fn expr_call_effect(callee: &Expr) -> Effect {
+    if let Some(effect) = closure_body_call_effect(callee) { return effect; }
     match &callee.kind {
         ExprKind::FirstClassCallable(target) => callable_target_call_effect(target),
-        ExprKind::Closure { params, return_type, body, .. } => closure_body_call_effect(params, return_type, body),
         ExprKind::Variable(name) => callable_alias_effect(name),
         _ => conservative_call_effect(),
     }
@@ -170,13 +172,9 @@ pub(super) fn callable_target_call_effect(target: &CallableTarget) -> Effect {
 
 /// Returns the effect for a closure alias expression, if the expression is a closure.
 ///
-/// For `ExprKind::Closure`, returns `Some(closure_body_call_effect(body))`. For all other
-/// variants, returns `None`.
+/// Shares the same lexical reference scope as direct closure-call summaries.
 pub(super) fn closure_alias_effect(expr: &Expr) -> Option<Effect> {
-    match &expr.kind {
-        ExprKind::Closure { params, return_type, body, .. } => Some(closure_body_call_effect(params, return_type, body)),
-        _ => None,
-    }
+    closure_body_call_effect(expr)
 }
 
 /// Merges a collection of optional call effects into a single optional effect.

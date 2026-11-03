@@ -1162,7 +1162,10 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
         match &callee.kind {
-            ExprKind::Closure { params, return_type, body, .. } => {
+            ExprKind::Closure { params, return_type, body, variadic, variadic_by_ref,
+                capture_refs, by_ref_return, .. } => {
+                let mut references = reference_parameter_names(params, variadic.as_deref(), *variadic_by_ref);
+                references.extend(capture_refs.iter().cloned());
                 let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
                     params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
                 // The callee owns different locals even when their spellings match the caller.
@@ -1172,7 +1175,9 @@ impl ExceptionFlowAnalysis {
                     callee_analysis.checker_retirement_types = None;
                     &callee_analysis
                 } else { self };
-                with_return_boundary_facts(Some(&facts), || analysis.block_throws(body, bindings, class_context))
+                with_return_boundary_facts(Some(&facts), ||
+                    with_reference_parameter_scope(*by_ref_return, references, ||
+                        analysis.block_throws(body, bindings, class_context)))
             }
             ExprKind::FirstClassCallable(CallableTarget::Function(name)) => self
                 .function_throws

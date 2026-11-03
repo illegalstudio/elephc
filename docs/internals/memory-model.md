@@ -794,6 +794,9 @@ known aliases as fallible. Their property constraints can reject the original RH
 or invoke a Stringable callback. Callable summaries, constant-flow pruning and
 catch elimination install the same lexical reference-parameter scope, so a
 same-frame handler survives even when the RHS itself is a scalar literal.
+Pre/post increments and decrements preserve those validation catches too.
+Direct closure calls and closure aliases install their own reference parameter
+and capture scope while summarizing the body.
 
 This helper remains behind the explicit capability until property lifecycle and
 store lowering select it together.
