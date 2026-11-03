@@ -149,6 +149,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &[],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_reference",
+        package: "elephc-reference",
+        php_extensions: &[],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_curl",
         package: "elephc-curl",
         php_extensions: &["curl"],
