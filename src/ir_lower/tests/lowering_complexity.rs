@@ -81,6 +81,36 @@ fn codegen_numeric_fallback_builds_one_proof_per_body() {
     assert_eq!(small_builds, large_builds, "proofs grew with the comparisons: {small_builds} vs {large_builds}");
 }
 
+/// One body with `count` untyped (`Mixed`) locals, each released when the body returns.
+fn many_mixed_locals(count: usize) -> String {
+    let mut body = String::new();
+    for index in 0..count {
+        body.push_str(&format!("    $v{index} = $a[{index}] ?? {index};\n    $n += is_int($v{index}) ? 1 : 0;\n"));
+    }
+    format!("<?php\nfunction f(array $a) {{\n    $n = 0;\n{body}    return $n;\n}}\necho f([$argc]), \"\\n\";\n")
+}
+
+/// Instructions scanned for a slot's stores while generating code for `source`.
+fn local_store_scanned_instructions(source: &str) -> u64 {
+    let module = lower_source(source);
+    crate::codegen::LOCAL_STORE_SCANNED_INSTRUCTIONS.with(|count| count.set(0));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    crate::codegen::LOCAL_STORE_SCANNED_INSTRUCTIONS.with(|count| count.get())
+}
+
+/// Each release of a `Mixed` local scanned the WHOLE body for the slot's stores: locals times
+/// instructions, the top codegen frame of the Symfony Demo build. The scan must stay linear.
+#[test]
+fn mixed_local_release_scans_the_body_once() {
+    let small = local_store_scanned_instructions(&many_mixed_locals(40));
+    let large = local_store_scanned_instructions(&many_mixed_locals(160));
+    assert!(small > 0, "the fixture no longer reaches the mixed local release scan");
+    assert!(
+        large <= small * 6,
+        "the store scan grew superlinearly: {small} instructions for 40 locals, {large} for 160"
+    );
+}
+
 /// A generator yielding `count` keyed pairs whose keys are untyped (`Mixed`) values.
 fn many_keyed_yields(count: usize) -> String {
     let mut body = String::new();
@@ -358,6 +388,111 @@ fn subtype_dispatch_examines_a_linear_number_of_owners() {
     assert!(
         large <= small * 6,
         "subtype-dispatch owners grew superlinearly: {small} for 40 classes, {large} for 160"
+    );
+}
+
+/// `count` subclasses of `Base`, each declaring its own property, read through a `Base`
+/// receiver: every read asks which descendants declare the property.
+fn many_descendant_property_reads(count: usize) -> String {
+    let mut source = String::from("<?php\nclass Base {}\n");
+    for index in 0..count {
+        source.push_str(&format!("final class D{index} extends Base {{ public int $p{index} = {index}; }}\n"));
+    }
+    source.push_str("function read(Base $b): int {\n    $sum = 0;\n");
+    for index in 0..count {
+        source.push_str(&format!("    if ($b instanceof D{index}) {{ $sum += 1; }} else {{ $sum += $b->p{index} ?? 0; }}\n"));
+    }
+    source.push_str("    return $sum;\n}\necho read(new D0()), \"\\n\";\n");
+    source
+}
+
+/// Whole-table descendant scans made while checking `source`.
+fn descendant_class_scans(source: &str) -> u64 {
+    crate::types::checker::DESCENDANT_CLASS_SCANS.with(|count| count.set(0));
+    let _module = lower_source(source);
+    crate::types::checker::DESCENDANT_CLASS_SCANS.with(|count| count.get())
+}
+
+/// Every property read on a class receiver scanned (and sorted) the WHOLE class table for the
+/// descendants declaring it: reads times classes, the top cost of the Symfony Demo's method
+/// pass. The descendants of an ancestor are fixed, so the scans must not grow with the reads.
+#[test]
+fn descendant_property_lookup_scans_once_per_ancestor() {
+    let small = descendant_class_scans(&many_descendant_property_reads(40));
+    let large = descendant_class_scans(&many_descendant_property_reads(160));
+    assert!(small > 0, "the fixture no longer reaches the descendant property lookup");
+    assert!(
+        large <= small * 2,
+        "descendant scans grew with the property reads: {small} for 40 reads, {large} for 160"
+    );
+}
+
+/// `count` implementations of one interface and `count` calls through an interface receiver.
+fn many_interface_calls(count: usize) -> String {
+    let mut source = String::from("<?php\ninterface I { function m(): int; }\n");
+    for index in 0..count {
+        source.push_str(&format!("final class C{index} implements I {{ function m(): int {{ return {index}; }} }}\n"));
+    }
+    source.push_str("function total(I $i): int {\n    $sum = 0;\n");
+    for _ in 0..count {
+        source.push_str("    $sum += $i->m();\n");
+    }
+    source.push_str("    return $sum;\n}\necho total(new C0()), \"\\n\";\n");
+    source
+}
+
+/// Whole-table implementer scans made while checking `source`.
+fn interface_implementer_scans(source: &str) -> u64 {
+    crate::types::checker::INTERFACE_IMPLEMENTER_SCANS.with(|count| count.set(0));
+    let _module = lower_source(source);
+    crate::types::checker::INTERFACE_IMPLEMENTER_SCANS.with(|count| count.get())
+}
+
+/// Every call on an interface receiver collected and sorted the interface's implementers from
+/// the WHOLE class table: calls times classes. They are fixed per interface.
+#[test]
+fn interface_call_collects_implementers_once_per_interface() {
+    let small = interface_implementer_scans(&many_interface_calls(40));
+    let large = interface_implementer_scans(&many_interface_calls(160));
+    assert!(small > 0, "the fixture no longer reaches the interface implementer lookup");
+    assert!(
+        large <= small * 2,
+        "implementer scans grew with the calls: {small} for 40 calls, {large} for 160"
+    );
+}
+
+/// `count` classes and `count` writes of one property through a `mixed` receiver.
+fn many_mixed_receiver_writes(count: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..count {
+        source.push_str(&format!("class C{index} {{ public $v = {index}; }}\n"));
+    }
+    source.push_str("function set(mixed $o): void {\n");
+    for index in 0..count {
+        source.push_str(&format!("    $o->v = {index};\n"));
+    }
+    source.push_str("}\n$c = new C0();\nset($c);\necho $c->v, \"\\n\";\n");
+    source
+}
+
+/// Whole-table scans for mixed-receiver writes made while checking `source`.
+fn mixed_receiver_mutation_scans(source: &str) -> u64 {
+    crate::types::checker::MIXED_RECEIVER_MUTATION_SCANS.with(|count| count.set(0));
+    let _module = lower_source(source);
+    crate::types::checker::MIXED_RECEIVER_MUTATION_SCANS.with(|count| count.get())
+}
+
+/// Every property write through a mixed receiver scanned the WHOLE class table for the classes
+/// whose private slot the name shadows: writes times classes. The answer depends only on the
+/// scope and the name.
+#[test]
+fn mixed_receiver_writes_scan_once_per_scope_and_name() {
+    let small = mixed_receiver_mutation_scans(&many_mixed_receiver_writes(40));
+    let large = mixed_receiver_mutation_scans(&many_mixed_receiver_writes(160));
+    assert!(small > 0, "the fixture no longer reaches the mixed-receiver mutation scan");
+    assert!(
+        large <= small * 2,
+        "mixed-receiver scans grew with the writes: {small} for 40 writes, {large} for 160"
     );
 }
 

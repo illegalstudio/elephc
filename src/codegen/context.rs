@@ -132,6 +132,9 @@ pub(crate) struct FunctionContext<'a> {
     local_analysis: LocalSlotAnalysis,
     /// Release/store positions of this body, indexed on first use (see `value_uses`).
     value_uses: std::cell::OnceCell<value_uses::ValueUseIndex>,
+    /// The stored operand of every `StoreLocal`, by slot, in body order, indexed on first use
+    /// (see `local_store_operands`).
+    local_store_operands: std::cell::OnceCell<HashMap<LocalSlotId, Vec<Option<ValueId>>>>,
     /// The numeric-domain proof codegen falls back to for values the frame proof did not cover,
     /// built on first use and kept for the body: one per question rescanned the whole function.
     /// `Function::value_use_counts` of this body, counted on first use: a `yield` asked it per
@@ -297,6 +300,7 @@ impl<'a> FunctionContext<'a> {
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
             local_analysis: layout.local_analysis,
             value_uses: std::cell::OnceCell::new(),
+            local_store_operands: std::cell::OnceCell::new(),
             numeric_proof: std::cell::OnceCell::new(),
             use_counts: std::cell::OnceCell::new(),
             callable_reachability,
@@ -1611,6 +1615,28 @@ impl<'a> FunctionContext<'a> {
             .prove(values)
     }
 
+    /// The stored operand (`None` when the store has none) of every `StoreLocal` into `slot`,
+    /// in body order. Each local release asked this of the whole body: a body with thousands of
+    /// locals and instructions spent the Symfony Demo build's codegen in that scan.
+    pub(in crate::codegen) fn local_store_operands(&self, slot: LocalSlotId) -> &[Option<ValueId>] {
+        let index = self.local_store_operands.get_or_init(|| {
+            #[cfg(test)]
+            LOCAL_STORE_SCANNED_INSTRUCTIONS
+                .with(|count| count.set(count.get() + self.function.instructions.len() as u64));
+            let mut index: HashMap<LocalSlotId, Vec<Option<ValueId>>> = HashMap::new();
+            for inst in &self.function.instructions {
+                if inst.op != Op::StoreLocal {
+                    continue;
+                }
+                if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
+                    index.entry(slot).or_default().push(inst.operands.first().copied());
+                }
+            }
+            index
+        });
+        index.get(&slot).map_or(&[], Vec::as_slice)
+    }
+
     pub(in crate::codegen) fn value_uses(&self) -> &value_uses::ValueUseIndex {
         self.value_uses
             .get_or_init(|| value_uses::ValueUseIndex::build(self.function))
@@ -2482,4 +2508,6 @@ fn emit_mixed_result_as_tagged_scalar(emitter: &mut Emitter) {
 std::thread_local! {
     /// Numeric questions codegen answered on a body's shared fallback proof.
     pub(crate) static NUMERIC_FALLBACK_QUERIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Instructions scanned to find a slot's `StoreLocal`s (`local_store_operands`).
+    pub(crate) static LOCAL_STORE_SCANNED_INSTRUCTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

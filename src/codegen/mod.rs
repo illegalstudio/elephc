@@ -26,6 +26,8 @@ mod constant_materialization;
 pub(crate) mod context;
 #[cfg(test)]
 pub(crate) use context::NUMERIC_FALLBACK_QUERIES;
+#[cfg(test)]
+pub(crate) use context::LOCAL_STORE_SCANNED_INSTRUCTIONS;
 mod enum_singletons;
 mod eval_boxed_callable_helper;
 mod eval_callable_helpers;

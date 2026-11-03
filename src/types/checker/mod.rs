@@ -54,6 +54,16 @@ thread_local! {
     /// size: re-walking every declarer's parent chain per call site is quadratic.
     pub(crate) static SUBTYPE_DISPATCH_OWNERS_EXAMINED: std::cell::Cell<u64> =
         const { std::cell::Cell::new(0) };
+    /// Whole-table scans `descendant_class_names` made, so a test can pin them to the number of
+    /// distinct ancestors instead of property accesses.
+    pub(crate) static DESCENDANT_CLASS_SCANS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    /// Whole-table scans `direct_interface_implementers` made.
+    pub(crate) static INTERFACE_IMPLEMENTER_SCANS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    /// Whole-table scans `record_scope_dynamic_mixed_receiver_mutation` made.
+    pub(crate) static MIXED_RECEIVER_MUTATION_SCANS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
 }
 
 mod ref_param_widening;
@@ -338,6 +348,14 @@ pub(crate) struct Checker {
     /// once the class table is built; asking again for every call site walked each owner's parent
     /// chain. See `subtype_dispatch_owners`.
     pub(crate) subtype_dispatch_cache: std::cell::RefCell<(usize, crate::fast_hash::FastMap<(String, String), std::sync::Arc<[String]>>)>,
+    /// Classes extending or implementing an ancestor, sorted, keyed by the ancestor, with the
+    /// `classes.len()` they were computed at. Cleared with `subtype_dispatch_cache`. See
+    /// `descendant_class_names`: every property access on a class scanned the whole table.
+    pub(crate) descendant_classes_cache: std::cell::RefCell<(usize, crate::fast_hash::FastMap<String, std::sync::Arc<[String]>>)>,
+    /// Classes naming an interface in their own `implements` list, sorted, keyed by the
+    /// interface, with the `classes.len()` they were computed at. Cleared with
+    /// `subtype_dispatch_cache`. See `direct_interface_implementers`.
+    pub(crate) interface_implementers_cache: std::cell::RefCell<(usize, crate::fast_hash::FastMap<String, std::sync::Arc<[String]>>)>,
     /// Canonical class names declared in the program, available for forward references
     /// before the full class definitions are available.
     pub declared_classes: HashSet<String>,

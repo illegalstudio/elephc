@@ -67,6 +67,10 @@ struct ScopeDynamicMutationSite {
 #[derive(Debug, Default, Clone)]
 pub struct ScopeDynamicMutationTargets {
     sites: BTreeSet<ScopeDynamicMutationSite>,
+    /// The `(scope, property)` pairs whose mixed-receiver sites are already recorded, with the
+    /// `classes.len()` they were recorded at: the recorded classes depend on nothing else, and
+    /// every such write scanned the whole class table again.
+    mixed_receiver_pairs: (usize, std::collections::HashSet<(Option<String>, String)>),
 }
 
 impl ScopeDynamicMutationTargets {
@@ -309,6 +313,16 @@ pub(in crate::types::checker) fn record_scope_dynamic_mixed_receiver_mutation(
     property: &str,
 ) {
     let scope = checker.current_class.clone();
+    let table_size = checker.classes.len();
+    let pairs = &mut checker.scope_dynamic_mutation_targets.mixed_receiver_pairs;
+    if pairs.0 != table_size {
+        *pairs = (table_size, Default::default());
+    }
+    if !pairs.1.insert((scope.clone(), property.to_string())) {
+        return;
+    }
+    #[cfg(test)]
+    crate::types::checker::MIXED_RECEIVER_MUTATION_SCANS.with(|count| count.set(count.get() + 1));
     let targets = checker
         .classes
         .iter()

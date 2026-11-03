@@ -100,6 +100,8 @@ impl Checker {
             operator_classes: std::cell::Cell::new(None),
             method_owners: std::cell::RefCell::new(None),
             subtype_dispatch_cache: std::cell::RefCell::new((0, Default::default())),
+            descendant_classes_cache: std::cell::RefCell::new((0, Default::default())),
+            interface_implementers_cache: std::cell::RefCell::new((0, Default::default())),
             declared_classes: HashSet::new(),
             declared_class_parents: HashMap::new(),
             declared_class_interfaces: HashMap::new(),

@@ -582,6 +582,8 @@ pub(super) fn check_types_impl(
     // The implicit `Stringable` implementations just added change which classes satisfy an interface
     // receiver, so no dispatch answer memoized before this point may be reused.
     checker.subtype_dispatch_cache.borrow_mut().1.clear();
+    checker.descendant_classes_cache.borrow_mut().1.clear();
+    checker.interface_implementers_cache.borrow_mut().1.clear();
     lap("post_passes", &mut mark);
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);

@@ -886,22 +886,10 @@ impl Checker {
         property: &str,
     ) -> Vec<PhpType> {
         let mut types: Vec<PhpType> = Vec::new();
-        // Sorted, because the class table is a hash map and this function BUILDS A UNION from
-        // what it finds: an unordered walk would order the union's members differently from one
-        // compilation to the next, and the union's spelling reaches the emitted assembly.
-        // `compiler_determinism_tests` exists to catch exactly that.
-        let mut class_names: Vec<&String> = self.classes.keys().collect();
-        class_names.sort();
-        for name in class_names {
+        for name in self.descendant_class_names(ancestor).iter() {
             let Some(info) = self.classes.get(name) else {
                 continue;
             };
-            if name.as_str() == ancestor {
-                continue;
-            }
-            if !self.class_descends_from(name, ancestor) {
-                continue;
-            }
             let Some((_, (_, ty))) = info.visible_property(property) else {
                 continue;
             };
@@ -960,6 +948,35 @@ impl Checker {
     }
 
     /// Walks a class's parent chain looking for `ancestor`.
+    /// The classes other than `ancestor` that extend or implement it, SORTED: the class table is
+    /// a hash map and `descendant_declared_property_types` builds a union from them, whose
+    /// spelling reaches the emitted assembly (`compiler_determinism_tests`). Memoized per table
+    /// size, as the hierarchy is fixed once the table is built.
+    fn descendant_class_names(&self, ancestor: &str) -> std::sync::Arc<[String]> {
+        {
+            let mut cache = self.descendant_classes_cache.borrow_mut();
+            if cache.0 != self.classes.len() {
+                cache.0 = self.classes.len();
+                cache.1.clear();
+            }
+            if let Some(names) = cache.1.get(ancestor) {
+                return names.clone();
+            }
+        }
+        #[cfg(test)]
+        crate::types::checker::DESCENDANT_CLASS_SCANS.with(|count| count.set(count.get() + 1));
+        let mut names: Vec<String> = self
+            .classes
+            .keys()
+            .filter(|name| name.as_str() != ancestor && self.class_descends_from(name, ancestor))
+            .cloned()
+            .collect();
+        names.sort();
+        let names: std::sync::Arc<[String]> = names.into();
+        self.descendant_classes_cache.borrow_mut().1.insert(ancestor.to_string(), names.clone());
+        names
+    }
+
     fn class_descends_from(&self, class_name: &str, ancestor: &str) -> bool {
         let mut current = Some(class_name);
         while let Some(name) = current {

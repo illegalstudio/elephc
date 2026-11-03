@@ -605,12 +605,9 @@ fn mixed_local_slot_is_statically_destructor_free(
         return Ok(false);
     }
     let mut saw_store = false;
-    for inst in &ctx.function.instructions {
-        if inst.op != Op::StoreLocal || inst.immediate != Some(Immediate::LocalSlot(slot)) {
-            continue;
-        }
+    for value in ctx.local_store_operands(slot) {
         saw_store = true;
-        let Some(value) = inst.operands.first().copied() else {
+        let Some(value) = *value else {
             return Ok(false);
         };
         if !mixed_value_is_statically_destructor_free(ctx, value, &mut std::collections::HashSet::new())? {

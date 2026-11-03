@@ -714,11 +714,11 @@ impl Checker {
         };
         // The interface governs shared calls; enum-specific extensions are allowed when
         // any concrete signature accepts them. The selected runtime branch owns binding.
-        let mut implementations: Vec<String> = if is_static { Vec::new() } else { self.classes.iter()
-            .filter(|(_, info)| info.interfaces.iter().any(|name| name == interface_name))
-            .map(|(name, _)| name.clone())
-            .collect() };
-        implementations.sort();
+        let implementations: std::sync::Arc<[String]> = if is_static {
+            std::sync::Arc::from(Vec::new())
+        } else {
+            self.direct_interface_implementers(interface_name)
+        };
         let all_enums = !implementations.is_empty()
             && implementations.iter().all(|name| self.enums.contains_key(name));
         // Signatures only for the all-enum branch that reads them, taken before the spread
@@ -741,7 +741,7 @@ impl Checker {
             // Runtime enum unpacks can retain named tail keys, even when the
             // interface also has ordinary class implementations. Recheck enum
             // bodies against boxed collectors without changing source element hints.
-            for name in &implementations {
+            for name in implementations.iter() {
                 if self.enums.contains_key(name) {
                     self.promote_descriptor_variadic_container_for_method(name, &method_key, false);
                 }
@@ -1039,6 +1039,36 @@ impl Checker {
     /// it, in `method_owners_of` order. Hierarchy is fixed once the class table is built (the
     /// method pass rewrites signatures, which callers read fresh), so the answer is memoized per
     /// table size: every call site used to re-walk each owner's parent chain.
+    /// The classes naming `interface_name` in their own `implements` list, sorted. Memoized per
+    /// table size: every interface-typed call collected them from the whole class table.
+    fn direct_interface_implementers(&self, interface_name: &str) -> std::sync::Arc<[String]> {
+        {
+            let mut cache = self.interface_implementers_cache.borrow_mut();
+            if cache.0 != self.classes.len() {
+                cache.0 = self.classes.len();
+                cache.1.clear();
+            }
+            if let Some(names) = cache.1.get(interface_name) {
+                return names.clone();
+            }
+        }
+        #[cfg(test)]
+        crate::types::checker::INTERFACE_IMPLEMENTER_SCANS.with(|count| count.set(count.get() + 1));
+        let mut names: Vec<String> = self
+            .classes
+            .iter()
+            .filter(|(_, info)| info.interfaces.iter().any(|name| name == interface_name))
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        let names: std::sync::Arc<[String]> = names.into();
+        self.interface_implementers_cache
+            .borrow_mut()
+            .1
+            .insert(interface_name.to_string(), names.clone());
+        names
+    }
+
     fn subtype_dispatch_owners(&self, receiver_type: &str, method_key: &str) -> std::sync::Arc<[String]> {
         {
             let mut cache = self.subtype_dispatch_cache.borrow_mut();
