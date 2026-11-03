@@ -138,6 +138,16 @@ fn promotes_loop_carried_counter_into_register_eligible_parameter() {
         let allocation = allocate_registers(&function, target);
         assert!(allocation.register_of(param).is_some(), "{target:?}: header value gets a register");
         assert!(allocation.register_of(sum_param).is_some(), "{target:?}: accumulator gets a register");
+        assert_eq!(
+            allocation.register_of(param),
+            allocation.register_of(updated),
+            "{target:?}: the backedge value must share the header parameter's register"
+        );
+        assert_eq!(
+            allocation.register_of(sum_param),
+            allocation.register_of(sum_updated),
+            "{target:?}: the accumulator backedge must share its header register"
+        );
     }
 }
 

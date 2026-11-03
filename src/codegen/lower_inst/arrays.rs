@@ -360,6 +360,197 @@ enum ArrayGetMode {
     MixedForWrite,
 }
 
+/// Lowers one append into a private, preallocated, int-shaped array.
+///
+/// The producer proved uniqueness, non-null storage, the int slot shape and spare capacity, so
+/// the store is one payload write plus the header length increment: no COW split, growth,
+/// metadata check or source-local writeback remains. The array pointer is unchanged.
+pub(super) fn lower_array_push_reserved(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let value = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(value, "x1")?;
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the current logical length
+            ctx.emitter.instruction("add x11, x9, #24");                        // skip the indexed-array header to the payload base
+            ctx.emitter.instruction("str x1, [x11, x10, lsl #3]");              // store the appended int in the reserved slot
+            ctx.emitter.instruction("add x10, x10, #1");                        // advance the logical length
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the updated length
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(value, "rsi")?;
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load the current logical length
+            ctx.emitter.instruction("mov QWORD PTR [rdi + 24 + r10 * 8], rsi"); // store the appended int in the reserved slot
+            ctx.emitter.instruction("add r10, 1");                              // advance the logical length
+            ctx.emitter.instruction("mov QWORD PTR [rdi], r10");                // publish the updated length
+        }
+    }
+    Ok(())
+}
+
+/// Lowers the typed-array reduction helper call.
+///
+/// The producer proved the receiver is a private, non-null, int-shaped packed array and that
+/// `[start, end)` is in bounds. The helper reproduces PHP's left-to-right `+` sequence with
+/// int-to-float promotion and returns an owned Mixed cell; the seed is borrowed.
+pub(super) fn lower_array_sum_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let start = expect_operand(inst, 1)?;
+    let end = expect_operand(inst, 2)?;
+    let seed = expect_operand(inst, 3)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(start, "x1")?;
+            ctx.load_value_to_reg(end, "x2")?;
+            ctx.load_value_to_reg(seed, "x3")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(start, "rsi")?;
+            ctx.load_value_to_reg(end, "rdx")?;
+            ctx.load_value_to_reg(seed, "rcx")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_sum_int");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the one-time exact sum probe used by the loop-invariant sum cache.
+pub(super) fn lower_array_sum_probe_small(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_sum_probe_small");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the cached small/general raw sum dispatch selected by the loop-invariant proof.
+pub(super) fn lower_array_sum_int_cached(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let flag = expect_operand(inst, 1)?;
+    let general = ctx.next_label("array_sum_int_cached_general");
+    let done = ctx.next_label("array_sum_int_cached_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(flag, "x1")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x2", i64::MIN);
+            ctx.emitter.instruction("cmp x1, x2");                              // did the probe produce an exact small sum?
+            ctx.emitter.instruction(&format!("b.eq {general}"));                // otherwise use the exact guarded reducer
+            ctx.emitter.instruction("mov x0, x1");                              // return the cached exact sum
+            ctx.emitter.instruction(&format!("b {done}"));                      // skip the guarded reducer
+            ctx.emitter.label(&general);
+            super::core_builtins::prepare_deferred_call_site(ctx, inst)?;
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction("ldr x2, [x0]");                            // pass the packed element count as the exclusive end
+            ctx.emitter.instruction("mov x1, xzr");                             // the whole array is summed from index zero
+            abi::emit_call_label(ctx.emitter, "__rt_array_sum_int_value");
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(flag, "rsi")?;
+            ctx.emitter.instruction("mov rax, 0x8000000000000000");             // sentinel for an invalid probe
+            ctx.emitter.instruction("cmp rsi, rax");                            // did the probe produce an exact small sum?
+            ctx.emitter.instruction(&format!("je {general}"));                  // otherwise use the exact guarded reducer
+            ctx.emitter.instruction("mov rax, rsi");                            // return the cached exact sum
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // skip the guarded reducer
+            ctx.emitter.label(&general);
+            super::core_builtins::prepare_deferred_call_site(ctx, inst)?;
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rdi]");                // pass the packed element count as the exclusive end
+            ctx.emitter.instruction("xor esi, esi");                            // the whole array is summed from index zero
+            abi::emit_call_label(ctx.emitter, "__rt_array_sum_int_value");
+            ctx.emitter.label(&done);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the allocation-free `array_sum()` value entry selected by the int sink.
+///
+/// The producer proved the packed receiver is `array<int>` and that the boxed result is
+/// observed only through an `(int)` cast, so the helper returns the raw sum (or PHP's warned
+/// float-to-int conversion when the running sum promoted to double).
+pub(super) fn lower_array_sum_int_value(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction("ldr x2, [x0]");                            // pass the packed element count as the exclusive end
+            ctx.emitter.instruction("mov x1, xzr");                             // the whole array is summed from index zero
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rdi]");                // pass the packed element count as the exclusive end
+            ctx.emitter.instruction("xor esi, esi");                            // the whole array is summed from index zero
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_sum_int_value");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a proven in-bounds read of a private int-shaped indexed array.
+///
+/// The producing pass proved the receiver cannot be null, hash-promoted, or widened, and that
+/// `0 <= index < length` holds on every path that reaches the read. The element is therefore one
+/// raw int word at the fixed payload offset: no null fallback, bounds check, storage-kind
+/// dispatch, or missing-key warning remains, and the result is a plain PHP int.
+pub(super) fn lower_array_get_unchecked(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
+    if elem_ty.codegen_repr() != PhpType::Int
+        || inst.result_php_type.codegen_repr() != PhpType::Int
+    {
+        return Err(CodegenIrError::invalid_module(format!(
+            "array_get_unchecked requires an int element and int result, got {:?} -> {:?}",
+            elem_ty, inst.result_php_type
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(index, "x0")?;
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("add x10, x9, #24");                        // skip the indexed-array header to the payload base
+            ctx.emitter.instruction("ldr x0, [x10, x0, lsl #3]");               // load the proven in-bounds int slot
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(index, "rax")?;
+            ctx.load_value_to_reg(array, "r11")?;
+            ctx.emitter.instruction("mov rax, QWORD PTR [r11 + rax*8 + 24]");   // load the proven in-bounds int slot
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers an indexed-array element read with PHP null-sentinel fallback on misses.
 pub(super) fn lower_array_get(
     ctx: &mut FunctionContext<'_>,
@@ -1473,24 +1664,26 @@ fn lower_runtime_polymorphic_array_push(
     stored_type: &PhpType,
 ) -> Result<()> {
     let hash = ctx.next_label("array_push_hash");
+    let indexed = ctx.next_label("array_push_indexed");
     let done = ctx.next_label("array_push_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
-            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the receiver while heap-kind classification clobbers x0
-            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
-            ctx.emitter.instruction("cmp x0, #3");                              // select associative storage after a runtime promotion
+            ctx.emitter.instruction(&format!("cbz x0, {indexed}"));             // null receivers take the allocating indexed path
+            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the packed storage-kind metadata
+            ctx.emitter.instruction("and x9, x9, #0xff");                       // isolate the low storage-kind byte
+            ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = storage promoted to a hash
             ctx.emitter.instruction(&format!("b.eq {hash}"));                   // hash append has a distinct header and growth helper
-            abi::emit_pop_reg(ctx.emitter, "x0");                               // restore the indexed receiver before ordinary append lowering
+            ctx.emitter.label(&indexed);
             ctx.store_result_value(array)?;
             lower_array_push_aarch64(ctx, array, value, elem_ty)?;
             stamp_scalar_array_write_result(ctx, stored_type);
             ctx.emitter.instruction(&format!("b {done}"));                      // join with the updated container pointer in x0
 
             ctx.emitter.label(&hash);
+            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the receiver across value boxing
             prepare_boxed_mixed_value_for_container(ctx, value)?;
-            abi::emit_push_reg(ctx.emitter, "x0");                              // stack the owned Mixed cell above the preserved receiver
-            abi::emit_pop_reg(ctx.emitter, "x1");                               // transfer the owned Mixed cell into the hash entry
+            ctx.emitter.instruction("mov x1, x0");                              // pass the owned Mixed cell as the hash entry value
             abi::emit_pop_reg(ctx.emitter, "x0");                               // recover the receiver without reloading a call-clobbered SSA register
             ctx.emitter.instruction("mov x2, xzr");                             // boxed Mixed values use only the low payload word
             abi::emit_load_int_immediate(
@@ -1502,20 +1695,22 @@ fn lower_runtime_polymorphic_array_push(
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "rax")?;
-            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the receiver while heap-kind classification clobbers rax
-            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
-            ctx.emitter.instruction("cmp rax, 3");                              // select associative storage after a runtime promotion
+            ctx.emitter.instruction("test rax, rax");                           // null receivers take the allocating indexed path
+            ctx.emitter.instruction(&format!("jz {indexed}"));                  // route null storage to the indexed helper
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax - 8]");            // load the packed storage-kind metadata
+            ctx.emitter.instruction("and r10d, 0xff");                          // isolate the low storage-kind byte
+            ctx.emitter.instruction("cmp r10d, 3");                             // kind 3 = storage promoted to a hash
             ctx.emitter.instruction(&format!("je {hash}"));                     // hash append has a distinct header and growth helper
-            abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the indexed receiver before ordinary append lowering
+            ctx.emitter.label(&indexed);
             ctx.store_result_value(array)?;
             lower_array_push_x86_64(ctx, array, value, elem_ty)?;
             stamp_scalar_array_write_result(ctx, stored_type);
             ctx.emitter.instruction(&format!("jmp {done}"));                    // join with the updated container pointer in rax
 
             ctx.emitter.label(&hash);
+            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the receiver across value boxing
             prepare_boxed_mixed_value_for_container(ctx, value)?;
-            abi::emit_push_reg(ctx.emitter, "rax");                             // stack the owned Mixed cell above the preserved receiver
-            abi::emit_pop_reg(ctx.emitter, "rsi");                              // transfer the owned Mixed cell into the hash entry
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the owned Mixed cell as the hash entry value
             abi::emit_pop_reg(ctx.emitter, "rdi");                              // recover the receiver without reloading a call-clobbered SSA register
             ctx.emitter.instruction("xor edx, edx");                            // boxed Mixed values use only the low payload word
             abi::emit_load_int_immediate(
@@ -1851,12 +2046,12 @@ fn lower_array_get_aarch64(
 
     ctx.emitter.label(&null_label);
     if warn_on_missing {
-        emit_undefined_array_key_warning(ctx);
+        emit_undefined_array_key_warning(ctx, inst);
     }
     abi::emit_jump(ctx.emitter, &fallback_label);
     ctx.emitter.label(&null_receiver_label);
     if warn_on_missing {
-        emit_array_offset_on_null_warning(ctx);
+        emit_array_offset_on_null_warning_at(ctx, inst);
     }
     ctx.emitter.label(&fallback_label);
     emit_array_get_null_fallback(ctx, result_ty, !warn_on_missing);
@@ -2002,12 +2197,12 @@ fn lower_array_get_x86_64(
 
     ctx.emitter.label(&null_label);
     if warn_on_missing {
-        emit_undefined_array_key_warning(ctx);
+        emit_undefined_array_key_warning(ctx, inst);
     }
     abi::emit_jump(ctx.emitter, &fallback_label);
     ctx.emitter.label(&null_receiver_label);
     if warn_on_missing {
-        emit_array_offset_on_null_warning(ctx);
+        emit_array_offset_on_null_warning_at(ctx, inst);
     }
     ctx.emitter.label(&fallback_label);
     emit_array_get_null_fallback(ctx, result_ty, !warn_on_missing);
@@ -2579,13 +2774,31 @@ fn emit_branch_if_invoker_ref_cell_tag(
 }
 
 /// Emits PHP's undefined integer array-key warning for the key in the result register.
-fn emit_undefined_array_key_warning(ctx: &mut FunctionContext<'_>) {
+fn emit_undefined_array_key_warning(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    // The warning helper reads the offending key from the integer result register; publish
+    // the source line without clobbering it.
+    let key = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, key);
+    super::core_builtins::publish_diagnostic_site(ctx, inst);
+    abi::emit_pop_reg(ctx.emitter, key);
     abi::emit_call_label(ctx.emitter, "__rt_warn_undefined_array_key_int");
 }
 
 /// Emits PHP's warning for a direct array-offset read whose receiver is null.
 pub(super) fn emit_array_offset_on_null_warning(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_warn_array_offset_on_null");
+}
+
+/// Publishes the source line, then emits the null-receiver array-offset warning.
+///
+/// The indexed read's hot path skips the diagnostic-site publication; only this cold warning
+/// path reads the published file/line.
+pub(super) fn emit_array_offset_on_null_warning_at(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) {
+    super::core_builtins::publish_diagnostic_site(ctx, inst);
+    emit_array_offset_on_null_warning(ctx);
 }
 
 /// Emits the null/miss fallback in the result shape expected by the array element type.
@@ -2671,6 +2884,11 @@ fn lower_array_push_aarch64(
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_aarch64(ctx, array, value)?;
         }
+        PhpType::Int if scalar_tag.is_none() => {
+            ctx.load_value_to_reg(value, "x1")?;
+            ctx.load_value_to_reg(array, "x0")?;
+            emit_array_push_int_fast_path_aarch64(ctx);
+        }
         PhpType::Int | PhpType::Bool | PhpType::Pointer(_) | PhpType::Buffer(_) => {
             ctx.load_value_to_reg(value, "x1")?;
             ctx.load_value_to_reg(array, "x9")?;
@@ -2681,9 +2899,14 @@ fn lower_array_push_aarch64(
             ctx.load_value_to_result(value)?;
             crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
             ctx.emitter.instruction("mov x1, x0");                              // pass the nullable integer payload after PHP null-to-zero coercion
-            ctx.load_value_to_reg(array, "x9")?;
-            ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
-            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            if scalar_tag.is_none() {
+                ctx.load_value_to_reg(array, "x0")?;
+                emit_array_push_int_fast_path_aarch64(ctx);
+            } else {
+                ctx.load_value_to_reg(array, "x9")?;
+                ctx.emitter.instruction("mov x0, x9");                          // pass the indexed-array receiver to the append helper
+                abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            }
         }
         PhpType::Callable => {
             ctx.load_value_to_reg(value, "x0")?;
@@ -2764,6 +2987,68 @@ fn scalar_slot_element_tag(elem_ty: &PhpType, value_ty: &PhpType) -> Option<PhpT
     matches!(from_value, PhpType::Float | PhpType::Bool | PhpType::Pointer(_)).then_some(from_value)
 }
 
+/// Appends one raw int inline when the receiver is unique, shaped and has spare capacity.
+///
+/// AArch64 input: `x0` = indexed-array receiver, `x1` = int payload. A null receiver, a shared
+/// array, the first append into an empty array, a full array or any non-int value type falls
+/// back to `__rt_array_push_int`, which owns COW, shape specialization and growth. On return
+/// `x0` is the append result (the unchanged receiver on the fast path).
+fn emit_array_push_int_fast_path_aarch64(ctx: &mut FunctionContext<'_>) {
+    let slow = ctx.next_label("array_push_int_slow");
+    let done = ctx.next_label("array_push_int_done");
+    ctx.emitter.instruction(&format!("cbz x0, {slow}"));                        // null receivers need the allocating slow path
+    ctx.emitter.instruction("ldr w9, [x0, #-12]");                              // load the indexed-array refcount
+    ctx.emitter.instruction("cmp w9, #1");                                      // can this owner append without a COW split?
+    ctx.emitter.instruction(&format!("b.hi {slow}"));                           // shared arrays still need ensure_unique
+    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the current logical length
+    ctx.emitter.instruction(&format!("cbz x9, {slow}"));                        // the first append still specializes the empty-array shape
+    ctx.emitter.instruction("ldr x10, [x0, #8]");                               // load the current capacity
+    ctx.emitter.instruction("cmp x9, x10");                                     // is there room for one more scalar slot?
+    ctx.emitter.instruction(&format!("b.hs {slow}"));                           // full arrays still need the growth path
+    ctx.emitter.instruction("ldr x10, [x0, #-8]");                              // load the packed array metadata
+    ctx.emitter.instruction("ubfx x10, x10, #8, #7");                           // isolate the value type from the COW flag
+    ctx.emitter.instruction(&format!("cbnz x10, {slow}"));                      // only the int shape stores a raw word inline
+    ctx.emitter.instruction("add x10, x0, #24");                                // compute the payload base
+    ctx.emitter.instruction("str x1, [x10, x9, lsl #3]");                       // store the appended int in the next slot
+    ctx.emitter.instruction("add x9, x9, #1");                                  // advance the logical length
+    ctx.emitter.instruction("str x9, [x0]");                                    // publish the updated length
+    ctx.emitter.instruction(&format!("b {done}"));                              // skip the slow helper after the inline append
+    ctx.emitter.label(&slow);
+    abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+    ctx.emitter.label(&done);
+}
+
+/// Appends one raw int inline when the receiver is unique, shaped and has spare capacity.
+///
+/// x86_64 input: `rdi` = indexed-array receiver, `rsi` = int payload. The slow helper keeps the
+/// same null/shared/empty/full/non-int fallback contract as the AArch64 path.
+fn emit_array_push_int_fast_path_x86_64(ctx: &mut FunctionContext<'_>) {
+    let slow = ctx.next_label("array_push_int_slow");
+    let done = ctx.next_label("array_push_int_done");
+    ctx.emitter.instruction("test rdi, rdi");                                   // null receivers need the allocating slow path
+    ctx.emitter.instruction(&format!("jz {slow}"));                             // route null storage to the helper
+    ctx.emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                  // load the indexed-array refcount
+    ctx.emitter.instruction("cmp r10d, 1");                                     // can this owner append without a COW split?
+    ctx.emitter.instruction(&format!("ja {slow}"));                             // shared arrays still need ensure_unique
+    ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                        // load the current logical length
+    ctx.emitter.instruction("test r10, r10");                                   // is this the first append into an empty array?
+    ctx.emitter.instruction(&format!("jz {slow}"));                             // the first append still specializes the empty-array shape
+    ctx.emitter.instruction("mov r11, QWORD PTR [rdi + 8]");                    // load the current capacity
+    ctx.emitter.instruction("cmp r10, r11");                                    // is there room for one more scalar slot?
+    ctx.emitter.instruction(&format!("jae {slow}"));                            // full arrays still need the growth path
+    ctx.emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                    // load the packed array metadata
+    ctx.emitter.instruction("shr r11, 8");                                      // move the value type into the low bits
+    ctx.emitter.instruction("and r11d, 0x7f");                                  // ignore the persistent COW flag
+    ctx.emitter.instruction(&format!("jnz {slow}"));                            // only the int shape stores a raw word inline
+    ctx.emitter.instruction("mov QWORD PTR [rdi + 24 + r10 * 8], rsi");         // store the appended int in the next slot
+    ctx.emitter.instruction("add r10, 1");                                      // advance the logical length
+    ctx.emitter.instruction("mov QWORD PTR [rdi], r10");                        // publish the updated length
+    ctx.emitter.instruction(&format!("jmp {done}"));                            // skip the slow helper after the inline append
+    ctx.emitter.label(&slow);
+    abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+    ctx.emitter.label(&done);
+}
+
 /// Lowers an indexed-array append for x86_64 targets.
 fn lower_array_push_x86_64(
     ctx: &mut FunctionContext<'_>,
@@ -2783,6 +3068,11 @@ fn lower_array_push_x86_64(
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_x86_64(ctx, array, value)?;
         }
+        PhpType::Int if scalar_tag.is_none() => {
+            ctx.load_value_to_reg(value, "rsi")?;
+            ctx.load_value_to_reg(array, "rdi")?;
+            emit_array_push_int_fast_path_x86_64(ctx);
+        }
         PhpType::Int | PhpType::Bool | PhpType::Pointer(_) | PhpType::Buffer(_) => {
             ctx.load_value_to_reg(array, "r11")?;
             ctx.load_value_to_reg(value, "rsi")?;
@@ -2793,9 +3083,14 @@ fn lower_array_push_x86_64(
             ctx.load_value_to_result(value)?;
             crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
             ctx.emitter.instruction("mov rsi, rax");                            // pass the nullable integer payload after PHP null-to-zero coercion
-            ctx.load_value_to_reg(array, "r11")?;
-            ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
-            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            if scalar_tag.is_none() {
+                ctx.load_value_to_reg(array, "rdi")?;
+                emit_array_push_int_fast_path_x86_64(ctx);
+            } else {
+                ctx.load_value_to_reg(array, "r11")?;
+                ctx.emitter.instruction("mov rdi, r11");                        // pass the indexed-array receiver to the append helper
+                abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            }
         }
         PhpType::Callable => {
             ctx.load_value_to_reg(value, "rax")?;

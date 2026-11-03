@@ -128,3 +128,36 @@ fn property_write_receiver_remains_conservative() {
     );
     assert!(address_escaping_slots(&function).contains(&receiver));
 }
+
+/// Array keys are consumed by value while the container operand still escapes.
+#[test]
+fn array_key_load_is_value_only_but_container_escapes() {
+    let mut function = Function::new("array_key".into(), IrType::Void, PhpType::Void);
+    let array_type = PhpType::Array(Box::new(PhpType::Int));
+    let key = function.add_local(
+        Some("key".into()), IrType::I64, PhpType::Int, LocalKind::PhpLocal,
+    );
+    let array = function.add_local(
+        Some("array".into()), IrType::from_php(&array_type), array_type.clone(), LocalKind::PhpLocal,
+    );
+    let mut builder = Builder::new(&mut function);
+    let entry = builder.create_named_block("entry", vec![]);
+    builder.set_entry(entry);
+    builder.position_at_end(entry);
+    let seed = builder.emit_const_i64(0);
+    builder.emit_store_local(key, seed);
+    let container = builder.emit_load_local(array, IrType::from_php(&array_type), array_type);
+    let loaded_key = builder.emit_load_local(key, IrType::I64, PhpType::Int);
+    builder.emit(
+        Op::ArrayGet,
+        vec![container, loaded_key],
+        None,
+        IrType::I64,
+        PhpType::Int,
+        Ownership::NonHeap,
+    ).unwrap();
+    builder.terminate(Terminator::Return { value: None });
+    let escaping = address_escaping_slots(&function);
+    assert!(!escaping.contains(&key), "an array key is read by value");
+    assert!(escaping.contains(&array), "the container operand keeps the conservative rule");
+}

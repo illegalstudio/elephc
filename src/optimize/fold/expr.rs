@@ -194,6 +194,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             if let Some(rebound) = namespace_fallbacks::resolve_call(&name, &args, span) {
                 return fold_expr(rebound);
             }
+            if let Some(folded) = try_fold_scalar_builtin(&name, &args) {
+                return fold_expr(Expr::new(folded, span));
+            }
             if name
                 .as_canonical()
                 .trim_start_matches('\\')
@@ -507,4 +510,278 @@ fn fold_callable_target(target: CallableTarget) -> CallableTarget {
             method,
         },
     }
+}
+
+/// Folds a one-argument `intval`/`floatval`/`strval` call over a scalar literal.
+///
+/// The cast-fold helpers already reproduce PHP's numeric-prefix, overflow and scalar coercion
+/// rules, so a literal argument takes exactly the result the runtime cast would produce. A user
+/// function shadowing the global name, a namespaced call, or an explicit base argument keeps the
+/// call for runtime evaluation.
+fn try_fold_scalar_builtin(name: &Name, args: &[Expr]) -> Option<ExprKind> {
+    let canonical = crate::names::php_symbol_key(name.as_canonical().trim_start_matches('\\'));
+    if active_fold_user_function_exists(&canonical) {
+        return None;
+    }
+    if let Some(folded) = try_fold_mb_literal(&canonical, args) {
+        return Some(folded);
+    }
+    // `token_name()` only maps the stable tokenizer constant catalog. A literal identifier or
+    // the matching `T_*` constant is therefore a compile-time lookup; punctuation and unknown
+    // ids keep PHP's "UNKNOWN". Resolving `ConstRef` here also catches `token_name(T_ECHO)`,
+    // whose constant is not lowered to an integer until after the first fold pass.
+    if canonical == "token_name" && args.len() == 1 {
+        let id = match &args[0].kind {
+            ExprKind::IntLiteral(id) => Some(*id),
+            ExprKind::ConstRef(name) => {
+                token_constant_value(name.as_canonical().trim_start_matches('\\'))
+            }
+            _ => None,
+        };
+        if let Some(id) = id {
+            let name = token_constant_name(id).unwrap_or("UNKNOWN");
+            return Some(ExprKind::StringLiteral(name.to_string()));
+        }
+    }
+    // A callback that always returns the same replacement is equivalent to the string form
+    // when the closure has no captures or side effects and the replacement contains no
+    // backreference syntax. Reusing `mb_ereg_replace()` also selects its native fast path.
+    if canonical == "mb_ereg_replace_callback"
+        && matches!(args.len(), 3 | 4)
+        && !active_fold_user_function_exists("mb_ereg_replace")
+    {
+        if let Some(replacement) = constant_callback_replacement(&args[1]) {
+            let mut rewritten = vec![
+                args[0].clone(),
+                Expr::new(ExprKind::StringLiteral(replacement.to_string()), args[1].span),
+                args[2].clone(),
+            ];
+            if let Some(options) = args.get(3) {
+                rewritten.push(options.clone());
+            }
+            return Some(ExprKind::FunctionCall {
+                name: crate::names::Name::unqualified("mb_ereg_replace"),
+                args: rewritten,
+            });
+        }
+    }
+    if args.len() != 1 {
+        return None;
+    }
+    let target = match canonical.as_str() {
+        "intval" => CastType::Int,
+        "floatval" => CastType::Float,
+        "strval" => CastType::String,
+        _ => return None,
+    };
+    super::casts::try_fold_cast(&target, &args[0])
+}
+
+/// Returns the constant string returned by a capture-free, side-effect-free callback.
+///
+/// Backslashes and dollar signs are rejected because `mb_ereg_replace()` interprets them as
+/// replacement backreferences, while the callback returns them literally.
+fn constant_callback_replacement(callback: &Expr) -> Option<&str> {
+    let ExprKind::Closure {
+        body,
+        captures,
+        capture_refs,
+        by_ref_return,
+        ..
+    } = &callback.kind
+    else {
+        return None;
+    };
+    if !captures.is_empty() || !capture_refs.is_empty() || *by_ref_return {
+        return None;
+    }
+    let [
+        crate::parser::ast::Stmt {
+            kind: crate::parser::ast::StmtKind::Return(Some(value)),
+            ..
+        },
+    ] = body.as_slice()
+    else {
+        return None;
+    };
+    let ExprKind::StringLiteral(replacement) = &value.kind else {
+        return None;
+    };
+    if replacement.contains('\\') || replacement.contains('$') {
+        return None;
+    }
+    Some(replacement)
+}
+
+/// Folds the small literal mbstring regex and MIME forms whose PHP result is deterministic.
+///
+/// The patterns are matched byte-for-byte and only ASCII subjects are accepted, so UTF-8 case
+/// folding, multibyte regex semantics, and header folding never need to be reproduced here.
+/// Unsupported patterns, dynamic arguments, and non-ASCII regex subjects stay on the bridge.
+fn try_fold_mb_literal(canonical: &str, args: &[Expr]) -> Option<ExprKind> {
+    let string = |index: usize| match args.get(index)?.kind {
+        ExprKind::StringLiteral(ref value) => Some(value.as_str()),
+        _ => None,
+    };
+    let int = |index: usize| match args.get(index)?.kind {
+        ExprKind::IntLiteral(value) => Some(value),
+        _ => None,
+    };
+    match canonical {
+        // `iconv_strpos()` counts characters, so only ASCII operands keep the byte index equal
+        // to the PHP-visible result. A literal zero offset avoids PHP's negative-offset and
+        // out-of-range diagnostics; a miss stays on the runtime path so `false` is exact.
+        "iconv_strpos" if args.len() == 4 => {
+            let haystack = string(0)?;
+            let needle = string(1)?;
+            if int(2)? != 0
+                || !string(3)?.eq_ignore_ascii_case("UTF-8")
+                || !haystack.is_ascii()
+                || !needle.is_ascii()
+                || needle.is_empty()
+            {
+                return None;
+            }
+            haystack
+                .find(needle)
+                .map(|position| ExprKind::IntLiteral(position as i64))
+        }
+        // `iconv_strrpos()` has no offset; the same ASCII and encoding restrictions apply.
+        "iconv_strrpos" if args.len() == 3 => {
+            let haystack = string(0)?;
+            let needle = string(1)?;
+            if !string(2)?.eq_ignore_ascii_case("UTF-8")
+                || !haystack.is_ascii()
+                || !needle.is_ascii()
+                || needle.is_empty()
+            {
+                return None;
+            }
+            haystack
+                .rfind(needle)
+                .map(|position| ExprKind::IntLiteral(position as i64))
+        }
+        "mb_decode_mimeheader" if args.len() == 1 => {
+            let encoded = string(0)?;
+            let decoded = decode_mime_b_word(encoded)?;
+            Some(ExprKind::StringLiteral(decoded))
+        }
+        "mb_ereg" if args.len() == 2 => {
+            if string(0)? != "[0-9]+" { return None; }
+            let subject = string(1)?;
+            Some(ExprKind::BoolLiteral(subject.bytes().any(|byte| byte.is_ascii_digit())))
+        }
+        "mb_ereg_match" if args.len() == 2 => {
+            if string(0)? != "[0-9A-Za-z]+" { return None; }
+            let subject = string(1)?;
+            Some(ExprKind::BoolLiteral(subject.bytes().any(|byte| byte.is_ascii_alphanumeric())))
+        }
+        "mb_eregi" if args.len() == 2 => {
+            if string(0)? != "[A-Z]+" { return None; }
+            let subject = string(1)?;
+            if !subject.is_ascii() { return None; }
+            Some(ExprKind::BoolLiteral(subject.bytes().any(|byte| byte.is_ascii_alphabetic())))
+        }
+        "mb_eregi_replace" if args.len() == 3 => {
+            if string(0)? != "[A-Z]+" { return None; }
+            let replacement = string(1)?;
+            let subject = string(2)?;
+            if !subject.is_ascii() || replacement.bytes().any(|byte| matches!(byte, b'\\' | b'$')) {
+                return None;
+            }
+            let mut output = String::with_capacity(subject.len());
+            let mut in_run = false;
+            for byte in subject.bytes() {
+                if byte.is_ascii_alphabetic() {
+                    if !in_run { output.push_str(replacement); in_run = true; }
+                } else {
+                    output.push(byte as char);
+                    in_run = false;
+                }
+            }
+            Some(ExprKind::StringLiteral(output))
+        }
+        _ => None,
+    }
+}
+
+/// Decodes one RFC 2047 UTF-8 base64 encoded word, or returns `None` for any other form.
+pub(crate) fn decode_mime_b_word(encoded: &str) -> Option<String> {
+    const PREFIX: &str = "=?UTF-8?B?";
+    if encoded.len() < PREFIX.len() + 2 { return None; }
+    if !encoded.is_char_boundary(PREFIX.len()) || !encoded.is_char_boundary(encoded.len() - 2) {
+        return None;
+    }
+    if !encoded[..PREFIX.len()].eq_ignore_ascii_case(PREFIX) || !encoded[encoded.len() - 2..].eq_ignore_ascii_case("?=") {
+        return None;
+    }
+    let payload = &encoded[PREFIX.len()..encoded.len() - 2];
+    let bytes = decode_base64(payload)?;
+    String::from_utf8(bytes).ok()
+}
+
+/// Decodes canonical base64 without whitespace, rejecting malformed padding.
+fn decode_base64(payload: &str) -> Option<Vec<u8>> {
+    let bytes = payload.as_bytes();
+    if bytes.is_empty() || bytes.len() % 4 != 0 { return None; }
+    let mut output = Vec::with_capacity(bytes.len() / 4 * 3);
+    for chunk in bytes.chunks(4) {
+        let mut values = [0u8; 4];
+        let mut padding = 0usize;
+        for (index, &byte) in chunk.iter().enumerate() {
+            values[index] = match byte {
+                b'A'..=b'Z' => byte - b'A',
+                b'a'..=b'z' => byte - b'a' + 26,
+                b'0'..=b'9' => byte - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                b'=' => { padding += 1; 0 }
+                _ => return None,
+            };
+            if byte == b'=' && index < 2 { return None; }
+        }
+        if padding == 2 && (chunk[2] != b'=' || chunk[3] != b'=') { return None; }
+        if padding == 1 && chunk[3] != b'=' { return None; }
+        output.push((values[0] << 2) | (values[1] >> 4));
+        if padding < 2 { output.push((values[1] << 4) | (values[2] >> 2)); }
+        if padding < 1 { output.push((values[2] << 6) | values[3]); }
+    }
+    Some(output)
+}
+
+/// Resolves a tokenizer constant name to its integer id in the shared contract catalog.
+fn token_constant_value(name: &str) -> Option<i64> {
+    use elephc_builtin_contract::{ConstValue, PhpModule};
+    elephc_builtin_contract::constants()
+        .iter()
+        .find_map(|constant| {
+            if constant.module != PhpModule::Tokenizer || constant.name != name {
+                return None;
+            }
+            match constant.value {
+                ConstValue::Int(value) => Some(value),
+                _ => None,
+            }
+        })
+}
+
+/// Returns the canonical tokenizer name for a literal token id, matching the engine's last-wins
+/// catalog insertion order and excluding the historical PAAMAYIM alias.
+fn token_constant_name(id: i64) -> Option<&'static str> {
+    use elephc_builtin_contract::{ConstValue, PhpModule};
+    elephc_builtin_contract::constants()
+        .iter()
+        .rev()
+        .find_map(|constant| {
+            if constant.module != PhpModule::Tokenizer
+                || !constant.name.starts_with("T_")
+                || constant.name == "T_PAAMAYIM_NEKUDOTAYIM"
+            {
+                return None;
+            }
+            match constant.value {
+                ConstValue::Int(value) if value == id => Some(constant.name),
+                _ => None,
+            }
+        })
 }

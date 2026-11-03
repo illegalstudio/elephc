@@ -1649,9 +1649,12 @@ the integer range; the store beside it is still typed. Loops of such updates now
 ### Bounded Mixed Counters
 
 `src/ir_passes/bounded_mixed_counter.rs` considers ordinary Mixed locals updated
-by increment/decrement and seeded with concrete PHP integers, or with checked or
-mixed `+`, `-`, `*` of raw integers and of the counters proven with them
-(`$j = $i + 1`). A seed producer becomes the matching `ichecked_*_to_int` on the
+by increment/decrement or by a constant compound step (`$i += c`, `$i -= c`), and
+seeded with concrete PHP integers, or with checked or mixed `+`, `-`, `*` of raw
+integers and of the counters proven with them (`$j = $i + 1`). Private slots in the
+executable main frame take part in the same proof; a runtime `include` (which hands
+the frame to evaluated code) or dynamic `eval` keeps main's counters boxed. A seed
+producer becomes the matching `ichecked_*_to_int` on the
 trial and, like an update, must be rewritten to unchecked arithmetic. A comparison
 of a counter with a checked `+`/`-` of raw integers (`$i < $n - 1`) stays a
 `php_rel_cmp`, since the bound may be an overflowed float; IntegerRange bounds the
@@ -1957,7 +1960,9 @@ stack frame's `concat_base_offset`, and `concat_reset` rewinds `_concat_off` to 
 frame base; AST-to-EIR lowering already emits `acquire` / `str_persist` for any string
 that outlives a statement before emitting the original statement-boundary `concat_reset`.
 
-The pass runs two greatest-fixed-point analyses over reachable blocks:
+The pass runs two greatest-fixed-point analyses over reachable blocks; a
+post-fixed-point finalizer then hoists a loop-body reset into a unique preheader
+when the preheader can arrive dirty:
 
 1. **Forward clean-state elimination** tracks whether `_concat_off` is guaranteed
    to equal `concat_base_offset` on entry to each block and across each
@@ -1978,6 +1983,13 @@ The pass runs two greatest-fixed-point analyses over reachable blocks:
    non-inert instruction, `may_throw` / `may_fatal` instruction, or function exit.
    An earlier `concat_reset` whose outgoing paths all hit a later reset without
    intervening observation is neutralized to `nop`.
+3. **Loop preheader hoisting** (`ConcatResetHoist`, a post-fixed-point
+   finalizer) appends one marked reset to a loop's unique preheader when the
+   loop body still contains a reset after the two analyses. The clean state
+   propagates from the preheader through the header, so phase 1 then drops the
+   per-iteration body resets. The mark keeps both analyses from removing the
+   inserted reset, so the finalizer converges; it runs only for non-internal,
+   non-synthetic functions of at most 2,000 instructions with a back edge.
 
 ### Small-Function Inlining
 
@@ -2502,10 +2514,18 @@ The pass has four stages:
 2. **Intervals** (`intervals.rs`): blocks are numbered in reverse postorder and
    each value gets one contiguous `[start, end]` live interval. A value live
    across edges or a loop back-edge spans the intervening positions.
+   A loop-header parameter is then coalesced with one scalar backedge argument:
+   their intervals merge into one group, so the latch copy disappears and both
+   values share the register the scan assigns to the group. Alternate
+   predecessors keep their own edge copies because they can carry different
+   values.
 3. **Scan** (`regalloc.rs`): intervals are walked in start order against an
    active set; a free register from the matching pool is assigned, otherwise the
    use-weighted spill heuristic evicts the cheapest interval. Integer and float
-   values draw from separate pools.
+   values draw from separate pools. When both operands of an integer binary
+   operation already live in registers, the backend writes the result directly
+   into its allocated home instead of computing into the ABI result register and
+   copying it afterward.
 4. **Frame integration** (`codegen/frame.rs`): the allocation is stored in
    the frame layout, each used callee-saved register gets a save slot, and the
    value-access chokepoints (`load_value_to_result`, `load_value_to_reg`,

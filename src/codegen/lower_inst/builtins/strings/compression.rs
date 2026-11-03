@@ -81,7 +81,7 @@ pub(crate) fn lower_gzuncompress(ctx: &mut FunctionContext<'_>, inst: &Instructi
         Arch::AArch64 => lower_gzuncompress_aarch64(ctx, &ok, &after),
         Arch::X86_64 => lower_gzuncompress_x86_64(ctx, &ok, &after),
     }
-    box_string_or_false_result(ctx, "gzuncompress");
+    box_owned_string_or_false_result(ctx, "gzuncompress");
     store_if_result(ctx, inst)
 }
 /// Loads the first gzip/zlib string operand into the target string-result registers.

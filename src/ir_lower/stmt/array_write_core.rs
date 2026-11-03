@@ -254,6 +254,10 @@ fn lower_array_assign_with_update(
     }
     let (mut index_value, mut value_value, mut index_pins) =
         lower_write_key_and_value(ctx, index, value);
+    // `??=` borrows its result temp: the slot keeps the reference and hands it to the
+    // expression consumer, so the container write must retain its own owner instead of
+    // adopting the temp (which would leave a dangling hash entry after the merge releases it).
+    value_value = ctx.borrow_write_operand_if_needed(value_value, span);
     let container_ty = ctx.builder.value_php_type(array_value.value);
     value_value = ctx.retype_value_for_container_element(&container_ty, value_value, Some(value.span));
     // A hash whose stamped value type cannot hold the assigned value widens its storage first,
@@ -278,11 +282,16 @@ fn lower_array_assign_with_update(
         PhpType::Array(element) if is_empty_indexed_array_element(&element))
         && crate::types::empty_array_key_requires_hash_storage(index)
         && !index_is_boxed_mixed_key(index_value.ir_type);
+    let nonempty_sparse_key = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
+        PhpType::Array(element) if !is_empty_indexed_array_element(&element))
+        && crate::types::nonempty_array_key_forces_hash_storage(index)
+        && !index_is_boxed_mixed_key(index_value.ir_type);
     let mixed_elements = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
     let reference_string_key = mixed_elements && index_value.ir_type == IrType::Str
         && ctx.is_ref_bound_local(array);
-    if op == Op::ArraySet && (index_value.ir_type == IrType::Str || empty_sparse_key)
+    if op == Op::ArraySet
+        && (index_value.ir_type == IrType::Str || empty_sparse_key || nonempty_sparse_key)
         && !reference_string_key
     {
         lower_array_key_hash_promotion(

@@ -73,6 +73,18 @@ impl Allocation {
         self.registers.get(&value).copied()
     }
 
+    /// Assigns every member of a coalesced group the register chosen for its root.
+    pub(super) fn coalesce_members(&mut self, groups: &[super::regalloc::CoalescedGroup]) {
+        for group in groups {
+            let Some(register) = self.registers.get(&group.root).copied() else {
+                continue;
+            };
+            for &member in &group.members {
+                self.registers.insert(member, register);
+            }
+        }
+    }
+
     /// Attaches scalar recipes, retaining physical homes only where allocation paid for them.
     pub(super) fn with_constants(mut self, constants: HashMap<ValueId, ScalarConstant>) -> Self {
         self.constants = constants;

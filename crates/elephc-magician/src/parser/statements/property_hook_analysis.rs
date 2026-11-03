@@ -43,6 +43,7 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
         | EvalStmt::InterfaceDecl(_)
         | EvalStmt::ReferenceAssign { .. }
         | EvalStmt::TraitDecl(_)
+        | EvalStmt::IncDecVar { .. }
         | EvalStmt::UnsetVar { .. } => false,
         EvalStmt::UnsetArrayElement { array, index } => {
             eval_expr_uses_this_property(array, property_name)

@@ -12,7 +12,7 @@
 //! - Folding is ASCII-only (`A`-`Z` -> `a`-`z`), matching php-src's locale-independent
 //!   `zend_tolower_ascii`; non-ASCII bytes are compared verbatim.
 
-use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::{abi, emit::Emitter};
 use crate::codegen_support::platform::Arch;
 
 /// Emits the `__rt_strripos` runtime helper for AArch64.
@@ -42,6 +42,7 @@ pub fn emit_strripos(emitter: &mut Emitter) {
     emitter.instruction("sub x5, x2, x4");                                      // start searching from rightmost valid position
 
     // -- outer loop: try matching needle from right to left --
+    abi::emit_symbol_address(emitter, "x12", "_ascii_lower");                  // ASCII lowercase lookup table
     emitter.label("__rt_strripos_outer");
     emitter.instruction("mov x6, #0");                                          // reset needle comparison index
     emitter.label("__rt_strripos_inner");
@@ -49,24 +50,9 @@ pub fn emit_strripos(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_strripos_found");                            // all matched, found at position x5
     emitter.instruction("add x7, x5, x6");                                      // compute haystack index = pos + needle_idx
     emitter.instruction("ldrb w8, [x1, x7]");                                   // load haystack byte at computed index
+    emitter.instruction("ldrb w8, [x12, x8]");                                  // fold it through the lowercase table
     emitter.instruction("ldrb w10, [x3, x6]");                                  // load needle byte at current index
-
-    // -- fold the haystack byte to lowercase, ASCII range only --
-    emitter.instruction("cmp w8, #65");                                         // is the haystack byte at or above 'A'?
-    emitter.instruction("b.lt __rt_strripos_fold_needle");                      // bytes below 'A' are compared verbatim
-    emitter.instruction("cmp w8, #90");                                         // is the haystack byte at or below 'Z'?
-    emitter.instruction("b.gt __rt_strripos_fold_needle");                      // bytes above 'Z' are compared verbatim
-    emitter.instruction("add w8, w8, #32");                                     // fold the uppercase haystack byte to lowercase
-
-    // -- fold the needle byte to lowercase, ASCII range only --
-    emitter.label("__rt_strripos_fold_needle");
-    emitter.instruction("cmp w10, #65");                                        // is the needle byte at or above 'A'?
-    emitter.instruction("b.lt __rt_strripos_cmp");                              // bytes below 'A' are compared verbatim
-    emitter.instruction("cmp w10, #90");                                        // is the needle byte at or below 'Z'?
-    emitter.instruction("b.gt __rt_strripos_cmp");                              // bytes above 'Z' are compared verbatim
-    emitter.instruction("add w10, w10, #32");                                   // fold the uppercase needle byte to lowercase
-
-    emitter.label("__rt_strripos_cmp");
+    emitter.instruction("ldrb w10, [x12, x10]");                                // fold it through the lowercase table
     emitter.instruction("cmp w8, w10");                                         // compare the folded haystack and needle bytes
     emitter.instruction("b.ne __rt_strripos_prev");                             // mismatch, try previous position
     emitter.instruction("add x6, x6, #1");                                      // advance needle index
@@ -109,6 +95,7 @@ fn emit_strripos_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, rsi");                                         // copy the haystack length so the rightmost valid start offset can be computed once
     emitter.instruction("sub r9, rcx");                                         // compute the rightmost haystack offset where the full needle can still fit
 
+    abi::emit_symbol_address(emitter, "rsi", "_ascii_lower");                  // ASCII lowercase lookup table
     emitter.label("__rt_strripos_outer_linux_x86_64");
     emitter.instruction("xor r10d, r10d");                                      // start the needle byte comparison from index zero for the current candidate
 
@@ -118,21 +105,9 @@ fn emit_strripos_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, r9");                                          // copy the current candidate start offset so the indexed haystack byte can be addressed
     emitter.instruction("add r8, r10");                                         // compute the absolute haystack byte offset for the current needle byte
     emitter.instruction("movzx eax, BYTE PTR [rdi + r8]");                      // load the current haystack byte for the right-to-left candidate comparison
+    emitter.instruction("movzx eax, BYTE PTR [rsi + rax]");                     // fold it through the lowercase table
     emitter.instruction("movzx r11d, BYTE PTR [rdx + r10]");                    // load the current needle byte for the right-to-left candidate comparison
-    emitter.instruction("cmp al, 65");                                          // is the haystack byte at or above 'A'?
-    emitter.instruction("jb __rt_strripos_fold_needle_linux_x86_64");           // bytes below 'A' are compared verbatim
-    emitter.instruction("cmp al, 90");                                          // is the haystack byte at or below 'Z'?
-    emitter.instruction("ja __rt_strripos_fold_needle_linux_x86_64");           // bytes above 'Z' are compared verbatim
-    emitter.instruction("add al, 32");                                          // fold the uppercase haystack byte to lowercase
-
-    emitter.label("__rt_strripos_fold_needle_linux_x86_64");
-    emitter.instruction("cmp r11b, 65");                                        // is the needle byte at or above 'A'?
-    emitter.instruction("jb __rt_strripos_cmp_linux_x86_64");                   // bytes below 'A' are compared verbatim
-    emitter.instruction("cmp r11b, 90");                                        // is the needle byte at or below 'Z'?
-    emitter.instruction("ja __rt_strripos_cmp_linux_x86_64");                   // bytes above 'Z' are compared verbatim
-    emitter.instruction("add r11b, 32");                                        // fold the uppercase needle byte to lowercase
-
-    emitter.label("__rt_strripos_cmp_linux_x86_64");
+    emitter.instruction("movzx r11d, BYTE PTR [rsi + r11]");                    // fold it through the lowercase table
     emitter.instruction("cmp al, r11b");                                        // compare the folded haystack and needle bytes
     emitter.instruction("jne __rt_strripos_prev_linux_x86_64");                 // abandon this candidate start offset on the first mismatching byte
     emitter.instruction("add r10, 1");                                          // advance to the next byte within the current needle comparison
@@ -155,4 +130,23 @@ fn emit_strripos_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_strripos_notfound_linux_x86_64");
     emitter.instruction("mov rax, -1");                                         // return the not-found sentinel when no haystack offset matches the needle
     emitter.instruction("ret");                                                 // return the not-found sentinel to the caller
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies both targets fold ASCII case through the shared lookup table.
+    #[test]
+    fn strripos_emits_table_folding_on_all_targets() {
+        for name in ["macos-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).expect("supported target");
+            let mut emitter = Emitter::new(target);
+            emit_strripos(&mut emitter);
+            let assembly = emitter.output();
+            assert!(assembly.contains("_ascii_lower"), "{name}: {assembly}");
+            assert!(!assembly.contains("__rt_strripos_fold_needle"), "{name}: {assembly}");
+        }
+    }
 }

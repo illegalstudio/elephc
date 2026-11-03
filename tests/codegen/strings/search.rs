@@ -771,3 +771,37 @@ var_dump(call_user_func('stripos', 'FooBar', 'BAR'));
     );
     assert_eq!(out, "int(6)\nint(7)\nint(3)\n");
 }
+
+/// A one-byte needle counts every window byte, a longer needle advances past each whole
+/// non-overlapping match, and the scan stays binary-safe on high bytes.
+#[test]
+fn test_substr_count_non_overlapping_and_binary_safe() {
+    let out = compile_and_run(
+        r#"<?php
+$a = str_repeat("a", 100);
+$b = str_repeat("ab", 50) . "needle";
+$bin = "a\x80b\x80c\x80";
+echo substr_count($a, "a"), "|",
+     substr_count($a, "aa"), "|",
+     substr_count($b, "needle"), "|",
+     substr_count($b, "ab"), "|",
+     substr_count($bin, "\x80"), "|",
+     substr_count($a, "a", 10, 20), "|",
+     substr_count($a, "aa", -10), "\n";
+"#,
+    );
+    assert_eq!(out, "100|50|1|50|3|20|5\n");
+}
+
+/// A needle longer than the window, and the maximum window, both answer zero without reading.
+#[test]
+fn test_substr_count_long_needle_and_empty_window() {
+    let out = compile_and_run(
+        r#"<?php
+echo substr_count("abc", "abcd"), "|",
+     substr_count("abc", "a", 3), "|",
+     substr_count("", "a"), "\n";
+"#,
+    );
+    assert_eq!(out, "0|0|0\n");
+}

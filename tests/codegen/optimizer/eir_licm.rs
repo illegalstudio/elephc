@@ -49,3 +49,148 @@ fn test_licm_invariant_subexpression_preserved() {
     );
     assert_eq!(out, "6");
 }
+
+/// Emits the `main` function body for one source fixture with IR optimization enabled.
+fn emit_main_ir(source: &str) -> String {
+    let dir = make_cli_test_dir("elephc_licm_mbstring_ir");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).expect("write LICM fixture");
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-ir")
+        .arg(&php_path)
+        .output()
+        .expect("run elephc --emit-ir");
+    assert!(
+        output.status.success(),
+        "emit-ir failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).expect("EIR is UTF-8");
+    let main = text
+        .split("function main(")
+        .nth(1)
+        .expect("EIR contains main")
+        .split("\n  function ")
+        .next()
+        .expect("main body")
+        .to_string();
+    let _ = fs::remove_dir_all(dir);
+    main
+}
+
+/// An explicit-UTF-8 `mb_strlen` over a single-assignment local is evaluated once
+/// in the loop preheader.
+#[test]
+fn test_licm_hoists_invariant_mb_strlen_call() {
+    let source = r#"<?php
+$s = str_repeat("abcdef", $argc);
+$iters = (int)($argc + 3);
+$n = 0;
+for ($i = 0; $i < $iters; $i++) { $n ^= mb_strlen($s, "UTF-8") + $i; }
+echo $n;
+"#;
+    let ir = emit_main_ir(source);
+    let (preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    assert!(
+        preheader.contains("runtime.mb_strlen") && preheader.contains("origin: licm"),
+        "the invariant call must be hoisted into the preheader:\n{preheader}"
+    );
+    assert!(
+        !body.contains("runtime.mb_strlen"),
+        "the loop body must not call mb_strlen:\n{body}"
+    );
+    assert_eq!(compile_and_run(source), "0");
+}
+
+/// Reassigning the subject inside the loop keeps the call in place and preserves
+/// the per-iteration result.
+#[test]
+fn test_licm_does_not_hoist_mb_strlen_over_a_reassigned_subject() {
+    let source = r#"<?php
+$s = str_repeat("abcdef", $argc);
+$iters = (int)($argc + 3);
+$n = 0;
+for ($i = 0; $i < $iters; $i++) { $s = $i % 2 ? "abc" : "abcdef"; $n ^= mb_strlen($s, "UTF-8") + $i; }
+echo $n;
+"#;
+    let ir = emit_main_ir(source);
+    let (_preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    assert!(
+        body.contains("runtime.mb_strlen"),
+        "a reassigned subject must keep the call in the loop:\n{body}"
+    );
+    assert_eq!(compile_and_run(source), "12");
+}
+
+/// An owned `mb_substr` result observed only by `strlen` moves with its length
+/// and release, so the loop body performs no allocation.
+#[test]
+fn test_licm_hoists_owned_mb_substr_length_and_release() {
+    let source = r#"<?php
+$s = str_repeat("abcdefgh", 16);
+$iters = (int)($argc + 3);
+$n = 0;
+for ($i = 0; $i < $iters; $i++) { $n ^= strlen(mb_substr($s, 10, 20, "UTF-8")) + $i; }
+echo $n;
+"#;
+    let ir = emit_main_ir(source);
+    let (preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    assert!(
+        preheader.contains("runtime.mb_substr")
+            && preheader.contains("str_len")
+            && preheader.contains("release ")
+            && preheader.contains("origin: licm"),
+        "the substring, length, and release must move together:\n{preheader}"
+    );
+    assert!(
+        !body.contains("runtime.mb_substr") && !body.contains("release "),
+        "the loop body must only read the hoisted length:\n{body}"
+    );
+    assert_eq!(compile_and_run(source), "0");
+}
+
+/// The full decimal numeric-entity map is a literal packed array, so the
+/// allocation-free length call and both operand loads move into the preheader.
+#[test]
+fn test_licm_hoists_numericentity_length_with_the_full_decimal_map() {
+    let source = r#"<?php
+$s = "héllo wörld";
+$map = [0x80, 0x10FFFF, 0, 0x1FFFFF];
+$iters = (int)($argc + 3);
+$n = 0;
+for ($i = 0; $i < $iters; $i++) { $n ^= strlen(mb_encode_numericentity($s, $map, "UTF-8")) + $i; }
+echo $n;
+"#;
+    let ir = emit_main_ir(source);
+    let (preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    assert!(
+        preheader.contains("runtime.mb_encode_numericentity_len")
+            && preheader.contains("origin: licm"),
+        "the numeric-entity length must move into the preheader:\n{preheader}"
+    );
+    assert!(
+        !body.contains("runtime.mb_encode_numericentity_len"),
+        "the loop body must only read the hoisted length:\n{body}"
+    );
+    assert_eq!(compile_and_run(source), "12");
+}
+
+/// A map that is not the full decimal range keeps the call in the loop because
+/// the bridge fallback may throw and its per-iteration result is not proven total.
+#[test]
+fn test_licm_does_not_hoist_numericentity_with_a_nonstandard_map() {
+    let source = r#"<?php
+$s = "héllo wörld";
+$map = [0x80, 0x10FFFF, 0, 0x1FFF];
+$iters = (int)($argc + 3);
+$n = 0;
+for ($i = 0; $i < $iters; $i++) { $n ^= strlen(mb_encode_numericentity($s, $map, "UTF-8")) + $i; }
+echo $n;
+"#;
+    let ir = emit_main_ir(source);
+    let (_preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    assert!(
+        body.contains("runtime.mb_encode_numericentity_len"),
+        "a nonstandard map must keep the call in the loop:\n{body}"
+    );
+}

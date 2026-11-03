@@ -23,6 +23,8 @@ mod string_memory;
 mod pinned_fixed_issues;
 #[path = "regressions/builtins_misc.rs"]
 mod builtins_misc;
+#[path = "regressions/php_src_parity.rs"]
+mod php_src_parity;
 #[path = "regressions/concat_buffer_args.rs"]
 mod concat_buffer_args;
 #[path = "regressions/param_inference.rs"]

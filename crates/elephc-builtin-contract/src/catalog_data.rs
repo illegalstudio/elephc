@@ -27273,7 +27273,7 @@ echo memory_get_peak_usage();
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "Decrypts data with a supported AES cipher.",
+        summary: "Decrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.openssl-decrypt.php"),
@@ -27346,7 +27346,7 @@ echo memory_get_peak_usage();
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "Encrypts data with a supported AES cipher.",
+        summary: "Encrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.openssl-encrypt.php"),
@@ -27377,7 +27377,7 @@ echo memory_get_peak_usage();
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "Returns the supported OpenSSL cipher method names.",
+        summary: "Returns PHP's OpenSSL 3.6.4 default-provider cipher method names.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.openssl-get-cipher-methods.php"),

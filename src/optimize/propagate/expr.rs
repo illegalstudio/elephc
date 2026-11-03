@@ -34,6 +34,15 @@ pub(crate) fn captured_constant_env(
 pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     let invalidation = expr_invalidation(&expr);
     if matches!(invalidation, Invalidation::All) {
+        // `eval()` can retain a reference to any in-scope local, so a later
+        // assignment must not turn that local into a propagated constant.
+        if let ExprKind::FunctionCall { name, .. } = &expr.kind {
+            if crate::names::php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval" {
+                for name in env.keys() {
+                    super::stmt::mark_reference_volatile(name);
+                }
+            }
+        }
         // A present element in a scalar-only array fact cannot warn. Fold only
         // wholly read-only scalar expressions here, never across a call, write,
         // or unknown/missing read whose handler could invalidate another fact.

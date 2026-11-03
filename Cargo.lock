@@ -46,6 +46,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "allthehashes"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa1701fd1eeee3c44bd3367549108facd8ad7e72ff90ed078e3915fd78c18c83"
+dependencies = [
+ "adler2",
+ "crc",
+ "des",
+ "digest 0.10.7",
+ "gost94",
+ "hex",
+ "hmac 0.12.1",
+ "md-5 0.10.6",
+ "md2",
+ "md4",
+ "ripemd",
+ "sha1",
+ "sha2 0.10.9",
+ "sha3",
+ "whirlpool",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -725,6 +748,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "des"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffdd80ce8ce993de27e9f063a444a4d53ce8e8db4c1f00cc03af5ad5a9867a1e"
+dependencies = [
+ "cipher 0.4.4",
+]
+
+[[package]]
 name = "digest"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -742,6 +774,7 @@ dependencies = [
  "block-buffer 0.10.4",
  "const-oid 0.9.6",
  "crypto-common 0.1.7",
+ "subtle",
 ]
 
 [[package]]
@@ -843,6 +876,7 @@ version = "0.1.0"
 dependencies = [
  "adler2",
  "aes",
+ "allthehashes",
  "cipher 0.4.4",
  "crc",
  "crc32fast",
@@ -852,12 +886,14 @@ dependencies = [
  "md-5 0.10.6",
  "md2",
  "md4",
+ "murmur3",
  "ripemd",
  "sha1",
  "sha2 0.10.9",
  "sha3",
  "subtle",
  "whirlpool",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -941,6 +977,10 @@ dependencies = [
 
 [[package]]
 name = "elephc-monitoring-contract"
+version = "0.1.0"
+
+[[package]]
+name = "elephc-openssl"
 version = "0.1.0"
 
 [[package]]
@@ -1412,6 +1452,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gost94"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f960e0ba8eb5e47a7d45097dc4159b5ef63d82e62dc85894bfcfd8e6b85526c"
+dependencies = [
+ "digest 0.10.7",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1460,6 +1509,15 @@ checksum = "c1441c6b1e930e2817404b5046f1f989899143a12bf92de603b69f4e0aee1e15"
 dependencies = [
  "crypto-mac",
  "digest 0.9.0",
+]
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -2212,6 +2270,12 @@ dependencies = [
  "num-traits",
  "pxfm",
 ]
+
+[[package]]
+name = "murmur3"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9252111cf132ba0929b6f8e030cac2a24b507f3a4d6db6fb2896f27b354c714b"
 
 [[package]]
 name = "mutate_once"
@@ -4730,6 +4794,12 @@ dependencies = [
  "libc",
  "rustix 1.1.4",
 ]
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "550a2b930b62486a393c52d5c3b84bff264b28aa437ed64694d31e93b1757af7"
 
 [[package]]
 name = "yansi"

@@ -1437,7 +1437,7 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
     let terminator = block.terminator.as_ref().ok_or_else(|| {
         CodegenIrError::invalid_module(format!("block '{}' has no terminator", block.name))
     })?;
-    lower_term::lower_terminator(ctx, terminator)
+    lower_term::lower_terminator(ctx, block.id, terminator)
 }
 
 /// Emits the source-map marker for an EIR instruction when it carries a real PHP span.

@@ -230,7 +230,7 @@ mod tests {
             lookup("openssl_encrypt")
                 .expect("openssl_encrypt contract")
                 .requirements,
-            &[crate::BuiltinRequirement::Bridge("elephc_crypto")]
+            &[crate::BuiltinRequirement::Bridge("elephc_openssl")]
         );
         assert_eq!(
             lookup("preg_match").expect("preg_match contract").requirements,

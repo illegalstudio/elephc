@@ -173,10 +173,13 @@ Published operand slots require one same-block store, balanced owner records and
 final retirement. Their cleanup records remain intact when a property read can
 throw, and the dispatcher rejects frame addresses. Returns of the cell,
 pointer-valued block arguments, a second
-local, container stores and unknown consumers retain heap storage. Parameters,
-globals, statics, references, eval storage and suspended activations do not receive
-this local storage optimization. Private slots in the executable main frame use
-the same complete lifetime proof; global-visible values still retain heap storage.
+local, container stores and unknown consumers retain heap storage. A string
+conversion of the final scalar is an observation: the formatter reads the tag and
+payload and numeric tags render into concat scratch without adopting the cell.
+Parameters, globals, statics, references, eval storage and suspended activations
+do not receive this local storage optimization. Private slots in the executable
+main frame use the same complete lifetime proof; global-visible values still retain
+heap storage.
 
 Loop-carried numeric slots are lowered with their final Mixed representation from
 entry, including arithmetic results copied through another local. Closed numeric
@@ -1249,7 +1252,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_zlib_fwrite_fn`, `_zlib_close_fn`, `_bz2_fwrite_fn`, `_bz2_close_fn`, `_iconv_fwrite_fn`, `_iconv_close_fn` — late-bound stream compression and iconv bridge entry points
 - `_phar_zlib_inflate_init2_fn`, `_phar_zlib_inflate_fn`, `_phar_zlib_inflate_end_fn`, `_phar_bz2_decompress_fn` — late-bound PHAR decompression entry points
 - `_elephc_tls_connect_fn`, `_elephc_tls_connect_insecure_fn`, `_elephc_tls_connect_cafile_fn`, `_elephc_tls_connect_capath_fn`, `_elephc_tls_connect_peer_name_fn`, `_elephc_tls_connect_client_cert_fn`, `_elephc_tls_attach_fd_fn`, `_elephc_tls_attach_fd_client_cert_fn`, `_elephc_tls_read_fn`, `_elephc_tls_write_fn`, `_elephc_tls_close_fn` — late-bound TLS session entry points
-- `_elephc_crypto_hash_fn`, `_elephc_crypto_hmac_fn`, `_elephc_crypto_init_fn`, `_elephc_crypto_update_fn`, `_elephc_crypto_final_fn`, `_elephc_crypto_clone_fn`, `_elephc_crypto_free_fn`, `_elephc_crypto_is_finalized_fn`, `_elephc_crypto_cipher_iv_length_fn`, `_elephc_crypto_cipher_methods_fn`, `_elephc_crypto_encrypt_fn`, `_elephc_crypto_decrypt_fn` — late-bound hashing, incremental-context, and OpenSSL-compatible symmetric-crypto entry points
+- `_elephc_crypto_hash_fn`, `_elephc_crypto_hmac_fn`, `_elephc_crypto_init_fn`, `_elephc_crypto_update_fn`, `_elephc_crypto_final_fn`, `_elephc_crypto_clone_fn`, `_elephc_crypto_free_fn`, `_elephc_crypto_is_finalized_fn`, `_elephc_openssl_cipher_iv_length_fn`, `_elephc_openssl_cipher_methods_fn`, `_elephc_openssl_encrypt_fn`, `_elephc_openssl_decrypt_fn` — late-bound hashing, incremental-context, and OpenSSL-compatible symmetric-crypto entry points
 - `_elephc_bcmath_add_fn`, `_elephc_bcmath_sub_fn`, `_elephc_bcmath_mul_fn`, `_elephc_bcmath_div_fn`, `_elephc_bcmath_mod_fn`, `_elephc_bcmath_divmod_fn`, `_elephc_bcmath_pow_fn`, `_elephc_bcmath_powmod_fn`, `_elephc_bcmath_sqrt_fn`, `_elephc_bcmath_comp_fn`, `_elephc_bcmath_ceil_fn`, `_elephc_bcmath_floor_fn`, `_elephc_bcmath_round_fn`, `_elephc_bcmath_get_scale_fn`, `_elephc_bcmath_set_scale_fn`, `_elephc_bcmath_last_error_fn`, `_elephc_bcmath_free_fn` — late-bound decimal bridge entry points shared by arithmetic lowering and error/result marshalling
 - `_elephc_iconv_call_fn`, `_elephc_iconv_release_fn`, and `_elephc_curl_*_fn`: late-bound character-set conversion and curl easy, multi, share, callback, and multipart bridge entry points
 - enum-case `.comm` symbols produced via `enum_case_symbol(...)` — one 8-byte singleton storage slot per declared enum case
