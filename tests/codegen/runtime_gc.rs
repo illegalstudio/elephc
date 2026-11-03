@@ -228,6 +228,10 @@ mod native_string_arguments;
 mod native_property_unset;
 #[path = "runtime_gc/native_mixed_property_aliases.rs"]
 mod native_mixed_property_aliases;
+#[path = "runtime_gc/native_reference_validation_support.rs"]
+mod native_reference_validation_support;
+#[path = "runtime_gc/native_reference_publication.rs"]
+mod native_reference_publication;
 #[path = "runtime_gc/native_reference_validation_pins.rs"]
 mod native_reference_validation_pins;
 #[path = "runtime_gc/native_reference_parameter_leases.rs"]

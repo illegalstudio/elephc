@@ -1,5 +1,5 @@
 //! Purpose:
-//! Exercises real native validation roots independently of unfinished typed publishers.
+//! Exercises native validation roots and canonical publication before typed property activation.
 //!
 //! Called from:
 //! - Runtime GC executable CI on the three host targets.
@@ -10,45 +10,7 @@
 //! - Every acquired owner is retired before checking actual live heap accounting.
 
 use crate::support::*;
-
-/// Removes only this fixture's unique directory, including on assertion failure.
-struct FixtureDir(std::path::PathBuf);
-
-impl Drop for FixtureDir {
-    /// Retires the generated source, assembly, objects and executable for this fixture.
-    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
-}
-
-/// Emits one target-dialect instruction for the executable runtime harness.
-fn instruction(out: &mut String, arm: &str, x86: &str) {
-    out.push_str("    ");
-    out.push_str(if target().arch == Arch::AArch64 { arm } else { x86 });
-    out.push('\n');
-}
-
-/// Calls an internal runtime entry without applying C symbol mangling.
-fn call(out: &mut String, entry: &str) {
-    instruction(out, &format!("bl {entry}"), &format!("call {entry}"));
-}
-
-/// Materializes one native code or data symbol without clobbering another test register.
-fn address(out: &mut String, arm: &str, x86: &str, symbol: &str) {
-    if target().arch == Arch::AArch64 {
-        if target().platform == Platform::Linux {
-            out.push_str(&format!("    adrp {arm}, {symbol}\n    add {arm}, {arm}, :lo12:{symbol}\n"));
-        } else { out.push_str(&format!("    adrp {arm}, {symbol}@PAGE\n    add {arm}, {arm}, {symbol}@PAGEOFF\n")); }
-    } else { out.push_str(&format!("    lea {x86}, [rip + {symbol}]\n")); }
-}
-
-/// Loads a retained or borrowed test value from its stable harness stack slot.
-fn load(out: &mut String, offset: usize) {
-    instruction(out, &format!("ldr x0, [sp, #{offset}]"), &format!("mov rax, QWORD PTR [rsp + {offset}]"));
-}
-
-/// Saves a newly acquired owner across subsequent runtime calls.
-fn store(out: &mut String, offset: usize) {
-    instruction(out, &format!("str x0, [sp, #{offset}]"), &format!("mov QWORD PTR [rsp + {offset}], rax"));
-}
+use super::native_reference_validation_support::*;
 
 /// Registers one caller-owned native record using the pin helper's explicit C ABI.
 fn enter(out: &mut String, record: usize, value: usize) {
@@ -73,22 +35,6 @@ fn expect_detached_array_copy(out: &mut String) {
     instruction(out, "cmp x0, x9", "cmp rax, r10");
     instruction(out, "b.eq Lvalidation_pin_fail", "je Lvalidation_pin_fail");
     call(out, "__rt_decref_mixed");
-}
-
-/// Checks one zero runtime counter using only target-native symbol addressing.
-fn expect_zero(out: &mut String, symbol: &str) {
-    if target().arch == Arch::AArch64 {
-        let address = if target().platform == Platform::Linux {
-            format!("    adrp x9, {symbol}\n    add x9, x9, :lo12:{symbol}\n")
-        } else { format!("    adrp x9, {symbol}@PAGE\n    add x9, x9, {symbol}@PAGEOFF\n") };
-        out.push_str(&address);
-        instruction(out, "ldr x9, [x9]", "");
-        instruction(out, "cmp x9, #0", "");
-        instruction(out, "b.ne Lvalidation_pin_fail", "");
-    } else {
-        instruction(out, "", &format!("cmp QWORD PTR [rip + {symbol}], 0"));
-        instruction(out, "", "jne Lvalidation_pin_fail");
-    }
 }
 
 /// Invokes the actual protected coercion entry with the fixture's context and descriptor.
@@ -294,6 +240,24 @@ fn native_coordinator(out: &mut String, callback: &str) {
             call(out, "__rt_decref_any");
         }
     }
+    for (strict, expected) in [(0, 0), (1, 2)] {
+        instruction(out, &format!("mov x0, #{strict}"), &format!("mov eax, {strict}"));
+        store(out, 128);
+        native_publish(out, 208, expected);
+        // Publication borrows the RHS and preserves the caller's original bool representation.
+        load(out, 208);
+        call(out, "__rt_mixed_unbox");
+        instruction(out, "cmp x0, #3", "cmp rax, 3");
+        instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+        if strict == 1 {
+            load(out, 136);
+            instruction(out, "cmp x0, #0", "test rax, rax");
+            instruction(out, "b.eq Lvalidation_pin_fail", "je Lvalidation_pin_fail");
+            instruction(out, "str xzr, [sp, #136]", "mov QWORD PTR [rsp + 136], 0");
+            call(out, "__rt_decref_any");
+        }
+        expect_zero(out, "_rt_reference_validation_pins_top");
+    }
     load(out, 0);
     call(out, "__rt_mixed_unbox");
     instruction(out, "cmp x0, #2", "cmp rax, 2");
@@ -307,9 +271,32 @@ fn native_coordinator(out: &mut String, callback: &str) {
     instruction(out, "cmp x0, #0", "test rax, rax");
     instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
     // With no source left, restore the original detached owner for the later clone checks.
-    native_commit(out, 304, 0);
+    instruction(out, "str xzr, [sp, #128]", "mov QWORD PTR [rsp + 128], 0");
+    native_publish(out, 304, 0);
+    load(out, 304);
+    call(out, "__rt_decref_mixed");
+    // A reference RHS aliases the destination, but its concrete value is detached before commit.
+    native_publish(out, 0, 0);
+    expect_zero(out, "_rt_reference_validation_pins_top");
     load(out, 208);
     call(out, "__rt_decref_mixed");
+}
+
+/// Transfers an extra RHS owner, retaining the fixture's real source binding for later checks.
+fn native_publish(out: &mut String, original: usize, expected: usize) {
+    load(out, original);
+    call(out, "__rt_incref");
+    store(out, 312);
+    instruction(out, "add x0, sp, #128", "lea rdi, [rsp + 128]");
+    instruction(out, "ldr x1, [sp]", "mov rsi, QWORD PTR [rsp]");
+    instruction(out, "ldr x2, [sp, #312]", "mov rdx, QWORD PTR [rsp + 312]");
+    instruction(out, "add x3, sp, #224", "lea rcx, [rsp + 224]");
+    call(out, "__rt_reference_publish_native");
+    instruction(out, &format!("cmp x0, #{expected}"), &format!("cmp rax, {expected}"));
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    load(out, 224);
+    instruction(out, "cmp x0, #0", "test rax, rax");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
 }
 
 /// Transfers one candidate owner, then clears the consumed output instead of releasing it twice.

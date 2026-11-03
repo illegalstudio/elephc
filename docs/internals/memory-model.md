@@ -715,6 +715,27 @@ Throwable only after retiring those roots. The ABI fixture checks successful
 publication and an unchanged value after strict rejection; generated property
 publishers still need to call this primitive from their complete lifecycle paths.
 
+`__rt_reference_publish_native(context, wrapper, owned_rhs, outcome)` combines validation
+and commit for a canonical reference. It consumes and detaches the original RHS before
+callbacks, roots that snapshot and the wrapper with invisible leases, and passes
+the same snapshot to every declaration validator. With no matching source, it
+publishes a separate owner of the snapshot. A chosen candidate is removed from
+the outcome before commit consumes it. The rooted commit entry publishes the
+candidate, then takes and releases the snapshot lease before retiring the old
+child. Keeping an extra RHS owner across that retirement can delay an incoming
+object's destructor when the displaced destructor overwrites the new value.
+Callers must transfer their RHS owner and clear its unwind parking slot before
+entry. Both roots are unlinked and retired under the protected context on every
+completed validation path. The helper returns the
+status and conflict metadata without raising a PHP exception across Rust or
+leaving stack records linked. The ABI fixture checks weak coercion, strict
+rejection, unchanged RHS representation, source removal and an empty root list.
+Two executable regressions also verify incoming destruction inside the displaced
+destructor and a Stringable snapshot destructor observing the published string
+before its exception returns through the protected context.
+This helper remains behind the explicit capability until property lifecycle and
+store lowering select it together.
+
 Lowered `StoreRefCell` instructions preserve the original RHS and carry an
 explicit PHP bool operand for assignment-site strictness. The physical alias
 type remains separate. Hand-built legacy EIR with only the RHS is still accepted

@@ -31,6 +31,8 @@ mod validation_coordinator;
 pub(super) use validation_coordinator::emit as emit_validation_coordinator;
 mod validation_commit;
 pub(super) use validation_commit::emit as emit_validation_commit;
+mod validation_publish;
+pub(super) use validation_publish::emit as emit_validation_publish;
 pub(crate) use validation_pins::subtract as subtract_validation_pins;
 pub(crate) use canonical::resolve_scalar_property;
 pub(crate) use property_unset::emit_owned_property_unset;
