@@ -35,7 +35,7 @@ function nativeMutationNullableForeach(?int &$items, mixed $replacement): void {
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
         let function = module.functions.iter().find(|function| function.name == "nativeMutationArray").unwrap();
         assert!(function.instructions.iter().any(|inst| inst.immediate ==
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::ReferenceCellUsesRawPayload))),
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::ReferenceCellMutationLayout))),
             "{target}: raw cells need their concrete writer and writeback");
         let append = function.instructions.iter().find(|inst| inst.op == Op::MixedArrayAppend).unwrap();
         let receiver = function.value(append.operands[0]).unwrap();

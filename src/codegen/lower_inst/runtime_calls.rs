@@ -25,8 +25,8 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
-        RuntimeCallTarget::ReferenceCellUsesRawPayload =>
-            super::reference_payloads::lower_uses_raw_payload(ctx, inst),
+        RuntimeCallTarget::ReferenceCellMutationLayout =>
+            super::reference_payloads::lower_mutation_layout(ctx, inst),
         RuntimeCallTarget::ReferencePropertyCoerce { class_id, slot, is_static } => {
             super::objects::lower_reference_property_coercion(ctx, inst, class_id, slot, is_static)
         }

@@ -150,6 +150,7 @@ function nativeRawStringMutation(string &$text): void {
     $text = nativeRawStringReplacement(); $text[1] = 'Z';
     $byte = ($text[2] = 'Y'); echo gettype($text), ':', $text, ':', $byte, '|';
 }
+
 $text = 'before'; $alias =& $text;
 nativeRawStringMutation($text);
 echo $text, ':', $alias;
@@ -159,6 +160,39 @@ echo $text, ':', $alias;
         let output = if optimize { run() } else { without_ir_opt(run) };
         assert!(output.success, "optimize={optimize}: {}", output.stderr);
         assert_eq!(output.stdout, "string:aZY:Y|aZY:aZY", "optimize={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "optimize={optimize}: {}", output.stderr);
+    }
+}
+
+/// Unset ends the caller binding while subsequent offset writes update only the new local value.
+#[test]
+fn test_native_reference_detached_offset_writes_preserve_frame_layout_bundle() {
+    let source = r#"<?php
+function nativeDetachedConcreteString(string &$text): void {
+    unset($text); $text = 'ab'; $text[0] = 'Z';
+    echo $text, ':', ($text[1] = 'Y'), ':', $text, '|';
+}
+function nativeDetachedBoxedString(string &$text, string $code): void {
+    eval($code); $text[0] = 'Z';
+    echo $text, ':', ($text[1] = 'Y'), ':', $text, '|';
+}
+function nativeDetachedInteger(int &$text, string $code): void {
+    eval($code); $text[0] = 'Z';
+    echo $text, ':', ($text[1] = 'Y'), ':', $text, '|';
+}
+$text = 'before'; $alias =& $text;
+nativeDetachedConcreteString($text); echo $text, ':', $alias, '|';
+$code = $argc > 0 ? 'unset($text); $text = "ab";' : '';
+nativeDetachedBoxedString($text, $code); echo $text, ':', $alias, '|';
+$number = 41; nativeDetachedInteger($number, $code); echo $number;
+"#;
+    for optimize in [false, true] {
+        let run = || compile_and_run_with_heap_debug(source);
+        let output = if optimize { run() } else { without_ir_opt(run) };
+        assert!(output.success, "optimize={optimize}: {}", output.stderr);
+        assert_eq!(output.stdout, "Zb:Y:ZY|before:before|Zb:Y:ZY|before:before|Zb:Y:ZY|41",
+            "optimize={optimize}: {}", output.stderr);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"),
             "optimize={optimize}: {}", output.stderr);
     }

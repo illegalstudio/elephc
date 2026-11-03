@@ -11,13 +11,14 @@
 
 use super::*;
 
-/// Distinguishes attached raw payloads from canonical aliases and detached boxed frame locals.
-pub(super) fn lower_uses_raw_payload(
+/// Distinguishes attached native payloads, boxed values and detached concrete frame storage.
+pub(super) fn lower_mutation_layout(
     ctx: &mut FunctionContext<'_>, inst: &Instruction,
 ) -> Result<()> {
     let source = expect_operand(inst, 0)?;
     let slot = super::reference_arguments::local_slot_for_loaded_value(ctx, source)?;
     let boxed = ctx.next_label("reference_mutation_boxed");
+    let detached = ctx.next_label("reference_mutation_detached");
     let done = ctx.next_label("reference_mutation_layout_done");
     let result = abi::int_result_reg(ctx.emitter);
     if !ctx.local_ref_cell_representation_is_definite(slot)
@@ -30,7 +31,7 @@ pub(super) fn lower_uses_raw_payload(
         let state = ctx.ref_cell_state_offset(slot).ok_or_else(||
             CodegenIrError::invalid_module("native mutation reference has no layout state"))?;
         abi::load_at_offset(ctx.emitter, result, state);
-        abi::emit_branch_if_int_result_zero(ctx.emitter, &boxed);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &detached);
     }
     let offset = ctx.local_offset(slot)?;
     abi::load_at_offset(ctx.emitter, result, offset);
@@ -40,6 +41,12 @@ pub(super) fn lower_uses_raw_payload(
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&boxed);
     abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&detached);
+    // State zero ends the reference binding. Its occupant follows the final frame layout,
+    // which can differ from the entry payload and can widen after this instruction was lowered.
+    let detached_layout = if ctx.local_php_type(slot)?.codegen_repr() == PhpType::Mixed { 0 } else { 2 };
+    abi::emit_load_int_immediate(ctx.emitter, result, detached_layout);
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
@@ -115,6 +122,47 @@ mod tests {
     use crate::codegen::{data_section::DataSection, emit::Emitter, shared_state::SharedCodegenState};
     use crate::codegen_support::platform::Target;
     use crate::ir::{FunctionParam, IrType};
+
+    /// Detached native parameters select their final frame layout instead of the entry cell ABI.
+    #[test]
+    fn detached_reference_mutation_layout_uses_final_frame_storage_on_every_target() {
+        let source = r#"<?php
+function nativeDetachedMutationLayout(string &$text, mixed $replacement): void {
+    $text = $replacement; $text[0] = 'Z'; unset($text);
+}
+"#;
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let module = crate::ir_lower::tests::lower_source_at_for_target(source,
+                std::path::Path::new("main.php"), std::path::Path::new("."), target);
+            for (storage, code) in [(PhpType::Str, 2), (PhpType::Mixed, 0)] {
+                let mut function = module.functions.iter().find(|function|
+                    function.name == "nativeDetachedMutationLayout").unwrap().clone();
+                function.locals[0].php_type = storage.clone();
+                function.locals[0].ir_type = if storage == PhpType::Str { IrType::Str } else { IrType::Heap(crate::ir::IrHeapKind::Mixed) };
+                let query = function.instructions.iter().find(|inst| inst.immediate ==
+                    Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ReferenceCellMutationLayout)))
+                    .unwrap().clone();
+                let layout = frame::layout_for_function(&function, target, false, false, false);
+                let mut emitter = Emitter::new(target);
+                let mut data = DataSection::new();
+                let mut shared = SharedCodegenState::default();
+                {
+                    let mut context = FunctionContext::new(&module, &function, &mut emitter, &mut data,
+                        &mut shared, layout, false, false, false, None);
+                    super::lower_mutation_layout(&mut context, &query).unwrap();
+                }
+                let assembly = emitter.output();
+                let detached = assembly.lines().find(|line| line.trim_end().ends_with(':')
+                    && line.contains("reference_mutation_detached")).unwrap();
+                let arm = assembly.split_once(detached).unwrap().1.split("reference_mutation_layout_done").next().unwrap();
+                let expected = if target.arch == Arch::AArch64 {
+                    format!("mov x0, #{code}")
+                } else { format!("mov rax, {code}") };
+                assert!(arm.contains(&expected), "{name}: {storage:?} detached layout: {arm}");
+            }
+        }
+    }
 
     /// Scalar readers preserve the raw ABI while probing current canonical shape on every target.
     #[test]
