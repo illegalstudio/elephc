@@ -1,8 +1,6 @@
 ---
 title: "mysqli_connect()"
 description: "Opens a connection to a MySQL server."
-sidebar:
-  order: 108
 ---
 
 ## mysqli_connect()
@@ -25,8 +23,9 @@ Opens a connection to a MySQL server.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

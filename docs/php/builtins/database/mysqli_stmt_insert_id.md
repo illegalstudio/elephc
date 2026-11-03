@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_insert_id()"
 description: "Returns the id the last prepared INSERT generated."
-sidebar:
-  order: 174
 ---
 
 ## mysqli_stmt_insert_id()
@@ -20,8 +18,9 @@ Returns the id the last prepared INSERT generated.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

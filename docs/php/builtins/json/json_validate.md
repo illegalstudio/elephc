@@ -1,8 +1,6 @@
 ---
 title: "json_validate()"
 description: "Checks if a string contains valid JSON."
-sidebar:
-  order: 554
 ---
 
 ## json_validate()
@@ -22,8 +20,9 @@ Checks if a string contains valid JSON.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/json/json_validate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/json/json_validate.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

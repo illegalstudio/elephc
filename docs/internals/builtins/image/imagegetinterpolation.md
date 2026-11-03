@@ -1,8 +1,6 @@
 ---
 title: "imagegetinterpolation() - internals"
 description: "Compiler internals for imagegetinterpolation(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 520
 ---
 
 ## `imagegetinterpolation()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3333](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3333) (`imagegetinterpolation`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagegetinterpolation`)
 - **Function symbol**: `imagegetinterpolation()`
 
 

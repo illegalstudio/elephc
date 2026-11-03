@@ -1,8 +1,6 @@
 ---
 title: "curl_escape() - internals"
 description: "Compiler internals for curl_escape(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 770
 ---
 
 ## `curl_escape()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1370](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1370) (`curl_escape`)
+- **Lowering**: [`src/curl_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs) (`curl_escape`)
 - **Function symbol**: `curl_escape()`
 
 

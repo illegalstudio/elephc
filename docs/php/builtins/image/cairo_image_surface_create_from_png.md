@@ -1,8 +1,6 @@
 ---
 title: "cairo_image_surface_create_from_png()"
 description: "Creates an image surface from a PNG file."
-sidebar:
-  order: 418
 ---
 
 ## cairo_image_surface_create_from_png()
@@ -20,8 +18,9 @@ Creates an image surface from a PNG file.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

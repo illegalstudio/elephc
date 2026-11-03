@@ -1,8 +1,6 @@
 ---
 title: "class_exists()"
 description: "Checks whether the given class has been defined."
-sidebar:
-  order: 80
 ---
 
 ## class_exists()
@@ -21,8 +19,9 @@ Checks whether the given class has been defined.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/class_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/class_exists.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

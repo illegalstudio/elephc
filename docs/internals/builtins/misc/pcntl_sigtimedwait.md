@@ -1,8 +1,6 @@
 ---
 title: "pcntl_sigtimedwait() - internals"
 description: "Compiler internals for pcntl_sigtimedwait(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 735
 ---
 
 ## `pcntl_sigtimedwait()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_sigtimedwait.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_sigtimedwait.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

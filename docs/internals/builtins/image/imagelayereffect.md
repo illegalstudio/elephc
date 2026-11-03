@@ -1,8 +1,6 @@
 ---
 title: "imagelayereffect() - internals"
 description: "Compiler internals for imagelayereffect(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 525
 ---
 
 ## `imagelayereffect()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2613](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2613) (`imagelayereffect`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagelayereffect`)
 - **Function symbol**: `imagelayereffect()`
 
 

@@ -1,8 +1,6 @@
 ---
 title: "session_unset()"
 description: "Removes every variable from the session without destroying it."
-sidebar:
-  order: 1079
 ---
 
 ## session_unset()
@@ -19,8 +17,9 @@ Removes every variable from the session without destroying it.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "array_combine()"
 description: "Creates an array by using one array for keys and another for values."
-sidebar:
-  order: 5
 ---
 
 ## array_combine()
@@ -21,8 +19,9 @@ Creates an array by using one array for keys and another for values.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_combine.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_combine.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "cairo_matrix_init_identity()"
 description: "Creates an identity transformation matrix."
-sidebar:
-  order: 422
 ---
 
 ## cairo_matrix_init_identity()
@@ -19,8 +17,9 @@ Creates an identity transformation matrix.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

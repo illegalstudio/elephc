@@ -1,8 +1,6 @@
 ---
 title: "restore_exception_handler()"
 description: "Restores the previously active uncaught-exception handler."
-sidebar:
-  order: 756
 ---
 
 ## restore_exception_handler()
@@ -19,8 +17,9 @@ Restores the previously active uncaught-exception handler.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/restore_exception_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/restore_exception_handler.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

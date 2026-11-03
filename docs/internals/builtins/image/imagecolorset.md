@@ -1,8 +1,6 @@
 ---
 title: "imagecolorset() - internals"
 description: "Compiler internals for imagecolorset(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 485
 ---
 
 ## `imagecolorset()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2577](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2577) (`imagecolorset`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagecolorset`)
 - **Function symbol**: `imagecolorset()`
 
 

@@ -1,8 +1,6 @@
 ---
 title: "mb_output_handler()"
 description: "Converts an output-buffer phase using the request encodings, MIME selection, and substitution settings."
-sidebar:
-  order: 938
 ---
 
 ## mb_output_handler()
@@ -21,8 +19,9 @@ Converts an output-buffer phase using the request encodings, MIME selection, and
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_output_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_output_handler.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

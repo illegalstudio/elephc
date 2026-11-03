@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_reset()"
 description: "Resets a prepared statement so it can be executed again."
-sidebar:
-  order: 178
 ---
 
 ## mysqli_stmt_reset()
@@ -20,8 +18,9 @@ Resets a prepared statement so it can be executed again.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

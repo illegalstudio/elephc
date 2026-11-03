@@ -1,8 +1,6 @@
 ---
 title: "array_intersect_key()"
 description: "Computes the intersection of arrays using keys for comparison."
-sidebar:
-  order: 18
 ---
 
 ## array_intersect_key()
@@ -21,8 +19,9 @@ Computes the intersection of arrays using keys for comparison.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_intersect_key.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_intersect_key.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

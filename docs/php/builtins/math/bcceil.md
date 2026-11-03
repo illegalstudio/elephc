@@ -1,8 +1,6 @@
 ---
 title: "bcceil()"
 description: "Rounds an arbitrary-precision decimal number up to an integer."
-sidebar:
-  order: 562
 ---
 
 ## bcceil()
@@ -20,8 +18,9 @@ Rounds an arbitrary-precision decimal number up to an integer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/bcceil.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/bcceil.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

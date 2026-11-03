@@ -1,8 +1,6 @@
 ---
 title: "ord()"
 description: "Returns the ASCII value of the first character of a string."
-sidebar:
-  order: 975
 ---
 
 ## ord()
@@ -20,8 +18,9 @@ Returns the ASCII value of the first character of a string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ord.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ord.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

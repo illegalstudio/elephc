@@ -1,8 +1,6 @@
 ---
 title: "func_num_args()"
 description: "Returns the number of arguments passed to the current function call."
-sidebar:
-  order: 680
 ---
 
 ## func_num_args()
@@ -19,8 +17,9 @@ Returns the number of arguments passed to the current function call.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/func_num_args.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/func_num_args.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

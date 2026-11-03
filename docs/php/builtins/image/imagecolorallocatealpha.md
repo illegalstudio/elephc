@@ -1,8 +1,6 @@
 ---
 title: "imagecolorallocatealpha()"
 description: "Allocates a color with alpha in a palette image."
-sidebar:
-  order: 474
 ---
 
 ## imagecolorallocatealpha()
@@ -24,8 +22,9 @@ Allocates a color with alpha in a palette image.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

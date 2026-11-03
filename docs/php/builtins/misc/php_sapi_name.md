@@ -1,8 +1,6 @@
 ---
 title: "php_sapi_name()"
 description: "Returns the name of the server API this build runs under."
-sidebar:
-  order: 749
 ---
 
 ## php_sapi_name()
@@ -19,8 +17,9 @@ Returns the name of the server API this build runs under.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected version prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

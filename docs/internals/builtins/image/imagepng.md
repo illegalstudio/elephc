@@ -1,8 +1,6 @@
 ---
 title: "imagepng() - internals"
 description: "Compiler internals for imagepng(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 530
 ---
 
 ## `imagepng()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3579](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3579) (`imagepng`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagepng`)
 - **Function symbol**: `imagepng()`
 
 

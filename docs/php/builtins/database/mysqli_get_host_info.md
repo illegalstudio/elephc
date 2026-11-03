@@ -1,8 +1,6 @@
 ---
 title: "mysqli_get_host_info()"
 description: "Returns the server host name and connection type."
-sidebar:
-  order: 135
 ---
 
 ## mysqli_get_host_info()
@@ -20,8 +18,9 @@ Returns the server host name and connection type.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "imagegammacorrect() - internals"
 description: "Compiler internals for imagegammacorrect(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 519
 ---
 
 ## `imagegammacorrect()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3305](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3305) (`imagegammacorrect`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagegammacorrect`)
 - **Function symbol**: `imagegammacorrect()`
 
 

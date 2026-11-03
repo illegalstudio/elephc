@@ -1,8 +1,6 @@
 ---
 title: "memory_get_peak_usage()"
 description: "Returns peak live native heap bytes, including block headers and allocator rounding. With real_usage=true returns the fixed heap arena capacity, including unused space. Excludes concat scratch, libc, and Rust bridge allocations."
-sidebar:
-  order: 705
 ---
 
 ## memory_get_peak_usage()
@@ -20,8 +18,9 @@ Returns peak live native heap bytes, including block headers and allocator round
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/memory_get_peak_usage.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/memory_get_peak_usage.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 **Examples**:
 

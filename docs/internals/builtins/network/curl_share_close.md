@@ -1,8 +1,6 @@
 ---
 title: "curl_share_close() - internals"
 description: "Compiler internals for curl_share_close(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 790
 ---
 
 ## `curl_share_close()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1819](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1819) (`curl_share_close`)
+- **Lowering**: [`src/curl_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs) (`curl_share_close`)
 - **Function symbol**: `curl_share_close()`
 
 

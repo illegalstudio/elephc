@@ -1,8 +1,6 @@
 ---
 title: "ptr_read16() - internals"
 description: "Compiler internals for ptr_read16(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 806
 ---
 
 ## `ptr_read16()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_read16.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_read16.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,8 +1,6 @@
 ---
 title: "md5()"
 description: "Calculates the MD5 hash of a string."
-sidebar:
-  order: 968
 ---
 
 ## md5()
@@ -21,8 +19,9 @@ Calculates the MD5 hash of a string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/md5.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/md5.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "exif_imagetype()"
 description: "Identifies an image file's type, or false when it is not an image."
-sidebar:
-  order: 456
 ---
 
 ## exif_imagetype()
@@ -20,8 +18,9 @@ Identifies an image file's type, or false when it is not an image.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

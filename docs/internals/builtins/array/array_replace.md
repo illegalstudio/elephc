@@ -1,8 +1,6 @@
 ---
 title: "array_replace() - internals"
 description: "Compiler internals for array_replace(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 35
 ---
 
 ## `array_replace()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_replace.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

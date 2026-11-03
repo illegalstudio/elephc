@@ -1,8 +1,6 @@
 ---
 title: "mysqli_affected_rows() - internals"
 description: "Compiler internals for mysqli_affected_rows(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 102
 ---
 
 ## `mysqli_affected_rows()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:691](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L691) (`mysqli_affected_rows`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_affected_rows`)
 - **Function symbol**: `mysqli_affected_rows()`
 
 

@@ -1,8 +1,6 @@
 ---
 title: "mb_strlen()"
 description: "Returns the character count of a string in the requested encoding."
-sidebar:
-  order: 953
 ---
 
 ## mb_strlen()
@@ -21,8 +19,9 @@ Returns the character count of a string in the requested encoding.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_strlen.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_strlen.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

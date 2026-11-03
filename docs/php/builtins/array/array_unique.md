@@ -1,8 +1,6 @@
 ---
 title: "array_unique()"
 description: "Removes duplicate values from an array."
-sidebar:
-  order: 45
 ---
 
 ## array_unique()
@@ -20,8 +18,9 @@ Removes duplicate values from an array.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_unique.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_unique.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

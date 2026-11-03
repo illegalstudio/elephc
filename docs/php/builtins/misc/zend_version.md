@@ -1,8 +1,6 @@
 ---
 title: "zend_version()"
 description: "Returns the version of the Zend engine the runtime reports."
-sidebar:
-  order: 765
 ---
 
 ## zend_version()
@@ -19,8 +17,9 @@ Returns the version of the Zend engine the runtime reports.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected version prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/zend_version.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/zend_version.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

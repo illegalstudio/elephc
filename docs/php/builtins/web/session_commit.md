@@ -1,8 +1,6 @@
 ---
 title: "session_commit()"
 description: "Alias of session_write_close()."
-sidebar:
-  order: 1061
 ---
 
 ## session_commit()
@@ -19,8 +17,9 @@ Alias of session_write_close().
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

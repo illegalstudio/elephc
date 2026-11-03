@@ -1,8 +1,6 @@
 ---
 title: "cal_to_jd()"
 description: "Converts a date in the given calendar into a Julian Day count."
-sidebar:
-  order: 190
 ---
 
 ## cal_to_jd()
@@ -23,8 +21,9 @@ Converts a date in the given calendar into a Julian Day count.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

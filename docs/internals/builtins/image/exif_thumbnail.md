@@ -1,8 +1,6 @@
 ---
 title: "exif_thumbnail() - internals"
 description: "Compiler internals for exif_thumbnail(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 459
 ---
 
 ## `exif_thumbnail()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3987](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3987) (`exif_thumbnail`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`exif_thumbnail`)
 - **Function symbol**: `exif_thumbnail()`
 
 

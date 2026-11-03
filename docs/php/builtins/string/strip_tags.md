@@ -1,8 +1,6 @@
 ---
 title: "strip_tags()"
 description: "Strips HTML and PHP tags from a string. Optional `$allowed_tags` is a string like `\"<p><a>\"` or an array of tag names. Weak callers also coerce scalars and Stringable objects; strict callers require `array|string|null`."
-sidebar:
-  order: 997
 ---
 
 ## strip_tags()
@@ -21,8 +19,9 @@ Strips HTML and PHP tags from a string. Optional `$allowed_tags` is a string lik
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strip_tags.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strip_tags.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 **Examples**:
 

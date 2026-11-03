@@ -1,8 +1,6 @@
 ---
 title: "base_convert()"
 description: "Converts a number between two arbitrary bases from 2 to 36."
-sidebar:
-  order: 560
 ---
 
 ## base_convert()
@@ -22,8 +20,9 @@ Converts a number between two arbitrary bases from 2 to 36.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/base_convert.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/base_convert.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

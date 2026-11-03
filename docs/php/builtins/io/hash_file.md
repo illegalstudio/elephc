@@ -1,8 +1,6 @@
 ---
 title: "hash_file()"
 description: "Generates a hash value using the contents of a given file."
-sidebar:
-  order: 348
 ---
 
 ## hash_file()
@@ -22,8 +20,9 @@ Generates a hash value using the contents of a given file.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_file.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_file.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "random_bytes() - internals"
 description: "Compiler internals for random_bytes(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 660
 ---
 
 ## `random_bytes()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/random_prelude.rs`:316](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L316) (`random_bytes`)
+- **Lowering**: [`src/random_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs) (`random_bytes`)
 - **Function symbol**: `random_bytes()`
 
 

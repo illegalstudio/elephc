@@ -1,8 +1,6 @@
 ---
 title: "opcache_compile_file()"
 description: "Compiles a script into the opcode cache without executing it."
-sidebar:
-  order: 708
 ---
 
 ## opcache_compile_file()
@@ -20,8 +18,9 @@ Compiles a script into the opcode cache without executing it.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through native OPcache prelude declarations or dedicated interpreter handlers; see [OPcache](../../opcache.md).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

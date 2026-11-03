@@ -1,8 +1,6 @@
 ---
 title: "imagecreatefromtga() - internals"
 description: "Compiler internals for imagecreatefromtga(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 501
 ---
 
 ## `imagecreatefromtga()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3485](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3485) (`imagecreatefromtga`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagecreatefromtga`)
 - **Function symbol**: `imagecreatefromtga()`
 
 

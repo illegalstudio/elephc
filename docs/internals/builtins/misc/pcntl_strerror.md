@@ -1,8 +1,6 @@
 ---
 title: "pcntl_strerror() - internals"
 description: "Compiler internals for pcntl_strerror(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 737
 ---
 
 ## `pcntl_strerror()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/pcntl_strerror.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/pcntl_strerror.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

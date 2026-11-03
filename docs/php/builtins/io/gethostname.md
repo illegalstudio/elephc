@@ -1,8 +1,6 @@
 ---
 title: "gethostname()"
 description: "Gets the standard host name for the local machine."
-sidebar:
-  order: 343
 ---
 
 ## gethostname()
@@ -19,8 +17,9 @@ Gets the standard host name for the local machine.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/gethostname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gethostname.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

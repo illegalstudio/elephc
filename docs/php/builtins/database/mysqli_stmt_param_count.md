@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_param_count()"
 description: "Returns how many placeholders a prepared statement has."
-sidebar:
-  order: 176
 ---
 
 ## mysqli_stmt_param_count()
@@ -20,8 +18,9 @@ Returns how many placeholders a prepared statement has.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "floor()"
 description: "Rounds a number down to the nearest integer."
-sidebar:
-  order: 586
 ---
 
 ## floor()
@@ -20,8 +18,9 @@ Rounds a number down to the nearest integer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/floor.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/floor.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

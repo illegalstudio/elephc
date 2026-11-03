@@ -1,8 +1,6 @@
 ---
 title: "xmlwriter_end_comment() - internals"
 description: "Compiler internals for xmlwriter_end_comment(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1107
 ---
 
 ## `xmlwriter_end_comment()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/writer.rs`:1018](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs#L1018) (`xmlwriter_end_comment`)
+- **Lowering**: [`src/xml_prelude/build/writer.rs`](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/writer.rs) (`xmlwriter_end_comment`)
 - **Function symbol**: `xmlwriter_end_comment()`
 
 

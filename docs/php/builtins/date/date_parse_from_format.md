@@ -1,8 +1,6 @@
 ---
 title: "date_parse_from_format()"
 description: "Parses a date/time string against a format into components, warnings, and errors."
-sidebar:
-  order: 210
 ---
 
 ## date_parse_from_format()
@@ -21,8 +19,9 @@ Parses a date/time string against a format into components, warnings, and errors
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

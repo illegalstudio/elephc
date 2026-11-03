@@ -1,8 +1,6 @@
 ---
 title: "array_merge()"
 description: "Merges the elements of two arrays."
-sidebar:
-  order: 26
 ---
 
 ## array_merge()
@@ -20,8 +18,9 @@ Merges the elements of two arrays.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_merge.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_merge.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "bindec()"
 description: "Converts a binary string to its decimal number."
-sidebar:
-  order: 575
 ---
 
 ## bindec()
@@ -20,8 +18,9 @@ Converts a binary string to its decimal number.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

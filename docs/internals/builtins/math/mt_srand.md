@@ -1,8 +1,6 @@
 ---
 title: "mt_srand() - internals"
 description: "Compiler internals for mt_srand(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 654
 ---
 
 ## `mt_srand()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/random_prelude.rs`:152](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L152) (`mt_srand`)
+- **Lowering**: [`src/random_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs) (`mt_srand`)
 - **Function symbol**: `mt_srand()`
 
 

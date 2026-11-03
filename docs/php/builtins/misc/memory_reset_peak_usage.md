@@ -1,8 +1,6 @@
 ---
 title: "memory_reset_peak_usage()"
 description: "Resets the live native heap peak to current usage. The reserved arena capacity and cumulative allocation/free counters are unchanged."
-sidebar:
-  order: 707
 ---
 
 ## memory_reset_peak_usage()
@@ -19,8 +17,9 @@ Resets the live native heap peak to current usage. The reserved arena capacity a
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/memory_reset_peak_usage.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/memory_reset_peak_usage.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 **Examples**:
 

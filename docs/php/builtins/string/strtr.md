@@ -1,8 +1,6 @@
 ---
 title: "strtr()"
 description: "Translates bytes pairwise, or applies longest-match-first replacement pairs."
-sidebar:
-  order: 1010
 ---
 
 ## strtr()
@@ -22,8 +20,9 @@ Translates bytes pairwise, or applies longest-match-first replacement pairs.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strtr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strtr.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

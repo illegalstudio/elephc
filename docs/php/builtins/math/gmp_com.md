@@ -1,8 +1,6 @@
 ---
 title: "gmp_com()"
 description: "One's complement of a GMP number."
-sidebar:
-  order: 595
 ---
 
 ## gmp_com()
@@ -20,8 +18,9 @@ One's complement of a GMP number.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_com.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_com.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
