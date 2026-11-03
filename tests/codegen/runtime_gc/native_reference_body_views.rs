@@ -19,7 +19,7 @@ fn test_native_reference_body_write_uses_current_boxed_payload() {
 function nativeCanonicalReplacement(): mixed { return 'changed'; }
 function nativeCanonicalBodyView(int &$target): void {
     $target = nativeCanonicalReplacement(); $target[1] = 'X';
-    echo gettype($target), ':', $target, '|';
+    $byte = ($target[2] = 'Y'); echo gettype($target), ':', $target, ':', $byte, '|';
 }
 function nativeCanonicalArrayReplacement(): mixed { return [0]; }
 function nativeCanonicalArrayMutation(int &$target): void {
@@ -28,7 +28,7 @@ function nativeCanonicalArrayMutation(int &$target): void {
 }
 function nativeHeaderlessStringMutation(string &$target): void {
     $target = nativeCanonicalReplacement(); $target[1] = 'X';
-    echo gettype($target), ':', $target, '|';
+    $byte = ($target[2] = 'Y'); echo gettype($target), ':', $target, ':', $byte, '|';
 }
 if ($argc < 0) {
     $target = 1; nativeCanonicalBodyView($target); nativeCanonicalArrayMutation($target); unset($target);
@@ -91,7 +91,7 @@ if ($argc < 0) {
             &default_link_paths(),
             &[],
         );
-        assert_eq!(output, "string:cXanged|0:2|string:cXanged|1", "optimize={optimize}");
+        assert_eq!(output, "string:cXYnged:Y|0:2|string:cXYnged:Y|1", "optimize={optimize}");
     }
 }
 
@@ -124,7 +124,7 @@ fn test_native_reference_raw_string_offset_write_preserves_caller_alias() {
 function nativeRawStringReplacement(): mixed { return 'abc'; }
 function nativeRawStringMutation(string &$text): void {
     $text = nativeRawStringReplacement(); $text[1] = 'Z';
-    echo gettype($text), ':', $text, '|';
+    $byte = ($text[2] = 'Y'); echo gettype($text), ':', $text, ':', $byte, '|';
 }
 $text = 'before'; $alias =& $text;
 nativeRawStringMutation($text);
@@ -134,7 +134,7 @@ echo $text, ':', $alias;
         let run = || compile_and_run_with_heap_debug(source);
         let output = if optimize { run() } else { without_ir_opt(run) };
         assert!(output.success, "optimize={optimize}: {}", output.stderr);
-        assert_eq!(output.stdout, "string:aZc|aZc:aZc", "optimize={optimize}: {}", output.stderr);
+        assert_eq!(output.stdout, "string:aZY:Y|aZY:aZY", "optimize={optimize}: {}", output.stderr);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"),
             "optimize={optimize}: {}", output.stderr);
     }

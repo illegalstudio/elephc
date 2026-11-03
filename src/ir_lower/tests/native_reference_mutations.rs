@@ -18,7 +18,7 @@ function nativeMutationArray(int &$items, mixed $replacement): void {
     $items = $replacement; $items[] = 1; $items[1] = 2; echo gettype($items);
 }
 function nativeMutationString(string &$text, mixed $replacement): void {
-    $text = $replacement; $text[1] = 'X'; echo gettype($text);
+    $text = $replacement; $text[1] = 'X'; echo ($text[2] = 'Y'), gettype($text);
 }
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -36,6 +36,10 @@ function nativeMutationString(string &$text, mixed $replacement): void {
         assert_eq!(receiver.ownership, Ownership::Borrowed, "{target}: mutation cannot consume the child");
         assert!(function.instructions.iter().any(|inst| inst.op == Op::LoadRefCellValue
             && inst.result_ownership == Ownership::Owned), "{target}: observations still own detached values");
+        assert!(module.functions.iter().flat_map(|function| &function.instructions)
+            .filter(|inst| inst.op == Op::LoadRefCellValue)
+            .all(|inst| inst.result_ownership == Ownership::Owned),
+            "{target}: a string predicate must never relabel an owning snapshot as borrowed");
         crate::ir_lower::enable_native_reference_validation(&mut module).unwrap();
         crate::ir::validate_module(&module).unwrap();
         crate::codegen::generate_user_asm_from_ir(&module, false, false)

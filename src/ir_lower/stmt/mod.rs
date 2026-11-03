@@ -69,6 +69,7 @@ mod static_property_writes;
 mod property_array_writes;
 mod native_dimension_append;
 mod native_reference_mutations;
+pub(in crate::ir_lower) use native_reference_mutations::lower as lower_native_reference_mutation;
 mod native_dimension_incdec;
 pub(crate) mod property_write_receiver;
 mod metadata_control;

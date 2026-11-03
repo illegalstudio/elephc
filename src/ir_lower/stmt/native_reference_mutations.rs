@@ -12,7 +12,7 @@
 use super::*;
 
 /// Runs an operation with the actual reference layout, preserving ordinary branch joins.
-pub(super) fn lower(
+pub(in crate::ir_lower) fn lower(
     ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span,
     mut operation: impl FnMut(&mut LoweringContext<'_, '_>),
 ) -> bool {
