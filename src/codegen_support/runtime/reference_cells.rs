@@ -48,6 +48,9 @@ const UNMANAGED_REFERENCE_ESCAPE_MSG_LEN: i64 = 73;
 
 /// Byte length of `_borrowed_reference_return_msg`, kept beside the data that defines it.
 const BORROWED_REFERENCE_RETURN_MSG_LEN: i64 = 75;
+/// Diagnostic owned by a conversion conflict before the original RHS can be destroyed.
+pub(crate) const NATIVE_REFERENCE_CONFLICT_MSG: &str =
+    "Cannot assign to a reference held by properties with incompatible types";
 
 /// Diagnostic for a descriptor reference whose caller and selected parameter layouts differ.
 pub(crate) const TAGGED_REFERENCE_ARGUMENT_MSG: &str =
@@ -421,8 +424,22 @@ fn emit_borrowed_reference_return_error(emitter: &mut Emitter) {
 
 /// Emits one `<entry>_new` allocator plus the `<entry>` thrower that publishes and raises it.
 pub(crate) fn emit_reference_escape_error(emitter: &mut Emitter, entry: &str, message: &str, length: i64) {
+    emit_reference_error_allocator(emitter, &format!("{entry}_new"), "_spl_error_class_id", message, length);
     emitter.blank();
-    emitter.label_global(&format!("{entry}_new"));
+    emitter.label_global(entry);
+    abi::emit_frame_prologue(emitter, 16);
+    abi::emit_call_label(emitter, &format!("{entry}_new"));
+    abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), "_exc_value", 0);
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_jump(emitter, "__rt_throw_current");
+}
+
+/// Emits a compact built-in Throwable owner without publishing or raising it.
+fn emit_reference_error_allocator(
+    emitter: &mut Emitter, entry: &str, class_id: &str, message: &str, length: i64,
+) {
+    emitter.blank();
+    emitter.label_global(entry);
     abi::emit_frame_prologue(emitter, 32);
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 56);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
@@ -431,8 +448,8 @@ pub(crate) fn emit_reference_escape_error(emitter: &mut Emitter, entry: &str, me
             emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
             emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation before acquiring its object handle
             abi::emit_call_label(emitter, "__rt_object_handle_acquire");
-            abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_error_class_id", 0);
-            emitter.instruction("str x9, [x0]");                                // store the per-program Error class id
+            abi::emit_load_symbol_to_reg(emitter, "x9", class_id, 0);
+            emitter.instruction("str x9, [x0]");                                // store the selected per-program Throwable class id
             abi::emit_symbol_address(emitter, "x9", message);
             emitter.instruction("str x9, [x0, #8]");                            // borrow the fixed diagnostic message
             abi::emit_load_int_immediate(emitter, "x9", length);
@@ -445,8 +462,8 @@ pub(crate) fn emit_reference_escape_error(emitter: &mut Emitter, entry: &str, me
             abi::emit_load_int_immediate(emitter, "r10", x86_64_heap_kind_word(6) as i64);
             emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the allocation before acquiring its object handle
             abi::emit_call_label(emitter, "__rt_object_handle_acquire");
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_error_class_id", 0);
-            emitter.instruction("mov QWORD PTR [rax], r10");                    // store the per-program Error class id
+            abi::emit_load_symbol_to_reg(emitter, "r10", class_id, 0);
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // store the selected per-program Throwable class id
             abi::emit_symbol_address(emitter, "r10", message);
             emitter.instruction("mov QWORD PTR [rax + 8], r10");                // borrow the fixed diagnostic message
             emitter.instruction(&format!("mov QWORD PTR [rax + 16], {length}")); // publish the message byte length
@@ -457,19 +474,6 @@ pub(crate) fn emit_reference_escape_error(emitter: &mut Emitter, entry: &str, me
     }
     abi::emit_frame_restore(emitter, 32);
     abi::emit_return(emitter);
-
-    emitter.blank();
-    emitter.label_global(entry);
-    abi::emit_frame_prologue(emitter, 16);
-    abi::emit_call_label(emitter, &format!("{entry}_new"));
-    abi::emit_store_reg_to_symbol(
-        emitter,
-        abi::int_result_reg(emitter),
-        "_exc_value",
-        0,
-    );
-    abi::emit_frame_restore(emitter, 16);
-    abi::emit_jump(emitter, "__rt_throw_current");
 }
 
 #[cfg(test)]

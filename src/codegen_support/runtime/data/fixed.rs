@@ -767,6 +767,7 @@ pub(crate) fn emit_runtime_data_fixed(
     for (label, message) in [
         ("_tagged_reference_argument_msg", crate::codegen_support::runtime::reference_cells::TAGGED_REFERENCE_ARGUMENT_MSG),
         ("_tagged_reference_assignment_msg", crate::codegen_support::runtime::reference_cells::TAGGED_REFERENCE_ASSIGNMENT_MSG),
+        ("_native_reference_conflict_msg", crate::codegen_support::runtime::reference_cells::NATIVE_REFERENCE_CONFLICT_MSG),
     ] {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }

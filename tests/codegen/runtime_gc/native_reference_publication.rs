@@ -273,6 +273,92 @@ if ($argc < 0) { $rhs = nativePublisherMakeStringable(); unset($rhs); }
     assert_eq!(output, "convert|rhs-dtor|1");
 }
 
+/// A failed shared conversion remains the previous exception when the last RHS owner throws.
+#[test]
+fn test_native_reference_publication_chains_conflict_before_rhs_destructor() {
+    let dir = FixtureDir(make_cli_test_dir("elephc_native_reference_conflict_throw"));
+    let source = r#"<?php
+class NativeConflictInteger { public int|string $value = ''; }
+class NativeConflictFloat { public float|string $value = ''; }
+class NativeConflictInput {
+    public static int $calls = 0;
+    public function __toString(): string {
+        echo 'convert|'; return 'value' . ++self::$calls;
+    }
+    public function __destruct() {
+        echo 'destroy|'; if (self::$calls === 2) { throw new Exception('destructor'); }
+    }
+}
+function nativeConflictAssign(mixed &$target): void {
+    try { $target = new NativeConflictInput(); }
+    catch (Throwable $error) {
+        echo get_class($error), ':';
+        $previous = $error->getPrevious();
+        echo $previous === null ? 'none' : get_class($previous), '|';
+    }
+}
+if ($argc < 0) {
+    $integer = new NativeConflictInteger(); $float = new NativeConflictFloat();
+    $target = ''; nativeConflictAssign($target); unset($target, $integer, $float);
+}
+"#;
+    let (user, runtime, requirements) = without_ir_opt(||
+        compile_source_to_asm_with_native_reference_validation(source, &dir.0, 65_536, true));
+    let prefix = elephc::names::function_symbol("__eir_reference_property_");
+    let suffix = elephc::names::mangle_fqn("_instance");
+    let callbacks: Vec<_> = user.lines().filter_map(|line| line.trim().strip_suffix(':'))
+        .filter(|line| line.starts_with(&prefix) && line.ends_with(&suffix)).collect();
+    assert_eq!(callbacks.len(), 2, "both physical declarations must constrain the same reference");
+    let mut asm = String::new();
+    instruction(&mut asm, "sub sp, sp, #144", "sub rsp, 144");
+    address(&mut asm, "x0", "rax", "Lnative_conflict_initial");
+    call(&mut asm, "__rt_reference_new");
+    store(&mut asm, 0);
+    instruction(&mut asm, "mov x0, #7", "mov edi, 7");
+    call(&mut asm, "__rt_reference_cell_new");
+    store(&mut asm, 8);
+    instruction(&mut asm, "ldr x9, [sp]", "mov r10, QWORD PTR [rsp]");
+    instruction(&mut asm, "str x9, [x0]", "mov QWORD PTR [rax], r10");
+    // Each physical binding independently owns the shared canonical cell.
+    call(&mut asm, "__rt_incref");
+    store(&mut asm, 16);
+    for (index, callback) in callbacks.iter().enumerate() {
+        let binding = 8 + index * 8;
+        let descriptor = 32 + index * 32;
+        address(&mut asm, "x0", "rax", callback);
+        store(&mut asm, descriptor);
+        instruction(&mut asm, &format!("add x0, sp, #{binding}"), &format!("lea rdi, [rsp + {binding}]"));
+        instruction(&mut asm, &format!("ldr x1, [sp, #{binding}]"), &format!("mov rsi, QWORD PTR [rsp + {binding}]"));
+        instruction(&mut asm, &format!("add x2, sp, #{descriptor}"), &format!("lea rdx, [rsp + {descriptor}]"));
+        call(&mut asm, &target().extern_symbol("__elephc_reference_sources_bind_v1"));
+        instruction(&mut asm, "cmp x0, #0", "test rax, rax");
+        instruction(&mut asm, "b.eq Lvalidation_pin_fail", "je Lvalidation_pin_fail");
+    }
+    instruction(&mut asm, "ldr x0, [sp, #8]", "mov rdi, QWORD PTR [rsp + 8]");
+    call(&mut asm, "__rt_reference_source_associate_native");
+    for _ in 0..2 {
+        instruction(&mut asm, "ldr x0, [sp, #8]", "mov rdi, QWORD PTR [rsp + 8]");
+        call(&mut asm, &elephc::names::function_symbol("nativeConflictAssign"));
+    }
+    for binding in [8, 16] {
+        instruction(&mut asm, &format!("add x0, sp, #{binding}"), &format!("lea rdi, [rsp + {binding}]"));
+        call(&mut asm, &target().extern_symbol("__elephc_reference_sources_unbind_v1"));
+        instruction(&mut asm, "cmp x0, #0", "test rax, rax");
+        instruction(&mut asm, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+        load(&mut asm, binding);
+        call(&mut asm, "__rt_reference_cell_release");
+    }
+    expect_zero(&mut asm, "_rt_reference_validation_pins_top");
+    expect_zero(&mut asm, "_exc_value");
+    expect_zero(&mut asm, "_gc_live");
+    append_status_output(&mut asm, 144);
+    let mut user = inject_main_exit_harness(&user, &asm);
+    user.push_str("\n.data\n.p2align 3\nLnative_conflict_initial:\n    .quad 1\n    .quad Lnative_conflict_bytes\n    .quad 0\nLnative_conflict_bytes:\n    .byte 0\n");
+    let runtime = runtime_obj_for_asm(&runtime);
+    let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
+    assert_eq!(output, "convert|convert|destroy|Exception:TypeError|convert|convert|destroy|TypeError:none|1");
+}
+
 /// Prints the harness predicate after any failure jumps to the shared zero-result label.
 fn append_status_output(asm: &mut String, bytes: usize) {
     instruction(asm, "mov x0, #1", "mov eax, 1");

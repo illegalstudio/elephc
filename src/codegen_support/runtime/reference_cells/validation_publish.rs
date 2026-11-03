@@ -7,6 +7,7 @@
 //! Key details:
 //! - The owned RHS is detached before callbacks and every source sees that same snapshot.
 //! - The snapshot lease ends at publication, before displaced-value destructors can run.
+//! - A conversion conflict owns its TypeError before the last RHS lease is retired.
 //! - Every exit unlinks both roots and contains cleanup exceptions in the caller's context.
 
 use super::*;
@@ -24,12 +25,14 @@ const SNAPSHOT_PIN: usize = 112;
 /// Emits publish(context, wrapper, owned_rhs, outcome) with the coordinator's status ABI.
 /// Context and outcome must be valid; the RHS is consumed even on a refused wrapper.
 /// The caller raises any error only after this returns and retains no artificial RHS owner.
+/// Conflict status 3 carries an owned TypeError in context.pending; cleanup throws return 2.
 pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
     let failed = "__rt_reference_publish_native_invalid";
     let refused = "__rt_reference_publish_native_refused";
     let candidate_ready = "__rt_reference_publish_native_candidate_ready";
+    let validation_failure = "__rt_reference_publish_native_validation_failure";
     let cleanup = "__rt_reference_publish_native_cleanup";
     let done = "__rt_reference_publish_native_done";
     emitter.label_global("__rt_reference_publish_native");
@@ -66,7 +69,7 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     }
     abi::emit_call_label(emitter, "__rt_reference_validate_native");
     abi::store_at_offset(emitter, result, STATUS);
-    abi::emit_branch_if_int_result_nonzero(emitter, cleanup);
+    abi::emit_branch_if_int_result_nonzero(emitter, validation_failure);
     abi::load_at_offset(emitter, scratch, OUTCOME);
     abi::emit_load_from_address(emitter, result, scratch, 0);
     abi::emit_branch_if_int_result_nonzero(emitter, candidate_ready);
@@ -82,6 +85,13 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 3), SNAPSHOT_PIN);
     abi::emit_call_label(emitter, "__rt_reference_commit_native_rooted");
     abi::store_at_offset(emitter, result, STATUS);
+    abi::emit_jump(emitter, cleanup);
+    emitter.label(validation_failure);
+    branch_unless_conflict(emitter, cleanup);
+    // Establish the conflict before an RHS destructor can throw a replacement exception.
+    abi::emit_call_label(emitter, "__rt_reference_conflict_error_new");
+    abi::load_at_offset(emitter, scratch, CONTEXT);
+    abi::emit_store_to_address(emitter, result, scratch, 8);
     emitter.label(cleanup);
     for (record, label) in [(SNAPSHOT_PIN, "snapshot"), (WRAPPER_PIN, "wrapper")] {
         abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), record);
@@ -98,6 +108,11 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     abi::emit_load_from_address(emitter, result, result, 8);
     let status_ready = "__rt_reference_publish_native_status_ready";
     abi::emit_branch_if_int_result_zero(emitter, status_ready);
+    abi::load_at_offset(emitter, result, STATUS);
+    let throwable = "__rt_reference_publish_native_throwable";
+    branch_unless_conflict(emitter, throwable);
+    abi::emit_jump(emitter, status_ready);
+    emitter.label(throwable);
     abi::emit_load_int_immediate(emitter, result, 2);
     abi::store_at_offset(emitter, result, STATUS);
     emitter.label(status_ready);
@@ -113,6 +128,23 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     emitter.label(done);
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_return(emitter);
+    emit_reference_error_allocator(emitter, "__rt_reference_conflict_error_new",
+        "_spl_type_error_class_id", "_native_reference_conflict_msg",
+        NATIVE_REFERENCE_CONFLICT_MSG.len() as i64);
+}
+
+/// Selects coordinator status 3 without changing its conflict metadata or owned exception.
+fn branch_unless_conflict(emitter: &mut Emitter, other: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #3");                                  // conflict is distinct from a new cleanup Throwable
+            emitter.instruction(&format!("b.ne {other}"));                      // preserve all non-conflict coordinator statuses
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 3");                                  // conflict is distinct from a new cleanup Throwable
+            emitter.instruction(&format!("jne {other}"));                       // preserve all non-conflict coordinator statuses
+        }
+    }
 }
 
 /// Acquires one invisible owner before any callback can detach a real PHP binding.
@@ -137,8 +169,10 @@ mod tests {
             let snapshot = assembly.find("__rt_mixed_clone").unwrap();
             let validate = assembly.find("__rt_reference_validate_native").unwrap();
             let commit = assembly.find("__rt_reference_commit_native").unwrap();
+            let conflict = assembly.find("__rt_reference_conflict_error_new").unwrap();
             let cleanup = assembly.find("__rt_reference_publish_native_cleanup:").unwrap();
-            assert!(snapshot < validate && validate < commit && commit < cleanup, "{name}");
+            assert!(snapshot < validate && validate < commit && commit < conflict && conflict < cleanup, "{name}");
+            assert!(assembly.contains("_spl_type_error_class_id"), "{name}: conflict owns a TypeError before snapshot retirement");
             assert_eq!(assembly.matches("__rt_reference_validation_pin_enter").count(), 2, "{name}");
             assert_eq!(assembly.matches("__rt_reference_validation_pin_take").count(), 2, "{name}");
             assert_eq!(assembly.matches("__rt_reference_validation_release").count(), 3, "{name}");
