@@ -34,6 +34,7 @@ pub(crate) use function::{lower_array_merge_callable, lower_boxed_usort_callable
 mod ownership;
 mod object_boundaries;
 mod program;
+mod reference_property_validators;
 mod property_initializers;
 mod property_default_errors;
 mod reflection;

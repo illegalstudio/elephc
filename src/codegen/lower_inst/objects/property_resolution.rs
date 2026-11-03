@@ -104,6 +104,7 @@ pub(super) fn resolve_physical_property_slot(
         width: None,
         is_reference: info.property_slot_is_reference(index, property),
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     })
 }
 
@@ -1048,6 +1049,7 @@ fn resolve_scope_private_property_slot(
         width: None,
         is_reference: class_info.property_slot_is_reference(index, slot_property),
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     })
 }
 
@@ -1167,6 +1169,7 @@ pub(super) fn resolve_property_slot_for_class(
         width: None,
         is_reference,
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     })
 }
 
@@ -1411,5 +1414,6 @@ pub(super) fn resolve_packed_field_slot(
         width: field.width,
         is_reference: false,
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     })
 }

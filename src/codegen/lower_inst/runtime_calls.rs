@@ -25,6 +25,9 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::ReferencePropertyCoerce { class_id, slot, is_static } => {
+            super::objects::lower_reference_property_coercion(ctx, inst, class_id, slot, is_static)
+        }
         RuntimeCallTarget::CallableParameterIsByRef =>
             super::builtins::eval::lower_callable_parameter_is_by_ref(ctx, inst),
         RuntimeCallTarget::SplStorageHasAttachedWriteFetch => super::spl_storage_write_fetch::lower(ctx, inst),

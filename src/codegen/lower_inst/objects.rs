@@ -76,6 +76,8 @@ pub(super) struct PropertySlot {
     is_reference: bool,
     /// Argument diagnostic prefix when this temporary slot models an inherited setter.
     abstract_setter_type_error_prefix: Option<String>,
+    /// Original declared type when an internal validator always materializes a boxed candidate.
+    reference_declaration: Option<PhpType>,
 }
 
 /// Declared-property candidate reachable from a `Mixed` object receiver.
@@ -198,6 +200,7 @@ mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
 mod mixed_property_type_guard;
+pub(super) use mixed_property_type_guard::lower_reference_property_coercion;
 mod extern_fields;
 pub(super) use mixed_property_type_guard::emit_string_into_int_diagnostics;
 

@@ -65,6 +65,8 @@ pub enum RuntimeArgumentLayout {
 /// Typed runtime operation selected by backend-neutral EIR lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeCallTarget {
+    /// Validates one original boxed RHS against immutable native property declaration metadata.
+    ReferencePropertyCoerce { class_id: u64, slot: u32, is_static: bool },
     /// Releases the native owner represented by one private PHP host lease.
     PhpextObjectRelease,
     /// Publishes graph roots after excluding ordinary owners held by PHP wrappers.
@@ -188,6 +190,10 @@ impl RuntimeCallTarget {
     /// Returns the logical signature shared by EIR validation and backend lowering.
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
+            RuntimeCallTarget::ReferencePropertyCoerce { .. } => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::I64, IrType::Heap(IrHeapKind::Mixed)],
+                result: IrType::Heap(IrHeapKind::Mixed),
+            }),
             RuntimeCallTarget::CallableParameterIsByRef => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed), IrType::Str, IrType::I64],
                 result: IrType::I64,
@@ -329,6 +335,7 @@ impl RuntimeCallTarget {
     /// Returns the stable backend-neutral spelling used by textual EIR.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeCallTarget::ReferencePropertyCoerce { .. } => "reference.property_coerce",
             RuntimeCallTarget::CallableParameterIsByRef => "callable.parameter_is_by_ref",
             RuntimeCallTarget::SplStorageHasAttachedWriteFetch => "object.spl_has_attached_write_fetch",
             RuntimeCallTarget::PhpextObjectRelease => "phpext.object_release",

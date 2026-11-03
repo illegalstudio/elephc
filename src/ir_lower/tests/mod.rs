@@ -51,6 +51,7 @@ mod indexed_property_protocols;
 mod callable_argument_labels;
 mod object_property_indices;
 mod promoted_constructor_references;
+mod native_reference_validators;
 mod source_variadic_calls;
 mod erased_xml_presence;
 mod ordinary_prefix_storage;

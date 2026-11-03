@@ -240,6 +240,16 @@ pub(super) fn emit_mixed_property_type_guard(
 ) -> Result<Option<String>> {    let Some(actions) = plan_tag_actions(ctx, slot)? else {
         return Ok(None);
     };
+    emit_guard_for_actions(ctx, value, slot, &actions)
+}
+
+/// Emits a declaration plan independently of its caller's final storage materialization.
+fn emit_guard_for_actions(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    slot: &PropertySlot,
+    actions: &[TagAction],
+) -> Result<Option<String>> {
     if actions.iter().all(|action| matches!(action, TagAction::Accept)) {
         return Ok(None);
     }
@@ -798,12 +808,17 @@ fn emit_property_type_error(ctx: &mut FunctionContext<'_>, slot: &PropertySlot, 
     let message = if let Some(prefix) = &slot.abstract_setter_type_error_prefix {
         format!("{prefix}{source} given")
     } else {
-        format!(
-            "Cannot assign {} to property {}::${} of type {}",
-            source, slot.class_name, slot.property, php_type_name(&slot.php_type),
-        )
+        format!("Cannot assign {source}{}", property_diagnostic_suffix(slot))
     };
     super::super::exceptions::emit_type_error(ctx, &message);
+}
+
+/// Names a declaration without retaining or inspecting the receiver that once supplied it.
+fn property_diagnostic_suffix(slot: &PropertySlot) -> String {
+    let reference = if slot.reference_declaration.is_some() { "reference held by " } else { "" };
+    let declared = slot.reference_declaration.as_ref().unwrap_or(&slot.php_type);
+    format!(" to {reference}property {}::${} of type {}",
+        slot.class_name, slot.property, php_type_name(declared))
 }
 
 /// Throws the property `TypeError` for a bool source, naming it BY VALUE.
@@ -840,8 +855,7 @@ fn emit_object_property_type_error(ctx: &mut FunctionContext<'_>, slot: &Propert
         &if slot.abstract_setter_type_error_prefix.is_some() {
             String::from(" given")
         } else {
-            format!(" to property {}::${} of type {}",
-                slot.class_name, slot.property, php_type_name(&slot.php_type))
+            property_diagnostic_suffix(slot)
         },
     );
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
@@ -1605,3 +1619,6 @@ mod tests {
         }
     }
 }
+
+mod reference_coercion;
+pub(super) use reference_coercion::lower as lower_reference_property_coercion;

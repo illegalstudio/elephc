@@ -650,8 +650,16 @@ code, transfers one owned Mixed result on success, and contains a thrown native
 exception in the context's second word. The caller's active exception is restored
 separately. A context that already owns a contained Throwable stops before another
 validator runs. The descriptor entry must return a boxed owner without PHP hidden
-argument collectors or scalar-result markers. Generated declaration validators
-and publishers still need to bind this adapter and retire its raw Throwable owner.
+argument collectors or scalar-result markers. Scalar, nullable and scalar-union
+declaration callbacks are generated through the typed EIR
+`reference.property_coerce` operation. They borrow their two inputs and return one
+owned boxed candidate. Context bit zero selects assignment-site strictness;
+strict assignments preserve exact members and permit integer-to-float widening.
+Weak candidates reuse the property guard's coercions and diagnostics. Reference
+errors name the original declaration independently of candidate storage. The
+native ABI harness calls a generated callback through the protected adapter.
+Publishers still need to register these callbacks and retire the adapter's raw
+Throwable owner on every path.
 
 Native function parameter flags carry physical boxed-reference storage separately
 from declared PHP types and tagged nullable integers. Normal function object

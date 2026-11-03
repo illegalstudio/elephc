@@ -144,12 +144,60 @@ fn protected_coercion(out: &mut String) {
     call(out, "__rt_decref_any");
 }
 
+/// Calls a generated float declaration with the same original bool in weak and strict modes.
+fn generated_declaration_coercion(out: &mut String, callback: &str) {
+    load(out, 8);
+    store(out, 184);
+    instruction(out, "mov x0, #3", "mov eax, 3");
+    instruction(out, "mov x1, #1", "mov edi, 1");
+    instruction(out, "mov x2, #0", "xor esi, esi");
+    call(out, "__rt_mixed_from_value");
+    store(out, 8);
+    address(out, "x0", "rax", callback);
+    store(out, 144);
+    coerce(out, 0);
+    load(out, 160);
+    call(out, "__rt_mixed_unbox");
+    instruction(out, "cmp x0, #2", "cmp rax, 2");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    load(out, 160);
+    call(out, "__rt_mixed_cast_int");
+    instruction(out, "cmp x0, #1", "cmp rax, 1");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    load(out, 160);
+    call(out, "__rt_decref_mixed");
+    instruction(out, "mov x0, #1", "mov eax, 1");
+    store(out, 128);
+    coerce(out, 2);
+    load(out, 160);
+    instruction(out, "cmp x0, #0", "test rax, rax");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    load(out, 136);
+    instruction(out, "cmp x0, #0", "test rax, rax");
+    instruction(out, "b.eq Lvalidation_pin_fail", "je Lvalidation_pin_fail");
+    instruction(out, "str xzr, [sp, #136]", "mov QWORD PTR [rsp + 136], 0");
+    call(out, "__rt_decref_any");
+    instruction(out, "str xzr, [sp, #128]", "mov QWORD PTR [rsp + 128], 0");
+    load(out, 8);
+    call(out, "__rt_decref_mixed");
+    load(out, 184);
+    store(out, 8);
+}
+
 /// Real nested pins preserve singleton copy semantics, unlink in any order and leave no heap owners.
 #[test]
 fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     let dir = FixtureDir(make_cli_test_dir("elephc_native_reference_validation_pins"));
+    let source = "<?php class NativeValidationDeclarationProbe { public float $value = 0.0; } \
+        $object = new NativeValidationDeclarationProbe(); $alias = &$object->value; \
+        unset($alias, $object);";
     let (user, runtime, requirements) =
-        compile_source_to_asm_with_options("<?php", &dir.0, 65_536, false, true);
+        compile_source_to_asm_with_options(source, &dir.0, 65_536, false, true);
+    let callback_prefix = elephc::names::function_symbol("__eir_reference_property_");
+    let callback_suffix = elephc::names::mangle_fqn("_instance");
+    let callback = user.lines().filter_map(|line| line.trim().strip_suffix(':'))
+        .find(|line| line.starts_with(&callback_prefix) && line.ends_with(&callback_suffix))
+        .expect("the typed physical reference declaration must produce a native callback");
     let mut asm = String::new();
     instruction(&mut asm, "sub sp, sp, #224", "sub rsp, 224");
     // Create a canonical native cell whose PHPRef has exactly one real owner, the cell.
@@ -159,6 +207,7 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     call(&mut asm, "__rt_mixed_from_value");
     store(&mut asm, 8);
     protected_coercion(&mut asm);
+    generated_declaration_coercion(&mut asm, callback);
     load(&mut asm, 8);
     call(&mut asm, "__rt_reference_new");
     store(&mut asm, 0);
