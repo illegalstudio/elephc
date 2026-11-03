@@ -217,7 +217,7 @@ function nativeStaticReplaceReflection(): void {
 }
 if ($argc < 0) { nativeStaticInitializeOld(); nativeStaticReplaceDirect(); nativeStaticReplaceReflection(); }
 "#;
-    let (user, runtime, requirements) = without_ir_opt(||
+    let (user, runtime_assembly, requirements) = without_ir_opt(||
         compile_source_to_asm_with_native_reference_validation(source, &dir.0, 65_536, true));
     let symbol = elephc::names::static_property_symbol("NativeStaticDestructSlot", "value");
     let mut asm = String::new();
@@ -235,13 +235,68 @@ if ($argc < 0) { nativeStaticInitializeOld(); nativeStaticReplaceDirect(); nativ
     expect_zero(&mut asm, "_exc_value");
     expect_zero(&mut asm, "_gc_live");
     append_status_output(&mut asm, 32);
+    let user = instrument_reflection_argument_owners(&user, &mut asm);
     let user = inject_main_exit_harness(&user, &asm);
-    let runtime = runtime_obj_for_asm(&runtime);
-    let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
+    let runtime = runtime_obj_for_asm(&runtime_assembly);
+    let captured = assemble_and_run_capture(
+        &user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
+    assert!(captured.success, "{}: {}", captured.status, captured.stderr);
+    let output = captured.stdout;
+    let owner_counts = captured.stderr;
     let reflection = user.split_once("@fn name=nativeStaticReplaceReflection ")
         .map(|(_, body)| body.split_once("@endfn name=nativeStaticReplaceReflection")
             .map_or(body, |(body, _)| body))
         .unwrap_or("native Reflection function metadata missing");
+    let reflection = reflection.split_once("op=mixed_box").map_or(reflection, |(_, body)| body);
+    let destructor = user.split_once("@fn name=NativeStaticDisplaced::__destruct ")
+        .map(|(_, body)| body.split_once("@endfn name=NativeStaticDisplaced::__destruct")
+            .map_or(body, |(body, _)| body))
+        .unwrap_or("displaced destructor metadata missing");
+    let publication = runtime_assembly.split_once("__rt_reference_publish_native:\n")
+        .map(|(_, body)| body.lines().take(240).collect::<Vec<_>>().join("\n"))
+        .unwrap_or_else(|| "native publisher assembly missing".into());
+    let commit = runtime_assembly.split_once("__rt_reference_commit_native_rooted:\n")
+        .map(|(_, body)| body.lines().take(120).collect::<Vec<_>>().join("\n"))
+        .unwrap_or_else(|| "native rooted commit assembly missing".into());
     assert_eq!(output, "old-start|incoming|old-end|old-start|old-end|incoming|1",
-        "native Reflection ownership sequence:\n{reflection}");
+        "argument object owner counts before/after publication: {owner_counts}\nnative Reflection ownership sequence:\n{reflection}\nDisplaced destructor:\n{destructor}\nNative publisher:\n{publication}\nRooted commit:\n{commit}");
+    assert_eq!(owner_counts, "21", "Reflection owns its argument across publication");
+}
+
+/// Observes existing object counts without adding an owner or running callbacks during publication.
+fn instrument_reflection_argument_owners(user: &str, harness: &mut String) -> String {
+    let mut probe = String::new();
+    address(&mut probe, "x9", "r10", "Lreflection_argument_counts");
+    instruction(&mut probe, "ldr x10, [x2, #8]", "mov r11, QWORD PTR [rdx + 8]");
+    instruction(&mut probe, "str x10, [x9]", "mov QWORD PTR [r10], r11");
+    instruction(&mut probe, "ldur w11, [x10, #-12]", "mov r8d, DWORD PTR [r11 - 12]");
+    instruction(&mut probe, "str x11, [x9, #8]", "mov QWORD PTR [r10 + 8], r8");
+    call(&mut probe, "__rt_reference_publish_native");
+    address(&mut probe, "x9", "r10", "Lreflection_argument_counts");
+    instruction(&mut probe, "ldr x10, [x9]", "mov r11, QWORD PTR [r10]");
+    instruction(&mut probe, "ldur w11, [x10, #-12]", "mov r8d, DWORD PTR [r11 - 12]");
+    instruction(&mut probe, "str x11, [x9, #16]", "mov QWORD PTR [r10 + 16], r8");
+    let (prefix, body) = user.split_once("@fn name=nativeStaticReplaceReflection ").unwrap();
+    let (body, suffix) = body.split_once("@endfn name=nativeStaticReplaceReflection").unwrap();
+    let entry = if target().arch == Arch::AArch64 { "    bl __rt_reference_publish_native\n" }
+        else { "    call __rt_reference_publish_native\n" };
+    assert_eq!(body.matches(entry).count(), 1, "observe exactly the Reflection publication");
+    let body = body.replacen(entry, &probe, 1);
+    let user = format!("{prefix}@fn name=nativeStaticReplaceReflection {body}@endfn name=nativeStaticReplaceReflection{suffix}\n.data\n.p2align 3\nLreflection_argument_counts:\n    .quad 0, 0, 0\n");
+    // These diagnostics run only after the original stdout and cleanup predicates completed.
+    let mut report = String::new();
+    for offset in [8, 16] {
+        address(&mut report, "x9", "r10", "Lreflection_argument_counts");
+        instruction(&mut report, &format!("ldr x0, [x9, #{offset}]"),
+            &format!("mov rax, QWORD PTR [r10 + {offset}]"));
+        call(&mut report, "__rt_itoa");
+        if target().arch == Arch::AArch64 {
+            instruction(&mut report, "mov x0, #2", "");
+            if target().platform == Platform::Linux {
+                instruction(&mut report, "mov x8, #64", ""); instruction(&mut report, "svc #0", "");
+            } else { instruction(&mut report, "mov x16, #4", ""); instruction(&mut report, "svc #0x80", ""); }
+        } else { report.push_str("    mov rsi, rax\n    mov edi, 2\n    mov eax, 1\n    syscall\n"); }
+    }
+    harness.push_str(&report);
+    user
 }
