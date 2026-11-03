@@ -22,6 +22,8 @@ pub(super) use calls::{
     function_call_effect,
     instance_property_read_effect,
     instance_method_call_effect,
+    instance_method_result_type,
+    static_method_result_type,
     static_method_call_effect,
 };
 
@@ -91,7 +93,13 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::ConstDecl { value: expr, .. }
         | StmtKind::StaticVar { init: expr, .. }
         | StmtKind::ListUnpack { value: expr, .. }
-        | StmtKind::Return(Some(expr)) => expr_effect(expr),
+            => expr_effect(expr),
+        StmtKind::Return(Some(expr)) => {
+            let effect = expr_effect(expr);
+            if super::return_boundaries::active_return_boundary_may_throw(expr) {
+                effect.with_may_throw()
+            } else { effect }
+        }
         StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
         StmtKind::Assign { value, .. }
         | StmtKind::TypedAssign { value, .. }

@@ -366,7 +366,8 @@ pub(super) fn lower_foreach(
 
         ctx.builder.position_at_end(first_nonempty);
         let value_slot = ctx.declare_local(value_var, PhpType::Mixed);
-        ctx.release_stored_local_value(value_var, value_slot, Some(array.span));
+        ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(value_slot)),
+            Op::ReleaseLocalSlot.default_effects(), Some(array.span));
         branch_to(ctx, body_block);
     } else {
         branch_to(ctx, header);
@@ -417,34 +418,9 @@ pub(super) fn lower_foreach(
         iterator_cleanup: by_ref_origin.map(|_| (iterator_state, array.span)),
         receiver_pin,
     });
-    if let Some(key_var) = key_var {
-        let key = ctx.emit_value(
-            Op::IterCurrentKey,
-            vec![iterator.value],
-            None,
-            PhpType::Mixed,
-            Op::IterCurrentKey.default_effects(),
-            Some(array.span),
-        );
-        ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
-    }
-    if value_by_ref {
-        let slot = ctx.declare_local(value_var, foreach_ref_value_type(&source_ty));
-        ctx.release_ref_cell_owner(value_var, Some(array.span));
-        ctx.emit_void(
-            Op::IterCurrentValueRef,
-            vec![iterator.value],
-            Some(Immediate::LocalSlot(slot)),
-            Op::IterCurrentValueRef.default_effects(),
-            Some(array.span),
-        );
-        ctx.mark_ref_bound_local(value_var);
-        ctx.mark_local_initialized(value_var);
-    } else {
-        let value_ty = foreach_value_type(&source_ty);
-        let value = lower_foreach_current_value(ctx, iterator, &source_ty, &value_ty, array.span);
-        ctx.store_local(value_var, value, value_ty, Some(array.span));
-    }
+    super::foreach_bindings::bind_current(
+        ctx, iterator, &source_ty, key_var, value_var, value_by_ref, array.span,
+    );
     lower_block(ctx, body);
     ctx.loop_stack.pop();
     ctx.pop_loop_carried_missing_strings();
@@ -794,7 +770,7 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
 /// as an integer-like payload. For a hash of pointers or buffers the box is cast back to that
 /// word and retyped, so `$p->x`, `$p === null` and `$buf[$i]` see the pointer or handle instead
 /// of a boxed integer.
-fn lower_foreach_current_value(
+pub(super) fn lower_foreach_current_value(
     ctx: &mut LoweringContext<'_, '_>,
     iterator: LoweredValue,
     source_ty: &PhpType,

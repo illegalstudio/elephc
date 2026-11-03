@@ -434,7 +434,7 @@ impl Checker {
                 promoted |= self.promote_declared_variadic_container(variant)?;
             }
             if promoted {
-                self.functions.remove(name);
+                self.remove_function_signature(name);
                 self.completed_function_signatures.remove(name);
                 self.ensure_function_variant_group_signature(name, crate::span::Span::dummy())?;
             }

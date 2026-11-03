@@ -160,12 +160,9 @@ fn declared_int_return_boundary(
     value: LoweredValue,
     span: Option<Span>,
 ) -> Option<LoweredValue> {
-    if !ctx.return_type_is_declared || ctx.return_php_type != PhpType::Int {
-        return None;
-    }
-    if !matches!(
-        ctx.builder.value_php_type(value.value).codegen_repr(),
-        PhpType::Mixed | PhpType::Float
+    if !crate::types::declared_int_return_requires_validation(
+        ctx.return_type_is_declared, &ctx.return_php_type,
+        &ctx.builder.value_php_type(value.value),
     ) {
         return None;
     }

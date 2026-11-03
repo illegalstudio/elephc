@@ -1,0 +1,1877 @@
+//! Purpose:
+//! Checks nullable fallback facts through boolean guards and local coalescing assignments.
+//!
+//! Called from:
+//! - The `error_tests` integration test harness.
+//!
+//! Key details:
+//! - Positive fixtures retain declared return contracts; negative fixtures test unsafe joins.
+
+use super::*;
+
+/// Match destinations retain guards and reject stale reads after label or arm writes.
+#[test]
+fn test_nullable_fallback_flow_r62_match_guard_views() {
+    check_source(include_str!("../fixtures/nullable_fallback_match_guard_views.php"))
+        .unwrap_or_else(|error| panic!("active match guard: {error}"));
+    let declarations = "interface Marker {} class Base {} function consume(Marker $value): int { return 7; }";
+    for body in [
+        "return match ($flag) { (($value = null) ?? 1) => consume($value), default => 0 };",
+        "return match ($flag) { 1, (($value = null) ?? 2) => consume($value), default => 0 };",
+        "return match ($flag) { (($value = null) ?? 1) => 0, default => consume($value) };",
+        "$r = match ($flag) { 1 => ($value = null), default => 0 }; return consume($value);",
+    ] {
+        let source = format!("<?php {declarations} function run(?Base $value, int $flag): int {{ if ($value === null) {{ return 0; }} if ($value instanceof Marker) {{ {body} }} return 0; }}");
+        expect_error(&source, "expects Marker");
+    }
+    let arm_store = format!("<?php {declarations} function run(?Base $value, int $flag): void {{ if ($value instanceof Marker) {{ match ($flag) {{ 1 => $value = new Base(), default => null }}; }} }}");
+    check_source(&arm_store).unwrap();
+    expect_error(&arm_store.replace("default => null };", "default => null }; consume($value);"), "expects Marker");
+    expect_error("<?php function change(int &$value): int { return ++$value; } function run(?int $value, int $flag): int { if ($value === null) { return 0; } return match ($flag) { 1 => change($value), default => 0 }; }", "by-reference");
+}
+
+/// Exception destinations retain enclosing guards but never revive a value replaced in the try.
+#[test]
+fn test_nullable_fallback_flow_r61_exception_guard_views() {
+    check_source(include_str!("../fixtures/nullable_fallback_exception_guard_views.php"))
+        .unwrap_or_else(|error| panic!("active exception guard: {error}"));
+    for body in [
+        "try { $value = new Base(); throw new Exception(); } catch (Exception $error) { consume($value); }",
+        "try { if (($value = new Base()) instanceof Other) { throw new Exception(); } } finally { consume($value); }",
+        "try { if ($flag) { $value = new Base(); } throw new Exception(); } catch (Exception $error) { consume($value); }",
+    ] {
+        let source = format!("<?php interface Marker {{}} interface Other {{}} class Base {{}} function consume(Marker $value): void {{}} function run(?Base $value, bool $flag): void {{ if ($value === null) {{ return; }} if ($value instanceof Marker) {{ {body} }} }}");
+        expect_error(&source, "expects Marker");
+    }
+}
+
+/// Loop-tail snapshots contain guard views while preserving nullable writes and refinements.
+#[test]
+fn test_nullable_fallback_flow_r59_loop_guard_views() {
+    let source = include_str!("../fixtures/nullable_fallback_loop_guard_views.php");
+    check_source(source).unwrap_or_else(|error| panic!("loop guard read contract: {error}"));
+    for name in ["r59StoredBefore", "r59StoredInside", "r59StoredBreak"] {
+        let nullable = format!("function {name}(?int $value): ?int");
+        assert!(source.contains(&nullable), "missing nullable return fixture: {name}");
+        let required = source.replace(&nullable, &format!("function {name}(?int $value): int"));
+        expect_error(&required, "return type expects int");
+    }
+}
+
+/// Read-only scalar, union and array guards retain raw and nullable reference contracts.
+#[test]
+fn test_nullable_fallback_flow_r58_guard_value_containment() {
+    check_source(include_str!("../fixtures/nullable_fallback_guard_views.php"))
+        .unwrap_or_else(|error| panic!("guard-only binding contract: {error}"));
+}
+
+/// Temporary object capabilities in ternaries cannot change the following binding contract.
+#[test]
+fn test_nullable_fallback_flow_r57_instanceof_ternary_binding_views() {
+    check_source(include_str!("../../examples/instanceof/main.php"))
+        .unwrap_or_else(|error| panic!("existing instanceof example: {error}"));
+    expect_error("<?php interface Flag {} class Base {} function replace(?Base $item): Base { $item instanceof Flag ? ($item = null) : ($item = new Base()); return $item; }", "return type expects Base");
+}
+
+/// A boxed reference-local retains dynamic foreach dispatch behind an Iterable read view.
+#[test]
+fn test_nullable_fallback_flow_ci_boxed_iterable_foreach_admission() {
+    let source = "<?php function keepBoxedIterable(iterable $items): iterable { return $items; } function touchBoxedIterable(&$items): void { $items = 123; } function run(iterable $input, int $flag): void { $items = keepBoxedIterable($input); if ($flag < 0) { touchBoxedIterable($items); return; } foreach ($items as &$value) { $value = 1; } unset($value); }";
+    check_source(source).unwrap();
+    for replacement in ["unset($items); $items = keepBoxedIterable($input);", "unset($items); $items =& $input;"] {
+        expect_error(&source.replace("foreach ($items", &format!("{replacement} foreach ($items")), "by-reference foreach");
+    }
+    expect_error("<?php function run(iterable $items): void { foreach ($items as &$value) {} }", "by-reference foreach");
+    expect_error(r#"<?php
+class R55Items implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+    public function current(): mixed { return null; }
+    public function key(): mixed { return null; }
+    public function next(): void {}
+}
+function run(?iterable $items): void {
+    if ($items === null) { return; }
+    foreach ($items as &$value) { $value = 1; }
+}
+run(new R55Items());"#, "by-reference foreach");
+}
+
+/// A parent-class or interface probe preserves the receiver's concrete subclass contract.
+#[test]
+fn test_nullable_fallback_flow_ci_instanceof_subclass_views() {
+    for condition in ["$value instanceof ParentView", "$value instanceof ParentView && $flag"] {
+        let source = format!("<?php interface View {{}} class ParentView implements View {{}} class ChildView extends ParentView {{ public int $onlyChild = 7; }} function run(ChildView $value, bool $flag): ChildView {{ echo ({condition}) ? 'yes' : 'no'; echo $value->onlyChild; echo ($value instanceof View) ? 'view' : 'other'; return $value; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    check_source("<?php class A {} class B extends A { public int $onlyB = 7; } function run(A|null $value): int { if ($value instanceof B) { return $value->onlyB; } return 0; }").unwrap();
+}
+
+/// Creating a foreach reference cannot make the displaced proven scalar destructible.
+#[test]
+fn test_nullable_fallback_flow_r53_foreach_reference_retirement_precision() {
+    let source = "<?php class D { public function __destruct() { throw new Exception('delem'); } } function needInt(int $v): void {} $e = 1; $xs = [7 => new D()]; try { foreach ($xs as $e => &$e) {} } catch (Exception $c) { needInt($e); }";
+    check_source(source).unwrap_or_else(|error| panic!("{error}"));
+    // An alias that predates this statement still prevents a scalar retirement proof.
+    let aliased = source.replace("$e = 1;", "$e = 1; $alias = &$e;");
+    expect_error(&aliased, "expects int");
+}
+
+/// A concrete scalar array cannot throw before publishing its iteration bindings.
+#[test]
+fn test_nullable_fallback_flow_r52_foreach_entry_precision() {
+    for source in ["[7 => 'v']", "$xs"] {
+        let source = format!("<?php class D {{ public function __destruct() {{ throw new Exception('d'); }} }} function need(string $x): void {{}} function run(): void {{ $xs = [7 => 'v']; $key = new D(); $value = 5; try {{ foreach ({source} as $key => $value) {{ break; }} }} catch (Exception $c) {{ need($value); }} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    // Operand failures still precede publication, even for an array-valued expression.
+    expect_error("<?php class Entry {} function source(): array { throw new Exception('source'); } function need(string $x): void {} function run(): void { $value = new Entry(); try { foreach (source() as $value) { break; } } catch (Exception $c) { need($value); } }", "expects string");
+    // Opaque iterable callbacks also retain the entry alternative.
+    expect_error("<?php class Entry {} class Items implements Iterator { public function rewind(): void { throw new Exception('rewind'); } public function valid(): bool { return true; } public function current(): string { return 'v'; } public function key(): int { return 7; } public function next(): void {} } function need(string $x): void {} function run(Items $xs): void { $value = new Entry(); try { foreach ($xs as $value) { break; } } catch (Exception $c) { need($value); } }", "expects string");
+}
+
+/// Foreach binding retirement cannot expose an obsolete object type in an outer handler.
+#[test]
+fn test_nullable_fallback_flow_r51_foreach_retirement_admission() {
+    for (params, iteration) in [
+        ("", "foreach ([1] as $e) { break; }"),
+        ("", "foreach ([7 => 'v'] as $e => $v) { break; }"),
+        ("array $xs", "foreach ($xs as $e) { return; }"),
+        ("", "$xs = [1]; foreach ($xs as &$e) { break; }"),
+    ] {
+        let source = format!("<?php class D {{ public function __destruct() {{ throw new Exception('d'); }} }} function need(D $x): void {{}} function run({params}): void {{ $e = new D(); try {{ {iteration} }} catch (Exception $c) {{ need($e); }} }}");
+        expect_error(&source, "expects D");
+    }
+    expect_error("<?php class Base {} class D extends Base { public int $n = 5; public function __destruct() { throw new Exception('d'); } } function needD(D $x): void { echo $x->n; } function run(): void { $e = new D(); try { foreach ([new Base()] as $e) { break; } } catch (Exception $c) { needD($e); } }", "expects D");
+    expect_error("<?php class D { public function __destruct() { throw new Exception('d'); } } function need(D $x): void {} $e = new D(); try { foreach ([1] as $e) { break; } } catch (Exception $c) { need($e); }", "expects D");
+    expect_error("<?php class D { public function __destruct() { throw new Exception('d'); } } function need(int $x): void {} function run(): void { $key = new D(); $value = 5; try { foreach ([7 => 'v'] as $key => $value) { break; } } catch (Exception $c) { need($value); } }", "expects int");
+    expect_error("<?php function need(int $x): void {} function run(): void { foreach (['key' => 7] as $e => $e) { need($e); } }", "expects int");
+}
+
+/// Empty foreach sources and non-heap displaced values add no retirement exits.
+#[test]
+fn test_nullable_fallback_flow_r51_foreach_retirement_precision() {
+    for (declarations, initial, source) in [
+        ("class Cold { public function __destruct() { throw new Exception('d'); } }", "$e = 1;", "['x']"),
+        ("class D { public function __destruct() { throw new Exception('d'); } }", "$e = new D();", "[]"),
+    ] {
+        // An unreachable handler cannot clear the continuing proof. This checks reachability
+        // directly rather than depending on the fallback type used to check unreachable code.
+        let source = format!("<?php {declarations} function need(int $x): void {{}} function run(?int $v): void {{ $v ??= 1; {initial} try {{ foreach ({source} as $e) {{ break; }} }} catch (Exception $c) {{ $v = null; }} need($v); }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// Recursive loop values stay bounded when catch reachability requests retirement facts.
+#[test]
+fn test_nullable_fallback_flow_r48_recursive_retirement_completion() {
+    for body in [
+        "try {} catch (Exception $other) {} $a = [$a];",
+        "try { $x = 1; } catch (Exception $other) {} $a = [$a, $a];",
+        "try { $a = [$a]; } catch (Exception $other) {}",
+        "$a = [$a];",
+    ] {
+        let source = format!("<?php function run(array $xs): void {{ $a = [1]; foreach ($xs as $x) {{ {body} }} var_dump(count($a)); }} run([1, 2, 3]);");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// Implicit binding cleanup cannot hide a handler that invalidates a nullable value.
+#[test]
+fn test_nullable_fallback_flow_r48_implicit_retirement_admission() {
+    for prefix in ["$v ??= 1;", "$v = $v ?? 1;", "if ($v === null) return;"] {
+        for (initial, operation) in [
+            ("$e = new R48Destructor();", "try { throw new Exception('a'); } catch (Exception $e) {}"),
+            ("$g = new R48Destructor();", "global $g;"),
+        ] {
+            for body in [
+                format!("{initial} foreach ($xs as $x) {{ need($v); try {{ {operation} }} catch (Exception $c) {{ $v = null; }} }}"),
+                format!("{initial} try {{ {operation} }} catch (Exception $c) {{ $v = null; }} need($v);"),
+            ] {
+                let source = format!("<?php class R48Destructor {{ public function __destruct() {{ throw new Exception('d'); }} }} function need(int $v): void {{}} function run(?int $v, array $xs): void {{ {prefix} {body} }}");
+                let error = check_source(&source).err().unwrap_or_else(|| panic!("accepted: {source}"));
+                assert!(error.to_string().contains("expects int"), "{source}: {error}");
+            }
+        }
+    }
+}
+
+/// Terminal and unreachable cleanup handlers preserve valid continuation value contracts.
+#[test]
+fn test_nullable_fallback_flow_r48_implicit_retirement_precision() {
+    for handler in ["catch (Exception $c) { return; }", "catch (TypeError $c) { $v = null; }"] {
+        let source = format!("<?php class R48Destructor {{ public function __destruct() {{ throw new Exception('d'); }} }} function need(int $v): void {{}} function run(?int $v): void {{ $v ??= 1; $e = new R48Destructor(); try {{ try {{ throw new Exception('a'); }} catch (Exception $e) {{}} }} {handler} need($v); }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    check_source("<?php function need(int $v): void {} function run(?int $v, array $xs): void { $v ??= 1; foreach ($xs as $x) { need($v); try { try { throw new Exception('a'); } catch (Exception $other) {} } catch (Exception $c) { $v = null; } } }").unwrap();
+}
+
+/// Continuing catch bindings cannot retain an integer proof at a later loop header.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_backedge_admission() {
+    for prefix in ["$e ??= 1;", "$e = $e ?? 1;", "if ($e === null) { return; }"] {
+        for body in [
+            "foreach ($xs as $x) { BODY }",
+            "$i = 0; while ($i < 2) { $i++; BODY }",
+            "for ($i = 0; $i < 2; $i++) { BODY }",
+            "$i = 0; do { $i++; BODY } while ($i < 2);",
+        ] {
+            for handler in [
+                "catch (Exception $e) {}", "catch (Exception $e) { continue; }",
+                "catch (RuntimeException|LogicException $e) {}",
+            ] {
+                let step = format!("need($e); try {{ throw new RuntimeException('x'); }} {handler}");
+                let source = format!("<?php function need(int $e): void {{}} function run(?int $e, array $xs): void {{ {prefix} {} }}", body.replace("BODY", &step));
+                expect_error(&source, "expects int");
+            }
+        }
+    }
+    for (declarations, operation, handler) in [
+        ("function trigger(): void { throw new Exception('x'); }", "TRIGGER();", "Exception"),
+        ("class Boom { public function __toString(): string { throw new Exception('x'); } }", "echo new Boom();", "Exception"),
+    ] {
+        let source = format!("<?php {declarations} function need(int $e): void {{}} function run(?int $e, array $xs): void {{ $e ??= 1; foreach ($xs as $x) {{ need($e); try {{ {operation} }} catch ({handler} $e) {{}} }} }}");
+        expect_error(&source, "expects int");
+    }
+    expect_error("<?php function need(int $e): void {} function run(?int $e, array $xs, mixed $value): int { $e ??= 1; foreach ($xs as $x) { need($e); try { return $value; } catch (TypeError $e) {} } return 0; }", "expects int");
+}
+
+/// Catch bindings that cannot reach another iteration preserve the entry integer view.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_terminal_precision() {
+    for handler in [
+        "catch (Exception $e) { break; }", "catch (Exception $e) { return; }",
+        "catch (Exception $other) {}", "catch (Exception) {}",
+        "catch (Exception $e) { continue; } finally { return; }",
+    ] {
+        for prefix in ["$e ??= 1;", "$e = $e ?? 1;", "if ($e === null) { return; }"] {
+            let source = format!("<?php function need(int $e): void {{}} function run(?int $e, array $xs): void {{ {prefix} foreach ($xs as $x) {{ need($e); try {{ throw new Exception('x'); }} {handler} }} }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+}
+
+/// Unreachable handlers and resolved catch contracts do not erase a valid loop-entry type.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_reachability_precision() {
+    for body in [
+        "try {} catch (Exception $e) {}",
+        "try { $safe = 1; } catch (Exception $e) {}",
+        "try { throw new TypeError('x'); } catch (Exception $e) {}",
+        "try { throw new RuntimeException('x'); } catch (Exception $other) {} catch (RuntimeException $e) {}",
+    ] {
+        let source = format!("<?php function need(int $e): void {{}} function run(?int $e, array $xs): void {{ if ($e === null) return; foreach ($xs as $x) {{ need($e); {body} }} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    for (initial, operation) in [("", "$safe = 1;"), ("", "$e = 1;"),
+        ("", "($safe = 1);"), ("$safe = 0;", "unset($safe);"), ("", "unset($safe);")] {
+        let source = format!("<?php class ColdThrower {{ public function __destruct() {{ throw new Exception('x'); }} }} function need(int $e): void {{ var_dump($e); }} function run(?int $e, array $xs): void {{ if ($e === null) return; {initial} foreach ($xs as $x) {{ need($e); try {{ {operation} }} catch (Exception $e) {{}} }} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    for (declarations, owner, parameter, handler) in [
+        ("class SelfCatch extends Exception", "SelfCatch", "SelfCatch", "self"),
+        ("class ParentCatch extends Exception {} class ChildCatch extends ParentCatch", "ChildCatch", "ParentCatch", "parent"),
+    ] {
+        let source = format!("<?php function need({parameter} $e): void {{}} {declarations} {{ public function run(?{parameter} $e, array $xs): void {{ if ($e === null) return; foreach ($xs as $x) {{ need($e); try {{ throw new {parameter}('x'); }} catch ({handler} $e) {{}} }} }} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{owner}: {source}: {error}"));
+    }
+    check_source("<?php function need(Exception $e): void {} function run(?Exception $e, array $xs): void { if ($e === null) return; foreach ($xs as $x) { need($e); try { throw new RuntimeException('x'); } catch (RuntimeException|LogicException $e) {} } }").unwrap();
+}
+
+/// Real retirement throws retain catch backedges across references and nested frames.
+#[test]
+fn test_nullable_fallback_flow_r47_catch_destructor_admission() {
+    for (initial, operation) in [
+        ("$held = new LoopDestructor();", "$held = null;"),
+        ("$held = new LoopDestructor();", "unset($held);"),
+        ("$held = 0;", "replaceHeld($held); $held = null;"),
+        ("$held = 0;", "(function(): void { $held = new LoopDestructor(); $held = null; })();"),
+        ("", "try { throw new LoopException(); } catch (LoopException $held) {} $held = null;"),
+    ] {
+        let source = format!("<?php class LoopDestructor {{ public function __destruct() {{ throw new Exception('x'); }} }} class LoopException extends Exception {{ public function __destruct() {{ throw new Exception('x'); }} }} function replaceHeld(mixed &$held): void {{ $held = new LoopDestructor(); }} function need(int $e): void {{}} function run(?int $e, array $xs): void {{ if ($e === null) return; {initial} foreach ($xs as $x) {{ need($e); try {{ {operation} }} catch (Exception $e) {{}} }} }}");
+        expect_error(&source, "expects int");
+    }
+    expect_error("<?php class LoopDestructor { public function __destruct() { throw new Exception('x'); } } function need(int $e): void {} function run(?int $e, array $xs, ?LoopDestructor $object): void { if ($e === null) return; $held = [1]; foreach ($xs as $x) { need($e); foreach ($held as &$alias) { $alias = $object; } unset($alias); $object = null; try { $held = []; } catch (Exception $e) {} } }", "expects int");
+}
+
+/// Array-preserving reference operations retain guarded nullable array read contracts.
+#[test]
+fn test_nullable_fallback_flow_r46_guarded_array_mutations() {
+    for body in [
+        "sort($a); rsort($a);", "ksort($a); sort($a);", "krsort($a); sort($a);",
+        "array_push($a, 9); array_pop($a);", "array_unshift($a, 9); array_shift($a);",
+        "array_splice($a, 0, 1, [4]); sort($a);",
+        "usort($a, fn($x, $y) => $x <=> $y); sort($a);",
+        "uasort($a, fn($x, $y) => $x <=> $y); sort($a);",
+        "uksort($a, fn($x, $y) => $x <=> $y); sort($a);",
+        "array_multisort($a, $b); array_pop($a); array_pop($b);",
+        "reset($a); end($a); next($a); prev($a); sort($a);",
+    ] {
+        for guarded in [
+            format!("if ($a === null) {{ return []; }} {body} need($a); return $a;"),
+            format!("if ($a !== null) {{ {body} need($a); return $a; }} return [];"),
+        ] {
+            let source = format!("<?php function need(array $a): int {{ return count($a); }} function run(?array $a, array $b): array {{ {guarded} }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+    check_source("<?php class C { public function run(?array $a): array { if ($a === null) return []; ksort($a); return $a; } }").unwrap();
+    check_source("<?php function mutate(array &$a): void {} function run(?array $a): array { if ($a === null) return []; mutate($a); return $a; }").unwrap();
+}
+
+/// Arbitrary reference writes still erase an array guard when they can replace its value.
+#[test]
+fn test_nullable_fallback_flow_r46_array_reference_invalidations() {
+    for effect in ["settype($a, 'string');", "replaceValue($a);"] {
+        let source = format!("<?php function replaceValue(mixed &$a): void {{ $a = null; }} function run(?array $a): array {{ if ($a === null) return []; sort($a); {effect} return $a; }}");
+        expect_error(&source, "return type expects array");
+    }
+}
+
+/// Same-type array proofs do not turn successive mutating builtins into Mixed outputs.
+#[test]
+fn test_nullable_fallback_flow_r45_mutating_array_chains() {
+    for body in [
+        "$a = [3, 1, 2]; sort($a); rsort($a); echo implode(',', $a);",
+        "$a = ['b' => 2, 'a' => 1]; ksort($a); asort($a); echo count($a);",
+        "$a = [1, 2]; array_push($a, 3); array_pop($a); echo count($a);",
+        "$a = ['a', 'b']; array_unshift($a, 'p'); array_shift($a); echo count($a);",
+        "$old = []; pcntl_sigprocmask(SIG_BLOCK, [], $old); pcntl_sigprocmask(SIG_BLOCK, [], $old);",
+    ] {
+        let source = format!("<?php {body}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// Structural non-null results retain guarded, coalesced and expression assignment views.
+#[test]
+fn test_nullable_fallback_flow_r45_structural_store_proofs() {
+    for value in [
+        "$v > 100 ? 100 : $v", "$flag ? 1 : 2", "$w ?: 4", "$w ?? 4",
+        "match ($a) { 1 => 10, default => 20 }", "$a & 1", "$a % 3", "$a <=> 3",
+        "C::K", "C::$s", "$c->n", "@($flag ? 1 : 2)", "($copy = $flag ? 1 : 2)",
+    ] {
+        for prefix in ["if ($v === null) { return 0; }", "$v ??= 1;"] {
+            let source = format!("<?php class C {{ const K = 7; public static int $s = 8; public int $n = 9; }} function need(int $v): void {{}} function run(?int $v, int $a, bool $flag, ?int $w, C $c): int {{ {prefix} $v = {value}; need($v); return $v; }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+    for value in ["$s . '!'", "\"n={$n}\""] {
+        let source = format!("<?php function need(string $s): void {{}} function run(?string $s, int $n): void {{ if ($s === null) {{ return; }} $s = {value}; need($s); }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    check_source("<?php function need(int $v): void {} function run(?int $v, bool $flag): void { $v ??= 1; need($v = $flag ? 1 : 2); if ($v !== null) { $v = $flag ? 3 : 4; need($v); } }").unwrap();
+    check_source("<?php function need(int $v): void {} function run(?int $v, bool $flag, array $xs): void { if ($v === null) { return; } foreach ($xs as $x) { need($v); $v = $flag ? 1 : 2; } }").unwrap();
+}
+
+/// Composite expressions cannot hide fallible element reads or written loop-copy sources.
+#[test]
+fn test_nullable_fallback_flow_r45_structural_store_negatives() {
+    for value in [
+        "$flag ? $ints[$key] : 1", "match ($key) { 1 => 1, default => $ints[$key] }",
+        "$w ?? $ints[$key]", "$w ?: $ints[$key]", "@$ints[$key]", "($copy = $ints[$key])",
+    ] {
+        let source = format!("<?php function need(int $v): void {{}} function run(?int $v, ?int $w, bool $flag, int $key): void {{ $v ??= 1; $ints = [10]; $v = {value}; need($v); }}");
+        let error = check_source(&source).expect_err(&source);
+        assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
+    }
+    for value in ["$flag ? $other : 7", "match ($key) { 1 => 7, default => $other }", "$other ?? $ints[$key]"] {
+        let source = format!("<?php function need(int $v): void {{}} function run(?int $v, ?int $other, ?int $w, bool $flag, int $key): void {{ $w ??= 1; $other ??= 3; $ints = [10]; if ($v !== null) {{ foreach ([1, 2] as $i) {{ if ($v !== null) {{ $other = $ints[$key]; $v = {value}; continue; }} $w = null; break; }} }} need($w); }}");
+        let error = check_source(&source).expect_err(&source);
+        assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
+    }
+}
+
+/// Unproved continuing stores preserve null at narrowed nullable loop reads and exits.
+#[test]
+fn test_nullable_fallback_flow_r44_backedge_store_reads() {
+    for (entry, tail, guard, store) in [
+        ("if ($value !== null) {", "}", "$value !== null", "$value = $ints[$key];"),
+        ("if ($value === null) { return 0; }", "", "$value !== null", "$value = $ints[$key];"),
+        ("if ($value !== null) {", "}", "!is_null($value)", "$value = $ints[$key];"),
+        ("$other ??= 3; if ($value !== null) {", "}", "$value !== null", "$other = $ints[$key]; $value = $other;"),
+    ] {
+        let source = format!("<?php function run(?int $value, ?int $other, int $key) {{ $ints = [10]; $result = 1; {entry} foreach ([1, 2] as $item) {{ if ({guard}) {{ {store} continue; }} $result = 2.5; break; }} {tail} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["run"].return_type;
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+    for store in ["$value = 7;", "$value = $other;"] {
+        let source = format!("<?php function run(?int $value, ?int $other) {{ $other ??= 3; $result = 1; if ($value !== null) {{ foreach ([1, 2] as $item) {{ if ($value !== null) {{ {store} continue; }} $result = 2.5; break; }} }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        assert_eq!(checked.functions["run"].return_type, types::PhpType::Int, "{source}");
+    }
+}
+
+/// Null on a continuing back edge cannot be discarded before a later non-null typed call.
+#[test]
+fn test_nullable_fallback_flow_r44_backedge_admission() {
+    for coalesce in ["$w ??= 1;", "$w = $w ?? 1;"] {
+        for (entry, tail) in [
+            ("if ($value !== null) {", "}"),
+            ("if ($value === null) { return; }", ""),
+            ("$value ??= 5;", ""),
+        ] {
+            for body in [
+                "foreach ([1, 2] as $item) { if ($value !== null) { $value = $ints[$key]; continue; } $w = null; break; }",
+                "$other ??= 3; foreach ([1, 2] as $item) { if ($value !== null) { $other = $ints[$key]; $value = $other; continue; } $w = null; break; }",
+                "$i = 0; while ($i < 2) { $i++; if ($value !== null) { $value = $ints[$key]; continue; } $w = null; break; }",
+                "for ($i = 0; $i < 2; $value = $ints[$key]) { $i++; if ($value !== null) { continue; } $w = null; break; }",
+            ] {
+                let source = format!("<?php function need(int $value): void {{}} function run(?int $value, ?int $other, ?int $w, int $key): void {{ {coalesce} $ints = [10]; {entry} {body} {tail} need($w); }}");
+                let error = check_source(&source).expect_err(&source);
+                assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
+            }
+        }
+    }
+}
+
+/// Assignment guards retain every reachable suffix exit, including old-null entry states.
+#[test]
+fn test_nullable_fallback_flow_r43_entry_guard_effects() {
+    let bodies = [
+        "foreach ([1, 2] as $item) { $value = 7; if (($value = $ints[$key]) !== null) { continue; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = 7; if (null !== ($value = $ints[$key])) { continue; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = 7; if (!(($value = $ints[$key]) === null)) { continue; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = 7; if (($value = $ints[$key]) === null) {} elseif ($value !== null) { continue; } $result = 2.5; break; }",
+        "$value = 7; switch ($subject) { case 1: if (($value = $ints[$key]) !== null) { break; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = null; if (($value = $ints[$key]) === null) { continue; } $result = 2.5; break; }",
+    ];
+    for body in bodies {
+        let source = format!("<?php function run(int $subject, int $key) {{ $ints = [10]; $result = 1; {body} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["run"].return_type;
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+    for (prefix, guard) in [("$value = 7;", "$value !== null"), ("$value = null;", "$value === null")] {
+        let source = format!("<?php function run() {{ $result = 1; foreach ([1, 2] as $item) {{ {prefix} if ({guard}) {{ continue; }} $result = 2.5; break; }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        assert_eq!(checked.functions["run"].return_type, types::PhpType::Int, "{source}");
+    }
+}
+
+/// A reachable null store after an assignment guard cannot disappear from a typed call's input.
+#[test]
+fn test_nullable_fallback_flow_r43_entry_guard_admission() {
+    for coalesce in ["$w ??= 1;", "$w = $w ?? 1;"] {
+        for (prefix, guard) in [
+            ("$value = 7;", "if (($value = $ints[$key]) !== null) { continue; }"),
+            ("$value = 7;", "if (null !== ($value = $ints[$key])) { continue; }"),
+            ("$value = 7;", "if (!(($value = $ints[$key]) === null)) { continue; }"),
+            ("$value = 7;", "if (($value = $ints[$key]) === null) {} elseif ($value !== null) { continue; }"),
+            ("$value = null;", "if (($value = $ints[$key]) === null) { continue; }"),
+        ] {
+            let source = format!("<?php function need(int $value): void {{}} function run(?int $w, array $ints, int $key): void {{ {coalesce} foreach ([1, 2] as $item) {{ {prefix} {guard} $w = null; break; }} need($w); }}");
+            let error = check_source(&source).expect_err(&source);
+            assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
+        }
+    }
+}
+
+/// Default dispatch includes later label writes on every path that can reach a back edge.
+#[test]
+fn test_nullable_fallback_flow_r42_default_backedge_labels() {
+    for coalesce in ["$value ??= 1;", "$value = $value ?? 1;"] {
+        for arms in [
+            "default: continue 2; case ($value = null): return;",
+            "case 0: return; default: continue 2; case ($value = null): return;",
+            "default: case 0: continue 2; case ($value = null): return;",
+            "default: break; case ($value = null): return;",
+            "case ($value = null): return; default: continue 2;",
+        ] {
+            let source = format!("<?php function need(int $value): void {{}} function run(?int $value, array $xs): void {{ {coalesce} foreach ($xs as $x) {{ need($value); switch ($x) {{ {arms} }} }} }}");
+            let error = check_source(&source).expect_err(&source);
+            assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
+        }
+        for arms in [
+            "default: return; case ($value = null): return;",
+            "default: break 2; case ($value = null): return;",
+            "default: case 0: return; case ($value = null): return;",
+        ] {
+            let source = format!("<?php function need(int $value): void {{}} function run(?int $value, array $xs): void {{ {coalesce} foreach ($xs as $x) {{ need($value); switch ($x) {{ {arms} }} }} }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+}
+
+/// Later clauses retain condition kills and freshly established condition proofs.
+#[test]
+fn test_nullable_fallback_flow_r42_condition_prefix_proofs() {
+    let body = "foreach ([1, 2] as $item) { if ($value !== null) { continue; } $result = 2.5; break; }";
+    for prefix in ["", "$value = $ints[$key]; $value = 7;"] {
+        for branch in ["else", "elseif ($key > -1)"] {
+            let source = format!("<?php function run(int $value, int $key) {{ $ints = [10]; $result = 1; {prefix} if (($value = $ints[$key]) > 100) {{ $result = 0; }} {branch} {{ {body} }} return $result; }}");
+            let checked = check_source_full(&source).unwrap();
+            let result = &checked.functions["run"].return_type;
+            assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+                if members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+        }
+    }
+    let chain = format!("<?php function run(int $value, int $key) {{ $ints = [10]; $result = 1; if ($key < 0) {{ $result = 0; }} elseif (($value = $ints[$key]) > 100) {{ $result = 0; }} else {{ {body} }} return $result; }}");
+    let checked = check_source_full(&chain).unwrap();
+    let result = &checked.functions["run"].return_type;
+    assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+        if members.contains(&types::PhpType::Float)), "{chain}: {result:?}");
+    for condition in ["($value = 7) > 100", "($value = 7) > 100 || false"] {
+        let source = format!("<?php function run(int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; if ({condition}) {{ $result = 0; }} else {{ {body} }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        assert_eq!(checked.functions["run"].return_type, types::PhpType::Int, "{source}");
+    }
+}
+
+/// Later switch labels cannot remove a reachable float exit from an earlier matching arm.
+#[test]
+fn test_nullable_fallback_flow_r41_switch_label_proofs() {
+    let body = "foreach ([1, 2] as $item) { if ($value !== null) { continue; } $result = 2.5; break; }";
+    for arms in [
+        format!("case 1: {body} break; case ($value = 7): break;"),
+        format!("default: break; case 1: {body} break; case ($value = 7): break;"),
+        format!("case 1: case ($value = 7): {body} break;"),
+    ] {
+        let source = format!("<?php function run(int $subject, int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; switch ($subject) {{ {arms} }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["run"].return_type;
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+}
+
+/// An evaluated label still establishes its proof in its own arm and the unmatched default.
+#[test]
+fn test_nullable_fallback_flow_r41_switch_label_effects() {
+    let body = "foreach ([1, 2] as $item) { if ($value !== null) { continue; } $result = 2.5; break; }";
+    for arms in [
+        format!("case ($value = 7): {body} break; default: break;"),
+        format!("default: {body} break; case ($value = 7): break;"),
+    ] {
+        let source = format!("<?php function run(int $subject, int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; switch ($subject) {{ {arms} }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        assert_eq!(checked.functions["run"].return_type, types::PhpType::Int, "{source}");
+    }
+}
+
+/// A proof from an earlier clause cannot prune a later sibling's nullable loop exit.
+#[test]
+fn test_nullable_fallback_flow_r40_sibling_proofs() {
+    for branch in ["else", "elseif (!$flag)"] {
+        let source = format!("<?php function run(bool $flag, int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; if ($flag) {{ $value = 7; }} {branch} {{ foreach ([1, 2] as $item) {{ if ($value !== null) {{ continue; }} $result = 2.5; break; }} }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["run"].return_type;
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+}
+
+/// Non-null raw destinations retain compatible default checks for both coalescing spellings.
+#[test]
+fn test_nullable_fallback_flow_r40_raw_coalesce_defaults() {
+    for assignment in ["$x ??=", "$x = $x ??"] {
+        let property = format!("<?php class P {{ public int $n = 4; }} function run(bool $flag, P $p): void {{ if ($flag) {{ $x = 3; }} {assignment} $p->n; var_dump($x); }}");
+        check_source(&property).unwrap_or_else(|error| panic!("{property}: {error}"));
+        let skipped = format!("<?php function run(): void {{ $x = 3; $y = 0; {assignment} ($y = 7); var_dump($x, $y); }}");
+        check_source(&skipped).unwrap_or_else(|error| panic!("{skipped}: {error}"));
+    }
+}
+
+/// Pure argument and skipped-default inference cannot publish a conditional store's proof.
+#[test]
+fn test_nullable_fallback_flow_r40_speculative_proofs() {
+    for expression in [
+        "observe($flag ? ($value = 7) : 0);",
+        "observe($input ?? ($value = 7));",
+        "$stable = 3; $stable ??= (int)($value = 7);",
+        "$stable = 3; $stable = $stable ?? (int)($value = 7);",
+    ] {
+        let source = format!("<?php function observe(int $value): void {{}} function run(bool $flag, ?int $input, int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; {expression} foreach ([1, 2] as $item) {{ if ($value !== null) {{ continue; }} $result = 2.5; break; }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["run"].return_type;
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+}
+
+/// Resolver-generated include-once guards cannot export a fresh raw proof from a skipped body.
+#[test]
+fn test_nullable_fallback_flow_r40_include_once_proofs() {
+    use elephc::parser::ast::{ExprKind, StmtKind};
+    let source = "<?php function run(int $key) { $ints = [10]; $result = 1; $value = $ints[$key]; $value = 7; foreach ([1, 2] as $item) { if ($value !== null) { continue; } $result = 2.5; break; } return $result; }";
+    let mut program = parse(&tokenize(source).unwrap()).unwrap();
+    let body = program.iter_mut().find_map(|stmt| match &mut stmt.kind {
+        StmtKind::FunctionDecl { body, .. } => Some(body), _ => None,
+    }).unwrap();
+    let store = body.iter_mut().find(|stmt| matches!(&stmt.kind,
+        StmtKind::Assign { name, value } if name == "value" && matches!(value.kind, ExprKind::IntLiteral(7))))
+        .unwrap();
+    let guarded = store.clone();
+    store.kind = StmtKind::IncludeOnceGuard { label: "r40_once".to_string(), body: vec![guarded] };
+    let program = elephc::name_resolver::resolve(program).unwrap();
+    let checked = types::check(&program).unwrap();
+    let result = &checked.functions["run"].return_type;
+    assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+        if members.contains(&types::PhpType::Float)), "{result:?}");
+}
+
+/// Optional stores, overwritten parameters and finally edges cannot erase a nullable exit.
+#[test]
+fn test_nullable_fallback_flow_r39_raw_proof_joins() {
+    for (body, receiver, outer_for) in [
+        ("$value = $ints[$key]; if ($flag) { $value = 7; }", "$value", false),
+        ("$value = $ints[$key]; if ($flag) { $value = 7; }", "$value", true),
+        ("$value = $ints[$key]; switch ($key) { case 1: $value = 7; break; }", "$value", false),
+        ("$value = $ints[$key]; if ($flag) { $value = 7; } $copy = $value;", "$copy", false),
+        ("$default = $ints[$key]; $copy = $default;", "$copy", false),
+        ("do { try { $value = 7; continue; } finally { $value = $ints[$key]; } } while (false);", "$value", false),
+        ("$value = $ints[$key]; do { try { $value = 7; continue; } finally { $value = $ints[$key]; } } while (false);", "$value", false),
+    ] {
+        let header = if outer_for { "for ($item = 0; $item < 2; $item++)" }
+            else { "foreach ([1, 2] as $item)" };
+        let source = format!("<?php function run(int $default, bool $flag, int $key) {{ $ints = [10]; $result = 1; {header} {{ {body} if ({receiver} !== null) {{ continue; }} $result = 2.5; break; }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["run"].return_type;
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.len() == 2 && members.contains(&types::PhpType::Int)
+                && members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+}
+
+/// Function, method and closure parameters seed proofs from their own declared entry values.
+#[test]
+fn test_nullable_fallback_flow_r39_parameter_proofs() {
+    let source = "<?php function readFallback(?int $value, int $default): int { $value ??= $default; return $value; } final class FallbackOwner { public function read(?int $value, int $default): int { $value ??= $default; return $value; } } $read = function (?int $value, int $default): int { $value ??= $default; return $value; };";
+    check_source(source).unwrap();
+    expect_error("<?php function run(?int $value, int $default, int $key): int { $ints = [10]; $default = $ints[$key]; $value ??= $default; return $value; }", "return type expects int");
+}
+
+/// A fallible RHS cannot prove a nullable binding suitable for a non-null parameter.
+#[test]
+fn test_nullable_fallback_flow_r38_fallible_store_contracts() {
+    for body in [
+        "if ($flag) { $value = $input; } $value = $ints[$key];",
+        "$value = $input; if ($value === null) { $value = $ints[$key]; }",
+        "$value = $input; $value ??= $ints[$key];",
+        "$value = $input; $value ??= 7; $value = $ints[$key];",
+    ] {
+        let source = format!("<?php function need(int $value): void {{}} function run(?int $input, bool $flag, int $key): void {{ $ints = [10]; {body} need($value); }}");
+        expect_error(&source, "expects int");
+        let cast = source.replace("$ints[$key]", "(int)$ints[$key]");
+        check_source(&cast).unwrap_or_else(|error| panic!("{cast}: {error}"));
+    }
+    for body in ["$value ??= $default;", "$fallback = 7; $value ??= $fallback;"] {
+        let source = format!("<?php function run(?int $value, int $default): int {{ {body} return $value; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// An inferred array-element type cannot erase the null path that carries a loop exit.
+#[test]
+fn test_nullable_fallback_flow_r38_array_guard_reachability() {
+    for guard in [
+        "if ($value !== null) { continue; }",
+        "if ($value === null) {} else { continue; }",
+        "if (!($value === null)) { continue; }",
+    ] {
+        let source = format!("<?php function loopMiss(int $key) {{ $ints = [10]; $result = 1; foreach ([1, 2] as $item) {{ $value = $ints[$key]; {guard} $result = 2.5; break; }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["loopMiss"].return_type;
+        // The diagnostic harness may box heterogeneous numeric flow as Mixed. Either
+        // representation must retain the float exit instead of proving a concrete integer.
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.len() == 2 && members.contains(&types::PhpType::Int)
+                && members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+}
+
+/// Callback engine arguments are present even though they are absent from caller bindings.
+#[test]
+fn test_nullable_fallback_flow_r37_callback_placeholders() {
+    check_source("<?php $result = mb_ereg_replace_callback('a', function(array $matches): string { return 'X'; }, 'aba'); var_dump($result);").unwrap();
+}
+
+/// Speculative loop probes do not precede the eval that creates their top-level bindings.
+#[test]
+fn test_nullable_fallback_flow_r37_eval_loop_probes() {
+    for probe in ["unset($value);", "var_dump(isset($value));"] {
+        let source = format!("<?php for ($i = 0; $i < 3; $i++) {{ eval('$value = 42;'); echo $value; {probe} }}");
+        check_source(&source).unwrap();
+    }
+    expect_error("<?php for ($i = 0; $i < 3; $i++) { var_dump(isset($later)); $later = 42; }", "Undefined variable: $later");
+}
+
+/// A successful store removes the missing-binding null from reused branch-local counters.
+#[test]
+fn test_nullable_fallback_flow_ci_rebound_counter_presence() {
+    for first in ["for ($i = 0; $i < $count; $i++) {}", "$i = 0; $i++;"] {
+        for tail in [
+            "for ($i = 0; $i < $count; $i++) { needIndex($i); }",
+            "$i = 0; needIndex($i);",
+            "$i = 0; while ($i < $count) { needIndex($i); $i++; }",
+        ] {
+            let source = format!("<?php function needIndex(int $index): void {{}} function run(int $count, bool $flag): void {{ if ($flag) {{ {first} return; }} {tail} }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+    expect_error("<?php function needIndex(int $index): void {} function run(?int $input, bool $flag): void { if ($flag) { $value = $input; } needIndex($value); }", "expects int");
+}
+
+/// Reopening a stream in another branch removes absence without discarding fopen failure.
+#[test]
+fn test_nullable_fallback_flow_ci_rebound_stream_presence() {
+    let source = "<?php function run(bool $flag): void { if ($flag) { $stream = fopen('php://temp', 'w+b'); if ($stream === false) { return; } fclose($stream); return; } $stream = fopen('php://temp', 'w+b'); if ($stream === false) { return; } fclose($stream); }";
+    check_source(source).unwrap();
+    expect_error("<?php function run(bool $flag): void { if ($flag) { $stream = fopen('php://temp', 'w+b'); } fclose($stream); }", "fclose() expects resource");
+}
+
+/// A continuing unset retracts the integer fact before the next loop-body read.
+#[test]
+fn test_nullable_fallback_flow_review_r35_loop_unset_contracts() {
+    for fallback in ["$value ??= 1;", "if ($value === null) { $value = 1; }"] {
+        let source = format!("<?php function need(int $value): void {{}} function run(?int $value, array $items): void {{ {fallback} foreach ($items as $item) {{ need($value); unset($value); }} }}");
+        expect_error(&source, "parameter $value expects int, got int|null");
+    }
+    for body in [
+        "$value ??= 1; foreach ([1, 2] as $item) { break; unset($value); } return $value;",
+        "foreach ([1, 2] as $item) { $value ??= 1; need($value); unset($value); } return 1;",
+        "$raw = 3; foreach ([1, 2] as $item) { unset($raw); } return $raw;",
+    ] {
+        let source = format!("<?php function need(int $value): void {{}} function run(?int $value): int {{ {body} }}");
+        let checked = check_source(&source);
+        assert!(checked.is_ok(), "{source}: {checked:?}");
+    }
+}
+
+/// A value snapshot of an aliased guard remains admissible at checked scalar boundaries.
+#[test]
+fn test_nullable_fallback_flow_review_r35_alias_snapshot_contracts() {
+    for capture in ["fn(): int => $value", "function () use ($value): int { return $value; }", "fn() => need($value)"] {
+        let source = format!("<?php function need(int $input): int {{ return $input; }} function snapshot(?int $value): Closure {{ $alias = &$value; if ($value !== null) {{ return {capture}; }} return fn(): int => 0; }}");
+        let checked = check_source(&source);
+        assert!(checked.is_ok(), "{source}: {checked:?}");
+    }
+}
+
+/// Presence joins include skipped branches and intersect only reaching bindings.
+#[test]
+fn test_nullable_fallback_flow_definite_binding_joins() {
+    for body in [
+        "if ($choose) { $value = $parameter; $value ??= 5; } return $value;",
+        "while ($choose) { $value = $parameter; $value ??= 5; break; } return $value;",
+        "foreach ($choose ? [1] : [] as $item) { $value = $parameter; $value ??= 5; } return $value;",
+        "switch ($choose) { case true: $value = $parameter; $value ??= 5; break; } return $value;",
+        "try { if ($choose) { throw new RuntimeException('stop'); } $value = $parameter; $value ??= 5; } catch (Exception $error) {} return $value;",
+        "if ($choose) { $value = $parameter; $value ??= 5; } try {} finally {} return $value;",
+    ] {
+        let source = format!("<?php function bindingJoin(?int $parameter, bool $choose): int {{ {body} }}");
+        expect_error(&source, "return type expects int");
+    }
+    for (parameter, fallback, result) in [
+        ("?string", "'fallback'", "string"),
+        ("?BindingTarget", "new BindingTarget()", "BindingTarget"),
+    ] {
+        let source = format!("<?php class BindingTarget {{}} function bindingJoin({parameter} $parameter, bool $choose): {result} {{ if ($choose) {{ $value = $parameter; $value ??= {fallback}; }} return $value; }}");
+        expect_error(&source, "return type expects");
+    }
+    for body in [
+        "$value = $parameter; $value ??= 5; return $value;",
+        "if ($choose) { $value = $parameter; } if ($value !== null) { return $value; } return 5;",
+        "if ($choose) { $value = $parameter; } if ($value === null) { throw new RuntimeException('missing'); } return $value;",
+        "if ($choose) { $value = $parameter; $value ??= 5; } else { $value = 5; } return $value;",
+        "do { $value = $parameter; $value ??= 5; } while (false); return $value;",
+        "for (;;) { $value = $parameter; $value ??= 5; break; } return $value;",
+        "switch ($choose) { case true: $value = $parameter; $value ??= 5; break; default: $value = 5; } return $value;",
+        "try { if ($choose) { throw new RuntimeException('stop'); } $value = $parameter; $value ??= 5; } catch (Exception $error) { $value = 5; } return $value;",
+        "try {} finally { $value = $parameter; $value ??= 5; } return $value;",
+        "try { if ($choose) { return 1; } $value = $parameter; if ($value === null) { $value = 5; } } finally {} return $value;",
+        "$value = $choose ? ($parameter ?? 5) : 6; return $value;",
+        "$value = match ($choose) { true => ($parameter ?? 5), false => 6 }; return $value;",
+        "if ($choose) { $raw = 3; } return $raw;",
+    ] {
+        let source = format!("<?php function bindingJoin(?int $parameter, bool $choose): int {{ {body} }}");
+        let checked = check_source(&source);
+        assert!(checked.is_ok(), "{source}: {checked:?}");
+    }
+}
+
+
+/// A nullable local introduced on only one branch cannot promise a non-null return.
+#[test]
+fn test_nullable_fallback_flow_review_maybe_unbound_integer_return() {
+    expect_error("<?php function run(?int $parameter, bool $choose): int { if ($choose) { $value = $parameter; if ($value === null) { $value = 5; } } return $value; }",
+        "return type expects int, got int|null");
+}
+
+/// Relative object parameters retain the catch exit of their argument type guard.
+#[test]
+fn test_nullable_fallback_flow_review_relative_object_guard() {
+    for (declaration, receiver, call) in [
+        ("class Node { static function accept(self $other): int { return 1; } }", "Node", "Node::accept($maybe)"),
+        ("class Node { function accept(self $other): int { return 1; } }", "Node", "(new Node())->accept($maybe)"),
+        ("class Root {} class Node extends Root { static function accept(parent $other): int { return 1; } }", "Root", "Node::accept($maybe)"),
+    ] {
+        let source = format!("<?php {declaration} function run(?{receiver} $maybe, ?int $value): int {{ $value ??= 7; try {{ $value = null; {call}; return 1; }} catch (TypeError $error) {{}} return $value; }}");
+        expect_error(&source, "return type expects int, got int|null");
+    }
+}
+
+/// Wide builtin handlers retain the null write from a failing declared-return boundary.
+#[test]
+fn test_nullable_fallback_flow_review_builtin_catch_parents() {
+    for parent in ["Error", "Throwable"] {
+        let source = format!("<?php function run(?int $value, mixed $returned): int {{ $value ??= 7; try {{ $value = null; return $returned; }} catch ({parent} $error) {{}} return $value; }}");
+        expect_error(&source, "return type expects int, got int|null");
+    }
+}
+
+/// Complete integer fallback joins retain nullable storage and invalidate their read after calls.
+#[test]
+fn test_nullable_fallback_flow_review_integer_read_proof_lifecycle() {
+    check_source("<?php class IntegerReadBox { public static int $value = 0; } function need(int $value): int { return $value; } function run(?int $value): int { if ($value === null) { $value = 40; } IntegerReadBox::$value = $value; return need($value); }").unwrap();
+    expect_error("<?php function need(int $value): void {} function run(?int $value, bool $flag): void { if ($value === null) { if ($flag) { $value = 40; } } need($value); }", "expects int");
+    expect_error("<?php function need(int $value): void {} function resetValue(?int &$value): void { $value = null; } function run(?int $value): void { if ($value === null) { $value = 40; } resetValue($value); need($value); }", "expects int");
+}
+
+/// Null and Stringable alternatives preserve opaque value bindings in every guard order.
+#[test]
+fn test_nullable_fallback_flow_review_opaque_alternative_boundaries() {
+    for guard in ["$value === null || is_int($value)",
+        "!(!is_int($value) && $value !== null)",
+        "$value === null || is_int($value) || is_string($value)",
+        "is_string($value) || $value instanceof Stringable",
+        "$value instanceof TextAlternativeA || $value instanceof TextAlternativeB",
+        "$value === null || $value instanceof TextAlternativeA"]
+    {
+        for body in ["return need($value);", "return $value;",
+            "$box = new NullableBoundaryBox(); $box->text = $value; return $box->text;",
+            "NullableBoundaryBox::$shared = $value; return NullableBoundaryBox::$shared;",
+            "$copy = $value; return need($copy);",
+            "$closure = function () use ($value): ?string { return need($value); }; return $closure();"]
+        {
+            let source = format!("<?php class TextAlternativeA implements Stringable {{ function __toString(): string {{ return 'a'; }} }} class TextAlternativeB implements Stringable {{ function __toString(): string {{ return 'b'; }} }} class NullableBoundaryBox {{ public ?string $text = null; public static ?string $shared = null; }} function need(?string $value): ?string {{ return $value; }} function run(mixed $value): ?string {{ if ({guard}) {{ {body} }} return 'other'; }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+}
+
+/// Scalar alternatives over Mixed retain weak bindings through every value boundary.
+#[test]
+fn test_nullable_fallback_flow_review_total_scalar_boundaries() {
+    for guard in ["is_int($value) || is_string($value)", "!(!is_int($value) && !is_string($value))",
+        "is_float($value) || is_bool($value)"]
+    {
+        for body in ["return need($value);", "return $value;",
+            "$box = new ScalarBoundaryBox(); $box->text = $value; return $box->text;",
+            "ScalarBoundaryBox::$shared = $value; return ScalarBoundaryBox::$shared;",
+            "$copy = $value; return need($copy);", "return ($value = $value);",
+            "$closure = function () use ($value): string { return need($value); }; return $closure();",
+            "$closure = fn(): string => need($value); return $closure();"]
+        {
+            let source = format!("<?php class ScalarBoundaryBox {{ public string $text = ''; public static string $shared = ''; }} function need(string $value): string {{ return $value; }} function run(mixed $value): string {{ if ({guard}) {{ {body} }} return 'other'; }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+    check_source("<?php function need(int $value): int { return $value; } function run(mixed $value): int { if (is_int($value) || is_bool($value)) { return need($value); } return -1; }").unwrap();
+    check_source("<?php class GuardedMethodBoundary { function run(mixed $value): string { if (is_int($value) || is_string($value)) { return $value; } return 'other'; } } $closure = function (mixed $value): string { if (is_float($value) || is_bool($value)) { return $value; } return 'other'; };").unwrap();
+    let checked = check_source_full("<?php function logical(mixed $value) { if (is_int($value) || is_string($value)) { return $value; } return false; }").unwrap();
+    assert_eq!(checked.functions["logical"].return_type, types::PhpType::Mixed);
+    check_source("<?php function need(string $value): string { return $value; } function logical(mixed $value) { if (is_int($value) || is_string($value)) { return $value; } return 0; } echo need(logical(42));").unwrap();
+    expect_error("<?php function need(string $value): void {} function declared(int|string $value): void { need($value); }", "expects string");
+    expect_error("<?php function need(string $value): void {} function sentinel(string|false $value): void { need($value); }", "expects string");
+    expect_error("<?php function need(string &$value): void {} function shared(mixed $value): void { if (is_int($value) || is_string($value)) { need($value); } }", "by-reference storage");
+}
+
+/// Possibly absent raw bindings retain compatibility diagnostics instead of false non-null returns.
+#[test]
+fn test_nullable_fallback_flow_review_maybe_unbound_coalesce() {
+    for assignment in ["$value = $value ??", "$value ??="] {
+        for prefix in [
+            "if ($key > 1) { $value = 5; }",
+            "$value = 5; if ($key > 1) { unset($value); }",
+        ] {
+            expect_error(&format!("<?php function run(int $key) {{ {prefix} {assignment} 'fallback'; return $value; }}"),
+                "null coalescing assignment");
+        }
+        for prefix in [
+            "if ($key > 1) { $value = new MaybeBoundBox(); }",
+            "foreach ([1, 2] as $key) { if ($key > 1) { $value = new MaybeBoundBox(); } }",
+        ] {
+            expect_error(&format!("<?php class MaybeBoundBox {{}} function maybeBox(): ?MaybeBoundBox {{ return null; }} function run(int $key) {{ {prefix} {assignment} maybeBox(); return $value; }}"),
+                "null coalescing assignment");
+        }
+        expect_error(&format!("<?php function run(?int $value, int $key) {{ $value ??= 7; if ($key > 1) {{ unset($value); }} {assignment} 'fallback'; return $value; }}"),
+            "null coalescing assignment");
+    }
+}
+
+/// A skipped nullable default keeps a non-null read but still receives diagnostic checking.
+#[test]
+fn test_nullable_fallback_flow_review_recoalesce_contracts() {
+    for assignment in ["$value = $value ??", "$value ??="] {
+        let source = format!("<?php function repeated(?string $value, ?string $default): string {{ {assignment} 'x'; {assignment} $default; return $value; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        expect_error(&source.replace("$default; return", "unknownRecoalesceDefault(); return"),
+            "Undefined function");
+    }
+}
+
+/// Switch assignment compatibility can widen independently of each arm's entry read type.
+#[test]
+fn test_nullable_fallback_flow_review_switch_assignment_contracts() {
+    let checked = check_source_full("<?php function switchedValue(int $key) { $value = 0; switch ($key) { case 1: $value = 2.5; break; case 2: $value = 'two'; break; default: $value = $key; } return $value; }").unwrap();
+    assert_eq!(checked.functions["switchedValue"].return_type, types::PhpType::Mixed);
+}
+
+/// Nullsafe writes retain both value alternatives in the inferred return contract.
+#[test]
+fn test_nullable_fallback_flow_review_nullsafe_raw_write_contracts() {
+    let source = "<?php class RawFlow { function take(mixed $value): void {} } function floating(?RawFlow $receiver) { $value = 1; $receiver?->take($value = 2.5); return $value; } function nullable(?RawFlow $receiver) { $value = null; $receiver?->take($value = 5); return $value; }";
+    let checked = check_source_full(source).unwrap();
+    assert_eq!(checked.functions["floating"].return_type, types::PhpType::Mixed);
+    assert!(matches!(&checked.functions["nullable"].return_type, types::PhpType::Union(members)
+        if members.contains(&types::PhpType::Void) && members.contains(&types::PhpType::Int)));
+}
+
+/// A raw container write on a catch break remains in the following return contract.
+#[test]
+fn test_nullable_fallback_flow_review_raw_loop_exit_contract() {
+    for assignment in ["$rows = ['x'];", "[$rows] = [['x']];"] {
+        expect_error(&format!("<?php function rows(array $input): array<int> {{ $rows = []; foreach ($input as $key) {{ try {{ throw new RuntimeException('stop'); }} catch (Exception $error) {{ {assignment} break; }} }} return $rows; }}"),
+            "returns array<string>");
+    }
+}
+
+/// A preceding switch arm's array layout remains part of the following return contract.
+#[test]
+fn test_nullable_fallback_flow_review_switch_array_exit_contract() {
+    expect_error("<?php function rows(int $key): array<int> { $rows = []; switch ($key) { case 1: $rows = ['x']; break; default: $rows = [1]; } return $rows; }",
+        "returns array<mixed>");
+    let checked = check_source_full("<?php function unmatchedSwitch(int $key) { $value = 1; switch ($key) { case 1: $value = 2.5; break; case 2: $value = 3; } return $value; }").unwrap();
+    assert_eq!(checked.functions["unmatchedSwitch"].return_type, types::PhpType::Mixed);
+}
+
+/// Inferred boolean flags accept a containing scalar union without relaxing fixed contracts.
+#[test]
+fn test_nullable_fallback_flow_ci_boolean_option_union() {
+    for initial in ["false", "true"] {
+        let source = format!("<?php function options(array<string,string|int|bool> $options): void {{ $flag = {initial}; foreach ($options as $key => $value) {{ if ($key === 'read_and_close') {{ $flag = $value; }} }} echo (int)$flag; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    expect_error("<?php function fixedOption(bool &$flag, string|int|bool $value): void { $flag = $value; }", "cannot reassign");
+    expect_error("<?php function declaredOption(bool $flag, string|int|bool $value): void { if ($flag) { $flag = $value; } }", "cannot reassign");
+}
+
+/// An interface probe adds a scoped capability without rebinding the original receiver.
+#[test]
+fn test_nullable_fallback_flow_ci_interface_probe_join() {
+    let declarations = "interface CISink { public function write(): void; public function close(): void; } interface CIWatcher { public function touch(): void; }";
+    for probe in [
+        "if ($ci_handler instanceof CIWatcher) { $ci_handler->touch(); }",
+        "if ($skip) { if ($ci_handler instanceof CIWatcher) { $ci_handler->touch(); $done = true; } }",
+    ] {
+        let source = format!("<?php {declarations} function consume(?CISink $ci_handler, bool $skip): void {{ if ($ci_handler !== null) {{ $done = false; {probe} if (!$done) {{ $ci_handler->write(); }} $ci_handler->close(); }} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    expect_error(&format!("<?php {declarations} function consume(?CISink $ci_handler): void {{ if ($ci_handler === null) {{ return; }} if ($ci_handler instanceof CIWatcher) {{ $ci_handler->touch(); }} $ci_handler->touch(); }}"), "Undefined method");
+}
+
+/// Loops that must execute publish their actual exits without a zero-iteration alternative.
+#[test]
+fn test_nullable_fallback_flow_review_must_run_loops() {
+    for body in [
+        "do { if ($value === null) { return 0; } } while (false); return $value;",
+        "do { if ($value === null) { return 0; } break; } while (true); return $value;",
+        "while (true) { if ($value === null) { return 0; } break; } return $value;",
+        "while (1) { if ($value === null) { return 0; } break; } return $value;",
+        "for (;;) { if ($value === null) { return 0; } break; } return $value;",
+        "switch ($key) { case 1: if ($value === null) { return 0; } break; default: if ($value === null) { return 0; } break; } return $value;",
+    ] {
+        let source = format!("<?php function run(?int $value, int $key): int {{ {body} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    expect_error("<?php function run(?int $value, bool $flag): int { while ($flag) { if ($value === null) { return 0; } break; } return $value; }", "return type expects int");
+}
+
+/// A finally input includes pending loop and switch exits before its body is checked.
+#[test]
+fn test_nullable_fallback_flow_review_finally_inputs() {
+    for coalesce in ["$value ??= 1;", "$value = $value ?? 1;"] {
+        for body in [
+            "foreach ([1] as $i) { try { if ($flag) { $value = null; break; } } finally { need($value); } }",
+            "switch ($key) { case 1: try { if ($flag) { $value = null; break; } } finally { need($value); } }",
+            "try { if ($value !== null) { $value = null; return; } } finally { need($value); }",
+            "try { if ($value !== null) { $value = null; throw new RuntimeException('failed'); } } finally { need($value); }",
+            "try { if ($value !== null) { $value = null; (throw new RuntimeException('failed')); } } finally { need($value); }",
+            "try { try { throw new RuntimeException('initial'); } catch (RuntimeException $error) { if ($value !== null) { $value = null; throw new RuntimeException('failed'); } } } finally { need($value); }",
+        ] {
+            let source = format!("<?php function need(int $value): void {{}} function run(?int $value, bool $flag, int $key): void {{ {coalesce} {body} }}");
+            expect_error(&source, "expects int");
+        }
+    }
+    for body in [
+        "try { if ($value !== null) { $value = null; throw new RuntimeException('failed'); } } catch (RuntimeException $error) { $value ??= 2; } finally { need($value); }",
+        "try { try { if ($value !== null) { $value = null; throw new RuntimeException('failed'); } } catch (RuntimeException $error) { $value ??= 2; } } finally { need($value); }",
+        "try { $noop = function (?int $value): void { $value = null; return; }; $noop(null); } finally { need($value); }",
+        "try { return; $value = null; return; } finally { need($value); }",
+    ] {
+        let source = format!("<?php function need(int $value): void {{}} function run(?int $value): void {{ $value ??= 1; {body} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// Caught and implicit throws retain writes at each operation's source-order boundary.
+#[test]
+fn test_nullable_fallback_flow_review_catch_unwind() {
+    check_source("<?php class UnrelatedRetirementFlow { public function __destruct() { throw new LogicException('drop'); } } function failRetirementFlow(): never { throw new RuntimeException('fail'); } function needRetirementFlow(int $value): void {} function run(?int $value): void { $value ??= 4; try { if ($value !== null) { $value = null; FAILRETIREMENTFLOW(); } } catch (RuntimeException $e) { $value ??= 2; } finally { needRetirementFlow($value); } }").unwrap();
+    for coalesce in ["$value ??= 4;", "$value = $value ?? 4;"] {
+        for body in [
+            "try { if ($value !== null) { $value = null; throw new RuntimeException('x'); } } catch (RuntimeException $e) {} finally { need($value); }",
+            "try { if ($value !== null) { $value = null; throw new RuntimeException('x'); } } catch (Exception $e) {} need($value);",
+            "try { if ($value !== null) { $value = null; throw new RuntimeException('x'); } } catch (RuntimeException $e) { need($value); }",
+            "try { if ($value !== null) { $value = null; mayThrow(); return; } } catch (RuntimeException $e) {} need($value);",
+            "try { if ($value !== null) { $value = null; fail(); } } finally { need($value); }",
+            "foreach ([1] as $i) { try { if ($value !== null) { $value = null; fail(); } } finally { need($value); } }",
+            "try { if ($value !== null) { $value = null; $zero = 0; $out = 1 / $zero; return; } } catch (Throwable $e) {} need($value);",
+        ] {
+            let source = format!("<?php function need(int $v): void {{}} function fail(): never {{ throw new RuntimeException('x'); }} function mayThrow(): void {{ throw new RuntimeException('x'); }} function run(?int $value): void {{ {coalesce} {body} }}");
+            expect_error(&source, "expects int");
+        }
+    }
+    for body in [
+        "try { if ($value === null) { return; } throw new RuntimeException('x'); } catch (RuntimeException $e) { need($value); }",
+        "try { $value = null; throw new RuntimeException('x'); } catch (RuntimeException $e) { $value ??= 2; need($value); }",
+        "try { $value = null; mayThrow(); } catch (RuntimeException $e) { $value ??= 2; need($value); }",
+        "$value ??= 1; try { if ($value !== null) { $value = null; FAIL(); } } catch (RuntimeException $e) { $value ??= 2; } finally { need($value); }",
+        "try { $value ??= 1; pureCall(); } catch (RuntimeException $e) {}",
+        "$value ??= 1; try { if ($value !== null) { $value = null; exit(); } } finally { need($value); }",
+        "$value ??= 1; try { if ($value !== null) { $value = null; die(); } } finally { need($value); }",
+        "$value ??= 1; try { try { pureArgs(throwsArg(), $value = null); } catch (RuntimeException $e) { need($value); } } finally {}",
+        "$value ??= 1; try { if ($flag) { $value = null; throw new RuntimeException('x'); } throw new LogicException('x'); } catch (RuntimeException $e) { $value ??= 2; } catch (LogicException $e) { need($value); } finally { need($value); }",
+    ] {
+        let source = format!("<?php function need(int $v): void {{}} function pureCall(): void {{}} function fail(): never {{ throw new RuntimeException('x'); }} function pureArgs(int $a, ?int $b): void {{}} function throwsArg(): int {{ throw new RuntimeException('x'); }} function mayThrow(): void {{ throw new RuntimeException('x'); }} function run(?int $value, bool $flag): void {{ {body} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// Statement callbacks and iterator resumptions contribute their actual catch input states.
+#[test]
+fn test_nullable_fallback_flow_review_statement_exceptions() {
+    for coalesce in ["$value ??= 5;", "$value = $value ?? 5;"] {
+        for body in [
+            "try { mayThrow(false); $value = null; echo $label; $value ??= 6; } catch (RuntimeException $e) { return $value; } return 0;",
+            "try { echo $label; } catch (RuntimeException $e) { $value = null; } return $value;",
+            "try { mayThrow(false); $value = null; $bag->missing = 1; $value ??= 6; } catch (RuntimeException $e) { return $value; } return 0;",
+            "try { mayThrow(false); foreach (rows(true) as $row) { $value = null; } $value ??= 6; } catch (RuntimeException $e) { return $value; } return 0;",
+            "try { mayThrow(false); foreach (rows(true) as $row) { $value = null; continue; } $value ??= 6; } catch (RuntimeException $e) { return $value; } return 0;",
+            "try { ($value = null) |> passValue(...); } catch (RuntimeException $e) {} return $value;",
+        ] {
+            let source = format!("<?php class Label {{ public function __toString(): string {{ throw new RuntimeException('label'); }} }} class Bag {{ public function __set(string $name, mixed $value): void {{ throw new RuntimeException('set'); }} }} function mayThrow(bool $flag): void {{ if ($flag) {{ throw new RuntimeException('call'); }} }} function passValue(?int $value): int {{ return 0; }} function rows(bool $fail): iterable {{ yield 1; if ($fail) {{ throw new RuntimeException('rows'); }} }} function run(?int $value, Label $label, Bag $bag): int {{ {coalesce} {body} }}");
+            expect_error(&source, "return type expects int");
+        }
+    }
+    for setup in ["", "$old = null; $set = function () use (&$old) { $old = new RetiredFlow(); }; $set();"] {
+        let source = format!("<?php class RetiredFlow {{ public function __destruct() {{ throw new RuntimeException('drop'); }} }} function mayThrow(bool $flag): void {{ if ($flag) {{ throw new RuntimeException('call'); }} }} function run(?int $value, ?RetiredFlow $old): int {{ $value ??= 5; {setup} try {{ mayThrow(false); $value = null; $old = null; $value ??= 6; }} catch (Throwable $e) {{ return $value; }} return 0; }}");
+        expect_error(&source, "return type expects int");
+    }
+
+}
+
+/// Reference operands and declaration initializers cannot silently discard a throwing catch.
+#[test]
+fn test_nullable_fallback_flow_review_initializer_effects() {
+    for coalesce in ["$value ??= 4;", "$value = $value ?? 4;"] {
+        for body in [
+            "$r = &$arr[failInit()];",
+            "$r = &$holder->item();",
+            "$r = &makeHolderInit()->slot;",
+            "$r = &refInit();",
+            "$r = &HolderInit::staticItem();",
+            "int $local = failInit();",
+            "static $saved = failInit();",
+            "const FLOW_INIT = failInit();",
+            "int $local = ($value = null) ?? 7;",
+            "static $saved = ($value = null) ?? 7;",
+        ] {
+            let source = format!("<?php function failInit(): int {{ throw new RuntimeException('x'); }} function &refInit(): int {{ throw new RuntimeException('x'); }} function makeHolderInit(): HolderInit {{ throw new RuntimeException('x'); }} class HolderInit {{ public int $slot = 1; public function &item(): int {{ throw new RuntimeException('x'); }} public static function &staticItem(): int {{ throw new RuntimeException('x'); }} }} function run(?int $value, HolderInit $holder): int {{ {coalesce} $arr = [1, 2]; try {{ {body} }} catch (RuntimeException $e) {{ $value = null; }} return $value; }}");
+            expect_error(&source, "return type expects int");
+        }
+    }
+    expect_error("<?php class RefRetiredInit { public function __destruct() { throw new RuntimeException('drop'); } } function mayThrowRefInit(bool $flag): void { if ($flag) { throw new RuntimeException('earlier'); } } function run(?int $value, mixed $old): int { $value ??= 4; $source = 1; try { mayThrowRefInit(false); $value = null; $old = &$source; $value ??= 6; } catch (Throwable $e) { return $value; } return 0; }", "return type expects int");
+}
+
+/// Eager operands and nonliteral callbacks cannot conceal a store from guarded reads.
+#[test]
+fn test_nullable_fallback_flow_review_eager_operands() {
+    for coalesce in ["$value ??= 4;", "$value = $value ?? 4;"] {
+        for body in [
+            "if (($value = null) instanceof OperandFlow) {} return $value;",
+            "new $className($value = null); return $value;",
+            "$copy = clone (($value = null) ?? new OperandFlow()); return $value;",
+            "$kept = array_filter([1, 0, 2], $value = null); return $value;",
+            "$kept = array_filter(callback: $value = null, array: [1, 0, 2]); return $value;",
+            "$kept = array_filter([1], (($value = null) ?? new OperandFlow())->accept(...)); return $value;",
+        ] {
+            let source = format!("<?php class OperandFlow {{ public function __construct(mixed $arg = null) {{}} public function accept(int $value): bool {{ return true; }} }} function run(?int $value, string $className): int {{ {coalesce} {body} }}");
+            let error = check_source(&source).expect_err("hidden null store must fail").to_string();
+            assert!(error.contains("return type expects int"), "{source}: {error}");
+        }
+    }
+    expect_error("<?php class OperandFlow {} function run(?string $raw, ?int $value): int { if ($raw === null && $value !== null) { if (($value = null) instanceof OperandFlow) {} return $value; } return 0; }", "return type expects int");
+    check_source("<?php function run(): array { return array_filter(['one', ''], fn($text) => strlen($text) > 0); }").unwrap();
+    for expression in ["yield ($value = null);", "yield from [($value = null)];"] {
+        let source = format!("<?php function needYieldOperand(int $value): void {{}} function values(?int $value): iterable {{ $value ??= 4; {expression} needYieldOperand($value); }}");
+        expect_error(&source, "expects int");
+    }
+
+}
+
+/// Conditional access and match labels retain both their skipped and evaluated local states.
+#[test]
+fn test_nullable_fallback_flow_review_conditional_operands() {
+    let mut admitted = Vec::new();
+    for coalesce in ["$value ??= 4", "$value = $value ?? 4"] {
+        let source = format!("<?php class ConditionalOperandFlow {{ public function take(int $arg): void {{}} }} function run(?int $value, ?ConditionalOperandFlow $receiver): int {{ $receiver?->take({coalesce}); return $value; }}");
+        match check_source(&source) {
+            Ok(_) => admitted.push(source),
+            Err(error) => assert!(error.to_string().contains("return type expects int"), "{source}: {error}"),
+        }
+    }
+    for body in [
+        "return match ($key) { ($value = null) => 0, default => needOperand($value) };",
+        "$holder->{$property} = ($value = null); return $value;",
+        "$holder->{(($value = null) ?? 'item')} = 1; return $value;",
+        "try { $holder->{$property} = 1; } catch (RuntimeException $e) { $value = null; } return $value;",
+        "try { $holder->{$property} = resetOperand($value); } catch (RuntimeException $e) { return $value; } return 0;",
+    ] {
+        let source = format!("<?php class ConditionalOperandFlow {{ public mixed $item = null; public function __set(string $name, mixed $value): void {{ throw new RuntimeException('set'); }} }} function resetOperand(?int &$value): int {{ $value = null; throw new RuntimeException('reset'); }} function needOperand(int $value): int {{ return $value; }} function run(?int $value, int $key, ConditionalOperandFlow $holder, string $property): int {{ $value ??= 4; {body} }}");
+        match check_source(&source) {
+            Ok(_) => admitted.push(source),
+            Err(error) => assert!(error.to_string().contains("expects int"), "{source}: {error}"),
+        }
+    }
+    assert!(admitted.is_empty(), "unsafe admitted operands: {admitted:#?}");
+    expect_error("<?php function needLabelOperand(int $value): int { return $value; } function run(?int $value, int $key): int { return match ($key) { 1, ($value ??= 4) => needLabelOperand($value), default => 0 }; }", "expects int");
+    check_source("<?php class NonNullOperandFlow { public function take(int $value): void {} } function run(?int $value, NonNullOperandFlow $receiver): int { $receiver?->take($value ??= 4); return $value; }").unwrap();
+
+}
+
+/// A captured reference's stale null type cannot prove that the try always returns early.
+#[test]
+fn test_nullable_fallback_flow_review_captured_null_reachability() {
+    for coalesce in ["$value ??= 5;", "$value = $value ?? 5;"] {
+        let source = format!("<?php function run(?int $value): int {{ {coalesce} $flag = null; $set = function () use (&$flag) {{ $flag = 1; }}; try {{ $set(); if ($flag === null) {{ return -1; }} $value = null; }} catch (RuntimeException $e) {{}} return $value; }}");
+        expect_error(&source, "return type expects int");
+    }
+}
+
+/// Broken switch arms cannot narrow a later arm that can be entered directly.
+#[test]
+fn test_nullable_fallback_flow_review_switch_arm_inputs() {
+    for guard in ["$closed || $value === null", "$value === null"] {
+        for first_exit in ["break;", "continue;", "return 1;"] {
+            let source = format!("<?php function run(?int $value, int $key, bool $closed): int {{ switch ($key) {{ case 1: if ({guard}) {{ return -1; }} {first_exit} case 2: return $value; }} return 0; }}");
+            expect_error(&source, "return type expects int");
+        }
+    }
+    check_source("<?php function run(?int $value, int $key): ?int { switch ($key) { case 1: $value = null; case 2: return $value; default: return $value; } }").unwrap();
+}
+
+/// Non-null object references preserve the established Mixed output view of boxed callers.
+#[test]
+fn test_nullable_fallback_flow_review_non_null_object_reference() {
+    check_source("<?php class Box { public int $value = 1; } function swapBox(Box &$box): void { $box = new Box(); $box->value = 9; } function run(?Box $box): int { if ($box === null) { return -1; } swapBox($box); return $box->value; }").unwrap();
+}
+
+/// Numeric storage preparation must not replace an unguarded nullable read with Mixed.
+#[test]
+fn test_nullable_fallback_flow_review_plain_loop_nullability() {
+    for rhs in ["$flag ? null : 1", "$flag ? 1.5 : 1", "$flag ? 's' : 1", "$value + 1", "'x'", "[1]", "$x"] {
+        let source = format!("<?php function need(int $value): void {{}} function run(?int $value, array $xs, bool $flag): void {{ foreach ($xs as $x) {{ need($value); $value = {rhs}; }} }}");
+        expect_error(&source, "expects int");
+    }
+    // The counter's next iteration can be float in the checker. Keep that assignment
+    // diagnostic separate from the nullable return, whose payload is explicitly int.
+    expect_error("<?php function run(?int $value, bool $flag): int { for ($i = 0; $i < 2; $i++) { $value = $flag ? null : $i; } return $value; }", "cannot reassign $value from int|null to int|float|null");
+    expect_error("<?php function run(?int $value, bool $flag): int { for ($i = 0; $i < 2; $i++) { $value = $flag ? null : (int)$i; } return $value; }", "return type expects int");
+    check_source("<?php function resetValue(?int &$value): void { $value = null; } function run(?int $value, array $xs, bool $flag): void { foreach ($xs as $x) { $value = $flag ? null : 1; } resetValue($value); }").unwrap();
+}
+
+/// Loop exits preserve the complement on the path that reaches the following statement.
+#[test]
+fn test_nullable_fallback_flow_review_loop_exit_complements() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for header in ["foreach ($xs as $x)", "while ($flag)", "for (; $flag; $flag = false)", "do"] {
+        for exit in ["continue", "break"] {
+            let tail = if header == "do" { " while ($flag);" } else { "" };
+            for store in ["$value = 0;", "$value = null;", ""] {
+                let source = format!("<?php function run(?int $value, array $xs, bool $flag): int {{ {header} {{ if ($value === null) {{ {store} {exit}; }} return $value; }}{tail} return 0; }}");
+                check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+            }
+        }
+    }
+    check_source("<?php function run(?int $value, array $xs): int { foreach ($xs as $x) { while (true) { if ($value === null) { $value = 0; continue 2; } return $value; } } return 0; }").unwrap();
+}
+
+/// Nullable writes on back edges retire both spellings of an earlier coalescing view.
+#[test]
+fn test_nullable_fallback_flow_review_loop_entry_writes() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for coalesce in ["$value ??= 1;", "$value = $value ?? 1;"] {
+        for body in [
+            "foreach ($xs as $x) { need($value); $value = null; }",
+            "foreach ($xs as $x) { need($value); $value = $flag ? null : 1; }",
+            "while ($flag) { need($value); $value = null; $flag = false; }",
+            "for (; $flag; $value = null) { need($value); $flag = false; }",
+            "do { need($value); $value = null; } while ($flag);",
+            "foreach ($xs as $x) { need($value); if ($flag) { $value = null; continue; } }",
+            "foreach ($xs as $x) { need($value); resetValue($value); }",
+            "foreach ($xs as $x) { need($value); resetValue(value: $value); }",
+            "foreach ($xs as $x) { need($value); $reset = function () use (&$value) { $value = null; }; $reset(); }",
+            "foreach ($xs as $x) { need($value); $alias =& $value; $alias = null; }",
+            "foreach ($xs as $x) { need($value); switch ($x) { default: $value = null; case 1: continue 2; } return; }",
+            "foreach ($xs as $x) { need($value); while (true) { $value = null; continue 2; } }",
+            "foreach ($xs as $x) { need($value); try { continue; } finally { $value = null; } }",
+        ] {
+            let source = format!("<?php function need(int $value): void {{}} function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value, array $xs, bool $flag): void {{ {coalesce} {body} }}");
+            let error = check_source(&source).expect_err(&source);
+            assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
+        }
+        for body in [
+            "foreach ($xs as $x) { need($value); $value = 2; }",
+            "foreach ($xs as $x) { need($value); $value = null; break; }",
+            "foreach ($xs as $x) { need($value); while (true) { $value = null; break 2; } }",
+            "foreach ($xs as $x) { if ($flag) { $value = null; break; } need($value); }",
+            "foreach ($xs as $x) { need($value); $value = null; return; }",
+            "foreach ($xs as $x) { need($value); try { $value = null; continue; } finally { return; } }",
+        ] {
+            let source = format!("<?php function need(int $value): void {{}} function run(?int $value, array $xs, bool $flag): void {{ {coalesce} {body} }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+    for (ty, default) in [("bool", "true"), ("string", "'ok'"), ("Service", "new Service()")] {
+        for coalesce in [format!("$value ??= {default};"), format!("$value = $value ?? {default};")] {
+            for write in ["$value = null;", "resetValue($value);"] {
+                let source = format!("<?php final class Service {{}} function need({ty} $value): void {{}} function resetValue(?{ty} &$value): void {{ $value = null; }} function run(?{ty} $value, array $xs): void {{ {coalesce} foreach ($xs as $x) {{ need($value); {write} }} }}");
+                // Class|null now binds through main's runtime instance guard. The native
+                // loop-object regression verifies a null next iteration throws before entry.
+                if ty == "Service" {
+                    check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+                    continue;
+                }
+                let error = check_source(&source).expect_err(&source);
+                assert!(error.contains(&format!("expects {ty}")) && error.contains("null"), "{source}: {error}");
+            }
+        }
+    }
+}
+
+/// Tail bindings survive the loop and continue edges retain nullable reference storage.
+#[test]
+fn test_nullable_fallback_flow_review_loop_tail_bindings() {
+    for source in [
+        "<?php for ($i = 0; $i < 3; $prev = $i, $i++) { if ($i > 0) { echo $prev; } }",
+        "<?php for ($i = 0, $acc = 0; $i < 3; $i++, $total = $acc) { $acc += $i; } echo $total;",
+        "<?php function nextLine(): ?string { return null; } do { $k = 1; } while (($line = nextLine()) !== null); var_dump($line);",
+        "<?php function bump(?int &$x): void { $x = ($x ?? 0) + 1; } function run(?int $value): void { for ($i = 0; $i < 3; $i++, bump($value)) { if ($value !== null) { continue; } $value = null; break; } var_dump($value); } run(5); run(null);",
+    ] { check_source(source).unwrap_or_else(|error| panic!("{source}: {error}")); }
+}
+
+/// Switch breaks and level-one continues publish terminal writes to the switch exit.
+#[test]
+fn test_nullable_fallback_flow_review_switch_exits() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for prefix in ["$value ??= 3;", "$value = $value ?? 3;", "if ($value === null) { return 0; }"] {
+        for exit in ["break", "continue"] {
+            let source = format!("<?php function run(?int $value, int $key): int {{ {prefix} switch ($key) {{ case 1: if ($key > 0) {{ $value = null; {exit}; }} break; }} return $value; }}");
+            expect_error(&source, "return type expects int");
+        }
+        expect_error(&format!("<?php function run(?int $value, int $key): int {{ {prefix} switch ($key) {{ default: $value = null; case 1: return $value; }} return 0; }}"), "return type expects int");
+        expect_error(&format!("<?php function need(int $value): void {{}} function run(?int $value, int $key): int {{ {prefix} switch ($key) {{ default: $value = null; case 1: need($value); }} return 0; }}"), "expects int");
+        let source = format!("<?php function run(?int $value, int $key): ?int {{ {prefix} foreach ([1, 2] as $i) {{ switch ($key) {{ case 1: if ($key > 0) {{ $value = null; continue 2; }} break; }} }} return $value; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// Break values remain visible after the loop and retain their reference ABI.
+#[test]
+fn test_nullable_fallback_flow_review_loop_exit_storage() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for body in [
+        "foreach ($xs as $x) { if (is_int($value)) { $value = null; break; } } need($value);",
+        "foreach ($xs as $x) { if ($value === null) { $value = 0; continue; } } need($value);",
+        "foreach ($xs as $x) { try { if ($value === null) { $value = 0; break; } } finally { $value = null; } } need($value);",
+    ] {
+        expect_error(&format!("<?php function need(int $value): void {{}} function run(?int $value, array $xs): void {{ {body} }}"), "expects int");
+    }
+    for exit in ["break", "continue"] {
+        let source = format!("<?php function widen(mixed &$value): void {{ $value = 'x'; }} function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value, array $xs): void {{ foreach ($xs as $x) {{ if ($value === null) {{ widen($value); {exit}; }} resetValue($value); }} }}");
+        let error = check_source(&source).expect_err(&source);
+        assert!(error.contains("by-reference storage") || error.contains("got mixed"), "{error}");
+    }
+}
+
+/// Compound and nested guards expose non-null integer and boolean fallback parameters.
+#[test]
+fn test_nullable_fallback_flow_and_guards() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for (ty, fallback) in [("int", "0"), ("bool", "false")] {
+        for guard in [
+            "if ($raw === null && $default !== null) { return $default; }",
+            "if ($default !== null && $raw === null) { return $default; }",
+            "if ($raw === null) { if ($default !== null) { return $default; } }",
+            "if (!($raw !== null || $default === null)) { return $default; }",
+            "if ($raw === null && !($default === null)) { return $default; }",
+        ] {
+            let source = format!("<?php function queryFallback(?string $raw, ?{ty} $default = null): {ty} {{ {guard} return {fallback}; }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{guard}: {error}"));
+        }
+    }
+}
+
+/// Every operand of a false OR guard holds on its non-divergent fallthrough path.
+#[test]
+fn test_nullable_fallback_flow_or_fallthrough() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for guard in [
+        "$closed || $value === null",
+        "$value === null || $closed",
+        "!(!$closed && $value !== null)",
+        "$closed || ($value === null || $other === null)",
+    ] {
+        let source = format!("<?php final class Service {{}} function service(?Service $value, bool $closed, ?int $other): Service {{ if ({guard}) {{ throw new LogicException('unavailable'); }} return $value; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{guard}: {error}"));
+    }
+}
+
+/// A coalesced receiver assignment removes only the null member, including in expression form.
+#[test]
+fn test_nullable_fallback_flow_coalesced_receiver() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for assignment in ["$options = $options ?? new Options();", "$options ??= new Options();", "consume(($options = $options ?? new Options())->path);"] {
+        let source = format!("<?php final class Options {{ public readonly string $path; public function __construct() {{ $this->path = 'ok'; }} }} function consume(string $path): void {{}} function run(?Options $options = null): void {{ {assignment} consume($options->path); }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{assignment}: {error}"));
+    }
+}
+
+/// OR-true and AND-false paths do not prove that either nullable operand is non-null.
+#[test]
+fn test_nullable_fallback_flow_unsafe_joins() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for body in [
+        "if ($flag || $value !== null) { return $value; } return 0;",
+        "if ($flag && $value === null) { throw new Exception('missing'); } return $value;",
+        "if ($flag && $value !== null) {} return $value;",
+        "$value = $value ?? null; return $value;",
+        "if ($flag) { $value ??= 0; } return $value;",
+        "$value ??= 0; $value = null; return $value;",
+    ] {
+        let source = format!("<?php function fallback(?int $value, bool $flag): int {{ {body} }}");
+        let error = check_source(&source).expect_err(body);
+        assert!(error.contains("return type expects int"), "{body}: {error}");
+    }
+}
+
+/// A later operand may replace a local directly or through a reference-taking call.
+#[test]
+fn test_nullable_fallback_flow_operand_mutation() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for condition in [
+        "$value !== null && (($value = null) === null)",
+        "$value !== null && resetValue($value)",
+    ] {
+        expect_error(&format!("<?php final class Service {{}} function resetValue(?Service &$value): bool {{ $value = null; return true; }} function fallback(?Service $value): Service {{ if ({condition}) {{ return $value; }} return new Service(); }}"), "return type expects Service");
+    }
+    expect_error(
+        "<?php final class Service {} class Box { public ?Service $value = null; public function __get(string $name): bool { $this->value = null; return true; } } function fallback(Box $box, mixed $proxy): Service { if ($box->value !== null && $proxy->flag) { return $box->value; } return new Service(); }",
+        "return type expects Service",
+    );
+}
+
+/// Short-circuit operands, ternaries, elseif complements and while bodies share guard facts.
+#[test]
+fn test_nullable_fallback_flow_expression_paths() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for body in [
+        "return $value !== null && positive($value);",
+        "return $value === null || positive($value);",
+        "return $raw === null && $value !== null ? positive($value) : false;",
+        "if ($raw !== null || $value === null) { return false; } elseif (positive($value)) { return true; } return false;",
+        "while ($raw === null && $value !== null) { return positive($value); } return false;",
+        "if ($raw === null && $value !== null) { $value = null; } return false;",
+    ] {
+        let source = format!("<?php function positive(int $value): bool {{ return $value > 0; }} function fallback(?string $raw, ?int $value): bool {{ {body} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{body}: {error}"));
+    }
+}
+
+/// Refining a nullable binding does not forbid assigning null again later.
+#[test]
+fn test_nullable_fallback_flow_coalesce_reassignment() {
+    let _strict = elephc::strict_php::scoped_enable();
+    check_source("<?php function fallback(?int $value): int { $value ??= 0; $value = null; $value ??= 1; return $value; }").unwrap();
+}
+
+/// Reference-taking calls see the underlying nullable slot, including after coalescing.
+#[test]
+fn test_nullable_fallback_flow_reference_storage() {
+    let _strict = elephc::strict_php::scoped_enable();
+    check_source("<?php function resetValue(?int &$value): bool { $value = null; return true; } function fallback(?int $value): bool { return $value !== null && resetValue($value); }").unwrap();
+    check_source("<?php function resetValue(?int &$value): void { $value = null; } function fallback(?int $value): void { $value ??= 0; resetValue($value); }").unwrap();
+}
+
+/// A scalar read view cannot turn a nullable boxed binding into raw reference storage.
+#[test]
+fn test_nullable_fallback_flow_review_reference_boundaries() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for (ty, value) in [("string", "'changed'"), ("float", "3.0"), ("int", "2"), ("bool", "true")] {
+        for body in [
+            "if ($closed || $value === null) { return; } change($value);",
+            "$result = $raw === null && $value !== null ? change($value) : false;",
+            "if ($value !== null) { change($value); }",
+            "while ($value !== null) { change($value); break; }",
+        ] {
+            let source = format!("<?php function change({ty} &$value): bool {{ $value = {value}; return true; }} function run(?{ty} $value, bool $closed, ?string $raw): void {{ {body} }}");
+            let error = check_source(&source).expect_err(&source);
+            assert!(error.contains("by-reference storage") || error.contains(&format!("got {ty}|null")), "{source}: {error}");
+        }
+    }
+}
+
+/// Unset, foreach destinations and reference rebinding end the previous coalescing contract.
+#[test]
+fn test_nullable_fallback_flow_review_binding_lifecycle() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for body in [
+        "unset($value); $value = 'abc'; return $value;",
+        "foreach (['a'] as $value) {} $value = 'b'; return $value;",
+        "foreach (['a' => 1] as $value => $item) {} $value = 'b'; return $value;",
+        "$other = 'a'; $value =& $other; change($value); return $value;",
+    ] {
+        let source = format!("<?php function change(string &$value): void {{ $value .= '!'; }} function run(?int $value): string {{ $value ??= 0; {body} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{body}: {error}"));
+    }
+}
+
+/// Retained read facts do not replace the binding's strict assignment or widening decisions.
+#[test]
+fn test_nullable_fallback_flow_review_widening_contract() {
+    let _strict = elephc::strict_php::scoped_enable();
+    let source = "<?php function run(?int $value): void { $value ??= 0; $value = 1.5; echo $value; }";
+    let error = check_source_strict(source).unwrap_err();
+    assert!(error.contains("cannot reassign $value from int|null to float"), "{error}");
+    let result = check_source_full(source).unwrap();
+    assert!(result.warnings.iter().any(|warning| warning.message.contains("changes type from int|null to float")));
+    check_source("<?php final class P { public string $p = 'ok'; } function run(?int $value, mixed $other): void { $value ??= 0; $value = $other; echo $value->p; }").unwrap();
+}
+
+/// Aliases and global/static rebinding cannot retain a coalescing non-null guarantee.
+#[test]
+fn test_nullable_fallback_flow_review_alias_barriers() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for body in [
+        "$value ??= new Service(); $alias =& $value; $alias = null; return $value;",
+        "$alias =& $value; $value ??= new Service(); $alias = null; return $value;",
+        "$value ??= new Service(); global $value; return $value;",
+        "$value ??= new Service(); static $value = null; return $value;",
+    ] {
+        expect_error(&format!("<?php final class Service {{}} function run(?Service $value): Service {{ {body} }}"), "return type expects Service");
+    }
+}
+
+/// Long associative chains retain every guaranteed fact without repeated prefix inference.
+#[test]
+fn test_nullable_fallback_flow_review_long_chains() {
+    let _strict = elephc::strict_php::scoped_enable();
+    let params = (0..400).map(|index| format!("?int $a{index}")).collect::<Vec<_>>().join(", ");
+    for (operator, comparison, body) in [
+        (" && ", " !== null", "if (CONDITION && $closed) { return $a399; } return 0;"),
+        (" || ", " === null", "if (CONDITION || $closed) { throw new Exception('missing'); } return $a399;"),
+    ] {
+        let condition = (0..400).map(|index| format!("$a{index}{comparison}"))
+            .collect::<Vec<_>>().join(operator);
+        let source = format!("<?php function run({params}, bool $closed): int {{ {} }}", body.replace("CONDITION", &condition));
+        check_source(&source).unwrap_or_else(|error| panic!("{operator}: {error}"));
+    }
+}
+
+/// Guard-complement storage does not undo compatible ordinary stores or their precise read types.
+#[test]
+fn test_nullable_fallback_flow_review_guarded_stores() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for source in [
+        "<?php function run(?string $value): string { if ($value === null) { return ''; } $value = trim($value); return $value; }",
+        "<?php function run(?int $value): int { if ($value === null) { throw new Exception(); } $value = 0; return $value; }",
+        "<?php final class S { public function next(): S { return new S(); } } function run(?S $value): S { if ($value === null) { throw new Exception(); } $value = $value->next(); return $value; }",
+        "<?php function source(): ?string { return 'ok'; } function run(): string { $value = source(); if ($value === null) { return ''; } $value = strtoupper($value); return $value; }",
+        "<?php function run(int|false $value): int { if ($value === false) { return 0; } $value = 4; return $value; }",
+        "<?php function run(?array $value): array { if ($value === null) { return []; } $value = array_values($value); return $value; }",
+    ] {
+        check_source(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    expect_error("<?php function run(?int $a, ?int $b, bool $closed): int { if ($closed || $a === null) { return 0; } $a = $b; return $a; }", "return type expects int");
+}
+
+/// Object alternatives retain a usable Throwable supertype on ambiguous boolean outcomes.
+#[test]
+fn test_nullable_fallback_flow_review_throwable_joins() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for body in [
+        "if ($error instanceof A || $error instanceof B) { throw $error; }",
+        "if ($error instanceof A && $closed) { return; } throw $error;",
+        "if ($error instanceof A && $closed) { return; } else { throw $error; }",
+    ] {
+        let source = format!("<?php class A extends Exception {{}} class B extends Exception {{}} function run(Throwable $error, bool $closed): void {{ {body} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{body}: {error}"));
+    }
+}
+
+/// Both direct and nested reference captures invalidate facts in their enclosing frame.
+#[test]
+fn test_nullable_fallback_flow_review_reference_captures() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for body in [
+        "$callback = function () use (&$value) { $value = null; }; $callback();",
+        "$callbacks = [function () use (&$value) { $value = null; }]; $callbacks[0]();",
+    ] {
+        let source = format!("<?php final class S {{}} function run(?S $value): S {{ $value ??= new S(); {body} return $value; }}");
+        expect_error(&source, "return type expects S");
+    }
+}
+
+/// Widening effects cannot leave a nullable reference contract attached to a boxed value.
+#[test]
+fn test_nullable_fallback_flow_review_storage_effects() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for effect in ["widen($value);", "settype($value, 'string');", "++$value;", "$value++;", "--$value;", "$value--;"] {
+        for body in [
+            "$value ??= 1; EFFECT resetValue($value);",
+            "if ($value === null) { return; } EFFECT resetValue($value);",
+            "if ($value !== null) { EFFECT resetValue($value); }",
+        ] {
+            let source = format!("<?php function widen(mixed &$value): void {{ $value = null; }} function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value): void {{ {} }}", body.replace("EFFECT", effect));
+            let error = check_source(&source).expect_err(&source);
+            assert!(error.contains("by-reference storage"), "{source}: {error}");
+        }
+    }
+}
+
+/// Declared-int return verification keeps TypeError handlers in the continuing type join.
+#[test]
+fn test_nullable_fallback_flow_review_return_boundary_catches() {
+    for prefix in ["$value ??= 1;", "$value = $value ?? 1;", "if ($value === null) { return 0; }"] {
+        for call in ["returnChecked($input)", "ReturnBoundaryBox::read($input)"] {
+            let source = format!("<?php function returnChecked(mixed $input): int {{ return $input; }} class ReturnBoundaryBox {{ public static function read(mixed $input): int {{ return $input; }} }} function run(?int $value, mixed $input): int {{ {prefix} $ignored = 0; try {{ $ignored = {call}; }} catch (TypeError $error) {{ $value = null; }} echo $ignored; return $value; }}");
+            expect_error(&source, "return type expects int");
+        }
+    }
+}
+
+/// A nullable array write cannot promise an unboxed array argument without a source guard.
+#[test]
+fn test_nullable_fallback_flow_review_nullable_container_reads() {
+    for write in ["$value[] = 5;", "$value[0] = 5;", "$ignored = ($value[0] = 5);"] {
+        for (consumer, message) in [
+            ("max($value)", "must be of type array"),
+            ("array_map(fn($item) => $item * 2, $value)", "second argument must be array"),
+        ] {
+            let source = format!("<?php function run(?array $value): void {{ {write} {consumer}; }}");
+            expect_error(&source, message);
+        }
+    }
+    for body in [
+        "$value[] = 5; $value = null;",
+        "if ($flag) { $value[] = 5; } else { $value = null; }",
+        "$value[] = 5; resetArray($value);",
+    ] {
+        let source = format!("<?php function resetArray(?array &$value): void {{ $value = null; }} function run(?array $value, bool $flag): int {{ try {{ if ($value === null) {{ return 0; }} }} finally {{ {body} }} return max($value); }}");
+        expect_error(&source, "must be of type array");
+    }
+}
+
+/// Container writes in finally update the element view rather than restoring stale entry facts.
+#[test]
+fn test_nullable_fallback_flow_review_finally_container_writes() {
+    let mut failures = Vec::new();
+    for write in ["$value[] = 'abc';", "$value[2] = 'abc';", "$ignored = ($value[2] = 'abc');"] {
+        for guarded_inside in [true, false] {
+            let before = if guarded_inside { "" } else { "if ($value === null) { return 0; }" };
+            let body = if guarded_inside { "if ($value === null) { return 0; }" } else { "echo '';" };
+            let source = format!("<?php function run(bool $flag): int {{ $value = $flag ? [1, 2] : null; {before} try {{ {body} }} finally {{ {write} }} return strlen($value[2]); }}");
+            if let Err(error) = check_source(&source) { failures.push(format!("{source}: {error}")); }
+        }
+    }
+    for source in [
+        "<?php function run(?array $value): array { try { if ($value === null) { return []; } } finally { $value[] = 1; } return $value; }",
+        "<?php function run(bool $flag): int { $value = $flag ? ['first' => 1] : null; try { if ($value === null) { return 0; } } finally { $value['next'] = 'abc'; } return strlen($value['next']); }",
+        "<?php function resetArray(?array &$value): void { $value = null; } function run(?array $value): void { if ($value === null) { return; } try { echo ''; } finally { $value[] = 1; } resetArray($value); }",
+    ] {
+        if let Err(error) = check_source(source) { failures.push(format!("{source}: {error}")); }
+    }
+    assert!(failures.is_empty(), "container flow failures: {failures:#?}");
+}
+
+/// Read-only finally blocks preserve the continuing path's guard facts after terminal exits.
+#[test]
+fn test_nullable_fallback_flow_review_finally_continuation() {
+    for source in [
+        "<?php function run(?int $value): int { try { echo 'try'; } finally { if ($value === null) { return 0; } } return $value; }",
+        "<?php function run(?int $value): int { try { if ($value === null) { return 0; } } finally { $value = 7; } return $value; }",
+        "<?php function run(?int &$value): int { try { if ($value === null) { return 0; } } finally { echo 'done'; } return $value; }",
+        "<?php function run(?int $value, ?int $other): int { try { if ($value === null) { return 0; } if ($other === null) { return 0; } } finally { $value = $other; } return $value; }",
+        "<?php function run(?int $value, ?int $other): int { try { if ($value === null) { return 0; } if ($other === null) { return 0; } } finally { $other = 7; $value = $other; } return $value; }",
+    ] { check_source(source).unwrap_or_else(|error| panic!("{source}: {error}")); }
+    for guard in ["$value === null", "$closed || $value === null"] {
+        for exit in ["return 0;", "throw new RuntimeException('exit');"] {
+            let source = format!("<?php function run(?int $value, bool $closed): int {{ try {{ if ({guard}) {{ {exit} }} }} finally {{ echo 'done'; }} return $value; }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        for exit in ["continue;", "break;"] {
+            let source = format!("<?php function needFinallyContinuation(int $value): void {{}} function run(?int $value, bool $closed): void {{ foreach ([1, 2] as $index) {{ try {{ if ({guard}) {{ {exit} }} }} finally {{ echo 'done'; }} needFinallyContinuation($value); }} }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+    check_source("<?php final class FinallyServiceFlow {} function run(?FinallyServiceFlow $value, bool $closed): FinallyServiceFlow { try { if ($closed || $value === null) { throw new LogicException('exit'); } } finally { echo 'done'; } return $value; }").unwrap();
+    for prefix in ["$value ??= 1;", "$value = $value ?? 1;"] {
+        let source = format!("<?php function run(?int $value, bool $flag): int {{ {prefix} try {{ if ($flag) {{ $value = null; return 0; }} }} finally {{ echo 'done'; }} return $value; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    for body in ["$value = null;", "resetFinallyContinuation($value);", "$write = function () use (&$value) { $value = null; }; $write();"] {
+        let source = format!("<?php function resetFinallyContinuation(?int &$value): void {{ $value = null; }} function run(?int $value): int {{ try {{ if ($value === null) {{ return 0; }} }} finally {{ {body} }} return $value; }}");
+        expect_error(&source, "return type expects int");
+    }
+    expect_error("<?php function needFinallyContinuation(int $value): void {} function run(?int $value): void { try { if ($value === null) { return; } } finally { needFinallyContinuation($value); } }", "expects int");
+    expect_error("<?php function run(?int $value, ?int $other): int { try { if ($value === null) { return 0; } if ($other === null) { return 0; } } finally { $other = null; $value = $other; } return $value; }", "return type expects int");
+    expect_error("<?php function run(?int $value, ?int $other): int { try { if ($value === null) { return 0; } } finally { $value = $other; $other ??= 1; } return $value; }", "return type expects int");
+}
+
+/// Conditional writes invalidate a non-null read on every expression control-flow surface.
+#[test]
+fn test_nullable_fallback_flow_review_conditional_effects() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for prefix in ["$value ??= 1;", "if ($n > 0 || $value === null) { return 0; }"] {
+        for body in [
+            "$flag && resetValue($value);", "$flag || resetValue($value);",
+            "$flag and resetValue($value);", "$flag or resetValue($value);",
+            "$r = $flag ? resetValue($value) : false;",
+            "$r = $flag ?: resetValue($value);",
+            "$r = $other ?? resetValue($value);",
+            "$r = match ($n) { 1 => resetValue($value), default => false };",
+        ] {
+            let source = format!("<?php function resetValue(?int &$value): bool {{ $value = null; return true; }} function run(?int $value, bool $flag, int $n, ?bool $other): int {{ {prefix} {body} return $value; }}");
+            let error = check_source(&source).expect_err(&source);
+            assert!(error.contains("return type expects int"), "{source}: {error}");
+        }
+    }
+    expect_error("<?php final class S {} function resetValue(?S &$value): bool { $value = null; return true; } function run(?S $value, bool $flag): S { $value ??= new S(); $r = $flag ? resetValue($value) : false; return $value; }", "return type expects S");
+}
+
+/// A conditional coalescing default carries its writes to other previously narrowed locals.
+#[test]
+fn test_nullable_fallback_flow_review_coalesce_default_effects() {
+    for prefix in [
+        "$value ??= 1;", "$value = $value ?? 1;",
+        "if ($closed || $value === null) { return 0; }",
+        "if ($value === null) { return 0; }",
+    ] {
+        for body in [
+            "$other ??= resetDefaultFlow($value);",
+            "$other = $other ?? resetDefaultFlow($value);",
+            "consumeDefaultFlow($other ??= resetDefaultFlow($value));",
+            "$other ??= (($value = null) === null);",
+        ] {
+            let source = format!("<?php function resetDefaultFlow(?int &$value): bool {{ $value = null; return true; }} function consumeDefaultFlow(bool $flag): void {{}} function run(?int $value, ?bool $other, bool $closed): int {{ {prefix} {body} return $value; }}");
+            expect_error(&source, "return type expects int");
+        }
+    }
+    check_source("<?php function resetSkippedFlow(?int &$value): bool { $value = null; return true; } function run(?int $value, bool $other): int { $value ??= 1; $other ??= resetSkippedFlow($value); return $value; }").unwrap();
+}
+
+/// Alternatives retain entry storage for reference checks and preserve their result precision.
+#[test]
+fn test_nullable_fallback_flow_review_conditional_reference_contracts() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for body in [
+        "$r = $flag ? widen($value) : change($value);",
+        "$r = $flag ? $value++ : change($value);",
+        "$r = match ($n) { 1 => widen($value), default => change($value) };",
+        "$r = $flag ? widen($value) : false; change($value);",
+        "$r = ($flag && widen($value)) || change($value);",
+        "$flag && widen($value); resetValue($value);",
+    ] {
+        let source = format!("<?php function widen(mixed &$value): bool {{ $value = 'str'; return true; }} function change(int &$value): bool {{ ++$value; return true; }} function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value, bool $flag, int $n): void {{ $value ??= 1; {body} }}");
+        let error = check_source(&source).expect_err(&source);
+        assert!(error.contains("by-reference storage") || error.contains("got int|null"), "{source}: {error}");
+    }
+    for source in [
+        "<?php function widen(mixed &$value): bool { $value = 'str'; return true; } function run(?int $value, int $n): void { $value ??= 1; $r = match ($n) { 1 => widen($value), default => false }; }",
+        "<?php function run(?int $value, bool $flag): int { $value ??= 1; return $flag ? ($value = 2) : $value; }",
+        "<?php function run(?int $value, int $n): int { $value ??= 1; return match ($n) { 1 => ($value = 2), default => $value }; }",
+    ] { check_source(source).unwrap_or_else(|error| panic!("{source}: {error}")); }
+}
+
+/// Destructuring and catch bindings retire the previous guard before validating later stores.
+#[test]
+fn test_nullable_fallback_flow_review_rebinding_destinations() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for prefix in [
+        "$value ??= 1;", "if ($value === null) { return; }",
+        "if ($value !== null) { echo ''; }",
+    ] {
+        for binding in [
+            "[$value] = ['str'];", "list($value) = ['str'];",
+            "foreach ([['str']] as [$value]) {}",
+        ] {
+            let stores = format!("<?php function run(?int $value): void {{ {prefix} {binding} $value = 7; }}");
+            let result = check_source_full(&stores).unwrap();
+            assert!(result.warnings.iter().any(|warning| warning.message.contains("changes type from string to int")), "{stores}");
+            let error = check_source_strict(&stores).expect_err(&stores);
+            assert!(error.contains("cannot reassign $value from string to int"), "{stores}: {error}");
+            let unsafe_ref = format!("<?php function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value): void {{ {prefix} {binding} $value = 7; resetValue($value); }}");
+            expect_error(&unsafe_ref, "requires a variable with mixed/union/nullable storage");
+        }
+        let indexed = format!("<?php function appendValue(string &$value): void {{ $value .= '!'; }} function run(?int $value): void {{ {prefix} [$value] = ['str']; appendValue($value); }}");
+        check_source(&indexed).unwrap_or_else(|error| panic!("{indexed}: {error}"));
+        // Keyed destructuring uses adaptive Mixed storage, including for a literal hash.
+        let keyed = format!("<?php function appendValue(mixed &$value): void {{ $value .= '!'; }} function run(?int $value): void {{ {prefix} ['key' => $value] = ['key' => 'str']; appendValue($value); }}");
+        check_source(&keyed).unwrap_or_else(|error| panic!("{keyed}: {error}"));
+        expect_error(&keyed.replace("mixed &$value", "string &$value"), "cannot bind typed by-reference storage");
+    }
+    check_source("<?php function run(?int $value): void { $value ??= 1; try { throw new Exception(); } catch (Exception $value) { $value = new Exception(); echo get_class($value); } }").unwrap();
+}
+
+/// Stores under a redundant guard must invalidate a coalesced non-null read view.
+#[test]
+fn test_nullable_fallback_flow_review_guarded_null_stores() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for prefix in ["$value ??= 1;", "if ($value === null) { return 0; }"] {
+        for body in [
+            "if (is_int($value)) { $value = null; }",
+            "if ($value !== null) { $value = null; }",
+            "if (is_int($value)) { $value = null; } else { $value = 2; }",
+            "while (is_int($value)) { $value = null; }",
+            "while (is_int($value)) { $value = null; break; }",
+            "$r = is_int($value) ? ($value = null) : 0;",
+            "is_int($value) && (($value = null) === null);",
+        ] {
+            let source = format!("<?php function run(?int $value): int {{ {prefix} {body} return $value; }}");
+            expect_error(&source, "return type expects int");
+        }
+    }
+    expect_error("<?php class S {} final class ChildS extends S {} function run(?S $value): S { $value ??= new ChildS(); if ($value instanceof ChildS) { $value = null; } return $value; }", "return type expects S");
+    for body in [
+        "if (is_int($value)) { $value = 2; }",
+        "if (is_int($value)) { $value = 2; } else { $value = 3; }",
+        "while (is_int($value)) { $value = 2; break; }",
+    ] {
+        let source = format!("<?php function run(?int $value): int {{ $value ??= 1; {body} return $value; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    let incompatible = "<?php function run(?int $value): void { $value ??= 1; if (is_int($value)) { $value = 1.5; } }";
+    let error = check_source_strict(incompatible).expect_err(incompatible);
+    assert!(error.contains("cannot reassign"), "{error}");
+    for body in ["if (is_int($value)) { widen($value); }", "while (is_int($value)) { widen($value); break; }"] {
+        let source = format!("<?php function widen(mixed &$value): void {{ $value = 'str'; }} function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value): void {{ $value ??= 1; {body} resetValue($value); }}");
+        expect_error(&source, "by-reference storage");
+    }
+}
+
+/// A nested guard keeps the nullable slot ABI for raw and matching nullable references.
+#[test]
+fn test_nullable_fallback_flow_review_nested_reference_storage() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for (ty, default, predicate) in [
+        ("int", "1", "is_int"), ("float", "1.5", "is_float"),
+        ("bool", "true", "is_bool"), ("string", "'str'", "is_string"),
+    ] {
+        for prefix in [format!("$value ??= {default};"), "if ($value === null) { return; }".to_string()] {
+            for body in [
+                format!("if ({predicate}($value)) {{ change($value); }}"),
+                format!("while ({predicate}($value)) {{ change($value); break; }}"),
+                format!("$r = {predicate}($value) ? change($value) : false;"),
+                format!("{predicate}($value) && change($value);"),
+            ] {
+                let raw = format!("<?php function change({ty} &$value): bool {{ $value = {default}; return true; }} function run(?{ty} $value): void {{ {prefix} {body} }}");
+                expect_error(&raw, "by-reference");
+                let matching = raw.replace(&format!("change({ty} &"), &format!("change(?{ty} &"));
+                check_source(&matching).unwrap_or_else(|error| panic!("{matching}: {error}"));
+            }
+        }
+    }
+}
+
+/// A fresh guard cannot restore tagged reference storage after an increment boxed the local.
+#[test]
+fn test_nullable_fallback_flow_review_fresh_guard_widening() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for update in ["$value++;", "++$value;", "$value--;", "--$value;"] {
+        for body in [
+            "if ($value !== null) { UPDATE }",
+            "while ($value !== null) { UPDATE break; }",
+            "$r = $value !== null ? (UPDATE) : 0;",
+            "if ($value !== null && (UPDATE) > 100) { echo ''; }",
+        ] {
+            let expression = update.trim_end_matches(';');
+            let body = if body.contains("(UPDATE)") { body.replace("UPDATE", expression) }
+                else { body.replace("UPDATE", update) };
+            let source = format!("<?php function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value): void {{ {body} resetValue($value); }}");
+            expect_error(&source, "by-reference storage");
+        }
+    }
+    // Pure guards retain their physical contract, including a kept terminal complement.
+    for body in ["if ($value === null) { return; }", "if ($value !== null) { echo ''; }"] {
+        let source = format!("<?php function resetValue(?int &$value): void {{ $value = null; }} function run(?int $value): void {{ {body} resetValue($value); }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// Multiple scalar alternatives stay opaque, while a proven float needs an explicit int cast.
+#[test]
+fn test_nullable_fallback_flow_review_union_coercion_diagnostic() {
+    let _strict = elephc::strict_php::scoped_enable();
+    let source = "<?php function toInt(int $value): int { return $value; } function run(mixed $value): int { if (is_float($value) || is_bool($value)) { return toInt($value); } return 0; }";
+    check_source(source).unwrap();
+    let single = source.replace("is_float($value) || is_bool($value)", "is_float($value)");
+    let error = check_source(&single).expect_err(&single);
+    assert!(error.contains("got float"), "{error}");
+    assert!(error.contains("add an explicit cast at the call site"), "{error}");
+    check_source(&single.replace("toInt($value)", "toInt((int)$value)")).unwrap();
+}
+
+/// Loop headers reject tagged references before a later checked update boxes the same slot.
+#[test]
+fn test_nullable_fallback_flow_review_loop_reference_storage() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for prefix in ["", "$value ??= 1;"] {
+        for (header, tail) in [
+            ("foreach ([1, 2, 3] as $i)", ""),
+            ("while ($flag)", "$flag = false;"),
+            ("for ($i = 0; $i < 3; $i++)", ""),
+            ("do", ""),
+        ] {
+            for update in ["$value++;", "++$value;", "$value--;", "--$value;"] {
+                let body = format!("showValue($value); $value = 1; if ($value !== null) {{ {update} }} {tail}");
+                let loop_body = if header == "do" { format!("do {{ {body} }} while (false);") }
+                    else { format!("{header} {{ {body} }}") };
+                let source = format!("<?php function showValue(?int &$value): void {{ var_dump($value); }} function run(?int $value, bool $flag): void {{ {prefix} {loop_body} }}");
+                expect_error(&source, "by-reference storage");
+            }
+        }
+    }
+    // Integer-only stores keep the compact nullable reference contract.
+    check_source("<?php function showValue(?int &$value): void { var_dump($value); } function run(?int $value): void { foreach ([1, 2] as $i) { showValue($value); $value = $i; } }").unwrap();
+    expect_error("<?php function run(?int $value): void { foreach ([1] as $i) { $value++; } }", "Cannot increment");
+}
+
+/// Fixed tagged updates remain compatible with later nullable reference calls and captures.
+#[test]
+fn test_nullable_fallback_flow_review_fixed_reference_continuation() {
+    let _strict = elephc::strict_php::scoped_enable();
+    for update in ["$value++;", "++$value;", "$value--;", "--$value;"] {
+        let source = format!("<?php function resetValue(?int &$value): void {{ $value = null; }} function incoming(?int &$value): void {{ if ($value !== null) {{ {update} }} resetValue($value); }} function captured(?int $value): void {{ $show = function () use (&$value) {{ var_dump($value); }}; if ($value !== null) {{ {update} }} resetValue($value); $show(); }} function capturedLoop(?int $value): void {{ $show = function () use (&$value) {{ var_dump($value); }}; foreach ([1, 2] as $i) {{ resetValue($value); $value = $i; if ($value !== null) {{ {update} }} $show(); }} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    let late_capture = "<?php function resetValue(?int &$value): void { $value = null; } function run(?int $value): void { if ($value !== null) { $value++; } $show = function () use (&$value) { var_dump($value); }; resetValue($value); }";
+    expect_error(late_capture, "by-reference storage");
+    let detached_capture = "<?php function nullableValue(?int $value): ?int { return $value; } function resetValue(?int &$value): void { $value = null; } function run(?int $value): void { $show = function () use (&$value) { var_dump($value); }; unset($value); $value = nullableValue(5); if ($value !== null) { $value++; } resetValue($value); }";
+    expect_error(detached_capture, "by-reference storage");
+    check_source("<?php function resetValue(?int &$value): void { $value = null; } function run(?int $value, bool $flag): void { if ($flag) { $show = function () use (&$value) { var_dump($value); }; $show(); } if ($value !== null) { $value++; } resetValue($value); }").unwrap();
+}

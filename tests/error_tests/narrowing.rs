@@ -278,11 +278,10 @@ fn test_the_guard_stops_governing_after_the_region_stores() {
 fn a_store_in_a_nested_guard_ends_the_enclosing_guards_authority() {
     let source =
         "<?php $a = 1; if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; } echo $a;";
-    // The same answer in both modes, and the same one HEAD gave before this feature: the outer
-    // region is not transparent, but its replay from `$a`'s own `int` sees no conflict either,
-    // so `mixed_storage_scan` does not mark the name and the checker reports.
-    expect_error(source, "cannot reassign $a from string to int");
-    expect_error_strict(source, "cannot reassign $a from string to int");
+    // The nested branch can leave either its float store or the enclosing string view.
+    // Neither alternative permits the later integer store, in either locals mode.
+    expect_error(source, "cannot reassign $a from string|float to int");
+    expect_error_strict(source, "cannot reassign $a from string|float to int");
 }
 
 /// Shared classes for the readonly-narrowing fixtures: `Box::$plugin` is readonly, and only

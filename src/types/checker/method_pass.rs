@@ -249,7 +249,9 @@ impl Checker {
                                 method_env.get(name).map(|ty| (name.clone(), ty.clone()))
                             })
                             .collect();
-                    self.with_local_storage_context(
+                    let return_facts = crate::optimize::ReturnBoundaryFacts::new(method.return_type.as_ref(),
+                        method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body);
+                    crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
                         method_ref_params,
                         method_param_names,
                         pre_bound_own_storage,
@@ -258,6 +260,7 @@ impl Checker {
                             checker.boxed_parameter_locals.extend(method.params.iter()
                                 .filter(|(_, annotation, _, _)| annotation.is_none())
                                 .map(|(name, _, _, _)| name.clone()));
+                            checker.seed_parameter_value_proofs(&method_env);
                             for s in &method.body {
                                 if let Err(error) = checker.check_stmt(s, &mut method_env) {
                                     method_errors.extend(error.flatten());
@@ -265,7 +268,7 @@ impl Checker {
                             }
                             Ok(())
                         },
-                    )?;
+                    ))?;
                     let method_has_errors = !method_errors.is_empty();
                     pass_errors.extend(method_errors);
 

@@ -39,6 +39,8 @@ mod nullsafe_chain;
 mod ref_place_args;
 mod boxed_user_sort;
 mod scalar_literals;
+mod local_values;
+use local_values::lower_local_value;
 mod numeric_binary;
 mod integer_destinations;
 pub(crate) use integer_destinations::coerce_integer_arithmetic;
@@ -220,7 +222,7 @@ pub(crate) use pending_owners::lower_with_pending_owners;
 pub(crate) use branch_conditions::lower_condition;
 pub(crate) use call_operand_owners::{
     pin_in_flight_owners, register_owned_call_operand, retire_owned_call_operand,
-    root_owned_call_operand, unpin_in_flight_owners, unregister_owned_call_operand,
+    root_owned_call_operand, root_value_for_later_use, unpin_in_flight_owners, unregister_owned_call_operand,
     PinnedInFlightOwner,
 };
 pub(crate) use property_access::singular_object_class;
@@ -307,7 +309,7 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
         ExprKind::FloatLiteral(value) => lower_float_literal(ctx, *value, expr),
         ExprKind::BoolLiteral(value) => lower_bool_literal(ctx, *value, expr),
         ExprKind::Null => lower_null(ctx, expr),
-        ExprKind::Variable(name) => ctx.load_local(name, Some(expr.span)),
+        ExprKind::Variable(name) => lower_local_value(ctx, name, expr.span),
         ExprKind::BinaryOp { left, op, right } => lower_binary(ctx, left, op, right, expr),
         ExprKind::InstanceOf { value, target } => lower_instanceof(ctx, value, target, expr),
         ExprKind::Negate(inner) => lower_numeric_unary(ctx, inner, Op::INeg, Op::FNeg, expr),

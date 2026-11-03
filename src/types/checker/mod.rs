@@ -36,8 +36,14 @@ mod generic_new;
 mod generic_variance;
 mod inference;
 mod loop_storage;
+mod loop_flow;
+mod finally_flow;
+mod function_names;
+mod loop_backedges;
 mod method_pass;
 mod member_receivers;
+mod local_values;
+mod binding_flow;
 mod mixed_storage_scan;
 mod numeric_regions;
 mod packed_counter;
@@ -63,7 +69,6 @@ use crate::types::{
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
-pub(crate) use loop_storage::loop_carried_storage_types;
 pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 pub(crate) use schema::normalize_signature_default_receivers;
@@ -92,6 +97,7 @@ pub(crate) struct Checker {
     pub completed_function_signatures: HashSet<String>,
     /// Canonical function signatures indexed by fully-qualified name.
     pub functions: HashMap<String, FunctionSig>,
+    function_name_indices: function_names::FunctionNameIndices,
     /// Functions whose body is currently being checked.
     ///
     /// Recursive calls may use their provisional signature, but must not re-specialize the same
@@ -403,6 +409,14 @@ pub(crate) struct Checker {
     pub null_probe_depth: usize,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
+    /// Control-flow exits owned by the current function-like frame's active loops.
+    loop_flow_frames: Vec<loop_flow::LoopFlowFrame>,
+    /// Shared callable exception summaries for source-order try/catch flow.
+    exception_analysis: Option<crate::optimize::CheckerExceptionAnalysis>,
+    /// Function exits waiting for the active try statements' finally blocks.
+    finally_flow_frames: Vec<finally_flow::FinallyFlowFrame>,
+    /// Actual RHS types observed while validating finally, keyed by body scope and source node.
+    finally_assigned_value_types: HashMap<(String, usize), (Span, PhpType)>,
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,
     /// used to restore correct depth when branching through `finally`.
     pub finally_break_continue_bases: Vec<usize>,
@@ -453,6 +467,8 @@ pub(crate) struct Checker {
     pub array_push_property_plans: HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Receiver types observed at member uses, with conflicting checker visits disabled.
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Integer reads agreed by every authoritative flow visit to one scoped local use.
+    pub local_value_read_types: crate::types::LocalValueReadTypes,
     /// Named-function contexts and body scopes queried without their local branch guards.
     pub member_receiver_analysis_scopes: Vec<(Option<String>, String)>,
     /// Caller locals converted to canonical boxed storage by a validated by-reference call.
@@ -498,6 +514,8 @@ pub(crate) struct Checker {
     /// A binding created inside a branch may be uninitialized at a later depth-0 point, so
     /// releasing or abandoning its slot there is not safe.
     pub local_binding_depth: HashMap<String, u32>,
+    /// Bindings present on every currently reaching path, independent of storage eligibility.
+    pub definitely_bound_locals: HashSet<String>,
     /// For each local currently VIEWED through a flow guard's narrowing, the type its binding
     /// held before the guard narrowed it, paired with the view the guard published.
     ///
@@ -519,6 +537,8 @@ pub(crate) struct Checker {
     /// Empty outside a guarded region, and reset per body — a name narrowed in the caller says
     /// nothing about a same-named local in a closure checked inside the branch.
     pub narrowed_local_origins: HashMap<String, NarrowedLocalOrigin>,
+    /// Monotonic binding revisions distinguish a fresh guard from an intervening store.
+    pub next_guard_binding_revision: u64,
     /// Locals of the current body that a reference can reach: `=&` target or source,
     /// by-reference closure captures (`use (&$x)`), any plain variable passed to a
     /// by-reference parameter, and BOTH names a `foreach ($arr as &$v)` touches — the iterable
@@ -538,6 +558,8 @@ pub(crate) struct Checker {
     /// Unlike captures and by-reference parameters, these can retain native packed-array
     /// storage through multiple local names, so a write must not widen only one view.
     pub ref_assign_aliased_locals: HashSet<String>,
+    /// Locals already captured by reference at this point in the current body.
+    pub by_ref_captured_locals: HashSet<String>,
     /// Earlier by-reference captures whose native element layout a later push must preserve.
     pub array_push_capture_sites: HashMap<String, HashSet<Span>>,
     /// Current local bindings that alias a managed container entry whose physical cell payload
@@ -633,7 +655,9 @@ pub(crate) struct Checker {
     /// [`SavedLocalBindingScope`].
     pub mixed_storage_locals: HashSet<String>,
     /// Union storage contracts retained while guards narrow reads of a local in the current body.
-    pub guarded_union_types: HashMap<String, PhpType>,
+    pub guarded_union_types: HashMap<String, GuardedLocalStorage>,
+    /// Reference captures discovered during immutable inference and awaiting the caller's effects walk.
+    pub pending_ref_capture_invalidations: HashSet<String>,
     /// Every statement-form assignment to a mixed-storage local, as span -> the SET of local names
     /// boxed at that position, so EIR lowering can declare the slot boxed BEFORE the first store
     /// instead of inferring it from the first stored value. Cumulative across bodies, and keyed
@@ -697,10 +721,14 @@ pub(crate) struct Checker {
 pub(crate) struct SavedLocalBindingScope {
     conditional_depth: u32,
     binding_depth: HashMap<String, u32>,
+    definitely_bound: HashSet<String>,
     narrowed_origins: HashMap<String, NarrowedLocalOrigin>,
+    loop_flow_frames: Vec<loop_flow::LoopFlowFrame>,
+    finally_flow_frames: Vec<finally_flow::FinallyFlowFrame>,
     ref_aliased: HashSet<String>,
     non_builtin_ref_aliased: HashSet<String>,
     ref_assign_aliased: HashSet<String>,
+    by_ref_captured: HashSet<String>,
     array_push_capture_sites: HashMap<String, HashSet<Span>>,
     boxed_ref_aliased: HashSet<String>,
     boxed_ref_invalidations: Vec<HashSet<String>>,
@@ -709,7 +737,8 @@ pub(crate) struct SavedLocalBindingScope {
     boxed_parameters: HashSet<String>,
     typed: HashMap<String, PhpType>,
     mixed_storage: HashSet<String>,
-    guarded_unions: HashMap<String, PhpType>,
+    guarded_unions: HashMap<String, GuardedLocalStorage>,
+    pending_ref_captures: HashSet<String>,
     contains_eval: bool,
     numeric_regions: HashMap<Span, HashSet<String>>,
     numeric_region_retypes: HashSet<(Span, String)>,
@@ -722,6 +751,10 @@ pub(crate) struct SavedLocalBindingScope {
 pub struct NarrowedLocalOrigin {
     /// Type the binding held before any guard on this name narrowed it.
     pub origin: PhpType,
+    /// Logical value read before this guard, independent of its outer physical origin.
+    pub read_input: PhpType,
+    /// Identity of the value guarded, inherited by nested guards until a real store.
+    pub binding_revision: u64,
     /// The guard's own view, or `None` once the region has stored something of its own.
     ///
     /// A failed assignment merge is re-measured against `origin` only while the environment
@@ -745,6 +778,15 @@ pub struct NarrowedLocalOrigin {
     /// `$a = 1; if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; }` compiled while
     /// the same two stores written flat did not (raised in review on #509).
     pub stored_in_region: bool,
+}
+
+/// A storage contract retained independently of a local's current read type.
+#[derive(Clone)]
+pub struct GuardedLocalStorage {
+    /// The binding representation that a reference still addresses.
+    pub ty: PhpType,
+    /// Coalescing needs the original assignment contract; a guard keeps ordinary flow merges.
+    pub coalesced: bool,
 }
 
 /// One entry of [`Checker::narrowed_local_origins`] as it stood before a guard region opened it.
@@ -896,15 +938,19 @@ impl Checker {
         let saved = SavedLocalBindingScope {
             conditional_depth: self.local_conditional_depth,
             binding_depth: std::mem::take(&mut self.local_binding_depth),
+            definitely_bound: std::mem::take(&mut self.definitely_bound_locals),
             // A guard in the ENCLOSING body narrows the enclosing frame's local. A closure
             // checked inside that branch binds its own name in its own frame, so inheriting the
             // origin would measure the closure's store against a binding it does not own.
             narrowed_origins: std::mem::take(&mut self.narrowed_local_origins),
+            loop_flow_frames: std::mem::take(&mut self.loop_flow_frames),
+            finally_flow_frames: std::mem::take(&mut self.finally_flow_frames),
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
             non_builtin_ref_aliased: std::mem::take(
                 &mut self.non_builtin_ref_aliased_locals,
             ),
             ref_assign_aliased: std::mem::take(&mut self.ref_assign_aliased_locals),
+            by_ref_captured: std::mem::take(&mut self.by_ref_captured_locals),
             array_push_capture_sites: std::mem::take(&mut self.array_push_capture_sites),
             boxed_ref_aliased: std::mem::take(&mut self.boxed_ref_aliased_locals),
             boxed_ref_invalidations: std::mem::take(
@@ -919,6 +965,7 @@ impl Checker {
             // box a callee local the pre-scan never marked.
             mixed_storage: std::mem::take(&mut self.mixed_storage_locals),
             guarded_unions: std::mem::take(&mut self.guarded_union_types),
+            pending_ref_captures: std::mem::take(&mut self.pending_ref_capture_invalidations),
             contains_eval: self.body_contains_eval,
             numeric_regions: std::mem::take(&mut self.numeric_region_sites),
             numeric_region_retypes: std::mem::take(&mut self.numeric_region_retypes),
@@ -926,6 +973,7 @@ impl Checker {
         };
         self.local_conditional_depth = 0;
         self.local_parameter_names = param_names.iter().cloned().collect();
+        self.definitely_bound_locals = param_names.iter().cloned().collect();
         self.local_binding_depth = param_names.into_iter().map(|name| (name, 0)).collect();
         self.typed_local_names = HashMap::new();
         // Cleared rather than inherited: a caller that runs `eval` says nothing about the body
@@ -941,10 +989,14 @@ impl Checker {
     pub(crate) fn exit_local_binding_scope(&mut self, saved: SavedLocalBindingScope) {
         self.local_conditional_depth = saved.conditional_depth;
         self.local_binding_depth = saved.binding_depth;
+        self.definitely_bound_locals = saved.definitely_bound;
         self.narrowed_local_origins = saved.narrowed_origins;
+        self.loop_flow_frames = saved.loop_flow_frames;
+        self.finally_flow_frames = saved.finally_flow_frames;
         self.ref_aliased_locals = saved.ref_aliased;
         self.non_builtin_ref_aliased_locals = saved.non_builtin_ref_aliased;
         self.ref_assign_aliased_locals = saved.ref_assign_aliased;
+        self.by_ref_captured_locals = saved.by_ref_captured;
         self.array_push_capture_sites = saved.array_push_capture_sites;
         self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
         self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;
@@ -954,6 +1006,7 @@ impl Checker {
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
         self.guarded_union_types = saved.guarded_unions;
+        self.pending_ref_capture_invalidations = saved.pending_ref_captures;
         self.body_contains_eval = saved.contains_eval;
         self.numeric_region_sites = saved.numeric_regions;
         self.numeric_region_retypes = saved.numeric_region_retypes;
@@ -976,17 +1029,38 @@ impl Checker {
         pre_guard: Option<&PhpType>,
         view: &PhpType,
     ) -> SavedNarrowingOrigin {
+        if !name.starts_with('\u{1}') && stmt_check::type_is_definitely_non_null(view) {
+            self.definitely_bound_locals.insert(name.to_string());
+        }
         let previous = self.narrowed_local_origins.get(name).cloned();
+        let binding_revision = previous.as_ref().map_or_else(|| {
+            self.next_guard_binding_revision += 1;
+            self.next_guard_binding_revision
+        }, |entry| entry.binding_revision);
+        let read_input = pre_guard.map(|input| previous.as_ref()
+            .filter(|entry| !entry.stored_in_region && entry.view.as_ref() == Some(input)
+                && !self.type_contains_values(&entry.read_input, input))
+            .map_or_else(|| input.clone(), |entry| entry.read_input.clone()));
         match previous
             .as_ref()
             .map(|entry| entry.origin.clone())
             .or_else(|| pre_guard.cloned())
         {
             Some(origin) => {
+                let read_input = read_input.unwrap_or_else(|| origin.clone());
+                if !name.starts_with('\u{1}')
+                    && matches!(origin.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
+                {
+                    self.guarded_union_types.entry(name.to_string()).or_insert_with(|| {
+                        GuardedLocalStorage { ty: origin.clone(), coalesced: false }
+                    });
+                }
                 self.narrowed_local_origins.insert(
                     name.to_string(),
                     NarrowedLocalOrigin {
                         origin,
+                        read_input,
+                        binding_revision,
                         view: Some(view.clone()),
                         // The REGION is new even when the entry inherits an outer origin, so a
                         // store the enclosing region already made does not follow it inward. It
@@ -1021,6 +1095,9 @@ impl Checker {
     /// clearing only `view` let a nested store's effect evaporate before `exit_flow_narrowing`
     /// could see it.
     pub(crate) fn republish_flow_narrowing(&mut self, name: &str, view: &PhpType) {
+        if !name.starts_with('\u{1}') && stmt_check::type_is_definitely_non_null(view) {
+            self.definitely_bound_locals.insert(name.to_string());
+        }
         if let Some(entry) = self.narrowed_local_origins.get_mut(name) {
             entry.view = Some(view.clone());
         }
@@ -1033,6 +1110,8 @@ impl Checker {
     /// A no-op for a name no guard has narrowed, which is every name most of the time.
     pub(crate) fn record_store_over_flow_narrowing(&mut self, name: &str) {
         if let Some(entry) = self.narrowed_local_origins.get_mut(name) {
+            self.next_guard_binding_revision += 1;
+            entry.binding_revision = self.next_guard_binding_revision;
             entry.view = None;
             entry.stored_in_region = true;
         }
@@ -1045,15 +1124,16 @@ impl Checker {
     /// its view cleared. See [`NarrowedLocalOrigin::stored_in_region`] for why nesting would
     /// otherwise be a way around the rule.
     pub(crate) fn exit_flow_narrowing(&mut self, saved: SavedNarrowingOrigin) {
-        let region_stored = self
+        let region = self
             .narrowed_local_origins
             .get(&saved.name)
-            .is_some_and(|entry| entry.stored_in_region);
+            .map(|entry| (entry.stored_in_region, entry.binding_revision));
         match saved.previous {
             Some(mut entry) => {
-                if region_stored {
+                if let Some((true, revision)) = region {
                     entry.view = None;
                     entry.stored_in_region = true;
+                    entry.binding_revision = revision;
                 }
                 self.narrowed_local_origins.insert(saved.name, entry);
             }
@@ -1070,8 +1150,12 @@ impl Checker {
     /// captures, or reflected class of the binding that is gone — that is how a stale
     /// `$f()` signature would survive an `unset($f)`.
     pub(crate) fn clear_local_binding_metadata(&mut self, name: &str) {
+        self.record_loop_binding_end(name);
+        self.guarded_union_types.remove(name);
+        self.pending_ref_capture_invalidations.remove(name);
         self.boxed_parameter_locals.remove(name);
         self.array_push_capture_sites.remove(name);
+        self.by_ref_captured_locals.remove(name);
         self.invalidate_boxed_ref_alias_binding(name);
         self.closure_return_types.remove(name);
         self.callable_sigs.remove(name);
@@ -1081,6 +1165,40 @@ impl Checker {
         self.first_class_callable_targets.remove(name);
         self.reflection_class_targets.remove(name);
         self.foreach_key_locals.remove(name);
+    }
+
+    /// Ends a retained local read view before a store or rebinding chooses its new contract.
+    pub(crate) fn invalidate_local_flow_narrowing(&mut self, name: &str, env: &mut TypeEnv) {
+        let origin = self.guarded_union_types.remove(name).map(|origin| origin.ty).or_else(|| {
+            self.narrowed_local_origins.get(name)
+                .filter(|origin| origin.view.is_some()).map(|origin| origin.origin.clone())
+        });
+        if let Some(origin) = origin {
+            env.insert(name.to_string(), origin);
+        }
+        self.record_store_over_flow_narrowing(name);
+    }
+
+    /// Ends a read guard and drops retained storage when an effect installs a wider layout.
+    pub(crate) fn record_local_storage_effect(&mut self, name: &str, ty: &PhpType) {
+        let retain = self.guarded_union_types.get(name).is_some_and(|storage| {
+            self.merged_assignment_type(&storage.ty, ty).as_ref() == Some(&storage.ty)
+        });
+        if !retain {
+            self.guarded_union_types.remove(name);
+        }
+        self.record_store_over_flow_narrowing(name);
+    }
+
+    /// Restores read-fact provenance after a conditional region when its storage did not change.
+    pub(crate) fn restore_guarded_storage_provenance(&mut self, saved: &HashMap<String, GuardedLocalStorage>) {
+        for (name, previous) in saved {
+            if let Some(current) = self.guarded_union_types.get_mut(name) {
+                if current.ty == previous.ty {
+                    current.coalesced = previous.coalesced;
+                }
+            }
+        }
     }
 
     /// Ends the current binding's managed-cell provenance and records conditional uncertainty.
@@ -1464,6 +1582,7 @@ fn check_types_on_compiler_stack(
         closure_generator_spans: checker.closure_generator_spans,
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
+        local_value_read_types: checker.local_value_read_types,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),

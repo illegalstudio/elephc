@@ -262,9 +262,6 @@ impl Checker {
         matches!(ty, PhpType::Union(_)) && self.type_supports_mixed_numeric_dispatch(ty)
     }
 
-    /// Computes the merged type when assigning `new_ty` to a variable that already has
-    /// `existing` type. Returns `Some(merged)` when types are compatible for compound assignment
-    /// (e.g., `+=`), or `None` when the types cannot be merged (e.g., two incompatible scalars).
     /// Returns whether every runtime value of `actual` is representable in `expected`
     /// WITHOUT a runtime narrowing.
     ///
@@ -281,7 +278,7 @@ impl Checker {
     /// array arms, so an `array<int>` still "contains" an `array<mixed>` — the element-level
     /// instance of the same lie. That family has its own storage-contract machinery
     /// (`loop_carried_storage_types`) and is left for a separate audit.
-    fn type_contains_values(&self, expected: &PhpType, actual: &PhpType) -> bool {
+    pub(in crate::types::checker) fn type_contains_values(&self, expected: &PhpType, actual: &PhpType) -> bool {
         match actual {
             PhpType::Mixed => matches!(expected, PhpType::Mixed),
             PhpType::Union(members) => members

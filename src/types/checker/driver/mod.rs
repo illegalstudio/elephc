@@ -459,6 +459,13 @@ pub(super) fn check_types_impl(
         return Err(CompileError::from_many(errors));
     }
 
+    // Exception summaries need valid inheritance, and still precede all callable bodies.
+    // Schema errors retain conservative exception flow rather than analyzing invalid cycles.
+    if errors.is_empty() {
+        let registered_parents: Vec<_> = class_map.iter().filter_map(|(name, class)|
+            class.extends.as_ref().map(|parent| (name.clone(), parent.clone()))).collect();
+        checker.exception_analysis = Some(crate::optimize::CheckerExceptionAnalysis::new(program, &registered_parents));
+    }
     let (_, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);

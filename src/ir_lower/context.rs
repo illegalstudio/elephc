@@ -355,6 +355,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Checked receiver views at property reads and method calls, scoped to the current body.
     pub member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
+    /// Checked integer value views, separate from the physical local/reference contract.
+    pub local_value_read_types: &'m crate::types::LocalValueReadTypes,
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
     pub boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
     pub first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
@@ -545,6 +547,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         closure_generator_spans: &'m HashSet<Span>,
         array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
         member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
+        local_value_read_types: &'m crate::types::LocalValueReadTypes,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
         generic_call_sites: &'m HashMap<(String, Span), String>,
@@ -614,6 +617,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             closure_generator_spans,
             array_push_property_plans,
             member_receiver_types,
+            local_value_read_types,
             boxed_reference_promotion_sites,
             first_class_builtin_call_types,
             generic_call_sites,
@@ -2131,6 +2135,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
+    /// Loads the physical occupant even when an earlier unset left a logical null fact.
+    pub(crate) fn load_local_for_retirement_pin(
+        &mut self, name: &str, span: Option<Span>,
+    ) -> LoweredValue {
+        let logical_type = self.local_types.get(name).cloned();
+        if logical_type == Some(PhpType::Void) {
+            if let Some(slot) = self.local_slots.get(name).copied() {
+                self.local_types.insert(name.to_string(), self.builder.local_php_type(slot));
+            }
+        }
+        let value = self.load_local(name, span);
+        if let Some(logical_type) = logical_type {
+            self.local_types.insert(name.to_string(), logical_type);
+        }
+        value
+    }
+
     /// Returns the PHP type `load_local` stamps on a read of `name`, without emitting the read.
     ///
     /// `None` means the read is not a frame, reference-cell or global slot load (an extern
@@ -2370,9 +2391,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         }
         let tracked = Ownership::php_type_needs_lifetime_tracking(&storage_type);
+        // A later branch join can box a scalar after this overwrite was lowered.
+        // Retire its previous owner at the final storage type, even on a forward edge.
+        let scalar_may_be_boxed = matches!(storage_type.codegen_repr(), PhpType::TaggedScalar
+            | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
         let eval_may_have_reloaded_slot = self.eval_barrier_active
             && self.builder.local_kind(slot) == LocalKind::PhpLocal;
-        if !tracked && self.loop_stack.is_empty() && !eval_may_have_reloaded_slot {
+        if !tracked && !scalar_may_be_boxed && self.loop_stack.is_empty() && !eval_may_have_reloaded_slot {
             // Outside loops no back-edge can execute a later widening store before
             // this one, and no eval reload can have populated it, so the untracked
             // storage type is final for this path.

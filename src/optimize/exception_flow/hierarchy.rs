@@ -43,6 +43,27 @@ mod tests {
         assert!(hierarchy.is_subtype("RuntimeException", "Error"));
         assert!(!hierarchy.is_subtype("RuntimeException", "Exception"));
     }
+
+    /// Registered builtin parents are transitive without overriding explicit source relations.
+    #[test]
+    fn test_nullable_fallback_flow_registered_exception_parents() {
+        let tokens = crate::lexer::tokenize("<?php class RuntimeException extends Error {}").unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let mut hierarchy = ExceptionHierarchy::from_program(&program, HashSet::new());
+        hierarchy.add_registered_parents(&[
+            ("TypeError".to_string(), "Error".to_string()),
+            ("ArgumentCountError".to_string(), "TypeError".to_string()),
+            ("JsonException".to_string(), "Exception".to_string()),
+            ("RuntimeException".to_string(), "Exception".to_string()),
+        ]);
+        assert!(hierarchy.is_subtype("ArgumentCountError", "TypeError"));
+        assert!(hierarchy.is_subtype("ArgumentCountError", "tHrOwAbLe"));
+        assert!(hierarchy.is_subtype("JsonException", "Exception"));
+        assert!(!hierarchy.is_subtype("JsonException", "Error"));
+        assert!(!hierarchy.is_subtype("TypeError", "Exception"));
+        assert!(hierarchy.is_subtype("RuntimeException", "Error"));
+        assert!(!hierarchy.is_subtype("RuntimeException", "Exception"));
+    }
 }
 
 /// Canonical class/interface relations used to compare thrown and caught types.
@@ -112,6 +133,16 @@ impl ExceptionHierarchy {
         hierarchy.collect_program_declarations(program);
         hierarchy.add_throwable_roots();
         hierarchy
+    }
+
+    /// Fills missing nominal parent edges while preserving source and checked metadata.
+    pub(super) fn add_registered_parents(&mut self, parents: &[(String, String)]) {
+        for (name, parent) in parents {
+            let key = php_symbol_key(name);
+            if self.class_names.insert(key.clone()) {
+                self.parents.insert(key, parent.clone());
+            }
+        }
     }
 
     /// Adds the PHP root throwable relations needed even when no checker metadata is supplied.

@@ -52,6 +52,9 @@ pub(crate) const CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET: usize = CALLABLE_DESC_STA
 
 const CALLABLE_DESC_VARIADIC_NONE: u64 = u64::MAX;
 
+/// Inline scalar pairs own no heap child, unlike the boxed Mixed binding tag 7.
+const CALLABLE_BINDING_TAG_TAGGED_SCALAR: u64 = 16;
+
 const CALLABLE_DESC_DEFAULT_NONE: u64 = 0;
 const CALLABLE_DESC_DEFAULT_INT: u64 = 1;
 const CALLABLE_DESC_DEFAULT_STRING: u64 = 2;
@@ -353,6 +356,11 @@ pub(crate) fn emit_store_current_result_to_runtime_capture(
 ) {
     let offset = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16;
     match capture_ty.codegen_repr() {
+        PhpType::TaggedScalar => {
+            abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
+            abi::emit_store_to_address(emitter,
+                crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter), descriptor_reg, offset + 8);
+        }
         PhpType::Float => {
             abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), descriptor_reg, offset);
         }
@@ -377,6 +385,11 @@ pub(crate) fn emit_load_runtime_capture_to_result(
 ) {
     let offset = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16;
     match capture_ty.codegen_repr() {
+        PhpType::TaggedScalar => {
+            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
+            abi::emit_load_from_address(emitter,
+                crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter), descriptor_reg, offset + 8);
+        }
         PhpType::Float => {
             abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), descriptor_reg, offset);
         }
@@ -539,7 +552,10 @@ fn binding_table(
         let (name_word, name_len) = optional_string_word(data, Some(name));
         words.push(name_word);
         words.push(DataWord::U64(name_len));
-        words.push(DataWord::U64(type_tag(&ty.codegen_repr())));
+        let tag = if ty.codegen_repr() == PhpType::TaggedScalar {
+            CALLABLE_BINDING_TAG_TAGGED_SCALAR
+        } else { type_tag(&ty.codegen_repr()) };
+        words.push(DataWord::U64(tag));
         words.push(DataWord::U64(u64::from(*by_ref)));
     }
     Some(data.add_words(words))
@@ -643,6 +659,18 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform, Target};
     use crate::span::Span;
+
+    /// Nullable integer captures must never be traced or released as boxed heap pointers.
+    #[test]
+    fn test_nullable_fallback_flow_tagged_capture_metadata() {
+        let mut data = DataSection::new();
+        binding_table(&mut data, &[("value".into(), PhpType::TaggedScalar, false)]).unwrap();
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let asm = data.emit(Target::parse(target).unwrap());
+            assert!(asm.contains("    .quad 0x0000000000000010\n"), "{asm}");
+            assert!(!asm.contains("    .quad 0x0000000000000007\n"), "{asm}");
+        }
+    }
 
     /// Verifies that descriptor records contain signature, environment, and invocation pointers.
     #[test]

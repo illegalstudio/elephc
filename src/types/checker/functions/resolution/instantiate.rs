@@ -199,7 +199,7 @@ impl Checker {
         if let Some(variants) = self.function_variant_groups.get(name).cloned() {
             // The public specialization keeps runtime dispatch. Binding only the first body
             // would silently select it regardless of which include actually executed.
-            self.function_variant_groups.insert(
+            self.publish_function_variants(
                 instantiated.clone(),
                 variants.iter().map(|variant| generics::instantiated_name(variant, &bindings)).collect(),
             );
@@ -243,8 +243,7 @@ impl Checker {
             .variadic_type
             .as_ref()
             .map(|ty| generics::substitute_value_type(ty, &bindings));
-        self.fn_decls
-            .insert(instantiated.clone(), instantiated_decl);
+        self.publish_function_declaration(instantiated.clone(), instantiated_decl);
         Ok(instantiated)
     }
 }

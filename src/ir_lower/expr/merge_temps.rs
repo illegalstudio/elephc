@@ -365,7 +365,15 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
     }
     match &expr.kind {
         ExprKind::Variable(name) => {
-            normalize_value_php_type(crate::types::eir_value_php_type(&ctx.local_type(name)))
+            let storage = local_values::projected_local_value_type(ctx, name, expr.span)
+                .unwrap_or_else(|| ctx.local_type(name));
+            // A tagged local still has int/null alternatives. Keep them for the branch
+            // join instead of merging the representation marker with an integer as Mixed.
+            if storage.codegen_repr() == PhpType::TaggedScalar {
+                storage
+            } else {
+                normalize_value_php_type(crate::types::eir_value_php_type(&storage))
+            }
         }
         ExprKind::ErrorSuppress(inner) => materialized_expr_type_for_merge(ctx, inner),
         ExprKind::BinaryOp { left, op, right } if mixed_numeric_op(op).is_some() => {

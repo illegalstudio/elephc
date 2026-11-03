@@ -1017,9 +1017,9 @@ pub(super) fn array_literal_element_type_for_ir(
             scoped_constant_value_type_for_ir(ctx, receiver, name, item)
         }
         ExprKind::Variable(name) => ir_array_storage_type(
-            ctx.local_types
+            local_values::projected_local_value_type(ctx, name, item.span).or_else(|| ctx.local_types
                 .get(name)
-                .cloned()
+                .cloned())
                 .unwrap_or_else(|| infer_expr_type_syntactic(item)),
         ),
         ExprKind::FunctionCall { name, .. } => {

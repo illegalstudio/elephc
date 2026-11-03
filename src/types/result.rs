@@ -24,6 +24,9 @@ use super::{
 /// Fixed-point loop storage contracts keyed by `(function-like scope, loop span)`.
 pub(crate) type LoopStorageTypes = HashMap<(String, Span), TypeEnv>;
 
+/// Value reads keyed by body scope, source span and local name; visits join conservatively.
+pub(crate) type LocalValueReadTypes = HashMap<(String, Span, String), PhpType>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Describes a statically-known access violation that PHP raises as a catchable
 /// exception at runtime instead of a compile-time rejection.
@@ -131,6 +134,8 @@ pub struct CheckResult {
     pub array_push_property_plans: HashMap<(String, Span), ArrayPushPropertyPlan>,
     /// Checked member receiver types by body scope and source node; conflicting visits are None.
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Source-point value read contracts; these never change a local's reference storage.
+    pub local_value_read_types: LocalValueReadTypes,
     /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.
     pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
     /// Reads proven to use native buffers on every checker visit to the source span.

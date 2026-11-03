@@ -159,9 +159,9 @@ pub(super) fn lower_builtin_call_args(
     let operands = borrowed_string_args::try_lower(ctx, name, sig, args)
         .unwrap_or_else(|| lower_planned_builtin_call_args(ctx, name, sig, args));
     let canonical = php_symbol_key(name.trim_start_matches('\\'));
-    let lowering = crate::builtins::registry::lookup(&canonical)
-        .map(|def| def.spec.semantics.argument_lowering);
-    match lowering {
+    let def = crate::builtins::registry::lookup(&canonical);
+    let lowering = def.map(|def| def.spec.semantics.argument_lowering);
+    let operands = match lowering {
         Some(crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues { arg, sole }) => {
             lower_bare_array_values_operand(ctx, sig, args, operands, arg, sole)
         }
@@ -169,6 +169,28 @@ pub(super) fn lower_builtin_call_args(
             lower_weak_string_union_operand(ctx, args, operands, arg)
         }
         _ => operands,
+    };
+    if let Some(def) = def {
+        validate_array_chunk_element_layout(ctx, def, &operands,
+            args.first().map_or_else(Span::dummy, |arg| arg.span));
+    }
+    operands
+}
+
+/// Reports the existing indexed-string chunking limitation before target codegen.
+fn validate_array_chunk_element_layout(
+    ctx: &LoweringContext<'_, '_>, def: &crate::builtins::registry::BuiltinDef,
+    operands: &[crate::ir::ValueId], span: Span,
+) {
+    if !matches!(def.spec.semantics.lowering,
+        crate::builtins::semantics::BuiltinLowering::Runtime(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayChunk)))
+    { return; }
+    if operands.first().is_some_and(|value| matches!(ctx.builder.value_php_type(*value),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Str))
+    {
+        crate::ir_lower::diagnostics::refuse(span,
+            "array_chunk() on indexed string arrays is not supported in AOT mode");
     }
 }
 
@@ -249,9 +271,10 @@ fn builtin_string_callbacks_as_first_class(
 
 /// Replaces a bare-`array` operand with the owned `array<mixed>` list of its values.
 ///
-/// See `BuiltinArgumentLowering::BareArrayValues` for why. Only an operand the checker typed as the
-/// bare declaration — `array<mixed>|array<mixed, mixed>` — is converted: a typed array already
-/// reaches the builtin's own path and needs nothing, and converting it would only copy it.
+/// See `BuiltinArgumentLowering::BareArrayValues` for why. A checked array read may still
+/// have boxed nullable storage after a guard or coalescing assignment. A single concrete
+/// container payload keeps its element/key contract through the existing typed unbox. Only
+/// runtime-layout arrays use the generic values list; native typed arrays remain direct.
 ///
 /// Ownership follows `coerce_operands_to_params`, which makes the same kind of substitution: every
 /// by-value operand is rooted FIRST, because `array_values()` may throw and an unrooted owned
@@ -271,7 +294,9 @@ fn lower_bare_array_values_operand(
     let Some(&operand) = operands.get(arg) else {
         return operands;
     };
-    if !ctx.builder.value_php_type(operand).is_php_array() {
+    if !ctx.builder.value_php_type(operand).is_php_array()
+        && ctx.builder.value_type(operand) != IrType::Heap(crate::ir::IrHeapKind::Mixed)
+    {
         return operands;
     }
     let span = args.first().map_or_else(crate::span::Span::dummy, |first| first.span);
@@ -289,19 +314,35 @@ fn lower_bare_array_values_operand(
         value: operands[arg],
         ir_type: ctx.builder.value_type(operands[arg]),
     };
-    let values = ctx.emit_owned_value(
-        crate::ir::Op::RuntimeCall,
-        vec![source.value],
-        Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-            crate::ir::RuntimeFnId::ArrayValues,
-        ))),
-        PhpType::Array(Box::new(PhpType::Mixed)),
-        crate::ir_lower::effects_lookup::runtime_effects(),
-        Some(span),
-    );
-    release_coerced_source_if_owned(ctx, source, Some(span));
+    let source_ty = ctx.builder.value_php_type(source.value).clone();
+    let values = if let Some(payload_ty) = nullable_concrete_container_payload(&source_ty) {
+        coerce_container_to_mixed_payload(ctx, source, &source_ty.codegen_repr(), &payload_ty, span)
+    } else {
+        let values = ctx.emit_owned_value(
+            crate::ir::Op::RuntimeCall,
+            vec![source.value],
+            Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::ArrayValues,
+            ))),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            crate::ir_lower::effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_coerced_source_if_owned(ctx, source, Some(span));
+        values
+    };
     operands[arg] = root_evaluated_call_argument(ctx, values, span).value;
     operands
+}
+
+/// Keeps the sole concrete container alternative of nullable physical storage.
+fn nullable_concrete_container_payload(ty: &PhpType) -> Option<PhpType> {
+    let PhpType::Union(members) = ty else { return None; };
+    let mut non_null = members.iter().filter(|member| !matches!(member, PhpType::Void | PhpType::Never));
+    let payload = non_null.next()?;
+    if non_null.next().is_none() && matches!(payload, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        Some(payload.clone())
+    } else { None }
 }
 
 /// Lowers builtin operands through the builtin's own argument-lowering strategy.
