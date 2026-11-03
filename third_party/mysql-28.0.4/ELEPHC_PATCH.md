@@ -10,7 +10,11 @@ workspace `Cargo.toml`, with these additions in `src/conn/mod.rs` (marked `eleph
 - `Conn::set_server_option(option)` — `COM_SET_OPTION` (mysqli's per-`multi_query()`
   multi-statement toggle), and in `src/conn/opts/mod.rs` the `multi_statements` option
   (`OptsBuilder::multi_statements`, default `true`) that lets a mysqli handshake omit
-  `CLIENT_MULTI_STATEMENTS`.
+  `CLIENT_MULTI_STATEMENTS`, and `mariadb_extensions` (`OptsBuilder::mariadb_extensions`,
+  default `true`) that lets it skip MariaDB's extended capabilities like mysqlnd.
+- mysqlnd-exact wire statistics: `IO_STAT_NAMES`, `IoCounters`, the per-command response
+  state machine that picks the mysqlnd packet reader of each received packet, and the
+  `CountedStream` wrapper that counts raw received bytes.
 - `IoCounters`, `GLOBAL_IO_COUNTERS`, and `Conn::io_counters()` — byte and packet counters
   updated in `raw_read_packet` / `write_packet`, the two points every packet passes
   (mysqli's `get_connection_stats()` / `mysqli_get_client_stats()`).

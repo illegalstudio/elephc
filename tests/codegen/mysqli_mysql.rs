@@ -1410,7 +1410,7 @@ echo "|client=", (int) mysqli_get_client_stats()["bytes_received"] >= (int) $aft
     ));
     assert_eq!(
         out,
-        "ctor-saw=7|tag=t|bare=Exception:mysqli_result::fetch_object(): Argument #2 ($constructor_args) must be empty when the specified class (Bare) does not have a constructor|small=int(5)\n|big=string(20) \"18446744073709551610\"\n|stmt=18446744073709551611|proc=18446744073709551611|link=18446744073709551611|sent=29|recv-big=y|pkts=1|overhead=y|client=y"
+        "ctor-saw=7|tag=t|bare=Exception:mysqli_result::fetch_object(): Argument #2 ($constructor_args) must be empty when the specified class (Bare) does not have a constructor|small=int(5)\n|big=string(20) \"18446744073709551610\"\n|stmt=18446744073709551611|proc=18446744073709551611|link=18446744073709551611|sent=33|recv-big=y|pkts=2|overhead=y|client=y"
     );
 }
 
@@ -1499,4 +1499,56 @@ $db->query("DROP TABLE mwarn");
     );
     assert_eq!(lines[3], "W:mysqli::query(): No index used in query/prepared statement SELECT * FROM mwarn WHERE v = 1");
     assert_eq!(lines.len(), 5, "{out}");
+}
+
+/// The wire statistics follow mysqlnd's own accounting, checked against PHP 8.3 mysqlnd on
+/// the same server: a command counts `physical + 1` packets and `payload + 4` bytes for
+/// each, and every received packet is charged to the counter of the mysqlnd reader that
+/// consumes it through php-src's shifted per-type tables — result headers under
+/// `rset_row`, field definitions under `prepare_response`, rows under `change_user` (the
+/// closing EOF as its 4 header bytes), EOFs under `rset_header`, OK packets nowhere.
+/// `stmt->close()` really sends COM_STMT_CLOSE, and a re-prepare reaches the server.
+#[test]
+#[ignore]
+fn test_mysqli_wire_statistics_follow_mysqlnd() {
+    let out = compile_and_run(&my_program(
+        r#"
+$keys = ["packets_sent", "packets_sent_command", "packets_received_rset_row",
+    "packets_received_prepare_response", "packets_received_rset_header",
+    "packets_received_change_user", "packets_received_ok", "bytes_received_change_user_packet"];
+$prev = $db->get_connection_stats();
+$step = function (string $label) use ($db, $keys, &$prev): void {
+    $now = $db->get_connection_stats();
+    echo $label;
+    foreach ($keys as $k) {
+        echo " ", (int) $now[$k] - (int) $prev[$k];
+    }
+    echo "|";
+    $prev = $now;
+};
+$db->query("SELECT REPEAT('x', 1000) AS a, 2 AS b")->fetch_all();
+$step("query");
+$db->ping();
+$step("ping");
+$s = $db->prepare("SELECT ? + 1 AS r, 'z' AS c");
+$step("prepare");
+$v = 5;
+$s->bind_param("i", $v);
+$s->execute();
+$s->get_result()->fetch_all();
+$step("execute");
+$s->close();
+$step("close");
+$again = $db->prepare("SELECT 1");
+$again->close();
+$again = $db->prepare("SELECT 1");
+$step("reprepare");
+$out = $db->get_connection_stats();
+echo (int) $out["protocol_overhead_out"] === 4 * (int) $out["packets_sent"] ? "overhead" : "?";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "query 2 1 1 2 1 2 0 1013|ping 2 1 0 0 0 0 0 0|prepare 2 1 0 3 2 0 0 0|execute 2 1 1 2 1 2 0 20|close 2 1 0 0 0 0 0 0|reprepare 6 3 0 2 2 0 0 0|overhead"
+    );
 }

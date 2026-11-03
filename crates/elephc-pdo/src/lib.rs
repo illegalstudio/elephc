@@ -5509,6 +5509,7 @@ pub extern "C" fn elephc_pdo_finalize(stmt_id: i64) -> i64 {
                     lock_recover(conns()).get_mut(&statement.conn_id)
                 {
                     statement.reset(connection);
+                    statement.close_native(connection);
                 }
                 1
             }

@@ -234,6 +234,10 @@ class mysqli {
         // multi_queries via connect parameter"); multi_query() turns them on with
         // COM_SET_OPTION, and query() / real_query() turn them off again.
         $_driverConfig = $_driverConfig . "servermulti=0;";
+        // mysqlnd negotiates none of MariaDB's extended capabilities either.
+        $_driverConfig = $_driverConfig . "mariadbext=0;";
+        // Every prepare() reaches the server and close() sends COM_STMT_CLOSE.
+        $_driverConfig = $_driverConfig . "stmtcache=0;";
         if (($flags & 32) != 0) {
             $_driverConfig = $_driverConfig . "compress=1;";
         }
@@ -513,33 +517,41 @@ class mysqli {
         return $_out;
     }
 
-    // mysqlnd's wire-level counters, which the bridge client counts at its
-    // packet layer: one connection's (handle >= 0) or the process-wide totals
-    // (handle -1); null for every other statistic. The protocol overhead is the
-    // 4-byte header of every packet.
+    // mysqlnd's wire-level statistics, which the patched bridge client counts
+    // exactly like mysqlnd (per-send and per-reader accounting, mysqlnd's own
+    // shifted per-packet-type tables included): one connection's (handle >= 0)
+    // or the process-wide totals (handle -1); null for every other statistic.
     private static function __elephcWireStat(int $handle, string $key): ?string {
         if ($handle < -1) {
             return null;
         }
-        if ($key === "bytes_sent") {
-            return (string) elephc_pdo_mysql_io_stat($handle, 0);
+        $_index = [
+            "bytes_sent" => 0,
+            "bytes_received" => 1,
+            "packets_sent" => 2,
+            "packets_received" => 3,
+            "protocol_overhead_in" => 4,
+            "protocol_overhead_out" => 5,
+            "packets_sent_command" => 6,
+            "bytes_received_ok_packet" => 7,
+            "bytes_received_eof_packet" => 8,
+            "bytes_received_rset_header_packet" => 9,
+            "bytes_received_rset_field_meta_packet" => 10,
+            "bytes_received_rset_row_packet" => 11,
+            "bytes_received_prepare_response_packet" => 12,
+            "bytes_received_change_user_packet" => 13,
+            "packets_received_ok" => 14,
+            "packets_received_eof" => 15,
+            "packets_received_rset_header" => 16,
+            "packets_received_rset_field_meta" => 17,
+            "packets_received_rset_row" => 18,
+            "packets_received_prepare_response" => 19,
+            "packets_received_change_user" => 20,
+        ][$key] ?? -1;
+        if ($_index < 0) {
+            return null;
         }
-        if ($key === "bytes_received") {
-            return (string) elephc_pdo_mysql_io_stat($handle, 1);
-        }
-        if ($key === "packets_sent") {
-            return (string) elephc_pdo_mysql_io_stat($handle, 2);
-        }
-        if ($key === "packets_received") {
-            return (string) elephc_pdo_mysql_io_stat($handle, 3);
-        }
-        if ($key === "protocol_overhead_in") {
-            return (string) (elephc_pdo_mysql_io_stat($handle, 3) * 4);
-        }
-        if ($key === "protocol_overhead_out") {
-            return (string) (elephc_pdo_mysql_io_stat($handle, 2) * 4);
-        }
-        return null;
+        return (string) elephc_pdo_mysql_io_stat($handle, $_index);
     }
 
     public function get_warnings(): mysqli_warning|false {

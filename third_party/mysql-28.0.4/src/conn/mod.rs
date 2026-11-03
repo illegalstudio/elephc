@@ -199,43 +199,338 @@ impl ResultSetInfo {
     }
 }
 
-/// elephc patch: wire-level traffic counters (mysqlnd's `bytes_sent`, `bytes_received`,
-/// `packets_sent`, `packets_received`). Shared through an `Arc` so a reader keeps seeing
-/// them while another thread owns the `Conn`. Bytes count each physical packet's payload
-/// plus its 4-byte header, before compression and TLS.
-#[derive(Debug, Default)]
+/// elephc patch: mysqlnd's wire-level statistics, named by their mysqli statistics keys and
+/// counted the way mysqlnd counts them (see `IoCounters::record_*`).
+pub const IO_STAT_NAMES: [&str; 21] = [
+    "bytes_sent",
+    "bytes_received",
+    "packets_sent",
+    "packets_received",
+    "protocol_overhead_in",
+    "protocol_overhead_out",
+    "packets_sent_command",
+    "bytes_received_ok_packet",
+    "bytes_received_eof_packet",
+    "bytes_received_rset_header_packet",
+    "bytes_received_rset_field_meta_packet",
+    "bytes_received_rset_row_packet",
+    "bytes_received_prepare_response_packet",
+    "bytes_received_change_user_packet",
+    "packets_received_ok",
+    "packets_received_eof",
+    "packets_received_rset_header",
+    "packets_received_rset_field_meta",
+    "packets_received_rset_row",
+    "packets_received_prepare_response",
+    "packets_received_change_user",
+];
+
+const STAT_BYTES_SENT: usize = 0;
+const STAT_BYTES_RECEIVED: usize = 1;
+const STAT_PACKETS_SENT: usize = 2;
+const STAT_PACKETS_RECEIVED: usize = 3;
+const STAT_OVERHEAD_IN: usize = 4;
+const STAT_OVERHEAD_OUT: usize = 5;
+const STAT_PACKETS_SENT_CMD: usize = 6;
+const STAT_BYTES_TYPED: usize = 7;
+const STAT_PACKETS_TYPED: usize = 14;
+
+/// elephc patch: the counters behind `IO_STAT_NAMES`. Shared through an `Arc` so a reader
+/// keeps seeing them while another thread owns the `Conn`.
+#[derive(Debug)]
 pub struct IoCounters {
-    pub bytes_sent: std::sync::atomic::AtomicU64,
-    pub bytes_received: std::sync::atomic::AtomicU64,
-    pub packets_sent: std::sync::atomic::AtomicU64,
-    pub packets_received: std::sync::atomic::AtomicU64,
+    stats: [std::sync::atomic::AtomicU64; IO_STAT_NAMES.len()],
 }
+
+const IO_STAT_ZERO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// elephc patch: process-wide totals of every connection's [`IoCounters`] (mysqlnd's client
 /// statistics).
 pub static GLOBAL_IO_COUNTERS: IoCounters = IoCounters {
-    bytes_sent: std::sync::atomic::AtomicU64::new(0),
-    bytes_received: std::sync::atomic::AtomicU64::new(0),
-    packets_sent: std::sync::atomic::AtomicU64::new(0),
-    packets_received: std::sync::atomic::AtomicU64::new(0),
+    stats: [IO_STAT_ZERO; IO_STAT_NAMES.len()],
 };
 
-impl IoCounters {
-    /// Records one logical packet of `payload` bytes; a payload of 0xFFFFFF bytes or more
-    /// travels as several physical packets (the last one shorter than 0xFFFFFF).
-    fn record(&self, payload: usize, sent: bool) {
-        use std::sync::atomic::Ordering::Relaxed;
-        let packets = (payload / 0xFF_FFFF) as u64 + 1;
-        let bytes = payload as u64 + 4 * packets;
-        for counters in [self, &GLOBAL_IO_COUNTERS] {
-            if sent {
-                counters.bytes_sent.fetch_add(bytes, Relaxed);
-                counters.packets_sent.fetch_add(packets, Relaxed);
-            } else {
-                counters.bytes_received.fetch_add(bytes, Relaxed);
-                counters.packets_received.fetch_add(packets, Relaxed);
-            }
+impl Default for IoCounters {
+    fn default() -> Self {
+        IoCounters {
+            stats: [IO_STAT_ZERO; IO_STAT_NAMES.len()],
         }
+    }
+}
+
+/// elephc patch: the mysqlnd packet reader a received packet goes through. The per-type
+/// statistics follow mysqlnd's `packet_type_to_statistic_*` tables, which php-src indexes
+/// with an enum they no longer line up with: an EOF lands in the result-header counters, a
+/// result header in the row counters, a field definition in the prepare-response counters,
+/// a row in the change-user counters, an OK packet nowhere, and the readers past the tables'
+/// end (prepare response, change-user response, statistics, auth-plugin exchanges) in
+/// `bytes_sent`. Verified against PHP 8.3 / 8.4 mysqlnd.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PacketReader {
+    Greet,
+    AuthResp,
+    ChangeAuthResp,
+    Ok,
+    Eof,
+    RsetHeader,
+    RsetField,
+    Row,
+    BeyondTable,
+}
+
+impl PacketReader {
+    /// The typed statistic slot (0..7 over `ok, eof, rset_header, rset_field_meta,
+    /// rset_row, prepare_response, change_user`) mysqlnd charges, if any.
+    fn typed_slot(self) -> Option<usize> {
+        match self {
+            PacketReader::AuthResp => Some(0),
+            PacketReader::ChangeAuthResp => Some(1),
+            PacketReader::Eof => Some(2),
+            PacketReader::RsetHeader => Some(4),
+            PacketReader::RsetField => Some(5),
+            PacketReader::Row => Some(6),
+            _ => None,
+        }
+    }
+}
+
+/// elephc patch: which mysqlnd reader the next received packet goes through, advanced by
+/// the commands sent and the responses read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResponseState {
+    Greeting,
+    Auth,
+    ChangeAuth,
+    Idle,
+    Ok,
+    Eof,
+    BeyondTable,
+    RsetHeader,
+    Fields { remaining: u64, next_fields: u64, then_rows: bool },
+    Rows,
+    PrepareResponse,
+}
+
+impl IoCounters {
+    /// Reads statistic `index` of `IO_STAT_NAMES` (0 past the end).
+    pub fn get(&self, index: usize) -> u64 {
+        self.stats
+            .get(index)
+            .map(|stat| stat.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    fn add(&self, index: usize, value: u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.stats[index].fetch_add(value, Relaxed);
+        GLOBAL_IO_COUNTERS.stats[index].fetch_add(value, Relaxed);
+    }
+
+    /// mysqlnd_pfc::send: its packet counter starts at 1 and grows per physical packet, so
+    /// one send of `payload` bytes counts `physical + 1` packets, and `bytes_sent` the
+    /// uncompressed payload plus four header bytes for each of them.
+    fn record_send(&self, payload: usize) {
+        let packets = (payload / 0xFF_FFFF) as u64 + 2;
+        self.add(STAT_BYTES_SENT, payload as u64 + 4 * packets);
+        self.add(STAT_OVERHEAD_OUT, 4 * packets);
+        self.add(STAT_PACKETS_SENT, packets);
+    }
+
+    /// mysqlnd_read_header + the typed accounting of the reader that consumed the packet.
+    /// The EOF that ends a row stream is charged its four header bytes only (measured
+    /// against PHP 8.3 mysqlnd: text, binary, and multi-result row streams alike).
+    fn record_receive(&self, buf: &[u8], reader: PacketReader) {
+        let payload = buf.len();
+        let physical = (payload / 0xFF_FFFF) as u64 + 1;
+        self.add(STAT_OVERHEAD_IN, 4 * physical);
+        self.add(STAT_PACKETS_RECEIVED, physical);
+        let bytes = if reader == PacketReader::Row && is_eof_packet(buf) {
+            4
+        } else {
+            payload as u64 + 4
+        };
+        if let Some(slot) = reader.typed_slot() {
+            self.add(STAT_BYTES_TYPED + slot, bytes);
+            self.add(STAT_PACKETS_TYPED + slot, 1);
+        } else if reader == PacketReader::BeyondTable {
+            self.add(STAT_BYTES_SENT, bytes + 1);
+        }
+    }
+}
+
+/// elephc patch: the socket stream with mysqlnd's `bytes_received` accounting — raw bytes
+/// as the client reads them, after TLS decryption and before decompression, like
+/// mysqlnd_vio::network_read.
+#[derive(Debug)]
+struct CountedStream {
+    stream: Stream,
+    counters: Arc<IoCounters>,
+}
+
+impl Deref for CountedStream {
+    type Target = Stream;
+    fn deref(&self) -> &Stream {
+        &self.stream
+    }
+}
+
+impl io::Read for CountedStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = io::Read::read(&mut self.stream, buf)?;
+        self.counters.add(STAT_BYTES_RECEIVED, read as u64);
+        Ok(read)
+    }
+}
+
+impl io::Write for CountedStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        io::Write::write(&mut self.stream, buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        io::Write::flush(&mut self.stream)
+    }
+}
+
+/// Reads a length-encoded integer at `*pos`, advancing it.
+fn lenenc_at(buf: &[u8], pos: &mut usize) -> Option<u64> {
+    let first = *buf.get(*pos)?;
+    *pos += 1;
+    let width = match first {
+        0..=0xFA => return Some(u64::from(first)),
+        0xFC => 2,
+        0xFD => 3,
+        0xFE => 8,
+        _ => return None,
+    };
+    let bytes = buf.get(*pos..*pos + width)?;
+    *pos += width;
+    Some(bytes.iter().rev().fold(0u64, |acc, byte| (acc << 8) | u64::from(*byte)))
+}
+
+const MORE_RESULTS_EXISTS: u16 = 0x0008;
+
+/// Returns the status flags of an OK packet (`0x00`, affected rows, insert id, status).
+fn ok_packet_status(buf: &[u8]) -> u16 {
+    let mut pos = 1;
+    if lenenc_at(buf, &mut pos).is_none() || lenenc_at(buf, &mut pos).is_none() {
+        return 0;
+    }
+    buf.get(pos..pos + 2)
+        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+        .unwrap_or(0)
+}
+
+/// Returns the status flags of an EOF packet (`0xFE`, warnings, status).
+fn eof_packet_status(buf: &[u8]) -> u16 {
+    buf.get(3..5)
+        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+        .unwrap_or(0)
+}
+
+/// Whether `buf` is an EOF packet (`0xFE` with fewer than 9 bytes).
+fn is_eof_packet(buf: &[u8]) -> bool {
+    buf.first() == Some(&0xFE) && buf.len() < 9
+}
+
+impl ResponseState {
+    /// The state after sending command byte `command`.
+    fn after_command(command: u8) -> Self {
+        match command {
+            0x03 | 0x17 => ResponseState::RsetHeader, // COM_QUERY, COM_STMT_EXECUTE
+            0x16 => ResponseState::PrepareResponse,   // COM_STMT_PREPARE
+            0x1C => ResponseState::Rows,              // COM_STMT_FETCH
+            0x1B | 0x0D => ResponseState::Eof,        // COM_SET_OPTION, COM_DEBUG
+            0x09 | 0x11 => ResponseState::BeyondTable, // COM_STATISTICS, COM_CHANGE_USER
+            0x01 | 0x18 | 0x19 => ResponseState::Idle, // QUIT, SEND_LONG_DATA, STMT_CLOSE
+            _ => ResponseState::Ok,
+        }
+    }
+
+    /// Classifies one received packet and advances the state.
+    fn consume(&mut self, buf: &[u8]) -> PacketReader {
+        let first = buf.first().copied().unwrap_or(0);
+        let (reader, next) = match *self {
+            ResponseState::Greeting => (PacketReader::Greet, ResponseState::Auth),
+            ResponseState::Auth => (
+                PacketReader::AuthResp,
+                match first {
+                    0xFE => ResponseState::ChangeAuth,
+                    0x01 => ResponseState::Auth,
+                    _ => ResponseState::Idle,
+                },
+            ),
+            ResponseState::ChangeAuth => (
+                PacketReader::ChangeAuthResp,
+                if first == 0x01 { ResponseState::ChangeAuth } else { ResponseState::Idle },
+            ),
+            ResponseState::Idle | ResponseState::Ok => (PacketReader::Ok, ResponseState::Idle),
+            ResponseState::Eof => (PacketReader::Eof, ResponseState::Idle),
+            ResponseState::BeyondTable => (
+                PacketReader::BeyondTable,
+                if first == 0xFE || first == 0x01 { ResponseState::BeyondTable } else { ResponseState::Idle },
+            ),
+            ResponseState::RsetHeader => (
+                PacketReader::RsetHeader,
+                match first {
+                    0x00 if ok_packet_status(buf) & MORE_RESULTS_EXISTS != 0 => ResponseState::RsetHeader,
+                    0x00 | 0xFF => ResponseState::Idle,
+                    // LOCAL INFILE: mysqlnd reads the post-upload reply as a header again.
+                    0xFB => ResponseState::RsetHeader,
+                    _ => {
+                        let mut pos = 0;
+                        let columns = lenenc_at(buf, &mut pos).unwrap_or(0);
+                        ResponseState::Fields { remaining: columns, next_fields: 0, then_rows: true }
+                    }
+                },
+            ),
+            ResponseState::Fields { remaining, next_fields, then_rows } => {
+                if remaining > 0 {
+                    (
+                        PacketReader::RsetField,
+                        ResponseState::Fields { remaining: remaining - 1, next_fields, then_rows },
+                    )
+                } else if next_fields > 0 {
+                    (
+                        PacketReader::Eof,
+                        ResponseState::Fields { remaining: next_fields, next_fields: 0, then_rows },
+                    )
+                } else if then_rows {
+                    (PacketReader::Eof, ResponseState::Rows)
+                } else {
+                    (PacketReader::Eof, ResponseState::Idle)
+                }
+            }
+            ResponseState::Rows => (
+                PacketReader::Row,
+                if first == 0xFF {
+                    ResponseState::Idle
+                } else if is_eof_packet(buf) {
+                    if eof_packet_status(buf) & MORE_RESULTS_EXISTS != 0 {
+                        ResponseState::RsetHeader
+                    } else {
+                        ResponseState::Idle
+                    }
+                } else {
+                    ResponseState::Rows
+                },
+            ),
+            ResponseState::PrepareResponse => (
+                PacketReader::BeyondTable,
+                if first == 0x00 {
+                    let columns = buf.get(5..7).map(|b| u64::from(u16::from_le_bytes([b[0], b[1]]))).unwrap_or(0);
+                    let params = buf.get(7..9).map(|b| u64::from(u16::from_le_bytes([b[0], b[1]]))).unwrap_or(0);
+                    match (params, columns) {
+                        (0, 0) => ResponseState::Idle,
+                        (0, columns) => ResponseState::Fields { remaining: columns, next_fields: 0, then_rows: false },
+                        (params, columns) => ResponseState::Fields { remaining: params, next_fields: columns, then_rows: false },
+                    }
+                } else {
+                    ResponseState::Idle
+                },
+            ),
+        };
+        *self = next;
+        reader
     }
 }
 
@@ -243,7 +538,7 @@ impl IoCounters {
 #[derive(Debug)]
 struct ConnInner {
     opts: Opts,
-    stream: Option<MySyncFramed<Stream>>,
+    stream: Option<MySyncFramed<CountedStream>>,
     stmt_cache: StmtCache,
 
     // TODO: clean this up
@@ -270,6 +565,8 @@ struct ConnInner {
 
     /// elephc patch: this connection's wire traffic counters.
     io_counters: Arc<IoCounters>,
+    /// elephc patch: the mysqlnd packet reader the next received packet goes through.
+    response_state: ResponseState,
 }
 
 impl ConnInner {
@@ -293,6 +590,7 @@ impl ConnInner {
             nonce: Vec::new(),
             reset_upon_return: opts.get_pool_opts().reset_connection(),
             io_counters: Arc::new(IoCounters::default()),
+            response_state: ResponseState::Greeting,
 
             opts,
         }
@@ -391,11 +689,11 @@ impl Conn {
             .map(Option::unwrap_or_default)
     }
 
-    fn stream_ref(&self) -> &MySyncFramed<Stream> {
+    fn stream_ref(&self) -> &MySyncFramed<CountedStream> {
         self.0.stream.as_ref().expect("incomplete connection")
     }
 
-    fn stream_mut(&mut self) -> &mut MySyncFramed<Stream> {
+    fn stream_mut(&mut self) -> &mut MySyncFramed<CountedStream> {
         self.0.stream.as_mut().expect("incomplete connection")
     }
 
@@ -556,8 +854,9 @@ impl Conn {
     fn switch_to_ssl(&mut self, ssl_opts: SslOpts) -> Result<()> {
         let stream = self.0.stream.take().expect("incomplete conn");
         let (in_buf, out_buf, codec, stream) = stream.destruct();
+        let CountedStream { stream, counters } = stream;
         let stream = stream.make_secure(self.0.opts.get_host(), ssl_opts)?;
-        let stream = MySyncFramed::construct(in_buf, out_buf, codec, stream);
+        let stream = MySyncFramed::construct(in_buf, out_buf, codec, CountedStream { stream, counters });
         self.0.stream = Some(stream);
         Ok(())
     }
@@ -602,7 +901,10 @@ impl Conn {
                 bind_address,
             )?
         };
-        self.0.stream = Some(MySyncFramed::new(stream));
+        self.0.stream = Some(MySyncFramed::new(CountedStream {
+            stream,
+            counters: Arc::clone(&self.0.io_counters),
+        }));
         Ok(())
     }
 
@@ -611,7 +913,8 @@ impl Conn {
             Err(Error::server_disconnected())
         } else {
             // elephc patch: count the packet's wire traffic.
-            self.0.io_counters.record(buffer.len(), false);
+            let reader = self.0.response_state.consume(buffer);
+            self.0.io_counters.record_receive(buffer, reader);
             Ok(())
         }
     }
@@ -655,7 +958,7 @@ impl Conn {
         // elephc patch: count the packet's wire traffic.
         let payload = data.remaining();
         self.stream_mut().send(data)?;
-        self.0.io_counters.record(payload, true);
+        self.0.io_counters.record_send(payload);
         Ok(())
     }
 
@@ -859,6 +1162,10 @@ impl Conn {
     ///
     /// This function has to be enhanced if client supports more MariaDB features.
     fn get_mariadb_client_flags(&self) -> MariadbCapabilities {
+        if !self.0.opts.get_mariadb_extensions() {
+            // elephc patch: see `OptsBuilder::mariadb_extensions`.
+            return MariadbCapabilities::empty();
+        }
         MariadbCapabilities::MARIADB_CLIENT_CACHE_METADATA
             | MariadbCapabilities::MARIADB_CLIENT_STMT_BULK_OPERATIONS
             | MariadbCapabilities::MARIADB_CLIENT_BULK_UNIT_RESULTS
@@ -1108,6 +1415,7 @@ impl Conn {
         self.reset_seq_id();
         debug_assert!(!buf.is_empty());
         self.0.last_command = buf[0];
+        self.begin_command(buf[0]);
         self.write_packet(&mut &*buf)
     }
 
@@ -1118,7 +1426,15 @@ impl Conn {
 
         self.reset_seq_id();
         self.0.last_command = buf[0];
+        self.begin_command(buf[0]);
         self.write_packet(&mut &*buf)
+    }
+
+    /// elephc patch: a command packet is about to go out (mysqlnd's
+    /// `packets_sent_command`, and the reader its response goes through).
+    fn begin_command(&mut self, command: u8) {
+        self.0.io_counters.add(STAT_PACKETS_SENT_CMD, 1);
+        self.0.response_state = ResponseState::after_command(command);
     }
 
     fn send_long_data(&mut self, stmt_id: u32, params: &[Value]) -> Result<()> {

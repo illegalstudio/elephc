@@ -277,6 +277,11 @@ pub(crate) struct InnerOpts {
     /// per `multi_query()` with `COM_SET_OPTION`.
     multi_statements: bool,
 
+    /// elephc patch: whether the handshake negotiates MariaDB's extended capabilities
+    /// (defaults to `true`). mysqli connects without them, like mysqlnd, so its sessions see
+    /// the same packets php does.
+    mariadb_extensions: bool,
+
     /// Connect attributes
     connect_attrs: Option<HashMap<String, String>>,
 
@@ -339,6 +344,7 @@ impl Default for InnerOpts {
             compress: None,
             additional_capabilities: CapabilityFlags::empty(),
             multi_statements: true,
+            mariadb_extensions: true,
             connect_attrs: Some(HashMap::new()),
             secure_auth: true,
             enable_cleartext_plugin: false,
@@ -540,6 +546,11 @@ impl Opts {
     /// elephc patch: whether the handshake requests `CLIENT_MULTI_STATEMENTS`.
     pub fn get_multi_statements(&self) -> bool {
         self.0.multi_statements
+    }
+
+    /// elephc patch: whether the handshake negotiates MariaDB's extended capabilities.
+    pub fn get_mariadb_extensions(&self) -> bool {
+        self.0.mariadb_extensions
     }
 
     /// Connect attributes (the default connect attributes are sent by default).
@@ -1290,6 +1301,13 @@ impl OptsBuilder {
     /// `true`).
     pub fn multi_statements(mut self, multi_statements: bool) -> Self {
         self.opts.0.multi_statements = multi_statements;
+        self
+    }
+
+    /// elephc patch: whether the handshake negotiates MariaDB's extended capabilities
+    /// (defaults to `true`).
+    pub fn mariadb_extensions(mut self, mariadb_extensions: bool) -> Self {
+        self.opts.0.mariadb_extensions = mariadb_extensions;
         self
     }
 

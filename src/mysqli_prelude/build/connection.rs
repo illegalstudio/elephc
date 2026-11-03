@@ -297,6 +297,8 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     ),
                     s_assign("_driverConfig", e_str("")),
                     s_assign("_driverConfig", e_binop(e_var("_driverConfig"), BinOp::Concat, e_str("servermulti=0;"))),
+                    s_assign("_driverConfig", e_binop(e_var("_driverConfig"), BinOp::Concat, e_str("mariadbext=0;"))),
+                    s_assign("_driverConfig", e_binop(e_var("_driverConfig"), BinOp::Concat, e_str("stmtcache=0;"))),
                     s_if(
                         e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(32)), BinOp::NotEq, e_int(0)),
                         vec![
@@ -775,55 +777,16 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
+                    s_assign("_index", e_null_coalesce(e_index(e_array_assoc(vec![(e_str("bytes_sent"), e_int(0)), (e_str("bytes_received"), e_int(1)), (e_str("packets_sent"), e_int(2)), (e_str("packets_received"), e_int(3)), (e_str("protocol_overhead_in"), e_int(4)), (e_str("protocol_overhead_out"), e_int(5)), (e_str("packets_sent_command"), e_int(6)), (e_str("bytes_received_ok_packet"), e_int(7)), (e_str("bytes_received_eof_packet"), e_int(8)), (e_str("bytes_received_rset_header_packet"), e_int(9)), (e_str("bytes_received_rset_field_meta_packet"), e_int(10)), (e_str("bytes_received_rset_row_packet"), e_int(11)), (e_str("bytes_received_prepare_response_packet"), e_int(12)), (e_str("bytes_received_change_user_packet"), e_int(13)), (e_str("packets_received_ok"), e_int(14)), (e_str("packets_received_eof"), e_int(15)), (e_str("packets_received_rset_header"), e_int(16)), (e_str("packets_received_rset_field_meta"), e_int(17)), (e_str("packets_received_rset_row"), e_int(18)), (e_str("packets_received_prepare_response"), e_int(19)), (e_str("packets_received_change_user"), e_int(20))]), e_var("key")), e_neg(e_int(1)))),
                     s_if(
-                        e_binop(e_var("key"), BinOp::StrictEq, e_str("bytes_sent")),
+                        e_binop(e_var("_index"), BinOp::Lt, e_int(0)),
                         vec![
-                            s_return(e_cast(CastType::String, e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_int(0)]))),
+                            s_return(e_null()),
                         ],
                         vec![],
                         None,
                     ),
-                    s_if(
-                        e_binop(e_var("key"), BinOp::StrictEq, e_str("bytes_received")),
-                        vec![
-                            s_return(e_cast(CastType::String, e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_int(1)]))),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("key"), BinOp::StrictEq, e_str("packets_sent")),
-                        vec![
-                            s_return(e_cast(CastType::String, e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_int(2)]))),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("key"), BinOp::StrictEq, e_str("packets_received")),
-                        vec![
-                            s_return(e_cast(CastType::String, e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_int(3)]))),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("key"), BinOp::StrictEq, e_str("protocol_overhead_in")),
-                        vec![
-                            s_return(e_cast(CastType::String, e_binop(e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_int(3)]), BinOp::Mul, e_int(4)))),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("key"), BinOp::StrictEq, e_str("protocol_overhead_out")),
-                        vec![
-                            s_return(e_cast(CastType::String, e_binop(e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_int(2)]), BinOp::Mul, e_int(4)))),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_return(e_null()),
+                    s_return(e_cast(CastType::String, e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_var("_index")]))),
                 ]),
         )
         .method(

@@ -290,16 +290,22 @@ the connection, so a later `real_connect()` on the same object starts clean.
   `mysqli_warning` cannot be constructed directly.
 - `get_connection_stats()`, `mysqli_get_client_stats()`, and
   `mysqli_get_links_stats()` return mysqlnd's statistics arrays with every key
-  php reports (values as numeric strings). The counters elephc can observe are
-  tracked: connections, closes, `COM_*` commands sent, result-set and
-  buffered-row counts, `no_index_used` / `bad_index_used`, and the wire
-  traffic — `bytes_sent`, `bytes_received`, `packets_sent`,
-  `packets_received`, and `protocol_overhead_in` / `_out` (4 header bytes per
-  packet), counted at the bridge client's packet layer before compression and
-  TLS. The client totals of `mysqli_get_client_stats()` include PDO MySQL
-  connections, like mysqlnd's. The per-packet-type byte counters
-  (`bytes_received_ok_packet`, `packets_received_rset_row`, …) and the
-  allocator counters (`mem_*`) stay `"0"`.
+  php reports (values as numeric strings). The wire statistics follow mysqlnd's
+  own accounting and match PHP 8.3 mysqlnd on the same server: `bytes_sent` /
+  `packets_sent` / `protocol_overhead_out` (each command counts its physical
+  packets plus one, as mysqlnd does), `packets_sent_command`, `bytes_received`
+  (raw socket bytes — after TLS decryption, before decompression),
+  `packets_received`, `protocol_overhead_in`, and the per-packet-type
+  `bytes_received_*_packet` / `packets_received_*` pairs, charged through
+  php-src's own (shifted) reader tables: result headers show up under
+  `rset_row`, field definitions under `prepare_response`, rows under
+  `change_user`, EOFs under `rset_header`. A mysqli session negotiates the same
+  protocol features mysqlnd does (no MariaDB extended capabilities, no client
+  statement cache: every `prepare()` reaches the server and `close()` sends
+  `COM_STMT_CLOSE`). The `mem_*` counters are `"0"`, as in php with its default
+  `mysqlnd.collect_memory_statistics=Off`. The connection-level counters
+  (connections, closes, `COM_*` commands, `no_index_used` / `bad_index_used`,
+  result-set and buffered-row counts) are tracked too.
 - `debug()` returns `true`: mysqlnd's client-side debug tracing is compiled out
   of release builds (`MYSQLI_DEBUG_TRACE_ENABLED` is `0`), where php does the same.
 
@@ -402,6 +408,13 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
 - **Property writes stick**: the public `mysqli` / `mysqli_result` /
   `mysqli_stmt` properties are refreshed after operations but are not
   write-barriered; assigning to them is not rejected.
+- **Statistics timing and decode-time counters**: the bridge reads a result
+  set's rows when `execute()` / `multi_query()` runs rather than on the first
+  fetch, so the wire counters reach php's values once the results are consumed
+  (a snapshot taken in between can differ). The row-decoding counters
+  (`proto_text_fetched_*`, `proto_binary_fetched_*`,
+  `bytes_received_real_data_*`) stay `"0"`, and the result-set, free-result,
+  and statement-lifecycle counters are approximations of mysqlnd's.
 - **`insert_id` / `affected_rows` / `num_rows` are `int|string`**, as php
   declares them. elephc type-checks calls statically, so passing one straight
   to an `int` parameter needs an `(int)` cast where php would coerce at run

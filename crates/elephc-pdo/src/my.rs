@@ -122,6 +122,12 @@ struct MyDriverOptions {
     /// connects without it (unless `MYSQLI_CLIENT_MULTI_STATEMENTS`), like mysqlnd, and
     /// toggles the server option around `multi_query()`.
     handshake_multi_statements: bool,
+    /// Whether the handshake negotiates MariaDB's extended capabilities (mysqli: no, like
+    /// mysqlnd).
+    mariadb_extensions: bool,
+    /// Whether native prepares go through the client's statement cache. mysqli: no, like
+    /// mysqlnd — every prepare() reaches the server and finalize sends COM_STMT_CLOSE.
+    stmt_cache: bool,
 }
 
 impl Default for MyDriverOptions {
@@ -138,6 +144,8 @@ impl Default for MyDriverOptions {
             ssl_cipher: None,
             server_public_key: None,
             handshake_multi_statements: true,
+            mariadb_extensions: true,
+            stmt_cache: true,
             io_timeout_secs: None,
         }
     }
@@ -257,18 +265,12 @@ fn native_type_name(t: ColumnType) -> &'static str {
     }
 }
 
-/// Reads counter `which` (0 bytes sent, 1 bytes received, 2 packets sent, 3 packets
-/// received) from a set of wire traffic counters; `0` for any other selector.
+/// Reads wire statistic `which` (an index into `mysql::IO_STAT_NAMES`, mysqlnd's own
+/// statistic keys) from a set of wire traffic counters; `0` for any other selector.
 pub fn io_counter(counters: &mysql::IoCounters, which: i64) -> i64 {
-    use std::sync::atomic::Ordering::Relaxed;
-    let value = match which {
-        0 => counters.bytes_sent.load(Relaxed),
-        1 => counters.bytes_received.load(Relaxed),
-        2 => counters.packets_sent.load(Relaxed),
-        3 => counters.packets_received.load(Relaxed),
-        _ => 0,
-    };
-    i64::try_from(value).unwrap_or(i64::MAX)
+    usize::try_from(which)
+        .map(|index| i64::try_from(counters.get(index)).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 /// The linked pure-Rust MySQL client's implementation/version string, reported as
@@ -310,6 +312,8 @@ pub struct MyConn {
     pub buffered_query: bool,
     /// Whether client-side execution accepts more than one SQL statement.
     pub multi_statements: bool,
+    /// Whether finalizing a native statement sends COM_STMT_CLOSE (no statement cache).
+    pub closes_statements: bool,
     /// Whether an unbuffered statement still has unread rows.
     pub unbuffered_active: bool,
     /// Warning count from the final OK/EOF packet of the last completed operation.
@@ -744,6 +748,8 @@ fn parse_driver_options(config: &str) -> Result<MyDriverOptions, String> {
             "ignore" => options.ignore_space = value == "1",
             "multi" => options.multi_statements = value != "0",
             "servermulti" => options.handshake_multi_statements = value != "0",
+            "mariadbext" => options.mariadb_extensions = value != "0",
+            "stmtcache" => options.stmt_cache = value != "0",
             "buffered" => options.buffered_query = value != "0",
             "capath" if !value.is_empty() => options.ssl_ca_path = Some(PathBuf::from(value)),
             "cipher" if !value.is_empty() => options.ssl_cipher = Some(value),
@@ -1938,7 +1944,12 @@ impl MyConn {
         if driver_options.compress {
             opts = opts.compress(Some(mysql::Compression::default()));
         }
-        opts = opts.multi_statements(driver_options.handshake_multi_statements);
+        opts = opts
+            .multi_statements(driver_options.handshake_multi_statements)
+            .mariadb_extensions(driver_options.mariadb_extensions);
+        if !driver_options.stmt_cache {
+            opts = opts.stmt_cache_size(0);
+        }
         if let Some(secs) = driver_options.io_timeout_secs {
             // mysqlnd applies MYSQLI_OPT_READ_TIMEOUT to the socket stream, so a
             // stalled server fails the read (and a stalled write) instead of hanging.
@@ -1989,6 +2000,7 @@ impl MyConn {
             fetch_table_names: false,
             buffered_query: driver_options.buffered_query,
             multi_statements: driver_options.multi_statements,
+            closes_statements: !driver_options.stmt_cache,
             unbuffered_active: false,
             warning_count: 0,
             in_transaction: false,
@@ -2593,8 +2605,8 @@ impl MyConn {
         }
     }
 
-    /// Returns one wire traffic counter of this connection (mysqlnd's `bytes_sent`,
-    /// `bytes_received`, `packets_sent`, `packets_received` for `which` 0..=3).
+    /// Returns wire statistic `which` (an index into `mysql::IO_STAT_NAMES`) of this
+    /// connection.
     pub fn io_stat(&self, which: i64) -> i64 {
         io_counter(&self.io_counters, which)
     }
@@ -3139,6 +3151,17 @@ impl MyStmt {
     }
 
     /// Resets the cursor and execution state, keeping the bound values.
+    /// Releases the server-side statement when the connection keeps no statement cache
+    /// (mysqli), sending COM_STMT_CLOSE like mysqlnd's mysqli_stmt_close().
+    pub fn close_native(&mut self, conn: &mut MyConn) {
+        if !conn.closes_statements || conn.conn.0.is_none() {
+            return;
+        }
+        if let Some(statement) = self.statement.take() {
+            let _ = conn.conn.close(statement);
+        }
+    }
+
     pub fn reset(&mut self, conn: &mut MyConn) -> i64 {
         if let Some(stream_id) = self.stream_id {
             conn.finish_stream(stream_id);
