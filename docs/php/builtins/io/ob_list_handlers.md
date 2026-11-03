@@ -1,8 +1,6 @@
 ---
 title: "ob_list_handlers()"
 description: "Lists all output handlers in use."
-sidebar:
-  order: 361
 ---
 
 ## ob_list_handlers()
@@ -19,8 +17,9 @@ Lists all output handlers in use.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/ob_list_handlers.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/ob_list_handlers.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "finfo_close() - internals"
 description: "Compiler internals for finfo_close(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 324
 ---
 
 ## `finfo_close()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/fileinfo_prelude/build.rs`:156](https://github.com/illegalstudio/elephc/blob/main/src/fileinfo_prelude/build.rs#L156) (`finfo_close`)
+- **Lowering**: [`src/fileinfo_prelude/build.rs`](https://github.com/illegalstudio/elephc/blob/main/src/fileinfo_prelude/build.rs) (`finfo_close`)
 - **Function symbol**: `finfo_close()`
 
 

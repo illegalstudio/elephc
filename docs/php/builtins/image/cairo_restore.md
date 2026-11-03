@@ -1,8 +1,6 @@
 ---
 title: "cairo_restore()"
 description: "Restores the context state saved by the matching cairo_save()."
-sidebar:
-  order: 439
 ---
 
 ## cairo_restore()
@@ -20,8 +18,9 @@ Restores the context state saved by the matching cairo_save().
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

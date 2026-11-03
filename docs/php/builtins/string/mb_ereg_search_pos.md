@@ -1,8 +1,6 @@
 ---
 title: "mb_ereg_search_pos()"
 description: "Returns the next multibyte regex match byte offset and length, or false."
-sidebar:
-  order: 924
 ---
 
 ## mb_ereg_search_pos()
@@ -21,8 +19,9 @@ Returns the next multibyte regex match byte offset and length, or false.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_search_pos.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_search_pos.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

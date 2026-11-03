@@ -1,8 +1,6 @@
 ---
 title: "memory_get_frees()"
 description: "Returns the cumulative number of native heap blocks released. Direct native reads do not allocate; eval boxes the sampled count."
-sidebar:
-  order: 704
 ---
 
 ## memory_get_frees()
@@ -19,9 +17,11 @@ Returns the cumulative number of native heap blocks released. Direct native read
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/memory_get_frees.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/memory_get_frees.rs)).
-- **Strict PHP mode**: hidden - this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
+
+- Hidden in strict PHP mode: this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 **Examples**:
 

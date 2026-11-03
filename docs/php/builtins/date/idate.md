@@ -1,8 +1,6 @@
 ---
 title: "idate()"
 description: "Formats a timestamp with a single format character and returns it as an integer."
-sidebar:
-  order: 230
 ---
 
 ## idate()
@@ -21,8 +19,9 @@ Formats a timestamp with a single format character and returns it as an integer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

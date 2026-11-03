@@ -1,8 +1,6 @@
 ---
 title: "array_replace()"
 description: "Replaces elements from passed arrays into the first array."
-sidebar:
-  order: 35
 ---
 
 ## array_replace()
@@ -21,8 +19,9 @@ Replaces elements from passed arrays into the first array.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

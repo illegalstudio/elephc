@@ -1,8 +1,6 @@
 ---
 title: "extension_loaded()"
 description: "Checks whether a named PHP extension is loaded."
-sidebar:
-  order: 677
 ---
 
 ## extension_loaded()
@@ -20,8 +18,9 @@ Checks whether a named PHP extension is loaded.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/extension_loaded.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/extension_loaded.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

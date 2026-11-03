@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stat()"
 description: "Returns the server's current status line."
-sidebar:
-  order: 162
 ---
 
 ## mysqli_stat()
@@ -20,8 +18,9 @@ Returns the server's current status line.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

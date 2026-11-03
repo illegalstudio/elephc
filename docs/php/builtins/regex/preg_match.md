@@ -1,8 +1,6 @@
 ---
 title: "preg_match()"
 description: "Performs a regular expression match."
-sidebar:
-  order: 836
 ---
 
 ## preg_match()
@@ -22,8 +20,9 @@ Performs a regular expression match.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

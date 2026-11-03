@@ -1,8 +1,6 @@
 ---
 title: "shell_exec()"
 description: "Executes a command via the shell and returns the complete output as a string."
-sidebar:
-  order: 831
 ---
 
 ## shell_exec()
@@ -20,8 +18,11 @@ Executes a command via the shell and returns the complete output as a string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at compile time for iOS library targets.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/shell_exec.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/shell_exec.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
+
+- Compiled code can call it on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at compile time for iOS library targets.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "session_reset()"
 description: "Reloads the session data from storage, discarding this request's changes."
-sidebar:
-  order: 1073
 ---
 
 ## session_reset()
@@ -19,8 +17,9 @@ Reloads the session data from storage, discarding this request's changes.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

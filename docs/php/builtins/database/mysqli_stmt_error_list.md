@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_error_list()"
 description: "Returns every error of the last call on a statement."
-sidebar:
-  order: 168
 ---
 
 ## mysqli_stmt_error_list()
@@ -20,8 +18,9 @@ Returns every error of the last call on a statement.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

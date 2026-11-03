@@ -1,8 +1,6 @@
 ---
 title: "curl_share_setopt() - internals"
 description: "Compiler internals for curl_share_setopt(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 794
 ---
 
 ## `curl_share_setopt()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1802](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1802) (`curl_share_setopt`)
+- **Lowering**: [`src/curl_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs) (`curl_share_setopt`)
 - **Function symbol**: `curl_share_setopt()`
 
 

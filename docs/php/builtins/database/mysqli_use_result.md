@@ -1,8 +1,6 @@
 ---
 title: "mysqli_use_result()"
 description: "Starts reading a result row by row from the server."
-sidebar:
-  order: 184
 ---
 
 ## mysqli_use_result()
@@ -20,8 +18,9 @@ Starts reading a result row by row from the server.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

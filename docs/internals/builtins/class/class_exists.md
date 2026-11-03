@@ -1,8 +1,6 @@
 ---
 title: "class_exists() - internals"
 description: "Compiler internals for class_exists(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 80
 ---
 
 ## `class_exists()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/class_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/class_exists.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

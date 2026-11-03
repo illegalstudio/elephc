@@ -1,8 +1,6 @@
 ---
 title: "xml_parser_free()"
 description: "Frees an XML parser; a no-op kept for compatibility."
-sidebar:
-  order: 1092
 ---
 
 ## xml_parser_free()
@@ -20,8 +18,9 @@ Frees an XML parser; a no-op kept for compatibility.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xml_parser_free.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xml_parser_free.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

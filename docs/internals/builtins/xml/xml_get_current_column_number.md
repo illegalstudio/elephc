@@ -1,8 +1,6 @@
 ---
 title: "xml_get_current_column_number() - internals"
 description: "Compiler internals for xml_get_current_column_number(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1085
 ---
 
 ## `xml_get_current_column_number()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/parser.rs`:1535](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1535) (`xml_get_current_column_number`)
+- **Lowering**: [`src/xml_prelude/build/parser.rs`](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs) (`xml_get_current_column_number`)
 - **Function symbol**: `xml_get_current_column_number()`
 
 

@@ -1,8 +1,6 @@
 ---
 title: "mysqli_field_count()"
 description: "Returns how many columns the last query produced."
-sidebar:
-  order: 128
 ---
 
 ## mysqli_field_count()
@@ -20,8 +18,9 @@ Returns how many columns the last query produced.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

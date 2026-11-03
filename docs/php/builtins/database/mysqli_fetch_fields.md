@@ -1,8 +1,6 @@
 ---
 title: "mysqli_fetch_fields()"
 description: "Returns metadata for every column of a result."
-sidebar:
-  order: 124
 ---
 
 ## mysqli_fetch_fields()
@@ -20,8 +18,9 @@ Returns metadata for every column of a result.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

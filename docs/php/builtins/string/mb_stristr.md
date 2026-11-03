@@ -1,8 +1,6 @@
 ---
 title: "mb_stristr()"
 description: "Returns text before or from the first case-insensitive substring match, or false."
-sidebar:
-  order: 952
 ---
 
 ## mb_stristr()
@@ -23,8 +21,9 @@ Returns text before or from the first case-insensitive substring match, or false
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_stristr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_stristr.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

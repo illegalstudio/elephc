@@ -1,8 +1,6 @@
 ---
 title: "is_int()"
 description: "Checks whether a variable is an integer."
-sidebar:
-  order: 1040
 ---
 
 ## is_int()
@@ -20,8 +18,9 @@ Checks whether a variable is an integer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/types/is_int.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_int.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

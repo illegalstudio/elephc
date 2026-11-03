@@ -1,8 +1,6 @@
 ---
 title: "getservbyname()"
 description: "Gets port number associated with an Internet service and protocol."
-sidebar:
-  order: 346
 ---
 
 ## getservbyname()
@@ -21,8 +19,9 @@ Gets port number associated with an Internet service and protocol.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/getservbyname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/getservbyname.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

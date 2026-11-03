@@ -1,8 +1,6 @@
 ---
 title: "gmp_invert()"
 description: "Modular inverse."
-sidebar:
-  order: 609
 ---
 
 ## gmp_invert()
@@ -21,8 +19,9 @@ Modular inverse.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_invert.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_invert.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

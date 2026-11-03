@@ -1,8 +1,6 @@
 ---
 title: "imagesavealpha()"
 description: "Controls whether full alpha channel information is saved with the image."
-sidebar:
-  order: 535
 ---
 
 ## imagesavealpha()
@@ -21,8 +19,9 @@ Controls whether full alpha channel information is saved with the image.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

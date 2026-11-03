@@ -1,8 +1,6 @@
 ---
 title: "timezone_location_get()"
 description: "Returns a timezone's country code, latitude, longitude, and comments."
-sidebar:
-  order: 249
 ---
 
 ## timezone_location_get()
@@ -20,8 +18,9 @@ Returns a timezone's country code, latitude, longitude, and comments.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected tz prelude.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

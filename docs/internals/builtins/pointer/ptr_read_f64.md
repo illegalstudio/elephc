@@ -1,8 +1,6 @@
 ---
 title: "ptr_read_f64() - internals"
 description: "Compiler internals for ptr_read_f64(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 810
 ---
 
 ## `ptr_read_f64()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_read_f64.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_read_f64.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

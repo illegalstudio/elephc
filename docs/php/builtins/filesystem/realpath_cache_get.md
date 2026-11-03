@@ -1,8 +1,6 @@
 ---
 title: "realpath_cache_get()"
 description: "Returns realpath cache entries."
-sidebar:
-  order: 299
 ---
 
 ## realpath_cache_get()
@@ -19,8 +17,9 @@ Returns realpath cache entries.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_get.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_get.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

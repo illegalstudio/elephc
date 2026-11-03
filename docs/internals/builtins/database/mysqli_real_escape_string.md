@@ -1,8 +1,6 @@
 ---
 title: "mysqli_real_escape_string() - internals"
 description: "Compiler internals for mysqli_real_escape_string(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 152
 ---
 
 ## `mysqli_real_escape_string()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:230](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L230) (`mysqli_real_escape_string`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_real_escape_string`)
 - **Function symbol**: `mysqli_real_escape_string()`
 
 

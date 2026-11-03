@@ -1,8 +1,6 @@
 ---
 title: "get_exception_handler()"
 description: "Returns the currently active uncaught-exception handler, or null when none is installed."
-sidebar:
-  order: 691
 ---
 
 ## get_exception_handler()
@@ -19,8 +17,9 @@ Returns the currently active uncaught-exception handler, or null when none is in
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/get_exception_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/get_exception_handler.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

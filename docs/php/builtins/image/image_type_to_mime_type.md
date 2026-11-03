@@ -1,8 +1,6 @@
 ---
 title: "image_type_to_mime_type()"
 description: "Returns the MIME type for an IMAGETYPE_* constant."
-sidebar:
-  order: 464
 ---
 
 ## image_type_to_mime_type()
@@ -20,8 +18,9 @@ Returns the MIME type for an IMAGETYPE_* constant.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

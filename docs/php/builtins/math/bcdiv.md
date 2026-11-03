@@ -1,8 +1,6 @@
 ---
 title: "bcdiv()"
 description: "Divides two arbitrary-precision decimal numbers."
-sidebar:
-  order: 564
 ---
 
 ## bcdiv()
@@ -22,8 +20,9 @@ Divides two arbitrary-precision decimal numbers.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/bcdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/bcdiv.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

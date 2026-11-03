@@ -1,8 +1,6 @@
 ---
 title: "imagesy() - internals"
 description: "Compiler internals for imagesy(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 543
 ---
 
 ## `imagesy()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2278](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2278) (`imagesy`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagesy`)
 - **Function symbol**: `imagesy()`
 
 

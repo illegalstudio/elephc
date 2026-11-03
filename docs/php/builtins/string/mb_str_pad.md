@@ -1,8 +1,6 @@
 ---
 title: "mb_str_pad()"
 description: "Pads a string to a character length using the requested side and encoding."
-sidebar:
-  order: 947
 ---
 
 ## mb_str_pad()
@@ -24,8 +22,9 @@ Pads a string to a character length using the requested side and encoding.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_str_pad.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_str_pad.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "mysqli_autocommit()"
 description: "Turns automatic committing on or off."
-sidebar:
-  order: 103
 ---
 
 ## mysqli_autocommit()
@@ -21,8 +19,9 @@ Turns automatic committing on or off.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

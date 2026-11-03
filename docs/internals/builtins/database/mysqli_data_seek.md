@@ -1,8 +1,6 @@
 ---
 title: "mysqli_data_seek() - internals"
 description: "Compiler internals for mysqli_data_seek(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 111
 ---
 
 ## `mysqli_data_seek()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1089](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1089) (`mysqli_data_seek`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_data_seek`)
 - **Function symbol**: `mysqli_data_seek()`
 
 

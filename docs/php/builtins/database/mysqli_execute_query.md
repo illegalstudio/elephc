@@ -1,8 +1,6 @@
 ---
 title: "mysqli_execute_query()"
 description: "Prepares, binds, and executes a statement in one call."
-sidebar:
-  order: 117
 ---
 
 ## mysqli_execute_query()
@@ -22,8 +20,9 @@ Prepares, binds, and executes a statement in one call.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

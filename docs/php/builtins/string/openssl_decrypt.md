@@ -1,8 +1,6 @@
 ---
 title: "openssl_decrypt()"
 description: "Decrypts data with a supported AES cipher."
-sidebar:
-  order: 972
 ---
 
 ## openssl_decrypt()
@@ -26,8 +24,9 @@ Decrypts data with a supported AES cipher.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/openssl_decrypt.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/openssl_decrypt.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

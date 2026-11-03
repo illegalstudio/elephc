@@ -1,8 +1,6 @@
 ---
 title: "array_pad()"
 description: "Pads an array to the specified length with a value."
-sidebar:
-  order: 29
 ---
 
 ## array_pad()
@@ -22,8 +20,9 @@ Pads an array to the specified length with a value.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_pad.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_pad.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

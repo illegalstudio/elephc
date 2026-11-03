@@ -1,8 +1,6 @@
 ---
 title: "fputcsv()"
 description: "Format line as CSV and write to file pointer."
-sidebar:
-  order: 332
 ---
 
 ## fputcsv()
@@ -23,8 +21,9 @@ Format line as CSV and write to file pointer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

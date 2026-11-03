@@ -1,8 +1,6 @@
 ---
 title: "timezone_offset_get()"
 description: "Returns a timezone's UTC offset in seconds at the given date."
-sidebar:
-  order: 252
 ---
 
 ## timezone_offset_get()
@@ -21,8 +19,9 @@ Returns a timezone's UTC offset in seconds at the given date.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

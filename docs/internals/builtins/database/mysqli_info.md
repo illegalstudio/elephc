@@ -1,8 +1,6 @@
 ---
 title: "mysqli_info() - internals"
 description: "Compiler internals for mysqli_info(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 139
 ---
 
 ## `mysqli_info()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:767](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L767) (`mysqli_info`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_info`)
 - **Function symbol**: `mysqli_info()`
 
 

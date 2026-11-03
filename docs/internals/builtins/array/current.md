@@ -1,8 +1,6 @@
 ---
 title: "current() - internals"
 description: "Compiler internals for current(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 55
 ---
 
 ## `current()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/current.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/current.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

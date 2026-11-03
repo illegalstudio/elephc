@@ -1,8 +1,6 @@
 ---
 title: "cairo_identity_matrix() - internals"
 description: "Compiler internals for cairo_identity_matrix(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 416
 ---
 
 ## `cairo_identity_matrix()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13716](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13716) (`cairo_identity_matrix`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`cairo_identity_matrix`)
 - **Function symbol**: `cairo_identity_matrix()`
 
 

@@ -1,8 +1,6 @@
 ---
 title: "cairo_set_line_width()"
 description: "Sets the stroke width in user-space units."
-sidebar:
-  order: 446
 ---
 
 ## cairo_set_line_width()
@@ -21,8 +19,9 @@ Sets the stroke width in user-space units.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "date_create_from_format()"
 description: "Creates a DateTime by parsing a string against an explicit format."
-sidebar:
-  order: 195
 ---
 
 ## date_create_from_format()
@@ -22,8 +20,9 @@ Creates a DateTime by parsing a string against an explicit format.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

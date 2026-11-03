@@ -1,8 +1,6 @@
 ---
 title: "debug_print_backtrace()"
 description: "Prints a PHP backtrace for the active call stack."
-sidebar:
-  order: 672
 ---
 
 ## debug_print_backtrace()
@@ -21,8 +19,9 @@ Prints a PHP backtrace for the active call stack.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/debug_print_backtrace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/debug_print_backtrace.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

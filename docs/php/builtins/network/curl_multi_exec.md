@@ -1,8 +1,6 @@
 ---
 title: "curl_multi_exec()"
 description: "Runs the sub-connections of the current cURL handle."
-sidebar:
-  order: 777
 ---
 
 ## curl_multi_exec()
@@ -21,8 +19,9 @@ Runs the sub-connections of the current cURL handle.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_exec.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_exec.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

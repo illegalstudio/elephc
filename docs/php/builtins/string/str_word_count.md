@@ -1,8 +1,6 @@
 ---
 title: "str_word_count()"
 description: "Counts the words in a string, or returns them as a list or byte-offset map."
-sidebar:
-  order: 994
 ---
 
 ## str_word_count()
@@ -22,8 +20,9 @@ Counts the words in a string, or returns them as a list or byte-offset map.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/str_word_count.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_word_count.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

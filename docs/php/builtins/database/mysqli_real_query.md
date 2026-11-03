@@ -1,8 +1,6 @@
 ---
 title: "mysqli_real_query()"
 description: "Runs one statement without fetching its result."
-sidebar:
-  order: 153
 ---
 
 ## mysqli_real_query()
@@ -21,8 +19,9 @@ Runs one statement without fetching its result.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

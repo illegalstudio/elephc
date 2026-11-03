@@ -1,8 +1,6 @@
 ---
 title: "gmp_pow() - internals"
 description: "Compiler internals for gmp_pow(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 622
 ---
 
 ## `gmp_pow()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_pow.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_pow.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

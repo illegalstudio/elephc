@@ -63,6 +63,16 @@ hash-prelude functions, and the four intentionally eval-only reflection function
 are emitted directly from the same contract. Python does not reconstruct their
 signatures or backend availability.
 
+Generated pages must only change when the builtin itself changes, otherwise every
+open PR that touches builtins conflicts on thousands of files. So the output
+carries no source line numbers (links point at the file and name the function)
+and builtin pages carry no `sidebar.order` (the site sorts pages without one by
+id, which is the name order they are generated in; only the area index pages
+keep an order). Each page's Availability section is a two-column table, Compiled
+(AOT) and Magician (eval), with "Available" or "Not available yet" and any caveats
+listed below it; how each backend implements the builtin belongs to the internals
+page.
+
 ## Layout
 
 ```

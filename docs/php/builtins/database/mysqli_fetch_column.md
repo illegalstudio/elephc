@@ -1,8 +1,6 @@
 ---
 title: "mysqli_fetch_column()"
 description: "Returns one column of the next row."
-sidebar:
-  order: 121
 ---
 
 ## mysqli_fetch_column()
@@ -21,8 +19,9 @@ Returns one column of the next row.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

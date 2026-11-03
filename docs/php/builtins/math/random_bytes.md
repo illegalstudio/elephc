@@ -1,8 +1,6 @@
 ---
 title: "random_bytes()"
 description: "Generates cryptographically secure pseudo-random bytes."
-sidebar:
-  order: 660
 ---
 
 ## random_bytes()
@@ -20,9 +18,11 @@ Generates cryptographically secure pseudo-random bytes.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected random prelude.
-- **AOT signature compatibility**: `runtime-arity-validation` - compiled code accepts any argument count and raises PHP's `ArgumentCountError` at run time, so the signature shown is the PHP-visible one.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
+
+- Compiled code accepts any argument count and raises PHP's `ArgumentCountError` at run time, so the signature shown is the PHP-visible one.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

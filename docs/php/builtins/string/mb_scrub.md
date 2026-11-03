@@ -1,8 +1,6 @@
 ---
 title: "mb_scrub()"
 description: "Replaces malformed encoded units using the current substitution setting."
-sidebar:
-  order: 944
 ---
 
 ## mb_scrub()
@@ -21,8 +19,9 @@ Replaces malformed encoded units using the current substitution setting.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_scrub.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_scrub.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

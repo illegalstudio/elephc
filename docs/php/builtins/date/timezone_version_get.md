@@ -1,8 +1,6 @@
 ---
 title: "timezone_version_get()"
 description: "Returns the version of the bundled timezone database."
-sidebar:
-  order: 255
 ---
 
 ## timezone_version_get()
@@ -19,8 +17,9 @@ Returns the version of the bundled timezone database.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

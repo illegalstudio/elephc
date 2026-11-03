@@ -1,8 +1,6 @@
 ---
 title: "ini_set()"
 description: "Overrides a configuration directive for the rest of the request."
-sidebar:
-  order: 1057
 ---
 
 ## ini_set()
@@ -21,8 +19,9 @@ Overrides a configuration directive for the rest of the request.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

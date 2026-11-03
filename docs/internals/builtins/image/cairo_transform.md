@@ -1,8 +1,6 @@
 ---
 title: "cairo_transform() - internals"
 description: "Compiler internals for cairo_transform(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 454
 ---
 
 ## `cairo_transform()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13704](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13704) (`cairo_transform`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`cairo_transform`)
 - **Function symbol**: `cairo_transform()`
 
 

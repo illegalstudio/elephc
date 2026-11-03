@@ -26,18 +26,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from registry import AREAS, slug  # noqa: E402
 
 
+# Builtin pages carry no `sidebar.order`: a global index renumbered every later page
+# whenever one builtin was added or removed. The site sorts pages without an order
+# by id, which is the same name order the pages are generated in.
 USER_FRONTMATTER_TEMPLATE = """---
 title: "{name}()"
 description: "{short_description}"
-sidebar:
-  order: {order}
 ---"""
 
 INTERNALS_TEMPLATE = """---
 title: "{name}() - internals"
 description: "{short_description}"
-sidebar:
-  order: {order}
 ---
 
 ## `{name}()` - internals
@@ -248,13 +247,6 @@ def _github_url(repo_root: Path, file_path: str) -> str:
     return f"https://github.com/illegalstudio/elephc/blob/main/{rel}"
 
 
-def _github_url_with_line(repo_root: Path, file_path: str, line: int) -> str:
-    rel = file_path
-    if line is None:
-        return _github_url(repo_root, file_path)
-    return f"https://github.com/illegalstudio/elephc/blob/main/{rel}#L{line}"
-
-
 def _backend_signature_call(name: str, support: dict) -> str:
     """Render one backend support block as a PHP-like call signature."""
     params: list[str] = []
@@ -271,105 +263,60 @@ def _backend_signature_call(name: str, support: dict) -> str:
     return f"{name}({', '.join(params)})"
 
 
-def _prelude_route_text(b: dict) -> str:
-    """Name the injected prelude that implements one prelude-routed builtin.
-
-    More than one prelude declares PHP-visible builtins (``src/hash_prelude.rs``
-    and ``src/curl_prelude.rs`` today), so the name is read from the extracted
-    lowering rather than hard-coded. Falls back to a prelude-neutral phrase when
-    the record carries no lowering block.
-    """
-    source = Path(((b.get("lowering") or {}).get("codegen_file") or "")).name
-    suffix = "_prelude.rs"
-    if source.endswith(suffix):
-        return f"the compiler-injected {source[: -len(suffix)]} prelude"
-    return "an injected elephc-PHP prelude"
+AVAILABLE = "Available"
+NOT_AVAILABLE = "Not available yet"
 
 
 def _availability_section(b: dict) -> str:
-    """Two-line support matrix: compiled (AOT) vs eval() interpreter."""
-    lines = ["## Availability", ""]
+    """Support table for the two backends, plus the caveats a user must know.
+
+    The table says only whether compiled code and Magician's eval() have the
+    builtin; how each backend implements it (registry lowering, injected prelude,
+    `eval_builtin!` declaration) belongs to the internals page linked below.
+    """
     aot = b.get("aot") or {"supported": not b.get("eval_only"), "kind": "unknown"}
-    if not aot.get("supported"):
-        reason = aot.get("unsupported_reason")
-        suffix = f" (`{reason}`)" if reason else ""
-        lines.append(
-            "- **Compiled (AOT)**: not available - compiled programs cannot "
-            f"call this builtin{suffix}."
-        )
-    else:
-        route = aot.get("kind")
-        if route == "registry":
-            target_support_kind = (b.get("semantics") or {}).get("target_support_kind")
-            if target_support_kind == "host_only":
-                lines.append(
-                    "- **Compiled (AOT)**: supported on the three executable/release "
-                    "hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are "
-                    "refused at compile time for iOS library targets."
-                )
-            else:
-                lines.append("- **Compiled (AOT)**: supported by the Elephc code generator.")
-        else:
-            route_text = {
-            "language-construct": "a dedicated compiler language-construct path",
-            "dedicated-syntax": "a dedicated AST/EIR syntax path",
-            "prelude": _prelude_route_text(b),
-            }.get(route, "the Elephc compiler")
-            lines.append(f"- **Compiled (AOT)**: supported through {route_text}.")
-        if aot.get("signature_override_reason"):
-            reason = aot["signature_override_reason"]
-            if reason == "runtime-arity-validation":
-                lines.append(
-                    "- **AOT signature compatibility**: "
-                    f"`{reason}` - compiled code accepts any argument count and raises "
-                    "PHP's `ArgumentCountError` at run time, so the signature shown is the "
-                    "PHP-visible one."
-                )
-            else:
-                lines.append(
-                    "- **AOT signature compatibility**: "
-                    f"`{reason}` - compiled code accepts the signature shown above; eval "
-                    "may expose the broader canonical signature."
-                )
-            eval_support = b.get("eval") or {}
-            if eval_support.get("supported"):
-                lines.append(
-                    "- **Effective eval signature**: "
-                    f"`{_backend_signature_call(b['name'], eval_support)}`."
-                )
     ev = b.get("eval") or {}
-    if ev.get("supported"):
-        kind = ev.get("kind")
-        if kind == "registry":
-            home = ev.get("home_file") or ""
-            lines.append(
-                "- **`eval()` (magician interpreter)**: supported through a declarative "
-                f"interpreter builtin ([`{home}`](https://github.com/illegalstudio/elephc/blob/main/{home}))."
+    cells = [AVAILABLE if aot.get("supported") else NOT_AVAILABLE,
+             AVAILABLE if ev.get("supported") else NOT_AVAILABLE]
+    lines = [
+        "## Availability",
+        "",
+        "| Compiled (AOT) | Magician (eval) |",
+        "|---|---|",
+        f"| {cells[0]} | {cells[1]} |",
+    ]
+    notes: list[str] = []
+    if aot.get("supported"):
+        if (b.get("semantics") or {}).get("target_support_kind") == "host_only":
+            notes.append(
+                "Compiled code can call it on the three executable/release hosts "
+                "(macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at "
+                "compile time for iOS library targets."
             )
-        elif kind == "opcache-dispatch":
-            lines.append(
-                "- **`eval()` (magician interpreter)**: supported through native "
-                "OPcache prelude declarations or dedicated interpreter handlers; "
-                "see [OPcache](../../opcache.md)."
+        reason = aot.get("signature_override_reason")
+        if reason == "runtime-arity-validation":
+            notes.append(
+                "Compiled code accepts any argument count and raises PHP's "
+                "`ArgumentCountError` at run time, so the signature shown is the "
+                "PHP-visible one."
             )
-        elif kind == "date-alias":
-            lines.append(
-                "- **`eval()` (magician interpreter)**: supported through the "
-                "procedural date/time alias dispatcher."
+        elif reason:
+            notes.append(
+                "Compiled code accepts the signature shown above; eval() accepts "
+                f"the broader `{_backend_signature_call(b['name'], ev)}`."
+                if ev.get("supported")
+                else "Compiled code accepts the signature shown above."
             )
-        else:
-            lines.append("- **`eval()` (magician interpreter)**: supported.")
-    else:
-        lines.append(
-            "- **`eval()` (magician interpreter)**: not available inside eval'd code."
-        )
     if b.get("is_extension"):
-        lines.append(
-            "- **Strict PHP mode**: hidden - this builtin is an elephc extension "
-            "with no PHP equivalent, so programs compiled with "
+        notes.append(
+            "Hidden in strict PHP mode: this builtin is an elephc extension with no "
+            "PHP equivalent, so programs compiled with "
             "[`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) "
             "treat the name as nonexistent, in compiled code and inside eval'd code."
         )
+    if notes:
+        lines.append("")
+        lines += [f"- {note}" for note in notes]
     return "\n".join(lines)
 
 
@@ -463,14 +410,13 @@ def _join_sections(*sections: str) -> str:
     return "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
 
 
-def render_user(b: dict, order: int, repo_root: Path) -> str:
+def render_user(b: dict, repo_root: Path) -> str:
     _ = repo_root  # reserved for future cross-repo links
     area_lower = b['area'].lower()
     article = "an" if area_lower[0] in "aeiou" else "a"
     frontmatter = USER_FRONTMATTER_TEMPLATE.format(
         name=b["name"],
         short_description=_short_description(b).replace('"', '\\"'),
-        order=order,
     )
     description = b.get("description") or (
         f"`{b['name']}()` is {article} {area_lower} builtin supported by Elephc. "
@@ -491,7 +437,7 @@ def render_user(b: dict, order: int, repo_root: Path) -> str:
     )
 
 
-def render_internals(b: dict, order: int, repo_root: Path) -> str:
+def render_internals(b: dict, repo_root: Path) -> str:
     sig_file = b["lowering"].get("sig_file")
     if not sig_file and b.get("eval_only"):
         # Eval-only builtins have no static signature home; point at the
@@ -499,17 +445,12 @@ def render_internals(b: dict, order: int, repo_root: Path) -> str:
         sig_file = (b.get("eval") or {}).get("home_file")
     sig_file = sig_file or "src/types/signatures.rs"
     codegen_file = b["lowering"].get("codegen_file")
-    codegen_line = b["lowering"].get("codegen_line")
     codegen_function = b["lowering"].get("codegen_function") or "(none, type-checker only)"
     notes = b["lowering"].get("notes") or []
     helpers = b["lowering"].get("runtime_helpers", [])
 
     sig_url = _github_url(repo_root, sig_file)
-    codegen_url = (
-        _github_url_with_line(repo_root, codegen_file, codegen_line)
-        if codegen_file and codegen_line
-        else ""
-    )
+    codegen_url = _github_url(repo_root, codegen_file) if codegen_file else ""
 
     checker_clause = ""
     if codegen_file:
@@ -519,7 +460,7 @@ def render_internals(b: dict, order: int, repo_root: Path) -> str:
         lowering_declaration = "- **Lowering**: unavailable for this backend.\n- **Function symbol**: none."
     else:
         lowering_declaration = (
-            f"- **Lowering**: [`{codegen_file or '(not lowered)'}`:{codegen_line or 0}]({codegen_url}){checker_clause}\n"
+            f"- **Lowering**: [`{codegen_file or '(not lowered)'}`]({codegen_url}){checker_clause}\n"
             f"- **Function symbol**: `{codegen_function}()`"
         )
 
@@ -545,14 +486,12 @@ def render_internals(b: dict, order: int, repo_root: Path) -> str:
     return INTERNALS_TEMPLATE.format(
         name=b["name"],
         short_description=_internals_short_description(b).replace('"', '\\"'),
-        order=order,
         slug=slug(b["name"]),
         user_link=user_link,
         lowering_declaration=lowering_declaration,
         sig_file=sig_file,
         sig_url=sig_url,
         codegen_file=codegen_file or "(not lowered)",
-        codegen_line=codegen_line or 0,
         codegen_url=codegen_url,
         checker_clause=checker_clause,
         codegen_function=codegen_function,
@@ -784,40 +723,38 @@ def _do_render(repo: Path, registry_path: Path, user_dir: Path, internals_dir: P
     skipped = 0
 
     # Internals pages are emitted for every catalog builtin, including helpers.
-    for idx, b in enumerate(catalog_builtins, start=1):
+    for b in catalog_builtins:
         i_dir = area_dir(internals_dir, b)
         i_dir.mkdir(parents=True, exist_ok=True)
         internals_path = i_dir / f"{slug(b['name'])}.md"
         if internals_path.exists() and not force:
             skipped += 1
         else:
-            content = render_internals(b, idx, repo).rstrip() + "\n"
+            content = render_internals(b, repo).rstrip() + "\n"
             internals_path.write_text(content, encoding="utf-8")
             written += 1
 
     # Compiler-only builtin entries are tracked outside the PHP-visible catalog.
-    # Render them after the catalog so they cannot perturb existing sidebar order.
-    internal_start = len(catalog_builtins) + 1
-    for idx, b in enumerate(internal_only, start=internal_start):
+    for b in internal_only:
         i_dir = area_dir(internals_dir, b)
         i_dir.mkdir(parents=True, exist_ok=True)
         internals_path = i_dir / f"{slug(b['name'])}.md"
         if internals_path.exists() and not force:
             skipped += 1
         else:
-            content = render_internals(b, idx, repo).rstrip() + "\n"
+            content = render_internals(b, repo).rstrip() + "\n"
             internals_path.write_text(content, encoding="utf-8")
             written += 1
 
     # User-facing pages are emitted only for non-internal builtins.
-    for idx, b in enumerate(user_facing, start=1):
+    for b in user_facing:
         u_dir = area_dir(user_dir, b)
         u_dir.mkdir(parents=True, exist_ok=True)
         user_path = u_dir / f"{slug(b['name'])}.md"
         if user_path.exists() and not force:
             skipped += 1
         else:
-            user_path.write_text(render_user(b, idx, repo), encoding="utf-8")
+            user_path.write_text(render_user(b, repo), encoding="utf-8")
             written += 1
 
     # Master index: docs/php/builtins.md

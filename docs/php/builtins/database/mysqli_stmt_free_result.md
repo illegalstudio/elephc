@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_free_result()"
 description: "Releases the result a prepared statement buffered."
-sidebar:
-  order: 171
 ---
 
 ## mysqli_stmt_free_result()
@@ -20,8 +18,9 @@ Releases the result a prepared statement buffered.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

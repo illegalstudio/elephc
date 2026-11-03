@@ -1,8 +1,6 @@
 ---
 title: "date_default_timezone_set()"
 description: "Sets the default timezone."
-sidebar:
-  order: 200
 ---
 
 ## date_default_timezone_set()
@@ -20,8 +18,9 @@ Sets the default timezone.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_set.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_set.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

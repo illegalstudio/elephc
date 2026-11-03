@@ -1,8 +1,6 @@
 ---
 title: "grapheme_strrev()"
 description: "Reverses a string by grapheme cluster, returning false on failure."
-sidebar:
-  order: 869
 ---
 
 ## grapheme_strrev()
@@ -20,9 +18,11 @@ Reverses a string by grapheme cluster, returning false on failure.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/grapheme_strrev.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/grapheme_strrev.rs)).
-- **Strict PHP mode**: hidden - this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
+
+- Hidden in strict PHP mode: this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

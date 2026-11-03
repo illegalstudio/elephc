@@ -1,8 +1,6 @@
 ---
 title: "mb_send_mail()"
 description: "Encodes the subject and body with the active language settings and sends the message through the configured mail transport."
-sidebar:
-  order: 945
 ---
 
 ## mb_send_mail()
@@ -24,8 +22,9 @@ Encodes the subject and body with the active language settings and sends the mes
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_send_mail.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_send_mail.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

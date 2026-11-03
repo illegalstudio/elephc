@@ -1,8 +1,6 @@
 ---
 title: "mysqli_connect_errno() - internals"
 description: "Compiler internals for mysqli_connect_errno(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 109
 ---
 
 ## `mysqli_connect_errno()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:587](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L587) (`mysqli_connect_errno`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_connect_errno`)
 - **Function symbol**: `mysqli_connect_errno()`
 
 

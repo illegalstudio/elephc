@@ -1,8 +1,6 @@
 ---
 title: "memory_get_usage()"
 description: "Returns live native heap bytes, including block headers and allocator rounding. With real_usage=true returns the fixed heap arena capacity, including unused space. Excludes concat scratch, libc, and Rust bridge allocations."
-sidebar:
-  order: 706
 ---
 
 ## memory_get_usage()
@@ -20,8 +18,9 @@ Returns live native heap bytes, including block headers and allocator rounding. 
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/memory_get_usage.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/memory_get_usage.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 **Examples**:
 

@@ -1,8 +1,6 @@
 ---
 title: "imagefilter() - internals"
 description: "Compiler internals for imagefilter(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 515
 ---
 
 ## `imagefilter()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3263](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3263) (`imagefilter`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagefilter`)
 - **Function symbol**: `imagefilter()`
 
 

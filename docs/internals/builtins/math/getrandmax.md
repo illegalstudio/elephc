@@ -1,8 +1,6 @@
 ---
 title: "getrandmax() - internals"
 description: "Compiler internals for getrandmax(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 588
 ---
 
 ## `getrandmax()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/random_prelude.rs`:194](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L194) (`getrandmax`)
+- **Lowering**: [`src/random_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs) (`getrandmax`)
 - **Function symbol**: `getrandmax()`
 
 

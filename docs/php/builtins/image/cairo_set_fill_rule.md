@@ -1,8 +1,6 @@
 ---
 title: "cairo_set_fill_rule()"
 description: "Selects the fill rule used to decide which regions a path encloses."
-sidebar:
-  order: 443
 ---
 
 ## cairo_set_fill_rule()
@@ -21,8 +19,9 @@ Selects the fill rule used to decide which regions a path encloses.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

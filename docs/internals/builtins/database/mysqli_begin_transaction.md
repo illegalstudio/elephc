@@ -1,8 +1,6 @@
 ---
 title: "mysqli_begin_transaction() - internals"
 description: "Compiler internals for mysqli_begin_transaction(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 104
 ---
 
 ## `mysqli_begin_transaction()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:270](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L270) (`mysqli_begin_transaction`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_begin_transaction`)
 - **Function symbol**: `mysqli_begin_transaction()`
 
 

@@ -1,8 +1,6 @@
 ---
 title: "atan()"
 description: "Returns the arctangent of a number in radians."
-sidebar:
-  order: 558
 ---
 
 ## atan()
@@ -20,8 +18,9 @@ Returns the arctangent of a number in radians.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/atan.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/atan.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

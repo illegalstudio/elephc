@@ -1,8 +1,6 @@
 ---
 title: "cairo_arc_negative()"
 description: "Adds a counter-clockwise arc of the given radius and angle span to the current path."
-sidebar:
-  order: 409
 ---
 
 ## cairo_arc_negative()
@@ -25,8 +23,9 @@ Adds a counter-clockwise arc of the given radius and angle span to the current p
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

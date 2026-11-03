@@ -1,8 +1,6 @@
 ---
 title: "ini_get()"
 description: "Returns the value of a configuration directive."
-sidebar:
-  order: 1055
 ---
 
 ## ini_get()
@@ -20,8 +18,9 @@ Returns the value of a configuration directive.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

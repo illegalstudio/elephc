@@ -1,8 +1,6 @@
 ---
 title: "imagecreatefromtga()"
 description: "Creates an image from a TGA file."
-sidebar:
-  order: 501
 ---
 
 ## imagecreatefromtga()
@@ -20,8 +18,9 @@ Creates an image from a TGA file.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "mb_strrichr()"
 description: "Returns text before or from the last case-insensitive substring match, or false."
-sidebar:
-  order: 956
 ---
 
 ## mb_strrichr()
@@ -23,8 +21,9 @@ Returns text before or from the last case-insensitive substring match, or false.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_strrichr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_strrichr.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

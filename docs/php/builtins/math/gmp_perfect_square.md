@@ -1,8 +1,6 @@
 ---
 title: "gmp_perfect_square()"
 description: "Checks whether a GMP number is a perfect square."
-sidebar:
-  order: 620
 ---
 
 ## gmp_perfect_square()
@@ -20,8 +18,9 @@ Checks whether a GMP number is a perfect square.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_perfect_square.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_perfect_square.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

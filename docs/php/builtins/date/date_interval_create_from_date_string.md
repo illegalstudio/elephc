@@ -1,8 +1,6 @@
 ---
 title: "date_interval_create_from_date_string()"
 description: "Creates a DateInterval from a relative date string such as \"2 days\"."
-sidebar:
-  order: 204
 ---
 
 ## date_interval_create_from_date_string()
@@ -20,8 +18,9 @@ Creates a DateInterval from a relative date string such as "2 days".
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "parse_url()"
 description: "Parses a URL and returns its components."
-sidebar:
-  order: 976
 ---
 
 ## parse_url()
@@ -21,8 +19,9 @@ Parses a URL and returns its components.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/parse_url.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/parse_url.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
