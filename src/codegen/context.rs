@@ -73,6 +73,7 @@ pub(crate) struct FunctionContext<'a> {
     try_handler_offsets: HashMap<i64, usize>,
     exception_guard_offsets: HashMap<ValueId, usize>,
     return_owner_guard_offsets: HashMap<LocalSlotId, usize>,
+    pub(super) return_cleanup_skip_offset: Option<usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
@@ -92,9 +93,9 @@ pub(crate) struct FunctionContext<'a> {
     pcntl_async_signals: bool,
     pcntl_signal_handlers: bool,
     pub(super) epilogue_label: Option<String>,
-    /// Equivalent returns share cleanup only when both their transferred slot and status agree.
+    /// Dynamic statuses (`None`) travel on the stack so their source offsets can share cleanup.
     pub(super) return_epilogues: HashMap<
-        (Option<LocalSlotId>, super::return_ownership::ReturnOwnershipStatus), String,
+        (Option<LocalSlotId>, Option<bool>), String,
     >,
     block_labels: Vec<String>,
     /// Block order, compare fusion, and cold-path state for late machine layout.
@@ -207,6 +208,7 @@ impl<'a> FunctionContext<'a> {
             try_handler_offsets: layout.try_handler_offsets,
             exception_guard_offsets: layout.exception_guard_offsets,
             return_owner_guard_offsets: layout.return_owner_guard_offsets,
+            return_cleanup_skip_offset: layout.return_cleanup_skip_offset,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
             exception_activation_offset: layout.exception_activation_offset,

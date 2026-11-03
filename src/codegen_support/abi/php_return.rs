@@ -43,6 +43,16 @@ pub(crate) fn emit_load_php_return_status(emitter: &mut Emitter, offset: usize) 
     abi::load_at_offset(emitter, status_reg, offset);
 }
 
+/// Keeps a path-specific marker in an aligned temporary slot across shared return cleanup.
+pub(crate) fn emit_push_php_return_status(emitter: &mut Emitter) {
+    abi::emit_push_reg(emitter, status_reg(emitter.target.arch));
+}
+
+/// Restores the marker after shared cleanup without changing the typed result registers.
+pub(crate) fn emit_pop_php_return_status(emitter: &mut Emitter) {
+    abi::emit_pop_reg(emitter, status_reg(emitter.target.arch));
+}
+
 /// Branches when the current compiled PHP return transfers an existing owner.
 pub(crate) fn emit_branch_if_php_return_owned(emitter: &mut Emitter, owned_label: &str) {
     match emitter.target.arch {

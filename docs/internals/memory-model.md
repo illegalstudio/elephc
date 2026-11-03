@@ -106,11 +106,14 @@ Each function has a stack frame. The [code generator](the-codegen.md) calculates
 
 On the EIR backend the frame also reserves one save slot per callee-saved register that the linear-scan register allocator uses. Eligible scalar PHP locals are promoted to SSA values, so their repeated loads and stores can disappear and loop-carried values can live in registers. The frame still reserves local slots, and address-taken, by-reference, global/static, refcounted, and volatile locals continue to use them. See [The IR](the-ir.md) for scalar promotion and register allocation.
 
-Equivalent native return paths share their emitted epilogue. The transferred
-local and return ownership status (including the exact saved status slot for
-dynamic ownership) identify the cleanup plan. Different transfers keep distinct
-plans. Sharing preserves cleanup order and exception handling while avoiding a
-complete copy of every owned local's cleanup at each source return.
+Native return paths share their emitted epilogue by static or dynamic return
+ownership. Functions with multiple returns reserve a frame word selecting the
+local whose owner escapes. Cleanup skips that local without clearing storage
+that a sibling destructor can observe. Dynamic ownership markers move from
+their individual spill slots to an aligned temporary stack slot before cleanup,
+then return to the private status register after cleanup. This bounds the
+number of cleanup plans independently of the number of returns, while keeping
+the selected owner, cleanup order and exception handling intact.
 
 ### Frame-local numeric cells
 

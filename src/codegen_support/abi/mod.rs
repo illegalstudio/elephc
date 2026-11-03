@@ -87,5 +87,6 @@ pub(crate) use values::refcount_release_helper;
 
 pub(crate) use php_return::{
     emit_php_return_status, emit_store_php_return_status, emit_load_php_return_status,
+    emit_push_php_return_status, emit_pop_php_return_status,
     emit_branch_if_php_return_owned,
 };
