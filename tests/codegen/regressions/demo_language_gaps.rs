@@ -1312,6 +1312,36 @@ namespace {
     assert_eq!(out, "bool(true)\nbool(true)\n");
 }
 
+/// Destructuring into a deeper element (`[$query['params'][$j], $ok] = ...`, Doctrine's
+/// `DoctrineDataCollector`) parses and writes like the plain nested assignment; the parser
+/// accepted one index only, and the whole file went to the interpreter.
+#[test]
+fn test_destructuring_into_nested_array_elements() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function pair(int $i): array { return ["v$i", $i % 2 === 0, true]; }
+$query = ['params' => [10, 20, 30]];
+foreach ($query['params'] as $j => $param) {
+    [$query['params'][$j], $explainable, $runnable] = pair($j);
+    if (!$explainable) { $query['explainable'] = false; }
+}
+echo json_encode($query), "\n";
+$o = new stdClass();
+$o->list = [];
+[$o->list['a'], $o->list['b']['c']] = [1, 2];
+$m = [];
+list('x' => $m['k'][0], 'y' => $m['k'][1]) = ['x' => 'X', 'y' => 'Y'];
+[$m['k'][], $m['n'][]] = ['Z', 'N'];
+echo json_encode($o), json_encode($m), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"params\":[\"v0\",\"v1\",\"v2\"],\"explainable\":false}\n\
+         {\"list\":{\"a\":1,\"b\":{\"c\":2}}}{\"k\":[\"X\",\"Y\",\"Z\"],\"n\":[\"N\"]}\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A `static` local handed out by reference (by-ref argument, `&` alias, `use (&$x)`) keeps every
 /// write across calls: Monolog's `BrowserConsoleHandler::handleStyle` shape.
 #[test]

@@ -173,6 +173,13 @@ impl ListLowerer {
 ///
 /// Returns `None` if the target expression kind is not a supported lvalue form.
 fn lower_assignment_target(target: Expr, value: Expr, span: Span) -> Option<Stmt> {
+    // A deeper element (`$a['k'][$j]`, `$o->p['a']['b']`) is the plain assignment's
+    // `NestedArrayAssign`, exactly as `$a['k'][$j] = $v;` parses.
+    if let ExprKind::ArrayAccess { array, .. } = &target.kind {
+        if matches!(array.kind, ExprKind::ArrayAccess { .. }) {
+            return Some(Stmt::new(StmtKind::NestedArrayAssign { target, value }, span));
+        }
+    }
     let kind = match target.kind {
         ExprKind::Variable(name) => StmtKind::Assign { name, value },
         ExprKind::ArrayAccess { array, index } => match array.kind {
@@ -220,6 +227,10 @@ fn lower_assignment_target(target: Expr, value: Expr, span: Span) -> Option<Stmt
 ///
 /// Returns `None` if the base expression kind does not support append semantics.
 fn lower_append_target(base: Expr, value: Expr, span: Span) -> Option<Stmt> {
+    // `[$a['k'][]] = ...` appends through a nested element, as `$a['k'][] = $v;` does.
+    if matches!(base.kind, ExprKind::ArrayAccess { .. }) {
+        return super::super::postfix::lower_nested_append_assignment(base, value, span).ok();
+    }
     let kind = match base.kind {
         ExprKind::Variable(array) => StmtKind::ArrayPush { array, value },
         ExprKind::PropertyAccess { object, property } => {

@@ -502,12 +502,9 @@ fn is_list_destructuring_target(expr: &Expr) -> bool {
         ExprKind::Variable(_)
         | ExprKind::PropertyAccess { .. }
         | ExprKind::StaticPropertyAccess { .. } => true,
-        ExprKind::ArrayAccess { array, .. } => matches!(
-            &array.kind,
-            ExprKind::Variable(_)
-                | ExprKind::PropertyAccess { .. }
-                | ExprKind::StaticPropertyAccess { .. }
-        ),
+        // Any depth, as php allows: Doctrine's `DoctrineDataCollector` destructures into
+        // `$query['params'][$j]`.
+        ExprKind::ArrayAccess { array, .. } => is_append_target_base(array),
         _ => false,
     }
 }
@@ -515,12 +512,13 @@ fn is_list_destructuring_target(expr: &Expr) -> bool {
 /// Returns `true` if the expression is a valid base for an append target (`$x[] = ...`).
 /// Must be a variable, property access, or static property access.
 fn is_append_target_base(expr: &Expr) -> bool {
-    matches!(
-        &expr.kind,
+    match &expr.kind {
         ExprKind::Variable(_)
-            | ExprKind::PropertyAccess { .. }
-            | ExprKind::StaticPropertyAccess { .. }
-    )
+        | ExprKind::PropertyAccess { .. }
+        | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, .. } => is_append_target_base(array),
+        _ => false,
+    }
 }
 
 /// Maps bracket and parenthesis open tokens to their textual label for error messages.
