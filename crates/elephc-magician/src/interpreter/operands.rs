@@ -110,19 +110,7 @@ pub(in crate::interpreter) fn finish_synthesized_method_arguments<I>(
 ) -> Result<RuntimeCellHandle, EvalStatus>
 where I: IntoIterator<Item = RuntimeCellHandle>, I::IntoIter: DoubleEndedIterator,
 {
-    let mut cleanup = Ok(());
-    for owner in owners.into_iter().rev() {
-        let released = release_expr_result(owner, context, values);
-        if cleanup.is_ok() { cleanup = released; }
-    }
-    match (result, cleanup) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = release_expr_result(value, context, values);
-            Err(status)
-        }
-        (Ok(value), Ok(())) => Ok(value),
-    }
+    finish_eval_argument_values(result, owners.into_iter().rev(), context, values)
 }
 
 /// Compares borrowed values and releases the comparison cell after reading its truthiness.
@@ -185,22 +173,26 @@ pub(in crate::interpreter) fn finish_eval_argument_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let result = result.and_then(|value| {
-        if value.is_borrowed() { values.retain(value) } else { Ok(value) }
-    });
-    let mut released = Ok(());
-    for argument in arguments {
-        let cleanup = release_expr_result(argument, context, values);
-        if released.is_ok() { released = cleanup; }
-    }
-    match (result, released) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
+    let result = result.and_then(|value| promote_borrowed_result(value, values))
+        .map(RuntimeOwnerSlot::new);
+    let arguments = arguments.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    // Materialization moves each cleanup obligation before any release can reenter PHP.
+    let inventory = (&arguments, result.as_ref().ok());
+    with_runtime_owners(&inventory, || {
+        let mut released = Ok(());
+        for argument in &arguments {
+            let cleanup = release_expr_result(argument.take(), context, values);
+            if released.is_ok() { released = cleanup; }
         }
-        (Ok(value), Ok(())) => Ok(value),
-    }
+        match (&result, released) {
+            (Err(status), _) => Err(*status),
+            (Ok(value), Err(status)) => {
+                let _ = eval_release_value(context, values, value.take());
+                Err(status)
+            }
+            (Ok(value), Ok(())) => Ok(value.take()),
+        }
+    })
 }
 
 #[cfg(test)]

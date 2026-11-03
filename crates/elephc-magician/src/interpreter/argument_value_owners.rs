@@ -183,20 +183,22 @@ pub(super) fn finish_eval_argument_owners(
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let owners = owners.as_ref();
-    with_runtime_owners(&owners, || {
-        let result = result.and_then(|value| promote_borrowed_result(value, values));
+    let result = result.and_then(|value| promote_borrowed_result(value, values))
+        .map(RuntimeOwnerSlot::new);
+    let inventory = (owners, result.as_ref().ok());
+    with_runtime_owners(&inventory, || {
         let mut cleanup = Ok(());
         for owner in owners {
             let released = owner.release(context, values);
             if cleanup.is_ok() { cleanup = released; }
         }
-        match (result, cleanup) {
-            (Err(status), _) => Err(status),
+        match (&result, cleanup) {
+            (Err(status), _) => Err(*status),
             (Ok(value), Err(status)) => {
-                let _ = eval_release_value(context, values, value);
+                let _ = eval_release_value(context, values, value.take());
                 Err(status)
             }
-            (Ok(value), Ok(())) => Ok(value),
+            (Ok(value), Ok(())) => Ok(value.take()),
         }
     })
 }

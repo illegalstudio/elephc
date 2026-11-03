@@ -190,6 +190,32 @@ echo 'done';
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
+/// A result held while an internal default's destructor suspends is an edge of that Fiber.
+#[test]
+fn test_eval_native_result_owner_survives_suspending_argument_cleanup_cycle() {
+    let source = r#"<?php
+class NativeCleanupPauseArgument {
+    public function __destruct() { Fiber::suspend(9); }
+}
+class NativeCleanupResultFactory {
+    public static function result(NativeCleanupPauseArgument $argument = new NativeCleanupPauseArgument()): mixed {
+        return Fiber::getCurrent();
+    }
+}
+$fiber = new Fiber(static function (): void {
+    eval('$held = NativeCleanupResultFactory::result();');
+});
+echo $fiber->start(), '|';
+unset($fiber);
+gc_collect_cycles();
+echo 'done';
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "9|done");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Opaque eval can suspend and consume the independently owned value supplied on resume.
 #[test]
 fn test_eval_static_fiber_suspend_preserves_resume_value_owners() {

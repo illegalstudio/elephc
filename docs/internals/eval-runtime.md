@@ -423,6 +423,9 @@ do not add another graph edge.
 Binder-owned default values, callable conversions and variadic keys remain visible
 through native invocation and reference writeback. Native function descriptors also
 publish their Rust-owned argument array, independently of its retained entries.
+Argument cleanup moves its obligations into stable slots and clears each slot
+before release. The promoted call result has a separate slot until cleanup ends,
+so a destructor that suspends cannot turn the held result into an external root.
 
 ## Runtime generic specialization
 

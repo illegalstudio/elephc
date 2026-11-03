@@ -10,6 +10,7 @@
 //! - The generated invoker remains authoritative for defaults, named-argument errors, and arity.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Invokes one boxed descriptor through its protected uniform adapter.
 pub(super) fn eval_native_descriptor_with_call_args(
@@ -23,30 +24,33 @@ pub(super) fn eval_native_descriptor_with_call_args(
         .ok_or(EvalStatus::UnsupportedConstruct)?;
     let mut staged = stage_native_descriptor_args(&signature, evaluated_args, context, values)?;
     let _native_context = crate::context::push_native_frame_context(context);
-    let arg_array = match build_native_function_arg_array(&staged, values) {
-        Ok(arguments) => arguments,
-        Err(status) => {
-            let _ = cleanup_native_function_ref_args(&staged, values);
-            return finish_eval_argument_values(Err(status), staged.values, context, values);
-        }
-    };
-
-    if let Err(status) = pin_native_call_evaluation_owners(&staged, context, values) {
-        let _ = cleanup_native_function_ref_args(&staged, values);
-        let result = finish_eval_argument_values(Err(status), [arg_array], context, values);
-        return finish_eval_argument_values(result, staged.values, context, values);
-    }
-    let result = values.invoke_native_callable(callback, arg_array, -1);
-    let writeback = write_back_native_function_ref_args(&staged, context, values);
-    let result = match (result, writeback) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
-        }
-        (Ok(value), Ok(())) => Ok(value),
-    };
-    let result = finish_eval_argument_values(result, [arg_array], context, values);
+    let result = with_runtime_owners(&staged.values, || {
+        let arg_array = match build_native_function_arg_array(&staged, values) {
+            Ok(arguments) => arguments,
+            Err(status) => {
+                let _ = cleanup_native_function_ref_args(&staged, values);
+                return Err(status);
+            }
+        };
+        let arg_array = RuntimeOwnerSlot::new(arg_array);
+        with_runtime_owners(&arg_array, || {
+            if let Err(status) = pin_native_call_evaluation_owners(&staged, context, values) {
+                let _ = cleanup_native_function_ref_args(&staged, values);
+                return finish_eval_argument_values(Err(status), [arg_array.take()], context, values);
+            }
+            let result = values.invoke_native_callable(callback, arg_array.borrowed(), -1);
+            let writeback = write_back_native_function_ref_args(&staged, context, values);
+            let result = match (result, writeback) {
+                (Err(status), _) => Err(status),
+                (Ok(value), Err(status)) => {
+                    let _ = eval_release_value(context, values, value);
+                    Err(status)
+                }
+                (Ok(value), Ok(())) => Ok(value),
+            };
+            finish_eval_argument_values(result, [arg_array.take()], context, values)
+        })
+    });
     finish_eval_argument_values(result, staged.values.drain(..), context, values)
 }
 

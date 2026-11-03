@@ -60,6 +60,13 @@ impl<A: RuntimeOwners, B: RuntimeOwners> RuntimeOwners for (A, B) {
     }
 }
 
+impl<T: RuntimeOwners> RuntimeOwners for Option<T> {
+    /// An absent result or failed operation contributes no owning field.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        if let Some(owner) = self { owner.visit_owned_slots(visit); }
+    }
+}
+
 impl RuntimeOwnerSlot {
     /// Moves one cleanup obligation, preserving borrowed provenance when no lease exists.
     pub(crate) fn new(value: RuntimeCellHandle) -> Self { Self(Cell::new(value)) }

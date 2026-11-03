@@ -20,6 +20,7 @@
 //!   and invisible to Reflection even if a caller reached this code with no shape at all.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Leaves Number scalar operands intact for its native internal string-or-integer adapter.
 /// Only this invocation's signature copy changes; reflection keeps the declared union.
@@ -122,16 +123,17 @@ pub(in crate::interpreter) fn release_native_bound_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut result = Ok(());
-    for arg in args {
-        for (key, _) in &arg.variadic_ref_targets {
-            let released = release_expr_result(*key, context, values);
+    let owners = args.iter().flat_map(|arg|
+        arg.variadic_ref_targets.iter().map(|(key, _)| *key).chain(std::iter::once(arg.value)))
+        .map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    with_runtime_owners(&owners, || {
+        let mut result = Ok(());
+        for owner in &owners {
+            let released = release_expr_result(owner.take(), context, values);
             if result.is_ok() { result = released; }
         }
-        let released = release_expr_result(arg.value, context, values);
-        if result.is_ok() { result = released; }
-    }
-    result
+        result
+    })
 }
 
 /// Preserves a call result while releasing the activation's internal argument owners.
@@ -141,15 +143,9 @@ pub(in crate::interpreter) fn finish_native_bound_call(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let released = release_native_bound_args(args, context, values);
-    match (result, released) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = release_expr_result(value, context, values);
-            Err(status)
-        }
-        (Ok(value), Ok(())) => Ok(value),
-    }
+    let owners = args.iter().flat_map(|arg|
+        arg.variadic_ref_targets.iter().map(|(key, _)| *key).chain(std::iter::once(arg.value)));
+    finish_eval_argument_values(result, owners, context, values)
 }
 
 /// Writes native AOT by-reference argument cells back to their eval caller targets.
