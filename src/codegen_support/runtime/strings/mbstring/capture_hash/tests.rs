@@ -68,13 +68,13 @@ pub(in crate::codegen_support::runtime::strings::mbstring) fn adapters(emitter: 
         "__rt_throw_current",
     ] {
         emitter.label_global(symbol);
-        emitter.instruction(if arm { "brk #0" } else { "ud2" });               // invalid marker writes are outside this ownership fixture
+        emitter.instruction(if arm { "brk #0" } else { "ud2" });                // invalid marker writes are outside this ownership fixture
     }
-    emitter.raw(&crate::codegen_support::data_section::comm_directive(
-        "_exc_value",
-        8,
-        emitter.target,
-    ));
+    for symbol in ["_exc_value", "_rt_reference_validation_pins_top"] {
+        emitter.raw(&crate::codegen_support::data_section::comm_directive(
+            symbol, 8, emitter.target,
+        ));
+    }
     emitter.label_global("fixture_invoke");
     if arm {
         emitter.instruction("mov x9, x0");                                      // retain the protected operation pointer
