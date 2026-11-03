@@ -238,5 +238,10 @@ if ($argc < 0) { nativeStaticInitializeOld(); nativeStaticReplaceDirect(); nativ
     let user = inject_main_exit_harness(&user, &asm);
     let runtime = runtime_obj_for_asm(&runtime);
     let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
-    assert_eq!(output, "old-start|incoming|old-end|old-start|old-end|incoming|1");
+    let reflection = user.split_once("@fn name=nativeStaticReplaceReflection ")
+        .map(|(_, body)| body.split_once("@endfn name=nativeStaticReplaceReflection")
+            .map_or(body, |(body, _)| body))
+        .unwrap_or("native Reflection function metadata missing");
+    assert_eq!(output, "old-start|incoming|old-end|old-start|old-end|incoming|1",
+        "native Reflection ownership sequence:\n{reflection}");
 }
