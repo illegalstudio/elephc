@@ -122,11 +122,9 @@ function nativeReferenceApplyMode(mixed &$target): void {{
     try {{ $target = true; echo 'accepted|'; }}
     catch (TypeError $error) {{ echo 'rejected|'; }}
 }}
-if ($argc < 0) {{
-    $probe = new NativeReferenceModeProbe(); $target = 2.0;
-    $alias =& $probe->value;
-    nativeReferenceApplyMode($target); unset($alias, $probe, $target);
-}}
+$probe = new NativeReferenceModeProbe(); $alias =& $probe->value;
+unset($alias, $probe);
+$keep = nativeReferenceApplyMode(...); unset($keep);
 "#, if strict { "declare(strict_types=1);" } else { "" });
         let (user, runtime, requirements) = without_ir_opt(||
             compile_source_to_asm_with_native_reference_validation(&source, &dir.0, 65_536, true));

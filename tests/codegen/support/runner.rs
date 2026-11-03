@@ -1862,6 +1862,7 @@ pub(crate) fn assemble_and_run(
     );
 
     let output = run_binary(&bin_path, dir);
+    super::diagnostics::preserve_native_fixture_failure(user_asm, &output);
     assert!(
         output.status.success(),
         "binary exited with status {}\nstdout: {}\nstderr: {}",

@@ -55,6 +55,14 @@ fn heap_execution_failed(output: &ProgramOutput) -> bool {
         line.contains("HEAP DEBUG: leak summary:") && !line.ends_with("clean"))
 }
 
+/// Saves a failed manual native ABI fixture before its directory guard removes the binary.
+pub(super) fn preserve_native_fixture_failure(assembly: &str, output: &std::process::Output) {
+    if output.status.success() { return; }
+    save_failure("native", None, assembly, &format!(
+        "status:{}\nstdout:\n{}\nstderr:\n{}", output.status,
+        String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)));
+}
+
 /// Preserves an assembler's exact stdin, including runtime assembly when that is what failed.
 pub(super) fn preserve_assembler_failure(assembly: &str) {
     save_failure("assembler", None, assembly, "Assembler failed; see the job's stderr.");
