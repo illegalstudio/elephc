@@ -1,8 +1,6 @@
 ---
 title: "date_create_from_format() - internals"
 description: "Compiler internals for date_create_from_format(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 195
 ---
 
 ## `date_create_from_format()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/name_resolver/expressions.rs`:860](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs#L860) (`rewrite_date_procedural_call`)
+- **Lowering**: [`src/name_resolver/expressions.rs`](https://github.com/illegalstudio/elephc/blob/main/src/name_resolver/expressions.rs) (`rewrite_date_procedural_call`)
 - **Function symbol**: `rewrite_date_procedural_call()`
 
 

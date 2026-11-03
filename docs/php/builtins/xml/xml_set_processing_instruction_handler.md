@@ -1,8 +1,6 @@
 ---
 title: "xml_set_processing_instruction_handler()"
 description: "Sets the processing instruction handler."
-sidebar:
-  order: 1102
 ---
 
 ## xml_set_processing_instruction_handler()
@@ -21,8 +19,9 @@ Sets the processing instruction handler.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xml_set_processing_instruction_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xml_set_processing_instruction_handler.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

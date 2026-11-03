@@ -1,8 +1,6 @@
 ---
 title: "exif_read_data()"
 description: "Reads the EXIF headers of a JPEG or TIFF image."
-sidebar:
-  order: 457
 ---
 
 ## exif_read_data()
@@ -23,8 +21,9 @@ Reads the EXIF headers of a JPEG or TIFF image.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

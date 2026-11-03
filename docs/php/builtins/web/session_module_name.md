@@ -1,8 +1,6 @@
 ---
 title: "session_module_name()"
 description: "Reads or sets the session save handler module."
-sidebar:
-  order: 1069
 ---
 
 ## session_module_name()
@@ -20,8 +18,9 @@ Reads or sets the session save handler module.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

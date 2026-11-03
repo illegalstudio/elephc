@@ -1,8 +1,6 @@
 ---
 title: "finfo_set_flags()"
 description: "Changes the persistent fileinfo configuration flags."
-sidebar:
-  order: 327
 ---
 
 ## finfo_set_flags()
@@ -21,8 +19,9 @@ Changes the persistent fileinfo configuration flags.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/fileinfo/finfo_set_flags.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/fileinfo/finfo_set_flags.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

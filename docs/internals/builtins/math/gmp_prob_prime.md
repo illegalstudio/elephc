@@ -1,8 +1,6 @@
 ---
 title: "gmp_prob_prime() - internals"
 description: "Compiler internals for gmp_prob_prime(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 624
 ---
 
 ## `gmp_prob_prime()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_prob_prime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_prob_prime.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

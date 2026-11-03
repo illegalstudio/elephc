@@ -1,8 +1,6 @@
 ---
 title: "date_timestamp_get()"
 description: "Returns a date's Unix timestamp."
-sidebar:
-  order: 216
 ---
 
 ## date_timestamp_get()
@@ -20,8 +18,9 @@ Returns a date's Unix timestamp.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

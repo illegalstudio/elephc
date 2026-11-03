@@ -1,8 +1,6 @@
 ---
 title: "session_register_shutdown()"
 description: "Registers session_write_close() as a shutdown function."
-sidebar:
-  order: 1072
 ---
 
 ## session_register_shutdown()
@@ -19,8 +17,9 @@ Registers session_write_close() as a shutdown function.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

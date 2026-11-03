@@ -560,7 +560,7 @@ docs/
 
 ### Astro compatibility
 
-All docs files are Markdown with YAML frontmatter compatible with Astro content collections. Every `.md` file **must** have this frontmatter format:
+All docs files are Markdown with YAML frontmatter compatible with Astro content collections. Every `.md` file **must** have `title` and `description`. Handwritten pages and generated area indexes also require `sidebar.order`, following this format:
 
 ```yaml
 ---
@@ -572,7 +572,7 @@ sidebar:
 ```
 
 - `title` replaces the `# Heading` — do **not** add a top-level `# Title` in the body (Astro renders it from frontmatter)
-- `sidebar.order` controls page ordering within its section
+- `sidebar.order` controls page ordering within its section. Generated per-builtin pages omit it and use the site's alphabetical ordering, so adding a builtin does not renumber unrelated pages.
 - No navigation links (`[← Back]`, `Next:`, etc.) — Astro handles navigation
 - Use standard Markdown (CommonMark). No custom shortcodes or Astro components inside docs
 

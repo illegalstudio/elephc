@@ -1,8 +1,6 @@
 ---
 title: "clearstatcache() - internals"
 description: "Compiler internals for clearstatcache(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 262
 ---
 
 ## `clearstatcache()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/clearstatcache.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/clearstatcache.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

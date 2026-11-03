@@ -1,8 +1,6 @@
 ---
 title: "cal_info()"
 description: "Returns a calendar's month names, abbreviations, and day count."
-sidebar:
-  order: 189
 ---
 
 ## cal_info()
@@ -20,8 +18,9 @@ Returns a calendar's month names, abbreviations, and day count.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

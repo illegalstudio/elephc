@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_reset() - internals"
 description: "Compiler internals for mysqli_stmt_reset(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 178
 ---
 
 ## `mysqli_stmt_reset()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1315](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1315) (`mysqli_stmt_reset`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_stmt_reset`)
 - **Function symbol**: `mysqli_stmt_reset()`
 
 

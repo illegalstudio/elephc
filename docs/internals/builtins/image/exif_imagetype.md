@@ -1,8 +1,6 @@
 ---
 title: "exif_imagetype() - internals"
 description: "Compiler internals for exif_imagetype(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 456
 ---
 
 ## `exif_imagetype()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3903](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3903) (`exif_imagetype`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`exif_imagetype`)
 - **Function symbol**: `exif_imagetype()`
 
 

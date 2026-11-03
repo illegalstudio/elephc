@@ -1,8 +1,6 @@
 ---
 title: "is_link()"
 description: "Tells whether the filename is a symbolic link."
-sidebar:
-  order: 284
 ---
 
 ## is_link()
@@ -20,8 +18,9 @@ Tells whether the filename is a symbolic link.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/is_link.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_link.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

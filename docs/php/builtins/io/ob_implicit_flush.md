@@ -1,8 +1,6 @@
 ---
 title: "ob_implicit_flush()"
 description: "Turns implicit flush on/off."
-sidebar:
-  order: 360
 ---
 
 ## ob_implicit_flush()
@@ -20,8 +18,9 @@ Turns implicit flush on/off.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/ob_implicit_flush.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/ob_implicit_flush.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

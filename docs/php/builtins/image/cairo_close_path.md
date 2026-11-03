@@ -1,8 +1,6 @@
 ---
 title: "cairo_close_path()"
 description: "Closes the current subpath with a line back to its starting point."
-sidebar:
-  order: 410
 ---
 
 ## cairo_close_path()
@@ -20,8 +18,9 @@ Closes the current subpath with a line back to its starting point.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

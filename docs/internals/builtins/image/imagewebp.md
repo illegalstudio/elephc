@@ -1,8 +1,6 @@
 ---
 title: "imagewebp() - internals"
 description: "Compiler internals for imagewebp(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 546
 ---
 
 ## `imagewebp()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3633](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3633) (`imagewebp`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagewebp`)
 - **Function symbol**: `imagewebp()`
 
 

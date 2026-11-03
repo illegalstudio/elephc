@@ -1,8 +1,6 @@
 ---
 title: "imagerotate()"
 description: "Returns a copy of an image rotated by an angle."
-sidebar:
-  order: 534
 ---
 
 ## imagerotate()
@@ -23,8 +21,9 @@ Returns a copy of an image rotated by an angle.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

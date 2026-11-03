@@ -1,8 +1,6 @@
 ---
 title: "finfo_open() - internals"
 description: "Compiler internals for finfo_open(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 326
 ---
 
 ## `finfo_open()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/fileinfo_prelude/build.rs`:146](https://github.com/illegalstudio/elephc/blob/main/src/fileinfo_prelude/build.rs#L146) (`finfo_open`)
+- **Lowering**: [`src/fileinfo_prelude/build.rs`](https://github.com/illegalstudio/elephc/blob/main/src/fileinfo_prelude/build.rs) (`finfo_open`)
 - **Function symbol**: `finfo_open()`
 
 

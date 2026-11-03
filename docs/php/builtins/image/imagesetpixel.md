@@ -1,8 +1,6 @@
 ---
 title: "imagesetpixel()"
 description: "Sets one pixel to a color."
-sidebar:
-  order: 538
 ---
 
 ## imagesetpixel()
@@ -23,8 +21,9 @@ Sets one pixel to a color.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

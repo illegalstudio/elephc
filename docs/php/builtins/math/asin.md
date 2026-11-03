@@ -1,8 +1,6 @@
 ---
 title: "asin()"
 description: "Returns the arcsine of a number in radians."
-sidebar:
-  order: 557
 ---
 
 ## asin()
@@ -20,8 +18,9 @@ Returns the arcsine of a number in radians.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/asin.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/asin.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

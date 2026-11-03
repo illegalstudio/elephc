@@ -1,8 +1,6 @@
 ---
 title: "imagefontwidth() - internals"
 description: "Compiler internals for imagefontwidth(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 518
 ---
 
 ## `imagefontwidth()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2964](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2964) (`imagefontwidth`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagefontwidth`)
 - **Function symbol**: `imagefontwidth()`
 
 

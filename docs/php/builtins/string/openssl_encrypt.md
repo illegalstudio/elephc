@@ -1,8 +1,6 @@
 ---
 title: "openssl_encrypt()"
 description: "Encrypts data with a supported AES cipher."
-sidebar:
-  order: 973
 ---
 
 ## openssl_encrypt()
@@ -27,8 +25,9 @@ Encrypts data with a supported AES cipher.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/openssl_encrypt.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/openssl_encrypt.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

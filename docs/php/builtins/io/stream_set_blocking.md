@@ -1,8 +1,6 @@
 ---
 title: "stream_set_blocking()"
 description: "Sets blocking/non-blocking mode on a stream."
-sidebar:
-  order: 389
 ---
 
 ## stream_set_blocking()
@@ -21,8 +19,9 @@ Sets blocking/non-blocking mode on a stream.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_blocking.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_blocking.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

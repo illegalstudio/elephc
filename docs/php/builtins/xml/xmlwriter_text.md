@@ -1,8 +1,6 @@
 ---
 title: "xmlwriter_text()"
 description: "Writes escaped text content."
-sidebar:
-  order: 1134
 ---
 
 ## xmlwriter_text()
@@ -21,8 +19,9 @@ Writes escaped text content.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_text.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_text.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

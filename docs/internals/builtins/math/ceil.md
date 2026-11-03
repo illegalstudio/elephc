@@ -1,8 +1,6 @@
 ---
 title: "ceil() - internals"
 description: "Compiler internals for ceil(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 576
 ---
 
 ## `ceil()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/ceil.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/ceil.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

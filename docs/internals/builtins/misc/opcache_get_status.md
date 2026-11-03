@@ -1,8 +1,6 @@
 ---
 title: "opcache_get_status() - internals"
 description: "Compiler internals for opcache_get_status(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 710
 ---
 
 ## `opcache_get_status()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/opcache_prelude/build.rs`:489](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs#L489) (`opcache_get_status`)
+- **Lowering**: [`src/opcache_prelude/build.rs`](https://github.com/illegalstudio/elephc/blob/main/src/opcache_prelude/build.rs) (`opcache_get_status`)
 - **Function symbol**: `opcache_get_status()`
 
 

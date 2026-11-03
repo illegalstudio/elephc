@@ -1,8 +1,6 @@
 ---
 title: "imagecolorresolvealpha()"
 description: "Returns the palette index of a color with alpha, allocating or approximating it."
-sidebar:
-  order: 484
 ---
 
 ## imagecolorresolvealpha()
@@ -24,8 +22,9 @@ Returns the palette index of a color with alpha, allocating or approximating it.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "finfo_file() - internals"
 description: "Compiler internals for finfo_file(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 325
 ---
 
 ## `finfo_file()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/fileinfo_prelude/build.rs`:169](https://github.com/illegalstudio/elephc/blob/main/src/fileinfo_prelude/build.rs#L169) (`finfo_file`)
+- **Lowering**: [`src/fileinfo_prelude/build.rs`](https://github.com/illegalstudio/elephc/blob/main/src/fileinfo_prelude/build.rs) (`finfo_file`)
 - **Function symbol**: `finfo_file()`
 
 

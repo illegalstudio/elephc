@@ -1,8 +1,6 @@
 ---
 title: "curl_multi_getcontent()"
 description: "Returns the content of a cURL handle if CURLOPT_RETURNTRANSFER is set."
-sidebar:
-  order: 779
 ---
 
 ## curl_multi_getcontent()
@@ -20,8 +18,9 @@ Returns the content of a cURL handle if CURLOPT_RETURNTRANSFER is set.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_getcontent.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_getcontent.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "isset()"
 description: "Determines whether a variable is set and is not null."
-sidebar:
-  order: 702
 ---
 
 ## isset()
@@ -21,8 +19,9 @@ Determines whether a variable is set and is not null.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through a dedicated compiler language-construct path.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/isset.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/isset.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

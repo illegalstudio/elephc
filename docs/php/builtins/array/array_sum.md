@@ -1,8 +1,6 @@
 ---
 title: "array_sum()"
 description: "Calculate an integer or float sum of array values; an empty array returns integer 0."
-sidebar:
-  order: 42
 ---
 
 ## array_sum()
@@ -20,8 +18,9 @@ Calculate an integer or float sum of array values; an empty array returns intege
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_sum.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_sum.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

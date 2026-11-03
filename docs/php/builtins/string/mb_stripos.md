@@ -1,8 +1,6 @@
 ---
 title: "mb_stripos()"
 description: "Finds the first character position using simple case folding, or returns false."
-sidebar:
-  order: 951
 ---
 
 ## mb_stripos()
@@ -23,8 +21,9 @@ Finds the first character position using simple case folding, or returns false.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_stripos.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_stripos.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

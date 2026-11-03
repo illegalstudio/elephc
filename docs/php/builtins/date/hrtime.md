@@ -1,8 +1,6 @@
 ---
 title: "hrtime()"
 description: "Returns the current high-resolution time."
-sidebar:
-  order: 229
 ---
 
 ## hrtime()
@@ -20,8 +18,9 @@ Returns the current high-resolution time.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/hrtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/hrtime.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "get_defined_constants()"
 description: "Returns constants visible to the current program."
-sidebar:
-  order: 687
 ---
 
 ## get_defined_constants()
@@ -20,8 +18,9 @@ Returns constants visible to the current program.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/get_defined_constants.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/get_defined_constants.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

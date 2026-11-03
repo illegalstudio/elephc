@@ -1,8 +1,6 @@
 ---
 title: "date_timezone_set()"
 description: "Sets a date's timezone, converting the wall-clock time to it."
-sidebar:
-  order: 219
 ---
 
 ## date_timezone_set()
@@ -21,8 +19,9 @@ Sets a date's timezone, converting the wall-clock time to it.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

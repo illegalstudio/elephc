@@ -1,8 +1,6 @@
 ---
 title: "gmp_gcdext()"
 description: "Extended greatest common divisor."
-sidebar:
-  order: 604
 ---
 
 ## gmp_gcdext()
@@ -21,8 +19,9 @@ Extended greatest common divisor.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_gcdext.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_gcdext.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

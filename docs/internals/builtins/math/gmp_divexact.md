@@ -1,8 +1,6 @@
 ---
 title: "gmp_divexact() - internals"
 description: "Compiler internals for gmp_divexact(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 600
 ---
 
 ## `gmp_divexact()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_divexact.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_divexact.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

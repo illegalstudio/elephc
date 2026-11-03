@@ -1,8 +1,6 @@
 ---
 title: "imagecopymergegray()"
 description: "Copies a rectangle into another image as grayscale, blending it by a percentage."
-sidebar:
-  order: 492
 ---
 
 ## imagecopymergegray()
@@ -28,8 +26,9 @@ Copies a rectangle into another image as grayscale, blending it by a percentage.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

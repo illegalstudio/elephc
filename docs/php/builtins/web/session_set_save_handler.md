@@ -1,8 +1,6 @@
 ---
 title: "session_set_save_handler()"
 description: "Installs a custom session storage handler."
-sidebar:
-  order: 1076
 ---
 
 ## session_set_save_handler()
@@ -28,8 +26,9 @@ Installs a custom session storage handler.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

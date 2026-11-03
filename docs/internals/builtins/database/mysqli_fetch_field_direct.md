@@ -1,8 +1,6 @@
 ---
 title: "mysqli_fetch_field_direct() - internals"
 description: "Compiler internals for mysqli_fetch_field_direct(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 123
 ---
 
 ## `mysqli_fetch_field_direct()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1147](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1147) (`mysqli_fetch_field_direct`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_fetch_field_direct`)
 - **Function symbol**: `mysqli_fetch_field_direct()`
 
 

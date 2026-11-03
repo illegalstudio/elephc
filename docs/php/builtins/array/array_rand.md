@@ -1,8 +1,6 @@
 ---
 title: "array_rand()"
 description: "Pick one or more random keys out of an array."
-sidebar:
-  order: 33
 ---
 
 ## array_rand()
@@ -21,8 +19,9 @@ Pick one or more random keys out of an array.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_rand.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_rand.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

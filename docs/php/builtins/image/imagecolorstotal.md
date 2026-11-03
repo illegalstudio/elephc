@@ -1,8 +1,6 @@
 ---
 title: "imagecolorstotal()"
 description: "Returns how many colors a palette image holds."
-sidebar:
-  order: 487
 ---
 
 ## imagecolorstotal()
@@ -20,8 +18,9 @@ Returns how many colors a palette image holds.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
