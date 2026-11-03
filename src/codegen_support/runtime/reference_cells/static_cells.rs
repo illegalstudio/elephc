@@ -173,6 +173,7 @@ fn branch_uninitialized(emitter: &mut Emitter, value: &str, marker: &str, label:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen_support::platform::Target;
 
     /// Every supported ABI allocates a real cell and detaches its binding before PHP retirement.
     #[test]
