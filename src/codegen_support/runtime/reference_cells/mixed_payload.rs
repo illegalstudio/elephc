@@ -74,7 +74,7 @@ pub(crate) fn follow_mixed_reference_slot(
 }
 
 /// Installs one persistent PHP wrapper while leaving the native cell's address and ownership intact.
-pub(super) fn emit_promote_mixed(emitter: &mut Emitter) {
+pub(super) fn emit_promote_mixed(emitter: &mut Emitter, native_validation: bool) {
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
     emitter.blank();
@@ -115,6 +115,9 @@ pub(super) fn emit_promote_mixed(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_decref_any");
     emitter.label("__rt_reference_cell_promote_mixed_done");
     abi::load_at_offset(emitter, result, 8);
+    if native_validation {
+        super::source_lifecycle::associate_result(emitter);
+    }
     abi::emit_frame_restore(emitter, 48);
     abi::emit_return(emitter);
 }

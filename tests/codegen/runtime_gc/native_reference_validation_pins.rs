@@ -244,7 +244,7 @@ fn native_coordinator(out: &mut String, callback: &str) {
         instruction(out, &format!("mov x0, #{strict}"), &format!("mov eax, {strict}"));
         store(out, 128);
         native_publish(out, 208, expected);
-        // Publication borrows the RHS and preserves the caller's original bool representation.
+        // Publication consumes only the extra owner and preserves the real source binding's bool.
         load(out, 208);
         call(out, "__rt_mixed_unbox");
         instruction(out, "cmp x0, #3", "cmp rax, 3");
@@ -266,6 +266,7 @@ fn native_coordinator(out: &mut String, callback: &str) {
     call(out, "__rt_mixed_cast_int");
     instruction(out, "cmp x0, #1", "cmp rax, 1");
     instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    native_source_detach_and_promote(out);
     instruction(out, "add x0, sp, #8", "lea rdi, [rsp + 8]");
     call(out, &target().extern_symbol("__elephc_reference_sources_unbind_v1"));
     instruction(out, "cmp x0, #0", "test rax, rax");
@@ -280,6 +281,47 @@ fn native_coordinator(out: &mut String, callback: &str) {
     expect_zero(out, "_rt_reference_validation_pins_top");
     load(out, 208);
     call(out, "__rt_decref_mixed");
+}
+
+/// Actual unset detaches the old wrapper's source, and promotion reindexes the replacement cell.
+fn native_source_detach_and_promote(out: &mut String) {
+    expect_reference_source(out, 1);
+    load(out, 0);
+    call(out, "__rt_incref");
+    instruction(out, "add x0, sp, #8", "lea rax, [rsp + 8]");
+    call(out, "__rt_reference_property_unset");
+    expect_reference_source(out, 0);
+    load(out, 0);
+    call(out, "__rt_decref_mixed");
+    load(out, 304);
+    call(out, "__rt_mixed_clone");
+    instruction(out, "ldr x9, [sp, #8]", "mov r10, QWORD PTR [rsp + 8]");
+    instruction(out, "str x0, [x9]", "mov QWORD PTR [r10], rax");
+    load(out, 8);
+    call(out, "__rt_reference_cell_promote_mixed");
+    instruction(out, "ldr x0, [x0]", "mov rax, QWORD PTR [rax]");
+    store(out, 0);
+    expect_reference_source(out, 1);
+    // The moved declaration still constrains the new wrapper after promotion.
+    instruction(out, "mov x0, #1", "mov eax, 1");
+    store(out, 128);
+    native_publish(out, 208, 2);
+    load(out, 136);
+    instruction(out, "cmp x0, #0", "test rax, rax");
+    instruction(out, "b.eq Lvalidation_pin_fail", "je Lvalidation_pin_fail");
+    instruction(out, "str xzr, [sp, #136]", "mov QWORD PTR [rsp + 136], 0");
+    call(out, "__rt_decref_any");
+    instruction(out, "str xzr, [sp, #128]", "mov QWORD PTR [rsp + 128], 0");
+}
+
+/// Queries the actual weak wrapper index without inspecting or retaining a PHP payload.
+fn expect_reference_source(out: &mut String, expected: usize) {
+    instruction(out, "ldr x0, [sp]", "mov rdi, QWORD PTR [rsp]");
+    instruction(out, "mov x1, #0", "xor esi, esi");
+    instruction(out, "add x2, sp, #224", "lea rdx, [rsp + 224]");
+    call(out, &target().extern_symbol("__elephc_reference_sources_next_reference_v1"));
+    instruction(out, &format!("cmp x0, #{expected}"), &format!("cmp rax, {expected}"));
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
 }
 
 /// Transfers an extra RHS owner, retaining the fixture's real source binding for later checks.

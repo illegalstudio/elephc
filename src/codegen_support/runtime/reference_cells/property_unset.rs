@@ -27,7 +27,7 @@ pub(crate) fn emit_owned_property_unset(emitter: &mut Emitter, base: &str, offse
 }
 
 /// Replaces the object's cell owner with uninitialized storage, then retires the old owner.
-pub(super) fn emit_property_unset(emitter: &mut Emitter) {
+pub(super) fn emit_property_unset(emitter: &mut Emitter, native_validation: bool) {
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
     emitter.blank();
@@ -54,6 +54,16 @@ pub(super) fn emit_property_unset(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, scratch, 8);
     abi::emit_store_to_address(emitter, result, scratch, 0);
     abi::emit_store_zero_to_address(emitter, scratch, 8);
+    if native_validation {
+        abi::store_at_offset(emitter, result, 24);
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 24);
+        let entry = emitter.target.extern_symbol("__elephc_reference_sources_rebind_v1");
+        abi::emit_call_label(emitter, &entry);
+        super::source_lifecycle::require_success(emitter);
+        abi::load_at_offset(emitter, result, 24);
+        super::source_lifecycle::associate_result(emitter);
+    }
     abi::load_at_offset(emitter, result, 16);
     abi::emit_call_label(emitter, "__rt_decref_any");
     abi::emit_frame_restore(emitter, 48);
@@ -65,6 +75,28 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
     use std::path::Path;
+
+    /// Selected runtimes move the physical type source before the displaced cell can run PHP.
+    #[test]
+    fn native_reference_unset_rebinds_before_retiring_the_old_cell() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_property_unset(&mut emitter, true);
+            let assembly = emitter.output();
+            let publish = if target.arch == Arch::AArch64 { "str x0, [x10]" }
+                else { "mov QWORD PTR [r10], rax" };
+            let rebound = assembly.find("__elephc_reference_sources_rebind_v1").unwrap();
+            let associated = assembly.find("__rt_reference_source_associate_native").unwrap();
+            let release = assembly.find("__rt_decref_any").unwrap();
+            assert!(assembly.find(publish).unwrap() < rebound && rebound < associated && associated < release,
+                "{name}: the old wrapper loses this binding before a destructor can assign through it");
+            let mut emitter = Emitter::new(target);
+            emit_property_unset(&mut emitter, false);
+            assert!(!emitter.output().contains("__elephc_reference_sources"),
+                "{name}: ordinary runtimes must not gain a native registry dependency");
+        }
+    }
 
     /// Every ABI detaches the object's cell before a release can execute a destructor.
     #[test]
@@ -80,7 +112,7 @@ mod tests {
             let user = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
             assert!(user.contains("__rt_reference_property_unset"), "{name}: native detach call");
             let mut emitter = Emitter::new(target);
-            emit_property_unset(&mut emitter);
+            emit_property_unset(&mut emitter, false);
             let runtime = emitter.output();
             let publish = if target.arch == Arch::AArch64 { "str x0, [x10]" }
                 else { "mov QWORD PTR [r10], rax" };

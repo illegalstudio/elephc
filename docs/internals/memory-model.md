@@ -609,8 +609,8 @@ with a distinct generation token. Clone bindings remain separate even when they
 name the same cell and validator. Rebinding, unset and arena reset invalidate old
 tokens. The native rebind ABI preserves a registered binding's immutable
 declaration while moving it to a newly published cell, without registering
-unknown storage or retaining the displaced cell. Native iteration copies records and checks their liveness after PHP
-callbacks, rather than keeping an iterator across re-entry. Records own and
+unknown storage or retaining the displaced cell. Native iteration copies records
+without keeping a borrowed iterator across PHP re-entry. Records own and
 dereference no receiver, cell, value or validator address. Binding hooks must
 remove each source after the receiver destructor and before releasing its cell;
 ordinary reference parameters add no property source. Publisher and lifecycle
@@ -633,6 +633,19 @@ source that joined the target wrapper after the previous snapshot is visited.
 A cursor from an earlier physical state does not describe the current source set.
 An unchanged metadata epoch does not prove that a native cell stayed raw across
 PHP re-entry; callers must recheck physical shape and previously unmatched cells.
+
+In a selected native-validation runtime, Mixed promotion authenticates the cell's
+current wrapper and reports that association to every registered binding of the
+cell. Property unset publishes its fresh uninitialized cell, rebinds the existing
+physical declaration to that cell, reports its current shape, then retires the
+displaced cell. The old wrapper therefore loses that property's constraint
+before a displaced destructor can assign through a surviving alias. Promotion of
+the replacement reports its new wrapper without registering unknown storage.
+These index mutations run no PHP and own no values. A rejected mutation aborts
+instead of allowing assignment with stale constraints. Runtimes without the
+capability emit none of these registry calls. Object construction, clone, final
+retirement, static storage and arena reset still need their complete binding
+lifecycle before automatic typed canonical activation is enabled.
 
 The versioned native validation coordinator prepares property candidates without
 publishing a destination. It copies and physically checks the initial matching
