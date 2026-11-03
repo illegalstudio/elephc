@@ -179,7 +179,7 @@ fn collect_class_property_slots(
 }
 
 /// Returns metadata for a private parent slot hidden by a same-named child property.
-fn hidden_private_property_slot_metadata(
+pub(in crate::codegen) fn hidden_private_property_slot_metadata(
     module: &Module,
     class_name: &str,
     index: usize,

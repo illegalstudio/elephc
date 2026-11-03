@@ -17,18 +17,8 @@ pub(in crate::codegen::lower_inst) fn lower(
     ctx: &mut FunctionContext<'_>, inst: &Instruction, class_id: u64, index: u32,
     is_static: bool,
 ) -> Result<()> {
-    let (class_name, info) = ctx.module.class_infos.iter()
-        .find(|(_, info)| info.class_id == class_id)
-        .ok_or_else(|| CodegenIrError::invalid_module("unknown reference validator class"))?;
-    let properties = if is_static { &info.static_properties } else { &info.properties };
-    let (property, declared) = properties.get(index as usize)
-        .ok_or_else(|| CodegenIrError::invalid_module("unknown reference validator property"))?;
-    let declared = declared.clone();
-    let mut slot = PropertySlot {
-        class_name: class_name.clone(), property: property.clone(), php_type: declared.clone(),
-        offset: 0, is_declared: true, is_packed: false, width: None, is_reference: true,
-        abstract_setter_type_error_prefix: None, reference_declaration: None,
-    };
+    let mut slot = declaration_slot(ctx.module, class_id, index, is_static)?;
+    let declared = slot.php_type.clone();
     let weak = declaration_actions(ctx, &slot)?;
     let strict = strict_actions(&declared, &weak);
     // Candidate storage is uniformly boxed. Diagnostics retain the source declaration.
@@ -51,6 +41,34 @@ pub(in crate::codegen::lower_inst) fn lower(
     emit_candidate(ctx, value, &slot, &weak)?;
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
+}
+
+/// Resolves immutable diagnostics to the declaration owning this physical slot, including shadows.
+fn declaration_slot(
+    module: &crate::ir::Module, class_id: u64, index: u32, is_static: bool,
+) -> Result<PropertySlot> {
+    let (class_name, info) = module.class_infos.iter()
+        .find(|(_, info)| info.class_id == class_id)
+        .ok_or_else(|| CodegenIrError::invalid_module("unknown reference validator class"))?;
+    let properties = if is_static { &info.static_properties } else { &info.properties };
+    let (property, declared) = properties.get(index as usize)
+        .ok_or_else(|| CodegenIrError::invalid_module("unknown reference validator property"))?;
+    let declared = declared.clone();
+    let owner = if is_static {
+        info.static_property_declaring_classes.get(property).cloned().unwrap_or_else(|| class_name.clone())
+    } else if info.visible_property_index(property) == Some(index as usize) {
+        info.property_declaring_classes.get(property).cloned().unwrap_or_else(|| class_name.clone())
+    } else {
+        crate::codegen::eval_property_helpers::hidden_private_property_slot_metadata(
+            module, class_name, index as usize, property,
+        ).map(|(owner, _)| owner)
+            .ok_or_else(|| CodegenIrError::invalid_module("unknown hidden reference declaration owner"))?
+    };
+    Ok(PropertySlot {
+        class_name: owner, property: property.clone(), php_type: declared.clone(),
+        offset: 0, is_declared: true, is_packed: false, width: None, is_reference: true,
+        abstract_setter_type_error_prefix: None, reference_declaration: None,
+    })
 }
 
 /// Converts ordinary store acceptance into a precise, always-boxed PHP candidate plan.
@@ -145,5 +163,56 @@ mod tests {
         let plans = strict_actions(&PhpType::Union(vec![PhpType::False, PhpType::Void]), &weak);
         assert!(matches!(plans[3], TagAction::FalseOrScalar(None)));
         assert!(matches!(plans[7], TagAction::Accept));
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Inherited and hidden declarations retain their owners independently of receiver class names.
+    #[test]
+    fn native_reference_validators_use_physical_declaring_classes() {
+        let source = r#"<?php
+class NativeValidatorOwnerBase {
+    private int $hidden = 1;
+    public int $redeclared = 1;
+    public static string $inherited = 'base';
+    public function &baseReference(): int { return $this->hidden; }
+}
+class NativeValidatorOwnerChild extends NativeValidatorOwnerBase {
+    private string $hidden = 'child';
+    public int $redeclared = 2;
+    public static string $own = 'child';
+    public function &childReference(): string { return $this->hidden; }
+}
+$object = new NativeValidatorOwnerChild();
+$a =& $object->baseReference(); $b =& $object->childReference();
+$c =& $object->redeclared;
+echo $a, $b, $c, NativeValidatorOwnerChild::$inherited, NativeValidatorOwnerChild::$own;
+"#;
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let module = crate::ir_lower::tests::lower_source_at_for_target(
+                source, std::path::Path::new("main.php"), std::path::Path::new("."),
+                crate::codegen::platform::Target::parse(target).unwrap(),
+            );
+            let child = &module.class_infos["NativeValidatorOwnerChild"];
+            let hidden = child.properties.iter().position(|(name, ty)|
+                name == "hidden" && *ty == PhpType::Int).unwrap();
+            let visible = child.visible_property_index("hidden").unwrap();
+            for (index, owner) in [
+                (hidden, "NativeValidatorOwnerBase"), (visible, "NativeValidatorOwnerChild"),
+                (child.visible_property_index("redeclared").unwrap(), "NativeValidatorOwnerChild"),
+            ] {
+                assert_eq!(declaration_slot(&module, child.class_id, index as u32, false)
+                    .unwrap().class_name, owner, "{target}: physical instance declaration");
+            }
+            for (name, owner) in [("inherited", "NativeValidatorOwnerBase"), ("own", "NativeValidatorOwnerChild")] {
+                let index = child.static_properties.iter().position(|(property, _)| property == name).unwrap();
+                assert_eq!(declaration_slot(&module, child.class_id, index as u32, true)
+                    .unwrap().class_name, owner, "{target}: physical static declaration");
+            }
+        }
     }
 }

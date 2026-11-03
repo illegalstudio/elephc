@@ -665,7 +665,8 @@ is idempotent and validates the resulting EIR. They borrow their two inputs and 
 owned boxed candidate. Context bit zero selects assignment-site strictness;
 strict assignments preserve exact members and permit integer-to-float widening.
 Weak candidates reuse the property guard's coercions and diagnostics. Reference
-errors name the original declaration independently of candidate storage. The
+errors name the original physical declaration independently of candidate storage
+or receiver class, including hidden parent-private slots and inherited statics. The
 native ABI harness calls a generated callback through the protected adapter.
 Publishers still need to register these callbacks and retire the adapter's raw
 Throwable owner on every path.
