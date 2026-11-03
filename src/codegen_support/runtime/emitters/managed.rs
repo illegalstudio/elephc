@@ -238,7 +238,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     // Native `clone()` and Magician share this compact boxed adapter. Omit it when neither
     // surface is reachable so native-only literal eval keeps its runtime dependency-pure.
     if features.object_clone || features.eval_bridge {
-        eval_bridge::emit_object_clone_shallow_runtime(emitter);
+        eval_bridge::emit_object_clone_shallow_runtime(emitter, features.native_reference_validation);
     }
     if features.eval_bridge {
         eval_bridge::emit_eval_bridge_runtime(emitter, features);

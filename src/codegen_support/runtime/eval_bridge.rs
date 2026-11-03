@@ -59,12 +59,12 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter, features: RuntimeFe
 }
 
 /// Emits the boxed shallow-clone adapter shared by Magician and PHP 8.5 `clone()`.
-pub(crate) fn emit_object_clone_shallow_runtime(emitter: &mut Emitter) {
+pub(crate) fn emit_object_clone_shallow_runtime(emitter: &mut Emitter, native_validation: bool) {
     emitter.blank();
     emitter.comment("--- runtime: boxed object shallow clone ---");
     match emitter.target.arch {
-        Arch::AArch64 => emit_aarch64_object_clone_shallow_wrapper(emitter),
-        Arch::X86_64 => emit_x86_64_object_clone_shallow_wrapper(emitter),
+        Arch::AArch64 => emit_aarch64_object_clone_shallow_wrapper(emitter, native_validation),
+        Arch::X86_64 => emit_x86_64_object_clone_shallow_wrapper(emitter, native_validation),
     }
 }
 
@@ -697,6 +697,28 @@ mod tests {
                 body.contains(exit_status),
                 "fatal must exit with status 255 on {target:?}:\n{body}"
             );
+        }
+    }
+
+    /// PHP clone and eval register completed native sources before the new box exposes the copy.
+    #[test]
+    fn boxed_runtime_clone_registers_completed_native_sources_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for enabled in [false, true] {
+                let mut emitter = Emitter::new(target);
+                emit_object_clone_shallow_runtime(&mut emitter, enabled);
+                let asm = emitter.output();
+                let bind = asm.find("__rt_reference_sources_bind_object");
+                assert_eq!(bind.is_some(), enabled, "{name}: ordinary clones keep no registry dependency");
+                if let Some(bind) = bind {
+                    let copy = asm.find("__rt_hash_clone_shallow").unwrap();
+                    let boxing = if target.arch == Arch::AArch64 { "mov x0, #24" }
+                        else { "mov rax, 24" };
+                    let boxed = asm[bind..].find(boxing).unwrap() + bind;
+                    assert!(copy < bind && bind < boxed, "{name}: register all initialized clone cells");
+                }
+            }
         }
     }
 

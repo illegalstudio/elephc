@@ -648,15 +648,16 @@ capability emit none of these registry calls.
 Selected object allocation registers physical rows after all owned cells are
 initialized. Runtime by-name allocation registers after its property initializer
 thunk and before returning the object to hydration or reflection callers. Clone
-registers the completed copied cells as distinct bindings,
+registers the completed copied cells as distinct bindings in both the shared
+boxed runtime adapter used by PHP `clone` and eval, and direct EIR clone emission,
 including when an external alias makes both objects share one cell. The final
 object walk unregisters each owned reference row immediately before releasing
 its cell. Other properties retain their constraints until their own iteration.
 The walk begins after resurrection checks, so a destructor that saves `$this`
 retains its original sources. The web boundary resets the registry after PHP
-shutdown callbacks and before recycling arena addresses. Static storage and
-original-RHS store lowering still need their complete lifecycle and ownership
-handoff before automatic typed canonical activation is enabled.
+shutdown callbacks and before recycling arena addresses. Static storage and the
+remaining typed native/eval call surfaces still need their complete lifecycle
+and ownership handoff before automatic canonical activation is enabled.
 
 The versioned native validation coordinator prepares property candidates without
 publishing a destination. It copies and physically checks the initial matching
