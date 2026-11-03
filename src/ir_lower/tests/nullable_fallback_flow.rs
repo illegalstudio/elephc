@@ -931,3 +931,37 @@ fn test_nullable_fallback_flow_string_chunks_diagnostic_all_targets() {
         }
     }
 }
+
+/// A null default beside a scalar lowers to null-capable merge storage on every target (issue
+/// #1944): no `null` is ever stored into a plain `I64`, `F64` or `Str` slot, so `?int ?? null`
+/// keeps its tag word instead of the in-band sentinel, and the result assembles everywhere.
+#[test]
+fn test_nullable_fallback_flow_scalar_null_default_storage_all_targets() {
+    let source = r#"<?php
+function coalesced(?int $n): string { $x = $n ?? null; return $x === null ? "null" : "t" . $x; }
+function shortened(int $n): string { $x = $n ?: null; return $x === null ? "null" : "t" . $x; }
+function missed(int $k): string { $a = [1.5]; $x = $a[$k] ?? null; return $x === null ? "null" : "t" . $x; }
+function strung(?string $s): string { $x = $s ?? null; return $x === null ? "null" : "t" . $x; }
+echo coalesced(null), coalesced(6), shortened(0), shortened(6), missed(0), missed(3), strung(null), strung("s");
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        for function_name in ["coalesced", "shortened", "missed", "strung"] {
+            let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
+            for inst in &function.instructions {
+                if inst.op != Op::StoreLocal { continue; }
+                let Some(Immediate::LocalSlot(slot)) = &inst.immediate else { continue };
+                let stored = &function.values[inst.operands[0].as_raw() as usize];
+                if stored.php_type != crate::types::PhpType::Void { continue; }
+                let storage = function.locals[slot.as_raw() as usize].ir_type;
+                assert!(
+                    matches!(storage, IrType::TaggedScalar | IrType::Heap(IrHeapKind::Mixed)),
+                    "{name}: {function_name} stores null into a {storage:?} slot"
+                );
+            }
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

@@ -2828,3 +2828,74 @@ maybeCaptured(5, false); maybeCaptured(5, true); detachedCapture(5);
         if optimized { run(); } else { without_ir_opt(run); }
     }
 }
+
+/// A scalar merged with a null default keeps PHP null (issue #1944, #1835): `?int ?? null` once
+/// answered `9223372036854775806`, `?bool ?? null` `true`, `?float ?? null` `0.0` and
+/// `?string ?? null` `""`, because the merge temp was typed as the bare scalar and the null
+/// arm stored the in-band sentinel. `?:` over a falsy non-nullable scalar, typed array misses,
+/// `??=`, nested merges, array literals, `(array)` casts, nullable call results, returns and
+/// arguments all take the same paths. Runs through the CLI under `--heap-debug` in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_scalar_null_default_runtime() {
+    let source = r#"<?php
+function ternar(?int $n): string { $x = $n ?: null; return $x === null ? "tnull" : "t" . $x; }
+function coal(?int $n): string { $x = $n ?? null; return $x === null ? "cnull" : "c" . $x; }
+function show(string $label, mixed $value): void {
+    echo $label, ":", $value === null ? "N" : "V", "/", json_encode($value), "/", gettype($value), "|";
+}
+function coalInt(?int $n): void { $x = $n ?? null; show("ci", $x); $n ??= null; show("ca", $n); }
+function coalBool(?bool $b): void { $x = $b ?? null; show("cb", $x); }
+function coalFloat(?float $f): void { $x = $f ?? null; show("cf", $x); }
+function coalString(?string $s): void { $x = $s ?? null; show("cs", $x); echo "[", $x, "]|"; }
+function shortInt(int $n): void { $x = $n ?: null; show("si", $x); }
+function shortBool(bool $b): void { $x = $b ?: null; show("sb", $x); }
+function shortFloat(float $f): void { $x = $f ?: null; show("sf", $x); }
+function shortString(string $s): void { $x = $s ?: null; show("ss", $x); }
+function missInt(int $k): void { $a = [1]; $x = $a[$k] ?? null; show("mi", $x); }
+function missBool(int $k): void { $a = [true]; $x = $a[$k] ?? null; show("mb", $x); }
+function missFloat(int $k): void { $a = [1.5]; $x = $a[$k] ?? null; show("mf", $x); }
+function missString(int $k): void { $a = ["s"]; $x = $a[$k] ?? null; show("ms", $x); }
+function nested(?int $n): void {
+    $x = ($n ?? null) ?? 7; $y = [$n ?? null]; $z = (array) ($n ?? null);
+    $w = $n ?? null; $w = $w ?: 8;
+    show("nx", $x); show("ny", $y); show("nz", $z); show("nw", $w);
+}
+function maybeInt(bool $missing): ?int { return $missing ? null : 4; }
+function fromCall(bool $missing): void { $x = maybeInt($missing) ?? null; show("fc", $x); }
+function returned(?int $n): ?int { return $n ?? null; }
+function thrown(?int $n): int { try { $x = $n ?? throw new RuntimeException("none"); return $x + 1; } catch (RuntimeException $error) { return -1; } }
+function compared(?int $n): void { $x = $n ?? null; echo "cmp:", $x == null ? "eq" : "ne", $x < 1 ? "lt" : "ge", "|"; }
+for ($i = 0; $i < 2; $i++) {
+    echo ternar(0), " ", ternar(6), " ", coal(null), " ", coal(0), " ", coal(6), "\n";
+    coalInt(null); coalInt(0); coalInt(6); coalBool(null); coalBool(false); coalFloat(null); coalFloat(0.0);
+    coalString(null); coalString(""); echo "\n";
+    shortInt(0); shortInt(5); shortBool(false); shortFloat(0.0); shortString(""); shortString("0"); echo "\n";
+    missInt(0); missInt(3); missBool(0); missBool(3); missFloat(0); missFloat(3); missString(0); missString(3); echo "\n";
+    nested(null); nested(0); nested(6); echo "\n";
+    fromCall(true); fromCall(false); show("rt", returned(null)); show("rt", returned(3)); show("arg", null ?? null);
+    echo thrown(null), thrown(4), "|"; compared(null); compared(0); compared(5); echo "\n";
+}
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"tnull t6 cnull c0 c6\nci:N/null/NULL|ca:N/null/NULL|ci:V/0/integer|ca:V/0/integer|ci:V/6/integer|ca:V/6/integer|cb:N/null/NULL|cb:V/false/boolean|cf:N/null/NULL|cf:V/0/double|cs:N/null/NULL|[]|cs:V/\"\"/string|[]|\nsi:N/null/NULL|si:V/5/integer|sb:N/null/NULL|sf:N/null/NULL|ss:N/null/NULL|ss:N/null/NULL|\nmi:V/1/integer|mi:N/null/NULL|mb:V/true/boolean|mb:N/null/NULL|mf:V/1.5/double|mf:N/null/NULL|ms:V/\"s\"/string|ms:N/null/NULL|\nnx:V/7/integer|ny:V/[null]/array|nz:V/[]/array|nw:V/8/integer|nx:V/0/integer|ny:V/[0]/array|nz:V/[0]/array|nw:V/8/integer|nx:V/6/integer|ny:V/[6]/array|nz:V/[6]/array|nw:V/6/integer|\nfc:N/null/NULL|fc:V/4/integer|rt:N/null/NULL|rt:V/3/integer|arg:N/null/NULL|-15|cmp:eqlt|cmp:eqlt|cmp:nege|\n".repeat(2));
+}
+
+/// A literal item whose own storage is the inline tagged scalar is boxed (issue #1944): the
+/// 16-byte tagged array exists only as an append specialization, so `[$n]` with `?int $n`
+/// encoded `[6]` as `[null]` and refused `foreach`, and `["k" => $n]` had no hash entry tag at
+/// all. The same boxing keeps `[$n ?? null]`, `[$c ? $n : null]` and `[$n ?: null]` honest now
+/// that those merges keep their tag word. Runs through the CLI under `--heap-debug` in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_tagged_literal_elements_runtime() {
+    let source = r#"<?php
+function plain(?int $n): void { $x = [$n]; echo json_encode($x), count($x); foreach ($x as $v) { echo $v === null ? "n" : "v"; } echo "|"; }
+function keyed(?int $n): void { $x = ["k" => $n]; echo json_encode($x), $x["k"] === null ? "n" : "v", "|"; }
+function ternary(?int $n, bool $c): void { $x = [$c ? $n : null]; echo json_encode($x), "|"; }
+function coalesced(?int $n): void { $x = [$n ?? null, "k" => $n ?? null]; echo json_encode($x), "|"; }
+function shorted(int $n): void { $x = [$n ?: null]; echo json_encode($x), "|"; }
+for ($i = 0; $i < 2; $i++) {
+    plain(null); plain(6); keyed(null); keyed(6); ternary(null, true); ternary(6, true); ternary(6, false);
+    coalesced(null); coalesced(0); coalesced(6); shorted(0); shorted(5); echo "\n";
+}
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"[null]1n|[6]1v|{\"k\":null}n|{\"k\":6}v|[null]|[6]|[null]|{\"0\":null,\"k\":null}|{\"0\":0,\"k\":0}|{\"0\":6,\"k\":6}|[null]|[5]|\n".repeat(2));
+}

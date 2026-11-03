@@ -468,6 +468,26 @@ pub(crate) fn is_nullable_pointer_type(php_type: &PhpType) -> bool {
     matches!(php_type, PhpType::Union(members) if nullable_pointer_union_member(members).is_some())
 }
 
+/// Returns whether a type is held as one unboxed scalar with no null of its own: `int`,
+/// `float`, `string`, `bool` or `false`, or a union of only those (`int|string`).
+///
+/// Such storage cannot carry PHP null beside its value: under the tagged null representation
+/// an `int` slot never holds null at all, and the in-band marker a `float`, `string` or `bool`
+/// slot can carry is a real `0.0`, `""` or `true` to every consumer that does not probe for it.
+/// A merge that may answer null beside one of these therefore keeps the null member in its
+/// type, which selects the null-capable storage (the inline tagged scalar for `int|null`, a boxed
+/// cell otherwise). Containers, objects and pointers are not scalars here: their pointer word
+/// carries PHP null, so they keep their own type beside a null arm.
+pub(crate) fn is_unboxed_scalar_type(php_type: &PhpType) -> bool {
+    match php_type {
+        PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False => true,
+        PhpType::Union(members) => {
+            !members.is_empty() && members.iter().all(is_unboxed_scalar_type)
+        }
+        _ => false,
+    }
+}
+
 /// Returns whether `ty` is an indexed array whose elements are stored as raw pointer words
 /// (`array<ptr<T>>` or `array<ptr<T>|null>`), as opposed to boxed Mixed cells.
 pub(crate) fn is_pointer_element_indexed_array(ty: &PhpType) -> bool {
