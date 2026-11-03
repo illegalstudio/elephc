@@ -43,6 +43,7 @@ use super::stack_guard;
 use super::value_placement::{self, ValuePlacement};
 
 mod destructor_cleanup;
+mod return_epilogues;
 mod gc_owners;
 pub(super) mod reference_returns;
 mod web_host_abi;
@@ -2626,25 +2627,7 @@ pub(super) fn emit_function_return_epilogue(
     skip_return_slot: Option<LocalSlotId>,
     return_ownership: super::return_ownership::ReturnOwnershipStatus,
 ) {
-    emit_function_local_epilogue_cleanup(ctx, skip_return_slot);
-    for local in &ctx.function.locals {
-        if local.kind == LocalKind::ReturnRefCell {
-            let offset = ctx.local_offset(local.id).expect("return cell owner has frame storage");
-            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
-        }
-    }
-    emit_exception_activation_pop(ctx);
-    emit_callee_saved_restores(ctx);
-    match return_ownership {
-        super::return_ownership::ReturnOwnershipStatus::Static(owned) => {
-            super::return_ownership::emit_status(ctx.emitter, owned);
-        }
-        super::return_ownership::ReturnOwnershipStatus::Dynamic(offset) => {
-            super::return_ownership::emit_load_status(ctx.emitter, offset);
-        }
-    }
-    abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
-    abi::emit_return(ctx.emitter);
+    return_epilogues::emit(ctx, skip_return_slot, return_ownership);
 }
 
 /// Emits the shared epilogue for a direct-callable user function.

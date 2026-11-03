@@ -28,7 +28,7 @@ pub(super) use crate::codegen_support::abi::{
 };
 
 /// Ownership state published with one by-value compiled PHP return.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum ReturnOwnershipStatus {
     /// Final EIR metadata and frame analysis prove the return-path state.
     Static(bool),

@@ -92,6 +92,10 @@ pub(crate) struct FunctionContext<'a> {
     pcntl_async_signals: bool,
     pcntl_signal_handlers: bool,
     pub(super) epilogue_label: Option<String>,
+    /// Equivalent returns share cleanup only when both their transferred slot and status agree.
+    pub(super) return_epilogues: HashMap<
+        (Option<LocalSlotId>, super::return_ownership::ReturnOwnershipStatus), String,
+    >,
     block_labels: Vec<String>,
     /// Block order, compare fusion, and cold-path state for late machine layout.
     pub(super) machine_layout: MachineLayoutState,
@@ -219,6 +223,7 @@ impl<'a> FunctionContext<'a> {
             pcntl_async_signals,
             pcntl_signal_handlers,
             epilogue_label,
+            return_epilogues: HashMap::new(),
             block_labels,
             machine_layout: MachineLayoutState::default(),
         }

@@ -231,6 +231,7 @@ mod native_mixed_property_aliases;
 mod native_reference_validation_pins;
 #[path = "runtime_gc/native_reference_parameter_leases.rs"]
 mod native_reference_parameter_leases;
+mod shared_return_epilogues;
 mod eval_closure_receivers;
 mod eval_alias_unwind;
 mod eval_call_result_owners;
