@@ -386,6 +386,7 @@ pub(super) fn builtin_reflection_object_class() -> FlattenedClass {
 pub(super) fn builtin_reflection_enum_class() -> FlattenedClass {
     let mut class = builtin_reflection_class();
     class.name = "ReflectionEnum".to_string();
+    class.extends = Some("ReflectionClass".to_string());
     class
         .methods
         .retain(|method| reflection_enum_inherited_method_is_supported(&method.name));

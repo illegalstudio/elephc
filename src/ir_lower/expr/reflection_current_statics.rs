@@ -47,5 +47,10 @@ pub(super) fn lower(
     store_value_into_temp(ctx, &result, result_type, empty, expr.span);
     branch_to(ctx, merge);
     ctx.builder.position_at_end(merge);
+    // A boxed receiver can stabilize its borrowed field into an independent string.
+    // Retire that explicit copy while leaving an ordinary property borrow with its owner.
+    if ctx.value_is_owning_temporary(name) {
+        crate::ir_lower::ownership::release_if_owned(ctx, name, Some(expr.span));
+    }
     Some(take_owned_temp(ctx, &result, expr.span))
 }
