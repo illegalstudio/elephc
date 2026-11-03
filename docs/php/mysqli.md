@@ -287,8 +287,15 @@ the connection, so a later `real_connect()` on the same object starts clean.
 - `get_connection_stats()`, `mysqli_get_client_stats()`, and
   `mysqli_get_links_stats()` return mysqlnd's statistics arrays with every key
   php reports (values as numeric strings). The counters elephc can observe are
-  tracked (connections, closes, `COM_*` commands sent, result-set and
-  buffered-row counts); byte- and packet-level counters stay `"0"`.
+  tracked: connections, closes, `COM_*` commands sent, result-set and
+  buffered-row counts, `no_index_used` / `bad_index_used`, and the wire
+  traffic — `bytes_sent`, `bytes_received`, `packets_sent`,
+  `packets_received`, and `protocol_overhead_in` / `_out` (4 header bytes per
+  packet), counted at the bridge client's packet layer before compression and
+  TLS. The client totals of `mysqli_get_client_stats()` include PDO MySQL
+  connections, like mysqlnd's. The per-packet-type byte counters
+  (`bytes_received_ok_packet`, `packets_received_rset_row`, …) and the
+  allocator counters (`mem_*`) stay `"0"`.
 - `debug()` returns `true`: mysqlnd's client-side debug tracing is compiled out
   of release builds (`MYSQLI_DEBUG_TRACE_ENABLED` is `0`), where php does the same.
 
@@ -396,12 +403,10 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
   comments, and treats MySQL's `/*! … */` and MariaDB's `/*M! … */` executable
   comments as live SQL. Compound-body DDL (`CREATE PROCEDURE … BEGIN …; … END`)
   through `query()` is rejected too — run it through `multi_query()`.
-- **`insert_id` / `affected_rows` / `num_rows` are `int`**: a value beyond
-  `PHP_INT_MAX` (e.g. a `BIGINT UNSIGNED` AUTO_INCREMENT) wraps, where PHP
-  returns a numeric string.
-- **`fetch_object()` constructs before assigning properties** (the
-  `PDO::FETCH_PROPS_LATE` order); php-src assigns the row first and calls the
-  constructor afterwards.
+- **`insert_id` / `affected_rows` / `num_rows` are `int|string`**, as php
+  declares them. elephc type-checks calls statically, so passing one straight
+  to an `int` parameter needs an `(int)` cast where php would coerce at run
+  time.
 - **Capability probes do not inject the surface**: like PDO,
   `class_exists('mysqli')` in a program with no other mysqli reference
   reports `false`; build with `--with-mysqli` to force the surface. A bare
@@ -411,8 +416,6 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
 - **`get_charset()` reports only the charset name.** The returned object's
   `charset` field is exact; `collation`, `number`, `state`, `dir`,
   `min_length`, `max_length`, and `comment` are `0` / `""`.
-- **`mysqli` / `mysqli_stmt` declare a `__destruct()`** (php frees them in C),
-  so `method_exists($db, '__destruct')` is `true`.
 
 <!-- elephc:generated:symbols:begin -->
 

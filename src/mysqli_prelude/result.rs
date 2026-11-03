@@ -32,7 +32,7 @@ class mysqli_result implements IteratorAggregate {
     // Column byte lengths of the row returned by the most recent fetch, or
     // null before the first fetch / after exhaustion (php-src's $lengths).
     public ?array $lengths = null;
-    public int $num_rows = 0;
+    public int|string $num_rows = 0;
     // MYSQLI_STORE_RESULT (0) or MYSQLI_USE_RESULT (1). A USE_RESULT result
     // reads its rows from the server on demand (num_rows reads 0 until the
     // last row was fetched; data_seek / mysqli_num_rows throw, like mysqlnd).
@@ -216,13 +216,18 @@ class mysqli_result implements IteratorAggregate {
     }
 
     public function fetch_object(string $class = "stdClass", array $constructor_args = []): mixed {
+        // php rejects an abstract class before touching the result set.
+        $_isStd = strtolower($class) === "stdclass";
+        if (!$_isStd && __elephc_class_is_abstract($class)) {
+            throw new Error("Class " . $class . " cannot be instantiated");
+        }
         $_row = $this->fetch_row();
         if ($_row === null) {
             return null;
         }
         // Two straight-line returns rather than one reassigned local (the
         // dynamic-new result is Mixed; see the PDO prelude's hydrateClassOrStd).
-        if (strtolower($class) === "stdclass") {
+        if ($_isStd) {
             $_std = new stdClass();
             for ($_i = 0; $_i < $this->field_count; $_i++) {
                 $_n = (string) $this->names[$_i];
@@ -230,14 +235,25 @@ class mysqli_result implements IteratorAggregate {
             }
             return $_std;
         }
-        // Documented divergence: php-src assigns properties BEFORE calling the
-        // constructor; elephc constructs first (PDO::FETCH_PROPS_LATE order).
-        $_object = new $class(...$constructor_args);
-        for ($_i = 0; $_i < $this->field_count; $_i++) {
-            $_n = (string) $this->names[$_i];
-            $_object->{$_n} = $_row[$_i];
+        // Like php-src, the columns are assigned BEFORE the constructor runs, so
+        // a constructor sees (and may overwrite) the fetched values.
+        $_object = $this->assignRow(__elephc_new_without_constructor($class), $_row);
+        if (__elephc_class_has_constructor($class)) {
+            call_user_func_array([$_object, "__construct"], $constructor_args);
+        } elseif (count($constructor_args) != 0) {
+            throw new Exception("mysqli_result::fetch_object(): Argument #2 (\$constructor_args) must be empty when the specified class (" . $class . ") does not have a constructor");
         }
         return $_object;
+    }
+
+    // Writes one fetched row onto an object as properties (declared slots first,
+    // then dynamic ones), the order php-src's zend_merge_properties uses.
+    private function assignRow(mixed $object, array $row): mixed {
+        for ($_i = 0; $_i < $this->field_count; $_i++) {
+            $_n = (string) $this->names[$_i];
+            $object->{$_n} = $row[$_i];
+        }
+        return $object;
     }
 
     public function fetch_all(int $mode = 2): array {

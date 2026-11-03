@@ -252,6 +252,20 @@ fn native_type_name(t: ColumnType) -> &'static str {
     }
 }
 
+/// Reads counter `which` (0 bytes sent, 1 bytes received, 2 packets sent, 3 packets
+/// received) from a set of wire traffic counters; `0` for any other selector.
+pub fn io_counter(counters: &mysql::IoCounters, which: i64) -> i64 {
+    use std::sync::atomic::Ordering::Relaxed;
+    let value = match which {
+        0 => counters.bytes_sent.load(Relaxed),
+        1 => counters.bytes_received.load(Relaxed),
+        2 => counters.packets_sent.load(Relaxed),
+        3 => counters.packets_received.load(Relaxed),
+        _ => 0,
+    };
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
 /// The linked pure-Rust MySQL client's implementation/version string, reported as
 /// PDO's client version and as mysqli's `client_info` / `mysqli_get_client_info()`.
 pub const MYSQL_CLIENT_INFO: &str = "mysql 28.0.4";
@@ -260,6 +274,9 @@ pub const MYSQL_CLIENT_INFO: &str = "mysql 28.0.4";
 /// reads back (`rowCount`, `lastInsertId`, `errorCode`/`errorInfo`).
 pub struct MyConn {
     conn: MyClientSlot,
+    /// The client's wire traffic counters (patched `mysql` crate), shared so mysqli's
+    /// `get_connection_stats()` reads them even while an async worker owns the client.
+    io_counters: std::sync::Arc<mysql::IoCounters>,
     /// Transport description returned by `PDO::ATTR_CONNECTION_STATUS`, captured
     /// from the resolved connection options in php-src's `mysql_get_host_info()`
     /// shape (`"host via TCP/IP"` or `"Localhost via UNIX socket"`).
@@ -1951,8 +1968,10 @@ impl MyConn {
         let conn = Conn::new(opts).map_err(|e| e.to_string())?;
         let server_version = conn.server_version();
         let no_backslash_escapes = conn.no_backslash_escape();
+        let io_counters = conn.io_counters();
         Ok(MyConn {
             conn: MyClientSlot(Some(conn)),
+            io_counters,
             host_info,
             changes: 0,
             errmsg: String::new(),
@@ -2565,6 +2584,12 @@ impl MyConn {
                 self.restore_stream_client(client, warnings);
             }
         }
+    }
+
+    /// Returns one wire traffic counter of this connection (mysqlnd's `bytes_sent`,
+    /// `bytes_received`, `packets_sent`, `packets_received` for `which` 0..=3).
+    pub fn io_stat(&self, which: i64) -> i64 {
+        io_counter(&self.io_counters, which)
     }
 
     /// Returns the server status flags of the last OK/EOF packet (mysqli's

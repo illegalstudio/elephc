@@ -299,7 +299,7 @@ function mysqli_get_client_stats(): array {
     $_out = [];
     foreach (mysqli::__elephcStatKeys() as $_key) {
         $_name = (string) $_key;
-        $_out[$_name] = (string) ($_counters[$_name] ?? 0);
+        $_out[$_name] = mysqli::__elephcWireStat(-1, $_name) ?? (string) ($_counters[$_name] ?? 0);
     }
     return $_out;
 }
@@ -369,14 +369,14 @@ function mysqli_sqlstate(mixed $mysql): string {
     return $mysql->sqlstate;
 }
 
-function mysqli_affected_rows(mixed $mysql): int {
+function mysqli_affected_rows(mixed $mysql): int|string {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_affected_rows(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
     return $mysql->affected_rows;
 }
 
-function mysqli_insert_id(mixed $mysql): int {
+function mysqli_insert_id(mixed $mysql): int|string {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_insert_id(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
@@ -511,7 +511,7 @@ function mysqli_fetch_column(mixed $result, int $column = 0): mixed {
 
 // -- elephc PHP >= 8.1 mysqli fetch_column end --
 
-function mysqli_num_rows(mixed $result): int {
+function mysqli_num_rows(mixed $result): int|string {
     if (!($result instanceof mysqli_result)) {
         throw new TypeError("mysqli_num_rows(): Argument #1 (\$result) must be of type mysqli_result, " . gettype($result) . " given");
     }
@@ -762,7 +762,7 @@ function mysqli_stmt_free_result(mixed $statement): void {
     $statement->free_result();
 }
 
-function mysqli_stmt_affected_rows(mixed $statement): int {
+function mysqli_stmt_affected_rows(mixed $statement): int|string {
     if (!($statement instanceof mysqli_stmt)) {
         throw new TypeError("mysqli_stmt_affected_rows(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
     }
@@ -790,7 +790,7 @@ function mysqli_stmt_error_list(mixed $statement): array {
     return $statement->error_list;
 }
 
-function mysqli_stmt_num_rows(mixed $statement): int {
+function mysqli_stmt_num_rows(mixed $statement): int|string {
     if (!($statement instanceof mysqli_stmt)) {
         throw new TypeError("mysqli_stmt_num_rows(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
     }
@@ -811,7 +811,7 @@ function mysqli_stmt_field_count(mixed $statement): int {
     return $statement->field_count;
 }
 
-function mysqli_stmt_insert_id(mixed $statement): int {
+function mysqli_stmt_insert_id(mixed $statement): int|string {
     if (!($statement instanceof mysqli_stmt)) {
         throw new TypeError("mysqli_stmt_insert_id(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
     }

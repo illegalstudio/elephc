@@ -20,16 +20,24 @@ pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_nam
         };
         push_unique_method_names(
             info.methods.keys().filter(|method| {
-                elephc_builtin_contract::lookup_class(&resolved_name)
-                    .is_none_or(|class| class.method_is_php_visible(method))
+                // Inherited builtin implementation methods stay hidden in subclasses too.
+                let declaring = info.method_declaring_classes.get(*method).map(String::as_str).unwrap_or(resolved_name);
+                [resolved_name, declaring].iter().all(|owner| {
+                    elephc_builtin_contract::lookup_class(owner)
+                        .is_none_or(|class| class.method_is_php_visible(method))
+                })
             }),
             &mut names,
             &mut seen,
         );
         push_unique_method_names(
             info.static_methods.keys().filter(|method| {
-                elephc_builtin_contract::lookup_class(&resolved_name)
-                    .is_none_or(|class| class.method_is_php_visible(method))
+                // Inherited builtin implementation methods stay hidden in subclasses too.
+                let declaring = info.static_method_declaring_classes.get(*method).map(String::as_str).unwrap_or(resolved_name);
+                [resolved_name, declaring].iter().all(|owner| {
+                    elephc_builtin_contract::lookup_class(owner)
+                        .is_none_or(|class| class.method_is_php_visible(method))
+                })
             }),
             &mut names,
             &mut seen,

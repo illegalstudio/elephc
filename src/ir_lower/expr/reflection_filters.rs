@@ -151,6 +151,17 @@ pub(super) fn reflection_class_method_names_for_filter(
         .keys()
         .chain(class_info.static_methods.keys())
     {
+        // Builtin implementation methods a subclass inherits stay hidden (mysqli's `__destruct`).
+        let declaring = class_info
+            .method_declaring_classes
+            .get(name)
+            .or_else(|| class_info.static_method_declaring_classes.get(name));
+        if declaring.is_some_and(|owner| {
+            elephc_builtin_contract::lookup_class(owner)
+                .is_some_and(|class| !class.method_is_php_visible(name))
+        }) {
+            continue;
+        }
         if seen.insert(php_symbol_key(name))
             && reflection_method_matches_filter(class_info, name, filter)
         {

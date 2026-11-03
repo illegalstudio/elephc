@@ -3002,6 +3002,24 @@ pub extern "C" fn elephc_pdo_mysql_async_reap(conn_id: i64) -> i64 {
     })
 }
 
+/// Returns wire traffic counter `which` (0 bytes sent, 1 bytes received, 2 packets sent,
+/// 3 packets received) of one MySQL connection, or with `conn_id < 0` the process-wide
+/// total of every MySQL connection (mysqli's client statistics). `0` for a non-MySQL or
+/// unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_io_stat(conn_id: i64, which: i64) -> i64 {
+    ffi_guard(0, || {
+        if conn_id < 0 {
+            return my::io_counter(&mysql::GLOBAL_IO_COUNTERS, which);
+        }
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Mysql(c)) => c.io_stat(which),
+            _ => 0,
+        }
+    })
+}
+
 /// Returns the server status flags of the MySQL connection's last OK/EOF packet, backing
 /// mysqli's `MYSQLI_REPORT_INDEX`. `0` for a non-MySQL or unknown handle.
 #[no_mangle]

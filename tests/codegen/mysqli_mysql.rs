@@ -1352,3 +1352,55 @@ $db->query("DROP TABLE msx");
         "unexpected tail: {tail}"
     );
 }
+
+/// Point-6 fidelity against a live server: `fetch_object()` assigns the columns
+/// before the constructor runs (and rejects constructor args for a class without
+/// one), a `BIGINT UNSIGNED` AUTO_INCREMENT id beyond `PHP_INT_MAX` comes back as a
+/// numeric string, and the byte / packet counters follow the wire traffic.
+#[test]
+#[ignore]
+fn test_mysqli_fetch_object_order_big_ids_and_wire_stats() {
+    let out = compile_and_run(&my_program(
+        r#"
+class Seen {
+    public ?string $id = null;
+    public string $before = "";
+    public function __construct(public string $tag = "") { $this->before = (string) $this->id; }
+}
+class Bare { public ?string $id = null; }
+$o = $db->query("SELECT '7' AS id")->fetch_object("Seen", ["t"]);
+echo "ctor-saw=", $o->before, "|tag=", $o->tag;
+try {
+    $db->query("SELECT '7' AS id")->fetch_object("Bare", ["x"]);
+    echo "|bare=accepted";
+} catch (Exception $e) {
+    echo "|bare=", get_class($e), ":", $e->getMessage();
+}
+$db->query("DROP TABLE IF EXISTS mbig");
+$db->query("CREATE TABLE mbig (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, v INT)");
+$db->query("INSERT INTO mbig VALUES (5, 1)");
+echo "|small="; var_dump($db->insert_id);
+$db->query("INSERT INTO mbig VALUES (18446744073709551610, 1)");
+echo "|big="; var_dump($db->insert_id);
+$stmt = $db->prepare("INSERT INTO mbig VALUES (?, 2)");
+$id = "18446744073709551611";
+$stmt->bind_param("s", $id);
+$stmt->execute();
+echo "|stmt=", $stmt->insert_id, "|proc=", mysqli_stmt_insert_id($stmt), "|link=", mysqli_insert_id($db);
+$db->query("DROP TABLE mbig");
+$before = $db->get_connection_stats();
+$db->query("SELECT REPEAT('x', 1000)")->fetch_row();
+$after = $db->get_connection_stats();
+$sent = (int) $after["bytes_sent"] - (int) $before["bytes_sent"];
+$received = (int) $after["bytes_received"] - (int) $before["bytes_received"];
+echo "|sent=", $sent, "|recv-big=", $received > 1000 ? "y" : "n";
+echo "|pkts=", (int) $after["packets_sent"] - (int) $before["packets_sent"];
+echo "|overhead=", (int) $after["protocol_overhead_out"] === 4 * (int) $after["packets_sent"] ? "y" : "n";
+echo "|client=", (int) mysqli_get_client_stats()["bytes_received"] >= (int) $after["bytes_received"] ? "y" : "n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "ctor-saw=7|tag=t|bare=Exception:mysqli_result::fetch_object(): Argument #2 ($constructor_args) must be empty when the specified class (Bare) does not have a constructor|small=int(5)\n|big=string(20) \"18446744073709551610\"\n|stmt=18446744073709551611|proc=18446744073709551611|link=18446744073709551611|sent=29|recv-big=y|pkts=1|overhead=y|client=y"
+    );
+}

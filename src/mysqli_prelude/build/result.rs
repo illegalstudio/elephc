@@ -26,11 +26,10 @@ use crate::synthetic_class::{
     e_method_call,
     e_neg,
     e_new,
-    e_new_dynamic,
+    e_not,
     e_null,
     e_post_inc,
     e_prop,
-    e_spread,
     e_static_prop,
     e_str,
     e_ternary,
@@ -55,6 +54,7 @@ use crate::synthetic_class::{
     t_class,
     t_mixed,
     t_nullable,
+    t_union,
 };
 
 /// `mysqli_result` — transcribed from the PHP form.
@@ -64,7 +64,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
         .prop("current_field", TypeExpr::Int, Some(e_int(0)))
         .prop("field_count", TypeExpr::Int, Some(e_int(0)))
         .prop("lengths", t_nullable(t_array()), Some(e_null()))
-        .prop("num_rows", TypeExpr::Int, Some(e_int(0)))
+        .prop("num_rows", t_union(vec![TypeExpr::Int, TypeExpr::Str]), Some(e_int(0)))
         .prop("type", TypeExpr::Int, Some(e_int(0)))
         .private_static_prop("fromFactory", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("cells", t_array(), Some(e_array(vec![])))
@@ -337,6 +337,15 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .param_default("constructor_args", t_array(), e_array(vec![]))
                 .returns(t_mixed())
                 .body(vec![
+                    s_assign("_isStd", e_binop(e_call("strtolower", vec![e_var("class")]), BinOp::StrictEq, e_str("stdclass"))),
+                    s_if(
+                        e_binop(e_not(e_var("_isStd")), BinOp::And, e_call("__elephc_class_is_abstract", vec![e_var("class")])),
+                        vec![
+                            s_throw(e_new("Error", vec![e_binop(e_binop(e_str("Class "), BinOp::Concat, e_var("class")), BinOp::Concat, e_str(" cannot be instantiated"))])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_assign("_row", e_method_call(e_this(), "fetch_row", vec![])),
                     s_if(
                         e_binop(e_var("_row"), BinOp::StrictEq, e_null()),
@@ -347,7 +356,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_if(
-                        e_binop(e_call("strtolower", vec![e_var("class")]), BinOp::StrictEq, e_str("stdclass")),
+                        e_var("_isStd"),
                         vec![
                             s_assign("_std", e_new("stdClass", vec![])),
                             s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
@@ -359,12 +368,34 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign("_object", e_new_dynamic(e_var("class"), vec![e_spread(e_var("constructor_args"))])),
+                    s_assign("_object", e_method_call(e_this(), "assignRow", vec![e_call("__elephc_new_without_constructor", vec![e_var("class")]), e_var("_row")])),
+                    s_if(
+                        e_call("__elephc_class_has_constructor", vec![e_var("class")]),
+                        vec![
+                            s_expr(e_call("call_user_func_array", vec![e_array(vec![e_var("_object"), e_str("__construct")]), e_var("constructor_args")])),
+                        ],
+                        vec![
+                        (e_binop(e_call("count", vec![e_var("constructor_args")]), BinOp::NotEq, e_int(0)), vec![
+                            s_throw(e_new("Exception", vec![e_binop(e_binop(e_str("mysqli_result::fetch_object(): Argument #2 ($constructor_args) must be empty when the specified class ("), BinOp::Concat, e_var("class")), BinOp::Concat, e_str(") does not have a constructor"))])),
+                        ]),
+                    ],
+                        None,
+                    ),
+                    s_return(e_var("_object")),
+                ]),
+        )
+        .method(
+            method("assignRow")
+                .private()
+                .param("object", t_mixed())
+                .param("row", t_array())
+                .returns(t_mixed())
+                .body(vec![
                     s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
                         s_assign("_n", e_cast(CastType::String, e_index(e_this_prop("names"), e_var("_i")))),
-                        s_expr(e_assign(e_dyn_prop(e_var("_object"), e_var("_n")), e_index(e_var("_row"), e_var("_i")))),
+                        s_expr(e_assign(e_dyn_prop(e_var("object"), e_var("_n")), e_index(e_var("row"), e_var("_i")))),
                     ]),
-                    s_return(e_var("_object")),
+                    s_return(e_var("object")),
                 ]),
         )
         .method(

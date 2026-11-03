@@ -409,8 +409,14 @@ fn visible_class_method_names(
             })
             .filter(|method| class_method_visible(ctx, class_name, info, method))
             .filter(|method| {
-                elephc_builtin_contract::lookup_class(class_name)
-                    .is_none_or(|class| class.method_is_php_visible(method))
+                let declaring = info.method_declaring_classes.get(*method)
+                    .or_else(|| info.static_method_declaring_classes.get(*method))
+                    .map(String::as_str)
+                    .unwrap_or(class_name);
+                [class_name, declaring].iter().all(|owner| {
+                    elephc_builtin_contract::lookup_class(owner)
+                        .is_none_or(|class| class.method_is_php_visible(method))
+                })
             })
             .map(|method| class_method_display_name(ctx, class_name, info, method))
             .collect::<Vec<_>>()

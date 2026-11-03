@@ -25,9 +25,9 @@ pub(super) const SRC: &str = r##"
 // -- mysqli prepared-statement surface --
 
 class mysqli_stmt {
-    public int $affected_rows = 0;
-    public int $insert_id = 0;
-    public int $num_rows = 0;
+    public int|string $affected_rows = 0;
+    public int|string $insert_id = 0;
+    public int|string $num_rows = 0;
     public int $param_count = 0;
     public int $field_count = 0;
     public int $errno = 0;
@@ -293,7 +293,7 @@ class mysqli_stmt {
         $this->warningCount = elephc_pdo_warning_count($this->conn);
         if ($_cols == 0) {
             $this->affected_rows = elephc_pdo_changes($this->conn);
-            $this->insert_id = elephc_pdo_last_insert_id($this->conn, "");
+            $this->insert_id = mysqli::__elephcUnsignedId(elephc_pdo_last_insert_id_text($this->conn, ""));
             $this->refreshLink();
             // Rewind now so the statement is immediately re-executable.
             elephc_pdo_reset($this->stmt);
@@ -454,7 +454,7 @@ class mysqli_stmt {
         }
     }
 
-    public function num_rows(): int {
+    public function num_rows(): int|string {
         $this->requireValid();
         return $this->num_rows;
     }

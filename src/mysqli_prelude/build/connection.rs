@@ -40,6 +40,7 @@ use crate::synthetic_class::{
     e_null_coalesce,
     e_post_inc,
     e_prop,
+    e_self_call,
     e_static_call,
     e_static_prop,
     e_str,
@@ -81,7 +82,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .static_prop("clientStats", t_array(), Some(e_array(vec![])))
         .static_prop("openLinks", TypeExpr::Int, Some(e_int(0)))
         .static_prop("openPersistentLinks", TypeExpr::Int, Some(e_int(0)))
-        .prop("affected_rows", TypeExpr::Int, Some(e_int(0)))
+        .prop("affected_rows", t_union(vec![TypeExpr::Int, TypeExpr::Str]), Some(e_int(0)))
         .prop("client_info", TypeExpr::Str, Some(e_str("")))
         .prop("client_version", TypeExpr::Int, Some(e_int(0)))
         .prop("connect_errno", TypeExpr::Int, Some(e_int(0)))
@@ -92,7 +93,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .prop("field_count", TypeExpr::Int, Some(e_int(0)))
         .prop("host_info", TypeExpr::Str, Some(e_str("")))
         .prop("info", t_nullable(TypeExpr::Str), Some(e_null()))
-        .prop("insert_id", TypeExpr::Int, Some(e_int(0)))
+        .prop("insert_id", t_union(vec![TypeExpr::Int, TypeExpr::Str]), Some(e_int(0)))
         .prop("server_info", TypeExpr::Str, Some(e_str("")))
         .prop("server_version", TypeExpr::Int, Some(e_int(0)))
         .prop("sqlstate", TypeExpr::Str, Some(e_str("00000")))
@@ -733,9 +734,76 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_assign("_out", e_array(vec![])),
                     s_foreach(e_static_call("mysqli", "__elephcStatKeys", vec![]), None, "_key", vec![
                         s_assign("_name", e_cast(CastType::String, e_var("_key"))),
-                        s_array_assign("_out", e_var("_name"), e_cast(CastType::String, e_null_coalesce(e_index(e_this_prop("connStats"), e_var("_name")), e_int(0)))),
+                        s_array_assign("_out", e_var("_name"), e_null_coalesce(e_static_call("mysqli", "__elephcWireStat", vec![e_this_prop("conn"), e_var("_name")]), e_cast(CastType::String, e_null_coalesce(e_index(e_this_prop("connStats"), e_var("_name")), e_int(0))))),
                     ]),
                     s_return(e_var("_out")),
+                ]),
+        )
+        .method(
+            method("__elephcWireStat")
+                .private()
+                .static_()
+                .param("handle", TypeExpr::Int)
+                .param("key", TypeExpr::Str)
+                .returns(t_nullable(TypeExpr::Str))
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("handle"), BinOp::Lt, e_neg(e_int(1))),
+                        vec![
+                            s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("key"), BinOp::StrictEq, e_str("bytes_sent")),
+                        vec![
+                            s_return(e_cast(CastType::String, e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_int(0)]))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("key"), BinOp::StrictEq, e_str("bytes_received")),
+                        vec![
+                            s_return(e_cast(CastType::String, e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_int(1)]))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("key"), BinOp::StrictEq, e_str("packets_sent")),
+                        vec![
+                            s_return(e_cast(CastType::String, e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_int(2)]))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("key"), BinOp::StrictEq, e_str("packets_received")),
+                        vec![
+                            s_return(e_cast(CastType::String, e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_int(3)]))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("key"), BinOp::StrictEq, e_str("protocol_overhead_in")),
+                        vec![
+                            s_return(e_cast(CastType::String, e_binop(e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_int(3)]), BinOp::Mul, e_int(4)))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("key"), BinOp::StrictEq, e_str("protocol_overhead_out")),
+                        vec![
+                            s_return(e_cast(CastType::String, e_binop(e_call("elephc_pdo_mysql_io_stat", vec![e_var("handle"), e_int(2)]), BinOp::Mul, e_int(4)))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_null()),
                 ]),
         )
         .method(
@@ -1879,7 +1947,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Void)
                 .body(vec![
                     s_if(
-                        e_binop(e_binop(e_binop(e_static_prop("mysqli", "reportMode"), BinOp::BitAnd, e_int(4)), BinOp::Eq, e_int(0)), BinOp::Or, e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0))),
+                        e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0)),
                         vec![
                             s_return_void(),
                         ],
@@ -1891,16 +1959,26 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_binop(e_var("_status"), BinOp::BitAnd, e_int(16)), BinOp::NotEq, e_int(0)),
                         vec![
+                            s_expr(e_method_call(e_this(), "bump", vec![e_str("bad_index_used")])),
                             s_assign("_index", e_str("Bad index")),
                         ],
                         vec![
                         (e_binop(e_binop(e_var("_status"), BinOp::BitAnd, e_int(32)), BinOp::NotEq, e_int(0)), vec![
+                            s_expr(e_method_call(e_this(), "bump", vec![e_str("no_index_used")])),
                             s_assign("_index", e_str("No index")),
                         ]),
                     ],
                         Some(vec![
                         s_return_void(),
                     ]),
+                    ),
+                    s_if(
+                        e_binop(e_binop(e_static_prop("mysqli", "reportMode"), BinOp::BitAnd, e_int(4)), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
                     ),
                     s_assign("_message", e_binop(e_binop(e_var("_index"), BinOp::Concat, e_str(" used in query/prepared statement ")), BinOp::Concat, e_var("query"))),
                     s_if(
@@ -2242,12 +2320,31 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 ]),
         )
         .method(
+            method("__elephcUnsignedId")
+                .private()
+                .static_()
+                .param("text", TypeExpr::Str)
+                .returns(t_union(vec![TypeExpr::Int, TypeExpr::Str]))
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("text"), BinOp::StrictEq, e_str("")),
+                        vec![
+                            s_return(e_int(0)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_id", e_cast(CastType::Int, e_var("text"))),
+                    s_return(e_ternary(e_binop(e_cast(CastType::String, e_var("_id")), BinOp::StrictEq, e_var("text")), e_var("_id"), e_var("text"))),
+                ]),
+        )
+        .method(
             method("refreshStatus")
                 .private()
                 .returns(TypeExpr::Void)
                 .body(vec![
                     s_prop_assign(e_this(), "affected_rows", e_call("elephc_pdo_changes", vec![e_this_prop("conn")])),
-                    s_prop_assign(e_this(), "insert_id", e_call("elephc_pdo_last_insert_id", vec![e_this_prop("conn"), e_str("")])),
+                    s_prop_assign(e_this(), "insert_id", e_self_call("__elephcUnsignedId", vec![e_call("elephc_pdo_last_insert_id_text", vec![e_this_prop("conn"), e_str("")])])),
                     s_prop_assign(e_this(), "warning_count", e_call("elephc_pdo_warning_count", vec![e_this_prop("conn")])),
                     s_assign("_info", e_call("elephc_pdo_mysql_info", vec![e_this_prop("conn")])),
                     s_prop_assign(e_this(), "info", e_ternary(e_binop(e_var("_info"), BinOp::StrictEq, e_str("")), e_null(), e_var("_info"))),

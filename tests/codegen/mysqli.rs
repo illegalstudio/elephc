@@ -615,3 +615,48 @@ echo "|", (MYSQLI_REPORT_ALL & MYSQLI_REPORT_INDEX) === MYSQLI_REPORT_INDEX ? "a
     );
     assert_eq!(out, "err|err|err|all");
 }
+
+/// php frees mysqli objects in C, so `mysqli`, `mysqli_stmt`, and `mysqli_result`
+/// expose no `__destruct` (nor elephc's private helpers) to `method_exists()`,
+/// `get_class_methods()`, or reflection — also through a user subclass — and the
+/// method lists match php-src's.
+#[test]
+fn test_mysqli_implementation_methods_are_hidden() {
+    let out = compile_and_run(
+        r#"<?php
+$mode = MYSQLI_ASSOC;
+class AppDb extends mysqli {}
+echo method_exists("mysqli", "__destruct") ? "D" : "-";
+echo method_exists("mysqli_stmt", "__destruct") ? "D" : "-";
+echo method_exists("mysqli_result", "__destruct") ? "D" : "-";
+echo method_exists("AppDb", "__destruct") ? "D" : "-";
+echo method_exists("mysqli", "__elephcReportIndex") ? "H" : "-";
+$db = mysqli_init();
+echo method_exists($db, "__destruct") ? "D" : "-";
+foreach (["mysqli", "mysqli_stmt", "mysqli_result", "AppDb"] as $class) {
+    echo in_array("__destruct", get_class_methods($class)) ? "D" : "-";
+}
+echo "|";
+echo (new ReflectionClass("mysqli"))->hasMethod("__destruct") ? "D" : "-";
+echo (new ReflectionClass("mysqli_stmt"))->hasMethod("__destruct") ? "D" : "-";
+echo "|", count(get_class_methods("mysqli_stmt")), ",", count(get_class_methods("mysqli_result"));
+echo ",", method_exists("AppDb", "query") ? "q" : "?";
+"#,
+    );
+    assert_eq!(out, "----------|--|20,16,q");
+}
+
+/// The counters php declares `int|string` (`insert_id`, `affected_rows`, `num_rows`)
+/// keep that type on the properties and through the procedural aliases.
+#[test]
+fn test_mysqli_counters_are_int_or_numeric_string() {
+    let out = compile_and_run(
+        r#"<?php
+$mode = MYSQLI_ASSOC;
+echo (new ReflectionProperty("mysqli", "insert_id"))->getType();
+echo "|", (new ReflectionProperty("mysqli_stmt", "num_rows"))->getType();
+echo "|", (new ReflectionFunction("mysqli_affected_rows"))->getReturnType();
+"#,
+    );
+    assert_eq!(out, "string|int|string|int|string|int");
+}

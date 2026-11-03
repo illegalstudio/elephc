@@ -63,9 +63,9 @@ use crate::synthetic_class::{
 /// `mysqli_stmt` — transcribed from the PHP form.
 pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
     class("mysqli_stmt")
-        .prop("affected_rows", TypeExpr::Int, Some(e_int(0)))
-        .prop("insert_id", TypeExpr::Int, Some(e_int(0)))
-        .prop("num_rows", TypeExpr::Int, Some(e_int(0)))
+        .prop("affected_rows", t_union(vec![TypeExpr::Int, TypeExpr::Str]), Some(e_int(0)))
+        .prop("insert_id", t_union(vec![TypeExpr::Int, TypeExpr::Str]), Some(e_int(0)))
+        .prop("num_rows", t_union(vec![TypeExpr::Int, TypeExpr::Str]), Some(e_int(0)))
         .prop("param_count", TypeExpr::Int, Some(e_int(0)))
         .prop("field_count", TypeExpr::Int, Some(e_int(0)))
         .prop("errno", TypeExpr::Int, Some(e_int(0)))
@@ -459,7 +459,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         e_binop(e_var("_cols"), BinOp::Eq, e_int(0)),
                         vec![
                             s_prop_assign(e_this(), "affected_rows", e_call("elephc_pdo_changes", vec![e_this_prop("conn")])),
-                            s_prop_assign(e_this(), "insert_id", e_call("elephc_pdo_last_insert_id", vec![e_this_prop("conn"), e_str("")])),
+                            s_prop_assign(e_this(), "insert_id", e_static_call("mysqli", "__elephcUnsignedId", vec![e_call("elephc_pdo_last_insert_id_text", vec![e_this_prop("conn"), e_str("")])])),
                             s_expr(e_method_call(e_this(), "refreshLink", vec![])),
                             s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
                             s_expr(e_method_call(e_this(), "clearError", vec![])),
@@ -703,7 +703,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
         )
         .method(
             method("num_rows")
-                .returns(TypeExpr::Int)
+                .returns(t_union(vec![TypeExpr::Int, TypeExpr::Str]))
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireValid", vec![])),
                     s_return(e_this_prop("num_rows")),

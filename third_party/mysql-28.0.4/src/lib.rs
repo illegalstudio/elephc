@@ -953,6 +953,8 @@ pub use crate::myc::packets::{session_state_change, SessionStateInfo};
 #[doc(inline)]
 pub use crate::conn::binlog_stream::BinlogStream;
 #[doc(inline)]
+pub use crate::conn::{IoCounters, GLOBAL_IO_COUNTERS};
+#[doc(inline)]
 pub use crate::conn::local_infile::{LocalInfile, LocalInfileHandler};
 #[doc(inline)]
 pub use crate::conn::opts::SslOpts;

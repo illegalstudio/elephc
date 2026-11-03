@@ -27,6 +27,7 @@ use crate::synthetic_class::{
     e_instance_of,
     e_int,
     e_method_call,
+    e_neg,
     e_new,
     e_not,
     e_null,
@@ -705,7 +706,7 @@ pub(super) fn decl_fn_mysqli_get_client_stats() -> Stmt {
             s_assign("_out", e_array(vec![])),
             s_foreach(e_static_call("mysqli", "__elephcStatKeys", vec![]), None, "_key", vec![
                 s_assign("_name", e_cast(CastType::String, e_var("_key"))),
-                s_array_assign("_out", e_var("_name"), e_cast(CastType::String, e_null_coalesce(e_index(e_var("_counters"), e_var("_name")), e_int(0)))),
+                s_array_assign("_out", e_var("_name"), e_null_coalesce(e_static_call("mysqli", "__elephcWireStat", vec![e_neg(e_int(1)), e_var("_name")]), e_cast(CastType::String, e_null_coalesce(e_index(e_var("_counters"), e_var("_name")), e_int(0))))),
             ]),
             s_return(e_var("_out")),
         ])
@@ -887,7 +888,7 @@ pub(super) fn decl_fn_mysqli_sqlstate() -> Stmt {
 pub(super) fn decl_fn_mysqli_affected_rows() -> Stmt {
     function("mysqli_affected_rows")
         .param("mysql", t_mixed())
-        .returns(TypeExpr::Int)
+        .returns(t_union(vec![TypeExpr::Int, TypeExpr::Str]))
         .body(vec![
             s_if(
                 e_not(e_instance_of(e_var("mysql"), "mysqli")),
@@ -906,7 +907,7 @@ pub(super) fn decl_fn_mysqli_affected_rows() -> Stmt {
 pub(super) fn decl_fn_mysqli_insert_id() -> Stmt {
     function("mysqli_insert_id")
         .param("mysql", t_mixed())
-        .returns(TypeExpr::Int)
+        .returns(t_union(vec![TypeExpr::Int, TypeExpr::Str]))
         .body(vec![
             s_if(
                 e_not(e_instance_of(e_var("mysql"), "mysqli")),
@@ -1273,7 +1274,7 @@ pub(super) fn decl_fn_mysqli_fetch_column() -> Stmt {
 pub(super) fn decl_fn_mysqli_num_rows() -> Stmt {
     function("mysqli_num_rows")
         .param("result", t_mixed())
-        .returns(TypeExpr::Int)
+        .returns(t_union(vec![TypeExpr::Int, TypeExpr::Str]))
         .body(vec![
             s_if(
                 e_not(e_instance_of(e_var("result"), "mysqli_result")),
@@ -1937,7 +1938,7 @@ pub(super) fn decl_fn_mysqli_stmt_free_result() -> Stmt {
 pub(super) fn decl_fn_mysqli_stmt_affected_rows() -> Stmt {
     function("mysqli_stmt_affected_rows")
         .param("statement", t_mixed())
-        .returns(TypeExpr::Int)
+        .returns(t_union(vec![TypeExpr::Int, TypeExpr::Str]))
         .body(vec![
             s_if(
                 e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
@@ -2013,7 +2014,7 @@ pub(super) fn decl_fn_mysqli_stmt_error_list() -> Stmt {
 pub(super) fn decl_fn_mysqli_stmt_num_rows() -> Stmt {
     function("mysqli_stmt_num_rows")
         .param("statement", t_mixed())
-        .returns(TypeExpr::Int)
+        .returns(t_union(vec![TypeExpr::Int, TypeExpr::Str]))
         .body(vec![
             s_if(
                 e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
@@ -2070,7 +2071,7 @@ pub(super) fn decl_fn_mysqli_stmt_field_count() -> Stmt {
 pub(super) fn decl_fn_mysqli_stmt_insert_id() -> Stmt {
     function("mysqli_stmt_insert_id")
         .param("statement", t_mixed())
-        .returns(TypeExpr::Int)
+        .returns(t_union(vec![TypeExpr::Int, TypeExpr::Str]))
         .body(vec![
             s_if(
                 e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),

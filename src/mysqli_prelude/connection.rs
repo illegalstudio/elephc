@@ -55,7 +55,7 @@ class mysqli {
 
     // Public properties refreshed after operations (writes stick; documented
     // divergence — no write barriers).
-    public int $affected_rows = 0;
+    public int|string $affected_rows = 0;
     public string $client_info = "";
     public int $client_version = 0;
     public int $connect_errno = 0;
@@ -66,7 +66,7 @@ class mysqli {
     public int $field_count = 0;
     public string $host_info = "";
     public ?string $info = null;
-    public int $insert_id = 0;
+    public int|string $insert_id = 0;
     public string $server_info = "";
     public int $server_version = 0;
     public string $sqlstate = "00000";
@@ -489,9 +489,40 @@ class mysqli {
         $_out = [];
         foreach (mysqli::__elephcStatKeys() as $_key) {
             $_name = (string) $_key;
-            $_out[$_name] = (string) ($this->connStats[$_name] ?? 0);
+            // A closed link (handle -1) keeps its recorded counters only.
+            $_out[$_name] = mysqli::__elephcWireStat($this->conn < 0 ? -2 : $this->conn, $_name)
+                ?? (string) ($this->connStats[$_name] ?? 0);
         }
         return $_out;
+    }
+
+    // mysqlnd's wire-level counters, which the bridge client counts at its
+    // packet layer: one connection's (handle >= 0) or the process-wide totals
+    // (handle -1); null for every other statistic. The protocol overhead is the
+    // 4-byte header of every packet.
+    private static function __elephcWireStat(int $handle, string $key): ?string {
+        if ($handle < -1) {
+            return null;
+        }
+        if ($key === "bytes_sent") {
+            return (string) elephc_pdo_mysql_io_stat($handle, 0);
+        }
+        if ($key === "bytes_received") {
+            return (string) elephc_pdo_mysql_io_stat($handle, 1);
+        }
+        if ($key === "packets_sent") {
+            return (string) elephc_pdo_mysql_io_stat($handle, 2);
+        }
+        if ($key === "packets_received") {
+            return (string) elephc_pdo_mysql_io_stat($handle, 3);
+        }
+        if ($key === "protocol_overhead_in") {
+            return (string) (elephc_pdo_mysql_io_stat($handle, 3) * 4);
+        }
+        if ($key === "protocol_overhead_out") {
+            return (string) (elephc_pdo_mysql_io_stat($handle, 2) * 4);
+        }
+        return null;
     }
 
     public function get_warnings(): mysqli_warning|false {
@@ -1124,16 +1155,22 @@ class mysqli {
     // no (good) index, php reports "No index used in query/prepared statement …"
     // (an exception under STRICT, a warning otherwise — elephc writes STDERR).
     private function __elephcReportIndex(string $query): void {
-        if ((mysqli::$reportMode & 4) == 0 || $this->conn < 0) {
+        if ($this->conn < 0) {
             return;
         }
+        // mysqlnd counts no_index_used / bad_index_used whatever the report mode.
         $_status = elephc_pdo_mysql_server_status($this->conn);
         $_index = "";
         if (($_status & 16) != 0) {
+            $this->bump("bad_index_used");
             $_index = "Bad index";
         } elseif (($_status & 32) != 0) {
+            $this->bump("no_index_used");
             $_index = "No index";
         } else {
+            return;
+        }
+        if ((mysqli::$reportMode & 4) == 0) {
             return;
         }
         $_message = $_index . " used in query/prepared statement " . $query;
@@ -1339,11 +1376,21 @@ class mysqli {
         return $_sql;
     }
 
+    // php returns an AUTO_INCREMENT id beyond PHP_INT_MAX (a BIGINT UNSIGNED
+    // column) as its decimal string, any other id as an int.
+    private static function __elephcUnsignedId(string $text): int|string {
+        if ($text === "") {
+            return 0;
+        }
+        $_id = (int) $text;
+        return (string) $_id === $text ? $_id : $text;
+    }
+
     // Refreshes the connection status fields from the last command's OK packet,
     // matching php (which updates them after EVERY command).
     private function refreshStatus(): void {
         $this->affected_rows = elephc_pdo_changes($this->conn);
-        $this->insert_id = elephc_pdo_last_insert_id($this->conn, "");
+        $this->insert_id = self::__elephcUnsignedId(elephc_pdo_last_insert_id_text($this->conn, ""));
         $this->warning_count = elephc_pdo_warning_count($this->conn);
         $_info = elephc_pdo_mysql_info($this->conn);
         $this->info = $_info === "" ? null : $_info;

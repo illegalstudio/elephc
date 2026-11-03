@@ -199,6 +199,46 @@ impl ResultSetInfo {
     }
 }
 
+/// elephc patch: wire-level traffic counters (mysqlnd's `bytes_sent`, `bytes_received`,
+/// `packets_sent`, `packets_received`). Shared through an `Arc` so a reader keeps seeing
+/// them while another thread owns the `Conn`. Bytes count each physical packet's payload
+/// plus its 4-byte header, before compression and TLS.
+#[derive(Debug, Default)]
+pub struct IoCounters {
+    pub bytes_sent: std::sync::atomic::AtomicU64,
+    pub bytes_received: std::sync::atomic::AtomicU64,
+    pub packets_sent: std::sync::atomic::AtomicU64,
+    pub packets_received: std::sync::atomic::AtomicU64,
+}
+
+/// elephc patch: process-wide totals of every connection's [`IoCounters`] (mysqlnd's client
+/// statistics).
+pub static GLOBAL_IO_COUNTERS: IoCounters = IoCounters {
+    bytes_sent: std::sync::atomic::AtomicU64::new(0),
+    bytes_received: std::sync::atomic::AtomicU64::new(0),
+    packets_sent: std::sync::atomic::AtomicU64::new(0),
+    packets_received: std::sync::atomic::AtomicU64::new(0),
+};
+
+impl IoCounters {
+    /// Records one logical packet of `payload` bytes; a payload of 0xFFFFFF bytes or more
+    /// travels as several physical packets (the last one shorter than 0xFFFFFF).
+    fn record(&self, payload: usize, sent: bool) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let packets = (payload / 0xFF_FFFF) as u64 + 1;
+        let bytes = payload as u64 + 4 * packets;
+        for counters in [self, &GLOBAL_IO_COUNTERS] {
+            if sent {
+                counters.bytes_sent.fetch_add(bytes, Relaxed);
+                counters.packets_sent.fetch_add(packets, Relaxed);
+            } else {
+                counters.bytes_received.fetch_add(bytes, Relaxed);
+                counters.packets_received.fetch_add(packets, Relaxed);
+            }
+        }
+    }
+}
+
 /// Connection internals.
 #[derive(Debug)]
 struct ConnInner {
@@ -227,6 +267,9 @@ struct ConnInner {
 
     /// This flag is to opt-in/opt-out from reset upon return to a pool.
     pub(crate) reset_upon_return: bool,
+
+    /// elephc patch: this connection's wire traffic counters.
+    io_counters: Arc<IoCounters>,
 }
 
 impl ConnInner {
@@ -249,6 +292,7 @@ impl ConnInner {
             auth_plugin: AuthPlugin::MysqlNativePassword,
             nonce: Vec::new(),
             reset_upon_return: opts.get_pool_opts().reset_connection(),
+            io_counters: Arc::new(IoCounters::default()),
 
             opts,
         }
@@ -566,6 +610,8 @@ impl Conn {
         if !self.stream_mut().next_packet(buffer)? {
             Err(Error::server_disconnected())
         } else {
+            // elephc patch: count the packet's wire traffic.
+            self.0.io_counters.record(buffer.len(), false);
             Ok(())
         }
     }
@@ -606,7 +652,10 @@ impl Conn {
     }
 
     fn write_packet<T: Buf>(&mut self, data: &mut T) -> Result<()> {
+        // elephc patch: count the packet's wire traffic.
+        let payload = data.remaining();
         self.stream_mut().send(data)?;
+        self.0.io_counters.record(payload, true);
         Ok(())
     }
 
@@ -1246,6 +1295,12 @@ impl Conn {
     pub fn ping(&mut self) -> Result<(), Error> {
         self.write_command(Command::COM_PING, &[])?;
         self.drop_packet()
+    }
+
+    /// elephc patch: this connection's wire traffic counters, shared so they stay readable
+    /// while another thread owns the `Conn`.
+    pub fn io_counters(&self) -> Arc<IoCounters> {
+        Arc::clone(&self.0.io_counters)
     }
 
     /// elephc patch: the server status flags reported by the last OK / EOF packet (or the
