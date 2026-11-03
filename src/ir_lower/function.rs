@@ -1807,7 +1807,7 @@ fn lower_body_into_function(
             fiber_return_sigs, classes, enums, interfaces, declared_trait_names,
             declared_trait_methods, declared_trait_properties, packed_classes, extern_classes,
             throw_access_sites, builtin_call_types, closure_generator_spans,
-            array_push_property_plans, member_receiver_types,
+            array_push_property_plans, member_receiver_types, local_value_read_types,
             boxed_reference_promotion_sites, first_class_builtin_call_types, generic_call_sites,
             loop_storage_types, string_incdec_locals, bind_kill_sites, ref_detach_sites,
             retype_sites, mixed_storage_store_sites, loop_storage_scope.clone(), constants,

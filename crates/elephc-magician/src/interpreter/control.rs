@@ -11,6 +11,7 @@
 
 use crate::context::{pcntl_runtime::EvalPcntlContextLease, EvalReferenceTarget};
 use crate::value::RuntimeCellHandle;
+use super::argument_value_owners::ArgumentValueOwner;
 
 /// Internal statement-control result used to propagate eval returns and loops.
 pub(super) enum EvalControl {
