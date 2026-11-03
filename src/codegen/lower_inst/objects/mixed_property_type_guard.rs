@@ -1621,4 +1621,4 @@ mod tests {
 }
 
 mod reference_coercion;
-pub(super) use reference_coercion::lower as lower_reference_property_coercion;
+pub(in crate::codegen::lower_inst) use reference_coercion::lower as lower_reference_property_coercion;
