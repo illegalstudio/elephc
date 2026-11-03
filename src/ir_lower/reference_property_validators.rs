@@ -2,7 +2,7 @@
 //! Lowers immutable native property declaration callbacks through ordinary EIR.
 //!
 //! Called from:
-//! - Program lowering after physical class metadata and ordinary methods are complete.
+//! - Explicit native-validation capability selection after physical class metadata is complete.
 //!
 //! Key details:
 //! - Each native callback has exactly context and original-RHS C-ABI parameters.
@@ -31,8 +31,13 @@ fn supports_declaration(ty: &PhpType) -> bool {
     }
 }
 
-/// Emits callbacks only for reference-bearing instance slots and scalar static declarations.
-pub(super) fn lower(module: &mut Module) {
+/// Enables native validation and generates callbacks for the module's physical declarations.
+///
+/// Ordinary lowering does not need these callbacks. In particular, opaque eval must not
+/// duplicate every scalar guard in its class catalog before native publishers use them.
+/// Repeated selection preserves function identifiers and does not duplicate callbacks.
+pub fn enable_native_reference_validation(module: &mut Module) -> Result<(), super::LoweringError> {
+    module.required_runtime_features.native_reference_validation = true;
     let mut declarations = Vec::new();
     for info in module.class_infos.values() {
         for (index, (name, ty)) in info.properties.iter().enumerate() {
@@ -51,8 +56,13 @@ pub(super) fn lower(module: &mut Module) {
     declarations.sort_unstable();
     declarations.dedup();
     for (class_id, slot, is_static) in declarations {
-        module.add_function(lower_callback(class_id, slot, is_static));
+        let name = callback_name(class_id, slot, is_static);
+        if !module.functions.iter().any(|function| function.name == name) {
+            module.add_function(lower_callback(class_id, slot, is_static));
+        }
     }
+    crate::ir::validate_module(module)
+        .map_err(|error| super::validation_context::describe(module, error))
 }
 
 /// Creates a native two-parameter function returning exactly one independently owned candidate.

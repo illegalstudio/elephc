@@ -30,10 +30,19 @@ $g = &$object->numeric;
 echo $a, $b, $c, $d, $e, $f, $g, ReferenceValidatorShapes::$label;
 debug_backtrace();
 "#;
-    let module = super::lower_source_at_for_target(
+    let mut module = super::lower_source_at_for_target(
         source, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap(),
     );
+    assert!(!module.required_runtime_features.native_reference_validation);
+    assert!(!module.functions.iter().any(|function|
+        function.name.starts_with("__eir_reference_property_")),
+        "{target}: ordinary lowering must not generate unused validators");
+    crate::ir_lower::enable_native_reference_validation(&mut module).unwrap();
+    assert!(module.required_runtime_features.native_reference_validation);
+    let function_count = module.functions.len();
+    crate::ir_lower::enable_native_reference_validation(&mut module).unwrap();
+    assert_eq!(module.functions.len(), function_count, "{target}: capability selection is idempotent");
     let callbacks = module.functions.iter().filter(|function| function.instructions.iter().any(|inst|
         matches!(inst.immediate, Some(Immediate::RuntimeCall(
             RuntimeCallTarget::ReferencePropertyCoerce { .. }))))).collect::<Vec<_>>();

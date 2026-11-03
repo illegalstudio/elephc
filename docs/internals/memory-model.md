@@ -655,7 +655,10 @@ separately. A context that already owns a contained Throwable stops before anoth
 validator runs. The descriptor entry must return a boxed owner without PHP hidden
 argument collectors or scalar-result markers. Scalar, nullable and scalar-union
 declaration callbacks are generated through the typed EIR
-`reference.property_coerce` operation. They borrow their two inputs and return one
+`reference.property_coerce` operation when
+`ir_lower::enable_native_reference_validation` selects the capability. Ordinary
+lowering emits no unused callbacks for the opaque-eval class catalog. Selection
+is idempotent and validates the resulting EIR. They borrow their two inputs and return one
 owned boxed candidate. Context bit zero selects assignment-site strictness;
 strict assignments preserve exact members and permit integer-to-float widening.
 Weak candidates reuse the property guard's coercions and diagnostics. Reference

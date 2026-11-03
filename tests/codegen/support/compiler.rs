@@ -57,6 +57,20 @@ pub(crate) fn compile_source_to_asm_with_options(
     compile_source_to_asm_with_counters(source, dir, heap_size, gc_stats, false, heap_debug)
 }
 
+/// Compiles a native ABI fixture with declaration callbacks and their matching runtime enabled.
+pub(crate) fn compile_source_to_asm_with_native_reference_validation(
+    source: &str,
+    dir: &Path,
+    heap_size: usize,
+    heap_debug: bool,
+) -> (String, String, TestLinkRequirements) {
+    let (user, runtime, requirements) = try_compile_source_to_asm_with_capabilities(
+        source, dir, &HashSet::new(), heap_size, false, false, heap_debug,
+        default_null_repr(), false, true, elephc::php_version::PhpVersion::default(),
+    );
+    (user.expect("native-validation fixture codegen failed"), runtime, requirements)
+}
+
 /// Like `compile_source_to_asm_with_options`, with the `--counters` exit dump enabled.
 pub(crate) fn compile_source_to_asm_with_counters(
     source: &str,
@@ -282,6 +296,31 @@ fn try_compile_source_to_asm_with_defines_repr(
     String,
     TestLinkRequirements,
 ) {
+    try_compile_source_to_asm_with_capabilities(
+        source, dir, defines, heap_size, gc_stats, counters, heap_debug,
+        null_repr, with_regex, false, php_version,
+    )
+}
+
+/// Keeps explicitly selected fixture capabilities inside the same compiler stack budget.
+#[allow(clippy::too_many_arguments)]
+fn try_compile_source_to_asm_with_capabilities(
+    source: &str,
+    dir: &Path,
+    defines: &HashSet<String>,
+    heap_size: usize,
+    gc_stats: bool,
+    counters: bool,
+    heap_debug: bool,
+    null_repr: elephc::codegen::NullRepr,
+    with_regex: bool,
+    with_native_reference_validation: bool,
+    php_version: elephc::php_version::PhpVersion,
+) -> (
+    std::result::Result<String, elephc::codegen::CodegenIrError>,
+    String,
+    TestLinkRequirements,
+) {
     elephc::compiler_stack::with_compiler_stack(|| {
         try_compile_source_to_asm_with_defines_repr_inner(
             source,
@@ -293,6 +332,7 @@ fn try_compile_source_to_asm_with_defines_repr(
             heap_debug,
             null_repr,
             with_regex,
+            with_native_reference_validation,
             php_version,
         )
     })
@@ -310,6 +350,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     heap_debug: bool,
     null_repr: elephc::codegen::NullRepr,
     with_regex: bool,
+    with_native_reference_validation: bool,
     php_version: elephc::php_version::PhpVersion,
 ) -> (
     std::result::Result<String, elephc::codegen::CodegenIrError>,
@@ -453,6 +494,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     drop(eir_phase);
     if with_regex {
         ir_module.required_runtime_features.regex = true;
+    }
+    if with_native_reference_validation {
+        elephc::ir_lower::enable_native_reference_validation(&mut ir_module)
+            .expect("native reference declaration validators must be valid EIR");
     }
     // Mirror `pipeline::backend`: report the bridges this fixture actually links to
     // `extension_loaded()` / `get_loaded_extensions()`. Extension folding happens during

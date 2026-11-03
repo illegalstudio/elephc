@@ -330,15 +330,8 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     let source = "<?php class NativeValidationDeclarationProbe { public float $value = 0.0; } \
         $object = new NativeValidationDeclarationProbe(); $alias = &$object->value; \
         unset($alias, $object);";
-    let (user, _, source_requirements) =
-        compile_source_to_asm_with_options(source, &dir.0, 65_536, false, true);
-    assert!(source_requirements.is_empty(), "the ABI fixture has no PHP bridge dependencies");
-    let features = elephc::codegen::RuntimeFeatures {
-        native_reference_validation: true, ..elephc::codegen::RuntimeFeatures::none()
-    };
-    let runtime = elephc::codegen::generate_runtime_with_features(65_536, target(), features);
-    let requirements = TestLinkRequirements::new(Vec::new(),
-        elephc::codegen::link_requirements_for_runtime_features(features));
+    let (user, runtime, requirements) =
+        compile_source_to_asm_with_native_reference_validation(source, &dir.0, 65_536, true);
     let callback_prefix = elephc::names::function_symbol("__eir_reference_property_");
     let callback_suffix = elephc::names::mangle_fqn("_instance");
     let callback = user.lines().filter_map(|line| line.trim().strip_suffix(':'))
