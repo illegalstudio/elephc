@@ -142,6 +142,9 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         "web-session",
         "web-session-trans-sid",
         "web-session-upload",
+        // The edge example uses the --web server builtins; tests/web cover its
+        // real compilation profile.
+        "web-edge",
         // The application contract is injected only by --web-lifecycle=application;
         // web_application_example_reuses_its_counter covers its real compilation profile.
         "web-application",
