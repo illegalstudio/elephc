@@ -1649,3 +1649,216 @@ foreach ([0, MYSQLI_CLIENT_COMPRESS] as $flags) {
     let expected = "mq:4|store1:3|next2:3|use2:0|fetch2:1|free2:1|next3:1|next4:3|store4:2|done\n";
     assert_eq!(out, format!("{expected}{expected}"));
 }
+
+/// Per-step mysqlnd statistics across the whole result and statement lifecycle
+/// (decode-time protocol counters, data bytes, buffered / unbuffered / flushed
+/// sets, free and close accounting), connection and process-wide. The golden
+/// output was produced by php 8.3 + mysqlnd running this same program.
+#[test]
+#[ignore]
+fn test_mysqli_lifecycle_statistics_follow_mysqlnd() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$wire = ["bytes_sent","bytes_received","packets_sent","packets_received","protocol_overhead_in","protocol_overhead_out","packets_sent_command"];
+$prevC = $db->get_connection_stats();
+$prevG = mysqli_get_client_stats();
+$step = function (string $label) use ($db, &$prevC, &$prevG, $wire): void {
+    $c = $db->get_connection_stats();
+    $g = mysqli_get_client_stats();
+    $out = [];
+    foreach ($c as $k => $v) {
+        if (in_array($k, $wire) || str_starts_with($k, "bytes_received_") && str_ends_with($k, "_packet") || str_starts_with($k, "packets_received_")) { continue; }
+        $d = (int) $v - (int) $prevC[$k];
+        if ($d != 0) { $out[] = "c." . $k . "=" . $d; }
+    }
+    foreach ($g as $k => $v) {
+        if (in_array($k, $wire) || str_starts_with($k, "bytes_received_") && str_ends_with($k, "_packet") || str_starts_with($k, "packets_received_")) { continue; }
+        $d = (int) $v - (int) $prevG[$k];
+        if ($d != 0) { $out[] = "g." . $k . "=" . $d; }
+    }
+    echo $label, ": ", implode(" ", $out), "\n";
+    $prevC = $c;
+    $prevG = $g;
+};
+$db->query("DROP TABLE IF EXISTS mysqli_life_t");
+$db->query("CREATE TABLE mysqli_life_t (i INT, b BIGINT, d DECIMAL(6,2), f DOUBLE, s VARCHAR(10), bl BLOB, dt DATETIME, da DATE, t TINYINT, n INT NULL, e ENUM('a','b'), y YEAR, bt BIT(3), fl FLOAT, sm SMALLINT, md MEDIUMINT, tm TIME, ts TIMESTAMP NULL)");
+$step("ddl");
+$db->query("INSERT INTO mysqli_life_t VALUES (1, 2, 3.5, 4.25, 'abc', 'xyz', '2024-01-02 03:04:05', '2024-01-02', 7, NULL, 'b', 2024, 5, 1.5, 9, 10, '01:02:03', '2024-01-02 03:04:05'), (2, 3, 4.5, 5.25, 'de', NULL, NULL, NULL, 8, 1, 'a', 2025, 1, 2.5, 3, 4, '05:06:07', NULL)");
+$step("insert");
+$r = $db->query("SELECT * FROM mysqli_life_t");
+$step("query");
+$r->fetch_row();
+$step("fetch1");
+$r->data_seek(0);
+$r->fetch_assoc();
+$step("refetch");
+$r->fetch_all();
+$step("fetchall");
+$r->free();
+$step("free");
+$r = $db->query("SELECT i, s FROM mysqli_life_t", MYSQLI_USE_RESULT);
+$step("use");
+$r->fetch_row();
+$step("ufetch");
+$r->free();
+$step("ufree");
+$r = $db->query("SELECT i FROM mysqli_life_t");
+unset($r);
+$step("implicit");
+$db->real_query("SELECT s FROM mysqli_life_t");
+$r = $db->store_result();
+$step("real+store");
+$r->close();
+$db->query("UPDATE mysqli_life_t SET i = i + 1");
+$step("update");
+$s = $db->prepare("SELECT * FROM mysqli_life_t WHERE i > ?");
+$step("prepare");
+$v = 0; $s->bind_param("i", $v);
+$s->execute();
+$step("execute");
+$s->fetch();
+$step("sfetch1");
+$s->fetch();
+$s->fetch();
+$step("sfetchend");
+$s->execute();
+$s->store_result();
+$step("sstore");
+$s->fetch();
+$step("sfetchstored");
+$s->free_result();
+$step("sfree");
+$s->execute();
+$res = $s->get_result();
+$step("getresult");
+$res->fetch_all();
+$step("gfetchall");
+$res->free();
+$s->execute();
+$s->fetch();
+$s->close();
+$step("sclose_pending");
+$u = $db->prepare("UPDATE mysqli_life_t SET i = i + 1 WHERE i > ?");
+$u->bind_param("i", $v);
+$u->execute();
+$step("supdate");
+$u->close();
+$step("uclose");
+$never = $db->prepare("SELECT 1");
+$never->close();
+$step("never");
+$twice = $db->prepare("SELECT 1");
+$twice->execute(); $twice->store_result(); $twice->execute(); $twice->store_result();
+$twice->close();
+$step("twice");
+$db->multi_query("SELECT 1; UPDATE mysqli_life_t SET i = i; SELECT 2");
+do { if ($x = $db->store_result()) { $x->free(); } } while ($db->next_result());
+$step("multi");
+$db->ping();
+$db->select_db("testdb");
+$step("ping+select");
+$db->query("DROP TABLE mysqli_life_t");
+$db->close();
+$g = mysqli_get_client_stats();
+echo "end-close: g.explicit_close=", $g["explicit_close"] - $prevG["explicit_close"], "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        r#"ddl: c.non_result_set_queries=2 c.com_query=2 g.non_result_set_queries=2 g.com_query=2
+insert: c.non_result_set_queries=1 c.rows_affected_normal=2 c.com_query=1 g.non_result_set_queries=1 g.rows_affected_normal=2 g.com_query=1
+query: c.result_set_queries=1 c.no_index_used=1 c.buffered_sets=1 c.rows_fetched_from_server_normal=2 c.rows_buffered_from_client_normal=2 c.com_query=1 g.result_set_queries=1 g.no_index_used=1 g.buffered_sets=1 g.rows_fetched_from_server_normal=2 g.rows_buffered_from_client_normal=2 g.com_query=1
+fetch1: c.proto_text_fetched_bit=1 c.proto_text_fetched_tinyint=1 c.proto_text_fetched_short=1 c.proto_text_fetched_int24=1 c.proto_text_fetched_int=1 c.proto_text_fetched_bigint=1 c.proto_text_fetched_decimal=1 c.proto_text_fetched_float=1 c.proto_text_fetched_double=1 c.proto_text_fetched_date=1 c.proto_text_fetched_year=1 c.proto_text_fetched_time=1 c.proto_text_fetched_datetime=1 c.proto_text_fetched_timestamp=1 c.proto_text_fetched_string=2 c.proto_text_fetched_enum=1 c.bytes_received_real_data_normal=85 g.rows_fetched_from_client_normal_buffered=1 g.proto_text_fetched_bit=1 g.proto_text_fetched_tinyint=1 g.proto_text_fetched_short=1 g.proto_text_fetched_int24=1 g.proto_text_fetched_int=1 g.proto_text_fetched_bigint=1 g.proto_text_fetched_decimal=1 g.proto_text_fetched_float=1 g.proto_text_fetched_double=1 g.proto_text_fetched_date=1 g.proto_text_fetched_year=1 g.proto_text_fetched_time=1 g.proto_text_fetched_datetime=1 g.proto_text_fetched_timestamp=1 g.proto_text_fetched_string=2 g.proto_text_fetched_enum=1 g.bytes_received_real_data_normal=85
+refetch: c.proto_text_fetched_bit=1 c.proto_text_fetched_tinyint=1 c.proto_text_fetched_short=1 c.proto_text_fetched_int24=1 c.proto_text_fetched_int=1 c.proto_text_fetched_bigint=1 c.proto_text_fetched_decimal=1 c.proto_text_fetched_float=1 c.proto_text_fetched_double=1 c.proto_text_fetched_date=1 c.proto_text_fetched_year=1 c.proto_text_fetched_time=1 c.proto_text_fetched_datetime=1 c.proto_text_fetched_timestamp=1 c.proto_text_fetched_string=2 c.proto_text_fetched_enum=1 c.bytes_received_real_data_normal=85 g.rows_fetched_from_client_normal_buffered=1 g.proto_text_fetched_bit=1 g.proto_text_fetched_tinyint=1 g.proto_text_fetched_short=1 g.proto_text_fetched_int24=1 g.proto_text_fetched_int=1 g.proto_text_fetched_bigint=1 g.proto_text_fetched_decimal=1 g.proto_text_fetched_float=1 g.proto_text_fetched_double=1 g.proto_text_fetched_date=1 g.proto_text_fetched_year=1 g.proto_text_fetched_time=1 g.proto_text_fetched_datetime=1 g.proto_text_fetched_timestamp=1 g.proto_text_fetched_string=2 g.proto_text_fetched_enum=1 g.bytes_received_real_data_normal=85
+fetchall: c.proto_text_fetched_bit=1 c.proto_text_fetched_tinyint=1 c.proto_text_fetched_short=1 c.proto_text_fetched_int24=1 c.proto_text_fetched_int=2 c.proto_text_fetched_bigint=1 c.proto_text_fetched_decimal=1 c.proto_text_fetched_float=1 c.proto_text_fetched_double=1 c.proto_text_fetched_year=1 c.proto_text_fetched_time=1 c.proto_text_fetched_string=2 c.bytes_received_real_data_normal=33 g.rows_fetched_from_client_normal_buffered=1 g.proto_text_fetched_bit=1 g.proto_text_fetched_tinyint=1 g.proto_text_fetched_short=1 g.proto_text_fetched_int24=1 g.proto_text_fetched_int=2 g.proto_text_fetched_bigint=1 g.proto_text_fetched_decimal=1 g.proto_text_fetched_float=1 g.proto_text_fetched_double=1 g.proto_text_fetched_year=1 g.proto_text_fetched_time=1 g.proto_text_fetched_string=2 g.bytes_received_real_data_normal=33
+free: c.explicit_free_result=1 g.explicit_free_result=1
+use: c.result_set_queries=1 c.no_index_used=1 c.unbuffered_sets=1 c.com_query=1 g.result_set_queries=1 g.no_index_used=1 g.unbuffered_sets=1 g.com_query=1
+ufetch: c.rows_fetched_from_server_normal=1 c.rows_fetched_from_client_normal_unbuffered=1 c.proto_text_fetched_int=1 c.proto_text_fetched_string=1 c.bytes_received_real_data_normal=4 g.rows_fetched_from_server_normal=1 g.rows_fetched_from_client_normal_unbuffered=1 g.proto_text_fetched_int=1 g.proto_text_fetched_string=1 g.bytes_received_real_data_normal=4
+ufree: c.flushed_normal_sets=1 c.rows_fetched_from_server_normal=1 c.rows_fetched_from_client_normal_unbuffered=1 c.rows_skipped_normal=1 c.explicit_free_result=1 g.flushed_normal_sets=1 g.rows_fetched_from_server_normal=1 g.rows_fetched_from_client_normal_unbuffered=1 g.rows_skipped_normal=1 g.explicit_free_result=1
+implicit: c.result_set_queries=1 c.no_index_used=1 c.buffered_sets=1 c.rows_fetched_from_server_normal=2 c.rows_buffered_from_client_normal=2 c.explicit_free_result=1 c.com_query=1 g.result_set_queries=1 g.no_index_used=1 g.buffered_sets=1 g.rows_fetched_from_server_normal=2 g.rows_buffered_from_client_normal=2 g.explicit_free_result=1 g.com_query=1
+real+store: c.result_set_queries=1 c.no_index_used=1 c.buffered_sets=1 c.rows_fetched_from_server_normal=2 c.rows_buffered_from_client_normal=2 c.com_query=1 g.result_set_queries=1 g.no_index_used=1 g.buffered_sets=1 g.rows_fetched_from_server_normal=2 g.rows_buffered_from_client_normal=2 g.com_query=1
+update: c.non_result_set_queries=1 c.rows_affected_normal=2 c.explicit_free_result=1 c.com_query=1 g.non_result_set_queries=1 g.rows_affected_normal=2 g.explicit_free_result=1 g.com_query=1
+prepare: c.com_stmt_prepare=1 g.com_stmt_prepare=1
+execute: c.result_set_queries=1 c.no_index_used=1 c.com_stmt_execute=1 g.result_set_queries=1 g.no_index_used=1 g.com_stmt_execute=1
+sfetch1: c.ps_unbuffered_sets=1 c.rows_fetched_from_server_ps=1 c.rows_fetched_from_client_ps_unbuffered=1 g.ps_unbuffered_sets=1 g.rows_fetched_from_server_ps=1 g.rows_fetched_from_client_ps_unbuffered=1
+sfetchend: c.rows_fetched_from_server_ps=1 c.rows_fetched_from_client_ps_unbuffered=1 g.rows_fetched_from_server_ps=1 g.rows_fetched_from_client_ps_unbuffered=1
+sstore: c.result_set_queries=1 c.no_index_used=1 c.ps_buffered_sets=1 c.rows_fetched_from_server_ps=2 c.rows_buffered_from_client_ps=2 c.com_stmt_execute=1 g.result_set_queries=1 g.no_index_used=1 g.ps_buffered_sets=1 g.rows_fetched_from_server_ps=2 g.rows_buffered_from_client_ps=2 g.com_stmt_execute=1
+sfetchstored: g.rows_fetched_from_client_ps_buffered=1
+sfree: 
+getresult: c.result_set_queries=1 c.no_index_used=1 c.buffered_sets=1 c.rows_fetched_from_server_ps=2 c.rows_buffered_from_client_ps=2 c.com_stmt_execute=1 g.result_set_queries=1 g.no_index_used=1 g.buffered_sets=1 g.rows_fetched_from_server_ps=2 g.rows_buffered_from_client_ps=2 g.com_stmt_execute=1
+gfetchall: c.proto_binary_fetched_bit=5 c.proto_binary_fetched_tinyint=2 c.proto_binary_fetched_short=2 c.proto_binary_fetched_int24=2 c.proto_binary_fetched_int=2 c.proto_binary_fetched_bigint=3 c.proto_binary_fetched_decimal=2 c.proto_binary_fetched_float=2 c.proto_binary_fetched_double=2 c.proto_binary_fetched_date=2 c.proto_binary_fetched_year=1 c.proto_binary_fetched_time=2 c.proto_binary_fetched_datetime=2 c.proto_binary_fetched_timestamp=1 c.proto_binary_fetched_string=1 c.proto_binary_fetched_json=4 c.proto_binary_fetched_blob=1 c.bytes_received_real_data_ps=160 g.rows_fetched_from_client_ps_buffered=2 g.proto_binary_fetched_bit=5 g.proto_binary_fetched_tinyint=2 g.proto_binary_fetched_short=2 g.proto_binary_fetched_int24=2 g.proto_binary_fetched_int=2 g.proto_binary_fetched_bigint=3 g.proto_binary_fetched_decimal=2 g.proto_binary_fetched_float=2 g.proto_binary_fetched_double=2 g.proto_binary_fetched_date=2 g.proto_binary_fetched_year=1 g.proto_binary_fetched_time=2 g.proto_binary_fetched_datetime=2 g.proto_binary_fetched_timestamp=1 g.proto_binary_fetched_string=1 g.proto_binary_fetched_json=4 g.proto_binary_fetched_blob=1 g.bytes_received_real_data_ps=160
+sclose_pending: c.result_set_queries=1 c.no_index_used=1 c.ps_unbuffered_sets=1 c.flushed_ps_sets=1 c.rows_fetched_from_server_ps=2 c.rows_fetched_from_client_ps_unbuffered=2 c.rows_skipped_ps=1 c.explicit_free_result=1 c.implicit_free_result=1 c.com_stmt_execute=1 c.com_stmt_close=1 g.result_set_queries=1 g.no_index_used=1 g.ps_unbuffered_sets=1 g.flushed_ps_sets=1 g.rows_fetched_from_server_ps=2 g.rows_fetched_from_client_ps_unbuffered=2 g.rows_skipped_ps=1 g.explicit_free_result=2 g.implicit_free_result=1 g.explicit_stmt_close=1 g.com_stmt_execute=1 g.com_stmt_close=1
+supdate: c.non_result_set_queries=1 c.com_stmt_prepare=1 c.com_stmt_execute=1 g.non_result_set_queries=1 g.com_stmt_prepare=1 g.com_stmt_execute=1
+uclose: c.ps_prepared_once_executed=1 c.com_stmt_close=1 g.ps_prepared_once_executed=1 g.explicit_free_result=1 g.explicit_stmt_close=1 g.com_stmt_close=1
+never: c.ps_prepared_never_executed=1 c.implicit_free_result=1 c.com_stmt_prepare=1 c.com_stmt_close=1 g.ps_prepared_never_executed=1 g.explicit_free_result=1 g.implicit_free_result=1 g.explicit_stmt_close=1 g.com_stmt_prepare=1 g.com_stmt_close=1
+twice: c.result_set_queries=2 c.ps_buffered_sets=2 c.rows_fetched_from_server_ps=2 c.rows_buffered_from_client_ps=2 c.implicit_free_result=1 c.com_stmt_prepare=1 c.com_stmt_execute=2 c.com_stmt_close=1 g.result_set_queries=2 g.ps_buffered_sets=2 g.rows_fetched_from_server_ps=2 g.rows_buffered_from_client_ps=2 g.explicit_free_result=1 g.implicit_free_result=1 g.explicit_stmt_close=1 g.com_stmt_prepare=1 g.com_stmt_execute=2 g.com_stmt_close=1
+multi: c.result_set_queries=2 c.non_result_set_queries=1 c.buffered_sets=2 c.rows_fetched_from_server_normal=2 c.rows_buffered_from_client_normal=2 c.explicit_free_result=2 c.com_query=1 c.com_stmt_set_option=1 g.result_set_queries=2 g.non_result_set_queries=1 g.buffered_sets=2 g.rows_fetched_from_server_normal=2 g.rows_buffered_from_client_normal=2 g.explicit_free_result=2 g.com_query=1 g.com_stmt_set_option=1
+ping+select: c.com_init_db=1 c.com_ping=1 g.com_init_db=1 g.com_ping=1
+end-close: g.explicit_close=1
+"#
+    );
+}
+
+/// mysqlnd's cell decoding: BIT becomes a decimal string (text) or an integer
+/// (binary / INT_AND_FLOAT_NATIVE), ZEROFILL integers stay padded strings,
+/// unsigned values past PHP_INT_MAX stay strings, and fields carry NUM_FLAG.
+/// Golden output from php 8.3 + mysqlnd.
+#[test]
+#[ignore]
+fn test_mysqli_cell_decoding_follows_mysqlnd() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS mysqli_decode_t");
+$db->query("CREATE TABLE mysqli_decode_t (a INT(5) ZEROFILL, b TINYINT ZEROFILL, c BIGINT UNSIGNED ZEROFILL, y YEAR, bt BIT(3), b64 BIT(64), bt9 BIT(9), fz FLOAT ZEROFILL, u BIGINT UNSIGNED, d DECIMAL(4,1), ts TIMESTAMP NULL, n INT NULL)");
+$db->query("INSERT INTO mysqli_decode_t VALUES (7, 3, 12, 2024, 5, b'1111111111111111111111111111111111111111111111111111111111111111', 300, 1.5, 18446744073709551615, 2.5, NULL, NULL), (0, 0, 0, 1999, 0, 0, 1, 0, 1, 0, NULL, 4)");
+$show = function (string $label, ?array $row): void {
+    echo $label, ":";
+    foreach ((array) $row as $v) {
+        echo " ", gettype($v), "(", var_export($v, true), ")";
+    }
+    echo "\n";
+};
+$q = "SELECT * FROM mysqli_decode_t ORDER BY y DESC";
+$r = $db->query($q);
+$show("text", $r->fetch_row());
+$show("text", $r->fetch_row());
+foreach ($r->fetch_fields() as $f) {
+    echo $f->name, "=", $f->type, "/", $f->flags, " ";
+}
+echo "\n";
+$u = $db->query($q, MYSQLI_USE_RESULT);
+$show("unbuf", $u->fetch_row());
+$u->free();
+$s = $db->prepare($q);
+$s->execute();
+$g = $s->get_result();
+$show("binary", $g->fetch_row());
+$show("binary", $g->fetch_row());
+$a = $b = $c = $y = $bt = $b64 = $bt9 = $fz = $uu = $d = $ts = $n = null;
+$s->execute();
+$s->bind_result($a, $b, $c, $y, $bt, $b64, $bt9, $fz, $uu, $d, $ts, $n);
+$s->fetch();
+$show("bound", [$a, $b, $c, $y, $bt, $b64, $bt9, $fz, $uu, $d, $ts, $n]);
+$s->close();
+$native = mysqli_init();
+$native->options(MYSQLI_OPT_INT_AND_FLOAT_NATIVE, 1);
+$native->real_connect($host, $user, $pass, $dbname, $port);
+$show("native", $native->query($q)->fetch_row());
+$db->query("DROP TABLE mysqli_decode_t");
+"#,
+    ));
+    assert_eq!(
+        out,
+        r#"text: string('00007') string('003') string('00000000000000000012') string('2024') string('5') string('18446744073709551615') string('300') string('0000000001.5') string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
+text: string('00000') string('000') string('00000000000000000000') string('1999') string('0') string('0') string('1') string('000000000000') string('1') string('0.0') NULL(NULL) string('4')
+a=3/32864 b=1/32864 c=8/32864 y=13/32864 bt=16/32 b64=16/32 bt9=16/32 fz=4/32864 u=8/32800 d=246/0 ts=7/160 n=3/32768 
+unbuf: string('00007') string('003') string('00000000000000000012') string('2024') string('5') string('18446744073709551615') string('300') string('0000000001.5') string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
+binary: string('00007') string('003') string('00000000000000000012') string('2024') integer(5) string('18446744073709551615') integer(300) double(1.5) string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
+binary: string('00000') string('000') string('00000000000000000000') string('1999') integer(0) integer(0) integer(1) double(0.0) integer(1) string('0.0') NULL(NULL) integer(4)
+bound: string('00007') string('003') string('00000000000000000012') string('2024') integer(5) string('18446744073709551615') integer(300) double(1.5) string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
+native: string('00007') string('003') string('00000000000000000012') string('2024') integer(5) string('18446744073709551615') integer(300) double(1.5) string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
+"#
+    );
+}

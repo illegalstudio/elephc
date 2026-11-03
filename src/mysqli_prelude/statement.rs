@@ -30,6 +30,12 @@ class mysqli_stmt {
     public int|string $num_rows = 0;
     public int $param_count = 0;
     public int $field_count = 0;
+
+    // mysqlnd's per-column cell conversion of the current result set
+    // (mysqli_result::__elephcCellKind) and the columns' display widths;
+    // rebuilt whenever the set's metadata changes.
+    private array $cellKinds = [];
+    private array $cellLengths = [];
     public int $errno = 0;
     public array $error_list = [];
     public string $error = "";
@@ -65,6 +71,10 @@ class mysqli_stmt {
     // consume the pending rows. store_result() buffers them here so data_seek()
     // and fetch() can walk them.
     private bool $executedOnce = false;
+    // mysqlnd statistics: executions since prepare (ps_prepared_*_executed) and
+    // whether this execution's unbuffered fetch was counted (ps_unbuffered_sets).
+    private int $executeCount = 0;
+    private bool $unbufferedCounted = false;
     private bool $hasPending = false;
     private int $pendingStep = 0;
     private bool $stored = false;
@@ -145,6 +155,7 @@ class mysqli_stmt {
         // whose result shape exists only once the procedure runs.
         $_head = strtoupper(ltrim($query));
         $this->field_count = str_starts_with($_head, "CALL") ? 0 : elephc_pdo_column_count($_handle);
+        $this->cellKinds = [];
         $this->id = elephc_pdo_mysql_stmt_id($_handle);
         $this->bindTypes = "";
         $this->paramReader = null;
@@ -304,6 +315,13 @@ class mysqli_stmt {
         }
         $_cols = elephc_pdo_column_count($this->stmt);
         $this->field_count = $_cols;
+        $this->cellKinds = [];
+        $this->executeCount = $this->executeCount + 1;
+        $this->unbufferedCounted = false;
+        $_statLink = $this->link;
+        if ($_statLink !== null) {
+            $_statLink->__elephcHeaderStats($_cols, false);
+        }
         $this->warningCount = elephc_pdo_warning_count($this->conn);
         if ($_cols == 0) {
             $this->affected_rows = elephc_pdo_changes($this->conn);
@@ -349,6 +367,7 @@ class mysqli_stmt {
                 $_row[] = $this->storedCells[$_base + $_i];
             }
             $this->storedPos = $this->storedPos + 1;
+            $this->linkStat("rows_fetched_from_client_ps_buffered", 1, false);
             $this->writeRow($_row);
             return true;
         }
@@ -358,6 +377,11 @@ class mysqli_stmt {
                 return false;
             }
             return null;
+        }
+        // The first fetch of an unstored execution is mysqlnd's use_result().
+        if (!$this->unbufferedCounted) {
+            $this->unbufferedCounted = true;
+            $this->linkStat("ps_unbuffered_sets", 1, true);
         }
         $this->pendingRow();
         if ($this->pendingStep < 0) {
@@ -376,6 +400,8 @@ class mysqli_stmt {
             $_row[] = $this->columnValue($_i);
         }
         $this->num_rows = $this->num_rows + 1;
+        $this->linkStat("rows_fetched_from_server_ps", 1, true);
+        $this->linkStat("rows_fetched_from_client_ps_unbuffered", 1, true);
         // The next row (or the set's EOF) is read by the next fetch(), like mysqlnd.
         $this->pendingStep = 2;
         $this->writeRow($_row);
@@ -418,7 +444,10 @@ class mysqli_stmt {
             $this->opFailed();
             return false;
         }
-        $this->linkBump("ps_buffered_sets");
+        // mysqlnd's get_result() buffers through the normal-result path.
+        $this->linkBump("buffered_sets");
+        $this->linkStat("rows_fetched_from_server_ps", $_rowCount, true);
+        $this->linkStat("rows_buffered_from_client_ps", $_rowCount, true);
         $this->num_rows = $_rowCount;
         $this->affected_rows = $_rowCount;
         $this->finishResultSet();
@@ -451,6 +480,8 @@ class mysqli_stmt {
             return $this->opFailed();
         }
         $this->linkBump("ps_buffered_sets");
+        $this->linkStat("rows_fetched_from_server_ps", $_rowCount, true);
+        $this->linkStat("rows_buffered_from_client_ps", $_rowCount, true);
         $this->stored = true;
         $this->storedCells = $_cells;
         $this->storedCount = $_rowCount;
@@ -513,6 +544,7 @@ class mysqli_stmt {
         $_rc = 2;
         $this->dropStored();
         $this->field_count = elephc_pdo_column_count($this->stmt);
+        $this->cellKinds = [];
         $this->num_rows = 0;
         if ($this->field_count == 0) {
             $this->hasPending = false;
@@ -640,7 +672,7 @@ class mysqli_stmt {
 
     public function close(): bool {
         $this->requireValid();
-        $this->linkBump("explicit_stmt_close");
+        $this->countClose(true);
         $this->linkBump("com_stmt_close");
         $this->release();
         $this->closed = true;
@@ -650,7 +682,41 @@ class mysqli_stmt {
     public function __destruct() {
         // The bridge ignores an unknown/already-finalized handle, so this is
         // safe even when the owning mysqli connection was closed first.
+        if (!$this->closed && $this->stmt >= 0) {
+            $this->countClose(false);
+        }
         $this->release();
+    }
+
+    // mysqlnd's statement close accounting (mysqlnd_stmt::net_close / dtor): a
+    // result set still on the wire is flushed row by row, the statement's
+    // result metadata is freed (implicitly), and the close and its execution
+    // count are recorded — several of them process-wide only.
+    private function countClose(bool $explicit): void {
+        if ($this->link === null) {
+            return;
+        }
+        if ($this->hasPending && !$this->stored) {
+            $this->linkStat("flushed_ps_sets", 1, true);
+            $_rc = $this->pendingRow();
+            while ($_rc == 1) {
+                $this->linkStat("rows_fetched_from_server_ps", 1, true);
+                $this->linkStat("rows_fetched_from_client_ps_unbuffered", 1, true);
+                $this->linkStat("rows_skipped_ps", 1, true);
+                $_rc = elephc_pdo_step($this->stmt);
+            }
+            $this->pendingStep = $_rc;
+        }
+        if ($this->field_count > 0) {
+            $this->linkStat("implicit_free_result", 1, true);
+        }
+        $this->linkStat($explicit ? "explicit_free_result" : "implicit_free_result", 1, false);
+        if ($this->executeCount == 0) {
+            $this->linkStat("ps_prepared_never_executed", 1, true);
+        } elseif ($this->executeCount == 1) {
+            $this->linkStat("ps_prepared_once_executed", 1, true);
+        }
+        $this->linkStat($explicit ? "explicit_stmt_close" : "implicit_stmt_close", 1, false);
     }
 
     // -- internal helpers ($_-prefixed locals; same checker rule as PDO) --
@@ -790,7 +856,12 @@ class mysqli_stmt {
             $_lens[] = elephc_pdo_column_len($this->stmt, $_i);
             $_decimals[] = elephc_pdo_column_precision($this->stmt, $_i);
         }
-        return mysqli_result::__elephcFromDrain($cells, $rowCount, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
+        $_result = mysqli_result::__elephcFromDrain($cells, $rowCount, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
+        $_statLink = $this->link;
+        if ($_statLink !== null) {
+            $_result->__elephcCountFor($_statLink, true);
+        }
+        return $_result;
     }
 
     // Guards the two-step prepare() and execute() while the LINK has
@@ -806,6 +877,13 @@ class mysqli_stmt {
     }
 
     // Bumps a statistic on the owning connection (no-op once detached).
+    private function linkStat(string $key, int $by, bool $connection): void {
+        $_link = $this->link;
+        if ($_link !== null) {
+            $_link->__elephcStat($key, $by, $connection);
+        }
+    }
+
     private function linkBump(string $key): void {
         $_link = $this->link;
         if ($_link !== null) {
@@ -828,6 +906,18 @@ class mysqli_stmt {
     // Decodes one cell of the statement's current row; same dispatch as the
     // connection's columnValue (int / float / null / length-counted bytes).
     private function columnValue(int $index): mixed {
+        if (count($this->cellKinds) != $this->field_count) {
+            $this->cellKinds = [];
+            $this->cellLengths = [];
+            for ($_i = 0; $_i < $this->field_count; $_i++) {
+                $this->cellKinds[] = mysqli_result::__elephcCellKind(elephc_pdo_column_native_type($this->stmt, $_i), elephc_pdo_column_flags($this->stmt, $_i), false, true);
+                $this->cellLengths[] = elephc_pdo_column_len($this->stmt, $_i);
+            }
+        }
+        return mysqli_result::__elephcConvertCell($this->rawColumnValue($index), (int) $this->cellKinds[$index], (int) $this->cellLengths[$index]);
+    }
+
+    private function rawColumnValue(int $index): mixed {
         $_type = elephc_pdo_column_type($this->stmt, $index);
         if ($_type == 1) {
             return elephc_pdo_column_int($this->stmt, $index);

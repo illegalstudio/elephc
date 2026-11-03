@@ -48,6 +48,7 @@ use crate::synthetic_class::{
     s_for,
     s_if,
     s_prop_array_assign,
+    s_prop_array_push,
     s_prop_assign,
     s_return,
     s_return_void,
@@ -68,6 +69,8 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
         .prop("num_rows", t_union(vec![TypeExpr::Int, TypeExpr::Str]), Some(e_int(0)))
         .prop("param_count", TypeExpr::Int, Some(e_int(0)))
         .prop("field_count", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("cellKinds", t_array(), Some(e_array(vec![])))
+        .private_prop("cellLengths", t_array(), Some(e_array(vec![])))
         .prop("errno", TypeExpr::Int, Some(e_int(0)))
         .prop("error_list", t_array(), Some(e_array(vec![])))
         .prop("error", TypeExpr::Str, Some(e_str("")))
@@ -85,6 +88,8 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
         .private_prop("longData", t_array(), Some(e_array(vec![])))
         .private_prop("longDataSent", t_array(), Some(e_array(vec![])))
         .private_prop("executedOnce", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("executeCount", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("unbufferedCounted", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("hasPending", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("pendingStep", TypeExpr::Int, Some(e_int(0)))
         .private_prop("stored", TypeExpr::Bool, Some(e_bool(false)))
@@ -207,6 +212,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_this(), "param_count", e_call("elephc_pdo_mysql_param_count", vec![e_var("_handle")])),
                     s_assign("_head", e_call("strtoupper", vec![e_call("ltrim", vec![e_var("query")])])),
                     s_prop_assign(e_this(), "field_count", e_ternary(e_call("str_starts_with", vec![e_var("_head"), e_str("CALL")]), e_int(0), e_call("elephc_pdo_column_count", vec![e_var("_handle")]))),
+                    s_prop_assign(e_this(), "cellKinds", e_array(vec![])),
                     s_prop_assign(e_this(), "id", e_call("elephc_pdo_mysql_stmt_id", vec![e_var("_handle")])),
                     s_prop_assign(e_this(), "bindTypes", e_str("")),
                     s_prop_assign(e_this(), "paramReader", e_null()),
@@ -469,6 +475,18 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     ),
                     s_assign("_cols", e_call("elephc_pdo_column_count", vec![e_this_prop("stmt")])),
                     s_prop_assign(e_this(), "field_count", e_var("_cols")),
+                    s_prop_assign(e_this(), "cellKinds", e_array(vec![])),
+                    s_prop_assign(e_this(), "executeCount", e_binop(e_this_prop("executeCount"), BinOp::Add, e_int(1))),
+                    s_prop_assign(e_this(), "unbufferedCounted", e_bool(false)),
+                    s_assign("_statLink", e_this_prop("link")),
+                    s_if(
+                        e_binop(e_var("_statLink"), BinOp::StrictNotEq, e_null()),
+                        vec![
+                            s_expr(e_method_call(e_var("_statLink"), "__elephcHeaderStats", vec![e_var("_cols"), e_bool(false)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_prop_assign(e_this(), "warningCount", e_call("elephc_pdo_warning_count", vec![e_this_prop("conn")])),
                     s_if(
                         e_binop(e_var("_cols"), BinOp::Eq, e_int(0)),
@@ -532,6 +550,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                                 s_array_push("_row", e_index(e_this_prop("storedCells"), e_binop(e_var("_base"), BinOp::Add, e_var("_i")))),
                             ]),
                             s_prop_assign(e_this(), "storedPos", e_binop(e_this_prop("storedPos"), BinOp::Add, e_int(1))),
+                            s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_client_ps_buffered"), e_int(1), e_bool(false)])),
                             s_expr(e_method_call(e_this(), "writeRow", vec![e_var("_row")])),
                             s_return(e_bool(true)),
                         ],
@@ -551,6 +570,15 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                                 None,
                             ),
                             s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_not(e_this_prop("unbufferedCounted")),
+                        vec![
+                            s_prop_assign(e_this(), "unbufferedCounted", e_bool(true)),
+                            s_expr(e_method_call(e_this(), "linkStat", vec![e_str("ps_unbuffered_sets"), e_int(1), e_bool(true)])),
                         ],
                         vec![],
                         None,
@@ -581,6 +609,8 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         s_array_push("_row", e_method_call(e_this(), "columnValue", vec![e_var("_i")])),
                     ]),
                     s_prop_assign(e_this(), "num_rows", e_binop(e_this_prop("num_rows"), BinOp::Add, e_int(1))),
+                    s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_server_ps"), e_int(1), e_bool(true)])),
+                    s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_client_ps_unbuffered"), e_int(1), e_bool(true)])),
                     s_prop_assign(e_this(), "pendingStep", e_int(2)),
                     s_expr(e_method_call(e_this(), "writeRow", vec![e_var("_row")])),
                     s_return(e_bool(true)),
@@ -644,7 +674,9 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("ps_buffered_sets")])),
+                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("buffered_sets")])),
+                    s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_server_ps"), e_var("_rowCount"), e_bool(true)])),
+                    s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_buffered_from_client_ps"), e_var("_rowCount"), e_bool(true)])),
                     s_prop_assign(e_this(), "num_rows", e_var("_rowCount")),
                     s_prop_assign(e_this(), "affected_rows", e_var("_rowCount")),
                     s_expr(e_method_call(e_this(), "finishResultSet", vec![])),
@@ -686,6 +718,8 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "linkBump", vec![e_str("ps_buffered_sets")])),
+                    s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_server_ps"), e_var("_rowCount"), e_bool(true)])),
+                    s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_buffered_from_client_ps"), e_var("_rowCount"), e_bool(true)])),
                     s_prop_assign(e_this(), "stored", e_bool(true)),
                     s_prop_assign(e_this(), "storedCells", e_var("_cells")),
                     s_prop_assign(e_this(), "storedCount", e_var("_rowCount")),
@@ -789,6 +823,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     s_assign("_rc", e_int(2)),
                     s_expr(e_method_call(e_this(), "dropStored", vec![])),
                     s_prop_assign(e_this(), "field_count", e_call("elephc_pdo_column_count", vec![e_this_prop("stmt")])),
+                    s_prop_assign(e_this(), "cellKinds", e_array(vec![])),
                     s_prop_assign(e_this(), "num_rows", e_int(0)),
                     s_if(
                         e_binop(e_this_prop("field_count"), BinOp::Eq, e_int(0)),
@@ -1015,7 +1050,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireValid", vec![])),
-                    s_expr(e_method_call(e_this(), "linkBump", vec![e_str("explicit_stmt_close")])),
+                    s_expr(e_method_call(e_this(), "countClose", vec![e_bool(true)])),
                     s_expr(e_method_call(e_this(), "linkBump", vec![e_str("com_stmt_close")])),
                     s_expr(e_method_call(e_this(), "release", vec![])),
                     s_prop_assign(e_this(), "closed", e_bool(true)),
@@ -1025,7 +1060,69 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
         .method(
             method("__destruct")
                 .body(vec![
+                    s_if(
+                        e_binop(e_not(e_this_prop("closed")), BinOp::And, e_binop(e_this_prop("stmt"), BinOp::GtEq, e_int(0))),
+                        vec![
+                            s_expr(e_method_call(e_this(), "countClose", vec![e_bool(false)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_expr(e_method_call(e_this(), "release", vec![])),
+                ]),
+        )
+        .method(
+            method("countClose")
+                .private()
+                .param("explicit", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("link"), BinOp::StrictEq, e_null()),
+                        vec![
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_this_prop("hasPending"), BinOp::And, e_not(e_this_prop("stored"))),
+                        vec![
+                            s_expr(e_method_call(e_this(), "linkStat", vec![e_str("flushed_ps_sets"), e_int(1), e_bool(true)])),
+                            s_assign("_rc", e_method_call(e_this(), "pendingRow", vec![])),
+                            s_while(e_binop(e_var("_rc"), BinOp::Eq, e_int(1)), vec![
+                                s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_server_ps"), e_int(1), e_bool(true)])),
+                                s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_fetched_from_client_ps_unbuffered"), e_int(1), e_bool(true)])),
+                                s_expr(e_method_call(e_this(), "linkStat", vec![e_str("rows_skipped_ps"), e_int(1), e_bool(true)])),
+                                s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
+                            ]),
+                            s_prop_assign(e_this(), "pendingStep", e_var("_rc")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_this_prop("field_count"), BinOp::Gt, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "linkStat", vec![e_str("implicit_free_result"), e_int(1), e_bool(true)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "linkStat", vec![e_ternary(e_var("explicit"), e_str("explicit_free_result"), e_str("implicit_free_result")), e_int(1), e_bool(false)])),
+                    s_if(
+                        e_binop(e_this_prop("executeCount"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "linkStat", vec![e_str("ps_prepared_never_executed"), e_int(1), e_bool(true)])),
+                        ],
+                        vec![
+                        (e_binop(e_this_prop("executeCount"), BinOp::Eq, e_int(1)), vec![
+                            s_expr(e_method_call(e_this(), "linkStat", vec![e_str("ps_prepared_once_executed"), e_int(1), e_bool(true)])),
+                        ]),
+                    ],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "linkStat", vec![e_ternary(e_var("explicit"), e_str("explicit_stmt_close"), e_str("implicit_stmt_close")), e_int(1), e_bool(false)])),
                 ]),
         )
         .method(
@@ -1244,7 +1341,17 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         s_array_push("_lens", e_call("elephc_pdo_column_len", vec![e_this_prop("stmt"), e_var("_i")])),
                         s_array_push("_decimals", e_call("elephc_pdo_column_precision", vec![e_this_prop("stmt"), e_var("_i")])),
                     ]),
-                    s_return(e_static_call("mysqli_result", "__elephcFromDrain", vec![e_var("cells"), e_var("rowCount"), e_var("_names"), e_var("_tables"), e_var("_natives"), e_var("_flags"), e_var("_lens"), e_var("_decimals")])),
+                    s_assign("_result", e_static_call("mysqli_result", "__elephcFromDrain", vec![e_var("cells"), e_var("rowCount"), e_var("_names"), e_var("_tables"), e_var("_natives"), e_var("_flags"), e_var("_lens"), e_var("_decimals")])),
+                    s_assign("_statLink", e_this_prop("link")),
+                    s_if(
+                        e_binop(e_var("_statLink"), BinOp::StrictNotEq, e_null()),
+                        vec![
+                            s_expr(e_method_call(e_var("_result"), "__elephcCountFor", vec![e_var("_statLink"), e_bool(true)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_var("_result")),
                 ]),
         )
         .method(
@@ -1263,6 +1370,25 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("linkStat")
+                .private()
+                .param("key", TypeExpr::Str)
+                .param("by", TypeExpr::Int)
+                .param("connection", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("_link", e_this_prop("link")),
+                    s_if(
+                        e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
+                        vec![
+                            s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_var("key"), e_var("by"), e_var("connection")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                 ]),
         )
         .method(
@@ -1302,6 +1428,28 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
         )
         .method(
             method("columnValue")
+                .private()
+                .param("index", TypeExpr::Int)
+                .returns(t_mixed())
+                .body(vec![
+                    s_if(
+                        e_binop(e_call("count", vec![e_this_prop("cellKinds")]), BinOp::NotEq, e_this_prop("field_count")),
+                        vec![
+                            s_prop_assign(e_this(), "cellKinds", e_array(vec![])),
+                            s_prop_assign(e_this(), "cellLengths", e_array(vec![])),
+                            s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
+                                s_prop_array_push(e_this(), "cellKinds", e_static_call("mysqli_result", "__elephcCellKind", vec![e_call("elephc_pdo_column_native_type", vec![e_this_prop("stmt"), e_var("_i")]), e_call("elephc_pdo_column_flags", vec![e_this_prop("stmt"), e_var("_i")]), e_bool(false), e_bool(true)])),
+                                s_prop_array_push(e_this(), "cellLengths", e_call("elephc_pdo_column_len", vec![e_this_prop("stmt"), e_var("_i")])),
+                            ]),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_static_call("mysqli_result", "__elephcConvertCell", vec![e_method_call(e_this(), "rawColumnValue", vec![e_var("index")]), e_cast(CastType::Int, e_index(e_this_prop("cellKinds"), e_var("index"))), e_cast(CastType::Int, e_index(e_this_prop("cellLengths"), e_var("index")))])),
+                ]),
+        )
+        .method(
+            method("rawColumnValue")
                 .private()
                 .param("index", TypeExpr::Int)
                 .returns(t_mixed())

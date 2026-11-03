@@ -109,10 +109,16 @@ php's `ValueError`s.
 
 Text-protocol (`query()`) values are strings, like php; with
 `MYSQLI_OPT_INT_AND_FLOAT_NATIVE` integer and float columns come back as PHP
-`int` / `float`. Prepared-statement values keep their native types.
+`int` / `float`. Prepared-statement values keep their native types. Cells are
+decoded the way mysqlnd decodes them: a `BIT` column reads as its decimal
+string in the text protocol and as an `int` in the binary protocol (or with
+`MYSQLI_OPT_INT_AND_FLOAT_NATIVE`); `ZEROFILL` integers (`YEAR` included) stay
+zero-padded strings in both protocols, even with the native option; and
+unsigned values past `PHP_INT_MAX` stay decimal strings.
 
 Field metadata comes from the wire protocol: `name`, `table`, `type`
-(`MYSQLI_TYPE_*`), `flags`, `length`, and `decimals` are real; `orgname` and
+(`MYSQLI_TYPE_*`), `flags`, `length`, and `decimals` are real (`flags`
+includes the `MYSQLI_NUM_FLAG` mysqlnd adds to numeric columns); `orgname` and
 `orgtable` mirror `name` and `table`; `max_length` is `0` (as in mysqlnd); the
 metadata the bridge does not expose (`def`, `db`, `charsetnr`) reads `0` / `""`.
 
@@ -314,9 +320,18 @@ the connection, so a later `real_connect()` on the same object starts clean.
   `store_result()` / `get_result()` or one per fetch, and `next_result()`
   reads the next set — so the counters move at the same calls as php's. The
   `mem_*` counters are `"0"`, as in php with its default
-  `mysqlnd.collect_memory_statistics=Off`. The connection-level counters
-  (connections, closes, `COM_*` commands, `no_index_used` / `bad_index_used`,
-  result-set and buffered-row counts) are tracked too.
+  `mysqlnd.collect_memory_statistics=Off`. The decode-time and lifecycle
+  counters follow mysqlnd too: `proto_text_fetched_*` /
+  `proto_binary_fetched_*` (charged per decoded field when a row is handed to
+  the program, through php-src's shifted type-to-name tables) and
+  `bytes_received_real_data_*`, buffered / unbuffered / flushed set counts,
+  `rows_fetched_from_*` / `rows_buffered_from_client_*` / `rows_skipped_*`,
+  `explicit_free_result` / `implicit_free_result`, statement
+  `explicit_stmt_close` / `implicit_stmt_close`, `stmt_close_*_executed`,
+  `result_set_queries` / `non_result_set_queries` with the index flags, and the
+  connection-level counters (connections, closes, `COM_*` commands). The
+  counters mysqlnd records only process-wide (buffered client-side row fetches,
+  statement closes) move only in `mysqli_get_client_stats()`, as in php.
 - `debug()` returns `true`: mysqlnd's client-side debug tracing is compiled out
   of release builds (`MYSQLI_DEBUG_TRACE_ENABLED` is `0`), where php does the same.
 
@@ -413,10 +428,6 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
 - **Property writes stick**: the public `mysqli` / `mysqli_result` /
   `mysqli_stmt` properties are refreshed after operations but are not
   write-barriered; assigning to them is not rejected.
-- **Decode-time statistics**: the row-decoding counters
-  (`proto_text_fetched_*`, `proto_binary_fetched_*`,
-  `bytes_received_real_data_*`) stay `"0"`, and the result-set, free-result,
-  and statement-lifecycle counters are approximations of mysqlnd's.
 - **`insert_id` / `affected_rows` / `num_rows` are `int|string`**, as php
   declares them. elephc type-checks calls statically, so passing one straight
   to an `int` parameter needs an `(int)` cast where php would coerce at run

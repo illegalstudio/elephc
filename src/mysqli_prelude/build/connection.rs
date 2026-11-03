@@ -1406,10 +1406,10 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_assign("_columnCount", e_call("elephc_pdo_column_count", vec![e_var("_stmt")])),
+                    s_expr(e_method_call(e_this(), "__elephcHeaderStats", vec![e_var("_columnCount"), e_bool(true)])),
                     s_if(
                         e_binop(e_var("_columnCount"), BinOp::Eq, e_int(0)),
                         vec![
-                            s_expr(e_method_call(e_this(), "bump", vec![e_str("non_result_set_queries")])),
                             s_expr(e_method_call(e_this(), "refreshStatus", vec![])),
                             s_prop_assign(e_this(), "field_count", e_int(0)),
                             s_expr(e_call("elephc_pdo_finalize", vec![e_var("_stmt")])),
@@ -1976,12 +1976,10 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_binop(e_var("_status"), BinOp::BitAnd, e_int(16)), BinOp::NotEq, e_int(0)),
                         vec![
-                            s_expr(e_method_call(e_this(), "bump", vec![e_str("bad_index_used")])),
                             s_assign("_index", e_str("Bad index")),
                         ],
                         vec![
                         (e_binop(e_binop(e_var("_status"), BinOp::BitAnd, e_int(32)), BinOp::NotEq, e_int(0)), vec![
-                            s_expr(e_method_call(e_this(), "bump", vec![e_str("no_index_used")])),
                             s_assign("_index", e_str("No index")),
                         ]),
                     ],
@@ -2053,6 +2051,86 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_assign("_client", e_static_prop("mysqli", "clientStats")),
                     s_array_assign("_client", e_var("key"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_var("_client"), e_var("key")), e_int(0))), BinOp::Add, e_int(1))),
                     s_static_prop_assign("mysqli", "clientStats", e_var("_client")),
+                ]),
+        )
+        .method(
+            method("__elephcStat")
+                .private()
+                .param("key", TypeExpr::Str)
+                .param("by", TypeExpr::Int)
+                .param("connection", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("by"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_var("connection"),
+                        vec![
+                            s_prop_array_assign(e_this(), "connStats", e_var("key"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_this_prop("connStats"), e_var("key")), e_int(0))), BinOp::Add, e_var("by"))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_client", e_static_prop("mysqli", "clientStats")),
+                    s_array_assign("_client", e_var("key"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_var("_client"), e_var("key")), e_int(0))), BinOp::Add, e_var("by"))),
+                    s_static_prop_assign("mysqli", "clientStats", e_var("_client")),
+                ]),
+        )
+        .method(
+            method("__elephcHeaderStats")
+                .private()
+                .param("cols", TypeExpr::Int)
+                .param("normal", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("cols"), BinOp::Gt, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "bump", vec![e_str("result_set_queries")])),
+                            s_assign("_status", e_call("elephc_pdo_mysql_server_status", vec![e_this_prop("conn")])),
+                            s_if(
+                                e_binop(e_binop(e_var("_status"), BinOp::BitAnd, e_int(16)), BinOp::NotEq, e_int(0)),
+                                vec![
+                                    s_expr(e_method_call(e_this(), "bump", vec![e_str("bad_index_used")])),
+                                ],
+                                vec![
+                                (e_binop(e_binop(e_var("_status"), BinOp::BitAnd, e_int(32)), BinOp::NotEq, e_int(0)), vec![
+                                    s_expr(e_method_call(e_this(), "bump", vec![e_str("no_index_used")])),
+                                ]),
+                                (e_binop(e_binop(e_var("_status"), BinOp::BitAnd, e_int(2048)), BinOp::NotEq, e_int(0)), vec![
+                                    s_expr(e_method_call(e_this(), "bump", vec![e_str("slow_queries")])),
+                                ]),
+                            ],
+                                None,
+                            ),
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "bump", vec![e_str("non_result_set_queries")])),
+                    s_if(
+                        e_var("normal"),
+                        vec![
+                            s_assign("_affected", e_call("elephc_pdo_changes", vec![e_this_prop("conn")])),
+                            s_if(
+                                e_binop(e_var("_affected"), BinOp::Gt, e_int(0)),
+                                vec![
+                                    s_expr(e_method_call(e_this(), "__elephcStat", vec![e_str("rows_affected_normal"), e_var("_affected"), e_bool(true)])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                        ],
+                        vec![],
+                        None,
+                    ),
                 ]),
         )
         .method(
@@ -2626,10 +2704,10 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_assign("_columnCount", e_call("elephc_pdo_column_count", vec![e_var("_stmt")])),
+                    s_expr(e_method_call(e_this(), "__elephcHeaderStats", vec![e_var("_columnCount"), e_bool(true)])),
                     s_if(
                         e_binop(e_var("_columnCount"), BinOp::Eq, e_int(0)),
                         vec![
-                            s_expr(e_method_call(e_this(), "bump", vec![e_str("non_result_set_queries")])),
                             s_expr(e_method_call(e_this(), "refreshStatus", vec![])),
                             s_prop_assign(e_this(), "field_count", e_int(0)),
                             s_expr(e_call("elephc_pdo_finalize", vec![e_var("_stmt")])),
@@ -2675,10 +2753,10 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Void)
                 .body(vec![
                     s_assign("_cols", e_call("elephc_pdo_column_count", vec![e_this_prop("liveStmt")])),
+                    s_expr(e_method_call(e_this(), "__elephcHeaderStats", vec![e_var("_cols"), e_bool(true)])),
                     s_if(
                         e_binop(e_var("_cols"), BinOp::Eq, e_int(0)),
                         vec![
-                            s_expr(e_method_call(e_this(), "bump", vec![e_str("non_result_set_queries")])),
                             s_expr(e_method_call(e_this(), "refreshStatus", vec![])),
                             s_prop_assign(e_this(), "field_count", e_int(0)),
                             s_expr(e_method_call(e_this(), "clearError", vec![])),
@@ -2755,7 +2833,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         s_array_push("_flags", e_call("elephc_pdo_column_flags", vec![e_var("_stmt"), e_var("_i")])),
                         s_array_push("_lens", e_call("elephc_pdo_column_len", vec![e_var("_stmt"), e_var("_i")])),
                         s_array_push("_decimals", e_call("elephc_pdo_column_precision", vec![e_var("_stmt"), e_var("_i")])),
-                        s_array_push("_kinds", e_ternary(e_this_prop("optIntAndFloatNative"), e_method_call(e_this(), "nativeKind", vec![e_var("_native")]), e_int(0))),
+                        s_array_push("_kinds", e_static_call("mysqli_result", "__elephcCellKind", vec![e_var("_native"), e_cast(CastType::Int, e_index(e_var("_flags"), e_var("_i"))), e_this_prop("optIntAndFloatNative"), e_bool(false)])),
                     ]),
                     s_expr(e_method_call(e_this(), "bump", vec![e_str("unbuffered_sets")])),
                     s_prop_assign(e_this(), "affected_rows", e_neg(e_int(1))),
@@ -2780,7 +2858,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_prop_array_assign(e_this(), "connStats", e_str("rows_fetched_from_server_normal"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_this_prop("connStats"), e_str("rows_fetched_from_server_normal")), e_int(0))), BinOp::Add, e_var("rows"))),
                     s_prop_assign(e_this(), "affected_rows", e_var("rows")),
                     s_expr(e_method_call(e_this(), "finishSet", vec![])),
                 ]),
@@ -2848,29 +2925,14 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     ]),
                     s_assign("_native", e_array(vec![])),
                     s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("cols"))), Some(s_expr(e_post_inc("_i"))), vec![
-                        s_array_push("_native", e_ternary(e_this_prop("optIntAndFloatNative"), e_method_call(e_this(), "nativeKind", vec![e_cast(CastType::String, e_index(e_var("_natives"), e_var("_i")))]), e_int(0))),
+                        s_array_push("_native", e_static_call("mysqli_result", "__elephcCellKind", vec![e_cast(CastType::String, e_index(e_var("_natives"), e_var("_i"))), e_cast(CastType::Int, e_index(e_var("_flags"), e_var("_i"))), e_this_prop("optIntAndFloatNative"), e_bool(false)])),
                     ]),
                     s_assign("_cells", e_array(vec![])),
                     s_assign("_rowCount", e_int(0)),
                     s_assign("_rc", e_ternary(e_binop(e_var("firstStep"), BinOp::Eq, e_int(2)), e_call("elephc_pdo_step", vec![e_var("stmt")]), e_var("firstStep"))),
                     s_while(e_binop(e_var("_rc"), BinOp::Eq, e_int(1)), vec![
                         s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("cols"))), Some(s_expr(e_post_inc("_i"))), vec![
-                            s_assign("_value", e_method_call(e_this(), "columnValue", vec![e_var("stmt"), e_var("_i")])),
-                            s_assign("_kind", e_cast(CastType::Int, e_index(e_var("_native"), e_var("_i")))),
-                            s_if(
-                                e_binop(e_binop(e_var("_value"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_var("_kind"), BinOp::Eq, e_int(1))),
-                                vec![
-                                    s_array_push("_cells", e_cast(CastType::Int, e_var("_value"))),
-                                ],
-                                vec![
-                                (e_binop(e_binop(e_var("_value"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_var("_kind"), BinOp::Eq, e_int(2))), vec![
-                                    s_array_push("_cells", e_cast(CastType::Float, e_var("_value"))),
-                                ]),
-                            ],
-                                Some(vec![
-                                s_array_push("_cells", e_var("_value")),
-                            ]),
-                            ),
+                            s_array_push("_cells", e_static_call("mysqli_result", "__elephcConvertCell", vec![e_method_call(e_this(), "columnValue", vec![e_var("stmt"), e_var("_i")]), e_cast(CastType::Int, e_index(e_var("_native"), e_var("_i"))), e_cast(CastType::Int, e_index(e_var("_lens"), e_var("_i")))])),
                         ]),
                         s_assign("_rowCount", e_binop(e_var("_rowCount"), BinOp::Add, e_int(1))),
                         s_assign("_rc", e_call("elephc_pdo_step", vec![e_var("stmt")])),
@@ -2884,42 +2946,18 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_expr(e_method_call(e_this(), "bump", vec![e_str("result_set_queries")])),
                     s_expr(e_method_call(e_this(), "bump", vec![e_str("buffered_sets")])),
-                    s_prop_array_assign(e_this(), "connStats", e_str("rows_fetched_from_server_normal"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_this_prop("connStats"), e_str("rows_fetched_from_server_normal")), e_int(0))), BinOp::Add, e_var("_rowCount"))),
-                    s_prop_array_assign(e_this(), "connStats", e_str("rows_buffered_from_client_normal"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_this_prop("connStats"), e_str("rows_buffered_from_client_normal")), e_int(0))), BinOp::Add, e_var("_rowCount"))),
+                    s_expr(e_method_call(e_this(), "__elephcStat", vec![e_str("rows_fetched_from_server_normal"), e_var("_rowCount"), e_bool(true)])),
+                    s_expr(e_method_call(e_this(), "__elephcStat", vec![e_str("rows_buffered_from_client_normal"), e_var("_rowCount"), e_bool(true)])),
                     s_prop_assign(e_this(), "affected_rows", e_var("_rowCount")),
                     s_prop_assign(e_this(), "insert_id", e_int(0)),
                     s_prop_assign(e_this(), "field_count", e_var("cols")),
                     s_prop_assign(e_this(), "warning_count", e_call("elephc_pdo_warning_count", vec![e_this_prop("conn")])),
                     s_prop_assign(e_this(), "info", e_null()),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
-                    s_return(e_static_call("mysqli_result", "__elephcFromDrain", vec![e_var("_cells"), e_var("_rowCount"), e_var("_names"), e_var("_tables"), e_var("_natives"), e_var("_flags"), e_var("_lens"), e_var("_decimals")])),
-                ]),
-        )
-        .method(
-            method("nativeKind")
-                .private()
-                .param("native", TypeExpr::Str)
-                .returns(TypeExpr::Int)
-                .body(vec![
-                    s_if(
-                        e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_var("native"), BinOp::StrictEq, e_str("TINY")), BinOp::Or, e_binop(e_var("native"), BinOp::StrictEq, e_str("SHORT"))), BinOp::Or, e_binop(e_var("native"), BinOp::StrictEq, e_str("LONG"))), BinOp::Or, e_binop(e_var("native"), BinOp::StrictEq, e_str("LONGLONG"))), BinOp::Or, e_binop(e_var("native"), BinOp::StrictEq, e_str("INT24"))), BinOp::Or, e_binop(e_var("native"), BinOp::StrictEq, e_str("YEAR"))),
-                        vec![
-                            s_return(e_int(1)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_binop(e_var("native"), BinOp::StrictEq, e_str("FLOAT")), BinOp::Or, e_binop(e_var("native"), BinOp::StrictEq, e_str("DOUBLE"))),
-                        vec![
-                            s_return(e_int(2)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_return(e_int(0)),
+                    s_assign("_result", e_static_call("mysqli_result", "__elephcFromDrain", vec![e_var("_cells"), e_var("_rowCount"), e_var("_names"), e_var("_tables"), e_var("_natives"), e_var("_flags"), e_var("_lens"), e_var("_decimals")])),
+                    s_expr(e_method_call(e_var("_result"), "__elephcCountFor", vec![e_this(), e_bool(false)])),
+                    s_return(e_var("_result")),
                 ]),
         )
         .method(

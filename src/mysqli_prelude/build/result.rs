@@ -15,11 +15,13 @@ use crate::parser::ast::{BinOp, CastType, TypeExpr, Stmt};
 use crate::synthetic_class::{
     class,
     e_array,
+    e_array_assoc,
     e_assign,
     e_binop,
     e_bool,
     e_call,
     e_cast,
+    e_const,
     e_dyn_prop,
     e_index,
     e_int,
@@ -28,8 +30,10 @@ use crate::synthetic_class::{
     e_new,
     e_not,
     e_null,
+    e_null_coalesce,
     e_post_inc,
     e_prop,
+    e_static_call,
     e_static_prop,
     e_str,
     e_ternary,
@@ -41,9 +45,11 @@ use crate::synthetic_class::{
     s_array_push,
     s_assign,
     s_break,
+    s_continue,
     s_expr,
     s_for,
     s_if,
+    s_prop_array_push,
     s_prop_assign,
     s_return,
     s_return_void,
@@ -81,6 +87,10 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
         .private_prop("streamLink", t_nullable(t_class("mysqli")), Some(e_null()))
         .private_prop("streamKinds", t_array(), Some(e_array(vec![])))
         .private_prop("streamRows", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("statLink", t_nullable(t_class("mysqli")), Some(e_null()))
+        .private_prop("statBinary", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("statKeys", t_array(), Some(e_array(vec![])))
+        .private_prop("statFreed", TypeExpr::Bool, Some(e_bool(false)))
         .method(
             method("__construct")
                 .param("mysql", t_class("mysqli"))
@@ -184,6 +194,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_var("_result"), "streamStep", e_var("firstStep")),
                     s_prop_assign(e_var("_result"), "streamLink", e_var("link")),
                     s_prop_assign(e_var("_result"), "streamKinds", e_var("kinds")),
+                    s_prop_assign(e_var("_result"), "statLink", e_var("link")),
                     s_return(e_var("_result")),
                 ]),
         )
@@ -211,6 +222,284 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_var("target"), "streamKinds", e_this_prop("streamKinds")),
                     s_prop_assign(e_this(), "streamStmt", e_neg(e_int(1))),
                     s_prop_assign(e_this(), "streamLink", e_null()),
+                ]),
+        )
+        .method(
+            method("__elephcCellKind")
+                .private()
+                .static_()
+                .param("native", TypeExpr::Str)
+                .param("flags", TypeExpr::Int)
+                .param("intFloatNative", TypeExpr::Bool)
+                .param("binary", TypeExpr::Bool)
+                .returns(TypeExpr::Int)
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("native"), BinOp::StrictEq, e_str("BIT")),
+                        vec![
+                            s_return(e_ternary(e_binop(e_var("binary"), BinOp::Or, e_var("intFloatNative")), e_int(3), e_int(4))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_integer", e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_var("native"), BinOp::StrictEq, e_str("TINY")), BinOp::Or, e_binop(e_var("native"), BinOp::StrictEq, e_str("SHORT"))), BinOp::Or, e_binop(e_var("native"), BinOp::StrictEq, e_str("LONG"))), BinOp::Or, e_binop(e_var("native"), BinOp::StrictEq, e_str("LONGLONG"))), BinOp::Or, e_binop(e_var("native"), BinOp::StrictEq, e_str("INT24"))), BinOp::Or, e_binop(e_var("native"), BinOp::StrictEq, e_str("YEAR")))),
+                    s_if(
+                        e_binop(e_var("_integer"), BinOp::And, e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(64)), BinOp::NotEq, e_int(0))),
+                        vec![
+                            s_return(e_ternary(e_var("binary"), e_int(5), e_int(0))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("binary"), BinOp::Or, e_not(e_var("intFloatNative"))),
+                        vec![
+                            s_return(e_int(0)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_var("_integer"),
+                        vec![
+                            s_return(e_int(1)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_binop(e_var("native"), BinOp::StrictEq, e_str("FLOAT")), BinOp::Or, e_binop(e_var("native"), BinOp::StrictEq, e_str("DOUBLE"))),
+                        vec![
+                            s_return(e_int(2)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_int(0)),
+                ]),
+        )
+        .method(
+            method("__elephcConvertCell")
+                .private()
+                .static_()
+                .param("value", t_mixed())
+                .param("kind", TypeExpr::Int)
+                .param("length", TypeExpr::Int)
+                .returns(t_mixed())
+                .body(vec![
+                    s_if(
+                        e_binop(e_binop(e_var("value"), BinOp::StrictEq, e_null()), BinOp::Or, e_binop(e_var("kind"), BinOp::Eq, e_int(0))),
+                        vec![
+                            s_return(e_var("value")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("kind"), BinOp::Eq, e_int(1)),
+                        vec![
+                            s_assign("_int", e_cast(CastType::Int, e_var("value"))),
+                            s_return(e_ternary(e_binop(e_cast(CastType::String, e_var("_int")), BinOp::StrictEq, e_cast(CastType::String, e_var("value"))), e_var("_int"), e_var("value"))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("kind"), BinOp::Eq, e_int(2)),
+                        vec![
+                            s_return(e_cast(CastType::Float, e_var("value"))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("kind"), BinOp::Eq, e_int(5)),
+                        vec![
+                            s_return(e_call("str_pad", vec![e_cast(CastType::String, e_var("value")), e_var("length"), e_str("0"), e_const("STR_PAD_LEFT")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_bytes", e_cast(CastType::String, e_var("value"))),
+                    s_assign("_bits", e_int(0)),
+                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_call("strlen", vec![e_var("_bytes")]))), Some(s_expr(e_post_inc("_i"))), vec![
+                        s_assign("_bits", e_binop(e_binop(e_var("_bits"), BinOp::ShiftLeft, e_int(8)), BinOp::BitOr, e_call("ord", vec![e_index(e_var("_bytes"), e_var("_i"))]))),
+                    ]),
+                    s_if(
+                        e_binop(e_var("_bits"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_assign("_half", e_binop(e_binop(e_var("_bits"), BinOp::ShiftRight, e_int(1)), BinOp::BitAnd, e_int(9223372036854775807))),
+                            s_assign("_tens", e_call("intdiv", vec![e_var("_half"), e_int(5)])),
+                            s_assign("_unit", e_binop(e_binop(e_int(2), BinOp::Mul, e_binop(e_var("_half"), BinOp::Sub, e_binop(e_var("_tens"), BinOp::Mul, e_int(5)))), BinOp::Add, e_binop(e_var("_bits"), BinOp::BitAnd, e_int(1)))),
+                            s_return(e_binop(e_cast(CastType::String, e_var("_tens")), BinOp::Concat, e_cast(CastType::String, e_var("_unit")))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_ternary(e_binop(e_var("kind"), BinOp::Eq, e_int(3)), e_var("_bits"), e_cast(CastType::String, e_var("_bits")))),
+                ]),
+        )
+        .method(
+            method("__elephcCountFor")
+                .private()
+                .param("link", t_class("mysqli"))
+                .param("binary", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "statLink", e_var("link")),
+                    s_prop_assign(e_this(), "statBinary", e_var("binary")),
+                ]),
+        )
+        .method(
+            method("statKey")
+                .private()
+                .param("index", TypeExpr::Int)
+                .returns(TypeExpr::Str)
+                .body(vec![
+                    s_if(
+                        e_binop(e_call("count", vec![e_this_prop("statKeys")]), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_assign("_text", e_array_assoc(vec![(e_str("DECIMAL"), e_str("proto_text_fetched_decimal")), (e_str("TINY"), e_str("proto_text_fetched_tinyint")), (e_str("SHORT"), e_str("proto_text_fetched_short")), (e_str("LONG"), e_str("proto_text_fetched_int")), (e_str("FLOAT"), e_str("proto_text_fetched_float")), (e_str("DOUBLE"), e_str("proto_text_fetched_double")), (e_str("NULL"), e_str("proto_text_fetched_null")), (e_str("TIMESTAMP"), e_str("proto_text_fetched_timestamp")), (e_str("LONGLONG"), e_str("proto_text_fetched_bigint")), (e_str("INT24"), e_str("proto_text_fetched_int24")), (e_str("DATE"), e_str("proto_text_fetched_date")), (e_str("TIME"), e_str("proto_text_fetched_time")), (e_str("DATETIME"), e_str("proto_text_fetched_datetime")), (e_str("YEAR"), e_str("proto_text_fetched_year")), (e_str("NEWDATE"), e_str("proto_text_fetched_date")), (e_str("VARCHAR"), e_str("proto_text_fetched_string")), (e_str("BIT"), e_str("proto_text_fetched_bit")), (e_str("NEWDECIMAL"), e_str("proto_text_fetched_decimal")), (e_str("ENUM"), e_str("proto_text_fetched_set")), (e_str("SET"), e_str("proto_text_fetched_geometry")), (e_str("JSON"), e_str("proto_text_fetched_blob")), (e_str("TINY_BLOB"), e_str("proto_text_fetched_enum")), (e_str("MEDIUM_BLOB"), e_str("proto_text_fetched_enum")), (e_str("LONG_BLOB"), e_str("proto_text_fetched_enum")), (e_str("BLOB"), e_str("proto_text_fetched_enum")), (e_str("VAR_STRING"), e_str("proto_text_fetched_string")), (e_str("STRING"), e_str("proto_text_fetched_string")), (e_str("GEOMETRY"), e_str("proto_text_fetched_other"))])),
+                            s_assign("_binary", e_array_assoc(vec![(e_str("DECIMAL"), e_str("proto_binary_fetched_float")), (e_str("TINY"), e_str("proto_binary_fetched_short")), (e_str("SHORT"), e_str("proto_binary_fetched_int24")), (e_str("LONG"), e_str("proto_binary_fetched_bigint")), (e_str("FLOAT"), e_str("proto_binary_fetched_double")), (e_str("DOUBLE"), e_str("proto_binary_fetched_date")), (e_str("NULL"), e_str("proto_binary_fetched_bit")), (e_str("TIMESTAMP"), e_str("proto_binary_fetched_string")), (e_str("LONGLONG"), e_str("proto_binary_fetched_decimal")), (e_str("INT24"), e_str("proto_binary_fetched_int")), (e_str("DATE"), e_str("proto_binary_fetched_year")), (e_str("TIME"), e_str("proto_binary_fetched_datetime")), (e_str("DATETIME"), e_str("proto_binary_fetched_timestamp")), (e_str("YEAR"), e_str("proto_binary_fetched_time")), (e_str("NEWDATE"), e_str("proto_binary_fetched_year")), (e_str("VARCHAR"), e_str("proto_binary_fetched_json")), (e_str("BIT"), e_str("proto_binary_fetched_tinyint")), (e_str("NEWDECIMAL"), e_str("proto_binary_fetched_float")), (e_str("ENUM"), e_str("proto_binary_fetched_enum")), (e_str("SET"), e_str("proto_binary_fetched_set")), (e_str("TINY_BLOB"), e_str("proto_binary_fetched_blob")), (e_str("MEDIUM_BLOB"), e_str("proto_binary_fetched_blob")), (e_str("LONG_BLOB"), e_str("proto_binary_fetched_blob")), (e_str("BLOB"), e_str("proto_binary_fetched_blob")), (e_str("VAR_STRING"), e_str("proto_binary_fetched_json")), (e_str("STRING"), e_str("proto_binary_fetched_json")), (e_str("GEOMETRY"), e_str("proto_binary_fetched_geometry"))])),
+                            s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
+                                s_assign("_native", e_cast(CastType::String, e_index(e_this_prop("metaNativeTypes"), e_var("_i")))),
+                                s_prop_array_push(e_this(), "statKeys", e_ternary(e_this_prop("statBinary"), e_null_coalesce(e_index(e_var("_binary"), e_var("_native")), e_str("proto_binary_fetched_other")), e_null_coalesce(e_index(e_var("_text"), e_var("_native")), e_str("proto_binary_fetched_null")))),
+                            ]),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_cast(CastType::String, e_index(e_this_prop("statKeys"), e_var("index")))),
+                ]),
+        )
+        .method(
+            method("statBytes")
+                .private()
+                .param("index", TypeExpr::Int)
+                .param("value", t_mixed())
+                .returns(TypeExpr::Int)
+                .body(vec![
+                    s_assign("_native", e_cast(CastType::String, e_index(e_this_prop("metaNativeTypes"), e_var("index")))),
+                    s_if(
+                        e_binop(e_var("_native"), BinOp::StrictEq, e_str("BIT")),
+                        vec![
+                            s_assign("_bytes", e_call("intdiv", vec![e_binop(e_cast(CastType::Int, e_index(e_this_prop("metaLens"), e_var("index"))), BinOp::Add, e_int(7)), e_int(8)])),
+                            s_return(e_ternary(e_this_prop("statBinary"), e_binop(e_var("_bytes"), BinOp::Add, e_int(1)), e_var("_bytes"))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_not(e_this_prop("statBinary")), BinOp::Or, e_call("is_string", vec![e_var("value")])),
+                        vec![
+                            s_return(e_call("strlen", vec![e_cast(CastType::String, e_var("value"))])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("_native"), BinOp::StrictEq, e_str("TINY")),
+                        vec![
+                            s_return(e_int(1)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_binop(e_var("_native"), BinOp::StrictEq, e_str("SHORT")), BinOp::Or, e_binop(e_var("_native"), BinOp::StrictEq, e_str("YEAR"))),
+                        vec![
+                            s_return(e_int(2)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_binop(e_binop(e_var("_native"), BinOp::StrictEq, e_str("INT24")), BinOp::Or, e_binop(e_var("_native"), BinOp::StrictEq, e_str("LONG"))), BinOp::Or, e_binop(e_var("_native"), BinOp::StrictEq, e_str("FLOAT"))),
+                        vec![
+                            s_return(e_int(4)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_binop(e_var("_native"), BinOp::StrictEq, e_str("LONGLONG")), BinOp::Or, e_binop(e_var("_native"), BinOp::StrictEq, e_str("DOUBLE"))),
+                        vec![
+                            s_return(e_int(8)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_call("strlen", vec![e_cast(CastType::String, e_var("value"))])),
+                ]),
+        )
+        .method(
+            method("countRow")
+                .private()
+                .param("row", t_array())
+                .param("buffered", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("_link", e_this_prop("statLink")),
+                    s_if(
+                        e_binop(e_var("_link"), BinOp::StrictEq, e_null()),
+                        vec![
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_var("buffered"),
+                        vec![
+                            s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_ternary(e_this_prop("statBinary"), e_str("rows_fetched_from_client_ps_buffered"), e_str("rows_fetched_from_client_normal_buffered")), e_int(1), e_bool(false)])),
+                        ],
+                        vec![],
+                        Some(vec![
+                        s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("rows_fetched_from_server_normal"), e_int(1), e_bool(true)])),
+                        s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("rows_fetched_from_client_normal_unbuffered"), e_int(1), e_bool(true)])),
+                    ]),
+                    ),
+                    s_assign("_bytes", e_int(0)),
+                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
+                        s_assign("_value", e_index(e_var("row"), e_var("_i"))),
+                        s_if(
+                            e_binop(e_var("_value"), BinOp::StrictEq, e_null()),
+                            vec![
+                                s_if(
+                                    e_this_prop("statBinary"),
+                                    vec![
+                                        s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("proto_binary_fetched_bit"), e_int(1), e_bool(true)])),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_continue(1),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_method_call(e_this(), "statKey", vec![e_var("_i")]), e_int(1), e_bool(true)])),
+                        s_assign("_bytes", e_binop(e_var("_bytes"), BinOp::Add, e_method_call(e_this(), "statBytes", vec![e_var("_i"), e_var("_value")]))),
+                    ]),
+                    s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_ternary(e_this_prop("statBinary"), e_str("bytes_received_real_data_ps"), e_str("bytes_received_real_data_normal")), e_var("_bytes"), e_bool(true)])),
+                ]),
+        )
+        .method(
+            method("countFree")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("_link", e_this_prop("statLink")),
+                    s_if(
+                        e_binop(e_binop(e_var("_link"), BinOp::StrictEq, e_null()), BinOp::Or, e_this_prop("statFreed")),
+                        vec![
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "statFreed", e_bool(true)),
+                    s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("explicit_free_result"), e_int(1), e_bool(true)])),
                 ]),
         )
         .method(
@@ -261,6 +550,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         ),
                     ]),
                     s_prop_assign(e_this(), "lengths", e_var("_lengths")),
+                    s_expr(e_method_call(e_this(), "countRow", vec![e_var("_row"), e_bool(true)])),
                     s_return(e_var("_row")),
                 ]),
         )
@@ -577,6 +867,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Void)
                 .body(vec![
                     s_expr(e_method_call(e_this(), "discardStream", vec![])),
+                    s_expr(e_method_call(e_this(), "countFree", vec![])),
                     s_prop_assign(e_this(), "cells", e_array(vec![])),
                     s_prop_assign(e_this(), "rowCount", e_int(0)),
                     s_prop_assign(e_this(), "num_rows", e_int(0)),
@@ -609,6 +900,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
             method("__destruct")
                 .body(vec![
                     s_expr(e_method_call(e_this(), "discardStream", vec![])),
+                    s_expr(e_method_call(e_this(), "countFree", vec![])),
                 ]),
         )
         .method(
@@ -638,20 +930,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_assign("_row", e_array(vec![])),
                     s_assign("_lengths", e_array(vec![])),
                     s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_this_prop("field_count"))), Some(s_expr(e_post_inc("_i"))), vec![
-                        s_assign("_value", e_method_call(e_this(), "columnValue", vec![e_var("_i")])),
-                        s_assign("_kind", e_cast(CastType::Int, e_index(e_this_prop("streamKinds"), e_var("_i")))),
-                        s_if(
-                            e_binop(e_binop(e_var("_value"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_var("_kind"), BinOp::Eq, e_int(1))),
-                            vec![
-                                s_assign("_value", e_cast(CastType::Int, e_var("_value"))),
-                            ],
-                            vec![
-                            (e_binop(e_binop(e_var("_value"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_var("_kind"), BinOp::Eq, e_int(2))), vec![
-                                s_assign("_value", e_cast(CastType::Float, e_var("_value"))),
-                            ]),
-                        ],
-                            None,
-                        ),
+                        s_assign("_value", e_static_call("mysqli_result", "__elephcConvertCell", vec![e_method_call(e_this(), "columnValue", vec![e_var("_i")]), e_cast(CastType::Int, e_index(e_this_prop("streamKinds"), e_var("_i"))), e_cast(CastType::Int, e_index(e_this_prop("metaLens"), e_var("_i")))])),
                         s_array_push("_row", e_var("_value")),
                         s_if(
                             e_binop(e_var("_value"), BinOp::StrictEq, e_null()),
@@ -667,6 +946,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_this(), "streamRows", e_binop(e_this_prop("streamRows"), BinOp::Add, e_int(1))),
                     s_prop_assign(e_this(), "streamStep", e_int(2)),
                     s_prop_assign(e_this(), "lengths", e_var("_lengths")),
+                    s_expr(e_method_call(e_this(), "countRow", vec![e_var("_row"), e_bool(false)])),
                     s_return(e_var("_row")),
                 ]),
         )
@@ -679,6 +959,15 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         e_binop(e_this_prop("streamStmt"), BinOp::Lt, e_int(0)),
                         vec![
                             s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_link", e_this_prop("statLink")),
+                    s_if(
+                        e_binop(e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_this_prop("streamStep"), BinOp::NotEq, e_int(0))),
+                        vec![
+                            s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("flushed_normal_sets"), e_int(1), e_bool(true)])),
                         ],
                         vec![],
                         None,
@@ -702,6 +991,16 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         ),
                         s_prop_assign(e_this(), "streamRows", e_binop(e_this_prop("streamRows"), BinOp::Add, e_int(1))),
                         s_prop_assign(e_this(), "streamStep", e_int(2)),
+                        s_if(
+                            e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
+                            vec![
+                                s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("rows_fetched_from_server_normal"), e_int(1), e_bool(true)])),
+                                s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("rows_fetched_from_client_normal_unbuffered"), e_int(1), e_bool(true)])),
+                                s_expr(e_method_call(e_var("_link"), "__elephcStat", vec![e_str("rows_skipped_normal"), e_int(1), e_bool(true)])),
+                            ],
+                            vec![],
+                            None,
+                        ),
                     ]),
                     s_expr(e_method_call(e_this(), "endStream", vec![])),
                 ]),
@@ -793,7 +1092,17 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("max_length")), e_int(0))),
                     s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("length")), e_cast(CastType::Int, e_index(e_this_prop("metaLens"), e_var("index"))))),
                     s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("charsetnr")), e_int(0))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("flags")), e_cast(CastType::Int, e_index(e_this_prop("metaFlags"), e_var("index"))))),
+                    s_assign("_flags", e_cast(CastType::Int, e_index(e_this_prop("metaFlags"), e_var("index")))),
+                    s_assign("_length", e_cast(CastType::Int, e_index(e_this_prop("metaLens"), e_var("index")))),
+                    s_if(
+                        e_binop(e_binop(e_binop(e_var("_type"), BinOp::LtEq, e_int(9)), BinOp::And, e_binop(e_binop(e_binop(e_var("_type"), BinOp::NotEq, e_int(7)), BinOp::Or, e_binop(e_var("_length"), BinOp::Eq, e_int(14))), BinOp::Or, e_binop(e_var("_length"), BinOp::Eq, e_int(8)))), BinOp::Or, e_binop(e_var("_type"), BinOp::Eq, e_int(13))),
+                        vec![
+                            s_assign("_flags", e_binop(e_var("_flags"), BinOp::BitOr, e_int(32768))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("flags")), e_var("_flags"))),
                     s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("type")), e_var("_type"))),
                     s_expr(e_assign(e_dyn_prop(e_var("_field"), e_str("decimals")), e_cast(CastType::Int, e_index(e_this_prop("metaDecimals"), e_var("index"))))),
                     s_return(e_var("_field")),

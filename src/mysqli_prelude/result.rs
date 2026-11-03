@@ -65,6 +65,15 @@ class mysqli_result implements IteratorAggregate {
     private array $streamKinds = [];
     private int $streamRows = 0;
 
+    // mysqlnd statistics: the link the rows are counted on (null: not counted),
+    // whether they arrived in the binary protocol (a statement's get_result()),
+    // the per-column statistic each decoded field charges, and whether the
+    // result was already freed (counted once).
+    private ?mysqli $statLink = null;
+    private bool $statBinary = false;
+    private array $statKeys = [];
+    private bool $statFreed = false;
+
     // php: `new mysqli_result($mysql, $mode)` takes over the connection's
     // pending result set exactly like store_result() / use_result().
     public function __construct(mysqli $mysql, int $result_mode = 0) {
@@ -124,6 +133,7 @@ class mysqli_result implements IteratorAggregate {
         $_result->streamStep = $firstStep;
         $_result->streamLink = $link;
         $_result->streamKinds = $kinds;
+        $_result->statLink = $link;
         return $_result;
     }
 
@@ -148,6 +158,207 @@ class mysqli_result implements IteratorAggregate {
         $target->streamKinds = $this->streamKinds;
         $this->streamStmt = -1;
         $this->streamLink = null;
+    }
+
+    // The conversion mysqlnd applies to a decoded cell of a column: 0 none,
+    // 1 int / 2 float (MYSQLI_OPT_INT_AND_FLOAT_NATIVE on the text protocol),
+    // 3 BIT as an integer (binary protocol, or text with the native option),
+    // 4 BIT as its decimal string (plain text protocol), 5 ZEROFILL integer as
+    // a string padded to the display width (binary protocol; the text protocol
+    // already carries the padded string and keeps it even with the option).
+    private static function __elephcCellKind(string $native, int $flags, bool $intFloatNative, bool $binary): int {
+        if ($native === "BIT") {
+            return ($binary || $intFloatNative) ? 3 : 4;
+        }
+        $_integer = $native === "TINY" || $native === "SHORT" || $native === "LONG"
+            || $native === "LONGLONG" || $native === "INT24" || $native === "YEAR";
+        if ($_integer && ($flags & 64) != 0) {
+            return $binary ? 5 : 0;
+        }
+        if ($binary || !$intFloatNative) {
+            return 0;
+        }
+        if ($_integer) {
+            return 1;
+        }
+        if ($native === "FLOAT" || $native === "DOUBLE") {
+            return 2;
+        }
+        return 0;
+    }
+
+    // Applies a __elephcCellKind conversion ($length: the column's display
+    // width, used by the ZEROFILL padding).
+    private static function __elephcConvertCell(mixed $value, int $kind, int $length): mixed {
+        if ($value === null || $kind == 0) {
+            return $value;
+        }
+        if ($kind == 1) {
+            // An unsigned value past PHP_INT_MAX stays its decimal string.
+            $_int = (int) $value;
+            return (string) $_int === (string) $value ? $_int : $value;
+        }
+        if ($kind == 2) {
+            return (float) $value;
+        }
+        if ($kind == 5) {
+            return str_pad((string) $value, $length, "0", STR_PAD_LEFT);
+        }
+        // BIT: the big-endian bytes as an unsigned integer; one past
+        // PHP_INT_MAX becomes its decimal string, like mysqlnd.
+        $_bytes = (string) $value;
+        $_bits = 0;
+        for ($_i = 0; $_i < strlen($_bytes); $_i++) {
+            $_bits = ($_bits << 8) | ord($_bytes[$_i]);
+        }
+        if ($_bits < 0) {
+            $_half = ($_bits >> 1) & PHP_INT_MAX;
+            $_tens = intdiv($_half, 5);
+            $_unit = 2 * ($_half - $_tens * 5) + ($_bits & 1);
+            return (string) $_tens . (string) $_unit;
+        }
+        return $kind == 3 ? $_bits : (string) $_bits;
+    }
+
+    // Has $link count this buffered result's statistics ($binary: a statement's
+    // get_result(), decoded from the binary protocol).
+    private function __elephcCountFor(mysqli $link, bool $binary): void {
+        $this->statLink = $link;
+        $this->statBinary = $binary;
+    }
+
+    // The statistic mysqlnd charges for one decoded field of column $index:
+    // php-src's per-wire-type tables read through its (shifted) statistics
+    // names — e.g. a binary BIGINT lands in proto_binary_fetched_decimal.
+    private function statKey(int $index): string {
+        if (count($this->statKeys) == 0) {
+            $_text = [
+            "DECIMAL" => "proto_text_fetched_decimal",
+            "TINY" => "proto_text_fetched_tinyint",
+            "SHORT" => "proto_text_fetched_short",
+            "LONG" => "proto_text_fetched_int",
+            "FLOAT" => "proto_text_fetched_float",
+            "DOUBLE" => "proto_text_fetched_double",
+            "NULL" => "proto_text_fetched_null",
+            "TIMESTAMP" => "proto_text_fetched_timestamp",
+            "LONGLONG" => "proto_text_fetched_bigint",
+            "INT24" => "proto_text_fetched_int24",
+            "DATE" => "proto_text_fetched_date",
+            "TIME" => "proto_text_fetched_time",
+            "DATETIME" => "proto_text_fetched_datetime",
+            "YEAR" => "proto_text_fetched_year",
+            "NEWDATE" => "proto_text_fetched_date",
+            "VARCHAR" => "proto_text_fetched_string",
+            "BIT" => "proto_text_fetched_bit",
+            "NEWDECIMAL" => "proto_text_fetched_decimal",
+            "ENUM" => "proto_text_fetched_set",
+            "SET" => "proto_text_fetched_geometry",
+            "JSON" => "proto_text_fetched_blob",
+            "TINY_BLOB" => "proto_text_fetched_enum",
+            "MEDIUM_BLOB" => "proto_text_fetched_enum",
+            "LONG_BLOB" => "proto_text_fetched_enum",
+            "BLOB" => "proto_text_fetched_enum",
+            "VAR_STRING" => "proto_text_fetched_string",
+            "STRING" => "proto_text_fetched_string",
+            "GEOMETRY" => "proto_text_fetched_other",
+            ];
+            $_binary = [
+            "DECIMAL" => "proto_binary_fetched_float",
+            "TINY" => "proto_binary_fetched_short",
+            "SHORT" => "proto_binary_fetched_int24",
+            "LONG" => "proto_binary_fetched_bigint",
+            "FLOAT" => "proto_binary_fetched_double",
+            "DOUBLE" => "proto_binary_fetched_date",
+            "NULL" => "proto_binary_fetched_bit",
+            "TIMESTAMP" => "proto_binary_fetched_string",
+            "LONGLONG" => "proto_binary_fetched_decimal",
+            "INT24" => "proto_binary_fetched_int",
+            "DATE" => "proto_binary_fetched_year",
+            "TIME" => "proto_binary_fetched_datetime",
+            "DATETIME" => "proto_binary_fetched_timestamp",
+            "YEAR" => "proto_binary_fetched_time",
+            "NEWDATE" => "proto_binary_fetched_year",
+            "VARCHAR" => "proto_binary_fetched_json",
+            "BIT" => "proto_binary_fetched_tinyint",
+            "NEWDECIMAL" => "proto_binary_fetched_float",
+            "ENUM" => "proto_binary_fetched_enum",
+            "SET" => "proto_binary_fetched_set",
+            "TINY_BLOB" => "proto_binary_fetched_blob",
+            "MEDIUM_BLOB" => "proto_binary_fetched_blob",
+            "LONG_BLOB" => "proto_binary_fetched_blob",
+            "BLOB" => "proto_binary_fetched_blob",
+            "VAR_STRING" => "proto_binary_fetched_json",
+            "STRING" => "proto_binary_fetched_json",
+            "GEOMETRY" => "proto_binary_fetched_geometry",
+            ];
+            for ($_i = 0; $_i < $this->field_count; $_i++) {
+                $_native = (string) $this->metaNativeTypes[$_i];
+                $this->statKeys[] = $this->statBinary
+                    ? ($_binary[$_native] ?? "proto_binary_fetched_other")
+                    : ($_text[$_native] ?? "proto_binary_fetched_null");
+            }
+        }
+        return (string) $this->statKeys[$index];
+    }
+
+    // Bytes mysqlnd adds to bytes_received_real_data_* for one decoded field:
+    // the text field's length; in the binary protocol a string's length or the
+    // fixed width the value occupied on the wire.
+    private function statBytes(int $index, mixed $value): int {
+        $_native = (string) $this->metaNativeTypes[$index];
+        if ($_native === "BIT") {
+            $_bytes = intdiv((int) $this->metaLens[$index] + 7, 8);
+            return $this->statBinary ? $_bytes + 1 : $_bytes;
+        }
+        if (!$this->statBinary || is_string($value)) {
+            return strlen((string) $value);
+        }
+        if ($_native === "TINY") { return 1; }
+        if ($_native === "SHORT" || $_native === "YEAR") { return 2; }
+        if ($_native === "INT24" || $_native === "LONG" || $_native === "FLOAT") { return 4; }
+        if ($_native === "LONGLONG" || $_native === "DOUBLE") { return 8; }
+        return strlen((string) $value);
+    }
+
+    // mysqlnd's per-row accounting when a row is handed to the program: the
+    // client-side row counter (buffered: process-wide only) and, per decoded
+    // field, its type statistic and data bytes (a NULL text field charges
+    // nothing; a NULL binary field its null statistic).
+    private function countRow(array $row, bool $buffered): void {
+        $_link = $this->statLink;
+        if ($_link === null) {
+            return;
+        }
+        if ($buffered) {
+            $_link->__elephcStat($this->statBinary ? "rows_fetched_from_client_ps_buffered" : "rows_fetched_from_client_normal_buffered", 1, false);
+        } else {
+            $_link->__elephcStat("rows_fetched_from_server_normal", 1, true);
+            $_link->__elephcStat("rows_fetched_from_client_normal_unbuffered", 1, true);
+        }
+        $_bytes = 0;
+        for ($_i = 0; $_i < $this->field_count; $_i++) {
+            $_value = $row[$_i];
+            if ($_value === null) {
+                if ($this->statBinary) {
+                    $_link->__elephcStat("proto_binary_fetched_bit", 1, true);
+                }
+                continue;
+            }
+            $_link->__elephcStat($this->statKey($_i), 1, true);
+            $_bytes = $_bytes + $this->statBytes($_i, $_value);
+        }
+        $_link->__elephcStat($this->statBinary ? "bytes_received_real_data_ps" : "bytes_received_real_data_normal", $_bytes, true);
+    }
+
+    // mysqli_result free (close / free / free_result / destruction): php
+    // always reports it as explicit.
+    private function countFree(): void {
+        $_link = $this->statLink;
+        if ($_link === null || $this->statFreed) {
+            return;
+        }
+        $this->statFreed = true;
+        $_link->__elephcStat("explicit_free_result", 1, true);
     }
 
     public function fetch_row(): ?array {
@@ -176,6 +387,7 @@ class mysqli_result implements IteratorAggregate {
             }
         }
         $this->lengths = $_lengths;
+        $this->countRow($_row, true);
         return $_row;
     }
 
@@ -345,6 +557,7 @@ class mysqli_result implements IteratorAggregate {
         // An unbuffered set is skipped to its end (mysqlnd reads and discards
         // the remaining rows) so the link becomes usable again.
         $this->discardStream();
+        $this->countFree();
         // Drop the buffered cells; further fetches see an exhausted cursor.
         $this->cells = [];
         $this->rowCount = 0;
@@ -367,6 +580,7 @@ class mysqli_result implements IteratorAggregate {
 
     public function __destruct() {
         $this->discardStream();
+        $this->countFree();
     }
 
     // Reads the next row of a MYSQLI_USE_RESULT set from the server; null —
@@ -385,13 +599,7 @@ class mysqli_result implements IteratorAggregate {
         $_row = [];
         $_lengths = [];
         for ($_i = 0; $_i < $this->field_count; $_i++) {
-            $_value = $this->columnValue($_i);
-            $_kind = (int) $this->streamKinds[$_i];
-            if ($_value !== null && $_kind == 1) {
-                $_value = (int) $_value;
-            } elseif ($_value !== null && $_kind == 2) {
-                $_value = (float) $_value;
-            }
+            $_value = mysqli_result::__elephcConvertCell($this->columnValue($_i), (int) $this->streamKinds[$_i], (int) $this->metaLens[$_i]);
             $_row[] = $_value;
             if ($_value === null) {
                 $_lengths[] = 0;
@@ -403,6 +611,7 @@ class mysqli_result implements IteratorAggregate {
         // The following row (or the set's EOF) is read by the next fetch.
         $this->streamStep = 2;
         $this->lengths = $_lengths;
+        $this->countRow($_row, false);
         return $_row;
     }
 
@@ -410,6 +619,12 @@ class mysqli_result implements IteratorAggregate {
     private function discardStream(): void {
         if ($this->streamStmt < 0) {
             return;
+        }
+        // mysqlnd skip_result: a set not read to its EOF is flushed, and every
+        // row still on the wire is read (and counted) and skipped.
+        $_link = $this->statLink;
+        if ($_link !== null && $this->streamStep != 0) {
+            $_link->__elephcStat("flushed_normal_sets", 1, true);
         }
         while (true) {
             if ($this->streamStep == 2) {
@@ -420,6 +635,11 @@ class mysqli_result implements IteratorAggregate {
             }
             $this->streamRows = $this->streamRows + 1;
             $this->streamStep = 2;
+            if ($_link !== null) {
+                $_link->__elephcStat("rows_fetched_from_server_normal", 1, true);
+                $_link->__elephcStat("rows_fetched_from_client_normal_unbuffered", 1, true);
+                $_link->__elephcStat("rows_skipped_normal", 1, true);
+            }
         }
         $this->endStream();
     }
@@ -473,7 +693,15 @@ class mysqli_result implements IteratorAggregate {
         $_field->{"max_length"} = 0;
         $_field->{"length"} = (int) $this->metaLens[$index];
         $_field->{"charsetnr"} = 0;
-        $_field->{"flags"} = (int) $this->metaFlags[$index];
+        // mysqlnd adds NUM_FLAG client-side to every numeric wire type: those up
+        // to INT24 (a TIMESTAMP only at the legacy display lengths 14 and 8) and
+        // YEAR.
+        $_flags = (int) $this->metaFlags[$index];
+        $_length = (int) $this->metaLens[$index];
+        if (($_type <= 9 && ($_type != 7 || $_length == 14 || $_length == 8)) || $_type == 13) {
+            $_flags = $_flags | 32768;
+        }
+        $_field->{"flags"} = $_flags;
         $_field->{"type"} = $_type;
         // The bridge's column_precision is MySQL's own wire "decimals" byte.
         $_field->{"decimals"} = (int) $this->metaDecimals[$index];

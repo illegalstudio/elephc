@@ -880,8 +880,8 @@ class mysqli {
             return $this->opFailed();
         }
         $_columnCount = elephc_pdo_column_count($_stmt);
+        $this->__elephcHeaderStats($_columnCount, true);
         if ($_columnCount == 0) {
-            $this->bump("non_result_set_queries");
             $this->refreshStatus();
             $this->field_count = 0;
             elephc_pdo_finalize($_stmt);
@@ -1253,14 +1253,13 @@ class mysqli {
         if ($this->conn < 0) {
             return;
         }
-        // mysqlnd counts no_index_used / bad_index_used whatever the report mode.
+        // (The no_index_used / bad_index_used statistics are counted when the
+        // result header is read, see __elephcHeaderStats().)
         $_status = elephc_pdo_mysql_server_status($this->conn);
         $_index = "";
         if (($_status & 16) != 0) {
-            $this->bump("bad_index_used");
             $_index = "Bad index";
         } elseif (($_status & 32) != 0) {
-            $this->bump("no_index_used");
             $_index = "No index";
         } else {
             return;
@@ -1299,6 +1298,46 @@ class mysqli {
         $_client = mysqli::$clientStats;
         $_client[$key] = ((int) ($_client[$key] ?? 0)) + 1;
         mysqli::$clientStats = $_client;
+    }
+
+    // Adds $by to one mysqlnd statistic: the connection's and the process-wide
+    // one, or only the process-wide one ($connection false) for the counters
+    // mysqlnd bumps with MYSQLND_INC_GLOBAL_STATISTIC.
+    private function __elephcStat(string $key, int $by, bool $connection): void {
+        if ($by == 0) {
+            return;
+        }
+        if ($connection) {
+            $this->connStats[$key] = ((int) ($this->connStats[$key] ?? 0)) + $by;
+        }
+        $_client = mysqli::$clientStats;
+        $_client[$key] = ((int) ($_client[$key] ?? 0)) + $by;
+        mysqli::$clientStats = $_client;
+    }
+
+    // mysqlnd_query_read_result_set_header: a result set counts as a result-set
+    // query plus the server's index / slow-query flags; anything else as a
+    // non-result-set query plus (outside prepared statements) its affected rows.
+    private function __elephcHeaderStats(int $cols, bool $normal): void {
+        if ($cols > 0) {
+            $this->bump("result_set_queries");
+            $_status = elephc_pdo_mysql_server_status($this->conn);
+            if (($_status & 16) != 0) {
+                $this->bump("bad_index_used");
+            } elseif (($_status & 32) != 0) {
+                $this->bump("no_index_used");
+            } elseif (($_status & 2048) != 0) {
+                $this->bump("slow_queries");
+            }
+            return;
+        }
+        $this->bump("non_result_set_queries");
+        if ($normal) {
+            $_affected = elephc_pdo_changes($this->conn);
+            if ($_affected > 0) {
+                $this->__elephcStat("rows_affected_normal", $_affected, true);
+            }
+        }
     }
 
     // Friend-channel twin of bump() for mysqli_stmt / mysqli_result.
@@ -1659,8 +1698,8 @@ class mysqli {
         // Column metadata is definitely known after the first step, including
         // for emulated prepares that only execute at step time.
         $_columnCount = elephc_pdo_column_count($_stmt);
+        $this->__elephcHeaderStats($_columnCount, true);
         if ($_columnCount == 0) {
-            $this->bump("non_result_set_queries");
             $this->refreshStatus();
             $this->field_count = 0;
             elephc_pdo_finalize($_stmt);
@@ -1693,8 +1732,8 @@ class mysqli {
     // once; a result set waits for store_result() / use_result().
     private function enterSet(int $firstStep): void {
         $_cols = elephc_pdo_column_count($this->liveStmt);
+        $this->__elephcHeaderStats($_cols, true);
         if ($_cols == 0) {
-            $this->bump("non_result_set_queries");
             $this->refreshStatus();
             $this->field_count = 0;
             $this->clearError();
@@ -1750,7 +1789,7 @@ class mysqli {
             $_flags[] = elephc_pdo_column_flags($_stmt, $_i);
             $_lens[] = elephc_pdo_column_len($_stmt, $_i);
             $_decimals[] = elephc_pdo_column_precision($_stmt, $_i);
-            $_kinds[] = $this->optIntAndFloatNative ? $this->nativeKind($_native) : 0;
+            $_kinds[] = mysqli_result::__elephcCellKind($_native, (int) $_flags[$_i], $this->optIntAndFloatNative, false);
         }
         $this->bump("unbuffered_sets");
         // mysqlnd reports -1 affected rows until an unbuffered set is read.
@@ -1767,7 +1806,6 @@ class mysqli {
         if (!$this->streaming || $this->liveStmt < 0) {
             return;
         }
-        $this->connStats["rows_fetched_from_server_normal"] = ((int) ($this->connStats["rows_fetched_from_server_normal"] ?? 0)) + $rows;
         $this->affected_rows = $rows;
         $this->finishSet();
     }
@@ -1817,10 +1855,11 @@ class mysqli {
             $_lens[] = elephc_pdo_column_len($stmt, $_i);
             $_decimals[] = elephc_pdo_column_precision($stmt, $_i);
         }
-        // MYSQLI_OPT_INT_AND_FLOAT_NATIVE: 1 = integer column, 2 = float column.
+        // mysqlnd's per-column cell conversion (MYSQLI_OPT_INT_AND_FLOAT_NATIVE,
+        // BIT decoding).
         $_native = [];
         for ($_i = 0; $_i < $cols; $_i++) {
-            $_native[] = $this->optIntAndFloatNative ? $this->nativeKind((string) $_natives[$_i]) : 0;
+            $_native[] = mysqli_result::__elephcCellKind((string) $_natives[$_i], (int) $_flags[$_i], $this->optIntAndFloatNative, false);
         }
         // Cells are buffered FLAT in row-major order (see mysqli_result).
         $_cells = [];
@@ -1828,15 +1867,7 @@ class mysqli {
         $_rc = $firstStep == 2 ? elephc_pdo_step($stmt) : $firstStep;
         while ($_rc == 1) {
             for ($_i = 0; $_i < $cols; $_i++) {
-                $_value = $this->columnValue($stmt, $_i);
-                $_kind = (int) $_native[$_i];
-                if ($_value !== null && $_kind == 1) {
-                    $_cells[] = (int) $_value;
-                } elseif ($_value !== null && $_kind == 2) {
-                    $_cells[] = (float) $_value;
-                } else {
-                    $_cells[] = $_value;
-                }
+                $_cells[] = mysqli_result::__elephcConvertCell($this->columnValue($stmt, $_i), (int) $_native[$_i], (int) $_lens[$_i]);
             }
             $_rowCount = $_rowCount + 1;
             $_rc = elephc_pdo_step($stmt);
@@ -1845,10 +1876,9 @@ class mysqli {
             $this->opFailed();
             return null;
         }
-        $this->bump("result_set_queries");
         $this->bump("buffered_sets");
-        $this->connStats["rows_fetched_from_server_normal"] = ((int) ($this->connStats["rows_fetched_from_server_normal"] ?? 0)) + $_rowCount;
-        $this->connStats["rows_buffered_from_client_normal"] = ((int) ($this->connStats["rows_buffered_from_client_normal"] ?? 0)) + $_rowCount;
+        $this->__elephcStat("rows_fetched_from_server_normal", $_rowCount, true);
+        $this->__elephcStat("rows_buffered_from_client_normal", $_rowCount, true);
         // php-src: for a SELECT, affected_rows mirrors num_rows and insert_id
         // resets to 0 (the statement generated no AUTO_INCREMENT value).
         $this->affected_rows = $_rowCount;
@@ -1857,22 +1887,11 @@ class mysqli {
         $this->warning_count = elephc_pdo_warning_count($this->conn);
         $this->info = null;
         $this->clearError();
-        return mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
+        $_result = mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
+        $_result->__elephcCountFor($this, false);
+        return $_result;
     }
 
-    // Maps a native column type onto MYSQLI_OPT_INT_AND_FLOAT_NATIVE's
-    // conversion: integers (and YEAR) become int, FLOAT/DOUBLE become float,
-    // everything else (DECIMAL included) stays a string, like mysqlnd.
-    private function nativeKind(string $native): int {
-        if ($native === "TINY" || $native === "SHORT" || $native === "LONG"
-            || $native === "LONGLONG" || $native === "INT24" || $native === "YEAR") {
-            return 1;
-        }
-        if ($native === "FLOAT" || $native === "DOUBLE") {
-            return 2;
-        }
-        return 0;
-    }
 
     // Decodes one cell of the current row (int / float / null / length-counted
     // TEXT-or-BLOB copy so embedded NUL bytes survive).
