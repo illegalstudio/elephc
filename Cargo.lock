@@ -927,6 +927,7 @@ dependencies = [
  "rustyline",
  "serde",
  "serde_json",
+ "stacker",
  "unicode-segmentation",
 ]
 

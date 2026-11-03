@@ -343,6 +343,13 @@ Buffers created inside `eval()` do not use `_buffer_registry`. Magician keeps it
 
 `Fiber` objects own native stacks rather than borrowing the caller's stack. The runtime allocates each fiber stack through `mmap` (256 KiB usable by default, plus the guard page), protects the bottom 16 KiB with `mprotect(PROT_NONE)` as a guard page, and stores both the mapping base and total mapped size in the Fiber object so `__rt_fiber_free_stack` can later return it with `munmap`.
 
+Magician's byte-fragment and included-token parser entry points use a temporary
+16 MiB stack through `stacker::grow`. Cold parsing can therefore start on a small
+native Fiber stack. The stack is selected explicitly because native context
+switches do not update the operating-system thread's stack bounds. Parsing calls
+no PHP and returns its owned program before interpreter execution begins; PHP
+suspension and saved-frame ownership continue on the native coroutine stack.
+
 The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, and `own_call_frame`), so `__rt_fiber_switch` can swap between main and fiber contexts without mixing exception or cleanup chains.
 
 Every compiled function prologue also consults `_stack_limit`. The main-thread
