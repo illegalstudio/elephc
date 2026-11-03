@@ -614,15 +614,11 @@ echo "|", ($res instanceof mysqli_result) ? $res->fetch_column(0) : "no";
     assert_eq!(out, "prep|F|2014|F|2014|drained|prep2|exec|5");
 }
 
-/// A server error while producing the first result set of a multi_query
-/// batch (a scalar subquery returning 3 rows, errno 1242 on both MySQL and
-/// MariaDB) is reported as a failure — errno set, no partial result
-/// buffered, batch closed, connection still usable — never swallowed as a
-/// truncated success. Under the bridge's buffered execution the error
-/// surfaces on the first step; the same assertions guard the drain loop's
-/// mid-set path if execution ever streams. (Provoking a genuinely mid-set
-/// error needs a stored function, but CREATE FUNCTION fails with 1419 on
-/// binlog-enabled MySQL without SUPER — the CI user has no such privilege.)
+/// A server error while producing the first result set of a multi_query batch (a scalar
+/// subquery returning 3 rows, errno 1242 on both MySQL and MariaDB): like mysqlnd,
+/// `multi_query()` itself succeeds — it reads only the set's header and metadata — and the
+/// error surfaces when `store_result()` reads the rows (no partial result, batch closed,
+/// connection still usable). Expected output is php 8.3 mysqlnd's.
 #[test]
 #[ignore]
 fn test_mysqli_multi_query_reports_mid_set_error() {
@@ -640,7 +636,7 @@ $r = $db->query("SELECT 7");
 echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : ("no:" . $db->errno);
 "#,
     ));
-    assert_eq!(out, "F|1242|nores|nomore|7");
+    assert_eq!(out, "mq|0|nores|nomore|7");
 }
 
 /// Multi-statements are off on a mysqli session, like mysqlnd's: compound-body DDL is ONE
