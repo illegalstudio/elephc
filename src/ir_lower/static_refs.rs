@@ -80,6 +80,32 @@ pub(crate) fn reference_bound_statics(
     statics
 }
 
+/// The names of `body`'s `static` locals the body also assigns as a whole (`$x = ...`).
+///
+/// Such a static can receive any value later, so an array initializer with raw elements is
+/// stored with boxed ones (`lower_static_var`): its slot otherwise widened only at the later
+/// store, after the raw-element initializer was bound (symfony/http-client's
+/// `static $lastProgress = [0, 0]; ... $lastProgress = $progress ?: $lastProgress;`).
+pub(crate) fn reassigned_statics(body: &[Stmt]) -> HashSet<String> {
+    let mut statics = HashSet::new();
+    let mut assigned = HashSet::new();
+    walk_nodes(body, &mut |node| {
+        if let Node::Stmt(stmt) = node {
+            match &stmt.kind {
+                StmtKind::StaticVar { name, .. } => {
+                    statics.insert(name.clone());
+                }
+                StmtKind::Assign { name, .. } => {
+                    assigned.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+    });
+    statics.retain(|name| assigned.contains(name));
+    statics
+}
+
 /// Marks each plain-variable argument whose parameter may take it by reference.
 fn mark_arguments(args: &[Expr], used: &mut HashSet<String>, by_ref: impl Fn(usize) -> bool) {
     for (index, arg) in args.iter().enumerate() {

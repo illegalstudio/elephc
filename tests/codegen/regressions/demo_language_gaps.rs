@@ -1342,6 +1342,34 @@ echo json_encode($o), json_encode($m), "\n";
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A `static` array the body later replaces wholesale with a wider value
+/// (symfony/http-client's `NativeHttpClient` progress closure) stores its raw-element
+/// initializer boxed; the backend refused the initializer's narrower elements.
+#[test]
+fn test_static_array_reassigned_with_wider_values() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function make(callable $onProgress): callable {
+    return static function (...$progress) use ($onProgress) {
+        static $lastProgress = [0, 0];
+        if ($progress && -1 === $progress[0]) {
+            $lastProgress[0] = max($lastProgress);
+        } else {
+            $lastProgress = $progress ?: $lastProgress;
+        }
+        $onProgress($lastProgress[0], $lastProgress[1]);
+    };
+}
+$f = make(function ($a, $b) { echo "$a/$b\n"; });
+$f();
+$f(3, 10);
+$f();
+$f(-1, 0);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0/0\n3/10\n3/10\n10/10\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A `static` local handed out by reference (by-ref argument, `&` alias, `use (&$x)`) keeps every
 /// write across calls: Monolog's `BrowserConsoleHandler::handleStyle` shape.
 #[test]

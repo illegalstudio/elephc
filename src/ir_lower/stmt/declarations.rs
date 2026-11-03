@@ -264,6 +264,18 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
     // A null initializer therefore requires boxed persistent storage and no null-only flow fact.
     let initialized_type = ctx.builder.value_php_type(value.value);
     let storage_type = if initialized_type == PhpType::Void { PhpType::Mixed } else { initialized_type };
+    // An array static the body later assigns boxed elements to is declared with the checker's
+    // boxed element type from the start, so the initializer is converted below; the slot
+    // widened only at that later store, after the raw-element initializer was already bound.
+    let storage_type = match storage_type.codegen_repr() {
+        PhpType::Array(elem)
+            if ctx.reassigned_statics.contains(name)
+                && !matches!(elem.codegen_repr(), PhpType::Mixed | PhpType::Never | PhpType::Void) =>
+        {
+            PhpType::Array(Box::new(PhpType::Mixed))
+        }
+        _ => storage_type,
+    };
     let slot = ctx.declare_local_with_kind(name, storage_type.clone(), LocalKind::StaticLocal);
     // A string-keyed `static $m = [];` is declared as a hash (see
     // `required_static_local_storage_type`); the empty initializer becomes one to match. The
@@ -276,10 +288,32 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
             Op::ArrayToHash,
             vec![value.value],
             None,
-            slot_ty,
+            slot_ty.clone(),
             Op::ArrayToHash.default_effects(),
             Some(span),
         );
+    }
+    // A static the body also assigns wider values (`static $last = [0, 0]; $last = $progress;`,
+    // symfony/http-client's `NativeHttpClient`) is declared with boxed elements; the literal's
+    // raw ones are boxed to match, as a return to an `array<mixed>` contract boxes them.
+    let value_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    let widen = match (&value_ty, &slot_ty.codegen_repr()) {
+        (PhpType::Array(elem), PhpType::Array(slot_elem))
+            if slot_elem.codegen_repr() == PhpType::Mixed
+                && !matches!(elem.codegen_repr(), PhpType::Mixed | PhpType::Never | PhpType::Void) =>
+        {
+            Some(Op::ArrayToMixed)
+        }
+        (PhpType::AssocArray { value: elem, .. }, PhpType::AssocArray { value: slot_elem, .. })
+            if slot_elem.codegen_repr() == PhpType::Mixed
+                && !matches!(elem.codegen_repr(), PhpType::Mixed | PhpType::Never | PhpType::Void) =>
+        {
+            Some(Op::HashToMixed)
+        }
+        _ => None,
+    };
+    if let Some(op) = widen {
+        value = ctx.emit_value(op, vec![value.value], None, slot_ty.clone(), op.default_effects(), Some(span));
     }
     ctx.builder.emit_with_effects(
         Op::InitStaticLocal,

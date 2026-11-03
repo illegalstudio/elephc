@@ -2038,6 +2038,7 @@ fn lower_body_into_function(
     ctx.runtime_global_bindings = crate::global_decls::collect_global_var_names(body);
     ctx.reference_bound_statics =
         crate::ir_lower::static_refs::reference_bound_statics(body, ctx.functions);
+    ctx.reassigned_statics = crate::ir_lower::static_refs::reassigned_statics(body);
     ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
         ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);

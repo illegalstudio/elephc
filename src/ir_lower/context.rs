@@ -757,6 +757,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// This body's `static` locals used by reference (`crate::ir_lower::static_refs`): each is
     /// bound to a persistent reference cell, as php binds `static $x`, instead of a plain slot.
     pub(crate) reference_bound_statics: HashSet<String>,
+    /// This body's `static` locals it also assigns as a whole (`static_refs::reassigned_statics`).
+    pub(crate) reassigned_statics: HashSet<String>,
     /// `true` when lowering for a `--web` compile. Gates whether a bare
     /// request-superglobal name (`$_SERVER`/`$_SESSION`/…) is trusted to
     /// resolve to the fixed `AssocArray{Str, Mixed}` type: only `--web`
@@ -998,6 +1000,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             all_global_var_names,
             runtime_global_bindings: HashSet::new(),
             reference_bound_statics: HashSet::new(),
+            reassigned_statics: HashSet::new(),
             web,
             owner_name,
             closures: Vec::new(),
