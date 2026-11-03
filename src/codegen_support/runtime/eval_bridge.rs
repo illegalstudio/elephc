@@ -32,6 +32,7 @@ pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter, features: RuntimeF
     emit_object_clone_shallow_eval_export(emitter);
     emit_magic_set_guard_eval_exports(emitter);
     scope_release::emit(emitter);
+    owner_frames::emit(emitter);
 }
 
 /// Emits self-contained value wrappers shared by native eval fragments and Magician.
@@ -137,6 +138,7 @@ mod gc_boundary;
 mod release_boundary;
 mod bit_not;
 mod scope_release;
+mod owner_frames;
 
 #[allow(unused_imports)]
 use aarch64_values_classes::*;

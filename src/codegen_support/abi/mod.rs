@@ -38,6 +38,7 @@ pub use calls::{
     materialize_outgoing_c_abi_args, outgoing_call_stack_pad_bytes,
 };
 pub(crate) use call_operand_scope::{
+    emit_unlink_call_operand_owner_at_address,
     CALL_OPERAND_OWNER_RECORD_BYTES,
     emit_link_call_operand_owner_at_stack, emit_pop_call_operand_owner,
     emit_link_call_operand_custom_cleanup_at_stack,

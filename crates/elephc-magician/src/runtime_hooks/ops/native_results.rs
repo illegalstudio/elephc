@@ -31,8 +31,17 @@ impl ElephcRuntimeOps {
         result: *mut RuntimeCell,
         arguments: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.finish_native_call_releasing(result, || arguments)
+    }
+
+    /// Keeps an argument owner visible while adopting a result, then detaches it before release.
+    pub(super) fn finish_native_call_releasing(
+        &mut self,
+        result: *mut RuntimeCell,
+        arguments: impl FnOnce() -> RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
         let outcome = self.handle_native_call_result(result);
-        if let Err(status) = self.release_cells([arguments]) {
+        if let Err(status) = self.release_cells([arguments()]) {
             if let Ok(value) = outcome {
                 self.release_cells([value])?;
             }

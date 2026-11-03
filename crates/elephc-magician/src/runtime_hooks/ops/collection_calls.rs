@@ -447,18 +447,20 @@ macro_rules! impl_collection_call_ops {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let arg_array = self.arg_array(args)?;
-        let result = unsafe {
-            __elephc_eval_value_method_call(
-                object.as_ptr(),
-                method.as_ptr(),
-                method.len() as u64,
-                arg_array.as_ptr(),
-                scope_ptr,
-                scope_len,
-                self.context.cast(),
-            )
-        };
-        self.finish_native_call(result, arg_array)
+        crate::runtime_hooks::owner_frames::with_owned_runtime_cell(arg_array, |owner| {
+            let result = unsafe {
+                __elephc_eval_value_method_call(
+                    object.as_ptr(),
+                    method.as_ptr(),
+                    method.len() as u64,
+                    owner.borrowed().as_ptr(),
+                    scope_ptr,
+                    scope_len,
+                    self.context.cast(),
+                )
+            };
+            self.finish_native_call_releasing(result, || owner.take())
+        })
     }
 
     /// Calls an AOT static method through the generated user helper.
@@ -470,19 +472,21 @@ macro_rules! impl_collection_call_ops {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let arg_array = self.arg_array(args)?;
-        let result = unsafe {
-            __elephc_eval_value_static_method_call(
-                class_name.as_ptr(),
-                class_name.len() as u64,
-                method.as_ptr(),
-                method.len() as u64,
-                arg_array.as_ptr(),
-                scope_ptr,
-                scope_len,
-                self.context.cast(),
-            )
-        };
-        self.finish_native_call(result, arg_array)
+        crate::runtime_hooks::owner_frames::with_owned_runtime_cell(arg_array, |owner| {
+            let result = unsafe {
+                __elephc_eval_value_static_method_call(
+                    class_name.as_ptr(),
+                    class_name.len() as u64,
+                    method.as_ptr(),
+                    method.len() as u64,
+                    owner.borrowed().as_ptr(),
+                    scope_ptr,
+                    scope_len,
+                    self.context.cast(),
+                )
+            };
+            self.finish_native_call_releasing(result, || owner.take())
+        })
     }
 
     /// Converts a native free-function result into eval status, preserving pending throwables.

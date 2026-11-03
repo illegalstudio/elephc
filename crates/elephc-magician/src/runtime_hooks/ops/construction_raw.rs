@@ -37,26 +37,28 @@ macro_rules! impl_construction_raw_ops {
     ) -> Result<(), EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let arg_array = self.arg_array(args)?;
-        let ok = unsafe {
-            __elephc_eval_value_construct_object(
-                object.as_ptr(),
-                arg_array.as_ptr(),
-                scope_ptr,
-                scope_len,
-                self.context.cast(),
-            )
-        };
-        let outcome = if ok == 0 {
-            self.take_pending_native_throwable()
-                .map_or(Err(EvalStatus::RuntimeFatal), |thrown| {
-                    self.schedule_pending_throw(thrown)?;
-                    Err(EvalStatus::UncaughtThrowable)
-                })
-        } else {
-            Ok(())
-        };
-        self.release_cells([arg_array])?;
-        outcome
+        crate::runtime_hooks::owner_frames::with_owned_runtime_cell(arg_array, |owner| {
+            let ok = unsafe {
+                __elephc_eval_value_construct_object(
+                    object.as_ptr(),
+                    owner.borrowed().as_ptr(),
+                    scope_ptr,
+                    scope_len,
+                    self.context.cast(),
+                )
+            };
+            let outcome = if ok == 0 {
+                self.take_pending_native_throwable()
+                    .map_or(Err(EvalStatus::RuntimeFatal), |thrown| {
+                        self.schedule_pending_throw(thrown)?;
+                        Err(EvalStatus::UncaughtThrowable)
+                    })
+            } else {
+                Ok(())
+            };
+            self.release_cells([owner.take()])?;
+            outcome
+        })
     }
 
     /// Returns whether the generated AOT class-name table contains the requested class.

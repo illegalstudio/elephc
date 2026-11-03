@@ -113,6 +113,12 @@ pub(crate) fn emit_unlink_call_operand_owner_in_frame(emitter: &mut Emitter, fra
     emit_unlink_record(emitter);
 }
 
+/// Detaches an externally supplied exact record using the ordinary owner-chain splice.
+pub(crate) fn emit_unlink_call_operand_owner_at_address(emitter: &mut Emitter, address: &str) {
+    emit_reg_move(emitter, secondary_scratch_reg(emitter), address);
+    emit_unlink_record(emitter);
+}
+
 /// Splices the record in the secondary scratch register out of the activation chain.
 ///
 /// The common LIFO path uses only the two reserved scratch registers. The uncommon search saves

@@ -402,6 +402,13 @@ ownership marker. Generic eval method calls and callable lookup share this
 admission rule, so suspension inside an eval callback reaches the same native
 coroutine boundary on every supported target.
 
+Rust-owned temporary argument arrays for native constructors, instance methods
+and static methods publish an extended activation on the current coroutine stack.
+Its pure visitor reports the actual Rust pointer field as an owning graph edge.
+Taking that cell clears the field before native cleanup can execute PHP; a Rust
+guard detaches the pinned record after the protected native boundary returns.
+The visitor adds no retain and does not treat copied borrowed handles as owners.
+
 ## Runtime generic specialization
 
 `crates/elephc-generics` owns structural type terms, conflict detection, written argument binding,
