@@ -438,6 +438,8 @@ pub(crate) struct Checker {
     /// `mixed`, so a slot an override can reach must carry runtime-shaped storage rather than the
     /// narrow type its default happened to infer.
     pub clone_override_destinations: clone_override_storage::CloneOverrideDestinations,
+    /// Receivers of dynamic-name property writes, whose untyped slots are widened to `mixed`.
+    pub dynamic_property_write_destinations: clone_override_storage::CloneOverrideDestinations,
     /// Fixed untyped property slots that a reachable `unset()` may remove.
     ///
     /// Applied after body checking so the physical slot and every inherited view use boxed

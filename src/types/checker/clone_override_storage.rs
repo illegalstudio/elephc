@@ -160,7 +160,7 @@ pub(in crate::types::checker) fn record_dynamic_property_write_destination(
     checker: &mut Checker,
     object_ty: &PhpType,
 ) {
-    checker.clone_override_destinations.record(object_ty);
+    checker.dynamic_property_write_destinations.record(object_ty);
 }
 
 /// Records the widening a runtime string or boxed callable invocation can reach.
@@ -207,12 +207,29 @@ fn clone_call_may_carry_overrides(args: &[Expr]) -> bool {
 /// a per-span record.
 pub(super) fn widen_clone_override_property_storage(checker: &mut Checker) {
     let destinations = std::mem::take(&mut checker.clone_override_destinations);
+    widen_untyped_destination_slots(checker, &destinations, true);
+    // A dynamic-name write widens the same untyped slots but reserves no property hash: a
+    // name that misses every declared slot still takes the ordinary dynamic-property path
+    // (deprecation, or `Cannot create dynamic property` on a readonly class).
+    let dynamic_writes = std::mem::take(&mut checker.dynamic_property_write_destinations);
+    widen_untyped_destination_slots(checker, &dynamic_writes, false);
+}
+
+/// Widens every untyped slot `destinations` can reach to `mixed`, optionally reserving the
+/// per-instance property hash a clone override's undeclared key needs.
+fn widen_untyped_destination_slots(
+    checker: &mut Checker,
+    destinations: &CloneOverrideDestinations,
+    reserve_hash: bool,
+) {
     if destinations.is_empty() {
         return;
     }
-    let sel = destination_classes(checker, &destinations);
-    for class_name in &sel {
-        reserve_property_hash_storage(checker, class_name);
+    let sel = destination_classes(checker, destinations);
+    if reserve_hash {
+        for class_name in &sel {
+            reserve_property_hash_storage(checker, class_name);
+        }
     }
     // The hash reservation stays on the destinations, but the WIDENING has to follow the physical
     // SLOT. One slot is a single piece of storage seen through several `ClassInfo` copies, so
