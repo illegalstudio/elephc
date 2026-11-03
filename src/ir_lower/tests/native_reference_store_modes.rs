@@ -82,3 +82,45 @@ function nativeReferenceFreshStore(mixed &$target): void { $target = nativeRefer
 }
 
 supported_target_cases!(native_reference_store_source_owner, verify_native_reference_store_source_owner);
+
+/// Parking retires the fresh source only after a separate store owner was acquired.
+fn verify_native_reference_fresh_string_store_owner(target: &str) {
+    let source = "<?php \
+        function nativeFreshStringSource(): string { return str_repeat('ab', 2); } \
+        function nativeFreshStringStore(string &$value): void { $value = nativeFreshStringSource(); }";
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let function = module.functions.iter().find(|function| function.name == "nativeFreshStringStore").unwrap();
+    let store_index = function.instructions.iter().position(|inst| inst.op == Op::StoreRefCell).unwrap();
+    let store = &function.instructions[store_index];
+    let stored = store.operands[0];
+    let ValueDef::Instruction { inst, .. } = function.value(stored).unwrap().def else {
+        panic!("{target}: a retained store has a defining acquire");
+    };
+    let acquired = function.instruction(inst).unwrap();
+    assert_eq!(acquired.op, Op::Acquire, "{target}: the destination owns an independent string copy");
+    let source = acquired.operands[0];
+    assert_ne!(source, stored);
+    assert!(function.instructions[..store_index].iter().any(|inst|
+        inst.op == Op::Release && inst.operands == [source]),
+        "{target}: parking retires the original expression, not the acquired destination");
+    assert!(!function.instructions[..store_index].iter().any(|inst|
+        inst.op == Op::Release && inst.operands == [stored]),
+        "{target}: the value passed to StoreRefCell must still be owned");
+    assert_eq!(store.operands.len(), 3, "{target}: extra parking remains unwind-visible");
+    for validation in [false, true] {
+        for optimize in [false, true] {
+            let mut candidate = module.clone();
+            if validation { crate::ir_lower::enable_native_reference_validation(&mut candidate).unwrap(); }
+            if optimize { crate::ir_passes::optimize_module(&mut candidate); }
+            crate::ir::validate_module(&candidate).unwrap();
+            crate::codegen::generate_user_asm_from_ir(&candidate, false, false)
+                .unwrap_or_else(|error| panic!("{target}: validation={validation} optimize={optimize}: {error:?}"));
+        }
+    }
+}
+
+supported_target_cases!(native_reference_fresh_string_store_owner,
+    verify_native_reference_fresh_string_store_owner);

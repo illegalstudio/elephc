@@ -31,7 +31,8 @@ function nativePublisherMakeIncoming(): mixed { return new NativePublisherIncomi
 function nativePublisherAssign(mixed &$target): void { $target = nativePublisherMakeIncoming(); }
 if ($argc < 0) {
     $old = nativePublisherMakeOld(); $incoming = nativePublisherMakeIncoming();
-    unset($old, $incoming);
+    $target = null; nativePublisherAssign($target);
+    unset($old, $incoming, $target);
 }
 "#;
     // Keep the two factories independently callable from the ABI harness.
@@ -123,7 +124,8 @@ function nativeReferenceApplyMode(mixed &$target): void {{
 }}
 if ($argc < 0) {{
     $probe = new NativeReferenceModeProbe(); $target = 2.0;
-    nativeReferenceApplyMode($target); unset($probe, $target);
+    $alias =& $probe->value;
+    nativeReferenceApplyMode($target); unset($alias, $probe, $target);
 }}
 "#, if strict { "declare(strict_types=1);" } else { "" });
         let (user, runtime, requirements) = without_ir_opt(||
@@ -299,7 +301,9 @@ function nativeConflictAssign(mixed &$target): void {
 }
 if ($argc < 0) {
     $integer = new NativeConflictInteger(); $float = new NativeConflictFloat();
-    $target = ''; nativeConflictAssign($target); unset($target, $integer, $float);
+    $integerAlias =& $integer->value; $floatAlias =& $float->value;
+    $target = ''; nativeConflictAssign($target);
+    unset($target, $integerAlias, $floatAlias, $integer, $float);
 }
 "#;
     let (user, runtime, requirements) = without_ir_opt(||
@@ -357,6 +361,61 @@ if ($argc < 0) {
     let runtime = runtime_obj_for_asm(&runtime);
     let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
     assert_eq!(output, "convert|convert|destroy|Exception:TypeError|convert|convert|destroy|TypeError:none|1");
+}
+
+/// Fresh heap strings survive both the raw store and canonical source-parking retirement.
+#[test]
+fn test_native_reference_store_fresh_heap_string_ownership_bundle() {
+    let source = r#"<?php
+function nativeFreshHeapString(): string { return str_repeat('ab', 2); }
+function nativeFreshHeapAssign(string &$value): void {
+    $value = nativeFreshHeapString(); echo $value, '|';
+}
+if ($argc < 0) { $value = ''; nativeFreshHeapAssign($value); unset($value); }
+"#;
+    for canonical in [false, true] {
+        for optimize in [false, true] {
+            let dir = FixtureDir(make_cli_test_dir("elephc_native_reference_heap_string"));
+            let compile = || if canonical {
+                compile_source_to_asm_with_native_reference_validation(source, &dir.0, 65_536, true)
+            } else {
+                compile_source_to_asm_with_options(source, &dir.0, 65_536, false, true)
+            };
+            let (user, runtime, requirements) = if optimize { compile() } else { without_ir_opt(compile) };
+            let mut asm = String::new();
+            instruction(&mut asm, "sub sp, sp, #32", "sub rsp, 32");
+            if canonical {
+                address(&mut asm, "x0", "rax", "Lnative_heap_string_initial");
+                call(&mut asm, "__rt_reference_new");
+                store(&mut asm, 16);
+            }
+            let tag = if canonical { 7 } else { 1 };
+            instruction(&mut asm, &format!("mov x0, #{tag}"), &format!("mov edi, {tag}"));
+            call(&mut asm, "__rt_reference_cell_new");
+            store(&mut asm, 8);
+            if canonical {
+                instruction(&mut asm, "ldr x9, [sp, #16]", "mov r10, QWORD PTR [rsp + 16]");
+                instruction(&mut asm, "str x9, [x0]", "mov QWORD PTR [rax], r10");
+            } else {
+                address(&mut asm, "x9", "r10", "Lnative_heap_string_bytes");
+                instruction(&mut asm, "str x9, [x0]", "mov QWORD PTR [rax], r10");
+                instruction(&mut asm, "mov x9, #7", "mov r10, 7");
+                instruction(&mut asm, "str x9, [x0, #8]", "mov QWORD PTR [rax + 8], r10");
+            }
+            instruction(&mut asm, "ldr x0, [sp, #8]", "mov rdi, QWORD PTR [rsp + 8]");
+            call(&mut asm, &elephc::names::function_symbol("nativeFreshHeapAssign"));
+            load(&mut asm, 8);
+            call(&mut asm, "__rt_reference_cell_release");
+            expect_zero(&mut asm, "_rt_reference_validation_pins_top");
+            expect_zero(&mut asm, "_gc_live");
+            append_status_output(&mut asm, 32);
+            let mut user = inject_main_exit_harness(&user, &asm);
+            user.push_str("\n.data\n.p2align 3\nLnative_heap_string_initial:\n    .quad 1\n    .quad Lnative_heap_string_bytes\n    .quad 7\nLnative_heap_string_bytes:\n    .ascii \"initial\"\n");
+            let runtime = runtime_obj_for_asm(&runtime);
+            let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
+            assert_eq!(output, "abab|1", "canonical={canonical} optimize={optimize}");
+        }
+    }
 }
 
 /// Prints the harness predicate after any failure jumps to the shared zero-result label.
