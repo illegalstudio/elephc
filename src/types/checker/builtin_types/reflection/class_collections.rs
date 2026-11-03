@@ -342,18 +342,47 @@ pub(super) fn builtin_reflection_class_object_method(
         return_type: Some(TypeExpr::Named(Name::unqualified(class_name))),
         by_ref_return: false,
         body: vec![Stmt::new(
-            StmtKind::Return(Some(Expr::new(
-                ExprKind::PropertyAccess {
-                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
-                    property: property.to_string(),
-                },
-                dummy_span,
-            ))),
+            StmtKind::Return(Some(reflection_fresh_object_read(property, class_name))),
             dummy_span,
         )],
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// `$this->{property} instanceof Class ? clone $this->{property} : $this->{property}`.
+///
+/// php builds a new reflector on every `getDeclaringClass()` / `getClass()` call, so two calls
+/// (or two members of one class) never return the same object. The slot holds one reflector
+/// that the owner's members share to keep construction cheap; each read hands out a shallow
+/// copy of it, whose metadata arrays stay shared copy-on-write.
+pub(super) fn reflection_fresh_object_read(property: &str, class_name: &str) -> Expr {
+    let dummy_span = crate::span::Span::dummy();
+    let slot = || {
+        Expr::new(
+            ExprKind::PropertyAccess {
+                object: Box::new(Expr::new(ExprKind::This, dummy_span)),
+                property: property.to_string(),
+            },
+            dummy_span,
+        )
+    };
+    Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(Expr::new(
+                ExprKind::InstanceOf {
+                    value: Box::new(slot()),
+                    target: crate::parser::ast::InstanceOfTarget::Name(Name::unqualified(
+                        class_name,
+                    )),
+                },
+                dummy_span,
+            )),
+            then_expr: Box::new(Expr::new(ExprKind::Clone(Box::new(slot())), dummy_span)),
+            else_expr: Box::new(slot()),
+        },
+        dummy_span,
+    )
 }
 
 /// Returns a public mixed `ReflectionClass` method backed by one private slot.
