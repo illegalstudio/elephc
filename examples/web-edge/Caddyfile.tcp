@@ -1,0 +1,18 @@
+{
+	email admin@example.com
+}
+
+example.com {
+	root * /srv/app/public
+
+	handle /static/* {
+		file_server
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8080 {
+			health_uri /healthz
+			health_interval 10s
+		}
+	}
+}

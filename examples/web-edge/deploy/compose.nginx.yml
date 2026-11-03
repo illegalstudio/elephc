@@ -1,0 +1,63 @@
+name: elephc-edge-nginx
+
+# nginx variant of the edge stack. The origin and the shared socket volume are
+# identical to compose.yml; only the edge service changes.
+#
+#   docker compose -f examples/web-edge/deploy/compose.nginx.yml up --build
+#
+# The official nginx image starts as root; that is intentional here because it
+# binds 80/443 and writes its pid/cache files. The origin still runs as uid
+# 10001 and the socket is reachable through the shared volume.
+
+services:
+  init:
+    image: busybox:1.36
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /run/elephc /var/lib/elephc/sessions
+        chown -R 10001:10001 /run/elephc /var/lib/elephc
+        chmod 0770 /run/elephc
+    volumes:
+      - elephc-run:/run/elephc
+      - elephc-sessions:/var/lib/elephc/sessions
+    restart: "no"
+
+  app:
+    build:
+      context: ../../..
+      dockerfile: examples/web-edge/deploy/Dockerfile.app
+    user: "10001:10001"
+    environment:
+      ELEPHC_SESSION_SAVE_PATH: /var/lib/elephc/sessions
+    volumes:
+      - elephc-run:/run/elephc
+      - elephc-sessions:/var/lib/elephc/sessions
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/elephc/app.sock"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  edge:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - elephc-run:/run/elephc:ro
+      - ../nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../public:/srv/app/public:ro
+    depends_on:
+      app:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  elephc-run:
+  elephc-sessions:

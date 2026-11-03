@@ -1,0 +1,20 @@
+{
+	email admin@example.com
+}
+
+example.com {
+	root * /srv/app/public
+
+	handle /static/* {
+		file_server
+	}
+
+	handle {
+		reverse_proxy unix//run/elephc/app.sock {
+			health_uri /healthz
+			health_interval 10s
+		}
+		# Loopback TCP alternative:
+		# reverse_proxy 127.0.0.1:8080
+	}
+}

@@ -48,6 +48,8 @@ pub(crate) struct HandlerRequest {
     pub(crate) server_addr: String,
     pub(crate) server_port: u16,
     pub(crate) protocol: String,
+    pub(crate) request_scheme: String,
+    pub(crate) https: bool,
 }
 
 /// Status and headers committed by the handler before its first body chunk.
@@ -121,6 +123,7 @@ fn validate_request(request: &HandlerRequest) -> io::Result<()> {
         request.remote_addr.as_bytes(),
         request.server_addr.as_bytes(),
         request.protocol.as_bytes(),
+        request.request_scheme.as_bytes(),
     ] {
         account_bytes(&mut metadata, value.len(), MAX_REQUEST_METADATA_BYTES)?;
     }
@@ -167,13 +170,15 @@ pub(crate) async fn write_request_async(
         request.remote_addr.as_bytes(),
         request.server_addr.as_bytes(),
         request.protocol.as_bytes(),
+        request.request_scheme.as_bytes(),
     ] {
         let len = u32::try_from(value.len()).map_err(|_| invalid_data("request metadata is too large"))?;
         writer.write_all(&len.to_be_bytes()).await?;
         writer.write_all(value).await?;
     }
     writer.write_all(&request.remote_port.to_be_bytes()).await?;
-    writer.write_all(&request.server_port.to_be_bytes()).await
+    writer.write_all(&request.server_port.to_be_bytes()).await?;
+    writer.write_all(&[u8::from(request.https)]).await
 }
 
 /// Reads and validates one complete request snapshot in the broker process.
@@ -216,10 +221,13 @@ pub(crate) fn read_request(reader: &mut impl Read) -> io::Result<HandlerRequest>
     let remote_addr = wire_string(read_bytes(reader, &mut metadata, MAX_REQUEST_METADATA_BYTES)?);
     let server_addr = wire_string(read_bytes(reader, &mut metadata, MAX_REQUEST_METADATA_BYTES)?);
     let protocol = wire_string(read_bytes(reader, &mut metadata, MAX_REQUEST_METADATA_BYTES)?);
+    let request_scheme = wire_string(read_bytes(reader, &mut metadata, MAX_REQUEST_METADATA_BYTES)?);
     let mut remote_port = [0u8; 2];
     let mut server_port = [0u8; 2];
     reader.read_exact(&mut remote_port)?;
     reader.read_exact(&mut server_port)?;
+    let mut https = [0u8; 1];
+    reader.read_exact(&mut https)?;
     Ok(HandlerRequest {
         method,
         uri,
@@ -232,6 +240,8 @@ pub(crate) fn read_request(reader: &mut impl Read) -> io::Result<HandlerRequest>
         server_addr,
         server_port: u16::from_be_bytes(server_port),
         protocol,
+        request_scheme,
+        https: https[0] != 0,
     })
 }
 

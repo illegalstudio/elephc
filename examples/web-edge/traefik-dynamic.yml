@@ -1,0 +1,20 @@
+# Traefik dynamic configuration for the elephc origin.
+# The backend is loopback TCP because Unix-socket support varies by version.
+http:
+  routers:
+    app:
+      rule: Host(`example.com`)
+      entryPoints:
+        - websecure
+      service: app
+      tls:
+        certResolver: le
+  services:
+    app:
+      loadBalancer:
+        healthCheck:
+          path: /healthz
+          intervalSeconds: 10
+          timeoutSeconds: 3
+        servers:
+          - url: "http://127.0.0.1:8080"
