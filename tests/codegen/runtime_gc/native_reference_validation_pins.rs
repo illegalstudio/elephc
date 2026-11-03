@@ -391,6 +391,9 @@ echo native_reference_source_count(), ':';
 $copy = clone $object; echo native_reference_source_count(), ':';
 unset($alias, $object); echo native_reference_source_count(), ':';
 unset($copy); echo native_reference_source_count(), '|';
+$template = new NativeValidationDeclarationProbe(); $wire = serialize($template); unset($template);
+$hydrated = unserialize($wire); echo native_reference_source_count(), ':';
+unset($hydrated, $wire); echo native_reference_source_count(), '|';
 $shouldRescue = true;
 $revive = new NativeValidationDeclarationProbe(); $reviveAlias =& $revive->value;
 unset($reviveAlias, $revive); echo native_reference_source_count(), ':';
@@ -537,5 +540,5 @@ $shouldRescue = false; unset($rescued); echo native_reference_source_count(), '|
     append_source_counter(&mut user);
     let runtime = runtime_obj_for_asm(&runtime);
     let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
-    assert_eq!(output, "1:2:1:0|1:0|1");
+    assert_eq!(output, "1:2:1:0|1:0|1:0|1");
 }
