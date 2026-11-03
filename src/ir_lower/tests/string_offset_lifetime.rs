@@ -379,10 +379,35 @@ offsetBoundaries("\x07aaaaaaaZ");
                     continue;
                 }
                 if function.name == "offsetReflectionStaticValues" {
-                    assert!(function.instructions[index + 1..].iter().any(|inst| {
-                        inst.op == Op::StoreReflectionStaticProperty
-                            && inst.operands.contains(&read.result.unwrap())
-                    }), "{target}: reflection static stores must preserve the direct byte producer");
+                    let byte = read.result.unwrap();
+                    let direct = function.instructions[index + 1..].iter().any(|inst| {
+                        inst.op == Op::StoreReflectionStaticProperty && inst.operands.first() == Some(&byte)
+                    });
+                    if !direct {
+                        // Mixed destinations box the direct byte before retaining Reflection's
+                        // argument and cloning the separate consuming destination owner.
+                        let boxed = function.instructions[index + 1..].iter().find(|inst|
+                            inst.op == Op::MixedBox && inst.operands == [byte])
+                            .and_then(|inst| inst.result)
+                            .expect("Mixed Reflection arguments must box the direct byte producer");
+                        let stored = function.instructions[index + 1..].iter().find(|inst|
+                            inst.op == Op::MixedClone && inst.operands == [boxed])
+                            .and_then(|inst| inst.result)
+                            .expect("the setter must own a separate clone of its retained argument");
+                        assert!(function.instructions[index + 1..].iter().any(|inst|
+                            inst.op == Op::StoreReflectionStaticProperty && inst.operands.first() == Some(&stored)),
+                            "{target}: the boxed byte must reach its Reflection destination");
+                        let owner = function.instructions[index + 1..].iter().find(|inst|
+                            inst.op == Op::StoreLocal && inst.operands == [boxed])
+                            .and_then(|inst| inst.immediate.as_ref()).cloned()
+                            .expect("the boxed argument must have an unwind-visible owner");
+                        assert!(function.instructions.iter().any(|inst|
+                            inst.op == Op::PushCallOperandOwner && inst.immediate == Some(owner.clone())),
+                            "{target}: protect Reflection's argument through the setter");
+                        assert!(function.instructions.iter().any(|inst|
+                            inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(owner.clone())),
+                            "{target}: retire Reflection's original argument after the setter");
+                    }
                     persisted_reads += 1;
                     continue;
                 }
