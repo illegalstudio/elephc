@@ -15,7 +15,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_owned_values(
     object: RuntimeCellHandle, mut arguments: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let owners = arguments.iter().map(|argument| argument.value).collect();
+    let owners: Vec<_> = arguments.iter().map(|argument| argument.value).collect();
     for argument in &mut arguments { argument.value = argument.value.borrowed(); }
     let result = eval_dynamic_method_with_values(
         class_name, called_class_name, method, object, arguments, context, values,

@@ -192,7 +192,7 @@ pub(in crate::interpreter) fn eval_magic_static_method_call(
         return Ok(None);
     }
     let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
-    let owners = magic_args.iter().map(|argument| argument.value).collect();
+    let owners: Vec<_> = magic_args.iter().map(|argument| argument.value).collect();
     let result = eval_dynamic_static_method_with_values(
         &declaring_class,
         called_class_name,
