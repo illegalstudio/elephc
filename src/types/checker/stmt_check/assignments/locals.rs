@@ -556,6 +556,7 @@ fn promote_ref_call_property_argument(
     Ok(())
 }
 
+/// Rebinds a local by reference while preserving the source slot's type and alias metadata.
 fn check_ref_assign_variable(
     checker: &mut Checker,
     target: &str,

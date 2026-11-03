@@ -36,6 +36,7 @@ thread_local! {
 pub(super) fn with_constant_expression<T>(f: impl FnOnce() -> T) -> T {
     struct Reset(bool);
     impl Drop for Reset {
+        /// Restores the enclosing constant-expression mode when this scope exits.
         fn drop(&mut self) {
             CONSTANT_EXPRESSION.with(|flag| flag.set(self.0));
         }
