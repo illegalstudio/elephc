@@ -187,3 +187,20 @@ echo 'done';
     assert_eq!(output.stdout, "9|9|9|done");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// Opaque eval can suspend and consume the independently owned value supplied on resume.
+#[test]
+fn test_eval_static_fiber_suspend_preserves_resume_value_owners() {
+    let source = r#"<?php
+$source = $argc > 0 ? 'echo Fiber::suspend(7), "|";' : '';
+$fiber = new Fiber(static function () use ($source): void { eval($source); });
+echo $fiber->start(), '|';
+$fiber->resume(9);
+unset($fiber, $source);
+echo 'done';
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "7|9|done");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

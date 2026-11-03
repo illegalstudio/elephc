@@ -3257,3 +3257,6 @@ mod reference_argument_tests {
 
 #[cfg(test)]
 mod range_tests;
+
+#[cfg(test)]
+mod static_intrinsics;

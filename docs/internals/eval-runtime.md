@@ -395,6 +395,13 @@ using the descriptor invoker's shared conversion. It does not read the by-value
 ownership marker for these returns. Eval receives a value copy rather than a
 binding to the native reference cell.
 
+Static intrinsic dispatch admits the reviewed `Fiber::suspend` method wrapper.
+The wrapper clones the boxed suspension value before the runtime consumes it,
+omits the hidden called-class argument, and publishes the returned cell's
+ownership marker. Generic eval method calls and callable lookup share this
+admission rule, so suspension inside an eval callback reaches the same native
+coroutine boundary on every supported target.
+
 ## Runtime generic specialization
 
 `crates/elephc-generics` owns structural type terms, conflict detection, written argument binding,
