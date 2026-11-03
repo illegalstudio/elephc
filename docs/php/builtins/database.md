@@ -9,7 +9,7 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`mysqli_affected_rows()`](./database/mysqli_affected_rows.md) | `(mixed $mysql): int` | `int` | ✓ | - |
+| [`mysqli_affected_rows()`](./database/mysqli_affected_rows.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | - |
 | [`mysqli_autocommit()`](./database/mysqli_autocommit.md) | `(mixed $mysql, bool $enable): bool` | `bool` | ✓ | - |
 | [`mysqli_begin_transaction()`](./database/mysqli_begin_transaction.md) | `(mixed $mysql, int $flags = 0, ?string $name = null): bool` | `bool` | ✓ | - |
 | [`mysqli_change_user()`](./database/mysqli_change_user.md) | `(mixed $mysql, string $username, string $password, ?string $database): bool` | `bool` | ✓ | - |
@@ -55,16 +55,16 @@ sidebar:
 | [`mysqli_get_warnings()`](./database/mysqli_get_warnings.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | - |
 | [`mysqli_info()`](./database/mysqli_info.md) | `(mixed $mysql): ?string` | `?string` | ✓ | - |
 | [`mysqli_init()`](./database/mysqli_init.md) | `(): mixed` | `mixed` | ✓ | - |
-| [`mysqli_insert_id()`](./database/mysqli_insert_id.md) | `(mixed $mysql): int` | `int` | ✓ | - |
+| [`mysqli_insert_id()`](./database/mysqli_insert_id.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | - |
 | [`mysqli_kill()`](./database/mysqli_kill.md) | `(mixed $mysql, int $process_id): bool` | `bool` | ✓ | - |
 | [`mysqli_more_results()`](./database/mysqli_more_results.md) | `(mixed $mysql): bool` | `bool` | ✓ | - |
 | [`mysqli_multi_query()`](./database/mysqli_multi_query.md) | `(mixed $mysql, string $query): bool` | `bool` | ✓ | - |
 | [`mysqli_next_result()`](./database/mysqli_next_result.md) | `(mixed $mysql): bool` | `bool` | ✓ | - |
 | [`mysqli_num_fields()`](./database/mysqli_num_fields.md) | `(mixed $result): int` | `int` | ✓ | - |
-| [`mysqli_num_rows()`](./database/mysqli_num_rows.md) | `(mixed $result): int` | `int` | ✓ | - |
+| [`mysqli_num_rows()`](./database/mysqli_num_rows.md) | `(mixed $result): mixed` | `mixed` | ✓ | - |
 | [`mysqli_options()`](./database/mysqli_options.md) | `(mixed $mysql, int $option, mixed $value): bool` | `bool` | ✓ | - |
 | [`mysqli_ping()`](./database/mysqli_ping.md) | `(mixed $mysql): bool` | `bool` | ✓ | - |
-| [`mysqli_poll()`](./database/mysqli_poll.md) | `(array $read, array $error, array $reject, int $seconds, int $microseconds = 0): mixed` | `mixed` | ✓ | - |
+| [`mysqli_poll()`](./database/mysqli_poll.md) | `(?array $read, ?array $error, array $reject, int $seconds, int $microseconds = 0): mixed` | `mixed` | ✓ | - |
 | [`mysqli_prepare()`](./database/mysqli_prepare.md) | `(mixed $mysql, string $query): mixed` | `mixed` | ✓ | - |
 | [`mysqli_query()`](./database/mysqli_query.md) | `(mixed $mysql, string $query, int $result_mode = 0): mixed` | `mixed` | ✓ | - |
 | [`mysqli_quote_string()`](./database/mysqli_quote_string.md) | `(mixed $mysql, string $string): string` | `string` | ✓ | - |
@@ -83,7 +83,7 @@ sidebar:
 | [`mysqli_sqlstate()`](./database/mysqli_sqlstate.md) | `(mixed $mysql): string` | `string` | ✓ | - |
 | [`mysqli_ssl_set()`](./database/mysqli_ssl_set.md) | `(mixed $mysql, ?string $key, ?string $certificate, ?string $ca_certificate, ?string $ca_path, ?string $cipher_algos): bool` | `bool` | ✓ | - |
 | [`mysqli_stat()`](./database/mysqli_stat.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | - |
-| [`mysqli_stmt_affected_rows()`](./database/mysqli_stmt_affected_rows.md) | `(mixed $statement): int` | `int` | ✓ | - |
+| [`mysqli_stmt_affected_rows()`](./database/mysqli_stmt_affected_rows.md) | `(mixed $statement): mixed` | `mixed` | ✓ | - |
 | [`mysqli_stmt_attr_get()`](./database/mysqli_stmt_attr_get.md) | `(mixed $statement, int $attribute): int` | `int` | ✓ | - |
 | [`mysqli_stmt_attr_set()`](./database/mysqli_stmt_attr_set.md) | `(mixed $statement, int $attribute, int $value): bool` | `bool` | ✓ | - |
 | [`mysqli_stmt_bind_param()`](./database/mysqli_stmt_bind_param.md) | `(mixed $statement, string $types, ...$vars): bool` | `bool` | ✓ | - |
@@ -100,10 +100,10 @@ sidebar:
 | [`mysqli_stmt_get_result()`](./database/mysqli_stmt_get_result.md) | `(mixed $statement): mixed` | `mixed` | ✓ | - |
 | [`mysqli_stmt_get_warnings()`](./database/mysqli_stmt_get_warnings.md) | `(mixed $statement): mixed` | `mixed` | ✓ | - |
 | [`mysqli_stmt_init()`](./database/mysqli_stmt_init.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | - |
-| [`mysqli_stmt_insert_id()`](./database/mysqli_stmt_insert_id.md) | `(mixed $statement): int` | `int` | ✓ | - |
+| [`mysqli_stmt_insert_id()`](./database/mysqli_stmt_insert_id.md) | `(mixed $statement): mixed` | `mixed` | ✓ | - |
 | [`mysqli_stmt_more_results()`](./database/mysqli_stmt_more_results.md) | `(mixed $statement): bool` | `bool` | ✓ | - |
 | [`mysqli_stmt_next_result()`](./database/mysqli_stmt_next_result.md) | `(mixed $statement): bool` | `bool` | ✓ | - |
-| [`mysqli_stmt_num_rows()`](./database/mysqli_stmt_num_rows.md) | `(mixed $statement): int` | `int` | ✓ | - |
+| [`mysqli_stmt_num_rows()`](./database/mysqli_stmt_num_rows.md) | `(mixed $statement): mixed` | `mixed` | ✓ | - |
 | [`mysqli_stmt_param_count()`](./database/mysqli_stmt_param_count.md) | `(mixed $statement): int` | `int` | ✓ | - |
 | [`mysqli_stmt_prepare()`](./database/mysqli_stmt_prepare.md) | `(mixed $statement, string $query): bool` | `bool` | ✓ | - |
 | [`mysqli_stmt_reset()`](./database/mysqli_stmt_reset.md) | `(mixed $statement): bool` | `bool` | ✓ | - |

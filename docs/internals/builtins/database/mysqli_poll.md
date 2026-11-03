@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1140](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1140) (`mysqli_poll`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1141](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1141) (`mysqli_poll`)
 - **Function symbol**: `mysqli_poll()`
 
 
@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_poll(array $read, array $error, array $reject, int $seconds, int $microseconds = 0): mixed
+function mysqli_poll(?array $read, ?array $error, array $reject, int $seconds, int $microseconds = 0): mixed
 ```
 
 ## What the type checker enforces

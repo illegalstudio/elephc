@@ -8,14 +8,14 @@ sidebar:
 ## mysqli_poll()
 
 ```php
-function mysqli_poll(array $read, array $error, array $reject, int $seconds, int $microseconds = 0): mixed
+function mysqli_poll(?array $read, ?array $error, array $reject, int $seconds, int $microseconds = 0): mixed
 ```
 
 Polls connections for completed async queries.
 
 **Parameters**:
-- `$read` (`array`), passed by reference
-- `$error` (`array`), passed by reference
+- `$read` (`?array`), passed by reference
+- `$error` (`?array`), passed by reference
 - `$reject` (`array`), passed by reference
 - `$seconds` (`int`)
 - `$microseconds` (`int`), default `0`, optional
