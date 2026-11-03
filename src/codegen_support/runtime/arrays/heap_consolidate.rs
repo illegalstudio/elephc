@@ -266,7 +266,7 @@ fn emit_heap_consolidate_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r12", "_heap_bin_marks");
     emitter.instruction("xor eax, eax");                                        // no bin bytes drained yet
     emitter.instruction("xor edx, edx");                                        // nothing changed yet
-    emitter.instruction(&format!("mov rdi, 0x{:x}", HEAP_CONSOLIDATE_MARK));   // rdi = the free-block mark
+    emitter.instruction(&format!("mov rdi, 0x{:x}", HEAP_CONSOLIDATE_MARK));    // rdi = the free-block mark
     crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_buf");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the bump offset

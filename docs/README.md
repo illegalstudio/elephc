@@ -116,3 +116,7 @@ How elephc works under the hood — from lexing to code generation and runtime s
 - [ARM64 Instructions](internals/arm64-instructions.md) — instruction reference
 
 For compile-time instrumentation and debug artifacts, the CLI also supports `--timings` to print per-phase compiler timings, including the optimizer phases, and `--source-map` to emit a sidecar `.map` file next to generated assembly.
+
+## Implementation specifications
+
+- [PHP Session Support](specs/session-support.md): lifecycle, storage, locking and version-dependent behavior of the implemented web session subsystem.

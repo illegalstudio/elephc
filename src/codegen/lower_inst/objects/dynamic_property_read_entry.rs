@@ -186,8 +186,8 @@ pub(super) fn emit_property_warning_location(ctx: &mut FunctionContext<'_>, line
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), i64::from(line));
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                               // pass the formatted line-number pointer to the warning fragment buffer
-        ctx.emitter.instruction("mov rsi, rdx");                               // pass the formatted line-number length to the warning fragment buffer
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the formatted line-number pointer to the warning fragment buffer
+        ctx.emitter.instruction("mov rsi, rdx");                                // pass the formatted line-number length to the warning fragment buffer
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
     // Publish the real caller location for a user error handler.

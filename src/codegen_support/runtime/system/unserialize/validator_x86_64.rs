@@ -109,7 +109,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("je __rt_unser_validate_ref_x");                        // validate the back-reference index
     emitter.instruction("cmp r8d, 82");                                         // by-reference marker (R)?
     emitter.instruction("je __rt_unser_validate_ref_x");                        // r and R share one index grammar
-    emitter.instruction("mov rdx, rsi");                                         // unknown type markers report the value start
+    emitter.instruction("mov rdx, rsi");                                        // unknown type markers report the value start
     emitter.instruction("jmp __rt_unser_validate_at_fail_x");                   // unknown type marker
 
     emitter.label("__rt_unser_validate_null_x");

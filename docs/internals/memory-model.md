@@ -398,11 +398,11 @@ storage, and opaque or object operands retain their ordinary dispatch path.
 ## The string buffer (scratch pad)
 
 ```asm
-.comm _concat_buf, <heap-size>  ; heap-sized scratch buffer (default 8 MB)
+.comm _concat_buf, <heap-size>  ; heap-sized scratch buffer (default 128 MB)
 .comm _concat_off, 8        ; current write offset (reset per statement, to the frame base)
 ```
 
-The string buffer (`_concat_buf`) is a heap-sized scratch region (default 8 MB, matching the configured heap budget) used by all string operations — `itoa`, `ftoa`, `concat`, `strtolower`, `str_replace`, etc. Each operation writes its result at the current offset and advances the offset.
+The string buffer (`_concat_buf`) is a heap-sized scratch region (default 128 MB, matching the configured heap budget) used by string operations such as `itoa`, `ftoa`, `concat`, `strtolower` and `str_replace`. Each operation writes its result at the current offset and advances the offset.
 
 **The buffer is reset at the start of every statement — to the frame's inherited base, not necessarily 0.** Strings in the buffer are temporary: they live only for the duration of one statement's evaluation, *plus* (for an argument passed into a call) the lifetime of the callee. See [Cross-call slice arguments](#cross-call-slice-arguments) below.
 
@@ -454,7 +454,7 @@ This is a bounds check, not an optimization. A producer that skips it writes str
 
 ### Implications
 
-- **Bounded usage.** Because the buffer resets each statement, only one statement's worth of string operations needs to fit in the configured arena — plus the slice arguments held by any enclosing calls on the current stack (see [Cross-call slice arguments](#cross-call-slice-arguments)). The arena follows `--heap-size` (default 8 MB), and a result that does not fit takes the heap fallback above rather than overflowing. A result larger than the configured budget reports a controlled capacity fatal.
+- **Bounded usage.** Because the buffer resets each statement, only one statement's worth of string operations needs to fit in the configured arena, plus the slice arguments held by any enclosing calls on the current stack (see [Cross-call slice arguments](#cross-call-slice-arguments)). The arena follows `--heap-size` (default 128 MB), and a result that does not fit takes the heap fallback above rather than overflowing. A result larger than the configured budget reports a controlled capacity fatal.
 - **Scratch copies.** Concatenation writes a new slice into `_concat_buf`, or a new heap block when the result outgrows the buffer. That scratch path leaves existing string bytes unchanged. In-place extension is the consuming heap append in [Performance characteristics](#performance-characteristics): a unique kind-1 buffer whose right-hand side does not overlap it.
 - **Scratch only.** The buffer is strictly temporary. Anything that needs to survive goes to the heap.
 
@@ -1718,6 +1718,23 @@ and heap counters described above.
 | `_php_exception_handler_value`, `_php_exception_handler_callable` | Original PHP exception-handler value and normalized callable |
 | `_php_exception_handler_context`, `_php_exception_handler_context_release`, `_php_exception_handler_stack` | Eval handler context, its release callback, and prior exception-handler registrations |
 
+### Additional fixed runtime state
+
+The fixed data emitter also reserves these scalar slots. Each listed slot is
+8 bytes unless the size column states otherwise; they hold cursors, flags or
+borrowed pointers rather than a second copy of the runtime heap.
+
+| Symbols | Size | Purpose |
+|---|---|---|
+| `_itoa_spill_index`, `_float_spill_index` | 8 bytes each | Current positions in the integer and floating-point formatting spill rings |
+| `_ser_stream`, `_unser_call_line` | 8 bytes each | Active growable serialization-stream descriptor and source line for unserialization diagnostics |
+| `_elephc_eval_inventory_context` | 8 bytes | Eval context used while registering the module's native metadata |
+| `_elephc_random_mt_uniform_fn` | 8 bytes | Optional Mt19937 bridge entry used by `array_rand()` and `shuffle()` |
+| `_elephc_tls_last_error_fn`, `_elephc_tls_clear_error_fn` | 8 bytes each | Late-bound TLS error-query and error-reset callbacks |
+| `_stream_error_code`, `_stream_error_tls`, `_stream_close_silent` | 8 bytes each | Stream error state and silent-close flag |
+| `_stream_empty_error` | 1 byte | Empty stream-error string storage |
+| `_php_exit_hook`, `_uncaught_report_mode` | 8 bytes each | Hosted-extension shutdown callback and uncaught `__debugInfo()` report mode |
+
 ### Global variables
 
 Two 8-byte BSS slots store the program's command-line arguments:
@@ -1854,7 +1871,7 @@ read the same uniform heap header, including on the iOS targets.
 | Resource | Size | What happens when full |
 |---|---|---|
 | Stack | OS default (~8MB) | Stack overflow (crash) |
-| String buffer | `--heap-size` (default 8 MB) | Resets each statement — bounded by the program budget |
+| String buffer | `--heap-size` (default 128 MB) | Resets each statement, bounded by the program budget |
 | print_r capture | `_print_r_ptr`, `_print_r_cap`, `_print_r_mode`, `_print_r_off` = 8 bytes each | Both return and echo modes render into growable raw heap storage. Finish persists the result with string metadata, frees the raw buffer, and clears state; cleanup releases abandoned captures |
 | Output-buffer (`ob_*`) stack | `_ob_level`, `_ob_in_handler`, `_ob_flushing`, `_ob_implicit_flush` = 8 bytes each; `_ob_ptrs`, `_ob_lens`, `_ob_caps`, `_ob_handler_stubs`, `_ob_handler_envs`, `_ob_name_ptrs`, `_ob_name_lens`, `_ob_chunk_sizes`, `_ob_flags`, `_ob_started` = 512 bytes each (64 slots) | Up to 64 nested `ob_start()` levels; the buffer bodies themselves are heap-allocated (16KB default capacity, page-aligned chunk size + 1 when a chunk size is set, grown by doubling) |
 | Web capture flag | `elephc_web_capture` = 8 bytes | `--web` bridge output-capture flag read by `__rt_stdout_write`; zero selects the plain `write(1, ...)` syscall path |
