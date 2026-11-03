@@ -325,7 +325,7 @@ Key invariants:
   callable, reflection, resource, eval-declaration, or strict signature-subset behavior.
 - Before opening a PR that adds, removes, or changes PHP-visible builtins, run the
   `update-builtin-docs` skill or the equivalent CI sequence:
-  `cargo build --example gen_builtins`,
+  `cargo build --example gen_builtins --features curl`,
   `python3 scripts/docs/extract_builtins.py --render --force`,
   `python3 scripts/docs/audit_builtins.py`, and
   `python3 scripts/docs/elephc_builtins/validate_site_compat.py`, plus

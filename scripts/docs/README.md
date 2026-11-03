@@ -13,7 +13,7 @@ tree into one Markdown page per supported PHP builtin, in two flavours:
 The script is data-driven. Its source of truth is the dependency-neutral shared
 contract (`crates/elephc-builtin-contract`), joined to the compiler's `builtin!`
 bindings and Magician's `eval_builtin!` bindings by the `gen_builtins` example
-(`cargo run --example gen_builtins -- --include-internal`). It enriches that data
+(`cargo run --example gen_builtins --features curl -- --include-internal`). It enriches that data
 with each builtin's lowering location (parsed from the home file's `lower`
 hook) and documentation area, then writes a single JSON registry
 (`scripts/docs/builtin_registry.json`) which the Markdown renderer consumes.
@@ -27,7 +27,7 @@ it first (the extractor prefers the prebuilt binary at
 
 ```bash
 # 0. Build the registry exporter the generator reads from
-cargo build --example gen_builtins
+cargo build --example gen_builtins --features curl
 
 # 1. Parse the source and write the JSON registry
 python3 scripts/docs/extract_builtins.py
@@ -39,7 +39,11 @@ python3 scripts/docs/extract_builtins.py --render
 python3 scripts/docs/extract_builtins.py --render --force
 ```
 
-By default, hand-written pages are preserved — only stubs (i.e. pages that
+The exporter must include the `curl` feature, even for a docs-only audit. The
+committed reference uses one canonical configuration that includes the public
+curl surface; extraction rejects a default-feature exporter that omits it.
+
+By default, hand-written pages are preserved, and only stubs (i.e. pages that
 the script itself wrote) are overwritten. Use `--force` to overwrite
 everything.
 

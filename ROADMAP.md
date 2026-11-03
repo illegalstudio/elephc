@@ -1167,9 +1167,9 @@ real-world validation rather than by speculative pass work.
 ## v0.29.x — PHP extension bridge (experimental)
 
 - [ ] Link against PHP extension `.so` / `.dylib` shared libraries
-- [ ] Proof of concept with one native PHP extension not already covered by an elephc bridge
+- [x] Proof of concept with one native PHP extension not already covered by an elephc bridge
 - [ ] `--ext` flag to specify extension libraries at compile time
-- [ ] Documentation: how to bridge a PHP extension
+- [x] Documentation: how to bridge a PHP extension
 
 ## v0.30.x — WebAssembly target
 
