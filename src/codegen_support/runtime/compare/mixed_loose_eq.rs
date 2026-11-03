@@ -29,6 +29,8 @@
 use super::MAX_LOOSE_EQ_DEPTH;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
+mod object_numeric_retry;
+
 /// Emits `__rt_mixed_loose_eq` / `__rt_mixed_loose_eq_d` for the active target.
 ///
 /// Public entry: AArch64 `x0`/`x1` = the two boxed `Mixed` operands, result in `x0`;
@@ -142,6 +144,15 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, #6");                                         // is the right operand an object?
     emitter.instruction("b.eq __rt_mle_object_vs_number_left");                 // an object only equals the number 1
 
+    emitter.instruction("cmp x9, #10");                                         // is the left operand a Closure descriptor?
+    emitter.instruction("b.ne __rt_mle_left_not_callable");                     // only the right operand can still be callable
+    emitter.instruction("cmp x10, #10");                                        // two Closure descriptors retain identity comparison
+    emitter.instruction("b.eq __rt_mle_numeric");                               // compare callable identities without numeric conversion
+    emitter.instruction("b __rt_mle_object_vs_number_right");                   // a Closure converts to one against int or float
+    emitter.label("__rt_mle_left_not_callable");
+    emitter.instruction("cmp x10, #10");                                        // is the right operand a Closure descriptor?
+    emitter.instruction("b.eq __rt_mle_object_vs_number_left");                 // a Closure converts to one against int or float
+
     // -- PHP rule 5: strings compare with numeric-string promotion --
     emitter.instruction("cmp x9, #1");                                          // is the left operand a string?
     emitter.instruction("b.ne __rt_mle_left_not_string");                       // only the right operand can still be a string
@@ -228,12 +239,8 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_mle_false");                                 // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_right");
     emit_object_numeric_warning(emitter, true);
-    emit_reload_numeric_operand(emitter, true);
-    emitter.instruction("bl __rt_mixed_cast_float");                            // read the numeric value of the right operand
-    emitter.instruction("fmov d1, #1.0");                                       // PHP converts the object operand to 1
-    emitter.instruction("fcmp d0, d1");                                         // compare the number against the converted object
-    emitter.instruction("cset x0, eq");                                         // materialize the object-versus-number result
-    emitter.instruction("b __rt_mle_done");                                     // return the object-versus-number result
+    object_numeric_retry::emit_compare_converted_object(emitter, true);
+    emitter.instruction("b __rt_mle_done");                                     // return the converted object comparison result
 
     emitter.label("__rt_mle_object_vs_number_left");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the left runtime tag
@@ -243,12 +250,8 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_mle_false");                                 // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_left");
     emit_object_numeric_warning(emitter, false);
-    emit_reload_numeric_operand(emitter, false);
-    emitter.instruction("bl __rt_mixed_cast_float");                            // read the numeric value of the left operand
-    emitter.instruction("fmov d1, #1.0");                                       // PHP converts the object operand to 1
-    emitter.instruction("fcmp d0, d1");                                         // compare the number against the converted object
-    emitter.instruction("cset x0, eq");                                         // materialize the number-versus-object result
-    emitter.instruction("b __rt_mle_done");                                     // return the number-versus-object result
+    object_numeric_retry::emit_compare_converted_object(emitter, false);
+    emitter.instruction("b __rt_mle_done");                                     // return the converted object comparison result
 
     // -- string comparisons --
     emitter.label("__rt_mle_strings");
@@ -478,6 +481,15 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 6");                                          // is the right operand an object?
     emitter.instruction("je __rt_mle_object_vs_number_left");                   // an object only equals the number 1
 
+    emitter.instruction("cmp r10, 10");                                         // is the left operand a Closure descriptor?
+    emitter.instruction("jne __rt_mle_left_not_callable");                      // only the right operand can still be callable
+    emitter.instruction("cmp r11, 10");                                         // two Closure descriptors retain identity comparison
+    emitter.instruction("je __rt_mle_numeric");                                 // compare callable identities without numeric conversion
+    emitter.instruction("jmp __rt_mle_object_vs_number_right");                 // a Closure converts to one against int or float
+    emitter.label("__rt_mle_left_not_callable");
+    emitter.instruction("cmp r11, 10");                                         // is the right operand a Closure descriptor?
+    emitter.instruction("je __rt_mle_object_vs_number_left");                   // a Closure converts to one against int or float
+
     // -- PHP rule 5: strings compare with numeric-string promotion --
     emitter.instruction("cmp r10, 1");                                          // is the left operand a string?
     emitter.instruction("jne __rt_mle_left_not_string");                        // only the right operand can still be a string
@@ -565,9 +577,8 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_mle_false");                                  // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_right");
     emit_object_numeric_warning(emitter, true);
-    emit_reload_numeric_operand(emitter, true);
-    abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // read the numeric value of the right operand
-    emitter.instruction("jmp __rt_mle_compare_one");                            // compare the number against the converted object
+    object_numeric_retry::emit_compare_converted_object(emitter, true);
+    emitter.instruction("jmp __rt_mle_done");                                   // return the converted object comparison result
 
     emitter.label("__rt_mle_object_vs_number_left");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the left runtime tag
@@ -577,18 +588,8 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_mle_false");                                  // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_left");
     emit_object_numeric_warning(emitter, false);
-    emit_reload_numeric_operand(emitter, false);
-    abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // read the numeric value of the left operand
-
-    emitter.label("__rt_mle_compare_one");
-    emitter.instruction("movabs rax, 0x3ff0000000000000");                      // materialize the double bit pattern for 1.0
-    emitter.instruction("movq xmm1, rax");                                      // PHP converts the object operand to 1
-    emitter.instruction("ucomisd xmm0, xmm1");                                  // compare the number against the converted object
-    emitter.instruction("sete al");                                             // equality requires matching numeric values
-    emitter.instruction("setnp cl");                                            // an unordered NaN comparison is never equal
-    emitter.instruction("and al, cl");                                          // combine the ordered and equal predicates
-    emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the result register
-    emitter.instruction("jmp __rt_mle_done");                                   // return the object-versus-number result
+    object_numeric_retry::emit_compare_converted_object(emitter, false);
+    emitter.instruction("jmp __rt_mle_done");                                   // return the converted object comparison result
 
     // -- string comparisons --
     emitter.label("__rt_mle_strings");
@@ -712,39 +713,6 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the loose-equality boolean
 }
 
-/// Reloads the current numeric box after a warning may have replaced reference storage.
-fn emit_reload_numeric_operand(emitter: &mut Emitter, right: bool) {
-    let done = if right {
-        "__rt_mle_numeric_right_loaded"
-    } else {
-        "__rt_mle_numeric_left_loaded"
-    };
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            let operand = if right { 8 } else { 0 };
-            let reference = if right { 88 } else { 80 };
-            emitter.instruction(&format!("ldr x0, [sp, #{operand}]"));          // recover the original value for non-reference operands
-            emitter.instruction(&format!("ldr x9, [sp, #{reference}]"));        // recover optional stable reference storage
-            emitter.instruction(&format!("cbz x9, {done}"));                    // value operands retain their original comparison snapshot
-            emitter.instruction("ldr x0, [x9]");                                // reload the box currently owned by the reference cell
-        }
-        Arch::X86_64 => {
-            let operand = if right { 16 } else { 8 };
-            let reference = if right { 96 } else { 88 };
-            emitter.instruction(
-                &format!("mov rax, QWORD PTR [rbp - {operand}]")
-            );                                                                  // recover the original value for non-reference operands
-            emitter.instruction(
-                &format!("mov r10, QWORD PTR [rbp - {reference}]")
-            );                                                                  // recover optional stable reference storage
-            emitter.instruction("test r10, r10");                               // distinguish references from value operands
-            emitter.instruction(&format!("je {done}"));                         // value operands retain their original comparison snapshot
-            emitter.instruction("mov rax, QWORD PTR [r10]");                    // reload the box currently owned by the reference cell
-        }
-    }
-    emitter.label(done);
-}
-
 /// Compares a float payload with null by ignoring its sign bit, without bool warnings.
 fn emit_null_float_compare(emitter: &mut Emitter) {
     emitter.label("__rt_mle_null_float_right");
@@ -784,23 +752,29 @@ fn emit_null_float_compare(emitter: &mut Emitter) {
     }
 }
 
-/// Reports ordinary object-to-number conversion using the opposite operand's numeric tag.
+/// Reports object or Closure numeric conversion using the opposite operand's numeric tag.
 fn emit_object_numeric_warning(emitter: &mut Emitter, left_object: bool) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            let (object, numeric_tag) = if left_object { (32, 48) } else { (56, 24) };
+            let (object, object_tag, numeric_tag) = if left_object { (32, 24, 48) } else { (56, 48, 24) };
             emitter.instruction(&format!("ldr x0, [sp, #{object}]"));           // borrow the concrete object for class-name lookup
             emitter.instruction(&format!("ldr x1, [sp, #{numeric_tag}]"));      // zero selects int and tag two selects float wording
             emitter.instruction("mov x2, #0");                                  // let the helper discover an eval object owner context
-            emitter.instruction("mov x3, #0");                                  // use ordinary object class metadata
+            emitter.instruction(&format!("ldr x3, [sp, #{object_tag}]"));       // recover the object or callable runtime tag
+            emitter.instruction("cmp x3, #10");                                 // callable descriptors report the Closure class
+            emitter.instruction("cset x3, eq");                                 // select fixed Closure spelling without inspecting a descriptor
             abi::emit_call_label(emitter, "__rt_sprintf_warn_object_numeric");
         }
         Arch::X86_64 => {
-            let (object, numeric_tag) = if left_object { (40, 56) } else { (64, 32) };
+            let (object, object_tag, numeric_tag) = if left_object { (40, 32, 56) } else { (64, 56, 32) };
             emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {object}]")); // borrow the concrete object for class-name lookup
             emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {numeric_tag}]")); // zero selects int and tag two selects float wording
             emitter.instruction("xor edx, edx");                                // let the helper discover an eval object owner context
-            emitter.instruction("xor ecx, ecx");                                // use ordinary object class metadata
+            emitter.instruction(
+                &format!("cmp QWORD PTR [rbp - {object_tag}], 10")
+            );                                                                  // callable descriptors report the Closure class
+            emitter.instruction("sete cl");                                     // select fixed Closure spelling without inspecting a descriptor
+            emitter.instruction("movzx ecx, cl");                               // normalize the Closure class selector
             abi::emit_call_label(emitter, "__rt_sprintf_warn_object_numeric_x64");
         }
     }

@@ -34,6 +34,13 @@ Boxed reference operands also pass their stable storage address to
 the original numeric tag, then reloads the current box after the handler returns.
 Assignments through the reference can retire the original box, so retaining or
 casting that saved box would preserve a stale value or read freed storage.
+The converted object becomes a borrowed stack cell containing integer or float one;
+the complete equality table then compares it with the updated operand. This also
+handles new strings, arrays, objects and Closure descriptors, including a second
+conversion warning or throw. Scalar conversion keeps the structural recursion depth.
+Closure descriptors use the shared warning helper's fixed class spelling in both
+the generic table and specialized Mixed/number comparisons. Each global runtime
+entry explicitly branches to its shared body so linker section collection retains it.
 
 ## Pipeline Position
 

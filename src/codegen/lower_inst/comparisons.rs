@@ -505,7 +505,7 @@ fn emit_mixed_numeric_compare(
     Ok(())
 }
 
-/// Warns for a borrowed unboxed object, then compares its numeric value one without boxing.
+/// Warns for a borrowed object or Closure, then compares numeric one without boxing.
 fn emit_mixed_numeric_object_compare(
     ctx: &mut FunctionContext<'_>,
     numeric_ty: &PhpType,
@@ -514,16 +514,19 @@ fn emit_mixed_numeric_object_compare(
     let kind = i64::from(*numeric_ty == PhpType::Float);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #10");                             // callable descriptors use the fixed Closure spelling
+            ctx.emitter.instruction("cset x3, eq");                             // select Closure metadata before replacing the runtime tag
             ctx.emitter.instruction("mov x0, x1");                              // borrow the unboxed object for its class name
             abi::emit_load_int_immediate(ctx.emitter, "x1", kind);
             ctx.emitter.instruction("mov x2, #0");                              // allow the warning helper to discover an eval owner context
-            ctx.emitter.instruction("mov x3, #0");                              // use the object's class rather than the Closure label
             abi::emit_call_label(ctx.emitter, "__rt_sprintf_warn_object_numeric");
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rsi", kind);
             ctx.emitter.instruction("xor edx, edx");                            // allow the warning helper to discover an eval owner context
-            ctx.emitter.instruction("xor ecx, ecx");                            // rdi borrows the unboxed object for its class name
+            ctx.emitter.instruction("cmp rax, 10");                             // callable descriptors use the fixed Closure spelling
+            ctx.emitter.instruction("sete cl");                                 // select Closure metadata without inspecting its descriptor
+            ctx.emitter.instruction("movzx ecx, cl");                           // normalize the Closure class selector
             abi::emit_call_label(ctx.emitter, "__rt_sprintf_warn_object_numeric_x64");
         }
     }
@@ -597,6 +600,8 @@ fn emit_mixed_numeric_tag_dispatch(
             ctx.emitter.instruction(&format!("b.eq {}", non_scalar_label));     // hashes are never loosely equal to numeric operands
             ctx.emitter.instruction("cmp x0, #6");                              // check whether the mixed payload is an object
             ctx.emitter.instruction(&format!("b.eq {}", object_label));         // objects convert to one and emit PHP's numeric warning
+            ctx.emitter.instruction("cmp x0, #10");                             // check whether the mixed payload is a Closure descriptor
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // Closure values convert to one with their class warning
             ctx.emitter.instruction("cmp x0, #9");                              // check whether the mixed payload is a resource
             ctx.emitter.instruction(&format!("b.eq {}", resource_label));       // resources compare through their PHP display id
         }
@@ -611,6 +616,8 @@ fn emit_mixed_numeric_tag_dispatch(
             ctx.emitter.instruction(&format!("je {}", non_scalar_label));       // hashes are never loosely equal to numeric operands
             ctx.emitter.instruction("cmp rax, 6");                              // check whether the mixed payload is an object
             ctx.emitter.instruction(&format!("je {}", object_label));           // objects convert to one and emit PHP's numeric warning
+            ctx.emitter.instruction("cmp rax, 10");                             // check whether the mixed payload is a Closure descriptor
+            ctx.emitter.instruction(&format!("je {}", object_label));           // Closure values convert to one with their class warning
             ctx.emitter.instruction("cmp rax, 9");                              // check whether the mixed payload is a resource
             ctx.emitter.instruction(&format!("je {}", resource_label));         // resources compare through their PHP display id
         }

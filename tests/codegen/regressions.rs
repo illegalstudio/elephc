@@ -37,6 +37,8 @@ mod mixed_method_dispatch;
 mod switch_and_float_params;
 #[path = "regressions/loose_comparison_batch.rs"]
 mod loose_comparison_batch;
+#[path = "regressions/loose_comparison_ref_cells.rs"]
+mod loose_comparison_ref_cells;
 #[path = "regressions/return_this_ownership.rs"]
 mod return_this_ownership;
 #[path = "regressions/symbol_collisions.rs"]
