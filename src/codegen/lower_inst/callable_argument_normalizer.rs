@@ -66,6 +66,36 @@ pub(in crate::codegen) fn emit_callable_argument_normalizer(
 mod tests {
     use crate::codegen_support::platform::Target;
 
+    /// Multiple unrestricted boxed invocation sites reuse one complete candidate resolver.
+    #[test]
+    fn boxed_descriptor_invocations_share_candidate_tables_on_every_target() {
+        let source = "<?php function sharedBoxedFirst(mixed $callback, array $args): mixed { \
+            return call_user_func_array($callback, $args); } \
+            function sharedBoxedSecond(mixed $callback, array $args): mixed { \
+            return call_user_func_array($callback, $args); } \
+            function sharedBoxedTarget(string $value): string { return $value; }";
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let module = crate::ir_lower::tests::lower_source_at_for_target(
+                source, std::path::Path::new("main.php"), std::path::Path::new("."),
+                Target::parse(name).unwrap(),
+            );
+            let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            for function in ["sharedBoxedFirst", "sharedBoxedSecond"] {
+                let body = assembly.split_once(&format!("@fn name={function} symbol=")).unwrap().1
+                    .split_once(&format!("@endfn name={function}")).unwrap().0;
+                assert_eq!(body.matches(super::CALLABLE_ARGUMENT_NORMALIZER).count(), 1,
+                    "{name}: {function} resolves its callback through the shared entry");
+                assert!(!body.contains("runtime_string_descriptor_next")
+                    && !body.contains("callable_array_instance_next"),
+                    "{name}: {function} must not copy the candidate tables");
+                assert!(body.contains("__rt_callable_invoke_owned_descriptor_args"),
+                    "{name}: {function} transfers its selected descriptor to bounded invocation");
+            }
+            assert_eq!(assembly.matches(&format!("{}:\n", super::CALLABLE_ARGUMENT_NORMALIZER)).count(), 1,
+                "{name}: emit one resolver for the module");
+        }
+    }
+
     /// Shared argument normalization discovers an eval closure owner without a source eval local.
     fn verify_callable_argument_normalizer_discovers_eval_callback_owner(name: &str) {
         let source = "<?php function acceptOwnedEvalCallback(callable $callback): mixed { return $callback(); } \

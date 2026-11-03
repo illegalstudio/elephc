@@ -166,13 +166,17 @@ pub(super) fn lower_callable_descriptor_invoke(
             arg_mixed,
             "callable_descriptor_invoke",
         ),
-        PhpType::Mixed | PhpType::Union(_) => lower_mixed_callable_descriptor_invoke(
-            ctx,
-            inst,
-            callable,
-            arg_mixed,
-            "callable_descriptor_invoke",
-        ),
+        PhpType::Mixed | PhpType::Union(_) => {
+            if ctx.runtime_callable_candidates(callable).is_none()
+                && super::instruction_strict_php_profile(inst) == crate::strict_php::is_enabled()
+            {
+                lower_shared_mixed_descriptor_invoke(ctx, inst, callable, arg_mixed)
+            } else {
+                lower_mixed_callable_descriptor_invoke(
+                    ctx, inst, callable, arg_mixed, "callable_descriptor_invoke",
+                )
+            }
+        }
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
             lower_runtime_mixed_callable_array_descriptor_invoke(
                 ctx,
@@ -204,6 +208,20 @@ pub(super) fn lower_callable_descriptor_invoke(
             other
         ))),
     }
+}
+
+/// Resolves an unrestricted boxed callback once per module instead of expanding every candidate.
+fn lower_shared_mixed_descriptor_invoke(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, callable: ValueId, arguments: ValueId,
+) -> Result<()> {
+    ctx.shared.callable_argument_normalizer = true;
+    ctx.load_value_to_result(callable)?;
+    abi::emit_call_label(ctx.emitter, super::CALLABLE_ARGUMENT_NORMALIZER);
+    let descriptor = abi::nested_call_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, descriptor, abi::int_result_reg(ctx.emitter));
+    emit_descriptor_reg_invoker_call_with_mixed_arg(
+        ctx, inst, descriptor, arguments, "callable_descriptor_invoke", true,
+    )
 }
 
 /// Lowers descriptor invocation when the callable traveled through a boxed Mixed value.

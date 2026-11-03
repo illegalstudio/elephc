@@ -114,7 +114,8 @@ mod tests {
                 else { "str x15, [sp, #-16]!" };
             let pop = if name == "linux-x86_64" { "mov r11, QWORD PTR [rsp]" }
                 else { "ldr x15, [sp], #16" };
-            assert_eq!(body.matches(push).count(), 25, "{name}: snapshot every path's marker");
+            assert_eq!(body.matches(push).count(), 24,
+                "{name}: snapshot each distinct marker after equivalent return paths are merged");
             assert_eq!(body.matches(pop).count(), 1, "{name}: restore the shared marker after cleanup");
         }
     }
@@ -140,8 +141,8 @@ mod tests {
                 line.ends_with(':') && line.contains("shared_return_cleanup")).count();
             assert_eq!(shared, 1, "{name}: the runtime selector preserves the transferred local in shared cleanup");
             let cleanup = body.matches("epilogue cleanup $owned").count();
-            assert_eq!(cleanup, 1,
-                "{name}: cleanup copies must be bounded independently of the 24 source return sites: {cleanup}");
+            assert_eq!(cleanup, 2,
+                "{name}: retain one normal and one exceptional cleanup independently of the 24 return sites: {cleanup}");
         }
     }
 }

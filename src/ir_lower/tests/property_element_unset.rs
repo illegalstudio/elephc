@@ -318,11 +318,9 @@ supported_target_cases!(property_element_unset_native_xml_protocol,
     verify_property_element_unset_native_xml_protocol);
 
 /// A known quiet-read name emits only matching slots while runtime names keep every candidate.
-#[test]
-fn property_element_unset_known_name_bounds_slot_dispatch_on_every_target() {
-    for target in TARGETS {
-        for (name, known) in [("'items'", true), ("$name", false)] {
-            let source = format!(r#"<?php
+fn verify_property_element_unset_known_name_bounds_slot_dispatch(target: &str) {
+    for (name, known) in [("'items'", true), ("$name", false)] {
+        let source = format!(r#"<?php
 class QuietCandidateOwner {{
     public array $items = [];
     public array $other = [];
@@ -332,17 +330,19 @@ function quietCandidateRead(object $owner, string $name): void {{ unset($owner->
 $xmlCapability = new SimpleXMLElement('<r/>'); unset($xmlCapability);
 quietCandidateRead(new QuietCandidateOwner(), 'items');
 "#);
-            let module = super::lower_source_at_for_target(&source, Path::new("main.php"),
-                Path::new("."), Target::parse(target).unwrap());
-            let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-            let body = assembly.split_once("@fn name=quietCandidateRead symbol=").unwrap().1
-                .split_once("@endfn name=quietCandidateRead").unwrap().0;
-            let labels = body.lines().filter(|line| line.ends_with(':') && line.contains("unset_prop_slot")).count();
-            if known {
-                assert_eq!(labels, 1, "{target}: literal reads must skip unrelated slots");
-            } else {
-                assert!(labels >= 3, "{target}: runtime names must retain every declared slot");
-            }
+        let module = super::lower_source_at_for_target(&source, Path::new("main.php"),
+            Path::new("."), Target::parse(target).unwrap());
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = assembly.split_once("@fn name=quietCandidateRead symbol=").unwrap().1
+            .split_once("@endfn name=quietCandidateRead").unwrap().0;
+        let labels = body.lines().filter(|line| line.ends_with(':') && line.contains("unset_prop_slot")).count();
+        if known {
+            assert_eq!(labels, 1, "{target}: literal reads must skip unrelated slots");
+        } else {
+            assert!(labels >= 3, "{target}: runtime names must retain every declared slot");
         }
     }
 }
+
+supported_target_cases!(property_element_unset_known_name_bounds_slot_dispatch,
+    verify_property_element_unset_known_name_bounds_slot_dispatch);
