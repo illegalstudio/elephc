@@ -772,40 +772,20 @@ fn test_error_for_clause_rejects_include() {
     );
 }
 
-/// Pins the parser invariant the `for`-clause include guard rests on: `include` is an
-/// expression in exactly ONE position, the whole right-hand side of a plain assignment or a
-/// `return`.
-///
-/// `ExprKind::IncludeValue` has two construction sites, both in `try_parse_value_include`, and
-/// the assignment one builds a plain `StmtKind::Assign` BEFORE `parse_assignment_value_expr`
-/// runs. So no typed, indexed, property or static-property assignment can carry one, and the
-/// guard in `parse_for_clause` does not need to walk for them.
-///
-/// Raised in review on issue #476 as a possible hole. It is not one today — but it is an
-/// invariant nobody was testing, so if any of these ever starts parsing, this fails and points
-/// at that guard.
+/// Verifies an include that IS a `for` clause keeps the for-clause diagnostic now that include is
+/// an expression everywhere: `K::$s = include F` and `int $v = include F` are ordinary
+/// assignments whose value is the include, and the clause is not a statement list the resolver
+/// can expand it into. (An include NESTED in a clause is refused by the resolver; see
+/// `test_error_include_expression_in_unsupported_position`.)
 #[test]
-fn test_error_include_is_only_an_expression_in_an_assignment_rhs() {
+fn test_error_include_as_a_for_clause_value() {
     expect_error(
-        r#"<?php int $a = include "f.php";"#,
-        "Unexpected token: Include",
+        r#"<?php class K { public static $s; } for (K::$s = include "f.php"; false; ) {} echo 1;"#,
+        "include/require is not supported in a for clause",
     );
-    expect_error(
-        r#"<?php $a = []; $a[0] = include "f.php";"#,
-        "Unexpected token: Include",
-    );
-    expect_error(
-        r#"<?php $o = new stdClass(); $o->p = include "f.php";"#,
-        "Unexpected token: Include",
-    );
-    expect_error(
-        r#"<?php class K { public static $s; } K::$s = include "f.php";"#,
-        "Unexpected token: Include",
-    );
-    // The same rejection inside a clause, which is the case the review asked about.
     expect_error(
         r#"<?php for (int $v = include "f.php"; false; ) {} echo 1;"#,
-        "Unexpected token: Include",
+        "include/require is not supported in a for clause",
     );
 }
 
