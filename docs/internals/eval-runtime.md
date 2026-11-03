@@ -428,6 +428,9 @@ before release. The promoted call result has a separate slot until cleanup ends,
 so a destructor that suspends cannot turn the held result into an external root.
 Synthesized wrapper and magic-method arguments expose their original owner vectors
 through dispatch, then transfer those obligations to the shared cleanup slots.
+Owned operand prefixes stay visible while later operands are evaluated, and their
+complete inventory remains visible through the consumer. This includes temporary
+method receivers. Cleanup transfers the leases into slots cleared before release.
 
 ## Runtime generic specialization
 

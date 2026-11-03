@@ -168,9 +168,13 @@ class NativeCycleMagicConsumer {
     public function __call(string $name, array $arguments): mixed { return $arguments[0](); }
     public static function __callStatic(string $name, array $arguments): mixed { return $arguments[0](); }
 }
+class NativeCycleOwnedReceiver {
+    public mixed $fiber = null;
+    public function pause(): void { $this->fiber = Fiber::getCurrent(); Fiber::suspend(9); }
+}
 function nativeCycleCastFunction(callable $callback): void { $callback(); }
 $function = nativeCycleCastFunction(...);
-for ($mode = 0; $mode < 9; $mode++) {
+for ($mode = 0; $mode < 10; $mode++) {
     $callback = new NativeCycleCastCallback();
     $fiber = new Fiber(static function () use ($callback, $mode, $function): void {
         eval('
@@ -184,6 +188,7 @@ for ($mode = 0; $mode < 9; $mode++) {
                 $consumer = new NativeCycleMagicConsumer(); $consumer->missing($callback);
             } elseif ($mode === 5) { NativeCycleMagicConsumer::missing($callback); }
             elseif ($mode === 7) { call_user_func($function, $callback); }
+            elseif ($mode === 9) { (new NativeCycleOwnedReceiver())->pause(); }
             else {
                 if (!class_exists("EvalCycleMagicConsumer", false)) {
                     class EvalCycleMagicConsumer {
@@ -209,7 +214,7 @@ echo 'done';
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
-    assert_eq!(output.stdout, "9|9|9|9|9|9|9|9|9|done");
+    assert_eq!(output.stdout, "9|9|9|9|9|9|9|9|9|9|done");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 

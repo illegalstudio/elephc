@@ -267,25 +267,16 @@ pub(in crate::interpreter) fn with_eval_operands<V: RuntimeValueOps>(
     ) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut operands = Vec::with_capacity(args.len());
-    let result = (|| {
+    let prepared = (|| {
         for arg in args {
-            operands.push(eval_owned_expr(arg, context, scope, values)?);
+            let value = with_runtime_owners(&operands, || eval_owned_expr(arg, context, scope, values))?;
+            operands.push(value);
         }
-        consume(&operands, context, scope, values)
+        Ok(())
     })();
-    let mut cleanup = Ok(());
-    for operand in operands {
-        let released = eval_release_value(context, values, operand);
-        if cleanup.is_ok() { cleanup = released; }
-    }
-    match (result, cleanup) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = release_expr_result(value, context, values);
-            Err(status)
-        }
-        (Ok(value), Ok(())) => Ok(value),
-    }
+    let result = prepared.and_then(|()| with_runtime_owners(&operands, ||
+        consume(&operands, context, scope, values)));
+    finish_eval_argument_values(result, operands, context, values)
 }
 
 /// Keeps operands alive through a statement and releases every lease on success or failure.
@@ -299,17 +290,23 @@ pub(in crate::interpreter) fn with_eval_void_operands<V: RuntimeValueOps>(
     ) -> Result<(), EvalStatus>,
 ) -> Result<(), EvalStatus> {
     let mut operands = Vec::with_capacity(args.len());
-    let mut result = (|| {
+    let prepared = (|| {
         for arg in args {
-            operands.push(eval_owned_expr(arg, context, scope, values)?);
+            let value = with_runtime_owners(&operands, || eval_owned_expr(arg, context, scope, values))?;
+            operands.push(value);
         }
-        consume(&operands, context, scope, values)
+        Ok(())
     })();
-    for operand in operands {
-        let released = eval_release_value(context, values, operand);
-        if result.is_ok() { result = released; }
-    }
-    result
+    let mut result = prepared.and_then(|()| with_runtime_owners(&operands, ||
+        consume(&operands, context, scope, values)));
+    let operands = operands.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    with_runtime_owners(&operands, || {
+        for operand in &operands {
+            let released = eval_release_value(context, values, operand.take());
+            if result.is_ok() { result = released; }
+        }
+        result
+    })
 }
 
 /// Gives a statement consumer one owned lease for a materialized value and releases it on every exit.
