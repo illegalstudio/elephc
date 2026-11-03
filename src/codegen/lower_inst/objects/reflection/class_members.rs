@@ -29,7 +29,7 @@ pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_nam
     };
     // Zend's function-table order (`crate::types::method_order`), restricted to the
     // methods this class actually has and php exposes.
-    if let Some((resolved_name, info)) = resolve_reflection_class(ctx, class_name) {
+    if let Some((resolved_name, _)) = resolve_reflection_class(ctx, class_name) {
         let ordered = crate::types::method_order::zend_method_table_order(
             resolved_name,
             &ctx.module.class_infos,
@@ -40,23 +40,41 @@ pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_nam
                 )
             },
         );
-        let present = |key: &String| info.methods.contains_key(key) || info.static_methods.contains_key(key);
+        // A method is present when this class or an ancestor has it (a parent's
+        // private methods are not in the child's tables, yet php reports them).
+        let mut chain = Vec::new();
+        let mut current = Some(resolved_name.to_string());
+        while let Some(current_name) = current {
+            let Some((level_name, level)) = resolve_reflection_class(ctx, &current_name) else {
+                break;
+            };
+            chain.push((level_name, level));
+            current = level.parent.clone();
+            if current.as_deref() == Some(level_name) || chain.len() > 64 {
+                break;
+            }
+        }
         let filtered: Vec<String> = ordered
             .into_iter()
-            .filter(|key| present(key))
             .filter(|key| {
-                let is_static = !info.methods.contains_key(key);
-                visible(info, resolved_name, key, is_static)
+                chain.iter().any(|(level_name, level)| {
+                    let is_static = !level.methods.contains_key(key);
+                    (level.methods.contains_key(key) || level.static_methods.contains_key(key))
+                        && visible(level, level_name, key, is_static)
+                })
             })
             .collect();
         push_unique_method_names(filtered.iter(), &mut names, &mut seen);
-        // Anything the declarations did not cover keeps its table order after them.
-        for (map, is_static) in [(&info.methods, false), (&info.static_methods, true)] {
-            push_unique_method_names(
-                map.keys().filter(|method| visible(info, resolved_name, method, is_static)),
-                &mut names,
-                &mut seen,
-            );
+        // Anything the declarations did not cover keeps its table order after them,
+        // level by level up the parent chain.
+        for (level_name, level) in &chain {
+            for (map, is_static) in [(&level.methods, false), (&level.static_methods, true)] {
+                push_unique_method_names(
+                    map.keys().filter(|method| visible(level, level_name, method, is_static)),
+                    &mut names,
+                    &mut seen,
+                );
+            }
         }
     }
     // A reviewed internal surface reports php-src's declaration order. GMP's synthetic
