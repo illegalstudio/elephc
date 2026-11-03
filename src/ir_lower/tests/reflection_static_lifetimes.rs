@@ -14,6 +14,13 @@ use crate::ir::Op;
 fn verify_reflection_static_metadata_lifetimes(target: &str) {
     let source = r#"<?php
 class ReflectionStaticLifetimeSubject { public static mixed $value = null; }
+enum ReflectionStaticLifetimeEnum: string {
+    case First = 'first';
+    public function label(): string { return $this->value; }
+}
+function constructStaticLifetimeEnum(): ReflectionEnum {
+    return new ReflectionEnum(ReflectionStaticLifetimeEnum::class);
+}
 function constructStaticLifetimeReflector(): ReflectionClass {
     return new ReflectionClass(ReflectionStaticLifetimeSubject::class);
 }
@@ -46,6 +53,11 @@ function readStaticLifetimeReflector(ReflectionClass $reflection): mixed {
     }
     assert_eq!(module.class_infos.get("ReflectionEnum").unwrap().parent.as_deref(),
         Some("ReflectionClass"), "{target}: enum reflectors satisfy class parameter contracts");
+    let enum_owner = &module.class_infos["ReflectionEnum"];
+    for method in ["getmethods", "getproperties", "getconstants", "getstaticproperties"] {
+        assert_eq!(enum_owner.method_declaring_classes.get(method).map(String::as_str),
+            Some("ReflectionEnum"), "{target}: {method} must read the populated enum slots");
+    }
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     let constructor = assembly.split_once("@fn name=constructStaticLifetimeReflector ").unwrap().1
         .split_once("@endfn name=constructStaticLifetimeReflector").unwrap().0;

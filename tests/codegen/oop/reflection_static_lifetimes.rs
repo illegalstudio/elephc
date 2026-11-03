@@ -46,13 +46,20 @@ echo $second['value'];
 fn test_eval_reflector_static_name_lifetimes_bundle() {
     let source = r#"<?php
 class EvalStaticNameSubject { public static int $value = 11; }
-enum EvalStaticNameEnum { case Value; }
+enum EvalStaticNameEnum {
+    case Value;
+    public function label(): string { return 'value'; }
+}
 function readEvalStaticNameMap(ReflectionClass $reflection): mixed {
     return $reflection->getStaticProperties();
 }
 function printEvalStaticNameMap(ReflectionClass $reflection): void {
     $values = readEvalStaticNameMap($reflection);
     echo count($values), ':', isset($values['value']) ? $values['value'] : '-', '|';
+}
+function printEvalEnumMembers(ReflectionClass $reflection): void {
+    echo (int)$reflection->hasMethod('label'), ':', count($reflection->getMethods()),
+        ':', count($reflection->getProperties()), '|';
 }
 $code = $argc > 0 ? '
     $classOwner = new ReflectionClass("EvalStaticNameSubject");
@@ -69,6 +76,7 @@ $noise = str_repeat('x', strlen(EvalStaticNameSubject::class));
 printEvalStaticNameMap($objectOwner);
 unset($noise);
 printEvalStaticNameMap($enumOwner);
+printEvalEnumMembers($enumOwner);
 $noise = str_repeat('x', strlen(EvalStaticNameEnum::class));
 printEvalStaticNameMap($enumOwner);
 unset($noise);
@@ -77,6 +85,30 @@ echo 'done';
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
-    assert_eq!(output.stdout, "1:11|1:11|1:11|1:11|0:-|0:-|done");
+    assert_eq!(output.stdout, "1:11|1:11|1:11|1:11|0:-|1:2:1|0:-|done");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Generic class accessors use populated enum slots on builtin and user-derived reflectors.
+#[test]
+fn test_reflection_enum_inherited_collections_use_enum_metadata() {
+    let source = r#"<?php
+enum InheritedReflectionEnumSubject: string {
+    case First = 'first';
+    public const Extra = 9;
+    public function label(): string { return $this->value; }
+}
+class InheritedEnumReflection extends ReflectionEnum {}
+function printInheritedEnumCollections(ReflectionClass $reflection): void {
+    echo (int)$reflection->hasMethod('label'), ':', count($reflection->getMethods()),
+        ':', count($reflection->getProperties()), ':', count($reflection->getConstants()),
+        ':', count($reflection->getStaticProperties()), ':', $reflection->getConstant('Extra'), '|';
+}
+printInheritedEnumCollections(new ReflectionEnum(InheritedReflectionEnumSubject::class));
+printInheritedEnumCollections(new InheritedEnumReflection(InheritedReflectionEnumSubject::class));
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "1:4:2:2:0:9|1:4:2:2:0:9|");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }

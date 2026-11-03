@@ -97,7 +97,7 @@ pub(super) fn emit_reflection_owner_metadata(
         .unwrap_or_else(|| object_class_name.to_string());
     let class_name = owner_class_name.as_str();
     let is_reflection_class_owner =
-        matches!(class_name, "ReflectionClass" | "ReflectionObject");
+        matches!(class_name, "ReflectionClass" | "ReflectionObject" | "ReflectionEnum");
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
         let public_name_offset = ctx

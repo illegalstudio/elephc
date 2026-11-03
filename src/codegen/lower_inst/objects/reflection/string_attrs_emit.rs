@@ -124,7 +124,7 @@ pub(super) fn emit_reflection_attrs_property(
 /// Returns PHP's `Attribute::TARGET_*` bitmask for attributes on one Reflection owner type.
 pub(super) fn reflection_attribute_target_for_owner(class_name: &str) -> i64 {
     match class_name {
-        "ReflectionClass" | "ReflectionObject" => {
+        "ReflectionClass" | "ReflectionObject" | "ReflectionEnum" => {
             super::super::super::builtins::attributes::REFLECTION_ATTRIBUTE_TARGET_CLASS
         }
         "ReflectionFunction" => {

@@ -597,7 +597,7 @@ pub(super) fn eval_reflection_attribute_target(owner_kind: u64) -> u64 {
 pub(super) fn eval_reflection_owner_uses_class_metadata(owner_kind: u64) -> bool {
     matches!(
         owner_kind,
-        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT
+        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT | EVAL_REFLECTION_OWNER_ENUM
     )
 }
 
