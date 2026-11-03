@@ -10,6 +10,54 @@
 
 use super::*;
 
+/// Numeric reference cells remain live when warning handlers replace their boxed values.
+#[test]
+fn test_loose_comparison_batch_replaced_numeric_ref_cells() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+function compareNumericRef(mixed $start, mixed $next, bool $right, bool $write): void {
+    $n = $start;
+    $o = new stdClass();
+    set_error_handler(function(int $level, string $message) use (&$n, $next, $write): bool {
+        if ($write) { $n = $next; }
+        return true;
+    });
+    var_dump($right ? $o == $n : $n == $o);
+    var_dump($n == $o);
+    var_dump($n);
+    restore_error_handler();
+}
+foreach ([false, true] as $right) {
+    compareNumericRef(1, 1, $right, true);
+    compareNumericRef(2, 1, $right, true);
+    compareNumericRef(1, 2, $right, true);
+    compareNumericRef(1, 2, $right, false);
+    compareNumericRef(2.0, 1.0, $right, true);
+}
+function switchNumericRef(): void {
+    $n = 2;
+    set_error_handler(function(int $level, string $message) use (&$n): bool { $n = 1; return true; });
+    switch ($n) {
+        case new stdClass(): echo "object\n"; break;
+        case 2: echo "two\n"; break;
+        default: echo "other\n";
+    }
+    restore_error_handler();
+    var_dump($n);
+}
+switchNumericRef();
+"#);
+    assert!(output.success, "{}: {} {}", output.status, output.stdout, output.stderr);
+    let cases = concat!(
+        "bool(true)\nbool(true)\nint(1)\n",
+        "bool(true)\nbool(true)\nint(1)\n",
+        "bool(false)\nbool(false)\nint(2)\n",
+        "bool(true)\nbool(true)\nint(1)\n",
+        "bool(true)\nbool(true)\nfloat(1)\n",
+    );
+    assert_eq!(output.stdout, format!("{}object\nint(1)\n", cases.repeat(2)));
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Issue #2149: a bool on either side selects truthiness, including non-unit integers.
 #[test]
 fn test_loose_comparison_batch_bool_switch() {

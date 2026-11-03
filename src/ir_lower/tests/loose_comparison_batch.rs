@@ -24,7 +24,14 @@ function iterableSwitch(iterable $x): int {
 function mixedSwitch(mixed $x): int {
     switch ($x) { case 1: return 1; case 2: return 2; default: return 0; }
 }
-echo boolSwitch(true), boolLabels(2), iterableSwitch([1]), mixedSwitch(new stdClass());
+function referenceSwitch(): int {
+    $n = 2;
+    set_error_handler(function(int $level, string $message) use (&$n): bool { $n = 1; return true; });
+    switch ($n) { case new stdClass(): $result = 1; break; case 2: $result = 2; break; default: $result = 0; }
+    restore_error_handler();
+    return $result;
+}
+echo boolSwitch(true), boolLabels(2), iterableSwitch([1]), mixedSwitch(new stdClass()), referenceSwitch();
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = crate::codegen::platform::Target::parse(target).unwrap();
@@ -42,10 +49,12 @@ echo boolSwitch(true), boolLabels(2), iterableSwitch([1]), mixedSwitch(new stdCl
         }
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         assert!(asm.contains("__rt_mixed_loose_eq"), "{target:?}: object fallback");
+        assert!(asm.contains("__rt_mixed_loose_eq_refs"), "{target:?}: live reference fallback");
         let mut emitter = crate::codegen_support::emit::Emitter::new(target);
         crate::codegen_support::runtime::emit_runtime(&mut emitter,
             crate::codegen_support::RuntimeFeatures::all());
         let asm = emitter.output();
+        assert!(asm.contains("__rt_mixed_loose_eq_refs"), "{target:?}: live reference runtime entry");
         assert!(asm.contains("__rt_sprintf_warn_object_numeric"), "{target:?}: object warning");
         assert!(asm.contains("__rt_mle_null_float"), "{target:?}: quiet float/null path");
     }

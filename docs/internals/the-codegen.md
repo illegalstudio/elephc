@@ -29,6 +29,11 @@ a comparison callback throws; finalization removes cleanup for borrowed views.
 The same local-view guards protect direct equality operands and evaluated case labels.
 Pending operands publish those guards before later expressions that can unwind, then
 detach them before the consuming comparison takes over their cleanup.
+Boxed reference operands also pass their stable storage address to
+`__rt_mixed_loose_eq_refs`. An object conversion warning selects its wording from
+the original numeric tag, then reloads the current box after the handler returns.
+Assignments through the reference can retire the original box, so retaining or
+casting that saved box would preserve a stale value or read freed storage.
 
 ## Pipeline Position
 

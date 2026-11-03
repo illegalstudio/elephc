@@ -16,8 +16,8 @@
 //!   because null converts to `""`, not to `0`), then containers (an array is
 //!   loosely equal only to another array), then objects, then strings, then a
 //!   numeric comparison. Reordering any two of those changes observable results.
-//! - `__rt_mixed_loose_eq_d` carries the recursion depth; `__rt_mixed_loose_eq` is
-//!   the depth-0 entry point every caller uses.
+//! - `__rt_mixed_loose_eq_d` carries recursion depth. The ordinary depth-0 entry
+//!   uses snapshots; `_refs` also accepts live boxed reference storage addresses.
 //! - Same-tag int/resource/callable payloads compare word-for-word rather than
 //!   through `double`, so large integers do not lose precision.
 //! - A resource against an int, float or string compares numerically: the resource
@@ -33,7 +33,9 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 ///
 /// Public entry: AArch64 `x0`/`x1` = the two boxed `Mixed` operands, result in `x0`;
 /// x86_64 `rdi`/`rsi`, result in `rax`. The `_d` form takes the recursion depth in
-/// `x2` / `rdx`. Both operands stay borrowed: the helper never releases them.
+/// `x2` / `rdx`. The `_refs` entry takes optional left/right boxed-storage
+/// addresses in arguments three/four and reloads numeric storage after warnings.
+/// Both operands stay borrowed: the helper never releases them.
 pub fn emit_mixed_loose_eq(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_loose_eq_x86_64(emitter);
@@ -46,7 +48,8 @@ pub fn emit_mixed_loose_eq(emitter: &mut Emitter) {
 ///
 /// Frame (112 bytes): `[sp,#0]` left cell, `[sp,#8]` right cell, `[sp,#16]` depth,
 /// `[sp,#24..#40]` left tag/lo/hi, `[sp,#48..#64]` right tag/lo/hi, `[sp,#72]` a
-/// scalar scratch slot, `[sp,#96]` saved `x29`/`x30`.
+/// scalar scratch slot, `[sp,#80]`/`[sp,#88]` optional reference storage,
+/// `[sp,#96]` saved `x29`/`x30`.
 fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_loose_eq ---");
@@ -55,11 +58,22 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_loose_eq_d");                             // share the depth-carrying comparison body
 
     emitter.label_global("__rt_mixed_loose_eq_d");
+    emitter.instruction("mov x3, #0");                                          // ordinary comparisons have no live left reference cell
+    emitter.instruction("mov x4, #0");                                          // ordinary comparisons have no live right reference cell
+    emitter.instruction("b __rt_mixed_loose_eq_common");                        // enter the shared frame with no reference storage
+
+    emitter.label_global("__rt_mixed_loose_eq_refs");
+    emitter.instruction("mov x4, x3");                                          // preserve the right reference storage address
+    emitter.instruction("mov x3, x2");                                          // preserve the left reference storage address
+    emitter.instruction("mov x2, #0");                                          // reference-aware comparisons start at depth zero
+
+    emitter.label_global("__rt_mixed_loose_eq_common");
     emitter.instruction("sub sp, sp, #112");                                    // allocate the loose-equality comparison frame
     emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #96");                                    // establish the comparison frame pointer
     emitter.instruction("stp x0, x1, [sp, #0]");                                // save both boxed operands for the later helper calls
     emitter.instruction("str x2, [sp, #16]");                                   // save the current recursion depth
+    emitter.instruction("stp x3, x4, [sp, #80]");                               // save optional numeric reference storage across warnings
     abi::emit_load_int_immediate(emitter, "x9", MAX_LOOSE_EQ_DEPTH);
     emitter.instruction("cmp x2, x9");                                          // has the walk reached the cyclic-structure cap?
     emitter.instruction("b.ge __rt_mle_false");                                 // stop instead of recursing into a cycle forever
@@ -213,7 +227,7 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_mle_false");                                 // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_right");
     emit_object_numeric_warning(emitter, true);
-    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the right boxed operand
+    emit_reload_numeric_operand(emitter, true);
     emitter.instruction("bl __rt_mixed_cast_float");                            // read the numeric value of the right operand
     emitter.instruction("fmov d1, #1.0");                                       // PHP converts the object operand to 1
     emitter.instruction("fcmp d0, d1");                                         // compare the number against the converted object
@@ -228,7 +242,7 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_mle_false");                                 // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_left");
     emit_object_numeric_warning(emitter, false);
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the left boxed operand
+    emit_reload_numeric_operand(emitter, false);
     emitter.instruction("bl __rt_mixed_cast_float");                            // read the numeric value of the left operand
     emitter.instruction("fmov d1, #1.0");                                       // PHP converts the object operand to 1
     emitter.instruction("fcmp d0, d1");                                         // compare the number against the converted object
@@ -356,9 +370,10 @@ fn emit_mixed_loose_eq_aarch64(emitter: &mut Emitter) {
 
 /// Emits the x86_64 loose-equality dispatcher.
 ///
-/// Frame (80 bytes below `rbp`): `[rbp-8]` left cell, `[rbp-16]` right cell,
+/// Frame (96 bytes below `rbp`): `[rbp-8]` left cell, `[rbp-16]` right cell,
 /// `[rbp-24]` depth, `[rbp-32..-48]` left tag/lo/hi, `[rbp-56..-72]` right
-/// tag/lo/hi, `[rbp-80]` a scalar scratch slot. The `push rbp` plus the 80-byte
+/// tag/lo/hi, `[rbp-80]` scratch, `[rbp-88]`/`[rbp-96]` optional reference storage.
+/// The `push rbp` plus the 96-byte
 /// reservation keep `rsp` 16-byte aligned for the nested libc-backed calls.
 fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -368,12 +383,24 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_loose_eq_d");                           // share the depth-carrying comparison body
 
     emitter.label_global("__rt_mixed_loose_eq_d");
+    emitter.instruction("xor ecx, ecx");                                        // ordinary comparisons have no live left reference cell
+    emitter.instruction("xor r8d, r8d");                                        // ordinary comparisons have no live right reference cell
+    emitter.instruction("jmp __rt_mixed_loose_eq_common");                      // enter the shared frame with no reference storage
+
+    emitter.label_global("__rt_mixed_loose_eq_refs");
+    emitter.instruction("mov r8, rcx");                                         // preserve the right reference storage address
+    emitter.instruction("mov rcx, rdx");                                        // preserve the left reference storage address
+    emitter.instruction("xor edx, edx");                                        // reference-aware comparisons start at depth zero
+
+    emitter.label_global("__rt_mixed_loose_eq_common");
     emitter.instruction("push rbp");                                            // save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the comparison frame pointer
-    emitter.instruction("sub rsp, 80");                                         // allocate the aligned loose-equality comparison frame
+    emitter.instruction("sub rsp, 96");                                         // allocate the aligned loose-equality comparison frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the left boxed operand
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the right boxed operand
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the current recursion depth
+    emitter.instruction("mov QWORD PTR [rbp - 88], rcx");                       // save optional left numeric reference storage
+    emitter.instruction("mov QWORD PTR [rbp - 96], r8");                        // save optional right numeric reference storage
     abi::emit_load_int_immediate(emitter, "r10", MAX_LOOSE_EQ_DEPTH);
     emitter.instruction("cmp rdx, r10");                                        // has the walk reached the cyclic-structure cap?
     emitter.instruction("jge __rt_mle_false");                                  // stop instead of recursing into a cycle forever
@@ -536,7 +563,7 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_mle_false");                                  // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_right");
     emit_object_numeric_warning(emitter, true);
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
+    emit_reload_numeric_operand(emitter, true);
     abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // read the numeric value of the right operand
     emitter.instruction("jmp __rt_mle_compare_one");                            // compare the number against the converted object
 
@@ -548,7 +575,7 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_mle_false");                                  // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_left");
     emit_object_numeric_warning(emitter, false);
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the left boxed operand
+    emit_reload_numeric_operand(emitter, false);
     abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // read the numeric value of the left operand
 
     emitter.label("__rt_mle_compare_one");
@@ -678,9 +705,42 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor rax, rax");                                        // report loose inequality
 
     emitter.label("__rt_mle_done");
-    emitter.instruction("add rsp, 80");                                         // release the comparison frame
+    emitter.instruction("add rsp, 96");                                         // release the comparison frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the loose-equality boolean
+}
+
+/// Reloads the current numeric box after a warning may have replaced reference storage.
+fn emit_reload_numeric_operand(emitter: &mut Emitter, right: bool) {
+    let done = if right {
+        "__rt_mle_numeric_right_loaded"
+    } else {
+        "__rt_mle_numeric_left_loaded"
+    };
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let operand = if right { 8 } else { 0 };
+            let reference = if right { 88 } else { 80 };
+            emitter.instruction(&format!("ldr x0, [sp, #{operand}]"));          // recover the original value for non-reference operands
+            emitter.instruction(&format!("ldr x9, [sp, #{reference}]"));        // recover optional stable reference storage
+            emitter.instruction(&format!("cbz x9, {done}"));                    // value operands retain their original comparison snapshot
+            emitter.instruction("ldr x0, [x9]");                                // reload the box currently owned by the reference cell
+        }
+        Arch::X86_64 => {
+            let operand = if right { 16 } else { 8 };
+            let reference = if right { 96 } else { 88 };
+            emitter.instruction(
+                &format!("mov rax, QWORD PTR [rbp - {operand}]")
+            );                                                                  // recover the original value for non-reference operands
+            emitter.instruction(
+                &format!("mov r10, QWORD PTR [rbp - {reference}]")
+            );                                                                  // recover optional stable reference storage
+            emitter.instruction("test r10, r10");                               // distinguish references from value operands
+            emitter.instruction(&format!("je {done}"));                         // value operands retain their original comparison snapshot
+            emitter.instruction("mov rax, QWORD PTR [r10]");                    // reload the box currently owned by the reference cell
+        }
+    }
+    emitter.label(done);
 }
 
 /// Compares a float payload with null by ignoring its sign bit, without bool warnings.
