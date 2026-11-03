@@ -15,8 +15,9 @@ use super::*;
 /// reference to a refcounted value. There are two storage disciplines, matched
 /// to what the codegen store actually does:
 ///
-/// - **Independent-value store** (the store crosses the boxed/unboxed boundary, in
-///   either direction): a Mixed/Union slot receiving a non-Mixed value, e.g.
+/// - **Independent-value store** (the store crosses the boxed/unboxed boundary):
+///   ordinary Mixed assignments normalize their RHS to a boxed owner in EIR first.
+///   Remaining container writebacks into a Mixed/Union slot, e.g.
 ///   `Class::$h = new C()`, is boxed with `__rt_mixed_from_value`, which takes its
 ///   *own* retained reference to the child; and a narrowing slot receiving a Mixed
 ///   value, e.g. `Class::$s += 1` on an `int` slot, is cast out of the box, so the
@@ -56,6 +57,14 @@ pub(super) fn lower_static_property_assign(
             coerce_typed_assign_value(ctx, source, &slot_ty, span)
         })
         .unwrap_or(source);
+    // Canonical publication consumes one boxed owner. Retire a concrete temporary's lease
+    // before the store can invoke a displaced destructor, while its new box keeps it alive.
+    let source = if static_property_type(ctx, receiver, property)
+        .is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
+        && ctx.builder.value_php_type(source.value).codegen_repr() != PhpType::Mixed
+    {
+        ctx.box_value_as_mixed(source, PhpType::Mixed, Some(span))
+    } else { source };
     if static_property_store_retains_independent_value(ctx, receiver, property, source) {
         store_static_property(ctx, receiver, property, source.value, span);
         if ctx.value_is_owning_temporary(source) {

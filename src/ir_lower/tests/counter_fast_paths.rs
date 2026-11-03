@@ -230,8 +230,10 @@ echo coercingBound($argc + 2), coercingSeed($argc + 3);
             let stores: Vec<_> = function.instructions.iter().filter(|inst| inst.op == Op::StoreStaticProperty).collect();
             assert!(!stores.is_empty(), "{target}: {text}");
             for store in stores {
-                assert!(store.operands.iter().all(|value| function.values[value.as_raw() as usize].ir_type
-                    == crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)), "{target}: {text}");
+                assert_eq!(function.values[store.operands[0].as_raw() as usize].ir_type,
+                    crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), "{target}: {text}");
+                assert_eq!(function.values[store.operands[1].as_raw() as usize].php_type,
+                    crate::types::PhpType::Bool, "{target}: source strictness is separate from the boxed RHS");
             }
         }
     }

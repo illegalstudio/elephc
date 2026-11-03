@@ -889,8 +889,9 @@ pub enum Op {
     /// The pointer is borrowed from process-lifetime symbol storage and lets a synthetic local
     /// reference publish container replacements back to the static property.
     LoadStaticPropertyRefCell,
-    /// Moves a value into static storage. An optional second borrowed LoadLocal operand names
-    /// its unwind parking slot, cleared once a same-representation store commits ownership.
+    /// Moves an original RHS into static storage with an optional assignment-site Bool.
+    /// An optional third borrowed LoadLocal operand names its unwind parking slot, cleared
+    /// once a same-representation store transfers ownership to storage or its publisher.
     StoreStaticProperty,
     StaticPropInitialized,
     LoadReflectionStaticProperty,

@@ -1,8 +1,8 @@
 //! Purpose:
-//! Publishes original StoreRefCell operands through authenticated canonical native references.
+//! Publishes original local and static operands through canonical native references.
 //!
 //! Called from:
-//! - Local reference assignment lowering when native reference validation is selected.
+//! - Local and static assignment lowering when native reference validation is selected.
 //!
 //! Key details:
 //! - Raw and unpromoted cells retain their existing store path.
@@ -68,6 +68,43 @@ pub(super) fn emit_if_canonical(
     abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native");
     emit_status(ctx, &done);
     ctx.emitter.label(&raw);
+    Ok(Some(done))
+}
+
+/// Consumes the current owned Mixed result when a static binding already owns a canonical cell.
+/// The static parking record borrows this same owner, so detaching it transfers rather than releases.
+pub(in crate::codegen::lower_inst) fn emit_static_if_managed(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, symbol: &str, transfer_owner: Option<usize>,
+) -> Result<Option<String>> {
+    if !ctx.module.required_runtime_features.native_reference_validation || inst.operands.len() < 2 {
+        return Ok(None);
+    }
+    let raw = ctx.next_label("native_static_reference_store_raw");
+    let done = ctx.next_label("native_static_reference_store_done");
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_reserve_temporary_stack(ctx.emitter, SCRATCH_BYTES);
+    abi::emit_store_to_sp(ctx.emitter, result, RHS);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 16);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &raw);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_canonical");
+    abi::emit_store_to_sp(ctx.emitter, result, WRAPPER);
+    ctx.load_value_to_result(inst.operands[1])?;
+    abi::emit_store_to_sp(ctx.emitter, result, CONTEXT);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    abi::emit_store_to_sp(ctx.emitter, result, PENDING);
+    if let Some(offset) = transfer_owner {
+        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    }
+    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), CONTEXT);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), WRAPPER);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), RHS);
+    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), OUTCOME);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native");
+    emit_status(ctx, &done);
+    ctx.emitter.label(&raw);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, RHS);
+    abi::emit_release_temporary_stack(ctx.emitter, SCRATCH_BYTES);
     Ok(Some(done))
 }
 

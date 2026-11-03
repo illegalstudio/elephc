@@ -56,7 +56,8 @@ pub(super) fn store_static_property(
     let name = format!("{}::{}", receiver_name(receiver), property);
     let data = ctx.intern_string(&name);
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value], span);
-    let mut operands = vec![value];
+    let strict = ctx.builder.emit_const_bool(crate::source::current_strict_types());
+    let mut operands = vec![value, strict];
     if let Some(owner) = crate::ir_lower::expr::pinned_transfer_owner(ctx, &pins, span) { operands.push(owner); }
     ctx.emit_void(
         Op::StoreStaticProperty,

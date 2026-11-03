@@ -767,7 +767,7 @@ Each instruction has:
 | `StoreStaticLocal(slot, value)` | value | `Void` | `writes_global`, maybe `refcount_op` |
 | `InitStaticLocal(slot, value)` | value | `Void` | `reads_global`, `writes_global`, maybe allocation/refcount effects |
 | `LoadStaticProperty(class, property)` | none | property type | `reads_global`, maybe `may_deopt` for late static |
-| `StoreStaticProperty(class, property, value)` | value | `Void` | `writes_global`, maybe `refcount_op`, `may_deopt` |
+| `StoreStaticProperty(class, property, value, mode?, owner?)` | original value, optional assignment-site Bool and borrowed unwind owner | `Void` | `writes_global`, maybe `refcount_op`, `may_deopt` |
 
 `UnsetLocal` and `ZeroLocalSlot` both clear a slot at its own storage type and
 differ only in the bit pattern, which is what each caller needs. `UnsetLocal`

@@ -1035,6 +1035,18 @@ pub(crate) fn pinned_transfer_owner(
     Some(owner.value)
 }
 
+/// Releases argument owners after their call returns, clearing each slot before PHP cleanup.
+/// An escaping destructor therefore finds an empty record rather than releasing the owner twice.
+pub(crate) fn release_pinned_in_flight_owners(
+    ctx: &mut LoweringContext<'_, '_>, records: Vec<PinnedInFlightOwner>, span: Span,
+) {
+    for record in records.into_iter().rev() {
+        ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(record.slot)),
+            Op::ReleaseLocalSlot.default_effects(), Some(span));
+        unregister_owned_call_operand(ctx, record.slot, span);
+    }
+}
+
 /// Retires in-flight pins in reverse publication order once the throwing window has closed.
 ///
 /// `UnsetLocal` zeroes the parking slot without releasing it: the reference never left the SSA

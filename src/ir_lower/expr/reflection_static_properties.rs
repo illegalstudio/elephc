@@ -366,9 +366,23 @@ pub(super) fn store_static_property_by_class_name_with_op(
     if crate::ir_lower::property_default_errors::for_class(ctx, class_name, span).is_some() {
         return;
     }
+    let (value, argument_pins) = if reflection_class_static_property_target(ctx, class_name, property)
+        .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
+    {
+        let source = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
+        // Reflection is a call: its by-value argument remains alive until the setter returns,
+        // independently of the destination publisher's consuming owner.
+        let argument = ctx.box_value_as_mixed(source, PhpType::Mixed, Some(span));
+        let argument_pins = super::pin_in_flight_owners(ctx, &[argument.value], span);
+        let stored = ctx.emit_value(Op::MixedClone, vec![argument.value], None, PhpType::Mixed,
+            Op::MixedClone.default_effects(), Some(span));
+        (stored.value, argument_pins)
+    } else { (value, Vec::new()) };
     let data = ctx.intern_string(&format!("{}::{}", class_name, property));
     let pins = super::pin_in_flight_owners(ctx, &[value], span);
-    let mut operands = vec![value];
+    let strict = ctx.builder.emit_const_bool(op != Op::StoreReflectionStaticProperty
+        && crate::source::current_strict_types());
+    let mut operands = vec![value, strict];
     if let Some(owner) = super::pinned_transfer_owner(ctx, &pins, span) { operands.push(owner); }
     ctx.emit_void(
         op,
@@ -378,4 +392,5 @@ pub(super) fn store_static_property_by_class_name_with_op(
         Some(span),
     );
     super::unpin_in_flight_owners(ctx, pins, span);
+    super::call_operand_owners::release_pinned_in_flight_owners(ctx, argument_pins, span);
 }

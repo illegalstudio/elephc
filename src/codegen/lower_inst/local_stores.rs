@@ -12,6 +12,7 @@ use crate::ir::RuntimeCallTarget;
 
 mod owned_output;
 mod native_reference_store;
+pub(super) use native_reference_store::emit_static_if_managed;
 pub(in crate::codegen) use owned_output::publish_current_owned_output;
 
 /// Lowers an addressable local store from one SSA operand.

@@ -1756,6 +1756,15 @@ shutdown retire the static binding through its cell-aware release helper.
 Application root discovery already borrows the actual low-word owner, which is
 the cell for a promoted binding. Automatic promotion remains deferred until
 static writers and reference exports also use the validated publication path.
+Native and native Reflection Mixed stores already dispatch an existing managed
+binding through the canonical publisher, preserving the original boxed RHS.
+Their EIR carries the source-file strictness (weak for Reflection's internal
+setter) and an optional third operand identifying the transferred unwind owner.
+Raw bindings keep the existing store path; no writer promotes them automatically.
+Direct Mixed assignments box concrete temporaries and retire their source lease
+before publication. Reflection keeps a separate boxed argument owner through the
+setter call, then clears its unwind slot before releasing it. This preserves PHP's
+different destructor timing for an assignment and an internal method argument.
 
 A `buffer<T>`, `ptr` or `ptr<T>` static property keeps its handle or address in the slot's low word, as an instance property does. The word owns nothing: overwriting it frees no buffer, and shutdown releases nothing for it. Element writes (`Class::$buf[$i] = $v`) resolve the handle the slot holds and store into the buffer payload without writing the slot back. A typed pointer slot whose default is `null` is initialized to the zero word, while a typed buffer or pointer slot without a default carries the uninitialized marker in its high word until the first store.
 

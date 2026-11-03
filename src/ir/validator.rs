@@ -931,10 +931,16 @@ fn validate_opcode_rules(
             Ok(())
         }
         StoreStaticProperty | StoreReflectionStaticProperty => {
-            if inst.operands.len() == 2 {
-                let owner = function.value(inst.operands[1]).ok_or(ValidationError::UnknownValue(inst.operands[1]))?;
+            if !(1..=3).contains(&inst.operands.len()) {
+                return check_count(inst_id, inst, 1, "original RHS, optional assignment-site Bool and source owner");
+            }
+            if inst.operands.len() >= 2 {
+                check_operand_type(function, inst_id, inst, 1, IrType::I64, "assignment-site bool (I64)")?;
+            }
+            if let Some(owner_id) = inst.operands.get(2) {
+                let owner = function.value(*owner_id).ok_or(ValidationError::UnknownValue(*owner_id))?;
                 let ValueDef::Instruction { inst: load, .. } = owner.def else {
-                    return Err(ValidationError::OwnershipTypeMismatch(inst.operands[1]));
+                    return Err(ValidationError::OwnershipTypeMismatch(*owner_id));
                 };
                 let parking_slot = function.instruction(load).and_then(|load| {
                     if load.op != Op::LoadLocal { return None; }
@@ -943,9 +949,12 @@ fn validate_opcode_rules(
                 });
                 if parking_slot.is_none_or(|slot| slot.kind != LocalKind::OwnedTemp)
                     || owner.ownership != Ownership::Borrowed
-                { return Err(ValidationError::OwnershipTypeMismatch(inst.operands[1])); }
-                Ok(())
-            } else { check_count(inst_id, inst, 1, "1 or 2") }
+                    || !function.instructions.iter().any(|instruction|
+                        instruction.op == Op::PushCallOperandOwner
+                            && instruction.immediate == function.instruction(load).unwrap().immediate)
+                { return Err(ValidationError::OwnershipTypeMismatch(*owner_id)); }
+            }
+            Ok(())
         }
         StoreRefCell => {
             if !(1..=3).contains(&inst.operands.len()) {

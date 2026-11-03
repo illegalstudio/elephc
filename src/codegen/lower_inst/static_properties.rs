@@ -158,14 +158,14 @@ pub(super) fn lower_store_static_property(
     if slot.late_bound && !slot.branches.is_empty() {
         let class_id_reg = class_id_work_reg(ctx.emitter);
         if emit_called_class_id_to_reg(ctx, class_id_reg)? {
-            emit_dynamic_store_static_property_result(ctx, &slot, class_id_reg, release_previous, transfer_owner);
+            emit_dynamic_store_static_property_result(ctx, inst, &slot, class_id_reg, release_previous, transfer_owner)?;
             if let Some(done_label) = eval_done_label {
                 ctx.emitter.label(&done_label);
             }
             return Ok(());
         }
     }
-    emit_direct_store_static_property_result(ctx, &slot, release_previous, transfer_owner);
+    emit_direct_store_static_property_result(ctx, inst, &slot, release_previous, transfer_owner)?;
     if let Some(done_label) = eval_done_label {
         ctx.emitter.label(&done_label);
     }
@@ -223,7 +223,7 @@ pub(super) fn lower_store_reflection_static_property(
     load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
     let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
     let transfer_owner = static_transfer_owner_offset(ctx, inst, &slot, &value_ty)?;
-    emit_direct_store_static_property_result(ctx, &slot, release_previous, transfer_owner);
+    emit_direct_store_static_property_result(ctx, inst, &slot, release_previous, transfer_owner)?;
     Ok(())
 }
 
@@ -410,7 +410,7 @@ fn static_transfer_owner_offset(
     if slot.php_type.codegen_repr() != PhpType::Mixed || source_ty.codegen_repr() != PhpType::Mixed {
         return Ok(None);
     }
-    let Some(owner) = inst.operands.get(1) else { return Ok(None); };
+    let Some(owner) = inst.operands.get(2) else { return Ok(None); };
     let Some(value) = ctx.function.value(*owner) else {
         return Err(CodegenIrError::invalid_module("static transfer owner is missing"));
     };
@@ -433,19 +433,23 @@ fn static_transfer_owner_offset(
 /// Emits a direct static property store into the fallback declaring-class symbol.
 fn emit_direct_store_static_property_result(
     ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
     slot: &StaticPropertySlot,
     release_previous: bool,
     transfer_owner: Option<usize>,
-) {
+) -> Result<()> {
     if slot.php_type.codegen_repr() == PhpType::Mixed {
+        let done = super::local_stores::emit_static_if_managed(ctx, inst, &slot.symbol, transfer_owner)?;
         let prefix = ctx.next_label("static_mixed_reference_store");
         crate::codegen_support::runtime::reference_cells::publish_mixed_symbol(
             ctx.emitter, &slot.symbol, release_previous, transfer_owner, &prefix,
         );
-        return;
+        if let Some(done) = done { ctx.emitter.label(&done); }
+        return Ok(());
     }
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, release_previous);
     clear_uninitialized_marker_after_static_store(ctx, &slot.symbol, &slot.php_type);
+    Ok(())
 }
 
 /// Compares a typed static-property marker with the uninitialized sentinel.
@@ -605,11 +609,12 @@ fn emit_dynamic_static_property_ref_cell_result(
 /// Emits a late-bound static property store selected by the runtime called-class id.
 fn emit_dynamic_store_static_property_result(
     ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
     slot: &StaticPropertySlot,
     class_id_reg: &str,
     release_previous: bool,
     transfer_owner: Option<usize>,
-) {
+) -> Result<()> {
     let done = ctx.next_label("static_prop_store_done");
     let mut labels = Vec::new();
     for branch in &slot.branches {
@@ -617,7 +622,7 @@ fn emit_dynamic_store_static_property_result(
         emit_branch_if_class_id_matches(ctx, class_id_reg, branch.class_id, &label);
         labels.push((label, branch));
     }
-    emit_direct_store_static_property_result(ctx, slot, release_previous, transfer_owner);
+    emit_direct_store_static_property_result(ctx, inst, slot, release_previous, transfer_owner)?;
     abi::emit_jump(ctx.emitter, &done);
     for (label, branch) in labels {
         ctx.emitter.label(&label);
@@ -626,10 +631,11 @@ fn emit_dynamic_store_static_property_result(
             continue;
         }
         let branch_slot = branch_static_property_slot(ctx, slot, branch);
-        emit_direct_store_static_property_result(ctx, &branch_slot, release_previous, transfer_owner);
+        emit_direct_store_static_property_result(ctx, inst, &branch_slot, release_previous, transfer_owner)?;
         abi::emit_jump(ctx.emitter, &done);
     }
     ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Builds direct symbol metadata for one redeclared late-bound static property branch.

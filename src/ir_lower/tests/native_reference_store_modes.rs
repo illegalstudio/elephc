@@ -124,3 +124,46 @@ fn verify_native_reference_fresh_string_store_owner(target: &str) {
 
 supported_target_cases!(native_reference_fresh_string_store_owner,
     verify_native_reference_fresh_string_store_owner);
+
+
+/// Native static writes use their source mode, while Reflection's internal setter remains weak.
+fn verify_native_static_reference_store_modes(target: &str) {
+    for strict in [false, true] {
+        let source = format!("<?php {} \
+            class NativeStaticModeSource {{ public static mixed $value = 0; }} \
+            function nativeStaticModeStore(mixed $original): void {{ \
+                NativeStaticModeSource::$value = $original; \
+                $class = new ReflectionClass(NativeStaticModeSource::class); \
+                $class->setStaticPropertyValue('value', $original); }}",
+            if strict { "declare(strict_types=1);" } else { "" });
+        let mut module = super::lower_source_at_for_target(
+            &source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "nativeStaticModeStore").unwrap();
+        for (op, expected) in [(Op::StoreStaticProperty, strict), (Op::StoreReflectionStaticProperty, false)] {
+            let store = function.instructions.iter().find(|inst| inst.op == op).unwrap();
+            assert!(store.operands.len() >= 2, "{target}: original value and assignment mode");
+            assert_eq!(function.value(store.operands[0]).unwrap().php_type, crate::types::PhpType::Mixed,
+                "{target}: retain the original boxed value");
+            let ValueDef::Instruction { inst, .. } = function.value(store.operands[1]).unwrap().def else {
+                panic!("{target}: mode must be an explicit constant");
+            };
+            assert_eq!(function.instruction(inst).unwrap().immediate, Some(Immediate::Bool(expected)),
+                "{target}: {op:?}");
+        }
+        crate::ir_lower::enable_native_reference_validation(&mut module).unwrap();
+        for optimize in [false, true] {
+            let mut candidate = module.clone();
+            if optimize { crate::ir_passes::optimize_module(&mut candidate); }
+            crate::ir::validate_module(&candidate).unwrap();
+            let assembly = crate::codegen::generate_user_asm_from_ir(&candidate, false, false).unwrap();
+            assert!(assembly.matches("__rt_reference_publish_native").count() >= 2,
+                "{target}: direct and Reflection stores must both use the canonical publisher");
+            assert!(assembly.contains("native_static_reference_store_raw"),
+                "{target}: raw static storage keeps the ordinary fallback");
+        }
+    }
+}
+
+supported_target_cases!(native_static_reference_store_modes, verify_native_static_reference_store_modes);

@@ -57,7 +57,7 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
     }
     for inst in &function.instructions {
         let owner_index = match inst.op {
-            Op::StoreStaticProperty | Op::StoreReflectionStaticProperty => Some(1),
+            Op::StoreStaticProperty | Op::StoreReflectionStaticProperty => Some(2),
             Op::StoreRefCell => Some(2),
             _ => None,
         };

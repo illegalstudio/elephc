@@ -259,8 +259,8 @@ fn static_mixed_store_transfers_its_unwind_pin_on_every_target() {
         crate::ir_passes::optimize_module(&mut module);
         let function = module.functions.iter().find(|function| function.name == "commitStaticPinValue").unwrap();
         let store = function.instructions.iter().find(|inst| inst.op == crate::ir::Op::StoreStaticProperty).unwrap();
-        assert_eq!(store.operands.len(), 2, "{name}: committing a moved value must hand off its pin");
-        let owner = function.value(store.operands[1]).unwrap();
+        assert_eq!(store.operands.len(), 3, "{name}: committing a moved value keeps mode and pin");
+        let owner = function.value(store.operands[2]).unwrap();
         assert_eq!(owner.ownership, crate::ir::Ownership::Borrowed, "{name}");
         let crate::ir::ValueDef::Instruction { inst, .. } = owner.def else { panic!("{name}: parking-slot load"); };
         let load = function.instruction(inst).unwrap();

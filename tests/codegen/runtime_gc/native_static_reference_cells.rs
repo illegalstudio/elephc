@@ -141,3 +141,102 @@ if ($argc < 0) { nativeStaticReadViews(); }
     let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
     assert_eq!(output, "41|41|41|41|1");
 }
+
+
+/// Fresh boxed static writes transfer their unwind pin exactly once through both native surfaces.
+#[test]
+fn test_native_static_reference_cell_writers_transfer_fresh_heap_boxes_bundle() {
+    for optimize in [false, true] {
+        let dir = FixtureDir(make_cli_test_dir("elephc_native_static_reference_writers"));
+        let source = r#"<?php
+class NativeStaticWriteBase { public static mixed $value = 0; }
+class NativeStaticWriteChild extends NativeStaticWriteBase {}
+function nativeStaticWriteFresh(): mixed { return str_repeat('ab', 2); }
+function nativeStaticWriteViews(): void {
+    NativeStaticWriteBase::$value = nativeStaticWriteFresh();
+    echo NativeStaticWriteChild::$value, '|';
+    $class = new ReflectionClass(NativeStaticWriteChild::class);
+    $class->setStaticPropertyValue('value', nativeStaticWriteFresh());
+    echo NativeStaticWriteBase::$value, '|';
+}
+if ($argc < 0) { nativeStaticWriteViews(); }
+"#;
+        let compile = || compile_source_to_asm_with_native_reference_validation(source, &dir.0, 65_536, true);
+        let (user, runtime, requirements) = if optimize { compile() } else { without_ir_opt(compile) };
+        let symbol = elephc::names::static_property_symbol("NativeStaticWriteBase", "value");
+        let mut asm = String::new();
+        instruction(&mut asm, "sub sp, sp, #32", "sub rsp, 32");
+        instruction(&mut asm, "mov x0, #0", "xor eax, eax");
+        instruction(&mut asm, "mov x1, #0", "xor edi, edi");
+        instruction(&mut asm, "mov x2, #0", "xor esi, esi");
+        call(&mut asm, "__rt_mixed_from_value");
+        address(&mut asm, "x9", "r10", &symbol);
+        instruction(&mut asm, "str x0, [x9]", "mov QWORD PTR [r10], rax");
+        instruction(&mut asm, "str xzr, [x9, #8]", "mov QWORD PTR [r10 + 8], 0");
+        address(&mut asm, "x0", "rdi", &symbol);
+        call(&mut asm, "__rt_reference_static_mixed_promote");
+        store(&mut asm, 8);
+        call(&mut asm, &elephc::names::function_symbol("nativeStaticWriteViews"));
+        address(&mut asm, "x0", "rdi", &symbol);
+        call(&mut asm, "__rt_reference_static_mixed_payload");
+        instruction(&mut asm, "ldr x9, [sp, #8]", "mov r10, QWORD PTR [rsp + 8]");
+        instruction(&mut asm, "cmp x0, x9", "cmp rax, r10");
+        instruction(&mut asm, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+        address(&mut asm, "x0", "rdi", &symbol);
+        call(&mut asm, "__rt_reference_static_mixed_release");
+        expect_zero(&mut asm, &symbol);
+        expect_zero(&mut asm, "_rt_reference_validation_pins_top");
+        expect_zero(&mut asm, "_exc_value");
+        expect_zero(&mut asm, "_gc_live");
+        append_status_output(&mut asm, 32);
+        let user = inject_main_exit_harness(&user, &asm);
+        let runtime = runtime_obj_for_asm(&runtime);
+        let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
+        assert_eq!(output, "abab|abab|1", "IR optimization={optimize}");
+    }
+}
+
+
+/// Direct assignment transfers its RHS, while Reflection retains its argument until return.
+#[test]
+fn test_native_static_reference_publication_retires_concrete_rhs_before_old_destructor() {
+    let dir = FixtureDir(make_cli_test_dir("elephc_native_static_reference_destructors"));
+    let source = r#"<?php
+class NativeStaticDestructSlot { public static mixed $value = null; }
+class NativeStaticIncoming { public function __destruct() { echo 'incoming|'; } }
+class NativeStaticDisplaced {
+    public function __destruct() {
+        echo 'old-start|'; NativeStaticDestructSlot::$value = 0; echo 'old-end|';
+    }
+}
+function nativeStaticInitializeOld(): void { NativeStaticDestructSlot::$value = new NativeStaticDisplaced(); }
+function nativeStaticReplaceDirect(): void { NativeStaticDestructSlot::$value = new NativeStaticIncoming(); }
+function nativeStaticReplaceReflection(): void {
+    $class = new ReflectionClass(NativeStaticDestructSlot::class);
+    $class->setStaticPropertyValue('value', new NativeStaticIncoming());
+}
+if ($argc < 0) { nativeStaticInitializeOld(); nativeStaticReplaceDirect(); nativeStaticReplaceReflection(); }
+"#;
+    let (user, runtime, requirements) = without_ir_opt(||
+        compile_source_to_asm_with_native_reference_validation(source, &dir.0, 65_536, true));
+    let symbol = elephc::names::static_property_symbol("NativeStaticDestructSlot", "value");
+    let mut asm = String::new();
+    instruction(&mut asm, "sub sp, sp, #32", "sub rsp, 32");
+    call(&mut asm, &elephc::names::function_symbol("nativeStaticInitializeOld"));
+    address(&mut asm, "x0", "rdi", &symbol);
+    call(&mut asm, "__rt_reference_static_mixed_promote");
+    call(&mut asm, &elephc::names::function_symbol("nativeStaticReplaceDirect"));
+    call(&mut asm, &elephc::names::function_symbol("nativeStaticInitializeOld"));
+    call(&mut asm, &elephc::names::function_symbol("nativeStaticReplaceReflection"));
+    address(&mut asm, "x0", "rdi", &symbol);
+    call(&mut asm, "__rt_reference_static_mixed_release");
+    expect_zero(&mut asm, &symbol);
+    expect_zero(&mut asm, "_rt_reference_validation_pins_top");
+    expect_zero(&mut asm, "_exc_value");
+    expect_zero(&mut asm, "_gc_live");
+    append_status_output(&mut asm, 32);
+    let user = inject_main_exit_harness(&user, &asm);
+    let runtime = runtime_obj_for_asm(&runtime);
+    let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
+    assert_eq!(output, "old-start|incoming|old-end|old-start|old-end|incoming|1");
+}
