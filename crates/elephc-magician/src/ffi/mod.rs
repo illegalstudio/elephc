@@ -33,6 +33,7 @@ pub mod object_construction;
 pub mod object_introspection;
 pub mod opcache_status;
 pub mod scope;
+mod scope_owners;
 #[cfg(not(test))]
 pub mod static_members;
 pub mod symbols;

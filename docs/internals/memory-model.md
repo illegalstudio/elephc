@@ -343,6 +343,13 @@ Buffers created inside `eval()` do not use `_buffer_registry`. Magician keeps it
 
 `Fiber` objects own native stacks rather than borrowing the caller's stack. The runtime allocates each fiber stack through `mmap` (256 KiB usable by default, plus the guard page), protects the bottom 16 KiB with `mprotect(PROT_NONE)` as a guard page, and stores both the mapping base and total mapped size in the Fiber object so `__rt_fiber_free_stack` can later return it with `munmap`.
 
+Saved native frames also enumerate the actual owning entries of their materialized
+eval scopes through `__elephc_eval_scope_visit_owners_v1`. The Rust handle itself
+is opaque foreign storage. Each visible owned entry exposes the address of its
+native cell-pointer field, while borrowed and unset entries contribute no edge.
+The callback shares the collector's slot-identity context, invokes no PHP and
+changes no owner counts. Its inventory matches scope cleanup's owned entries.
+
 Magician's byte-fragment and included-token parser entry points use a temporary
 16 MiB stack through `stacker::grow`. Cold parsing can therefore start on a small
 native Fiber stack. The stack is selected explicitly because native context

@@ -533,6 +533,16 @@ impl ElephcEvalScope {
         }
     }
 
+    /// Borrows the exact native owner slots retired by scope cleanup, without allocating.
+    /// The callback must perform only collector bookkeeping and cannot mutate scope storage.
+    pub(crate) fn visit_owned_cell_slots(&self, mut visit: impl FnMut(*const *mut crate::value::RuntimeCell)) {
+        for entry in self.entries.values() {
+            if entry.flags.is_visible() && entry.flags.ownership == ScopeCellOwnership::Owned {
+                visit(entry.cell.owner_slot());
+            }
+        }
+    }
+
     /// Removes every entry and returns runtime cells owned by the scope.
     pub fn drain_owned_cells(&mut self) -> Vec<RuntimeCellHandle> {
         self.aot_visible_names.clear();
