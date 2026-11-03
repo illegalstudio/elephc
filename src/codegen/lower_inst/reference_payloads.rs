@@ -11,6 +11,39 @@
 
 use super::*;
 
+/// Distinguishes attached raw payloads from canonical aliases and detached boxed frame locals.
+pub(super) fn lower_uses_raw_payload(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    let source = expect_operand(inst, 0)?;
+    let slot = super::reference_arguments::local_slot_for_loaded_value(ctx, source)?;
+    let boxed = ctx.next_label("reference_mutation_boxed");
+    let done = ctx.next_label("reference_mutation_layout_done");
+    let result = abi::int_result_reg(ctx.emitter);
+    if !ctx.local_ref_cell_representation_is_definite(slot)
+        && !ctx.local_ref_cell_representation_is_dynamic(slot)
+    {
+        abi::emit_load_int_immediate(ctx.emitter, result, 0);
+        return store_if_result(ctx, inst);
+    }
+    if ctx.local_ref_cell_representation_is_dynamic(slot) {
+        let state = ctx.ref_cell_state_offset(slot).ok_or_else(||
+            CodegenIrError::invalid_module("native mutation reference has no layout state"))?;
+        abi::load_at_offset(ctx.emitter, result, state);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &boxed);
+    }
+    let offset = ctx.local_offset(slot)?;
+    abi::load_at_offset(ctx.emitter, result, offset);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_canonical");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &boxed);
+    abi::emit_load_int_immediate(ctx.emitter, result, 1);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&boxed);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
 /// Reads the actual canonical value or the legacy payload, then exposes a borrowed logical view.
 pub(super) fn load_as(
     ctx: &mut FunctionContext<'_>, pointer: &str, payload_ty: &PhpType, result_ty: &PhpType,

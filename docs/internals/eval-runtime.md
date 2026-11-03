@@ -35,6 +35,11 @@ the entry value view, so later body reads copy the actual published PHP value.
 Output builtin arguments recover the original local from that load's slot metadata;
 regex captures, OpenSSL tags and PCNTL outputs keep writing through the shared place.
 Preparing an OpenSSL output preserves an already boxed native reference value view.
+Local append and indexed statement writes select the reference's physical layout
+before using a writable view. Canonical cells lend their current child to the Mixed
+writer; raw native cells use the concrete writer and its existing ABI writeback.
+Detached locals use their boxed frame storage. The layout choice applies to the
+mutation receiver, while ordinary value observations continue to own copies.
 When eval still shares the imported canonical
 wrapper, reload preserves that identity and skips the legacy scalar projection.
 

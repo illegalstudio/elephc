@@ -217,6 +217,7 @@ pub(crate) struct LoweringSnapshot {
     taken_owned_temp_values: HashSet<ValueId>,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     borrowed_string_call_operands: HashSet<ValueId>,
+    live_native_mutation_locals: HashMap<String, PhpType>,
     /// Provisional offset receiver reads belonging to this speculative function state.
     string_offset_receivers: Vec<(Span, ValueId)>,
     borrowed_string_calls_enabled: bool,
@@ -319,6 +320,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
     pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
+    /// Native reference places whose raw and canonical mutation arms have already been selected.
+    pub(crate) live_native_mutation_locals: HashMap<String, PhpType>,
     pub(crate) borrowed_string_calls_enabled: bool,
     /// PHP locals whose `(string)` cast must copy: the finished frame slot frees the load.
     ///
@@ -689,6 +692,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             taken_owned_temp_values: HashSet::new(),
             call_argument_evaluation_scopes: Vec::new(),
             borrowed_string_call_operands: HashSet::new(),
+            live_native_mutation_locals: HashMap::new(),
             string_offset_receivers: Vec::new(),
             owned_string_offset_sites: HashSet::new(),
             borrowed_string_calls_enabled: true,
@@ -765,6 +769,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             taken_owned_temp_values: self.taken_owned_temp_values.clone(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
             borrowed_string_call_operands: self.borrowed_string_call_operands.clone(),
+            live_native_mutation_locals: self.live_native_mutation_locals.clone(),
             string_offset_receivers: self.string_offset_receivers.clone(),
             borrowed_string_calls_enabled: self.borrowed_string_calls_enabled,
             owned_string_cast_locals: self.owned_string_cast_locals.clone(),
@@ -877,6 +882,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.taken_owned_temp_values = snapshot.taken_owned_temp_values;
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
         self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
+        self.live_native_mutation_locals = snapshot.live_native_mutation_locals;
         self.string_offset_receivers = snapshot.string_offset_receivers;
         self.borrowed_string_calls_enabled = snapshot.borrowed_string_calls_enabled;
         self.owned_string_cast_locals = snapshot.owned_string_cast_locals;
@@ -2208,6 +2214,39 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Emits a load from a PHP local slot.
     pub(crate) fn load_local(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
+        self.load_local_view(name, span, false)
+    }
+
+    /// Borrows a mutation's live boxed cell after its raw native payload arm was separated.
+    pub(crate) fn load_local_for_mutation(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
+        let Some(view) = self.live_native_mutation_locals.get(name).cloned() else {
+            return self.load_local(name, span);
+        };
+        let previous = self.local_types.insert(name.to_string(), view);
+        let value = self.load_local_view(name, span, true);
+        if let Some(previous) = previous { self.local_types.insert(name.to_string(), previous); }
+        else { self.local_types.remove(name); }
+        value
+    }
+
+    /// Keeps a selected raw mutation layout independent of later RHS value facts.
+    pub(crate) fn local_mutation_type(&self, name: &str) -> PhpType {
+        self.live_native_mutation_locals.get(name).cloned().unwrap_or_else(|| self.local_type(name))
+    }
+
+    /// Identifies a native parameter whose logical value no longer describes its raw cell ABI.
+    pub(crate) fn native_mutation_payload_type(&self, name: &str) -> Option<PhpType> {
+        if self.local_type(name).codegen_repr() != PhpType::Mixed || !self.is_ref_bound_local(name) {
+            return None;
+        }
+        self.builder.function().params.iter()
+            .find(|parameter| parameter.by_ref && parameter.name == name)
+            .map(|parameter| parameter.php_type.clone())
+            .filter(|ty| ty.codegen_repr() != PhpType::Mixed)
+    }
+
+    /// Selects independent observations or a mutation's already-selected writable value view.
+    fn load_local_view(&mut self, name: &str, span: Option<Span>, mutation: bool) -> LoweredValue {
         if let Some(php_type) = self.extern_global_type(name) {
             return self.load_extern_global(name, php_type, span);
         }
@@ -2228,7 +2267,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let slot = self.declare_local(name, php_type.clone());
         let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && kind == LocalKind::PhpLocal;
         let op = match (is_ref_bound, uses_global, kind) {
-            (true, _, _) if php_type.codegen_repr() == PhpType::Mixed
+            (true, _, _) if !mutation && php_type.codegen_repr() == PhpType::Mixed
                 && self.ref_cell_store_type(name, &self.builder.local_php_type(slot))
                     .codegen_repr() != PhpType::Mixed => Op::LoadRefCellValue,
             (true, _, _) => Op::LoadRefCell,

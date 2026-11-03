@@ -246,6 +246,18 @@ fn lower_array_assign_with_update(
     key_already_diagnosed: bool,
     incdec: Option<bool>,
 ) {
+    if super::native_reference_mutations::lower(ctx, array, span,
+        |ctx| lower_array_assign_selected(ctx, array, index, value, span, key_already_diagnosed, incdec))
+    { return; }
+    lower_array_assign_selected(ctx, array, index, value, span, key_already_diagnosed, incdec);
+}
+
+/// Emits the selected raw or canonical local writer without changing PHP operand order.
+#[allow(clippy::too_many_arguments)]
+fn lower_array_assign_selected(
+    ctx: &mut LoweringContext<'_, '_>, array: &str, index: &Expr, value: &Expr,
+    span: Span, key_already_diagnosed: bool, incdec: Option<bool>,
+) {
     if string_offset_writes::local_is_string_offset_target(ctx, array) {
         string_offset_writes::lower_string_offset_assign(ctx, array, index, value, span);
         return;

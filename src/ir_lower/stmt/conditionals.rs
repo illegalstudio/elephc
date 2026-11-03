@@ -14,6 +14,9 @@ use std::collections::HashMap;
 use crate::ir_lower::context::{ReflectionBindings, StaticCallableBinding};
 use crate::types::TypeEnv;
 
+mod runtime_choice;
+pub(super) use runtime_choice::lower_runtime_choice;
+
 /// One reachable arm of an `if` chain together with its deferred merge edge.
 struct IfArmExit {
     /// Empty block filled after every sibling arm has been lowered.

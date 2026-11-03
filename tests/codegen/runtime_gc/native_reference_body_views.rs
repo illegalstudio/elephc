@@ -18,9 +18,22 @@ fn test_native_reference_body_write_uses_current_boxed_payload() {
     let source = r#"<?php
 function nativeCanonicalReplacement(): mixed { return 'changed'; }
 function nativeCanonicalBodyView(int &$target): void {
-    $target = nativeCanonicalReplacement(); echo gettype($target), ':', $target, '|';
+    $target = nativeCanonicalReplacement(); $target[1] = 'X';
+    echo gettype($target), ':', $target, '|';
 }
-if ($argc < 0) { $target = 1; nativeCanonicalBodyView($target); unset($target); }
+function nativeCanonicalArrayReplacement(): mixed { return [0]; }
+function nativeCanonicalArrayMutation(int &$target): void {
+    $target = nativeCanonicalArrayReplacement(); $target[] = 1; $target[1] = 2;
+    echo $target[0], ':', count($target), '|';
+}
+function nativeHeaderlessStringMutation(string &$target): void {
+    $target = nativeCanonicalReplacement(); $target[1] = 'X';
+    echo gettype($target), ':', $target, '|';
+}
+if ($argc < 0) {
+    $target = 1; nativeCanonicalBodyView($target); nativeCanonicalArrayMutation($target); unset($target);
+    $raw = 'before'; nativeHeaderlessStringMutation($raw); unset($raw);
+}
 "#;
     for optimize in [false, true] {
         let compile =
@@ -51,13 +64,24 @@ if ($argc < 0) { $target = 1; nativeCanonicalBodyView($target); unset($target); 
             &mut asm,
             &elephc::names::function_symbol("nativeCanonicalBodyView"),
         );
+        instruction(&mut asm, "ldr x0, [sp, #8]", "mov rdi, QWORD PTR [rsp + 8]");
+        call(&mut asm, &elephc::names::function_symbol("nativeCanonicalArrayMutation"));
+        address(&mut asm, "x9", "r10", "Lnative_headerless_string");
+        instruction(&mut asm, "str x9, [sp, #16]", "mov QWORD PTR [rsp + 16], r10");
+        instruction(&mut asm, "mov x9, #6", "mov r10, 6");
+        instruction(&mut asm, "str x9, [sp, #24]", "mov QWORD PTR [rsp + 24], r10");
+        instruction(&mut asm, "add x0, sp, #16", "lea rdi, [rsp + 16]");
+        call(&mut asm, &elephc::names::function_symbol("nativeHeaderlessStringMutation"));
+        load(&mut asm, 16);
+        call(&mut asm, "__rt_heap_free_safe");
         load(&mut asm, 8);
         call(&mut asm, "__rt_reference_cell_release");
         expect_zero(&mut asm, "_rt_reference_validation_pins_top");
         expect_zero(&mut asm, "_exc_value");
         expect_zero(&mut asm, "_gc_live");
         append_status_output(&mut asm, 32);
-        let user = inject_main_exit_harness(&user, &asm);
+        let mut user = inject_main_exit_harness(&user, &asm);
+        user.push_str("\n.data\nLnative_headerless_string:\n    .byte 98,101,102,111,114,101,0\n");
         let runtime = runtime_obj_for_asm(&runtime);
         let output = assemble_and_run(
             &user,
@@ -67,6 +91,51 @@ if ($argc < 0) { $target = 1; nativeCanonicalBodyView($target); unset($target); 
             &default_link_paths(),
             &[],
         );
-        assert_eq!(output, "string:changed|1", "optimize={optimize}");
+        assert_eq!(output, "string:cXanged|0:2|string:cXanged|1", "optimize={optimize}");
+    }
+}
+
+/// Opaque eval keeps raw Mixed-element array references writable after logical widening.
+#[test]
+fn test_native_reference_array_mutations_after_opaque_eval_bundle() {
+    let source = r#"<?php
+function nativeRawArrayMutation(array<mixed> &$items, string $code): void {
+    eval($code); $items[] = 1; $items[1] = 2;
+    echo $items[0], ':', $items[1], ':', count($items), '|';
+}
+$items = [0]; $code = $argc > 0 ? '$items[0] = 0;' : '';
+nativeRawArrayMutation($items, $code);
+echo $items[0], ':', $items[1], ':', count($items);
+"#;
+    for optimize in [false, true] {
+        let run = || compile_and_run_with_heap_debug(source);
+        let output = if optimize { run() } else { without_ir_opt(run) };
+        assert!(output.success, "optimize={optimize}: {}", output.stderr);
+        assert_eq!(output.stdout, "0:2:2|0:2:2", "optimize={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "optimize={optimize}: {}", output.stderr);
+    }
+}
+
+/// A raw string reference keeps its two-word ABI through the same boxed logical value flow.
+#[test]
+fn test_native_reference_raw_string_offset_write_preserves_caller_alias() {
+    let source = r#"<?php
+function nativeRawStringReplacement(): mixed { return 'abc'; }
+function nativeRawStringMutation(string &$text): void {
+    $text = nativeRawStringReplacement(); $text[1] = 'Z';
+    echo gettype($text), ':', $text, '|';
+}
+$text = 'before'; $alias =& $text;
+nativeRawStringMutation($text);
+echo $text, ':', $alias;
+"#;
+    for optimize in [false, true] {
+        let run = || compile_and_run_with_heap_debug(source);
+        let output = if optimize { run() } else { without_ir_opt(run) };
+        assert!(output.success, "optimize={optimize}: {}", output.stderr);
+        assert_eq!(output.stdout, "string:aZc|aZc:aZc", "optimize={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "optimize={optimize}: {}", output.stderr);
     }
 }

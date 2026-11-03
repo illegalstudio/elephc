@@ -106,6 +106,7 @@ mod string_append;
 mod eval_ownership;
 mod eval_native_reference_layout;
 mod native_reference_outputs;
+mod native_reference_mutations;
 mod eval_typed_array_boundaries;
 mod eval_default_helpers;
 mod default_review_boundaries;

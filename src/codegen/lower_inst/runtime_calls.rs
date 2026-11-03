@@ -25,6 +25,8 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::ReferenceCellUsesRawPayload =>
+            super::reference_payloads::lower_uses_raw_payload(ctx, inst),
         RuntimeCallTarget::ReferencePropertyCoerce { class_id, slot, is_static } => {
             super::objects::lower_reference_property_coercion(ctx, inst, class_id, slot, is_static)
         }
@@ -380,25 +382,25 @@ fn lower_mixed_cell_copy_for_write(
     let done = ctx.next_label("public_write_copy_done");
     match ctx.emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz x0, {done}"));               // preserve an absent public getter result
-            ctx.emitter.instruction("ldr x9, [x0]");                           // inspect direct and persistent reference markers
-            ctx.emitter.instruction("cmp x9, #11");                            // direct caller-reference markers stay attached
-            ctx.emitter.instruction(&format!("b.eq {retain}"));                // retain the marker instead of detaching its value
-            ctx.emitter.instruction("cmp x9, #7");                             // nested Mixed may be an explicit PHP reference
-            ctx.emitter.instruction(&format!("b.ne {clone}"));                 // ordinary values receive independent Mixed storage
-            ctx.emitter.instruction("ldr x9, [x0, #16]");                      // inspect the persistent-reference flag
-            ctx.emitter.instruction("cmp x9, #1");                             // flag one denotes shared writable reference identity
-            ctx.emitter.instruction(&format!("b.eq {retain}"));                // preserve that identity through the later write resolver
+            ctx.emitter.instruction(&format!("cbz x0, {done}"));                // preserve an absent public getter result
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect direct and persistent reference markers
+            ctx.emitter.instruction("cmp x9, #11");                             // direct caller-reference markers stay attached
+            ctx.emitter.instruction(&format!("b.eq {retain}"));                 // retain the marker instead of detaching its value
+            ctx.emitter.instruction("cmp x9, #7");                              // nested Mixed may be an explicit PHP reference
+            ctx.emitter.instruction(&format!("b.ne {clone}"));                  // ordinary values receive independent Mixed storage
+            ctx.emitter.instruction("ldr x9, [x0, #16]");                       // inspect the persistent-reference flag
+            ctx.emitter.instruction("cmp x9, #1");                              // flag one denotes shared writable reference identity
+            ctx.emitter.instruction(&format!("b.eq {retain}"));                 // preserve that identity through the later write resolver
         }
         crate::codegen::platform::Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                          // preserve an absent public getter result
-            ctx.emitter.instruction(&format!("jz {done}"));                    // avoid reading a missing cell
-            ctx.emitter.instruction("cmp QWORD PTR [rax], 11");                // direct caller-reference markers stay attached
-            ctx.emitter.instruction(&format!("je {retain}"));                  // retain the marker instead of detaching its value
-            ctx.emitter.instruction("cmp QWORD PTR [rax], 7");                 // nested Mixed may be an explicit PHP reference
-            ctx.emitter.instruction(&format!("jne {clone}"));                  // ordinary values receive independent Mixed storage
-            ctx.emitter.instruction("cmp QWORD PTR [rax + 16], 1");            // flag one denotes shared writable reference identity
-            ctx.emitter.instruction(&format!("je {retain}"));                  // preserve that identity through the later write resolver
+            ctx.emitter.instruction("test rax, rax");                           // preserve an absent public getter result
+            ctx.emitter.instruction(&format!("jz {done}"));                     // avoid reading a missing cell
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 11");                 // direct caller-reference markers stay attached
+            ctx.emitter.instruction(&format!("je {retain}"));                   // retain the marker instead of detaching its value
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 7");                  // nested Mixed may be an explicit PHP reference
+            ctx.emitter.instruction(&format!("jne {clone}"));                   // ordinary values receive independent Mixed storage
+            ctx.emitter.instruction("cmp QWORD PTR [rax + 16], 1");             // flag one denotes shared writable reference identity
+            ctx.emitter.instruction(&format!("je {retain}"));                   // preserve that identity through the later write resolver
         }
     }
     ctx.emitter.label(&clone);

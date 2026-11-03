@@ -16,8 +16,8 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
     name: &str,
     span: Span,
 ) -> LoweredValue {
-    let ty = ctx.local_type(name);
-    let value = ctx.load_local(name, Some(span));
+    let value = ctx.load_local_for_mutation(name, Some(span));
+    let ty = ctx.builder.value_php_type(value.value);
     if ty.codegen_repr() != PhpType::Mixed
         || ctx.append_update_cell_aliases.contains(name)
     {
@@ -32,11 +32,18 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
         Some(span),
     );
     ctx.store_call_argument_local(name, detached, ty, Some(span));
-    ctx.load_local(name, Some(span))
+    ctx.load_local_for_mutation(name, Some(span))
 }
 
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
+    if super::native_reference_mutations::lower(ctx, array, span,
+        |ctx| lower_array_push_inner(ctx, array, value, span)) { return; }
+    lower_array_push_inner(ctx, array, value, span);
+}
+
+/// Emits one append after native reference layout dispatch has selected its writable view.
+fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
     let receiver = Expr::new(ExprKind::Variable(array.into()), span);
     if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
     let value = lower_expr(ctx, value);
@@ -60,7 +67,7 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         ctx.store_local(array, empty, array_ty, Some(span));
     }
     let array_value = if ctx.is_ref_bound_local(array) {
-        ctx.load_local(array, Some(span))
+        ctx.load_local_for_mutation(array, Some(span))
     } else {
         load_array_local_for_write(ctx, array, span)
     };
