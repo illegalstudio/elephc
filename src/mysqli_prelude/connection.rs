@@ -953,21 +953,73 @@ class mysqli {
     }
 
     public function get_charset(): mixed {
-        // php returns a stdClass describing the connection charset. elephc knows
-        // the live charset name; the collation/state/comment fields the bridge
-        // does not expose are reported as 0 / "" (documented).
+        // php describes the connection charset from mysqlnd's compiled-in table:
+        // the first entry for the session's charset name (its default collation,
+        // the one the bridge client negotiates), with state 1 and an empty dir.
         $this->requireInitialized();
-        $_charset = elephc_pdo_mysql_charset($this->conn);
+        $_charset = strtolower(elephc_pdo_mysql_charset($this->conn));
+        $_entry = mysqli::__elephcCharsetEntry($_charset);
         $_info = new stdClass();
         $_info->{"charset"} = $_charset;
-        $_info->{"collation"} = "";
+        $_info->{"collation"} = (string) $_entry[0];
         $_info->{"dir"} = "";
-        $_info->{"min_length"} = 0;
-        $_info->{"max_length"} = 0;
-        $_info->{"number"} = 0;
-        $_info->{"state"} = 0;
-        $_info->{"comment"} = "";
+        $_info->{"min_length"} = (int) $_entry[2];
+        $_info->{"max_length"} = (int) $_entry[3];
+        $_info->{"number"} = (int) $_entry[1];
+        $_info->{"state"} = 1;
+        $_info->{"comment"} = (string) $_entry[4];
         return $_info;
+    }
+
+    // mysqlnd's charset table (ext/mysqlnd/mysqlnd_charset.c), reduced to the
+    // first entry of each charset name, the one mysqlnd_find_charset_name()
+    // returns: [collation, number, min_length, max_length, comment].
+    private static function __elephcCharsetEntry(string $name): array {
+        $_table = [
+            "big5" => ["big5_chinese_ci", 1, 1, 2, ""],
+            "dec8" => ["dec8_swedish_ci", 3, 1, 1, ""],
+            "cp850" => ["cp850_general_ci", 4, 1, 1, ""],
+            "hp8" => ["hp8_english_ci", 6, 1, 1, ""],
+            "koi8r" => ["koi8r_general_ci", 7, 1, 1, ""],
+            "latin1" => ["latin1_swedish_ci", 8, 1, 1, ""],
+            "latin2" => ["latin2_general_ci", 9, 1, 1, ""],
+            "swe7" => ["swe7_swedish_ci", 10, 1, 1, ""],
+            "ascii" => ["ascii_general_ci", 11, 1, 1, ""],
+            "ujis" => ["ujis_japanese_ci", 12, 1, 3, ""],
+            "sjis" => ["sjis_japanese_ci", 13, 1, 2, ""],
+            "hebrew" => ["hebrew_general_ci", 16, 1, 1, ""],
+            "filename" => ["filename", 17, 1, 5, ""],
+            "tis620" => ["tis620_thai_ci", 18, 1, 1, ""],
+            "euckr" => ["euckr_korean_ci", 19, 1, 2, ""],
+            "koi8u" => ["koi8u_general_ci", 22, 1, 1, ""],
+            "gb2312" => ["gb2312_chinese_ci", 24, 1, 2, ""],
+            "greek" => ["greek_general_ci", 25, 1, 1, ""],
+            "cp1250" => ["cp1250_general_ci", 26, 1, 1, ""],
+            "gbk" => ["gbk_chinese_ci", 28, 1, 2, ""],
+            "latin5" => ["latin5_turkish_ci", 30, 1, 1, ""],
+            "armscii8" => ["armscii8_general_ci", 32, 1, 1, ""],
+            "utf8" => ["utf8_general_ci", 33, 1, 3, "UTF-8 Unicode"],
+            "ucs2" => ["ucs2_general_ci", 35, 2, 2, "UCS-2 Unicode"],
+            "cp866" => ["cp866_general_ci", 36, 1, 1, ""],
+            "keybcs2" => ["keybcs2_general_ci", 37, 1, 1, ""],
+            "macce" => ["macce_general_ci", 38, 1, 1, ""],
+            "macroman" => ["macroman_general_ci", 39, 1, 1, ""],
+            "cp852" => ["cp852_general_ci", 40, 1, 1, ""],
+            "latin7" => ["latin7_general_ci", 41, 1, 1, ""],
+            "utf8mb4" => ["utf8mb4_general_ci", 45, 1, 4, "UTF-8 Unicode"],
+            "cp1251" => ["cp1251_general_ci", 51, 1, 1, ""],
+            "utf16" => ["utf16_general_ci", 54, 2, 4, "UTF-16 Unicode"],
+            "utf16le" => ["utf16le_general_ci", 56, 2, 4, "UTF-16LE Unicode"],
+            "cp1256" => ["cp1256_general_ci", 57, 1, 1, ""],
+            "cp1257" => ["cp1257_general_ci", 59, 1, 1, ""],
+            "utf32" => ["utf32_general_ci", 60, 4, 4, "UTF-32 Unicode"],
+            "binary" => ["binary", 63, 1, 1, ""],
+            "geostd8" => ["geostd8_general_ci", 92, 1, 1, ""],
+            "cp932" => ["cp932_japanese_ci", 95, 1, 2, ""],
+            "eucjpms" => ["eucjpms_japanese_ci", 97, 1, 3, ""],
+            "gb18030" => ["gb18030_chinese_ci", 248, 1, 4, ""],
+        ];
+        return $_table[$name] ?? ["", 0, 0, 0, ""];
     }
 
     // -- elephc PHP >= 8.2 mysqli execute_query begin --

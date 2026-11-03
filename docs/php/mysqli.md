@@ -415,9 +415,6 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
   and `extension_loaded('mysqli')` all behave as in compiled code — but an
   `eval()` string is not scanned, so a program that uses mysqli *only* there
   needs `--with-mysqli`.
-- **`get_charset()` reports only the charset name.** The returned object's
-  `charset` field is exact; `collation`, `number`, `state`, `dir`,
-  `min_length`, `max_length`, and `comment` are `0` / `""`.
 
 <!-- elephc:generated:symbols:begin -->
 

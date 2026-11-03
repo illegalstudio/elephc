@@ -1617,17 +1617,29 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .returns(t_mixed())
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireInitialized", vec![])),
-                    s_assign("_charset", e_call("elephc_pdo_mysql_charset", vec![e_this_prop("conn")])),
+                    s_assign("_charset", e_call("strtolower", vec![e_call("elephc_pdo_mysql_charset", vec![e_this_prop("conn")])])),
+                    s_assign("_entry", e_static_call("mysqli", "__elephcCharsetEntry", vec![e_var("_charset")])),
                     s_assign("_info", e_new("stdClass", vec![])),
                     s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("charset")), e_var("_charset"))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("collation")), e_str(""))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("collation")), e_cast(CastType::String, e_index(e_var("_entry"), e_int(0))))),
                     s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("dir")), e_str(""))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("min_length")), e_int(0))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("max_length")), e_int(0))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("number")), e_int(0))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("state")), e_int(0))),
-                    s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("comment")), e_str(""))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("min_length")), e_cast(CastType::Int, e_index(e_var("_entry"), e_int(2))))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("max_length")), e_cast(CastType::Int, e_index(e_var("_entry"), e_int(3))))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("number")), e_cast(CastType::Int, e_index(e_var("_entry"), e_int(1))))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("state")), e_int(1))),
+                    s_expr(e_assign(e_dyn_prop(e_var("_info"), e_str("comment")), e_cast(CastType::String, e_index(e_var("_entry"), e_int(4))))),
                     s_return(e_var("_info")),
+                ]),
+        )
+        .method(
+            method("__elephcCharsetEntry")
+                .private()
+                .static_()
+                .param("name", TypeExpr::Str)
+                .returns(t_array())
+                .body(vec![
+                    s_assign("_table", e_array_assoc(vec![(e_str("big5"), e_array(vec![e_str("big5_chinese_ci"), e_int(1), e_int(1), e_int(2), e_str("")])), (e_str("dec8"), e_array(vec![e_str("dec8_swedish_ci"), e_int(3), e_int(1), e_int(1), e_str("")])), (e_str("cp850"), e_array(vec![e_str("cp850_general_ci"), e_int(4), e_int(1), e_int(1), e_str("")])), (e_str("hp8"), e_array(vec![e_str("hp8_english_ci"), e_int(6), e_int(1), e_int(1), e_str("")])), (e_str("koi8r"), e_array(vec![e_str("koi8r_general_ci"), e_int(7), e_int(1), e_int(1), e_str("")])), (e_str("latin1"), e_array(vec![e_str("latin1_swedish_ci"), e_int(8), e_int(1), e_int(1), e_str("")])), (e_str("latin2"), e_array(vec![e_str("latin2_general_ci"), e_int(9), e_int(1), e_int(1), e_str("")])), (e_str("swe7"), e_array(vec![e_str("swe7_swedish_ci"), e_int(10), e_int(1), e_int(1), e_str("")])), (e_str("ascii"), e_array(vec![e_str("ascii_general_ci"), e_int(11), e_int(1), e_int(1), e_str("")])), (e_str("ujis"), e_array(vec![e_str("ujis_japanese_ci"), e_int(12), e_int(1), e_int(3), e_str("")])), (e_str("sjis"), e_array(vec![e_str("sjis_japanese_ci"), e_int(13), e_int(1), e_int(2), e_str("")])), (e_str("hebrew"), e_array(vec![e_str("hebrew_general_ci"), e_int(16), e_int(1), e_int(1), e_str("")])), (e_str("filename"), e_array(vec![e_str("filename"), e_int(17), e_int(1), e_int(5), e_str("")])), (e_str("tis620"), e_array(vec![e_str("tis620_thai_ci"), e_int(18), e_int(1), e_int(1), e_str("")])), (e_str("euckr"), e_array(vec![e_str("euckr_korean_ci"), e_int(19), e_int(1), e_int(2), e_str("")])), (e_str("koi8u"), e_array(vec![e_str("koi8u_general_ci"), e_int(22), e_int(1), e_int(1), e_str("")])), (e_str("gb2312"), e_array(vec![e_str("gb2312_chinese_ci"), e_int(24), e_int(1), e_int(2), e_str("")])), (e_str("greek"), e_array(vec![e_str("greek_general_ci"), e_int(25), e_int(1), e_int(1), e_str("")])), (e_str("cp1250"), e_array(vec![e_str("cp1250_general_ci"), e_int(26), e_int(1), e_int(1), e_str("")])), (e_str("gbk"), e_array(vec![e_str("gbk_chinese_ci"), e_int(28), e_int(1), e_int(2), e_str("")])), (e_str("latin5"), e_array(vec![e_str("latin5_turkish_ci"), e_int(30), e_int(1), e_int(1), e_str("")])), (e_str("armscii8"), e_array(vec![e_str("armscii8_general_ci"), e_int(32), e_int(1), e_int(1), e_str("")])), (e_str("utf8"), e_array(vec![e_str("utf8_general_ci"), e_int(33), e_int(1), e_int(3), e_str("UTF-8 Unicode")])), (e_str("ucs2"), e_array(vec![e_str("ucs2_general_ci"), e_int(35), e_int(2), e_int(2), e_str("UCS-2 Unicode")])), (e_str("cp866"), e_array(vec![e_str("cp866_general_ci"), e_int(36), e_int(1), e_int(1), e_str("")])), (e_str("keybcs2"), e_array(vec![e_str("keybcs2_general_ci"), e_int(37), e_int(1), e_int(1), e_str("")])), (e_str("macce"), e_array(vec![e_str("macce_general_ci"), e_int(38), e_int(1), e_int(1), e_str("")])), (e_str("macroman"), e_array(vec![e_str("macroman_general_ci"), e_int(39), e_int(1), e_int(1), e_str("")])), (e_str("cp852"), e_array(vec![e_str("cp852_general_ci"), e_int(40), e_int(1), e_int(1), e_str("")])), (e_str("latin7"), e_array(vec![e_str("latin7_general_ci"), e_int(41), e_int(1), e_int(1), e_str("")])), (e_str("utf8mb4"), e_array(vec![e_str("utf8mb4_general_ci"), e_int(45), e_int(1), e_int(4), e_str("UTF-8 Unicode")])), (e_str("cp1251"), e_array(vec![e_str("cp1251_general_ci"), e_int(51), e_int(1), e_int(1), e_str("")])), (e_str("utf16"), e_array(vec![e_str("utf16_general_ci"), e_int(54), e_int(2), e_int(4), e_str("UTF-16 Unicode")])), (e_str("utf16le"), e_array(vec![e_str("utf16le_general_ci"), e_int(56), e_int(2), e_int(4), e_str("UTF-16LE Unicode")])), (e_str("cp1256"), e_array(vec![e_str("cp1256_general_ci"), e_int(57), e_int(1), e_int(1), e_str("")])), (e_str("cp1257"), e_array(vec![e_str("cp1257_general_ci"), e_int(59), e_int(1), e_int(1), e_str("")])), (e_str("utf32"), e_array(vec![e_str("utf32_general_ci"), e_int(60), e_int(4), e_int(4), e_str("UTF-32 Unicode")])), (e_str("binary"), e_array(vec![e_str("binary"), e_int(63), e_int(1), e_int(1), e_str("")])), (e_str("geostd8"), e_array(vec![e_str("geostd8_general_ci"), e_int(92), e_int(1), e_int(1), e_str("")])), (e_str("cp932"), e_array(vec![e_str("cp932_japanese_ci"), e_int(95), e_int(1), e_int(2), e_str("")])), (e_str("eucjpms"), e_array(vec![e_str("eucjpms_japanese_ci"), e_int(97), e_int(1), e_int(3), e_str("")])), (e_str("gb18030"), e_array(vec![e_str("gb18030_chinese_ci"), e_int(248), e_int(1), e_int(4), e_str("")]))])),
+                    s_return(e_null_coalesce(e_index(e_var("_table"), e_var("name")), e_array(vec![e_str(""), e_int(0), e_int(0), e_int(0), e_str("")]))),
                 ]),
         )
         // `mysqli::execute_query` is PHP 8.2+; earlier profiles do not declare it.

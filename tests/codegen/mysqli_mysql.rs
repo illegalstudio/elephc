@@ -1423,3 +1423,28 @@ var_dump($row);
         "object(Row)#2 (3) {\n  [\"id\"]=>\n  string(1) \"7\"\n  [\"label\"]=>\n  string(5) \"seven\"\n  [\"absent\"]=>\n  NULL\n}\n"
     );
 }
+
+/// `get_charset()` reports mysqlnd's charset-table entry for the session charset: the
+/// default collation, its number, the character byte lengths and the comment, with
+/// `state` 1 and an empty `dir`, after connecting and after each `set_charset()`.
+#[test]
+#[ignore]
+fn test_mysqli_get_charset_reports_the_mysqlnd_table_entry() {
+    let out = compile_and_run(&my_program(
+        r#"
+$show = function (mixed $c): string {
+    return $c->charset . "/" . $c->collation . "/" . $c->number . "/" . $c->min_length . "-"
+        . $c->max_length . "/" . $c->state . "/" . $c->dir . "/" . $c->comment;
+};
+echo $show($db->get_charset());
+$db->set_charset("LATIN1");
+echo "|", $show(mysqli_get_charset($db));
+$db->set_charset("utf8mb4");
+echo "|", $show($db->get_charset());
+"#,
+    ));
+    assert_eq!(
+        out,
+        "utf8mb4/utf8mb4_general_ci/45/1-4/1//UTF-8 Unicode|latin1/latin1_swedish_ci/8/1-1/1//|utf8mb4/utf8mb4_general_ci/45/1-4/1//UTF-8 Unicode"
+    );
+}
