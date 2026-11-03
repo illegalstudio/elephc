@@ -67,7 +67,8 @@ $detachedCopy = copyWithEvalNativeLease($detached->value, $detached, true);
 $detached->value = "after";
 echo $detachedCopy->value, "|";
 $shared = new EvalNativeParameterLeaseProbe();
-$alias =& $shared->value;
+$alias = "before";
+$shared->value =& $alias;
 $sharedCopy = copyWithEvalNativeLease($shared->value, $shared, true);
 $alias = "after";
 echo $sharedCopy->value, "|";
@@ -86,4 +87,45 @@ eval($code); unset($code);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
     assert_eq!(output.stdout, "after|before|after|caught|written|");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// Pending, duplicate, nested and aborted calls preserve exactly their live PHP bindings.
+#[test]
+fn test_native_reference_argument_handoff_preserves_binding_lifetimes() {
+    let source = r#"<?php
+class NativeArgumentHandoffProbe { public mixed $value = 'before'; }
+function writeNativeArgument(mixed &$value, NativeArgumentHandoffProbe $copy): void {
+    $value = 'after'; echo $copy->value, '|';
+}
+function detachNativeArguments(mixed &$first, mixed &$second, NativeArgumentHandoffProbe $object): NativeArgumentHandoffProbe {
+    unset($first, $second); return clone $object;
+}
+function nestedNativeArgument(mixed &$value, NativeArgumentHandoffProbe $object): NativeArgumentHandoffProbe {
+    unset($value); return clone $object;
+}
+function abortNativeArgument(): NativeArgumentHandoffProbe { throw new Exception('late'); }
+$pending = new NativeArgumentHandoffProbe();
+writeNativeArgument($pending->value, clone $pending);
+echo $pending->value, '|';
+$duplicate = new NativeArgumentHandoffProbe();
+$copy = detachNativeArguments($duplicate->value, $duplicate->value, $duplicate);
+$duplicate->value = 'after'; echo $copy->value, '|';
+$nested = new NativeArgumentHandoffProbe();
+writeNativeArgument($nested->value, nestedNativeArgument($nested->value, $nested));
+$aborted = new NativeArgumentHandoffProbe();
+try { writeNativeArgument($aborted->value, abortNativeArgument()); }
+catch (Exception $error) { echo $error->getMessage(), '|'; }
+$abortedCopy = clone $aborted;
+$aborted->value = 'after'; echo $abortedCopy->value, '|';
+"#;
+    for optimize in [true, false] {
+        let output = if optimize {
+            compile_and_run_with_heap_debug(source)
+        } else {
+            without_ir_opt(|| compile_and_run_with_heap_debug(source))
+        };
+        assert!(output.success, "ir-opt={optimize}: stdout={} stderr={}", output.stdout, output.stderr);
+        assert_eq!(output.stdout, "after|after|before|after|late|before|", "ir-opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    }
 }

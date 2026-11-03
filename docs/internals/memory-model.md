@@ -725,13 +725,27 @@ Cleanup takes the root owner without running PHP, then retires that owner inside
 the eval ABI's boxed Throwable accumulator. A destructor cannot bypass Rust
 cleanup or leave a record referring to retired foreign storage.
 
-A native frame retains an incoming managed reference cell in a hidden owner slot
+A native frame owns an incoming managed reference cell in a hidden owner slot
 for each regular by-reference parameter. The cell is authenticated before its
 owner is acquired; borrowed frame addresses leave the hidden owner empty.
 `unset`, normal return and unwinding retire that parameter binding independently
 of the caller and property owners. Hidden owners are appended after every ABI
 parameter slot, preserving argument positions. Variadic reference marker arrays
 keep their existing container path.
+
+Direct source-function calls pass eligible plain exact-Mixed properties through
+their live cell. A synthetic argument owner is visible while later arguments
+evaluate, so a later `clone` observes the pending PHP reference. Its tagged
+48-byte cleanup record keeps the owner-slot address at offset 16 and the final
+call's incoming stack pointer at offset 32. The record has no backtrace reader.
+Immediately before native entry, codegen activates only the owners named by that
+call's EIR operands. Parameter acquisition authenticates the cell and transfers
+the matching owner by clearing the caller slot before publishing the callee's
+owner. `unset` can therefore detach the formal parameter without an artificial
+caller binding preserving sharing. Nested calls use distinct activation keys;
+an exception before entry retires the pending owner through normal unwinding.
+Other call surfaces retain the existing independent parameter-owner path.
+
 Constructor, instance-method and static-method bridges likewise preserve an
 existing Mixed PHP wrapper instead of copying its child into detached staging.
 Native stores update that wrapper's child, and return cleanup releases the

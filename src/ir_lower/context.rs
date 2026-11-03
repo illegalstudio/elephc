@@ -149,6 +149,8 @@ pub(crate) struct CallArgumentEvaluationOwner {
 pub(crate) struct CallArgumentEvaluationScope {
     pub expression_depth: usize,
     pub owners: Vec<CallArgumentEvaluationOwner>,
+    /// Direct native source functions can adopt the call's live property argument owners.
+    pub live_property_reference_arguments: bool,
 }
 
 /// Staging for one `$target = &call()`, recorded while its source expression is lowered.

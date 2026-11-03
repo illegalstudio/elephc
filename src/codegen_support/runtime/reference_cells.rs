@@ -22,6 +22,7 @@ mod mixed_payload;
 mod mixed_symbol;
 mod property_payload;
 mod canonical;
+mod parameter_bindings;
 mod validation_pins;
 mod validation_coercion;
 mod validation_ops;
@@ -75,6 +76,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     validation_ops::emit(emitter);
     property_unset::emit_property_unset(emitter);
     emit_owner_lookup(emitter);
+    parameter_bindings::emit(emitter);
     canonical::emit(emitter);
     emit_unmanaged_borrow_lookup(emitter);
     emit_unmanaged_borrow_escape_error(emitter);

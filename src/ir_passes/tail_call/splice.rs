@@ -53,6 +53,7 @@ fn clone_body(host: &mut Function, source: &Function) -> BodyMap {
             local.ir_type, local.php_type.clone(), local.kind);
     }
     for local in &source.locals {
+        host.locals[map.locals[&local.id].as_raw() as usize].is_reference_argument_owner = local.is_reference_argument_owner;
         host.locals[map.locals[&local.id].as_raw() as usize].ref_cell_owner =
             local.ref_cell_owner.map(|owner| map.locals[&owner]);
     }

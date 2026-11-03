@@ -100,6 +100,7 @@ pub enum ValidationError {
     },
     NeverFunctionReturns,
     InvalidReferenceOwner { local: LocalSlotId, owner: LocalSlotId },
+    InvalidReferenceArgumentOwner(LocalSlotId),
     InvalidReferenceCallResult { inst: InstId, operand: ValueId },
 }
 
@@ -124,6 +125,9 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
 pub fn validate_function(function: &Function) -> Result<(), ValidationError> {
     validate_function_shape(function)?;
     for local in &function.locals {
+        if local.is_reference_argument_owner && local.kind != LocalKind::RefCell {
+            return Err(ValidationError::InvalidReferenceArgumentOwner(local.id));
+        }
         if let Some(owner) = local.ref_cell_owner {
             if function.locals.get(owner.as_raw() as usize)
                 .is_none_or(|slot| slot.kind != LocalKind::RefCell || slot.id == local.id)
@@ -145,6 +149,25 @@ pub fn validate_function(function: &Function) -> Result<(), ValidationError> {
 #[cfg(test)]
 mod reference_owner_metadata_tests {
     use super::*;
+
+    /// Pending argument ownership is legal only on a cell that the unwind chain can retire.
+    #[test]
+    fn native_reference_argument_role_requires_a_ref_cell_owner() {
+        let mut function = Function::new("native_argument_metadata".into(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = crate::ir::Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let owner = function.add_local(None, IrType::I64, PhpType::Mixed, LocalKind::RefCell);
+        function.locals[owner.as_raw() as usize].is_reference_argument_owner = true;
+        assert_eq!(validate_function(&function), Ok(()));
+        for invalid in [LocalKind::PhpLocal, LocalKind::OwnedTemp, LocalKind::ReturnRefCell] {
+            function.locals[owner.as_raw() as usize].kind = invalid;
+            assert_eq!(validate_function(&function), Err(ValidationError::InvalidReferenceArgumentOwner(owner)));
+        }
+    }
 
     /// Invalid lease metadata fails before a backend can detach or release an unrelated slot.
     #[test]

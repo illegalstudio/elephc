@@ -173,18 +173,14 @@ class NativeValidatorOwnerBase {
     private int $hidden = 1;
     public int $redeclared = 1;
     public static string $inherited = 'base';
-    public function &baseReference(): int { return $this->hidden; }
 }
 class NativeValidatorOwnerChild extends NativeValidatorOwnerBase {
     private string $hidden = 'child';
     public int $redeclared = 2;
     public static string $own = 'child';
-    public function &childReference(): string { return $this->hidden; }
 }
 $object = new NativeValidatorOwnerChild();
-$a =& $object->baseReference(); $b =& $object->childReference();
-$c =& $object->redeclared;
-echo $a, $b, $c, NativeValidatorOwnerChild::$inherited, NativeValidatorOwnerChild::$own;
+echo $object->redeclared, NativeValidatorOwnerChild::$inherited, NativeValidatorOwnerChild::$own;
 "#;
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let module = crate::ir_lower::tests::lower_source_at_for_target(

@@ -23,6 +23,7 @@ pub(super) fn begin_call_argument_evaluation(ctx: &mut LoweringContext<'_, '_>) 
         crate::ir_lower::context::CallArgumentEvaluationScope {
             expression_depth: ctx.expression_depth,
             owners: Vec::new(),
+            live_property_reference_arguments: false,
         },
     );
 }

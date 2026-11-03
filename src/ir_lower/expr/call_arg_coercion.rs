@@ -32,6 +32,22 @@ pub(super) fn lower_arg_with_signature(
     arg: &Expr,
 ) -> crate::ir::ValueId {
     if sig.ref_params.get(index).copied().unwrap_or(false)
+        && index < crate::types::call_args::regular_param_count(sig)
+        && ctx.call_argument_evaluation_scopes.last().is_some_and(|scope|
+            scope.live_property_reference_arguments && scope.expression_depth == ctx.expression_depth)
+        && sig.params.get(index).is_some_and(|(_, ty)|
+            super::ref_place_args::live_mixed_property_argument(ctx, arg, ty))
+    {
+        let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+        let owner = ctx.declare_ref_cell_owner(&alias, PhpType::Mixed);
+        ctx.builder.mark_reference_argument_owner(owner);
+        // Receiver cleanup can throw after the cell binds, including into a same-frame catch.
+        publish_scoped_ref_receiver_alias(ctx, &alias, arg.span);
+        lower_ref_assign_property(ctx, &alias, arg, arg.span);
+        let variable = Expr::new(ExprKind::Variable(alias), arg.span);
+        return lower_arg_with_signature(ctx, sig, index, &variable);
+    }
+    if sig.ref_params.get(index).copied().unwrap_or(false)
         && is_native_selection_reference_argument(ctx, arg)
     {
         let alias = stage_native_selection_reference(ctx, arg);

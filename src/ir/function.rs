@@ -170,6 +170,7 @@ impl Function {
             php_type,
             kind,
             ref_cell_owner: None,
+            is_reference_argument_owner: false,
         });
         id
     }
@@ -276,6 +277,8 @@ pub struct LocalSlot {
     pub kind: LocalKind,
     /// Hidden owner retired when eval detaches this PHP name from shared native storage.
     pub ref_cell_owner: Option<LocalSlotId>,
+    /// Pending PHP argument binding transferred to the native parameter on callee entry.
+    pub is_reference_argument_owner: bool,
 }
 
 /// Role of a local slot in PHP/runtime semantics.

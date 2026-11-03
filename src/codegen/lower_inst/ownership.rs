@@ -38,7 +38,12 @@ pub(super) fn lower_push_call_operand_owner(ctx: &mut FunctionContext<'_>, inst:
         && ctx.local_php_type(slot)?.codegen_repr() == PhpType::Callable;
     let address = abi::tertiary_scratch_reg(ctx.emitter);
     abi::emit_frame_slot_address(ctx.emitter, address, offset);
-    if ctx.local_kind(slot)? == crate::ir::LocalKind::ReturnRefCell {
+    if ctx.function.locals[slot.as_raw() as usize].is_reference_argument_owner {
+        if !holds_reference_cell {
+            return Err(crate::codegen::CodegenIrError::invalid_module("reference argument owner is not a managed cell lease"));
+        }
+        abi::emit_push_call_reference_argument_owner(ctx.emitter, address);
+    } else if ctx.local_kind(slot)? == crate::ir::LocalKind::ReturnRefCell {
         let record = ctx.return_owner_guard_offset(slot)?;
         abi::emit_link_call_operand_owner_in_frame(ctx.emitter, address, record);
     } else {

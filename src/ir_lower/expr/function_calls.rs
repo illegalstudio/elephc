@@ -113,7 +113,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if is_user_function {
         if let Some(signature) = sig.as_ref() {
             if let Some(rewrite) =
-                ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
+                ref_place_args::rewrite_direct_function_property_ref_args(ctx, signature, args)
             {
                 let previous = ctx.call_description.replace(canonical.to_string());
                 let result = lower_function_call(ctx, name, &rewrite.args, expr);
@@ -163,6 +163,10 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let previous_description = is_user_function
         .then(|| ctx.call_description.replace(canonical.to_string()));
     begin_call_argument_evaluation(ctx);
+    if is_user_function {
+        ctx.call_argument_evaluation_scopes.last_mut().expect("call argument scope")
+            .live_property_reference_arguments = !args.iter().any(is_spread_arg);
+    }
     let mut operands = if is_user_function {
         // A source-declared `array` has packed-or-hash Mixed storage. Its unpack must walk
         // runtime keys and bind each boxed cell before entering the direct function ABI, just

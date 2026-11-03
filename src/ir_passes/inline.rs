@@ -872,6 +872,7 @@ fn transplant_callee_body(
         local_map.insert(local.id, new_id);
     }
     for local in &callee.locals {
+        host.locals[local_map[&local.id].as_raw() as usize].is_reference_argument_owner = local.is_reference_argument_owner;
         host.locals[local_map[&local.id].as_raw() as usize].ref_cell_owner =
             local.ref_cell_owner.map(|owner| local_map[&owner]);
     }

@@ -206,6 +206,11 @@ impl<'f> Builder<'f> {
         self.func.locals[slot.as_raw() as usize].ref_cell_owner = Some(owner);
     }
 
+    /// Marks a managed cell lease as a pending argument binding that a native parameter may adopt.
+    pub(crate) fn mark_reference_argument_owner(&mut self, slot: LocalSlotId) {
+        self.func.locals[slot.as_raw() as usize].is_reference_argument_owner = true;
+    }
+
     /// Neutralizes deferred `release_local_slot` ops whose slot never widened to
     /// lifetime-tracked storage.
     ///
