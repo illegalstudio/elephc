@@ -338,7 +338,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // hash pointer
     emitter.instruction("ldr x1, [sp, #48]");                                   // key_lo
     emitter.instruction("ldr x2, [sp, #56]");                                   // key_hi (-1 for int keys)
-    emitter.instruction("bl __rt_unser_store_entry");                          // insert the entry, reusing a duplicate key's box
+    emitter.instruction("bl __rt_unser_store_entry");                           // insert the entry, reusing a duplicate key's box
     emitter.instruction("str x0, [sp, #24]");                                   // save the updated hash pointer
     emitter.instruction("str x0, [sp, #104]");                                  // keep the unfinished array reachable by exception cleanup
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the entry index
@@ -513,7 +513,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #80]");                                   // $data hash pointer
     emitter.instruction("ldr x1, [sp, #48]");                                   // key_lo
     emitter.instruction("ldr x2, [sp, #56]");                                   // key_hi (-1 for int keys)
-    emitter.instruction("bl __rt_unser_store_entry");                          // insert the entry, reusing a duplicate key's box
+    emitter.instruction("bl __rt_unser_store_entry");                           // insert the entry, reusing a duplicate key's box
     emitter.instruction("str x0, [sp, #80]");                                   // save the updated $data hash pointer
     emitter.instruction("str x0, [sp, #112]");                                  // keep unfinished hydration data reachable by exception cleanup
     emitter.instruction("ldr x4, [sp, #40]");                                   // reload the entry index
@@ -564,7 +564,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x0, #24]");                                   // opaque property hash
     emitter.instruction("ldr x1, [sp, #48]");                                   // serialized property key pointer
     emitter.instruction("ldr x2, [sp, #56]");                                   // serialized property key length
-    emitter.instruction("bl __rt_unser_store_entry");                          // insert the property, reusing a duplicate key's box
+    emitter.instruction("bl __rt_unser_store_entry");                           // insert the property, reusing a duplicate key's box
     emitter.instruction("ldr x9, [sp, #24]");                                   // incomplete-object payload after a possible hash grow
     emitter.instruction("str x0, [x9, #24]");                                   // retain updated property hash pointer
     emitter.label("__rt_unser_obj_skip_prop_store");
