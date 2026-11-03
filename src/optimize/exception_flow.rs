@@ -72,6 +72,8 @@ pub(super) struct ExceptionFlowAnalysis {
     function_throws: HashMap<String, ThrownTypes>,
     /// Declaration spelling for each case-folded function name, fixed before summary iteration.
     function_names: HashMap<String, String>,
+    /// Aliased property constraints can reject writes or invoke PHP during coercion.
+    reference_parameters: HashMap<String, HashSet<String>>,
     return_boundaries: HashMap<String, Rc<ReturnBoundaryFacts>>,
     static_method_throws: HashMap<String, ThrownTypes>,
     instance_method_throws: HashMap<String, ThrownTypes>,
@@ -297,6 +299,8 @@ impl ExceptionFlowAnalysis {
             &mut instance_method_bodies,
             &mut class_contexts,
         );
+        let mut reference_parameters = HashMap::new();
+        callables::collect_reference_parameter_scopes(program, &mut reference_parameters);
         let function_returns = type_metadata
             .map(|(functions, _, _)| {
                 functions
@@ -399,6 +403,7 @@ impl ExceptionFlowAnalysis {
         }
         let mut analysis = Self {
             checker_retirement_types: None,
+            reference_parameters,
             has_internal_object_operators: class_contexts.keys().any(|name|
                 elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())),
             hierarchy,
@@ -491,8 +496,10 @@ impl ExceptionFlowAnalysis {
             .map(|(name, body)| {
                 (
                     name.clone(),
-                    with_return_boundary_facts(self.return_boundaries.get(name), ||
-                        self.block_throws(body.body, &HashMap::new(), body.class_context))
+                    with_reference_parameter_scope(false,
+                        self.reference_parameters.get(name).cloned().unwrap_or_default(), ||
+                        with_return_boundary_facts(self.return_boundaries.get(name), ||
+                            self.block_throws(body.body, &HashMap::new(), body.class_context)))
                         .combined(self.scope_cleanup_throws(name)),
                 )
             })
@@ -635,9 +642,11 @@ impl ExceptionFlowAnalysis {
                 .combined(self.thrown_value_types(expr, bindings, class_context)),
             // Rebinding retires the target's previous value, and that value's destructor runs
             // in THIS frame, so a same-frame catch can still see it.
-            StmtKind::Assign { value, .. }
-            | StmtKind::TypedAssign { value, .. } => operand(value)
-                .combined(overwrite()),
+            StmtKind::Assign { name, value }
+            | StmtKind::TypedAssign { name, value, .. } => operand(value)
+                .combined(overwrite())
+                .combined(if is_reference_volatile(name) { ThrownTypes::unknown() }
+                    else { ThrownTypes::default() }),
             // The untyped optimizer cannot prove reference rebinding harmless. The
             // checker boundary has already validated its source and supplies target storage.
             StmtKind::RefAssign { source, .. } => operand(source).combined(overwrite())
@@ -651,6 +660,7 @@ impl ExceptionFlowAnalysis {
                 operand(value)
                     .combined(overwrite())
                     .combined(initialization)
+                    .combined(ThrownTypes::unknown())
             }
             StmtKind::ArrayPush { value, .. }
             | StmtKind::StaticPropertyArrayPush { value, .. } => operand(value)
@@ -1061,8 +1071,10 @@ impl ExceptionFlowAnalysis {
                 .combined(operand(target))
                 .combined(operand(value))
                 // The assignment retires whatever the target held before this write.
-                .combined(if matches!(target.kind, ExprKind::Variable(_)) {
-                    self.local_retirement_throws(target)
+                .combined(if let ExprKind::Variable(name) = &target.kind {
+                    self.local_retirement_throws(target).combined(if is_reference_volatile(name) {
+                        ThrownTypes::unknown()
+                    } else { ThrownTypes::default() })
                 } else { ThrownTypes::unknown() })
                 .combined(
                     result_target

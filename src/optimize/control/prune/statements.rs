@@ -278,13 +278,16 @@ fn prune_stmt_in_source_mode(stmt: Stmt) -> Vec<Stmt> {
             return_type,
             body,
         } => {
+            let reference_parameters = reference_parameter_names(&params, variadic.as_deref(), variadic_by_ref);
             let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
                 params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &body);
             vec![Stmt {
                 kind: StmtKind::FunctionDecl {
                     by_ref_return, name, type_params, params, param_attributes,
                     variadic, variadic_by_ref, variadic_type, return_type,
-                    body: with_return_boundary_facts(Some(&facts), || prune_function_body(body, by_ref_return)),
+                    body: with_return_boundary_facts(Some(&facts), ||
+                        with_reference_parameter_scope(by_ref_return, reference_parameters, ||
+                            prune_function_body(body, by_ref_return))),
                 },
                 span, source_mode, strict_types, attributes: Vec::new(),
             }]
@@ -445,11 +448,15 @@ pub(crate) fn prune_method(
         parent_name: parent_name.map(str::to_string),
     };
     let by_ref_return = method.by_ref_return;
+    let reference_parameters = reference_parameter_names(&method.params,
+        method.variadic.as_deref(), method.variadic_by_ref);
     let return_facts = ReturnBoundaryFacts::new(method.return_type.as_ref(),
         method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body);
     ClassMethod {
         body: with_class_effect_context(Some(context), || {
-            with_return_boundary_facts(Some(&return_facts), || prune_function_body(method.body, by_ref_return))
+            with_return_boundary_facts(Some(&return_facts), ||
+                with_reference_parameter_scope(by_ref_return, reference_parameters, ||
+                    prune_function_body(method.body, by_ref_return)))
         }),
         ..method
     }
@@ -459,11 +466,14 @@ pub(crate) fn prune_method(
 /// where inherited effects cannot be resolved. Sets ClassEffectContext to None.
 pub(crate) fn prune_method_without_context(method: ClassMethod) -> ClassMethod {
     let by_ref_return = method.by_ref_return;
+    let reference_parameters = reference_parameter_names(&method.params,
+        method.variadic.as_deref(), method.variadic_by_ref);
     let return_facts = ReturnBoundaryFacts::new(method.return_type.as_ref(),
         method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body);
     ClassMethod {
         body: with_class_effect_context(None, || with_return_boundary_facts(Some(&return_facts),
-            || prune_function_body(method.body, by_ref_return))),
+            || with_reference_parameter_scope(by_ref_return, reference_parameters, ||
+                prune_function_body(method.body, by_ref_return)))),
         ..method
     }
 }

@@ -709,6 +709,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             body,
         } => {
             let function_guards = GuardState::for_params(&params);
+            let reference_parameters = reference_parameter_names(&params, variadic.as_deref(), variadic_by_ref);
             let return_facts = ReturnBoundaryFacts::new(return_type.as_ref(),
                 params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &body);
             vec![Stmt {
@@ -722,7 +723,8 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                     variadic_by_ref,
                     variadic_type,
                     return_type,
-                    body: with_return_boundary_facts(Some(&return_facts), || with_function_scope(|| {
+                    body: with_return_boundary_facts(Some(&return_facts), ||
+                        with_reference_parameter_scope(by_ref_return, reference_parameters, || {
                         crate::optimize::generator_bodies::rewrite_preserving_yield(body, |body| {
                             dce_block_with_guards(body, function_guards)
                         })

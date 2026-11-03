@@ -636,6 +636,7 @@ struct FunctionEffectBody<'a> {
     body: &'a [Stmt],
     declared_never: bool,
     parameter_guard_may_throw: bool,
+    reference_parameters: HashSet<String>,
     return_boundary: Rc<ReturnBoundaryFacts>,
 }
 
@@ -646,6 +647,7 @@ struct StaticMethodBody<'a> {
     body: &'a [Stmt],
     declared_never: bool,
     parameter_guard_may_throw: bool,
+    reference_parameters: HashSet<String>,
     return_boundary: Rc<ReturnBoundaryFacts>,
 }
 

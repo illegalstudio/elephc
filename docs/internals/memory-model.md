@@ -772,6 +772,12 @@ On an inconsistent conversion, the publisher constructs an owned `TypeError` in
 `context.pending` before releasing the last RHS snapshot lease. A throwing RHS
 destructor can then chain that error as its previous exception. A conflict returns
 status three with that pending error; a newer cleanup throw returns status two.
+AST effect and exception analysis treats writes through reference parameters or
+known aliases as fallible. Their property constraints can reject the original RHS
+or invoke a Stringable callback. Callable summaries, constant-flow pruning and
+catch elimination install the same lexical reference-parameter scope, so a
+same-frame handler survives even when the RHS itself is a scalar literal.
+
 This helper remains behind the explicit capability until property lifecycle and
 store lowering select it together.
 

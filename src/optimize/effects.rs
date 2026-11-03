@@ -101,11 +101,16 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             } else { effect }
         }
         StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
-        StmtKind::Assign { value, .. }
-        | StmtKind::TypedAssign { value, .. }
-        | StmtKind::StaticPropertyAssign { value, .. } => {
-            expr_effect(value).with_side_effects()
+        StmtKind::Assign { name, value }
+        | StmtKind::TypedAssign { name, value, .. } => {
+            let effect = expr_effect(value).with_side_effects();
+            if is_reference_volatile(name) {
+                // A property-backed alias can validate or invoke Stringable callbacks.
+                effect.with_may_throw().with_writes_globals()
+            } else { effect }
         }
+        StmtKind::StaticPropertyAssign { value, .. } => expr_effect(value)
+            .with_side_effects().with_may_throw().with_writes_globals(),
         // The source can call PHP or resolve a property, and rebinding can retire a target
         // whose destructor throws or changes globals. Keep the enclosing exception boundary.
         StmtKind::RefAssign { source, .. } => expr_effect(source)
@@ -333,6 +338,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                     .map(expr_effect)
                     .unwrap_or(Effect::PURE),
             )
+            .combine(if matches!(&target.kind, ExprKind::Variable(name) if is_reference_volatile(name)) {
+                Effect::PURE.with_may_throw().with_writes_globals()
+            } else { Effect::PURE })
             .with_side_effects(),
         ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
