@@ -14,12 +14,43 @@ use crate::codegen_support::{platform::Arch, try_handlers::TRY_HANDLER_SLOT_SIZE
 
 const KEEP: &str = "__elephc_eval_callable_argument_keep";
 const RELEASE: &str = "__elephc_eval_callable_arguments_release";
+const VISITOR: &str = "__elephc_eval_callable_argument_frame_owners";
 const ARM_HEAD: usize = 24;
 
 /// Emits shared C-ABI adoption and bounded drain entries independently of candidate tables.
 pub(super) fn emit(emitter: &mut Emitter) {
     emit_keep(emitter);
     emit_release(emitter);
+    emit_visitor(emitter);
+}
+
+/// Enumerates descriptor ownership as saved Fiber edges instead of treating raw nodes as roots.
+fn emit_visitor(emitter: &mut Emitter) {
+    let result = abi::int_result_reg(emitter);
+    let next = abi::secondary_scratch_reg(emitter);
+    let again = "__elephc_eval_callable_argument_frame_owners_next";
+    let done = "__elephc_eval_callable_argument_frame_owners_done";
+    emitter.label_global(VISITOR);
+    abi::emit_frame_prologue(emitter, 48);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
+    abi::emit_load_from_address(emitter, result, abi::int_arg_reg_name(emitter.target, 0), 0);
+    abi::store_at_offset(emitter, result, 8);
+    emitter.label(again);
+    abi::load_at_offset(emitter, result, 8);
+    abi::emit_branch_if_int_result_zero(emitter, done);
+    abi::emit_load_from_address(emitter, next, result, 0);
+    abi::store_at_offset(emitter, next, 8);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("add x0, x0, #8"),                 // expose the node's actual descriptor owner slot
+        Arch::X86_64 => emitter.instruction("lea rdi, [rax + 8]"),              // pass the descriptor slot rather than the raw node allocation
+    }
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), 0);
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 2), 16);
+    abi::emit_call_label(emitter, "__rt_gc_frame_owner_slot");
+    abi::emit_jump(emitter, again);
+    emitter.label(done);
+    abi::emit_frame_restore(emitter, 48);
+    abi::emit_return(emitter);
 }
 
 /// Adopts a managed descriptor in a private native node, returning the same borrowed descriptor.
@@ -107,7 +138,7 @@ pub(in crate::codegen) fn begin(
     abi::emit_store_zero_to_address(emitter, head, 0);
     let record = if emitter.target.arch == Arch::AArch64 { arm_footer + 32 }
         else { TRY_HANDLER_SLOT_SIZE };
-    abi::emit_link_call_operand_custom_cleanup_at_stack(emitter, head, RELEASE, record);
+    abi::emit_link_call_operand_custom_cleanup_at_stack(emitter, head, RELEASE, VISITOR, record);
 }
 
 /// Transfers a cast's fresh descriptor into the current bridge's owner collection.
@@ -167,7 +198,7 @@ mod tests {
                 let detach = asm.find("detach temporary call operand owner").unwrap();
                 let drain = asm.rfind(RELEASE).unwrap();
                 assert!(publish < adopt && adopt < detach && detach < drain, "{name}: {asm}");
-                assert!(asm.contains("__rt_gc_operand_frame_owners"), "{name}: suspended ownership");
+                assert!(asm.contains(VISITOR), "{name}: enumerate descriptor edges inside saved Fiber graphs");
                 assert_eq!(asm.contains("__rt_cleanup_preserve_exception"), boxed, "{name}: result retirement");
                 if target.arch == Arch::AArch64 {
                     assert!(asm.contains(&format!("sub sp, x29, #{footer}")), "{name}: recover failed staging");
@@ -195,6 +226,11 @@ mod tests {
             assert!(free < release && release < boundary, "{name}: {body}");
             assert!(!body.contains("__rt_throw_current"), "{name}: cleanup cannot unwind into Rust");
             assert!(asm.contains("__rt_gc_candidate_live"), "{name}: static descriptors need no owner");
+            let visitor = asm.split(&format!("{VISITOR}:\n")).nth(1).unwrap();
+            assert!(visitor.contains("__rt_gc_frame_owner_slot"), "{name}: account each descriptor edge");
+            for entry in ["__rt_heap_alloc", "__rt_heap_free", "__rt_cleanup_preserve_exception"] {
+                assert!(!visitor.contains(entry), "{name}: the GC visitor cannot mutate owners");
+            }
         }
     }
 }

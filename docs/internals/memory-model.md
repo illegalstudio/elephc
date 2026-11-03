@@ -799,6 +799,10 @@ staging and is drained when a suspended Fiber frame is retired. Normal and faile
 bridge exits unlink this record and drain every descriptor under a protected
 cleanup boundary. Each node detaches before retirement, and cleanup exceptions
 return as pending native Throwables through the Rust bridge's usual failure path.
+The record's pure GC visitor enumerates each node's descriptor slot. The native
+kind-zero nodes themselves are outside the cycle collector's graph. Counting
+their descriptor owners as edges of the saved Fiber prevents an unreachable
+Fiber cycle from appearing to retain an external descriptor root.
 
 Source argument evaluation has its own owner in addition to native staging.
 Reference candidates carry shared Rust provenance for that exact owner; ordinary

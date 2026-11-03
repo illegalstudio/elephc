@@ -29,25 +29,26 @@ pub(crate) fn emit_link_call_operand_owner_at_stack(
     record_offset: usize,
 ) {
     let cleanup = if callable { "__rt_cleanup_call_operand_descriptor" } else { "__rt_cleanup_call_operand_owner" };
-    emit_link_owner_with_cleanup(emitter, owner_address, cleanup, record_offset);
+    emit_link_owner_with_cleanup(emitter, owner_address, cleanup, "__rt_gc_operand_frame_owners", record_offset);
 }
 
 /// Links an owner slot whose bounded cleanup drains a bridge-specific collection of values.
 pub(crate) fn emit_link_call_operand_custom_cleanup_at_stack(
-    emitter: &mut Emitter, owner_address: &str, cleanup: &str, record_offset: usize,
+    emitter: &mut Emitter, owner_address: &str, cleanup: &str, visitor: &str, record_offset: usize,
 ) {
-    emit_link_owner_with_cleanup(emitter, owner_address, cleanup, record_offset);
+    emit_link_owner_with_cleanup(emitter, owner_address, cleanup, visitor, record_offset);
 }
 
 /// Links a pending reference argument whose existing owner can become the native parameter owner.
 pub(crate) fn emit_push_call_reference_argument_owner(emitter: &mut Emitter, owner_address: &str) {
     emit_reserve_temporary_stack(emitter, CALL_OPERAND_OWNER_RECORD_BYTES);
-    emit_link_owner_with_cleanup(emitter, owner_address, "__rt_cleanup_call_reference_argument", 0);
+    emit_link_owner_with_cleanup(emitter, owner_address, "__rt_cleanup_call_reference_argument",
+        "__rt_gc_operand_frame_owners", 0);
 }
 
 /// Publishes the shared owner-slot layout with an explicit cleanup discipline.
 fn emit_link_owner_with_cleanup(
-    emitter: &mut Emitter, owner_address: &str, cleanup: &str, record_offset: usize,
+    emitter: &mut Emitter, owner_address: &str, cleanup: &str, visitor: &str, record_offset: usize,
 ) {
     let scratch = secondary_scratch_reg(emitter);
     emitter.comment("publish temporary call operand owner");
@@ -59,7 +60,7 @@ fn emit_link_owner_with_cleanup(
     emit_load_int_immediate(emitter, scratch, 0);
     emit_store_to_sp(emitter, scratch, record_offset + 24);
     emit_store_to_sp(emitter, scratch, record_offset + 32);
-    emit_symbol_address(emitter, scratch, "__rt_gc_operand_frame_owners");
+    emit_symbol_address(emitter, scratch, visitor);
     emit_store_to_sp(emitter, scratch, record_offset + 40);
     emit_temporary_stack_address(emitter, scratch, record_offset);
     emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
