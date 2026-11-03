@@ -67,8 +67,54 @@ pub fn collect_resolved_aliases(mut program: Program) -> Program {
         .collect::<HashSet<_>>();
     let mut alias_decls = Vec::new();
     collect_resolved_aliases_in_program(&mut program, &mut alias_decls, &mut declared);
-    program.extend(alias_decls);
+    // An alias of an INTERFACE is an interface: nette/utils' `class_alias(Translator::class,
+    // ITranslator::class)` became `class ITranslator extends Translator`, which the checker
+    // rightly refuses ("cannot extend interface"), and the file went to the interpreter.
+    let interfaces = declared_interface_keys(&program);
+    program.extend(alias_decls.into_iter().map(|decl| alias_as_interface(decl, &interfaces)));
     program
+}
+
+/// The lowercased fully qualified names of the interfaces `program` declares at file scope.
+fn declared_interface_keys(program: &Program) -> HashSet<String> {
+    fn walk(stmts: &[Stmt], out: &mut HashSet<String>) {
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::InterfaceDecl { name, .. } => {
+                    out.insert(php_symbol_key(name.trim_start_matches('\\')));
+                }
+                StmtKind::NamespaceBlock { body, .. }
+                | StmtKind::IncludeOnceGuard { body, .. }
+                | StmtKind::Synthetic(body) => walk(body, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = HashSet::new();
+    walk(program, &mut out);
+    out
+}
+
+/// Turns a synthesized `class Alias extends Original {}` into `interface Alias extends Original {}`
+/// when `Original` is one of `interfaces`; every other declaration is returned unchanged.
+fn alias_as_interface(decl: Stmt, interfaces: &HashSet<String>) -> Stmt {
+    let StmtKind::ClassDecl { name, extends: Some(parent), .. } = &decl.kind else {
+        return decl;
+    };
+    if !interfaces.contains(&php_symbol_key(parent.as_canonical().trim_start_matches('\\'))) {
+        return decl;
+    }
+    Stmt::new(
+        StmtKind::InterfaceDecl {
+            name: name.clone(),
+            generics: None,
+            extends: vec![parent.clone()],
+            properties: Vec::new(),
+            methods: Vec::new(),
+            constants: Vec::new(),
+        },
+        decl.span,
+    )
 }
 
 /// Scans one resolved statement list for static alias calls and nested statement lists.

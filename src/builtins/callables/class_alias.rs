@@ -34,7 +34,8 @@ builtin! {
 /// accepted and answers `Bool`; a runtime-dependent one is rejected.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if let Some((_, alias)) = crate::autoload::resolved_class_alias_args(cx.args) {
-        if cx.checker.classes.contains_key(&alias) {
+        // An interface's alias is synthesized as an interface (`autoload::alias`).
+        if cx.checker.classes.contains_key(&alias) || cx.checker.interfaces.contains_key(&alias) {
             return Ok(PhpType::Bool);
         }
     }

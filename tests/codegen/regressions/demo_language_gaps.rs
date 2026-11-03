@@ -869,6 +869,35 @@ unset($q);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// `class_alias()` of an INTERFACE (nette/utils' `compatibility.php` aliases `Translator` as
+/// `ITranslator` in an `elseif`) compiles: the alias is synthesized as an interface. It was a
+/// class extending the interface, which the checker refuses, and the file went to the
+/// interpreter.
+#[test]
+fn test_class_alias_of_an_interface_compiles() {
+    let out = compile_and_run(r#"<?php
+namespace Nette\Localization {
+    interface Translator { function translate($message, ...$parameters): string; }
+}
+namespace Nette\Localization {
+    if (false) {
+        interface ITranslator extends Translator {}
+    } elseif (!interface_exists(ITranslator::class)) {
+        class_alias(Translator::class, ITranslator::class);
+    }
+}
+namespace App {
+    final class En implements \Nette\Localization\Translator {
+        function translate($message, ...$parameters): string { return "en:$message"; }
+    }
+    $t = new En();
+    var_dump($t instanceof \Nette\Localization\Translator);
+    echo $t->translate('hi'), "\n";
+}
+"#);
+    assert_eq!(out, "bool(true)\nen:hi\n");
+}
+
 /// `file_get_contents()` accepts a `$context` that is not statically null (league/uri's
 /// `Uri::fromPath()` forwards its `resource|null` parameter), as `fopen()` does; the backend
 /// refused it at compile time and sent the class to the interpreter.
