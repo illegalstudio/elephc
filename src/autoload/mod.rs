@@ -143,6 +143,11 @@ pub fn run_collecting_included_with_defines_and_sources(
     crate::compiler_stack::with_compiler_stack(|| {
         run_collecting_included_on_compiler_stack(program, base_dir, registry, defines)
     })
+    .map(|(mut program, files, sources)| {
+        // An alias of an interface another file declares is known as one only now.
+        alias::settle_interface_aliases(&mut program);
+        (program, files, sources)
+    })
 }
 
 /// Expands autoloads after the public entry point has established the recursive stack budget.
@@ -583,8 +588,7 @@ pub fn collect_aliases(program: Program) -> Result<Program, CompileError> {
 
 /// Collects static class-string aliases after name resolution and autoload expansion.
 pub(crate) fn collect_resolved_aliases(program: Program) -> Program {
-    alias::collect_resolved_aliases(program)
-}
+    alias::collect_resolved_aliases(program)}
 
 /// Returns the canonical class pair when alias arguments are statically resolvable.
 pub(crate) fn resolved_class_alias_args(args: &[crate::parser::ast::Expr]) -> Option<(String, String)> {
@@ -2490,7 +2494,10 @@ fn activate_interface_declarations(
             rest.push(stmt);
             continue;
         };
-        if !accept(name.trim_start_matches('\\')) {
+        // A dummy-span interface is always active (`codegen::classlike_activation`): the
+        // synthesized alias of an interface (`alias::alias_as_interface`) sits at the end of its
+        // file, and an event there left `interface_exists()` false until the file ended.
+        if !accept(name.trim_start_matches('\\')) || stmt.span == crate::span::Span::dummy() {
             rest.push(stmt);
             continue;
         }

@@ -18,6 +18,10 @@
 //! - Disabled autoload is diagnosed on eligible source forms before constant folding.
 //! - Resolver-created include wrappers still count as top-level for included-file aliases.
 //! - The alias is a subclass, not a true PHP runtime alias, so identity checks differ in documented cases.
+//! - An alias of an interface is an interface. The per-file passes see only the file's own
+//!   interfaces, so the declarations carry a marker until `settle_interface_aliases` decides
+//!   them on the whole program, at the end of every autoload run. The alias interface is
+//!   always active, like the alias class: it exists before the call too.
 
 use std::collections::{HashMap, HashSet};
 
@@ -75,6 +79,66 @@ pub fn collect_resolved_aliases(mut program: Program) -> Program {
     program
 }
 
+/// The doc comment a synthesized alias declaration carries until [`settle_interface_aliases`]
+/// has seen the whole program. No parsed comment can hold a NUL, so a source class never
+/// carries it.
+const CLASS_ALIAS_MARKER: &str = "\0elephc:class_alias";
+
+/// Turns every synthesized alias of an interface into an interface, now that the WHOLE program
+/// is known, and drops the alias marker from the rest.
+///
+/// The per-file pass only sees interfaces of the file making the call: nette/utils'
+/// `compatibility.php` aliases `Translator`, which `Translator.php` declares, so the alias
+/// stayed `class ITranslator extends Translator` and the checker refused it ("cannot extend
+/// interface"). An alias of an alias is settled too, so this runs to a fixpoint.
+pub fn settle_interface_aliases(program: &mut Program) {
+    let mut interfaces = declared_interface_keys(program);
+    while settle_pass(program, &mut interfaces) {}
+    strip_alias_markers(program);
+}
+
+/// Converts the marked alias declarations whose parent is in `interfaces`, adding each alias
+/// to `interfaces`. Returns whether anything changed.
+fn settle_pass(stmts: &mut [Stmt], interfaces: &mut HashSet<String>) -> bool {
+    let mut changed = false;
+    for stmt in stmts {
+        match &mut stmt.kind {
+            StmtKind::ClassDecl { name, doc_comment, extends: Some(parent), .. }
+                if doc_comment.as_deref() == Some(CLASS_ALIAS_MARKER)
+                    && interfaces
+                        .contains(&php_symbol_key(parent.as_canonical().trim_start_matches('\\'))) =>
+            {
+                interfaces.insert(php_symbol_key(name.trim_start_matches('\\')));
+                let decl = std::mem::replace(stmt, Stmt::new(StmtKind::Synthetic(Vec::new()), stmt.span));
+                *stmt = alias_as_interface(decl, interfaces);
+                changed = true;
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. }
+            | StmtKind::Synthetic(body) => changed |= settle_pass(body, interfaces),
+            _ => {}
+        }
+    }
+    changed
+}
+
+/// Clears the alias marker, so reflection sees the declaration without a doc comment.
+fn strip_alias_markers(stmts: &mut [Stmt]) {
+    for stmt in stmts {
+        match &mut stmt.kind {
+            StmtKind::ClassDecl { doc_comment, .. }
+                if doc_comment.as_deref() == Some(CLASS_ALIAS_MARKER) =>
+            {
+                *doc_comment = None;
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. }
+            | StmtKind::Synthetic(body) => strip_alias_markers(body),
+            _ => {}
+        }
+    }
+}
+
 /// The lowercased fully qualified names of the interfaces `program` declares at file scope.
 fn declared_interface_keys(program: &Program) -> HashSet<String> {
     fn walk(stmts: &[Stmt], out: &mut HashSet<String>) {
@@ -104,8 +168,12 @@ fn alias_as_interface(decl: Stmt, interfaces: &HashSet<String>) -> Stmt {
     if !interfaces.contains(&php_symbol_key(parent.as_canonical().trim_start_matches('\\'))) {
         return decl;
     }
-    Stmt::new(
-        StmtKind::InterfaceDecl {
+    // The dummy span keeps the interface always active, as the compiler's own interfaces are
+    // (`codegen::classlike_activation`). With the call's span it activated where the
+    // declaration sits, the END of the file, so `interface_exists()` of the alias answered
+    // false everywhere before it; the synthesized alias class is likewise always known.
+    Stmt {
+        kind: StmtKind::InterfaceDecl {
             name: name.clone(),
             generics: None,
             extends: vec![parent.clone()],
@@ -113,8 +181,11 @@ fn alias_as_interface(decl: Stmt, interfaces: &HashSet<String>) -> Stmt {
             methods: Vec::new(),
             constants: Vec::new(),
         },
-        decl.span,
-    )
+        span: crate::span::Span::dummy(),
+        source_mode: decl.source_mode,
+        strict_types: decl.strict_types,
+        attributes: Vec::new(),
+    }
 }
 
 /// Scans one resolved statement list for static alias calls and nested statement lists.
@@ -511,7 +582,7 @@ fn synthesise_alias_decl(orig: &str, alias: &str, span: crate::span::Span) -> St
         StmtKind::ClassDecl {
             generics: None,
             name: alias_local,
-            doc_comment: None,
+            doc_comment: Some(CLASS_ALIAS_MARKER.to_string()),
             extends: Some(extends_name),
             implements: Vec::new(),
             is_abstract: false,
@@ -552,7 +623,7 @@ fn synthesise_resolved_alias_decl(
         StmtKind::ClassDecl {
             generics: None,
             name: alias.trim_start_matches('\\').to_string(),
-            doc_comment: None,
+            doc_comment: Some(CLASS_ALIAS_MARKER.to_string()),
             extends: Some(Name::from_parts(NameKind::FullyQualified, orig_parts)),
             implements: Vec::new(),
             is_abstract: false,

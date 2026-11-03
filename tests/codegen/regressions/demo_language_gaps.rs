@@ -1262,6 +1262,56 @@ unset($lit, $r);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// `class_alias()` of an interface ANOTHER FILE declares compiles: nette/utils' classmap sends
+/// `ITranslator` to `compatibility.php`, which aliases `Translator` from `Translator.php`. The
+/// per-file pass never saw that interface, so the alias stayed a class extending it.
+#[test]
+fn test_class_alias_of_an_interface_from_another_file_compiles() {
+    let out = compile_and_run_files(&[
+        ("composer.json", r#"{"autoload":{"classmap":["src/"]}}"#),
+        ("src/Translator.php", r#"<?php
+namespace Nette\Localization;
+interface Translator { function translate($message, ...$parameters): string; }
+"#),
+        ("src/compatibility.php", r#"<?php
+namespace Nette\Localization;
+if (false) {
+    interface ITranslator extends Translator {}
+} elseif (!interface_exists(ITranslator::class)) {
+    class_alias(Translator::class, ITranslator::class);
+}
+"#),
+        ("main.php", r#"<?php
+final class En implements \Nette\Localization\ITranslator {
+    function translate($message, ...$parameters): string { return "en:$message"; }
+}
+$t = new En();
+var_dump($t instanceof \Nette\Localization\Translator, interface_exists(\Nette\Localization\ITranslator::class));
+echo $t->translate('hi'), "\n";
+"#),
+    ], "main.php");
+    assert_eq!(out, "bool(true)\nbool(true)\nen:hi\n");
+}
+
+/// The interface alias a guarded `class_alias()` synthesizes answers `interface_exists()` after
+/// the guard. Its activation event sat at the end of the file, so it answered false until then.
+#[test]
+fn test_guarded_interface_alias_exists_after_the_guard() {
+    let out = compile_and_run(r#"<?php
+namespace Nette\Localization {
+    interface Translator {}
+    if (!interface_exists(ITranslator::class)) {
+        class_alias(Translator::class, ITranslator::class);
+    }
+    var_dump(interface_exists(ITranslator::class));
+}
+namespace {
+    var_dump(interface_exists('Nette\Localization\ITranslator'));
+}
+"#);
+    assert_eq!(out, "bool(true)\nbool(true)\n");
+}
+
 /// A `static` local handed out by reference (by-ref argument, `&` alias, `use (&$x)`) keeps every
 /// write across calls: Monolog's `BrowserConsoleHandler::handleStyle` shape.
 #[test]
