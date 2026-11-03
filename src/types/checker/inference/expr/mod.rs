@@ -17,9 +17,14 @@ mod array_access;
 mod basic;
 mod buffer_merges;
 mod class_refs;
+mod conditional_flow;
+mod conditional_operands;
+pub(in crate::types::checker) use conditional_flow::{ConditionalFlow, FlowSnapshot};
 mod effects;
+mod eager_operands;
 mod calls_objects;
 mod null_coalesce;
+mod stored_value_proofs;
 mod static_closure;
 use super::super::Checker;
 use super::syntactic::null_coalesce_merge_type;
@@ -109,7 +114,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         env.get(name)
-            .cloned()
+            .map(|ty| self.binding_read_type(name, ty, env))
             .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
             .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))
     }
@@ -214,6 +219,19 @@ pub(crate) fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bo
             ExprKind::StringLiteral(value)
                 if crate::types::parse_php_string_offset_literal(value).is_some()
         )
+}
+
+/// Removes null and false from the arm a short ternary selects only when truthy.
+fn truthy_short_ternary_type(checker: &Checker, ty: PhpType) -> PhpType {
+    match ty {
+        PhpType::Void | PhpType::False => PhpType::Never,
+        PhpType::Union(members) => {
+            let members: Vec<_> = members.into_iter()
+                .filter(|ty| !matches!(ty, PhpType::Void | PhpType::False)).collect();
+            if members.is_empty() { PhpType::Never } else { checker.normalize_union_type(members) }
+        }
+        other => other,
+    }
 }
 
 /// Merges two match arm result types: identical arms keep their type,

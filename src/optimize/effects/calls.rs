@@ -16,7 +16,8 @@ use crate::types::PhpType;
 /// Uses thread-local `ACTIVE_FUNCTION_EFFECTS` for user-defined functions. Falls back to
 /// Registry builtins consume their shared descriptor; unknown calls remain conservative.
 pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Effect {
-    let effect = with_active_function_effects(|effects| effects.and_then(|effects| effects.get(name).copied()))
+    let effect = with_active_function_effects(|effects| effects.and_then(|effects|
+        effects.get(name).copied()))
     .unwrap_or_else(|| {
         if let Some(def) = crate::builtins::registry::lookup(name) {
             let arg_types = semantic_optimizer_arg_types(def, args);
@@ -114,8 +115,13 @@ fn semantic_optimizer_arg_types(
 }
 
 /// Computes the effect for a closure body by delegating to `block_effect`.
-pub(super) fn closure_body_call_effect(body: &[Stmt]) -> Effect {
-    block_effect(body)
+pub(super) fn closure_body_call_effect(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    return_type: &Option<TypeExpr>, body: &[Stmt],
+) -> Effect {
+    let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
+        params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
+    with_return_boundary_facts(Some(&facts), || block_effect(body))
 }
 
 /// Computes the effect for an expression that may be called at runtime.
@@ -127,7 +133,7 @@ pub(super) fn closure_body_call_effect(body: &[Stmt]) -> Effect {
 pub(in crate::optimize) fn expr_call_effect(callee: &Expr) -> Effect {
     match &callee.kind {
         ExprKind::FirstClassCallable(target) => callable_target_call_effect(target),
-        ExprKind::Closure { body, .. } => closure_body_call_effect(body),
+        ExprKind::Closure { params, return_type, body, .. } => closure_body_call_effect(params, return_type, body),
         ExprKind::Variable(name) => callable_alias_effect(name),
         _ => conservative_call_effect(),
     }
@@ -168,7 +174,7 @@ pub(super) fn callable_target_call_effect(target: &CallableTarget) -> Effect {
 /// variants, returns `None`.
 pub(super) fn closure_alias_effect(expr: &Expr) -> Option<Effect> {
     match &expr.kind {
-        ExprKind::Closure { body, .. } => Some(closure_body_call_effect(body)),
+        ExprKind::Closure { params, return_type, body, .. } => Some(closure_body_call_effect(params, return_type, body)),
         _ => None,
     }
 }
@@ -235,6 +241,29 @@ pub(in crate::optimize) fn instance_method_call_effect(
             })
             .unwrap_or_else(conservative_call_effect)
     })
+}
+
+/// Resolves a return representation only when every closed-world dispatch target agrees.
+pub(in crate::optimize) fn instance_method_result_type(
+    object: &Expr, method_name: &str,
+) -> Option<crate::types::PhpType> {
+    let receiver = resolve_instance_receiver(object, method_name)?;
+    let targets = instance_dispatch_targets(&receiver, method_name)?;
+    with_active_function_effects(|functions| {
+        let functions = functions?;
+        let mut results = targets.iter().map(|key| functions.method_result_type(key));
+        let first = results.next()??;
+        results.all(|result| result.as_ref() == Some(&first)).then_some(first)
+    })
+}
+
+/// Reads the declared result of a statically resolved method without assuming dynamic dispatch.
+pub(in crate::optimize) fn static_method_result_type(
+    receiver: &crate::parser::ast::StaticReceiver, method_name: &str,
+) -> Option<crate::types::PhpType> {
+    let class = resolve_static_receiver_class(receiver)?;
+    with_active_function_effects(|functions|
+        functions?.method_result_type(&method_effect_key(&class, method_name)))
 }
 
 /// Resolves a named instance-property read for syntactically bounded receiver classes.

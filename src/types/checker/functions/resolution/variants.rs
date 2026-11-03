@@ -33,7 +33,7 @@ impl Checker {
                 self.failed_variant_contracts.insert(name.clone(), error.clone());
                 errors.push(error);
             }
-            self.fn_decls.insert(name, template);
+            self.publish_function_declaration(name, template);
         }
     }
 }

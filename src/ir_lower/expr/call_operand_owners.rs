@@ -828,6 +828,13 @@ pub(super) fn root_method_receiver(
             }
         }
     }
+    root_value_for_later_use(ctx, value, span)
+}
+
+/// Keeps a value alive across replacement of the storage that lends its current owner.
+pub(crate) fn root_value_for_later_use(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span,
+) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
     let (value, owner) = root_owned_call_operand(ctx, value, span);
     let ty = ctx.builder.value_php_type(value.value);
     if owner.is_some() || !Ownership::php_type_needs_lifetime_tracking(&ty)

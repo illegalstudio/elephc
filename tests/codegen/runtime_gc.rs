@@ -77,6 +77,7 @@ mod object_cast;
 mod array_cast;
 #[path = "runtime_gc/nullable_string_return.rs"]
 mod nullable_string_return;
+mod nullable_flow_slots;
 #[path = "runtime_gc/nullable_array_read_owners.rs"]
 mod nullable_array_read_owners;
 #[path = "runtime_gc/nullable_native_isset.rs"]

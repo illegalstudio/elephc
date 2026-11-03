@@ -151,6 +151,7 @@ fn dummy_check_result() -> CheckResult {
         closure_generator_spans: Default::default(),
         array_push_property_plans: HashMap::new(),
         member_receiver_types: HashMap::new(),
+        local_value_read_types: HashMap::new(),
         boxed_reference_promotion_sites: HashMap::new(),
         buffer_read_sites: Default::default(),
         first_class_builtin_call_types: HashMap::new(),

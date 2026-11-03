@@ -34,6 +34,9 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        if matches!(op, BinOp::And | BinOp::Or) {
+            return self.infer_short_circuit_type(expr, &mut env.clone(), false);
+        }
         let lt = self.infer_type(left, env)?;
         let rt = self.infer_type(right, env)?;
         if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(op, &lt, &rt, &self.classes) {
@@ -486,6 +489,29 @@ impl Checker {
         env: &TypeEnv,
         param_hints: &[PhpType],
     ) -> Result<PhpType, CompileError> {
+        let mut capture_storage = Vec::new();
+        for capture in captures {
+            let read = env.get(capture).map(|ty| self.binding_read_type(capture, ty, env));
+            let projected = !capture_refs.contains(capture) && read.as_ref()
+                .is_some_and(|ty| self.record_local_value_read(capture, expr.span, ty, env));
+            let variable = Expr::new(ExprKind::Variable(capture.clone()), expr.span);
+            let physical = self.guarded_local_storage_type(&variable, env).cloned();
+            let boxed_snapshot = !capture_refs.contains(capture) && !projected && read == Some(PhpType::Int)
+                && physical.as_ref().is_some_and(|ty| ty.codegen_repr() == PhpType::TaggedScalar);
+            if boxed_snapshot { self.record_local_value_read(capture, expr.span, &PhpType::Mixed, env); }
+            let captured = if capture_refs.contains(capture) { physical }
+                else if boxed_snapshot { Some(PhpType::Mixed) } else { read };
+            if let Some(captured) = captured {
+                if env.get(capture) != Some(&captured) { capture_storage.push((capture.clone(), captured)); }
+            }
+        }
+        // Reference captures keep their cell ABI; uncertain value snapshots use checked boxed values.
+        let capture_env = (!capture_storage.is_empty()).then(|| {
+            let mut captured = env.clone();
+            captured.extend(capture_storage);
+            captured
+        });
+        let env = capture_env.as_ref().unwrap_or(env);
         let mut closure_sig = self.prepare_closure_signature_context_with_param_hints(
             params,
             variadic,
@@ -515,7 +541,9 @@ impl Checker {
         // on. Recorded before entering the closure scope, which saves and restores the
         // enclosing set.
         for capture in capture_refs {
+            self.pending_ref_capture_invalidations.insert(capture.clone());
             self.ref_aliased_locals.insert(capture.clone());
+            self.by_ref_captured_locals.insert(capture.clone());
             self.non_builtin_ref_aliased_locals.insert(capture.clone());
             if expr.span.identifies_a_node() {
                 self.array_push_capture_sites.entry(capture.clone())
@@ -558,7 +586,9 @@ impl Checker {
             .chain(params.iter().map(|(name, _, _, _)| name))
             .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
             .collect();
-        let body_result = self.with_local_storage_context(
+        let return_facts = crate::optimize::ReturnBoundaryFacts::new(return_type.as_ref(),
+            params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
+        let body_result = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
             closure_ref_params,
             closure_param_names,
             pre_bound_own_storage,
@@ -568,12 +598,13 @@ impl Checker {
                     .filter(|(_, annotation, _, _)| annotation.is_none())
                     .map(|(name, _, _, _)| name.clone()));
                 checker.ref_assign_aliased_locals.extend(ref_assign_captures);
+                checker.seed_parameter_value_proofs(&closure_sig.env);
                 for stmt in body {
                     checker.check_stmt(stmt, &mut closure_sig.env)?;
                 }
                 Ok(())
             },
-        );
+        ));
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;

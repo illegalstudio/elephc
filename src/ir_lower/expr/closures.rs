@@ -259,7 +259,8 @@ pub(super) fn lower_closure_with_context(
                 // Keep a local cell owner independent of the descriptor's capture lease.
                 ctx.promote_local_ref_cell(capture, Some(expr.span));
             }
-            let captured = ctx.load_local(capture, Some(expr.span));
+            let captured = if by_ref { ctx.load_local(capture, Some(expr.span)) }
+                else { lower_local_value(ctx, capture, expr.span) };
             let php_type = php_type_override
                 .unwrap_or_else(|| ctx.builder.value_php_type(captured.value));
             (captured, php_type)

@@ -40,6 +40,8 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
 
+mod conditions;
+
 /// A detected type-guard narrowing: the guarded binding's env key and the types it takes in the
 /// then-branch (guard true) and else-branch (guard false).
 pub(crate) struct GuardNarrowing {
@@ -71,6 +73,41 @@ impl GuardTarget {
 }
 
 impl Checker {
+    /// Checks a branch under its guarded read views while retaining the original storage types.
+    pub(crate) fn with_flow_narrowings<T>(
+        &mut self,
+        guards: &[GuardNarrowing],
+        then_branch: bool,
+        env: &mut TypeEnv,
+        body: impl FnOnce(&mut Self, &mut TypeEnv) -> Result<T, CompileError>,
+    ) -> Result<T, CompileError> {
+        let storage_entry = self.guarded_union_types.clone();
+        let mut saved = Vec::with_capacity(guards.len());
+        for guard in guards {
+            let view = if then_branch { &guard.then_ty } else { &guard.else_ty };
+            let previous = env.get(&guard.var).cloned();
+            saved.push((self.enter_flow_narrowing(&guard.var, previous.as_ref(), view), previous));
+            env.insert(guard.var.clone(), view.clone());
+        }
+        let result = body(self, env);
+        for (origin, previous) in saved.into_iter().rev() {
+            // A guard-only view refines the existing value without rebinding its storage.
+            // Close an unrepresentable view before the arm's exit is joined.
+            let guard_only = self.narrowed_local_origins.get(&origin.name).is_some_and(|entry|
+                !entry.stored_in_region && entry.view.as_ref() == env.get(&origin.name));
+            if let Some(previous) = previous {
+                if guard_only && env.get(&origin.name).is_some_and(|view|
+                    !self.type_contains_values(&previous, view))
+                {
+                    env.insert(origin.name.clone(), previous);
+                }
+            }
+            self.exit_flow_narrowing(origin);
+        }
+        self.restore_guarded_storage_provenance(&storage_entry);
+        result
+    }
+
     /// Detects a type-predicate guard in an `if`/ternary condition and computes the then/else
     /// narrowing for the guarded binding against the current environment. Handles the scalar
     /// `is_*` predicates, `is_null`, `instanceof Class`, and `=== false` / `=== null`, each with an
@@ -353,14 +390,14 @@ impl Checker {
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> =
-                    members.iter().filter(|m| guard_matches(m, target)).cloned().collect();
+                    members.iter().filter(|m| guard_matches(self, m, target)).cloned().collect();
                 if kept.is_empty() {
                     target.fallback_type()
                 } else {
                     self.normalize_union_type(kept)
                 }
             }
-            _ if guard_matches(current, target) => current.clone(),
+            _ if guard_matches(self, current, target) => current.clone(),
             _ => target.fallback_type(),
         }
     }
@@ -372,7 +409,7 @@ impl Checker {
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> =
-                    members.iter().filter(|m| !guard_matches(m, target)).cloned().collect();
+                    members.iter().filter(|m| !guard_matches(self, m, target)).cloned().collect();
                 if kept.is_empty() {
                     current.clone()
                 } else {
@@ -538,9 +575,9 @@ fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> 
 ///
 /// `Mixed` and `Never` are treated as possibly-null because neither carries enough information
 /// to prove otherwise; a union is non-null only when every member is.
-fn type_is_definitely_non_null(ty: &PhpType) -> bool {
+pub(in crate::types::checker) fn type_is_definitely_non_null(ty: &PhpType) -> bool {
     match ty {
-        PhpType::Void | PhpType::Never | PhpType::Mixed => false,
+        PhpType::Void | PhpType::Never | PhpType::Mixed | PhpType::TaggedScalar => false,
         PhpType::Union(members) => members.iter().all(type_is_definitely_non_null),
         _ => true,
     }
@@ -548,13 +585,13 @@ fn type_is_definitely_non_null(ty: &PhpType) -> bool {
 
 /// Returns true when a union member is compatible with a guard target, used to keep (then) or drop
 /// (else) members. Exact targets require a matching variant; an `Object` target matches an object
-/// member with the same class name (inheritance-aware narrowing is left for the future), and
+/// member compatible with the target class or interface, and
 /// `AnyArray` matches either array shape.
-fn guard_matches(member: &PhpType, target: &GuardTarget) -> bool {
+fn guard_matches(checker: &Checker, member: &PhpType, target: &GuardTarget) -> bool {
     match target {
         GuardTarget::AnyArray => matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }),
-        GuardTarget::Exact(PhpType::Object(target_class)) => {
-            matches!(member, PhpType::Object(member_class) if member_class == target_class)
+        GuardTarget::Exact(target @ PhpType::Object(_)) => {
+            matches!(member, PhpType::Object(_)) && checker.type_accepts(target, member)
         }
         GuardTarget::Exact(PhpType::Bool) => matches!(member, PhpType::Bool | PhpType::False),
         GuardTarget::Exact(target) => member == target,

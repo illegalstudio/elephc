@@ -18,6 +18,8 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 use super::nullable_method_calls::terminate_method_call_on_null;
 
+mod local_views;
+
 use super::{
     branch_to, lower_array_access_from_value, lower_boxed_null,
     lower_dynamic_property_fetch_from_value, lower_expr, lower_expr_call_from_value,
@@ -282,6 +284,7 @@ fn lower_nullsafe_postfix_chain(
     let null_block = ctx.builder.create_named_block("nullsafe.chain.null", Vec::new());
     let done = ctx.builder.create_named_block("nullsafe.chain.done", Vec::new());
     let mut current = Some(lower_expr(ctx, chain.base));
+    let mut local_views = local_views::LocalViews::new(ctx);
 
     for segment in chain.segments {
         let Some(value) = current.take() else {
@@ -290,6 +293,7 @@ fn lower_nullsafe_postfix_chain(
         if ctx.builder.insertion_block_is_terminated() {
             break;
         }
+        local_views.observe(ctx);
         current = lower_nullsafe_postfix_segment(
             ctx,
             value,
@@ -298,6 +302,7 @@ fn lower_nullsafe_postfix_chain(
             warn_on_missing,
         );
     }
+    local_views.observe(ctx);
 
     if let Some(value) = current {
         if !ctx.builder.insertion_block_is_terminated() {
@@ -312,6 +317,7 @@ fn lower_nullsafe_postfix_chain(
     branch_to(ctx, done);
 
     ctx.builder.position_at_end(done);
+    local_views.publish(ctx);
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 

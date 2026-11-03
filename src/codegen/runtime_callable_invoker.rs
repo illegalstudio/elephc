@@ -3052,7 +3052,8 @@ fn push_descriptor_captures_as_hidden_args(
                 capture_ty,
             );
             abi::emit_push_result_value(emitter, capture_ty);
-            arg_types.push(capture_ty.clone());
+            // Hidden arguments use the same physical shape as the captured result pair.
+            arg_types.push(capture_ty.codegen_repr());
         }
     }
 }

@@ -132,8 +132,8 @@ fn type_hint_is_class(hint: &TypeExpr) -> bool {
                 .to_ascii_lowercase()
                 .as_str(),
             "mixed" | "callable" | "closure" | "array" | "object" | "iterable"
-                | "string" | "int" | "float" | "bool" | "null" | "true" | "static"
-                | "self" | "parent" | "void" | "never"
+                | "string" | "int" | "float" | "bool" | "null" | "true"
+                | "void" | "never"
         ),
         TypeExpr::Nullable(inner) | TypeExpr::Array(inner) | TypeExpr::Buffer(inner) => {
             type_hint_is_class(inner)

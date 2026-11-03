@@ -137,14 +137,14 @@ impl Checker {
                 ..
             } => {
                 let mut scoped_env = env.clone();
-                self.check_assignment_expression(
+                self.with_preserved_binding_flow(|checker| checker.check_assignment_expression(
                     target,
                     value,
                     result_target.as_deref(),
                     prelude,
                     expr.span,
                     &mut scoped_env,
-                )
+                ))
             }
             ExprKind::ConstRef(name) => {
                 let constant_name = name.as_str().trim_start_matches('\\');
