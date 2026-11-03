@@ -208,7 +208,20 @@ impl Checker {
         let mut seen_idx = 0usize;
 
         for arg in args {
-            let actual_ty = self.infer_type(arg, caller_env)?;
+            // A never-declared variable bound by reference is created by the call; it has no
+            // value to infer and must not specialize the callee's parameter type.
+            let undefined_by_ref = seen_idx < regular_param_count
+                && stored_sig.ref_params.get(seen_idx).copied().unwrap_or(false)
+                && matches!(&arg.kind, ExprKind::Variable(name) if !caller_env.contains_key(name));
+            let actual_ty = if undefined_by_ref {
+                stored_sig
+                    .params
+                    .get(seen_idx)
+                    .map(|(_, ty)| ty.clone())
+                    .unwrap_or(PhpType::Mixed)
+            } else {
+                self.infer_type(arg, caller_env)?
+            };
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }

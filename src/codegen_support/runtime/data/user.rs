@@ -3901,6 +3901,12 @@ fn var_dump_descriptor_rows(
         .iter()
         .enumerate()
         .filter_map(|(layout_index, (prop_name, prop_ty))| {
+            // `__elephc_*` slots are compiler storage for synthetic internal classes (an ICU
+            // bridge handle, a break-iterator cursor). PHP's internal objects keep that state
+            // in C and never render it, so every object renderer must skip these rows.
+            if prop_name.starts_with("__elephc_") {
+                return None;
+            }
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, layout_index, prop_name,
             );

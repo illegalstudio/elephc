@@ -292,6 +292,10 @@ impl Scanner<'_> {
         for helper in crate::builtins::gmp::prelude_helpers_for(&key) {
             self.record_callable(helper);
         }
+        // The Intl registry builtins' EIR lowerings call the synthetic AST bridge helpers.
+        for helper in crate::intl::prelude_helpers_for(&key) {
+            self.record_callable(helper);
+        }
         let normalized = self.normalized_function_arguments(&key, args);
         let first = normalized.first().map(unwrap_named_arg);
         match key.as_str() {

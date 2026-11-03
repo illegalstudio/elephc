@@ -8,12 +8,9 @@
 //! - The typed runtime target has a validated `Str -> Str` EIR signature.
 //! - Concrete helper symbols and registers are selected only by the target backend.
 
-use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
-
 builtin! {
     contract: "html_entity_decode",
-    semantics: crate::builtins::semantics::unary_string_runtime(
-        RuntimeCallTarget::UnaryString(UnaryStringRuntime::HtmlEntityDecode),
-        crate::ir::Effects::PURE,
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::HtmlEntityDecode,
     ),
 }

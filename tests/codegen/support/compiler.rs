@@ -381,6 +381,8 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::fileinfo_prelude::inject_if_used_for_version(
         resolved, false, php_version, &mut prelude_inventory,
     );
+    let intl_used = elephc::intl::program_uses_intl(&resolved);
+    let resolved = elephc::intl::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
@@ -423,20 +425,26 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         optimized,
         check_result.local_binding_decision_spans(),
     );
-    let empty_roots = HashSet::new();
+    let mut forced_groups = HashSet::new();
+    if intl_used {
+        forced_groups.insert("intl".to_string());
+    }
     // Mirrors `pipeline::compile`: a generic instantiation is reachable by construction but no
     // call site NAMES it in the AST — lowering resolves that from the checker's answer — so the
     // pruner would otherwise drop every instantiation as unreferenced.
-    let instantiation_roots: HashSet<String> =
+    let mut instantiation_roots: HashSet<String> =
         elephc::generics::instantiation_roots(&check_result.requested_instantiations)
             .into_iter()
             .collect();
+    if intl_used {
+        instantiation_roots.extend(elephc::intl::root_function_names());
+    }
     let optimized = elephc::optimize::prune_unreachable_declarations(
         optimized,
         &mut check_result,
         elephc::optimize::reachability::PruneOptions {
             inventory: &prelude_inventory,
-            forced_groups: &empty_roots,
+            forced_groups: &forced_groups,
             exported_functions: &instantiation_roots,
             eval_forced: false,
         },

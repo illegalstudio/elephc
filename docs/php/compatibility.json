@@ -195,7 +195,7 @@
       "total": 3180
     },
     "functions": {
-      "have": 1053,
+      "have": 1240,
       "total": 2169
     }
   },
@@ -911,11 +911,11 @@
         "have": 0,
         "total": 170
       },
-      "docs": null,
+      "docs": "docs/php/intl.md#functions",
       "extension": "intl",
       "functions": {
         "eval": 0,
-        "have": 0,
+        "have": 187,
         "total": 187
       },
       "name": "intl",

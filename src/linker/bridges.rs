@@ -55,6 +55,18 @@ pub(super) struct BridgeStaticlib {
 /// Every Elephc bridge known to discovery and CLI flag validation.
 pub(super) const BRIDGES: &[BridgeStaticlib] = &[
     BridgeStaticlib {
+        lib_name: "elephc_intl",
+        env_var: "ELEPHC_INTL_LIB_DIR",
+        crate_name: "elephc-intl",
+        flag_name: "intl",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        php_extensions: &["intl"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_tokenizer",
         env_var: "ELEPHC_TOKENIZER_LIB_DIR",
         crate_name: "elephc-tokenizer",

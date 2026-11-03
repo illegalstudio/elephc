@@ -21,6 +21,9 @@ pub(super) fn datetime_backing_properties() -> Vec<ClassProperty> {
         // Sub-second component (0..999999) preserved across operations; surfaced by getMicrosecond()
         // and the `u`/`v` format specifiers. elephc otherwise works at libc second resolution.
         property("microsecond", TypeExpr::Int, Expr::new(ExprKind::IntLiteral(0), dummy())),
+        // Internal construction marker: php throws DateObjectError when a DateTime subclass overrides
+        // __construct() without calling parent::__construct(); the flag lets Intl detect it.
+        property("__elephc_initialized", TypeExpr::Bool, Expr::new(ExprKind::BoolLiteral(false), dummy())),
         // Per-class static (0 = last createFromFormat succeeded, 1 = it failed) backing
         // getLastErrors()/date_get_last_errors(). Its storage now emits correctly for the used
         // synthetic class (see emit_static_property_initializers' emitted-class filter).

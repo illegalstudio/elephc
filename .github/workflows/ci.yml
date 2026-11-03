@@ -44,6 +44,7 @@ env:
     -p elephc-phar
     -p elephc-tz
     -p elephc-image
+    -p elephc-intl
     -p elephc-pcntl
     -p elephc-xml
     -p elephc-fileinfo

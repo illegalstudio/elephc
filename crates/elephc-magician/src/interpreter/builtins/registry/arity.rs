@@ -118,7 +118,6 @@ pub(super) const PHP_ARITY_OVERRIDES: &[(&str, EvalBuiltinArity)] = &[
     ("hash", EvalBuiltinArity::ranged(2, Some(4))),
     ("hash_file", EvalBuiltinArity::ranged(2, Some(4))),
     ("hash_init", EvalBuiltinArity::ranged(1, Some(4))),
-    ("html_entity_decode", EvalBuiltinArity::ranged(1, Some(3))),
     ("htmlentities", EvalBuiltinArity::ranged(1, Some(4))),
     ("htmlspecialchars", EvalBuiltinArity::ranged(1, Some(4))),
     ("mkdir", EvalBuiltinArity::ranged(1, Some(4))),

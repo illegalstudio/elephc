@@ -273,7 +273,7 @@ expect_builtin_arity_error!(
 expect_builtin_arity_error!(
     test_error_html_entity_decode_wrong_args,
     "<?php html_entity_decode();",
-    "html_entity_decode() takes exactly 1 argument"
+    "html_entity_decode() takes 1 to 3 arguments"
 );
 
 // Tests urldecode() arity error when called with no arguments.

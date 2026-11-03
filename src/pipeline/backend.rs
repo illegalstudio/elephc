@@ -364,6 +364,15 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     {
         native_requirements.push(NativeRequirement::package("curl"));
     }
+    // The Intl bridge's Rust staticlib reaches ICU through the managed `icu` package's
+    // opaque shim archive. Force-linking `elephc_intl` through a prelude/class reference or
+    // `--with-intl` must therefore also resolve ICU's static archives and C++ runtime.
+    if planned_link_libraries
+        .iter()
+        .any(|library| library == "elephc_intl")
+    {
+        native_requirements.push(NativeRequirement::package("icu"));
+    }
     // The xml bridge is the same shape as curl: `elephc_xml` is a Rust `staticlib`
     // whose parser is libxml2 itself, reached through the Elephc-owned C shim the
     // managed `libxml2` package builds and archives next to `libxml2.a`. It has no

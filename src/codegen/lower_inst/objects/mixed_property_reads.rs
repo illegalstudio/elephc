@@ -18,6 +18,9 @@ pub(super) fn lower_union_object_prop_get(
     class_name: &str,
     property: &str,
 ) -> Result<()> {
+    if super::known_property_reads::class_routes_to_magic_get(ctx, class_name, property) {
+        return lower_union_magic_get(ctx, inst, object, class_name, property);
+    }
     let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
     let object_label = ctx.next_label("union_prop_object");
     let done_label = ctx.next_label("union_prop_done");
@@ -42,6 +45,60 @@ pub(super) fn lower_union_object_prop_get(
     if let Some(read_done) = read_done {
         ctx.emitter.label(&read_done);
     }
+    ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a single-object union receiver whose property is answered by `__get`.
+///
+/// The union arm unboxes through the shared Mixed helper, so the accessor receives the
+/// unboxed object pointer rather than the boxed cell the declared-slot reads expect.
+fn lower_union_magic_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    class_name: &str,
+    property: &str,
+) -> Result<()> {
+    let object_label = ctx.next_label("union_magic_object");
+    let done_label = ctx.next_label("union_magic_done");
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_if_mixed_unboxed_object(ctx, &object_label);
+    emit_dynamic_property_miss_result(ctx, inst);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&object_label);
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    move_mixed_unboxed_object_payload(ctx, base_reg);
+    super::known_property_reads::lower_magic_get_prop_from_reg(
+        ctx, inst, class_name, property, base_reg,
+    )?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Lowers a nullable receiver whose property is answered by `__get`.
+fn lower_nullable_magic_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    class_name: &str,
+    property: &str,
+) -> Result<()> {
+    let null_label = ctx.next_label("nullable_magic_null");
+    let done_label = ctx.next_label("nullable_magic_done");
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    emit_nullable_receiver_object_payload(ctx, object, &null_label, base_reg)?;
+    super::known_property_reads::lower_magic_get_prop_from_reg(
+        ctx, inst, class_name, property, base_reg,
+    )?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&null_label);
+    emit_property_on_null_warning(ctx, property);
+    emit_boxed_null(ctx);
+
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -817,6 +874,9 @@ pub(super) fn lower_nullable_prop_get_with_warning(
     class_name: &str,
     property: &str,
 ) -> Result<()> {
+    if super::known_property_reads::class_routes_to_magic_get(ctx, class_name, property) {
+        return lower_nullable_magic_get(ctx, inst, object, class_name, property);
+    }
     let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
     let null_label = ctx.next_label("nullable_prop_warning_null");
     let done_label = ctx.next_label("nullable_prop_warning_done");

@@ -340,8 +340,14 @@ impl Checker {
                 let object_only = match &object_type {
                     PhpType::Object(_) => true,
                     PhpType::Union(members) => {
+                        // `$e::class` after `catch (Throwable $e)` carries the caught variable's
+                        // nullable type until the catch block's flow narrows it. An object plus
+                        // null is still a valid class-name receiver at run time.
                         !members.is_empty()
-                            && members.iter().all(|member| matches!(member, PhpType::Object(_)))
+                            && members.iter().any(|member| matches!(member, PhpType::Object(_)))
+                            && members.iter().all(|member| {
+                                matches!(member, PhpType::Object(_) | PhpType::Void | PhpType::Never)
+                            })
                     }
                     _ => false,
                 };

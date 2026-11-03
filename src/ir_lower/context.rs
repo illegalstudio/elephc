@@ -1538,6 +1538,31 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .is_some_and(|slot| self.initialized_slots.contains(slot))
     }
 
+    /// Returns whether a local can be given canonical Mixed ref-cell storage even before its
+    /// first assignment.
+    ///
+    /// A never-declared variable passed by reference is created by the binding itself: the
+    /// promotion boxes `null` into the cell the callee writes through. The ordinary
+    /// `local_is_promotable_to_ref_cell` predicate excludes an uninitialized slot, which is
+    /// exactly the state of those arguments.
+    pub(crate) fn local_is_declarable_ref_cell(&self, name: &str) -> bool {
+        if self.extern_global_type(name).is_some() || self.eval_scope_read_param.is_some() {
+            return false;
+        }
+        let kind = self
+            .local_kinds
+            .get(name)
+            .copied()
+            .unwrap_or(LocalKind::PhpLocal);
+        kind == LocalKind::PhpLocal
+            && !self.uses_global_storage(name, kind)
+            && !self.is_borrowed_element_ref_local(name)
+            && !self
+                .local_slots
+                .get(name)
+                .is_some_and(|slot| self.initialized_slots.contains(slot))
+    }
+
     /// Returns whether type checking approved widening this exact call argument local to Mixed.
     pub(crate) fn boxed_reference_promotion_is_authorized(
         &self,

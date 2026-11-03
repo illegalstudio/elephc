@@ -1,3 +1,6 @@
 # The parser corpus fixtures are byte-exact PHP output that includes bare CR and CRLF
 # character data; they must never be newline-normalized or flagged as whitespace errors.
 crates/elephc-xml/src/parser/tests/fixtures/*.out -text -whitespace
+# The committed php-src ext/intl PHPT corpus is verbatim upstream data: some fixtures
+# intentionally carry trailing spaces and CRLF in --FILE--/--EXPECT-- sections.
+tests/php_src/intl/** -text -whitespace

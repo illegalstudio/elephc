@@ -21,6 +21,7 @@ mod requirements;
 mod array;
 mod callables;
 mod curl;
+mod intl;
 mod io;
 pub(crate) mod mbstring;
 mod mbstring_callback;

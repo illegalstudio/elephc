@@ -110,6 +110,7 @@ fn static_defined_name_arg(arg: &Expr) -> Option<&str> {
 /// Returns true when a literal `defined()` name exists as a global or class-like constant.
 fn literal_constant_is_defined(ctx: &LoweringContext<'_, '_>, constant_name: &str) -> bool {
     ctx.constant_value(constant_name).is_some()
+        || crate::intl::is_intl_constant(constant_name)
         || crate::types::class_like_constant_is_defined(
             ctx.classes,
             ctx.interfaces,

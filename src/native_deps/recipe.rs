@@ -14,7 +14,7 @@ use crate::codegen_support::platform::Target;
 
 use super::catalog::PackageVersion;
 use super::error::{NativeError, NativeErrorKind};
-use super::recipes::{curl, gmp, libmagic, libssh2, libxml2, nghttp2, oniguruma, openssl, pcre2, zlib};
+use super::recipes::{curl, gmp, icu, libmagic, libssh2, libxml2, nghttp2, oniguruma, openssl, pcre2, zlib};
 use super::toolchain::NativeToolchain;
 
 /// Immutable inputs to one trusted package recipe invocation.
@@ -52,6 +52,7 @@ enum BuiltInRecipe {
     Libxml2,
     Gmp,
     Libmagic,
+    Icu,
 }
 
 /// Resolves a package and immutable recipe revision to its built-in executor.
@@ -67,6 +68,7 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("libmagic", 1) => Some(BuiltInRecipe::Libmagic),
         ("libxml2", 1) => Some(BuiltInRecipe::Libxml2),
         ("gmp", 2) => Some(BuiltInRecipe::Gmp),
+        ("icu", 31) => Some(BuiltInRecipe::Icu),
         _ => None,
     }
 }
@@ -85,6 +87,7 @@ impl RecipeRunner for CuratedRecipes {
             Some(BuiltInRecipe::Libmagic) => libmagic::build(request),
             Some(BuiltInRecipe::Libxml2) => libxml2::build(request),
             Some(BuiltInRecipe::Gmp) => gmp::build(request),
+            Some(BuiltInRecipe::Icu) => icu::build(request),
             None => Err(NativeError::new(
                 NativeErrorKind::Build,
                 format!(

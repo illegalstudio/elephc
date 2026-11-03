@@ -556,6 +556,33 @@ fn promote_ref_call_property_argument(
     Ok(())
 }
 
+/// Returns whether `candidate` is exactly `existing` with one `null` alternative added.
+///
+/// The nullable-wrapper pattern (`T` cursor/parameter -> `T|null`) is safe because every
+/// value the variable already holds is still accepted. Any other widening (`array` ->
+/// `array|false`) changes the set of values the declared binding promised, so it stays a
+/// reassignment error.
+fn is_nullable_widening_of(existing: &PhpType, candidate: &PhpType) -> bool {
+    let PhpType::Union(members) = candidate else {
+        return false;
+    };
+    if members.iter().filter(|member| matches!(member, PhpType::Void)).count() != 1 {
+        return false;
+    }
+    let without_null = members
+        .iter()
+        .filter(|member| !matches!(member, PhpType::Void))
+        .cloned()
+        .collect::<Vec<_>>();
+    let existing_members = match existing {
+        PhpType::Union(list) => list.clone(),
+        other => vec![other.clone()],
+    };
+    without_null.len() == existing_members.len()
+        && without_null.iter().all(|member| existing_members.contains(member))
+        && existing_members.iter().all(|member| without_null.contains(member))
+}
+
 /// Rebinds a local by reference while preserving the source slot's type and alias metadata.
 fn check_ref_assign_variable(
     checker: &mut Checker,
@@ -1276,6 +1303,12 @@ fn merge_local_assignment_type(
                 // dropped at the top of `check_assign`). Clearing again would discard the
                 // NEW binding's metadata instead: `$f = 1; $f = function (int $a) {…};
                 // $f("s")` would lose the signature that reports the bad argument.
+                env.insert(name.to_string(), ty.clone());
+                return Ok(());
+            }
+            // Adding `null` is the common cursor/optional-wrapper pattern and keeps every value
+            // the variable could already hold. Broader widenings remain reassignment errors.
+            if is_nullable_widening_of(existing, ty) {
                 env.insert(name.to_string(), ty.clone());
                 return Ok(());
             }

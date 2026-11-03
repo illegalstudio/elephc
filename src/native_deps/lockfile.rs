@@ -108,7 +108,10 @@ impl NativeLock {
                 target: version.supported_targets.iter().map(|target| LockedTarget {
                     name: (*target).to_string(),
                     archives: version.ordered_link_outputs.iter().map(|path| (*path).to_string()).collect(),
-                    system_libraries: Vec::new(),
+                    system_libraries: version.system_libraries.iter()
+                        .find(|(name, _)| name == target)
+                        .map(|(_, libraries)| libraries.iter().map(|name| (*name).to_string()).collect())
+                        .unwrap_or_default(),
                     frameworks: Vec::new(),
                 }).collect(),
             });

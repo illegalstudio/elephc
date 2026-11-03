@@ -12,7 +12,7 @@
 use crate::builtins::registry;
 use elephc_builtin_contract::{
     aot_signature_profile, aot_support, Area, BackendImplementation, BackendSupport,
-    BuiltinContract, DefaultSpec, TypeSpec,
+    BuiltinContract, DefaultSpec, PhpModule, TypeSpec,
 };
 
 /// Keeps variadic passing modes in the AOT signature aligned with the shared contract.
@@ -67,6 +67,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             ),
         ),
         ("image_prelude", crate::image_prelude::image_declarations()),
+        ("intl_prelude", crate::intl::declaration_program()),
         ("curl_prelude", parsed_curl_prelude()),
         ("xml_prelude", crate::xml_prelude::xml_declarations()),
         ("fileinfo_prelude", crate::fileinfo_prelude::fileinfo_declarations()),
@@ -227,6 +228,11 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
      does not exist, or an EvalImplementationPending label that would be false because \
      eval() can already call it. Consequence, accepted: the PHP comparison page counts \
      the curl module 34/35 rather than 35/35.",
+), (
+    "setlocale",
+    "the Intl prelude supplies PHP's process-facing setlocale() when ext/intl is in \
+     play; the compiler has no separate core setlocale surface to contract. The php-src \
+     Intl corpus reads only its return value while ICU keeps its own default locale.",
 )];
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
@@ -405,19 +411,40 @@ fn prelude_contracts_match_their_injected_signatures() {
             let at = format!("{name}(${}) in {prelude}", param.name);
             assert_eq!(actual.by_ref, param.by_ref, "{at}: by-reference marker");
             assert!(!actual.variadic, "{at}: fixed parameter declared variadic");
+            let matches = if contract.module == PhpModule::Intl {
+                php_type_matches_with_intl_refinements(param.ty, &actual.php_type)
+            } else {
+                php_type_matches(param.ty, &actual.php_type)
+            };
             assert!(
-                php_type_matches(param.ty, &actual.php_type),
+                matches,
                 "{at}: declared type `{}` is not the contract's {:?}",
                 actual.php_type,
                 param.ty
             );
             match (param.default, actual.default.as_deref()) {
                 (None, None) => {}
-                (Some(expected), Some(text)) => assert!(
-                    default_matches(&expected, text),
-                    "{at}: default `{text}` is not the contract's `{}`",
-                    default_text(&expected)
-                ),
+                (Some(expected), Some(text)) => {
+                    // PHP's stubs spell some Intl defaults by name (`ULOC_ACTUAL_LOCALE`,
+                    // `IDNA_DEFAULT`, ...) where the neutral contract records the folded
+                    // integer, so resolve the named form through the real prelude value.
+                    let intl_constant_default = contract.module == PhpModule::Intl
+                        && matches!(expected, DefaultSpec::Int(_) | DefaultSpec::IntMax)
+                        && match expected {
+                            DefaultSpec::Int(value) => {
+                                crate::intl::constant_int_value(text) == Some(value)
+                            }
+                            DefaultSpec::IntMax => {
+                                crate::intl::constant_int_value(text) == Some(i64::MAX)
+                            }
+                            _ => false,
+                        };
+                    assert!(
+                        default_matches(&expected, text) || intl_constant_default,
+                        "{at}: default `{text}` is not the contract's `{}`",
+                        default_text(&expected)
+                    );
+                }
                 (Some(expected), None) => panic!(
                     "{at}: contract has default `{}`, the prelude declares none",
                     default_text(&expected)
@@ -608,6 +635,60 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         }
     };
     declared == scalar
+}
+
+/// Returns whether one declared PHP type matches a contract type, allowing the Intl
+/// synthetic prelude to narrow a neutral `object` member to the concrete class PHP's own
+/// signatures name (`Collator`, `IntlTimeZone`, `DateTimeZone`, ...).
+fn php_type_matches_with_intl_refinements(expected: TypeSpec, declared: &str) -> bool {
+    if php_type_matches(expected, declared) {
+        return true;
+    }
+    match expected {
+        TypeSpec::Object => is_intl_object_type(declared),
+        TypeSpec::Union(members) => {
+            // A neutral `object` member summarizes whatever concrete classes PHP's own
+            // signature names, and one contract member may cover several of them
+            // (`IntlTimeZone|DateTimeZone` for one `object`).
+            let declared_members = declared.split('|').map(str::trim).collect::<Vec<_>>();
+            let declared_objects = declared_members
+                .iter()
+                .filter(|part| is_intl_object_type(part))
+                .count();
+            let declared_scalars = declared_members
+                .iter()
+                .copied()
+                .filter(|part| !is_intl_object_type(part))
+                .collect::<Vec<_>>();
+            let contract_scalars = members
+                .iter()
+                .copied()
+                .filter(|member| !matches!(member, TypeSpec::Object))
+                .collect::<Vec<_>>();
+            let contract_objects = members.len() - contract_scalars.len();
+            contract_objects > 0
+                && declared_objects > 0
+                && declared_scalars.len() == contract_scalars.len()
+                && declared_scalars.iter().all(|part| {
+                    contract_scalars
+                        .iter()
+                        .any(|member| php_type_matches_with_intl_refinements(*member, part))
+                })
+                && contract_scalars.iter().all(|member| {
+                    declared_scalars
+                        .iter()
+                        .any(|part| php_type_matches_with_intl_refinements(*member, part))
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Returns whether a declared PHP type narrows a neutral `object` to a concrete class.
+fn is_intl_object_type(declared: &str) -> bool {
+    let declared = declared.trim().trim_start_matches('?');
+    crate::intl::is_intl_class(declared)
+        || matches!(declared, "DateTime" | "DateTimeImmutable" | "DateTimeInterface" | "DateTimeZone")
 }
 
 /// Returns whether a prelude's default expression is the contract's default value.

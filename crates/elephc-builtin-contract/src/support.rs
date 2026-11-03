@@ -148,6 +148,13 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
     if contract.internal {
         return BackendSupport::Unsupported(UnsupportedReason::InternalCompilerSurface);
     }
+    // The Intl surface runs through the managed ICU bridge and the synthetic class prelude,
+    // neither of which Magician can reach from an `eval()` program. Declaring the whole area
+    // unsupported keeps every Intl contract out of the eval coverage gate instead of requiring
+    // one placeholder binding per scalar function.
+    if matches!(contract.area, Area::Intl) {
+        return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
+    }
     if EVAL_IMPLEMENTATION_PENDING
         .iter()
         .any(|name| contract.id == BuiltinId::from_canonical_name(name))
@@ -399,8 +406,9 @@ mod tests {
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
         assert_eq!(eval_internal, 134);
         // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
-        // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 359);
+        // and name-resolver-rewritten functions eval does not reach (see `eval_support`), plus
+        // the 187 Intl contracts that route through the managed ICU bridge.
+        assert_eq!(eval_pending, 546);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -410,10 +418,11 @@ mod tests {
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
-        assert_eq!(aot_registry, 824);
+        assert_eq!(aot_registry, 874);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 424 + curl_surface);
+        // Includes the 137 Intl procedural contracts declared by the synthetic prelude.
+        assert_eq!(aot_external, 561 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -469,7 +478,8 @@ mod tests {
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls.
-        assert_eq!(unsupported, 493);
+        // Includes the 187 Intl contracts: the managed ICU bridge has no eval route.
+        assert_eq!(unsupported, 680);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

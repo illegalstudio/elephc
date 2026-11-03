@@ -833,3 +833,42 @@ ok -9223372036854775808\n\
 err Cannot assign float to reference held by property C::$n of type int\n"
     );
 }
+
+/// Regression: an undeclared variable passed by reference to a static method is created by
+/// the binding. Two calls in one scope (the second after the variable is read) previously
+/// reused an unpromoted frame word and crashed in the callee's write-back.
+#[test]
+fn test_undefined_local_static_method_by_ref_output_twice() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public static function assign(&$out = null): int {
+        $out = 42;
+        return 1;
+    }
+}
+var_dump(T::assign($value), $value);
+var_dump(T::assign($value), $value);
+"#,
+    );
+    assert_eq!(out, "int(1)\nint(42)\nint(1)\nint(42)\n");
+}
+
+/// Regression: the same declaration called from a nested expression still publishes the
+/// caller variable after the call.
+#[test]
+fn test_undefined_local_static_method_by_ref_output_nested() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public static function pass(string $id, &$system = null): string {
+        $system = true;
+        return $id;
+    }
+}
+var_dump(T::pass("Europe/Lisbon", $isSystem));
+var_dump($isSystem);
+"#,
+    );
+    assert_eq!(out, "string(13) \"Europe/Lisbon\"\nbool(true)\n");
+}

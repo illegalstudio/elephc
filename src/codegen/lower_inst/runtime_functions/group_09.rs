@@ -119,6 +119,9 @@ pub(super) fn lower(
         RuntimeFnId::OpensslGetCipherMethods => Some({
             crate::codegen::lower_inst::builtins::openssl::lower_openssl_get_cipher_methods(ctx, inst)
         }),
+        RuntimeFnId::HtmlEntityDecode => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_html_entity_decode(ctx, inst)
+        }),
         RuntimeFnId::Htmlentities => Some({
             crate::codegen::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlentities")
         }),

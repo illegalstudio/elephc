@@ -1,0 +1,10 @@
+[package]
+name = "elephc-intl"
+version = "0.1.0"
+edition = "2021"
+description = "Managed ICU bridge backing elephc's ext/intl surface."
+license = "MIT"
+
+[lib]
+name = "elephc_intl"
+crate-type = ["staticlib", "rlib"]

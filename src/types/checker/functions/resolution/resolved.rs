@@ -138,7 +138,23 @@ impl Checker {
         }
         let mut param_idx = 0usize;
         for arg in args {
-            let actual_ty = self.infer_type(arg, caller_env)?;
+            // PHP creates a variable passed by reference; it is not read at the call site.
+            let by_ref_undefined_local = param_idx < regular_param_count
+                && effective_sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                && !default_args.get(param_idx).copied().unwrap_or(false)
+                && matches!(&arg.kind, ExprKind::Variable(name) if !caller_env.contains_key(name));
+            let actual_ty = if by_ref_undefined_local {
+                effective_sig
+                    .params
+                    .get(param_idx)
+                    .map(|(_, ty)| ty.clone())
+                    .unwrap_or(PhpType::Mixed)
+            } else {
+                self.infer_type(arg, caller_env)?
+            };
+            if by_ref_undefined_local {
+                self.record_undefined_by_ref_argument(arg, &actual_ty, span);
+            }
             let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
                 || self.boxed_reference_promotion_pending(arg, span);
             if matches!(arg.kind, ExprKind::Spread(_)) {

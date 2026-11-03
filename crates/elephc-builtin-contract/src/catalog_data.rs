@@ -15842,6 +15842,18 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: None,
                 by_ref: false,
             },
+            ParamSpec {
+                name: "flags",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(11)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "encoding",
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
         ],
         variadic: None,
         variadic_by_ref: false,

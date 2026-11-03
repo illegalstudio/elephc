@@ -162,9 +162,20 @@ pub(in crate::lexer) fn scan_number(cursor: &mut Cursor) -> Result<Token, Compil
 
     let mut num_str = scan_radix_digits(cursor, |c| c.is_ascii_digit());
 
+    // PHP accepts a trailing-dot float (`1000.`, `1.e3`) as well as a fractional part.
+    // The dot only starts a float when it cannot be an identifier separator: a digit, an
+    // exponent marker, or a non-alphanumeric delimiter such as `)`, `,`, `;`, or EOF.
     let is_float = if cursor.peek() == Some('.') {
         let remaining = cursor.remaining();
-        remaining.len() > 1 && (remaining.as_bytes()[1] as char).is_ascii_digit()
+        match remaining.as_bytes().get(1).copied() {
+            None => true,
+            Some(next) => {
+                let next = next as char;
+                next.is_ascii_digit()
+                    || matches!(next, 'e' | 'E')
+                    || !(next.is_ascii_alphanumeric() || next == '_' || next == '.')
+            }
+        }
     } else {
         false
     };

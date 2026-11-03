@@ -141,7 +141,7 @@ fn fixture_version(cache: &CacheLayout) -> &'static PackageVersion {
         source,
         recipe_revision: 1,
         dependencies: &[], supported_targets: Box::leak(vec![target].into_boxed_slice()),
-        ordered_link_outputs: &["lib/libfixture.a"], retained_headers: &["include/fixture.h"], provides: &["fixture"],
+        ordered_link_outputs: &["lib/libfixture.a"], retained_headers: &["include/fixture.h"], provides: &["fixture"], system_libraries: &[],
     }))
 }
 

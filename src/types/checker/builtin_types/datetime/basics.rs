@@ -50,6 +50,7 @@ if ($timezone === null) {
     }
     $this->timezone_name = $tzname;
 }
+$this->__elephc_initialized = true;
 "#;
 
 /// `DateTime`/`DateTimeImmutable::__construct(string $datetime = "now", ?DateTimeZone $timezone = null)`

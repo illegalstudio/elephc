@@ -906,6 +906,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "elephc-intl"
+version = "0.1.0"
+
+[[package]]
 name = "elephc-magician"
 version = "0.1.0"
 dependencies = [

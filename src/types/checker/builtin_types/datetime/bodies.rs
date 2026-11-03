@@ -109,6 +109,7 @@ pub(super) fn construct() -> Vec<Stmt> {
             s_prop_assign(e_this(), "timezone_name", e_var("tzname")),
         ]),
         ),
+        s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
     ]
 }
 

@@ -602,18 +602,15 @@ fn lower_boxed_prop_initialized(
     store_if_result(ctx, inst)
 }
 
-/// Returns the receiver class when an undeclared property should route through `__get`.
-pub(super) fn magic_get_receiver_class(
+/// Returns whether a class answers `property` from `__get` instead of a declared slot.
+pub(super) fn class_routes_to_magic_get(
     ctx: &FunctionContext<'_>,
-    object: ValueId,
+    class_name: &str,
     property: &str,
-) -> Result<Option<String>> {
-    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
-        return Ok(None);
-    };
+) -> bool {
     let normalized = class_name.trim_start_matches('\\');
     let Some(class_info) = ctx.module.class_infos.get(normalized) else {
-        return Ok(None);
+        return false;
     };
     // A slot this SCOPE does not resolve the name to is not a declaration for this decision.
     // php 7.4 removed shadow properties, so a strict ancestor's private name is not in this
@@ -627,9 +624,22 @@ pub(super) fn magic_get_receiver_class(
         .any(|(name, _)| name == property)
         && !property_name_is_scope_dynamic(ctx, normalized, property)
     {
-        return Ok(None);
+        return false;
     }
-    if class_info.methods.contains_key(&php_symbol_key("__get")) {
+    class_info.methods.contains_key(&php_symbol_key("__get"))
+}
+
+/// Returns the receiver class when an undeclared property should route through `__get`.
+pub(super) fn magic_get_receiver_class(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+) -> Result<Option<String>> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(None);
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    if class_routes_to_magic_get(ctx, normalized, property) {
         return Ok(Some(normalized.to_string()));
     }
     Ok(None)
@@ -653,6 +663,56 @@ pub(super) fn lower_magic_get_prop(
     emit_magic_get_args(ctx, object, property)?;
     super::super::emit_resolved_method_call(ctx, &target)?;
     store_method_call_result(ctx, inst, &target)
+}
+
+/// Lowers a magic property read whose receiver pointer is already in a register.
+///
+/// Nullable and single-object-union receivers unbox before resolving the accessor, so the
+/// `$this` pointer is no longer available as a value. The declared-slot arms of those readers
+/// take the same shape; without this entry point a class that serves a name only through
+/// `__get` (php's virtual internal properties) cannot be read from a `?T` receiver.
+pub(super) fn lower_magic_get_prop_from_reg(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    property: &str,
+    object_reg: &str,
+) -> Result<()> {
+    let target = resolve_method_call_target(ctx, class_name, "__get", 2)?;
+    if target.ref_params.first().copied().unwrap_or(false) {
+        return Err(CodegenIrError::unsupported(format!(
+            "magic __get by-reference name parameter on {}",
+            class_name
+        )));
+    }
+    emit_magic_get_args_from_reg(ctx, object_reg, property);
+    super::super::emit_resolved_method_call(ctx, &target)?;
+    store_method_call_result(ctx, inst, &target)
+}
+
+/// Loads `$this` from a register and the static property name into ABI registers for `__get`.
+pub(super) fn emit_magic_get_args_from_reg(
+    ctx: &mut FunctionContext<'_>,
+    object_reg: &str,
+    property: &str,
+) {
+    let (label, len) = ctx.data.add_string(property.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            if object_reg != "x0" {
+                ctx.emitter.instruction(&format!("mov x0, {object_reg}"));      // pass the unboxed receiver as $this
+            }
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            if object_reg != "rdi" {
+                ctx.emitter.instruction(&format!("mov rdi, {object_reg}"));     // pass the unboxed receiver as $this
+            }
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        }
+    }
 }
 
 /// Loads `$this` and the static property name into ABI registers for `__get`.
