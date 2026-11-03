@@ -19,7 +19,7 @@ mod ops;
 mod object_owners;
 #[cfg(not(test))]
 mod tags;
-mod owner_frames;
+pub(crate) mod owner_frames;
 #[cfg(not(test))]
 pub(crate) mod release;
 

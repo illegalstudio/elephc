@@ -9,6 +9,7 @@
 //! - Cleanup runs on failed argument evaluation and failed operations as well as success.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Prints a borrowed operand and releases its temporary owner and any separate string conversion.
 pub(in crate::interpreter) fn eval_echo_expr(
@@ -103,10 +104,12 @@ pub(in crate::interpreter) fn release_expr_result(
 }
 
 /// Retires synthesized caller operands after a borrowing method binder has finished.
-pub(in crate::interpreter) fn finish_synthesized_method_arguments(
-    result: Result<RuntimeCellHandle, EvalStatus>, owners: Vec<RuntimeCellHandle>,
+pub(in crate::interpreter) fn finish_synthesized_method_arguments<I>(
+    result: Result<RuntimeCellHandle, EvalStatus>, owners: I,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
+) -> Result<RuntimeCellHandle, EvalStatus>
+where I: IntoIterator<Item = RuntimeCellHandle>, I::IntoIter: DoubleEndedIterator,
+{
     let mut cleanup = Ok(());
     for owner in owners.into_iter().rev() {
         let released = release_expr_result(owner, context, values);
@@ -167,9 +170,12 @@ pub(in crate::interpreter) fn with_eval_call_arguments_with_modes<V: RuntimeValu
     let (arguments, receiver_owners) = eval_owned_call_arg_values(args, modes, context, scope, values)?;
     let (borrowed_arguments, argument_owners) = own_evaluated_call_arguments(arguments,
         |argument, index| modes.by_reference(argument.name.as_deref(), index));
-    let result = consume(borrowed_arguments, context, scope, values);
-    let result = finish_eval_argument_owners(result, argument_owners, context, values);
-    finish_synthesized_method_arguments(result, receiver_owners, context, values)
+    let receiver_owners = receiver_owners.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    with_runtime_owners(&(&argument_owners, &receiver_owners), || {
+        let result = consume(borrowed_arguments, context, scope, values);
+        let result = finish_eval_argument_owners(result, &argument_owners, context, values);
+        finish_synthesized_method_arguments(result, receiver_owners.iter().map(RuntimeOwnerSlot::take), context, values)
+    })
 }
 
 /// Retains borrowed returns before releasing argument owners, preserving the original call error.
@@ -223,8 +229,10 @@ pub(in crate::interpreter) fn with_eval_array_call_arguments<V: RuntimeValueOps>
     let arguments = eval_array_call_arg_values(array, context, values)?;
     let (borrowed_arguments, argument_owners) = own_evaluated_call_arguments(arguments,
         |argument, _| argument.ref_target.is_some());
-    let result = consume(borrowed_arguments, context, values);
-    finish_eval_argument_owners(result, argument_owners, context, values)
+    with_runtime_owners(&argument_owners, || {
+        let result = consume(borrowed_arguments, context, values);
+        finish_eval_argument_owners(result, &argument_owners, context, values)
+    })
 }
 
 /// Evaluates a condition and consumes its temporary owner after reading PHP truthiness.

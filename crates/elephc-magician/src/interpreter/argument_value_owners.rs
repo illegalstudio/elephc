@@ -12,6 +12,8 @@
 use super::*;
 use std::cell::{RefCell, UnsafeCell};
 use std::rc::Rc;
+use crate::runtime_hooks::owner_frames::{RuntimeOwners, RuntimeOwnerSlot, with_runtime_owners};
+use crate::value::RuntimeCell;
 
 /// Shared provenance for one independently acquired source argument owner.
 #[derive(Clone)]
@@ -25,16 +27,31 @@ struct ArgumentValueLease {
 
 /// Keeps ordinary arguments allocation-free while reference candidates carry shared provenance.
 pub(super) enum ArgumentCleanupOwner {
-    Value(RuntimeCellHandle),
+    Value(RuntimeOwnerSlot),
     Reference(ArgumentValueOwner),
 }
 
 impl ArgumentCleanupOwner {
     /// Consumes the original owner or its replacement pin without borrowing shared state through PHP.
-    pub(super) fn release(self, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
+    pub(super) fn release(&self, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
         match self {
-            Self::Value(value) => release_expr_result(value, context, values),
+            Self::Value(value) => release_expr_result(value.take(), context, values),
             Self::Reference(owner) => owner.release(context, values),
+        }
+    }
+}
+
+impl RuntimeOwners for ArgumentCleanupOwner {
+    /// Reports the original source lease, excluding borrowed descriptors and consumed pin leases.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        match self {
+            Self::Value(value) => value.visit_owned_slots(visit),
+            Self::Reference(owner) => {
+                let lease = owner.0.borrow();
+                if let Some(lease) = lease.as_ref().filter(|lease| lease.pin.is_none()) {
+                    lease.value.visit_owned_slots(visit);
+                }
+            }
         }
     }
 }
@@ -95,7 +112,7 @@ pub(super) fn own_evaluated_call_arguments(
                 argument.evaluation_owner = Some(owner.clone());
                 owners.push(ArgumentCleanupOwner::Reference(owner));
             } else {
-                owners.push(ArgumentCleanupOwner::Value(argument.value));
+                owners.push(ArgumentCleanupOwner::Value(RuntimeOwnerSlot::new(argument.value)));
             }
         }
         argument.value = argument.value.borrowed();
@@ -116,7 +133,7 @@ pub(super) fn own_unpacked_call_argument_owners(
             let owner = ArgumentValueOwner::new(value);
             references.entry(value.as_ptr() as usize).or_default().push_back(owner.clone());
             ArgumentCleanupOwner::Reference(owner)
-        } else { ArgumentCleanupOwner::Value(value) }
+        } else { ArgumentCleanupOwner::Value(RuntimeOwnerSlot::new(value)) }
     }).collect();
     for argument in arguments {
         if argument.ref_target.is_none() { continue; }
@@ -147,21 +164,24 @@ pub(super) fn pin_native_call_evaluation_owners(
 
 /// Retains a borrowed result before consuming every argument owner in its original order.
 pub(super) fn finish_eval_argument_owners(
-    result: Result<RuntimeCellHandle, EvalStatus>, owners: Vec<ArgumentCleanupOwner>,
+    result: Result<RuntimeCellHandle, EvalStatus>, owners: impl AsRef<[ArgumentCleanupOwner]>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let result = result.and_then(|value| promote_borrowed_result(value, values));
-    let mut cleanup = Ok(());
-    for owner in owners {
-        let released = owner.release(context, values);
-        if cleanup.is_ok() { cleanup = released; }
-    }
-    match (result, cleanup) {
-        (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
-            let _ = eval_release_value(context, values, value);
-            Err(status)
+    let owners = owners.as_ref();
+    with_runtime_owners(&owners, || {
+        let result = result.and_then(|value| promote_borrowed_result(value, values));
+        let mut cleanup = Ok(());
+        for owner in owners {
+            let released = owner.release(context, values);
+            if cleanup.is_ok() { cleanup = released; }
         }
-        (Ok(value), Ok(())) => Ok(value),
-    }
+        match (result, cleanup) {
+            (Err(status), _) => Err(status),
+            (Ok(value), Err(status)) => {
+                let _ = eval_release_value(context, values, value);
+                Err(status)
+            }
+            (Ok(value), Ok(())) => Ok(value),
+        }
+    })
 }

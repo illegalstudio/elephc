@@ -408,6 +408,11 @@ Its pure visitor reports the actual Rust pointer field as an owning graph edge.
 Taking that cell clears the field before native cleanup can execute PHP; a Rust
 guard detaches the pinned record after the protected native boundary returns.
 The visitor adds no retain and does not treat copied borrowed handles as owners.
+The same inventory covers independently acquired source argument leases and
+temporary reference receivers through dispatch, writeback and cleanup. Each
+source field disappears before its release can reenter PHP. Shared reference
+provenance reports its original field only until ownership moves into a native
+pin; borrowed descriptors do not add another graph edge.
 
 ## Runtime generic specialization
 

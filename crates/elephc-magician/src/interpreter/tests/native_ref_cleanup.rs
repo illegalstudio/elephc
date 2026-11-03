@@ -10,6 +10,7 @@
 
 use super::super::*;
 use super::support::*;
+use crate::runtime_hooks::owner_frames::RuntimeOwners;
 
 /// Native entry replaces exact source leases once and retires every root despite cleanup throws.
 #[test]
@@ -35,17 +36,27 @@ fn native_argument_evaluation_owners_transfer_and_cleanup_exact_leases() {
                 }],
             };
             bound.evaluation_owners.push(bound.evaluation_owners[0].clone());
+            let mut slots = Vec::new();
+            owners.visit_owned_slots(&mut |slot| slots.push(slot as usize));
+            assert_eq!(slots.len(), 3, "each acquired source lease has one saved-frame owner");
+            assert_eq!(slots.iter().copied().collect::<std::collections::HashSet<_>>().len(), 3,
+                "repeated values still have distinct real owner fields");
             assert!(arguments[2].evaluation_owner.is_none(), "value arguments need no shared owner allocation");
             assert!(values.native_argument_pin_events.is_empty(), "source evaluation stays PHP-visible");
             pin_native_call_evaluation_owners(&bound, &mut context, &mut values).unwrap();
             pin_native_call_evaluation_owners(&bound, &mut context, &mut values).unwrap();
+            slots.clear();
+            owners.visit_owned_slots(&mut |slot| slots.push(slot as usize));
+            assert_eq!(slots.len(), if pins { 1 } else { 3 },
+                "a transferred native pin must not leave a fictitious source-cell owner");
             assert_eq!(values.native_argument_pin_events.len(), if pins { 2 } else { 0 },
                 "each distinct lease pins once even when the value pointer is repeated");
             assert_eq!(values.cell_owners[&(reference.as_ptr() as usize)], 3,
                 "pinning replaces an owner without changing physical owner counts");
             let result = values.int(7).unwrap();
             if cleanup_throws { values.fail_release_call = Some(values.releases.len()); }
-            let result = finish_eval_argument_owners(Ok(result), owners, &mut context, &mut values);
+            let result = finish_eval_argument_owners(Ok(result), &owners, &mut context, &mut values);
+            owners.visit_owned_slots(&mut |_| panic!("cleanup must detach every source owner, even on error"));
             if cleanup_throws {
                 assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
             } else {
