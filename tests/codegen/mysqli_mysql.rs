@@ -1404,3 +1404,22 @@ echo "|client=", (int) mysqli_get_client_stats()["bytes_received"] >= (int) $aft
         "ctor-saw=7|tag=t|bare=Exception:mysqli_result::fetch_object(): Argument #2 ($constructor_args) must be empty when the specified class (Bare) does not have a constructor|small=int(5)\n|big=string(20) \"18446744073709551610\"\n|stmt=18446744073709551611|proc=18446744073709551611|link=18446744073709551611|sent=29|recv-big=y|pkts=1|overhead=y|client=y"
     );
 }
+
+/// `fetch_object()` into a class whose properties are UNTYPED and never assigned anywhere else
+/// (`public $id;`): the columns land in the declared slots, like php, instead of crashing on a
+/// duplicate dynamic property.
+#[test]
+#[ignore]
+fn test_mysqli_fetch_object_fills_untyped_declared_properties() {
+    let out = compile_and_run(&my_program(
+        r#"
+class Row { public $id; public $label; public $absent; }
+$row = $db->query("SELECT 7 AS id, 'seven' AS label")->fetch_object("Row");
+var_dump($row);
+"#,
+    ));
+    assert_eq!(
+        out,
+        "object(Row)#2 (3) {\n  [\"id\"]=>\n  string(1) \"7\"\n  [\"label\"]=>\n  string(5) \"seven\"\n  [\"absent\"]=>\n  NULL\n}\n"
+    );
+}

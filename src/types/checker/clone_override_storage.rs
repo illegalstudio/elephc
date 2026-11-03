@@ -1,6 +1,6 @@
 //! Purpose:
 //! Gives untyped properties reached by runtime-shaped mutation the boxed storage their PHP
-//! semantics require, currently clone overrides and property `unset()`.
+//! semantics require: clone overrides, dynamic-name property writes, and property `unset()`.
 //!
 //! Called from:
 //! - `crate::builtins::callables::clone`'s check hook, which records the destination classes.
@@ -148,6 +148,19 @@ pub(in crate::types::checker) fn record_callable_clone_override_destination(
         _ => checker.clone_override_destinations.any_class = true,
     }
     Ok(())
+}
+
+/// Records the widening a dynamic-name property write (`$o->{$name} = $v`) can reach.
+///
+/// The name is only known at runtime, so the write may hit any untyped declared slot of the
+/// receiver's class (or, for a boxed receiver, of any user class), with any value. Those slots
+/// get the same `mixed` storage a clone override needs; `fetch_object()` / PDO `FETCH_CLASS`
+/// hydration is the typical caller.
+pub(in crate::types::checker) fn record_dynamic_property_write_destination(
+    checker: &mut Checker,
+    object_ty: &PhpType,
+) {
+    checker.clone_override_destinations.record(object_ty);
 }
 
 /// Records the widening a runtime string or boxed callable invocation can reach.

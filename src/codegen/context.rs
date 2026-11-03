@@ -92,6 +92,10 @@ pub(crate) struct FunctionContext<'a> {
     block_labels: Vec<String>,
     /// Block order, compare fusion, and cold-path state for late machine layout.
     pub(super) machine_layout: MachineLayoutState,
+    /// While one top-level Reflection owner is being materialized: the classes whose shallow
+    /// declaring/type `ReflectionClass` is shared through a static slot (see
+    /// `reflection::member_properties_emit::emit_shared_shallow_reflection_class`).
+    pub(super) reflection_class_cache: Option<Vec<String>>,
 }
 
 impl<'a> FunctionContext<'a> {
@@ -214,6 +218,7 @@ impl<'a> FunctionContext<'a> {
             epilogue_label,
             block_labels,
             machine_layout: MachineLayoutState::default(),
+            reflection_class_cache: None,
         }
     }
 

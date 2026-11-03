@@ -182,6 +182,91 @@ pub(super) fn emit_reflection_parent_class_property(
     Ok(())
 }
 
+/// Static slot that shares one shallow `ReflectionClass` for `class_name` while a top-level
+/// Reflection owner is being materialized.
+fn shared_reflection_class_slot(class_name: &str) -> String {
+    let key: String = crate::names::php_symbol_key(class_name)
+        .bytes()
+        .map(|byte| format!("{:02x}", byte))
+        .collect();
+    format!("_elephc_refl_shared_{}", key)
+}
+
+/// Leaves an OWNED shallow `ReflectionClass` for `class_name` in the integer result register.
+///
+/// Every method, property, and parameter reflector carries a declaring-class (or parameter
+/// type-class) `ReflectionClass`. Building a fresh one per member made a single
+/// `new ReflectionClass(...)` allocate O(members) copies of the class's default and static
+/// property arrays — megabytes for a class like `mysqli`. Inside a top-level owner the first
+/// member builds it and parks it in a static slot; the rest retain that same object, so
+/// `getDeclaringClass()` of two members of one class returns one shared reflector (php
+/// returns equal, separately allocated ones). The slot holds one reference until
+/// `release_shared_reflection_classes` drops it, and is checked at runtime because the owner's
+/// runtime-class dispatch emits several candidate paths.
+pub(super) fn emit_shared_shallow_reflection_class(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+) -> Result<()> {
+    let metadata = reflection_shallow_class_metadata_for_name(ctx, class_name)?;
+    let Some(cache) = ctx.reflection_class_cache.as_mut() else {
+        return emit_reflection_owner_object(ctx, "ReflectionClass", &metadata);
+    };
+    if !cache.iter().any(|cached| cached == class_name) {
+        cache.push(class_name.to_string());
+    }
+    let slot = shared_reflection_class_slot(class_name);
+    ctx.data.add_comm(slot.clone(), 8);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_ty = PhpType::Object("ReflectionClass".to_string());
+    let build = ctx.next_label("refl_shared_class_build");
+    let done = ctx.next_label("refl_shared_class_done");
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &slot, 0);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &build);
+    abi::emit_incref_if_refcounted(ctx.emitter, &object_ty);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&build);
+    emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)?;
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, &slot, 0);
+    abi::emit_incref_if_refcounted(ctx.emitter, &object_ty);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Runs `emit` as one top-level Reflection owner materialization, sharing the shallow
+/// `ReflectionClass` reflectors its members need and releasing them afterwards. Nested calls
+/// join the enclosing scope.
+pub(super) fn with_shared_reflection_classes(
+    ctx: &mut FunctionContext<'_>,
+    emit: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
+) -> Result<()> {
+    if ctx.reflection_class_cache.is_some() {
+        return emit(ctx);
+    }
+    ctx.reflection_class_cache = Some(Vec::new());
+    let outcome = emit(ctx);
+    let used = ctx.reflection_class_cache.take().unwrap_or_default();
+    outcome?;
+    if used.is_empty() {
+        return Ok(());
+    }
+    // The owner object is the result; keep it while the shared slots are released.
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_ty = PhpType::Object("ReflectionClass".to_string());
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    for class_name in used {
+        let slot = shared_reflection_class_slot(&class_name);
+        let skip = ctx.next_label("refl_shared_class_unused");
+        abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &slot, 0);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &skip);
+        abi::emit_decref_if_refcounted(ctx.emitter, &object_ty);
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+        abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, &slot, 0);
+        ctx.emitter.label(&skip);
+    }
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    Ok(())
+}
+
 /// Replaces a member reflector's private declaring-class slot with `ReflectionClass|false`.
 pub(super) fn emit_reflection_declaring_class_property(
     ctx: &mut FunctionContext<'_>,
@@ -206,9 +291,7 @@ pub(super) fn emit_reflection_declaring_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(declaring_class_name) = declaring_class_name {
-        let declaring_metadata =
-            reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
+        emit_shared_shallow_reflection_class(ctx, declaring_class_name)?;
         emit_box_current_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),

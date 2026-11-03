@@ -639,11 +639,12 @@ foreach (["mysqli", "mysqli_stmt", "mysqli_result", "AppDb"] as $class) {
 echo "|";
 echo (new ReflectionClass("mysqli"))->hasMethod("__destruct") ? "D" : "-";
 echo (new ReflectionClass("mysqli_stmt"))->hasMethod("__destruct") ? "D" : "-";
+echo (new ReflectionClass("AppDb"))->hasMethod("__destruct") ? "D" : "-";
 echo "|", count(get_class_methods("mysqli_stmt")), ",", count(get_class_methods("mysqli_result"));
 echo ",", method_exists("AppDb", "query") ? "q" : "?";
 "#,
     );
-    assert_eq!(out, "----------|--|20,16,q");
+    assert_eq!(out, "----------|---|20,16,q");
 }
 
 /// The counters php declares `int|string` (`insert_id`, `affected_rows`, `num_rows`)
@@ -659,4 +660,30 @@ echo "|", (new ReflectionFunction("mysqli_affected_rows"))->getReturnType();
 "#,
     );
     assert_eq!(out, "string|int|string|int|string|int");
+}
+
+/// One `ReflectionClass` per mysqli class (and a user subclass) fits the 8 MB test heap:
+/// every method, parameter, and property reflector shares its declaring class's shallow
+/// `ReflectionClass` instead of allocating a copy of mysqli's default/static property
+/// arrays per member (about 3.7 MB for `mysqli` alone before).
+#[test]
+fn test_mysqli_reflection_fits_a_small_heap() {
+    let out = compile_and_run(
+        r#"<?php
+$mode = MYSQLI_ASSOC;
+class AppDb extends mysqli {}
+$before = memory_get_usage();
+$classes = [
+    new ReflectionClass("mysqli"),
+    new ReflectionClass("mysqli_stmt"),
+    new ReflectionClass("mysqli_result"),
+    new ReflectionClass("AppDb"),
+];
+$used = memory_get_usage() - $before;
+$query = $classes[3]->getMethod("query");
+echo $query->getDeclaringClass()->getName(), "|", $query->getParameters()[0]->getDeclaringClass()->getName();
+echo "|", $used < 2000000 ? "small" : "big:" . $used;
+"#,
+    );
+    assert_eq!(out, "mysqli|mysqli|small");
 }
