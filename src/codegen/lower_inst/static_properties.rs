@@ -382,9 +382,12 @@ fn emit_direct_load_static_property_result(
     if slot.is_declared {
         emit_uninitialized_static_property_guard(ctx, slot);
     }
-    abi::emit_load_symbol_to_result(ctx.emitter, &slot.symbol, &slot.php_type);
     if slot.php_type.codegen_repr() == PhpType::Mixed {
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
+        crate::codegen_support::runtime::reference_cells::load_mixed_static_value(
+            ctx.emitter, &slot.symbol, ctx.module.required_runtime_features.native_reference_validation,
+        );
+    } else {
+        abi::emit_load_symbol_to_result(ctx.emitter, &slot.symbol, &slot.php_type);
     }
 }
 

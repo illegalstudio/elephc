@@ -90,3 +90,54 @@ fn initialize_boxed_binding(asm: &mut String, value: i64) {
     instruction(asm, "str x0, [x9]", "mov QWORD PTR [r10], rax");
     instruction(asm, "str xzr, [x9, #8]", "mov QWORD PTR [r10 + 8], 0");
 }
+
+
+/// Native inherited and Reflection readers observe the value inside a promoted static cell.
+#[test]
+fn test_native_static_reference_cell_readers_preserve_value_and_owner() {
+    let dir = FixtureDir(make_cli_test_dir("elephc_native_static_reference_readers"));
+    let source = r#"<?php
+class NativeStaticReadBase { public static mixed $value = 0; }
+class NativeStaticReadChild extends NativeStaticReadBase {}
+function nativeStaticReadViews(): void {
+    echo NativeStaticReadBase::$value, '|', NativeStaticReadChild::$value, '|';
+    $class = new ReflectionClass(NativeStaticReadChild::class);
+    echo $class->getStaticPropertyValue('value'), '|';
+    $values = $class->getStaticProperties(); echo $values['value'], '|';
+}
+if ($argc < 0) { nativeStaticReadViews(); }
+"#;
+    let (user, runtime, requirements) = without_ir_opt(||
+        compile_source_to_asm_with_native_reference_validation(source, &dir.0, 65_536, true));
+    let symbol = elephc::names::static_property_symbol("NativeStaticReadBase", "value");
+    let mut asm = String::new();
+    instruction(&mut asm, "sub sp, sp, #32", "sub rsp, 32");
+    instruction(&mut asm, "mov x0, #0", "xor eax, eax");
+    instruction(&mut asm, "mov x1, #41", "mov edi, 41");
+    instruction(&mut asm, "mov x2, #0", "xor esi, esi");
+    call(&mut asm, "__rt_mixed_from_value");
+    address(&mut asm, "x9", "r10", &symbol);
+    instruction(&mut asm, "str x0, [x9]", "mov QWORD PTR [r10], rax");
+    instruction(&mut asm, "str xzr, [x9, #8]", "mov QWORD PTR [r10 + 8], 0");
+    address(&mut asm, "x0", "rdi", &symbol);
+    call(&mut asm, "__rt_reference_static_mixed_promote");
+    store(&mut asm, 8);
+    call(&mut asm, &elephc::names::function_symbol("nativeStaticReadViews"));
+    // Borrowed readers and Reflection snapshots cannot consume the binding's owner.
+    address(&mut asm, "x0", "rdi", &symbol);
+    call(&mut asm, "__rt_reference_static_mixed_payload");
+    instruction(&mut asm, "ldr x9, [sp, #8]", "mov r10, QWORD PTR [rsp + 8]");
+    instruction(&mut asm, "cmp x0, x9", "cmp rax, r10");
+    instruction(&mut asm, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    address(&mut asm, "x0", "rdi", &symbol);
+    call(&mut asm, "__rt_reference_static_mixed_release");
+    expect_zero(&mut asm, &symbol);
+    expect_zero(&mut asm, "_rt_reference_validation_pins_top");
+    expect_zero(&mut asm, "_exc_value");
+    expect_zero(&mut asm, "_gc_live");
+    append_status_output(&mut asm, 32);
+    let user = inject_main_exit_harness(&user, &asm);
+    let runtime = runtime_obj_for_asm(&runtime);
+    let output = assemble_and_run(&user, &runtime, &dir.0, &requirements, &default_link_paths(), &[]);
+    assert_eq!(output, "41|41|41|41|1");
+}

@@ -1749,9 +1749,13 @@ returns either the raw binding or the managed cell as a borrowed payload address
 `__rt_reference_static_mixed_release` clears the binding and layout word, restores
 the uninitialized marker and removes its weak type source before retiring the
 cell. Escaped native aliases keep that cell alive independently. The BSS address
-itself never has a managed header. These primitives have explicit ABI coverage;
-ordinary static lowering keeps the raw layout until all readers, writers and
-teardown consumers are connected.
+itself never has a managed header. With the capability selected, native,
+inherited, eval and Reflection reads resolve this layout before exposing the
+current borrowed PHP child. Process shutdown, request reset and application
+shutdown retire the static binding through its cell-aware release helper.
+Application root discovery already borrows the actual low-word owner, which is
+the cell for a promoted binding. Automatic promotion remains deferred until
+static writers and reference exports also use the validated publication path.
 
 A `buffer<T>`, `ptr` or `ptr<T>` static property keeps its handle or address in the slot's low word, as an instance property does. The word owns nothing: overwriting it frees no buffer, and shutdown releases nothing for it. Element writes (`Class::$buf[$i] = $v`) resolve the handle the slot holds and store into the buffer payload without writing the slot back. A typed pointer slot whose default is `null` is initialized to the zero word, while a typed buffer or pointer slot without a default carries the uninitialized marker in its high word until the first store.
 

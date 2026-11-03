@@ -912,6 +912,12 @@ fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>, properties: 
         let result = abi::int_result_reg(ctx.emitter);
         let scratch = abi::secondary_scratch_reg(ctx.emitter);
         ctx.emitter.comment(&format!("epilogue cleanup static property {symbol}"));
+        if ctx.module.required_runtime_features.native_reference_validation && ty == PhpType::Mixed {
+            abi::emit_symbol_address(ctx.emitter, result, &symbol);
+            abi::emit_unary_cleanup_preserving_exception(ctx.emitter,
+                "__rt_reference_static_mixed_release", result);
+            continue;
+        }
         abi::emit_load_symbol_to_reg(ctx.emitter, result, &symbol, 8);
         abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
         match ctx.emitter.target.arch {

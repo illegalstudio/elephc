@@ -142,4 +142,30 @@ mod tests {
             assert!(!assembly.contains(&static_property_symbol("StaticReferenceBase", "union")), "{name}: union activation requires its constraint ledger");
         }
     }
+
+    /// Eval reads resolve the optional cell layout without changing the ordinary raw getter ABI.
+    #[test]
+    fn mixed_static_eval_readers_resolve_managed_bindings_on_every_target() {
+        let source = "<?php class EvalStaticCellRead { public static mixed $value = 41; }";
+        let tokens = crate::lexer::tokenize(source).unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let checked = crate::types::check(&program).unwrap();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for native_validation in [false, true] {
+                let mut module = Module::new(target);
+                module.required_runtime_features.native_reference_validation = native_validation;
+                module.class_infos.insert("EvalStaticCellRead".into(), checked.classes["EvalStaticCellRead"].clone());
+                let slots = collect_eval_static_property_slots(&module);
+                let mut emitter = Emitter::new(target);
+                emit_static_property_get_helper(&module, &mut emitter, &mut DataSection::new(), &slots);
+                let assembly = emitter.output();
+                assert_eq!(assembly.contains("__rt_reference_static_mixed_payload"), native_validation,
+                    "{name}: optional layout selection must match the linked runtime");
+                assert!(assembly.contains("__rt_mixed_deref"), "{name}: expose the wrapper's current child");
+                assert!(assembly.contains("__rt_incref"), "{name}: eval owns the returned value independently");
+            }
+        }
+    }
+
 }

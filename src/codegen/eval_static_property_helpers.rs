@@ -598,7 +598,7 @@ fn emit_aarch64_get_slot_bodies(
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "get"));
         emit_aarch64_uninitialized_guard(emitter, slot, done_label);
-        emit_aarch64_box_static_property_slot(emitter, slot);
+        emit_aarch64_box_static_property_slot(module, emitter, slot);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the static property value
     }
 }
@@ -613,7 +613,7 @@ fn emit_x86_64_get_slot_bodies(
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "get"));
         emit_x86_64_uninitialized_guard(emitter, slot, done_label);
-        emit_x86_64_box_static_property_slot(emitter, slot);
+        emit_x86_64_box_static_property_slot(module, emitter, slot);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the static property value
     }
 }
@@ -756,7 +756,7 @@ fn emit_x86_64_uninitialized_guard(
 }
 
 /// Boxes an ARM64 static property symbol payload into a Mixed cell.
-fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
+fn emit_aarch64_box_static_property_slot(module: &Module, emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
     match slot.ty.codegen_repr() {
         // A `?ptr<T>` word boxes by the declared union in `slot.ty`, address 0 as PHP null.
         PhpType::Int
@@ -791,8 +791,9 @@ fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStati
                 "{}_mixed_done",
                 slot_body_label_raw(slot, "get")
             );
-            abi::emit_load_symbol_to_reg(emitter, "x0", &slot.symbol, 0);
-            abi::emit_call_label(emitter, "__rt_mixed_deref");
+            crate::codegen_support::runtime::reference_cells::load_mixed_static_value(
+                emitter, &slot.symbol, module.required_runtime_features.native_reference_validation,
+            );
             emitter.instruction(&format!("cbz x0, {}", null_label));            // null static storage reads as PHP null
             if slot.ty.is_php_array() {
                 emitter.instruction("bl __rt_mixed_clone");                     // detach the array zval so eval writes preserve static COW aliases
@@ -813,7 +814,7 @@ fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStati
 }
 
 /// Boxes an x86_64 static property symbol payload into a Mixed cell.
-fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
+fn emit_x86_64_box_static_property_slot(module: &Module, emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
     match slot.ty.codegen_repr() {
         // A `?ptr<T>` word boxes by the declared union in `slot.ty`, address 0 as PHP null.
         PhpType::Int
@@ -848,8 +849,9 @@ fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStatic
                 "{}_mixed_done_x",
                 slot_body_label_raw(slot, "get")
             );
-            abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
-            abi::emit_call_label(emitter, "__rt_mixed_deref");
+            crate::codegen_support::runtime::reference_cells::load_mixed_static_value(
+                emitter, &slot.symbol, module.required_runtime_features.native_reference_validation,
+            );
             emitter.instruction("test rax, rax");                               // check whether static storage holds a Mixed cell
             emitter.instruction(&format!("jz {}", null_label));                 // null static storage reads as PHP null
             if slot.ty.is_php_array() {

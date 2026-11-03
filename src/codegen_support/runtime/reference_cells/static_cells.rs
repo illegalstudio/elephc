@@ -17,6 +17,20 @@ pub(crate) const LAYOUT_OFFSET: usize = 16;
 /// Required static storage size, including the separate promoted-layout word.
 pub(crate) const BINDING_BYTES: usize = LAYOUT_OFFSET + 8;
 
+/// Loads the borrowed PHP value owned by a raw or promoted static Mixed binding.
+/// The promoted cell owns its wrapper; readers expose the current child without retaining it.
+pub(crate) fn load_mixed_value(emitter: &mut Emitter, symbol: &str, native_validation: bool) {
+    let result = abi::int_result_reg(emitter);
+    if native_validation {
+        abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), symbol);
+        abi::emit_call_label(emitter, "__rt_reference_static_mixed_payload");
+        abi::emit_load_from_address(emitter, result, result, 0);
+    } else {
+        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
+    }
+    abi::emit_call_label(emitter, "__rt_mixed_deref");
+}
+
 /// Emits the optional static-binding ABI without changing ordinary symbol-backed storage.
 pub(super) fn emit(emitter: &mut Emitter) {
     emit_payload(emitter);
@@ -180,4 +194,36 @@ mod tests {
             assert!(detached < unbind && unbind < retire, "{name}: detachment and weak metadata precede PHP cleanup");
         }
     }
+
+    /// Native and Reflection reads share a borrowed payload, while main cleanup retires the binding.
+    #[test]
+    fn static_mixed_reference_readers_and_main_cleanup_cover_every_target() {
+        let source = r#"<?php
+class StaticCellReadBase { public static mixed $value = 41; }
+class StaticCellReadChild extends StaticCellReadBase {}
+function staticCellReadViews(): void {
+    echo StaticCellReadBase::$value, '|', StaticCellReadChild::$value, '|';
+    $class = new ReflectionClass(StaticCellReadChild::class);
+    echo $class->getStaticPropertyValue('value'), '|';
+    $values = $class->getStaticProperties(); echo $values['value'], '|';
+}
+staticCellReadViews();
+"#;
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut module = crate::ir_lower::tests::lower_source_at_for_target(
+                source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+            );
+            crate::ir_lower::enable_native_reference_validation(&mut module).unwrap();
+            crate::ir::validate_module(&module).unwrap();
+            let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            assert!(assembly.matches("__rt_reference_static_mixed_payload").count() >= 4,
+                "{name}: native, inherited and both Reflection views resolve the binding");
+            assert!(assembly.contains("__rt_reference_static_mixed_release"),
+                "{name}: main cleanup must release the managed cell rather than its child box");
+            assert!(assembly.contains("__rt_cleanup_preserve_exception"),
+                "{name}: a throwing child cannot skip later static owners");
+        }
+    }
+
 }

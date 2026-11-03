@@ -35,7 +35,7 @@ mod validation_publish;
 pub(super) use validation_publish::emit as emit_validation_publish;
 mod source_lifecycle;
 mod static_cells;
-pub(crate) use static_cells::BINDING_BYTES as STATIC_BINDING_BYTES;
+pub(crate) use static_cells::{BINDING_BYTES as STATIC_BINDING_BYTES, load_mixed_value as load_mixed_static_value};
 pub(super) use source_lifecycle::emit as emit_source_lifecycle;
 pub(super) use source_lifecycle::require_success as require_source_success;
 pub(crate) use validation_pins::subtract as subtract_validation_pins;

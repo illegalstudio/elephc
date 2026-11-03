@@ -305,7 +305,13 @@ pub(super) fn emit_reflection_static_property_array(
         let skip_label = emit_skip_if_static_property_uninitialized(ctx, member);
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         let symbol = static_property_symbol(&member.declaring_class_name, &member.name);
-        abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &member.php_type);
+        if member.php_type.codegen_repr() == PhpType::Mixed {
+            crate::codegen_support::runtime::reference_cells::load_mixed_static_value(
+                ctx.emitter, &symbol, ctx.module.required_runtime_features.native_reference_validation,
+            );
+        } else {
+            abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &member.php_type);
+        }
         let storage_type = crate::types::mixed_box_php_type(&member.php_type);
         if matches!(storage_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             // Boxing an existing Mixed cell is a no-op. The metadata hash needs its own

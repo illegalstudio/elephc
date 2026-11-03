@@ -23,8 +23,8 @@
 //!   the static's init marker / typed-property sentinel so an uninitialized slot
 //!   (all-zero `.comm`) or a sentinel-as-pointer is never released.
 //! - Function statics are zeroed (value + marker) so their initializers re-run.
-//!   Static properties are NOT zeroed: the handler body re-runs their
-//!   initializers after the reset, which rewrites both value and sentinel.
+//!   Raw static properties retain their old words until their initializers re-run.
+//!   Optional managed Mixed bindings detach their cell and restore the uninitialized marker.
 
 use crate::codegen::abi;
 use crate::codegen::data_section::{DataSection, StaticLocalRecord};
@@ -67,7 +67,7 @@ impl LabelGen {
 ///
 /// Always emitted in `--web` builds, even without statics, to reset shared request state.
 /// Runs before the handler body's static-property/enum initializers, so it must
-/// only RELEASE the previous refcounted property value, not rewrite it.
+/// release previous owners; managed bindings also detach their cell before PHP cleanup.
 pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     if emitter.target.arch == Arch::AArch64 {
         emitter.raw(".align 2");
@@ -102,7 +102,8 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     }
     let (static_properties, hosting_tables) = static_properties_hosting_last(module);
     for (symbol, php_type) in static_properties {
-        emit_static_property_release(emitter, &symbol, &php_type, &mut labels);
+        emit_static_property_release(emitter, &symbol, &php_type, &mut labels,
+            module.required_runtime_features.native_reference_validation);
     }
     for name in &module.data.global_names {
         if !superglobals::is_superglobal(name) && !module.extern_globals.contains_key(name) {
@@ -123,7 +124,8 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
         abi::emit_call_label(emitter, &symbol);
     }
     for (symbol, php_type) in hosting_tables {
-        emit_static_property_release(emitter, &symbol, &php_type, &mut labels);
+        emit_static_property_release(emitter, &symbol, &php_type, &mut labels,
+            module.required_runtime_features.native_reference_validation);
     }
     // Last owner teardown, as in the main epilogue: a destructor above, or an engine object a
     // hosting table released, may still reach C code that calls a saved callback.
@@ -578,6 +580,36 @@ mod handler_reset_tests {
             assert!(inventory < heap, "{target:?}: handlers need the live request heap");
         }
     }
+
+    /// Request and application shutdown retire managed static cells before resetting their heap.
+    #[test]
+    fn web_static_reference_bindings_retire_on_every_target() {
+        let source = "<?php class WebStaticCellOwner { public static mixed $value = 41; } echo WebStaticCellOwner::$value;";
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            for application in [false, true] {
+                let mut module = crate::ir_lower::tests::lower_source_at_for_target(
+                    source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+                );
+                module.required_runtime_features.native_reference_validation = true;
+                module.web_application = application;
+                let mut emitter = Emitter::new(target);
+                emit_web_reset(&mut emitter, &module, &DataSection::new());
+                let assembly = emitter.output();
+                let reset_release = assembly.find("__rt_reference_static_mixed_release").unwrap();
+                let registry_reset = assembly.find("__elephc_reference_sources_reset_v1").unwrap();
+                assert!(reset_release < registry_reset, "{name}: detach bindings before registry and arena reset");
+                if application {
+                    let shutdown = target.extern_symbol("elephc_web_application_shutdown_cleanup");
+                    let body = assembly.split_once(&format!("{shutdown}:")).unwrap().1;
+                    assert!(body.contains("__rt_reference_static_mixed_release"),
+                        "{name}: final application cleanup owns the managed static cell");
+                    assert!(body.contains("__rt_cleanup_call"), "{name}: contain each child destructor");
+                }
+            }
+        }
+    }
+
 }
 
 /// Resets one function static local: skips uninitialized slots, releases any
@@ -606,14 +638,21 @@ fn emit_static_local_reset(emitter: &mut Emitter, record: &StaticLocalRecord, la
 /// zeroing it: the handler body's re-run initializer overwrites both the value
 /// and the typed-property sentinel after this reset, so only the old owner needs
 /// releasing to avoid a per-request leak. Skips the uninitialized sentinel so a
-/// sentinel is never released as if it were a heap pointer.
+/// sentinel is never released as if it were a heap pointer. Optional managed Mixed
+/// bindings instead detach their cell and restore the marker before its child cleanup.
 fn emit_static_property_release(
     emitter: &mut Emitter,
     symbol: &str,
     php_type: &PhpType,
     labels: &mut LabelGen,
+    native_validation: bool,
 ) {
     let ty = php_type.codegen_repr();
+    if native_validation && ty == PhpType::Mixed {
+        abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), symbol);
+        abi::emit_call_label(emitter, "__rt_reference_static_mixed_release");
+        return;
+    }
     let skip_label = labels.next("skip_prop");
     emitter.comment(&format!("release previous static property value {}", symbol));
     // Typed static properties carry an uninitialized sentinel in the high word
