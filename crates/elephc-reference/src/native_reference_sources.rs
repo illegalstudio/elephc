@@ -66,6 +66,17 @@ impl NativeReferenceTypeSources {
         Some(token)
     }
 
+    /// Moves an existing physical declaration to replacement storage without retaining its old cell.
+    fn rebind(&mut self, binding: usize, cell: usize) -> Option<()> {
+        if binding == 0 || cell == 0 { return None; }
+        let validator = self.bindings.get(&binding).and_then(|token| self.sources.get(token))
+            .map(|source| source.validator);
+        match validator {
+            Some(validator) => self.bind(binding, cell, validator).map(|_| ()),
+            None => Some(()),
+        }
+    }
+
     /// Retires only the selected physical property before its displaced cell can run destructors.
     fn unbind(&mut self, binding: usize) -> Option<()> {
         let Some(token) = self.bindings.get(&binding).copied() else { return Some(()); };
@@ -160,6 +171,16 @@ pub(super) fn snapshot_reference_sources(reference: usize) -> Vec<NativeReferenc
 pub extern "C" fn __elephc_reference_sources_bind_v1(binding: usize, cell: usize, validator: usize) -> u64 {
     std::panic::catch_unwind(|| SOURCES.with(|sources| sources.borrow_mut().bind(binding, cell, validator)))
         .ok().flatten().unwrap_or(0)
+}
+
+/// Moves a registered property to its newly published cell, preserving the immutable declaration.
+/// Unregistered storage remains unregistered and retains no native addresses.
+#[no_mangle]
+pub extern "C" fn __elephc_reference_sources_rebind_v1(binding: usize, cell: usize) -> i32 {
+    match std::panic::catch_unwind(|| SOURCES.with(|sources| sources.borrow_mut().rebind(binding, cell))) {
+        Ok(Some(())) => 0,
+        _ => -1,
+    }
 }
 
 /// Removes one binding without removing another clone or property that shares the same cell.
@@ -290,6 +311,38 @@ mod tests {
         assert_eq!(sources.next(0).unwrap().token, cloned);
         sources.unbind(20).unwrap();
         assert!(sources.next(0).is_none());
+    }
+
+    /// Unset replacement preserves the physical declaration while retiring only its old generation.
+    #[test]
+    fn native_reference_source_rebind_moves_only_the_selected_property() {
+        let mut sources = NativeReferenceTypeSources::default();
+        let first = sources.bind(10, 100, 1000).unwrap();
+        let peer = sources.bind(20, 100, 2000).unwrap();
+        sources.set_reference(100, 500).unwrap();
+        sources.rebind(10, 200).unwrap();
+        let replacement = sources.next_indexed(sources.cells.get(&200), 0).unwrap();
+        assert!(replacement.token > peer && replacement.token != first);
+        assert_eq!(replacement.validator, 1000);
+        assert_eq!(sources.next_indexed(sources.references.get(&500), 0).unwrap().token, peer);
+        assert_eq!(sources.references[&500].len(), 1);
+        sources.rebind(20, 300).unwrap();
+        assert!(!sources.cell_references.contains_key(&100));
+        assert!(!sources.references.contains_key(&500));
+    }
+
+    /// Invalid, unknown and exhausted replacement attempts never erase the previous constraint.
+    #[test]
+    fn native_reference_source_rebind_preserves_constraints_on_failure() {
+        let mut sources = NativeReferenceTypeSources::default();
+        let token = sources.bind(10, 100, 1000).unwrap();
+        assert_eq!(sources.rebind(999, 300), Some(()));
+        assert!(!sources.cells.contains_key(&300));
+        assert_eq!(sources.rebind(10, 0), None);
+        sources.next_token = u64::MAX;
+        assert_eq!(sources.rebind(10, 200), None);
+        assert_eq!(sources.next(0).unwrap().token, token);
+        assert_eq!(sources.next(0).unwrap().cell, 100);
     }
 
     /// Rebinding and arena reuse never reactivate a source copied before PHP re-entry.

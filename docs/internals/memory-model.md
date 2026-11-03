@@ -598,7 +598,9 @@ physical shape required by scalar readers.
 The native type-source metadata ABI identifies each physical property binding
 with a distinct generation token. Clone bindings remain separate even when they
 name the same cell and validator. Rebinding, unset and arena reset invalidate old
-tokens. Native iteration copies records and checks their liveness after PHP
+tokens. The native rebind ABI preserves a registered binding's immutable
+declaration while moving it to a newly published cell, without registering
+unknown storage or retaining the displaced cell. Native iteration copies records and checks their liveness after PHP
 callbacks, rather than keeping an iterator across re-entry. Records own and
 dereference no receiver, cell, value or validator address. Binding hooks must
 remove each source after the receiver destructor and before releasing its cell;
