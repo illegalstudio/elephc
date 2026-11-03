@@ -7,14 +7,21 @@ http:
       entryPoints:
         - websecure
       service: app
+      middlewares:
+        - forwarded
       tls:
         certResolver: le
+  middlewares:
+    forwarded:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Port: "443"
   services:
     app:
       loadBalancer:
         healthCheck:
           path: /healthz
-          intervalSeconds: 10
-          timeoutSeconds: 3
+          interval: 10s
+          timeout: 3s
         servers:
           - url: "http://127.0.0.1:8080"

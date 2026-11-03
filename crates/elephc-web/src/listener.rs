@@ -12,13 +12,17 @@
 //!   balance `accept()` across AF_UNIX listeners.
 //! - The master marks the UDS descriptor `FD_CLOEXEC`, so exec'd handler and
 //!   user subprocesses cannot retain it; `fork` still copies it into workers.
+//!   Worker clones are marked close-on-exec again after `try_clone()`.
+//! - The socket file is created group-readable/writable only (0660); the edge
+//!   must run under the same group as the origin.
 //! - A UDS peer has no IP address: `REMOTE_ADDR`/`SERVER_ADDR` are empty and
 //!   `REMOTE_PORT`/`SERVER_PORT` are zero.
 
 use std::io;
 use std::net::SocketAddr;
 use std::os::fd::{AsRawFd, RawFd};
-use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -117,7 +121,11 @@ impl ListenSource {
                         "the master did not create a Unix listener",
                     )
                 })?;
-                Ok(Self::Unix(listener.try_clone()?))
+                let clone = listener.try_clone()?;
+                // `try_clone` must not leave an exec-inheritable listener in a
+                // worker that may spawn PHP subprocesses.
+                set_close_on_exec(clone.as_raw_fd())?;
+                Ok(Self::Unix(clone))
             }
         }
     }
@@ -301,7 +309,8 @@ impl PeerInfo {
 /// Binds the master's Unix listener, replacing a stale socket file.
 ///
 /// A regular file or directory at `path` is refused: only a previous socket is
-/// removed, so a typo cannot delete arbitrary files.
+/// removed, so a typo cannot delete arbitrary files. A socket that still
+/// accepts connections is not stale and is refused instead of stolen.
 pub(crate) fn bind_unix_master(path: &Path) -> io::Result<std::os::unix::net::UnixListener> {
     remove_stale_socket(path)?;
     let listener = std::os::unix::net::UnixListener::bind(path)?;
@@ -310,6 +319,12 @@ pub(crate) fn bind_unix_master(path: &Path) -> io::Result<std::os::unix::net::Un
         return Err(error);
     }
     if let Err(error) = set_close_on_exec(listener.as_raw_fd()) {
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+    // The socket is the origin's trust boundary for `--trusted-proxy unix`.
+    // Keep it owner/group read-write, never world-accessible.
+    if let Err(error) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660)) {
         let _ = std::fs::remove_file(path);
         return Err(error);
     }
@@ -325,10 +340,26 @@ pub(crate) fn remove_unix_socket(path: &Path) {
     }
 }
 
-/// Removes a previous socket file, refusing a non-socket path.
+/// Removes a previous socket file, refusing a non-socket or live-socket path.
 fn remove_stale_socket(path: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_socket() => std::fs::remove_file(path),
+        Ok(metadata) if metadata.file_type().is_socket() => {
+            match UnixStream::connect(path) {
+                Ok(_) => Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("socket is already in use: {}", path.display()),
+                )),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+                    ) =>
+                {
+                    std::fs::remove_file(path)
+                }
+                Err(error) => Err(error),
+            }
+        }
         Ok(_) => Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             format!(

@@ -14,7 +14,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
-RUN cargo build --release --bin elephc \
+RUN cargo build --release --locked --bin elephc \
     && ./target/release/elephc --web examples/web-edge/main.php
 
 FROM debian:bookworm-slim
@@ -31,5 +31,5 @@ COPY --from=builder --chown=10001:10001 /src/examples/web-edge/main /usr/local/b
 ENV ELEPHC_SESSION_SAVE_PATH=/var/lib/elephc/sessions
 USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/app"]
-CMD ["--listen", "unix:/run/elephc/app.sock", "--workers", "4"]
+CMD ["--listen", "unix:/run/elephc/app.sock", "--workers", "4", "--trusted-proxy", "unix"]
 STOPSIGNAL SIGTERM

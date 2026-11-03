@@ -10,6 +10,7 @@
 //! - The guard reaps the master and its workers on success and on panic.
 
 use super::*;
+use std::os::unix::fs::PermissionsExt;
 
 /// Asserts a 200 response whose body contains `expected`.
 fn assert_uds_ok(response: &str, expected: &str) {
@@ -83,6 +84,47 @@ Worker::register(new Application());
     let response = http_get_unix(&path, "/hello");
     assert_uds_ok(&response, "application-uds:/hello");
     drop(server);
+    assert!(!path.exists());
+    let _ = fs::remove_dir_all(&fixture);
+}
+
+/// The origin creates the socket group-readable/writable, never world-accessible.
+#[test]
+fn web_uds_socket_is_not_world_accessible() {
+    let fixture = make_test_dir("web_uds_socket_mode");
+    let binary = compile_web_with_flags(&fixture, "<?php echo \"mode\";", "app", &[]);
+    let path = uds_path();
+    let server = spawn_server_unix(&binary, &path, "1", &[]);
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o660, "socket mode must stay owner/group only");
+    drop(server);
+    assert!(!path.exists());
+    let _ = fs::remove_dir_all(&fixture);
+}
+
+/// A live socket is not stale: a second master must refuse to steal the path.
+#[test]
+fn web_uds_refuses_a_live_socket() {
+    let fixture = make_test_dir("web_uds_live_socket");
+    let binary = compile_web_with_flags(&fixture, "<?php echo \"live\";", "app", &[]);
+    let path = uds_path();
+    let first = spawn_server_unix(&binary, &path, "1", &[]);
+    let output = output_with_timeout(
+        {
+            let mut command = Command::new(&binary);
+            command
+                .arg("--listen")
+                .arg(format!("unix:{}", path.display()));
+            command
+        },
+        Duration::from_secs(5),
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("already in use"), "{stderr}");
+    let response = http_get_unix(&path, "/");
+    assert_uds_ok(&response, "live");
+    drop(first);
     assert!(!path.exists());
     let _ = fs::remove_dir_all(&fixture);
 }

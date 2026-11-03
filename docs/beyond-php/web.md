@@ -376,8 +376,9 @@ A Unix-domain socket avoids exposing a TCP port:
 ./app --listen unix:/run/elephc/app.sock
 ```
 
-The socket follows the process umask, so run the origin and the edge under the
-same group (or a shared runtime directory). A Unix-domain peer has no IP
+The origin creates the socket with owner/group read-write permissions (`0660`),
+so run the origin and the edge under the same group (or a shared runtime
+directory). A Unix-domain peer has no IP
 address, so `REMOTE_ADDR` and `SERVER_ADDR` are empty and `REMOTE_PORT` /
 `SERVER_PORT` are `0`; use the `--trusted-proxy` section below to derive the
 client facts from forwarded headers.
@@ -408,8 +409,12 @@ present and well-formed. The chain is walked right-to-left, so trusted
 intermediates are skipped and the rightmost untrusted client address is used.
 `X-Forwarded-Proto` drives `REQUEST_SCHEME` and `HTTPS=on` (`HTTPS` is absent for
 HTTP), while `X-Forwarded-Port`, a forwarded `host=` port, or the scheme default
-(443/80) drives `SERVER_PORT`. `HTTP_HOST` is not rewritten; the raw
-`HTTP_FORWARDED` and `HTTP_X_FORWARDED_*` keys remain visible exactly as sent.
+(443/80) drives `SERVER_PORT`. `X-Forwarded-Host` is not used as a port
+authority. `HTTP_HOST` is not rewritten; the raw `HTTP_FORWARDED` and
+`HTTP_X_FORWARDED_*` keys remain visible exactly as sent. The edge must overwrite
+or remove client-supplied forwarded headers, including `X-Forwarded-Port`,
+`X-Forwarded-Host`, and `X-Real-IP`; otherwise a client can choose
+`SERVER_PORT` or the apparent authority.
 
 The closest PHP-FPM/nginx equivalents are:
 

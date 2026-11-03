@@ -150,6 +150,54 @@ fn trusted_proxy_request_applies_forwarded_headers() {
     let _ = fs::remove_dir_all(fixture);
 }
 
+/// Repeated X-Forwarded-For lines are merged; the appended proxy line wins.
+#[test]
+fn trusted_proxy_duplicate_forwarded_lines_use_the_rightmost_client() {
+    let (fixture, binary) = compile_app(None);
+    let (server, addr, _) = serve(&binary, Some("127.0.0.1/32"));
+    let response = http_request(
+        &addr,
+        "GET",
+        "/",
+        &[
+            ("X-Forwarded-For", "6.6.6.6"),
+            ("X-Forwarded-For", "203.0.113.9"),
+            ("X-Forwarded-Proto", "https"),
+        ],
+        "",
+    );
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let body = raw_response_body(&response);
+    assert_eq!(field(body, "REMOTE_ADDR"), "203.0.113.9");
+    assert_eq!(field(body, "REQUEST_SCHEME"), "https");
+    assert_eq!(field(body, "HTTPS"), "on");
+    drop(server);
+    let _ = fs::remove_dir_all(fixture);
+}
+
+/// A client-supplied X-Forwarded-Host port cannot override SERVER_PORT.
+#[test]
+fn trusted_proxy_x_forwarded_host_does_not_set_port() {
+    let (fixture, binary) = compile_app(None);
+    let (server, addr, _) = serve(&binary, Some("127.0.0.1/32"));
+    let response = http_request(
+        &addr,
+        "GET",
+        "/",
+        &[
+            ("X-Forwarded-For", "203.0.113.9"),
+            ("X-Forwarded-Proto", "https"),
+            ("X-Forwarded-Host", "example.com:8443"),
+        ],
+        "",
+    );
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let body = raw_response_body(&response);
+    assert_eq!(field(body, "SERVER_PORT"), "443");
+    drop(server);
+    let _ = fs::remove_dir_all(fixture);
+}
+
 /// RFC 7239 `Forwarded` has precedence and supplies the host port.
 #[test]
 fn trusted_proxy_forwarded_rfc7239_wins() {

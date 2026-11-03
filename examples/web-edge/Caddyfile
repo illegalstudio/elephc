@@ -11,6 +11,9 @@ example.com {
 
 	handle {
 		reverse_proxy unix//run/elephc/app.sock {
+			# Caddy sets X-Forwarded-For/Proto/Host but not Port; set it so a
+			# client-supplied X-Forwarded-Port cannot survive.
+			header_up X-Forwarded-Port {http.request.port}
 			health_uri /healthz
 			health_interval 10s
 		}

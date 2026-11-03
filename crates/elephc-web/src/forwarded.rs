@@ -11,7 +11,8 @@
 //! - Without `--trusted-proxy`, the socket peer is authoritative and the result
 //!   is byte-identical to the pre-feature behavior.
 //! - RFC 7239 `Forwarded` wins over `X-Forwarded-*` when present and
-//!   well-formed; malformed or obfuscated identifiers fall back to the peer.
+//!   well-formed; malformed or obfuscated identifiers fall back to the
+//!   `X-Forwarded-*` family when it is present, then to the peer.
 //! - The chain is walked right-to-left, so only trusted hops are skipped.
 
 use std::borrow::Cow;
@@ -75,7 +76,10 @@ impl TrustedProxies {
 
     /// Returns whether an IP falls inside one trusted network.
     fn is_trusted_ip(&self, ip: IpAddr) -> bool {
-        self.entries.iter().any(|entry| entry.matches(ip))
+        let normalized = normalize_ip(ip);
+        self.entries
+            .iter()
+            .any(|entry| entry.matches(ip) || entry.matches(normalized))
     }
 }
 
@@ -197,24 +201,25 @@ pub(crate) fn apply(
     if !trusted.is_trusted(peer) {
         return facts;
     }
-    if let Some(value) = header(headers, "forwarded") {
-        if let Some(forwarded) = ForwardedHeader::parse(value) {
+    if let Some(value) = header_joined(headers, "forwarded") {
+        if let Some(forwarded) = ForwardedHeader::parse(&value) {
             forwarded.apply(&mut facts, peer, trusted);
             return facts;
         }
     }
-    if let Some(value) = header(headers, "x-forwarded-for") {
-        let Some(nodes) = parse_xff(value) else {
-            return ConnectionFacts::from_peer(peer);
-        };
-        if let Some(node) = resolve_chain(&nodes, trusted, peer.remote_ip()) {
-            facts.remote_addr = node.ip.to_string();
-            if let Some(port) = node.port {
-                facts.remote_port = port;
+    if let Some(value) = header_joined(headers, "x-forwarded-for") {
+        // A malformed chain invalidates only the client address: a valid
+        // X-Forwarded-Proto/Port from the same trusted peer is still useful.
+        if let Some(nodes) = parse_xff(&value) {
+            if let Some(node) = resolve_chain(&nodes, trusted, peer.remote_ip()) {
+                facts.remote_addr = node.ip.to_string();
+                if let Some(port) = node.port {
+                    facts.remote_port = port;
+                }
             }
         }
     }
-    let scheme_forwarded = header(headers, "x-forwarded-proto")
+    let scheme_forwarded = header_last(headers, "x-forwarded-proto")
         .and_then(first_token)
         .and_then(normalize_scheme)
         .map(|scheme| {
@@ -222,9 +227,10 @@ pub(crate) fn apply(
             facts.https = scheme == "https";
         })
         .is_some();
-    let host_port = header(headers, "x-forwarded-host").and_then(host_port);
-    let forwarded_port = header(headers, "x-forwarded-port").and_then(parse_port);
-    if let Some(port) = forwarded_port.or(host_port) {
+    // `X-Forwarded-Host` is not a port authority. Only an explicit
+    // X-Forwarded-Port or an RFC 7239 `host=` parameter may set SERVER_PORT.
+    let forwarded_port = header_last(headers, "x-forwarded-port").and_then(parse_port);
+    if let Some(port) = forwarded_port {
         facts.server_port = port;
     } else if scheme_forwarded {
         if let Some(port) = default_port(&facts.request_scheme) {
@@ -251,7 +257,8 @@ impl ForwardedHeader {
         let mut scheme = None;
         let mut first_host_port = None;
         let mut saw_element = false;
-        for (index, element) in split_quoted(value, ',').into_iter().enumerate() {
+        let mut element_index = 0usize;
+        for element in split_quoted(value, ',') {
             if element.is_empty() {
                 continue;
             }
@@ -278,10 +285,11 @@ impl ForwardedHeader {
             if let Some(node) = node {
                 nodes.push(node);
             }
-            if index == 0 {
+            if element_index == 0 {
                 scheme = element_scheme;
                 first_host_port = element_host_port;
             }
+            element_index += 1;
         }
         saw_element.then_some(Self {
             nodes,
@@ -372,18 +380,61 @@ fn resolve_chain(
 ) -> Option<ForwardedNode> {
     for node in nodes.iter().rev() {
         if !trusted.is_trusted_ip(node.ip) {
-            return Some(*node);
+            return Some(ForwardedNode {
+                ip: normalize_ip(node.ip),
+                port: node.port,
+            });
         }
     }
-    fallback.map(|ip| ForwardedNode { ip, port: None })
+    fallback.map(|ip| ForwardedNode {
+        ip: normalize_ip(ip),
+        port: None,
+    })
 }
 
-/// Finds one header value case-insensitively.
-fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+/// Returns every value for `name`, in wire order, case-insensitively.
+fn header_values<'a>(
+    headers: &'a [(String, String)],
+    name: &'a str,
+) -> impl Iterator<Item = &'a str> + 'a {
     headers
         .iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .filter(move |(key, _)| key.eq_ignore_ascii_case(name))
         .map(|(_, value)| value.as_str())
+}
+
+/// Joins every occurrence of a comma-list header, as HTTP semantics require.
+fn header_joined<'a>(headers: &'a [(String, String)], name: &'a str) -> Option<String> {
+    let mut values = header_values(headers, name).filter(|value| !value.trim().is_empty());
+    let first = values.next()?;
+    let mut joined = String::from(first);
+    for value in values {
+        joined.push_str(", ");
+        joined.push_str(value);
+    }
+    Some(joined)
+}
+
+/// Returns the last occurrence of a scalar forwarded header.
+///
+/// The last line is the one added by the proxy closest to the origin; using
+/// the first line would let a client-supplied line win when an edge appends a
+/// separate header line instead of replacing the value.
+fn header_last<'a>(headers: &'a [(String, String)], name: &'a str) -> Option<&'a str> {
+    header_values(headers, name)
+        .filter(|value| !value.trim().is_empty())
+        .last()
+}
+
+/// Normalizes IPv4-mapped IPv6 addresses to their IPv4 form.
+fn normalize_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(address)),
+        IpAddr::V4(_) => ip,
+    }
 }
 
 /// Returns the first non-empty comma-separated token.
@@ -660,6 +711,124 @@ mod tests {
         assert_eq!(facts.request_scheme, "http");
         assert!(!facts.https);
         assert_eq!(facts.server_port, 80);
+    }
+
+    /// A malformed Forwarded header falls back to the X-Forwarded-* family.
+    #[test]
+    fn malformed_forwarded_falls_back_to_x_forwarded() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[
+                ("Forwarded", "for=unknown;proto=https"),
+                ("X-Forwarded-For", "203.0.113.9"),
+                ("X-Forwarded-Proto", "https"),
+            ]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "203.0.113.9");
+        assert_eq!(facts.request_scheme, "https");
+        assert!(facts.https);
+    }
+
+    /// Repeated comma-list headers are merged in wire order.
+    #[test]
+    fn duplicate_x_forwarded_for_lines_are_merged() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[
+                ("X-Forwarded-For", "6.6.6.6"),
+                ("X-Forwarded-For", "203.0.113.9"),
+            ]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "203.0.113.9");
+    }
+
+    /// Repeated scalar headers use the last line, added by the closest proxy.
+    #[test]
+    fn duplicate_scalar_headers_use_the_last_line() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[
+                ("X-Forwarded-Proto", "http"),
+                ("X-Forwarded-Proto", "https"),
+            ]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.request_scheme, "https");
+        assert!(facts.https);
+        assert_eq!(facts.server_port, 443);
+    }
+
+    /// Repeated RFC 7239 fields are merged before the chain walk.
+    #[test]
+    fn duplicate_forwarded_lines_are_merged() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[
+                ("Forwarded", "for=203.0.113.9;proto=https"),
+                ("Forwarded", "for=10.0.0.5"),
+            ]),
+            &trusted("127.0.0.1/32,10.0.0.0/8"),
+        );
+        assert_eq!(facts.remote_addr, "203.0.113.9");
+        assert_eq!(facts.request_scheme, "https");
+        assert!(facts.https);
+    }
+
+    /// A malformed XFF keeps the peer address but does not discard a valid proto.
+    #[test]
+    fn malformed_xff_keeps_valid_proto() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[
+                ("X-Forwarded-For", "203.0.113.9, unknown"),
+                ("X-Forwarded-Proto", "https"),
+            ]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "127.0.0.1");
+        assert_eq!(facts.request_scheme, "https");
+        assert!(facts.https);
+        assert_eq!(facts.server_port, 443);
+    }
+
+    /// A leading empty Forwarded element must not hide the first real element's proto.
+    #[test]
+    fn forwarded_leading_empty_element_preserves_proto() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[("Forwarded", ", for=203.0.113.9;proto=https")]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "203.0.113.9");
+        assert_eq!(facts.request_scheme, "https");
+        assert!(facts.https);
+    }
+
+    /// X-Forwarded-Host is not an authority for SERVER_PORT.
+    #[test]
+    fn x_forwarded_host_does_not_set_server_port() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[
+                ("X-Forwarded-Proto", "https"),
+                ("X-Forwarded-Host", "example.com:8443"),
+            ]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.server_port, 443);
+    }
+
+    /// IPv4-mapped IPv6 peers match an IPv4 trusted network.
+    #[test]
+    fn ipv4_mapped_peer_matches_ipv4_trusted_network() {
+        let facts = apply(
+            &peer("::ffff:127.0.0.1"),
+            &headers(&[("X-Forwarded-For", "203.0.113.9")]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "203.0.113.9");
     }
 
     /// The `unix` token trusts a Unix peer; an IP entry does not.

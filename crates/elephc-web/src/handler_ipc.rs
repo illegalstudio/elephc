@@ -27,7 +27,8 @@ const MAX_HEADER_COUNT: usize = 1024;
 /// Maximum response chunk written atomically by a handler child.
 pub(crate) const MAX_RESPONSE_CHUNK_BYTES: usize = 64 * 1024;
 /// Protocol marker that rejects accidental or stale request-channel payloads.
-const REQUEST_MAGIC: &[u8; 8] = b"ELEWEB01";
+/// Bumped when the request frame gained `request_scheme` and `https`.
+const REQUEST_MAGIC: &[u8; 8] = b"ELEWEB02";
 /// Response frame containing status and headers.
 const RESPONSE_START: u8 = 1;
 /// Response frame containing one bounded body chunk.

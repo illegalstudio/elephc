@@ -77,6 +77,7 @@ origin.
 ```text
 example.com {
     reverse_proxy unix//run/elephc/app.sock {
+        header_up X-Forwarded-Port {http.request.port}
         health_uri /healthz
         health_interval 10s
     }
@@ -84,35 +85,51 @@ example.com {
 ```
 
 Caddy sets `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host`
-automatically. Use `reverse_proxy 127.0.0.1:8080` for loopback TCP; the
+automatically; `X-Forwarded-Port` is set explicitly so a client-supplied value
+cannot survive. Use `reverse_proxy 127.0.0.1:8080` for loopback TCP; the
 container TCP variant mounts [`Caddyfile.tcp`](../../examples/web-edge/Caddyfile.tcp).
 
 ### nginx
 
 ```text
+upstream elephc_origin {
+    server unix:/run/elephc/app.sock;
+    keepalive 32;
+}
+
 location / {
-    proxy_pass http://unix:/run/elephc/app.sock:/;
+    proxy_pass http://elephc_origin;
     proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Forwarded-Port $server_port;
     proxy_set_header X-Real-IP $remote_addr;
 }
 ```
 
-Use `proxy_pass http://127.0.0.1:8080;` for loopback TCP. Keep
-`proxy_http_version 1.1` so the upstream connection is reusable.
+Use an `upstream` with `server 127.0.0.1:8080;` for loopback TCP. Keep
+`proxy_http_version 1.1` and `Connection ""` so the upstream connection is
+reusable.
 
 ### HAProxy
 
 ```text
+frontend https
+    bind :80
+    bind :443 ssl crt /etc/ssl/private/example.com.pem
+    http-request set-header X-Forwarded-For %[src]
+    http-request set-header X-Forwarded-Proto https if { ssl_fc }
+    http-request set-header X-Forwarded-Proto http if !{ ssl_fc }
+    http-request set-header X-Forwarded-Port %[dst_port]
+    http-request set-header X-Real-IP %[src]
+    default_backend elephc
+
 backend elephc
     option httpchk GET /healthz
     server app /run/elephc/app.sock
-    http-request set-header X-Forwarded-For %[src]
-    http-request set-header X-Forwarded-Proto https
-    http-request set-header X-Real-IP %[src]
 ```
 
 HAProxy does not serve static files; put a static server or object store beside
@@ -140,13 +157,17 @@ using this layout.
 ### Apache httpd
 
 ```text
-ProxyPass / unix:/run/elephc/app.sock|http://localhost/
-ProxyPassReverse / unix:/run/elephc/app.sock|http://localhost/
-RequestHeader set X-Forwarded-Proto "https"
-RequestHeader set X-Forwarded-Port "443"
+<VirtualHost *:443>
+    SSLEngine on
+    ProxyPass / unix:/run/elephc/app.sock|http://localhost/
+    ProxyPassReverse / unix:/run/elephc/app.sock|http://localhost/
+    RequestHeader set X-Forwarded-Proto "https"
+    RequestHeader set X-Forwarded-Port "443"
+</VirtualHost>
 ```
 
-Requires `mod_proxy`, `mod_proxy_http`, and `mod_headers`. Use
+Requires `mod_proxy`, `mod_proxy_http`, `mod_headers`, and `mod_ssl`. Redirect
+the `:80` vhost to HTTPS instead of marking plaintext requests as secure. Use
 `http://127.0.0.1:8080/` for loopback TCP.
 
 ### Ferron
@@ -193,7 +214,10 @@ drives `REQUEST_SCHEME`, `HTTPS=on` is exposed only for HTTPS, and
 visible in `$_SERVER`.
 
 Do not trust `0.0.0.0/0`. Use the narrowest CIDR that contains the proxy, or the
-`unix` token when the proxy connects over a socket. See
+`unix` token when the proxy connects over a socket. The edge must overwrite or
+remove client-supplied `Forwarded` / `X-Forwarded-*` values, including
+`X-Forwarded-Port`, `X-Forwarded-Host`, and `X-Real-IP`; passing them through
+lets a client choose `REMOTE_ADDR`, `REQUEST_SCHEME`, or `SERVER_PORT`. See
 [Trusted proxies](web.md#trusted-proxies) for the full PHP-FPM parity table.
 
 ## Health checks
@@ -213,11 +237,11 @@ separately.
 
 ## Socket permissions
 
-The origin creates the Unix socket with the process umask. Run the origin and
-the edge under the same group (or a shared runtime directory) and choose a
-matching umask. The systemd units use `RuntimeDirectory=elephc`,
-`RuntimeDirectoryMode=0750`, and `UMask=0007`; the compose stacks mount a shared
-named volume at `/run/elephc`.
+The origin creates the Unix socket with owner/group read-write permissions
+(`0660`), never world-accessible. Run the origin and the edge under the same
+group and make the runtime directory group-traversable. The systemd units use
+`RuntimeDirectory=elephc` and `RuntimeDirectoryMode=0750`; the compose stacks
+mount a shared named volume at `/run/elephc`.
 
 The master unlinks the socket on a clean shutdown and replaces a stale socket
 file at startup. A regular file or directory at the configured path is refused
@@ -229,7 +253,14 @@ The origin unit is
 [`examples/web-edge/deploy/systemd/elephc-app.service`](../../examples/web-edge/deploy/systemd/elephc-app.service).
 It runs the compiled binary with `--listen unix:/run/elephc/app.sock`, a shared
 `elephc-web` group, a private runtime directory, and `SIGTERM` as the stop
-signal.
+signal. Create the example accounts and group first:
+
+```bash
+groupadd -r elephc-web
+useradd -r -g elephc-web elephc
+useradd -r ferron
+useradd -r caddy
+```
 
 Edge units and notes:
 
@@ -261,7 +292,9 @@ The container files live in
   supervisord.
 - `compose.yml` runs the origin plus **Caddy** with a shared named volume for
   `/run/elephc`; only Caddy publishes ports 80/443.
-- `compose.nginx.yml` is the nginx variant.
+- `compose.nginx.yml` is the nginx variant; it uses an HTTP-only
+  `nginx.compose.conf` for local bring-up. The production `nginx.conf` expects
+  TLS certificates.
 - `compose.ferron.yml` is the Ferron 2.8.x variant.
 - `compose.tcp.yml` is the loopback-TCP variant: the edge shares the app's
   network namespace, the app listens on `127.0.0.1:8080`, and
