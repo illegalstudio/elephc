@@ -93,13 +93,14 @@ mod tests {
         for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(crate::codegen_support::platform::Target::parse(target).unwrap());
             emit(&mut emitter);
+            let arch = emitter.target.arch;
             let assembly = emitter.output();
             let authenticate = assembly.find("__rt_reference_cell_owner").unwrap();
             let records = assembly.find("_exc_call_frame_top").unwrap();
             let retain = assembly.rfind("__rt_incref").unwrap();
             assert!(authenticate < records && records < retain, "{target}: authenticate before claim or retain");
             assert!(assembly.contains("__rt_cleanup_call_reference_argument"), "{target}: only argument owners transfer");
-            let cleared = if emitter.target.arch == Arch::AArch64 {
+            let cleared = if arch == Arch::AArch64 {
                 "str xzr, [x11]"
             } else { "mov QWORD PTR [r11], 0" };
             assert!(assembly.find(cleared).is_some_and(|position| position < retain),
