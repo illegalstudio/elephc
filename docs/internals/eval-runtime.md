@@ -44,6 +44,8 @@ Offset-expression predicates release their owned observation after testing its t
 the expression result is staged independently across the raw and canonical writers.
 Deep stores, appends and captured updates select that same local root layout before
 traversing writable child cells, preserving computed key and RHS evaluation order.
+Direct native reference foreach sources use a live selected view and the existing iterator
+origin/writeback protocol; by-value foreach sources retain their value-copy behavior.
 When eval still shares the imported canonical
 wrapper, reload preserves that identity and skips the legacy scalar projection.
 

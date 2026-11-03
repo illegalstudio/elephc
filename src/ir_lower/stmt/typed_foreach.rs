@@ -208,9 +208,32 @@ pub(super) fn lower_foreach(
     body: &[Stmt],
     loop_span: Span,
 ) {
+    if value_by_ref {
+        if let ExprKind::Variable(name) = &array.kind {
+            if super::native_reference_mutations::lower(ctx, name, loop_span,
+                |ctx| lower_foreach_selected(ctx, array, key_var, value_var, value_by_ref, body, loop_span))
+            { return; }
+        }
+    }
+    lower_foreach_selected(ctx, array, key_var, value_var, value_by_ref, body, loop_span);
+}
+
+/// Iterates through the selected native layout while by-value sources retain copy semantics.
+#[allow(clippy::too_many_arguments)]
+fn lower_foreach_selected(
+    ctx: &mut LoweringContext<'_, '_>, array: &Expr, key_var: Option<&str>,
+    value_var: &str, value_by_ref: bool, body: &[Stmt], loop_span: Span,
+) {
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
+    if value_by_ref {
+        if let ExprKind::Variable(name) = &array.kind {
+            if let Some(view) = ctx.live_native_mutation_locals.get(name).cloned() {
+                ctx.set_local_logical_type(name, view);
+            }
+        }
+    }
     // A direct instance property has a dedicated fetch-for-write operation that separates and
     // republishes its container before iteration. Reifying it as a synthetic alias here bypasses
     // that operation and loses the property's copy-on-write boundary. Static properties and
@@ -649,6 +672,18 @@ fn lower_foreach_source(
     value_by_ref: bool,
 ) -> ForeachSource {
     if value_by_ref {
+        if let ExprKind::Variable(name) = &array.kind {
+            if ctx.live_native_mutation_locals.contains_key(name) {
+                let mut value = ctx.load_local_for_mutation(name, Some(array.span));
+                if value.ir_type == IrType::TaggedScalar {
+                    // The raw nullable scalar cannot iterate, but its warning needs the actual
+                    // int/null tag. This boxed observation is not a writable container copy.
+                    value = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(array.span));
+                }
+                return ForeachSource { value,
+                    is_borrowed_fetch: false, receiver: None };
+            }
+        }
         if let ExprKind::ArrayAccess {
             array: receiver,
             index,

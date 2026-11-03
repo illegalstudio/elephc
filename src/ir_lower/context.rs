@@ -2219,9 +2219,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Borrows a mutation's live boxed cell after its raw native payload arm was separated.
     pub(crate) fn load_local_for_mutation(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
-        let Some(view) = self.live_native_mutation_locals.get(name).cloned() else {
+        let Some(mut view) = self.live_native_mutation_locals.get(name).cloned() else {
             return self.load_local(name, span);
         };
+        // Native Mixed-element array payloads can be promoted to hash storage by a writer.
+        // A concrete current view carries that shape while the entry ABI remains one pointer.
+        if matches!(view.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            let current = self.local_type(name);
+            if matches!(current.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                view = current;
+            }
+        }
         let previous = self.local_types.insert(name.to_string(), view);
         let value = self.load_local_view(name, span, true);
         if let Some(previous) = previous { self.local_types.insert(name.to_string(), previous); }

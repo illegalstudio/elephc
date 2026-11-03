@@ -27,6 +27,8 @@ function nativeCanonicalArrayMutation(int &$target): void {
     echo $target[0], ':', count($target), '|';
     $target[0] = []; $target[0]['key'] = 3; $target[0]['key'] += 1; $target[0][] = 4;
     echo $target[0]['key'], ':', $target[0][0], ':', count($target[0]), '|';
+    foreach ($target as &$entry) { if (is_int($entry)) { $entry += 1; } }
+    unset($entry); echo $target[1], '|';
 }
 function nativeHeaderlessStringMutation(string &$target): void {
     $target = nativeCanonicalReplacement(); $target[1] = 'X';
@@ -66,6 +68,18 @@ if ($argc < 0) {
             &mut asm,
             &elephc::names::function_symbol("nativeCanonicalBodyView"),
         );
+        // Match the next callable's int entry contract before its body replaces the value.
+        instruction(&mut asm, "mov x0, #0", "xor eax, eax");
+        instruction(&mut asm, "mov x1, #41", "mov edi, 41");
+        instruction(&mut asm, "mov x2, #0", "xor esi, esi");
+        call(&mut asm, "__rt_mixed_from_value");
+        store(&mut asm, 16);
+        load(&mut asm, 0);
+        instruction(&mut asm, "ldr x1, [sp, #16]", "mov rdi, QWORD PTR [rsp + 16]");
+        call(&mut asm, "__rt_reference_replace");
+        call(&mut asm, "__rt_decref_mixed");
+        load(&mut asm, 16);
+        call(&mut asm, "__rt_decref_mixed");
         instruction(&mut asm, "ldr x0, [sp, #8]", "mov rdi, QWORD PTR [rsp + 8]");
         call(&mut asm, &elephc::names::function_symbol("nativeCanonicalArrayMutation"));
         address(&mut asm, "x9", "r10", "Lnative_headerless_string");
@@ -93,7 +107,7 @@ if ($argc < 0) {
             &default_link_paths(),
             &[],
         );
-        assert_eq!(output, "string:cXYnged:Y|0:2|4:4:2|string:cXYnged:Y|1", "optimize={optimize}");
+        assert_eq!(output, "string:cXYnged:Y|0:2|4:4:2|3|string:cXYnged:Y|1", "optimize={optimize}");
     }
 }
 
@@ -108,6 +122,8 @@ function nativeRawArrayMutation(array<mixed> &$items, string $code): void {
 function nativeRawNestedArrayMutation(array<mixed> &$items, string $code): void {
     eval($code); $items[0] = []; $items[0]['key'] = 3; $items[0]['key'] += 1; $items[0][] = 4;
     echo $items[0]['key'], ':', $items[0][0], ':', count($items[0]), '|';
+    foreach ($items as &$entry) { if (is_int($entry)) { $entry += 1; } }
+    unset($entry); echo $items[1], '|';
 }
 $items = [0]; $code = $argc > 0 ? '$items[0] = 0;' : '';
 nativeRawArrayMutation($items, $code);
@@ -119,7 +135,7 @@ echo $items[0]['key'], ':', $items[0][0], ':', count($items[0]);
         let run = || compile_and_run_with_heap_debug(source);
         let output = if optimize { run() } else { without_ir_opt(run) };
         assert!(output.success, "optimize={optimize}: {}", output.stderr);
-        assert_eq!(output.stdout, "0:2:2|0:2:2|4:4:2|4:4:2", "optimize={optimize}: {}", output.stderr);
+        assert_eq!(output.stdout, "0:2:2|0:2:2|4:4:2|3|4:4:2", "optimize={optimize}: {}", output.stderr);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"),
             "optimize={optimize}: {}", output.stderr);
     }

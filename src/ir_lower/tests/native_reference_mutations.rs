@@ -23,6 +23,12 @@ function nativeMutationString(string &$text, mixed $replacement): void {
 function nativeMutationNested(int &$items, mixed $replacement): void {
     $items = $replacement; $items[0]['key'] = 3; $items[0]['key'] += 1; $items[0][] = 4;
 }
+function nativeMutationForeach(int &$items, mixed $replacement): void {
+    $items = $replacement; foreach ($items as &$entry) { $entry = 5; } unset($entry);
+}
+function nativeMutationNullableForeach(?int &$items, mixed $replacement): void {
+    $items = $replacement; foreach ($items as &$entry) { $entry = 5; } unset($entry);
+}
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let mut module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
