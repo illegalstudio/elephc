@@ -19,6 +19,9 @@ function nativeEvalCaptureView(int &$value, string $code): void {
     $read = function () use (&$value): void { echo gettype($value); };
     $read();
 }
+function &nativeEvalReferenceReturnView(int &$value, string $code): int {
+    eval($code); $value = 3; return $value;
+}
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
@@ -45,6 +48,10 @@ function nativeEvalCaptureView(int &$value, string $code): void {
             .filter_map(|inst| inst.result).all(|value| outer.instructions.iter().any(|inst|
                 inst.op == crate::ir::Op::Release && inst.operands.contains(&value))),
             "{target}: by-reference descriptors must retire unused owning value views");
+        let reference = module.functions.iter().find(|function|
+            function.name == "nativeEvalReferenceReturnView").unwrap();
+        assert!(reference.instructions.iter().any(|inst| inst.op == crate::ir::Op::AcquireRefCell),
+            "{target}: eval must not make a previously supported reference return unrepresentable");
         crate::ir::validate_module(&module).unwrap();
     }
 }

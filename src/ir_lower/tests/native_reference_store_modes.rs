@@ -48,7 +48,8 @@ supported_target_cases!(native_reference_store_modes, verify_native_reference_st
 #[test]
 fn native_scalar_reference_writes_refresh_body_value_views_on_every_target() {
     let source = "<?php function nativeScalarBodyView(int &$value): void { \
-        $value = 'changed'; echo gettype($value), ':', $value; }";
+        $value = 'changed'; echo gettype($value), ':', $value; } \
+        function &nativeScalarReferenceReturn(int &$value): int { $value = 3; return $value; }";
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let mut module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
@@ -56,6 +57,10 @@ fn native_scalar_reference_writes_refresh_body_value_views_on_every_target() {
         assert_eq!(function.params[0].php_type, crate::types::PhpType::Int, "{target}");
         assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::LoadRefCellValue).count(),
             2, "{target}: both consumers must copy the current value");
+        let reference = module.functions.iter().find(|function|
+            function.name == "nativeScalarReferenceReturn").unwrap();
+        assert!(reference.instructions.iter().any(|inst| inst.op == Op::AcquireRefCell),
+            "{target}: a typed reference return must retain its existing managed cell ABI");
         crate::ir_lower::enable_native_reference_validation(&mut module).unwrap();
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let body = assembly.split_once("@fn name=nativeScalarBodyView symbol=").unwrap().1

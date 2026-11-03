@@ -1964,8 +1964,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Entry parameter hints constrain arguments, while property aliases keep their cell ABI.
     fn eval_can_widen_binding(&self, name: &str) -> bool {
-        !self.is_ref_bound_local(name) || self.builder.function().params.iter()
-            .any(|parameter| parameter.by_ref && parameter.name == name)
+        !self.is_ref_bound_local(name) || (!self.by_ref_return && self.builder.function().params.iter()
+            .any(|parameter| parameter.by_ref && parameter.name == name))
     }
 
     /// Enables direct eval-scope reads for selected variable names in an AOT eval body.
@@ -2813,7 +2813,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         if !is_ref_bound {
             self.set_local_type(name, php_type);
-        } else if self.builder.function().params.iter().any(|parameter|
+        } else if !self.by_ref_return && self.builder.function().params.iter().any(|parameter|
             parameter.by_ref && parameter.name == name
                 && matches!(parameter.php_type.codegen_repr(), PhpType::Int | PhpType::Bool
                     | PhpType::Float | PhpType::Str | PhpType::TaggedScalar))

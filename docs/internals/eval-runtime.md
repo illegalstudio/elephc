@@ -20,7 +20,8 @@ property changed through another native alias. AOT eval scope writes remain dirt
 literal scope reload keeps its existing path. Eval barriers preserve the payload
 types of property-backed references. Native parameter entry hints retain their
 physical cell ABI while their post-eval value views and detached local storage
-become Mixed.
+become Mixed in value-returning functions. Reference-returning functions keep their
+existing cell representation for the declared reference return ABI.
 
 Native reads probe a managed reference's canonical wrapper before using its legacy
 payload layout. The current boxed child supplies the PHP tag for the requested
