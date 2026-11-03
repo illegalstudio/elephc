@@ -869,6 +869,39 @@ unset($q);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A by-reference method returning an element of an array PROPERTY (doctrine/orm's
+/// `UnitOfWork::&getEntityChangeSet()` returns `$this->entityChangeSets[$oid]`) hands back that
+/// element itself: a write through the returned reference lands in the property. The backend
+/// refused it ("load_prop_ref_cell on non-reference property").
+#[test]
+fn test_by_reference_return_of_an_array_property_element() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class U {
+    private array $cs = [5 => ['a' => 1]];
+    private array $deep = ['x' => ['y' => [1]]];
+    public function &get(int $o): array {
+        $d = [];
+        if (!isset($this->cs[$o])) { return $d; }
+        return $this->cs[$o];
+    }
+    public function &deep(): array { return $this->deep['x']['y']; }
+    public function dump(): string { return json_encode([$this->cs, $this->deep]); }
+}
+$u = new U();
+$r = &$u->get(5);
+$r['b'] = 2;
+$miss = &$u->get(9);
+$miss['z'] = 1;
+$d = &$u->deep();
+$d[] = 2;
+echo $u->dump(), "\n";
+unset($r, $miss, $d);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[{\"5\":{\"a\":1,\"b\":2}},{\"x\":{\"y\":[1,2]}}]\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A generator closure with more than sixteen parameters and captures (symfony/http-client's
 /// `CachingHttpClient::request()` returns one with nineteen) compiles and runs: the coroutine has
 /// 32 start-argument slots. It was refused at 16 and the class went to the interpreter.

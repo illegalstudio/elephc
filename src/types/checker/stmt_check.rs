@@ -194,8 +194,15 @@ impl Checker {
                     );
                     // `function &f() { return $obj->prop; }` returns a reference to the
                     // property, so promote it to a reference property program-wide.
+                    // So does `return $obj->prop[$k]` (doctrine/orm's `UnitOfWork::&getEntityChangeSet()`
+                    // returns `$this->entityChangeSets[$oid]`): the element is promoted in place
+                    // inside the property's array, which needs the property itself as a cell.
+                    let mut returned_place = e;
+                    while let ExprKind::ArrayAccess { array, .. } = &returned_place.kind {
+                        returned_place = array;
+                    }
                     if self.current_by_ref_return {
-                        if let ExprKind::PropertyAccess { object, property } = &e.kind {
+                        if let ExprKind::PropertyAccess { object, property } = &returned_place.kind {
                             let object_ty = self.infer_type(object, env)?;
                             // A CLOSURE's `$this` is never settled by the scope it was written
                             // in: `Closure::bind`/`bindTo` can hand it any receiver, and the
