@@ -365,6 +365,17 @@ slow-timeout = { period = "60s", terminate-after = 6 }
 filter = 'binary(web_tests) and test(=environment::web_environment_computed_eval_retains_population)'
 slow-timeout = { period = "60s", terminate-after = 6 }
 
+# The environment-review fixtures also compile eval-capable web hosts. Several
+# crossed the 60s guard on macOS while sharing the web shard with the edge
+# tests; keep the 60s slow warning and terminate a hang at 180s.
+[[profile.default.overrides]]
+filter = 'binary(web_tests) and test(/^environment::review::web_environment_.*_retains_population$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_tests) and test(/^environment::review::web_environment_.*_retains_population$/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 [[profile.default.overrides]]
 filter = 'binary(web_tests) and test(=environment::web_environment_opaque_eval_retains_population)'
 slow-timeout = { period = "180s", terminate-after = 1 }
