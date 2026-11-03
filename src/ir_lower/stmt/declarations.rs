@@ -164,6 +164,82 @@ pub(super) fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String], s
     }
 }
 
+/// Lowers `static $x = init;` for a static some by-reference use names
+/// (`crate::ir_lower::static_refs`): php binds the local by reference to storage that outlives
+/// the call, so `$x` is bound to the reference cell of a hidden global owned by this function
+/// (every by-reference use then shares it), and the initializer runs once, guarded by a hidden
+/// `bool` static flag.
+fn lower_reference_bound_static_var(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    init: &Expr,
+    span: Span,
+) {
+    let function = ctx.builder.function().name.clone();
+    let mangled: String = function
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    // FNV-1a over the exact function name keeps two functions whose names mangle alike apart.
+    let hash = function
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3));
+    let storage = format!("__elephc_static_{hash:016x}_{mangled}__{name}");
+    ctx.bind_static_reference_local(name, &storage, Some(span));
+
+    let flag = format!("{name}#static_initialized");
+    let flag_slot = ctx.declare_local_with_kind(&flag, PhpType::Bool, LocalKind::StaticLocal);
+    let init_block = ctx.builder.create_named_block("static_ref_init", Vec::new());
+    let after_block = ctx.builder.create_named_block("static_ref_after", Vec::new());
+    let uninitialized = ctx
+        .builder
+        .emit_with_effects(
+            Op::StaticLocalUninitialized,
+            Vec::new(),
+            Some(Immediate::LocalSlot(flag_slot)),
+            IrType::I64,
+            PhpType::Bool,
+            Ownership::NonHeap,
+            Op::StaticLocalUninitialized.default_effects(),
+            Some(span),
+        )
+        .expect("static_local_uninitialized produces a branch condition");
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: uninitialized,
+        then_target: init_block,
+        then_args: Vec::new(),
+        else_target: after_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(init_block);
+    let value = lower_expr(ctx, init);
+    let value_type = ctx.builder.value_php_type(value.value);
+    ctx.store_local(name, value, value_type, Some(span));
+    let initialized = ctx.emit_value(
+        Op::ConstBool,
+        Vec::new(),
+        Some(Immediate::Bool(true)),
+        PhpType::Bool,
+        Op::ConstBool.default_effects(),
+        Some(span),
+    );
+    ctx.builder.emit_with_effects(
+        Op::InitStaticLocal,
+        vec![initialized.value],
+        Some(Immediate::LocalSlot(flag_slot)),
+        IrType::Void,
+        PhpType::Void,
+        Ownership::NonHeap,
+        Op::InitStaticLocal.default_effects(),
+        Some(span),
+    );
+    branch_to(ctx, after_block);
+    ctx.builder.position_at_end(after_block);
+    ctx.set_local_type(name, PhpType::Mixed);
+    ctx.clear_static_callable_locals();
+}
+
 /// Lowers a static local variable initialization.
 ///
 /// PHP evaluates the initializer only until the static holds a value, so it is lowered in
@@ -171,6 +247,10 @@ pub(super) fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String], s
 /// the constructor once, not on every call. The initializer is lowered first, out of line,
 /// because its type is what declares the slot the guard then names.
 pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, init: &Expr, span: Span) {
+    if ctx.reference_bound_statics.contains(name) {
+        lower_reference_bound_static_var(ctx, name, init, span);
+        return;
+    }
     let entry_block = ctx
         .builder
         .insertion_block()

@@ -754,6 +754,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub all_global_var_names: HashSet<String>,
     /// Names whose local binding can switch to a global cell at runtime.
     pub(crate) runtime_global_bindings: HashSet<String>,
+    /// This body's `static` locals used by reference (`crate::ir_lower::static_refs`): each is
+    /// bound to a persistent reference cell, as php binds `static $x`, instead of a plain slot.
+    pub(crate) reference_bound_statics: HashSet<String>,
     /// `true` when lowering for a `--web` compile. Gates whether a bare
     /// request-superglobal name (`$_SERVER`/`$_SESSION`/…) is trusted to
     /// resolve to the fixed `AssocArray{Str, Mixed}` type: only `--web`
@@ -994,6 +997,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             in_main,
             all_global_var_names,
             runtime_global_bindings: HashSet::new(),
+            reference_bound_statics: HashSet::new(),
             web,
             owner_name,
             closures: Vec::new(),
@@ -4568,6 +4572,33 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
             });
         let global = self.intern_global_storage_name(name);
+        let cell = self.emit_value(
+            Op::GlobalRefCell, Vec::new(), Some(Immediate::GlobalName(global)),
+            PhpType::Int, Op::GlobalRefCell.default_effects(), span,
+        );
+        self.bind_local_ref_cell_ptr(name, cell, PhpType::Mixed, span);
+        let owner = self.declare_ref_cell_owner(name, PhpType::Mixed);
+        self.emit_void(
+            Op::BindRefCellPtr, vec![cell.value], Some(Immediate::LocalSlot(owner)),
+            Op::BindRefCellPtr.default_effects(), span,
+        );
+        self.initialized_slots.insert(owner);
+        if let Some(previous) = previous {
+            crate::ir_lower::ownership::release_if_owned(self, previous, span);
+        }
+    }
+
+    /// Binds the local `name` to the persistent reference cell of the global `storage`, as
+    /// `global` does: the static-by-reference binding (`static $x` that some by-reference use
+    /// names, see `crate::ir_lower::static_refs`) keeps its value in a hidden global of its own.
+    pub(crate) fn bind_static_reference_local(&mut self, name: &str, storage: &str, span: Option<Span>) {
+        let previous = self.local_slots.get(name).copied()
+            .filter(|slot| self.initialized_slots.contains(slot))
+            .map(|_| {
+                let value = self.load_local(name, span);
+                crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
+            });
+        let global = self.intern_global_name(storage);
         let cell = self.emit_value(
             Op::GlobalRefCell, Vec::new(), Some(Immediate::GlobalName(global)),
             PhpType::Int, Op::GlobalRefCell.default_effects(), span,

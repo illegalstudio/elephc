@@ -1261,3 +1261,45 @@ unset($lit, $r);
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A `static` local handed out by reference (by-ref argument, `&` alias, `use (&$x)`) keeps every
+/// write across calls: Monolog's `BrowserConsoleHandler::handleStyle` shape.
+#[test]
+fn test_static_locals_bound_by_reference_persist_their_writes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function add(array &$a, string $k): void { $a[$k] = count($a); }
+function f(string $k): string {
+    static $labels = [];
+    add($labels, $k);
+    $r = &$labels;
+    $r['last'] = $k;
+    return json_encode($labels);
+}
+echo f('a'), "\n", f('b'), "\n";
+function g(string $s): string {
+    static $seen = [];
+    $cb = function () use ($s, &$seen) { $seen[$s] = ($seen[$s] ?? 0) + 1; return $seen[$s]; };
+    return $cb() . ':' . json_encode($seen);
+}
+echo g('x'), "\n", g('x'), "\n", g('y'), "\n";
+class Console {
+    public static function style(string $s): string {
+        static $colors;
+        $colors ??= [];
+        $p = &$colors;
+        $p[$s] ??= count($p) + 1;
+        return $s . '=' . $colors[$s];
+    }
+}
+echo Console::style('a'), ' ', Console::style('b'), ' ', Console::style('a'), "\n";
+function h(): int { static $n = 0; $m = &$n; return ++$m; }
+echo h(), h(), h(), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"a\":0,\"last\":\"a\"}\n{\"a\":0,\"last\":\"b\",\"b\":2}\n1:{\"x\":1}\n2:{\"x\":2}\n\
+         1:{\"x\":2,\"y\":1}\na=1 b=2 a=1\n123\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

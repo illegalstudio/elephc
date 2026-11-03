@@ -42,7 +42,6 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("hash", crate::hash_prelude::program_uses_surface),
     ("tokenizer", crate::tokenizer_prelude::program_uses_surface),
     ("gmp", crate::gmp_prelude::program_uses_surface),
-    ("random", crate::random_prelude::program_uses_random),
     ("curl", crate::curl_prelude::program_uses_surface),
     ("xml", crate::xml_prelude::program_uses_surface),
     ("fileinfo", crate::fileinfo_prelude::program_uses_surface),

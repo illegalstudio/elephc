@@ -614,18 +614,14 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     );
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
-    // A `gmp_*` / `Random\*` use only an autoloaded vendor class makes (league/uri's
-    // `GMPCalculator`) still needs the helpers its calls lower to.
+    // A `gmp_*` use only an autoloaded vendor class makes (league/uri's `GMPCalculator`) still
+    // needs the helpers its calls lower to.
     let ast = crate::gmp_prelude::inject_if_used(
         ast,
         with_crates.contains("gmp") || autoloaded("gmp"),
         &mut prelude_inventory,
     );
-    let ast = crate::random_prelude::inject_if_used(
-        ast,
-        with_crates.contains("random") || autoloaded("random"),
-        &mut prelude_inventory,
-    );
+    let ast = crate::random_prelude::inject_if_used(ast, with_crates.contains("random"), &mut prelude_inventory);
     // The sodium sealed-box surface is injected here too, so name resolution sees the
     // functions and folds a differently cased call (`\SODIUM_CRYPTO_BOX_SEAL()`) onto them.
     // The late gate after autoload expansion covers code only an autoloaded class reaches.

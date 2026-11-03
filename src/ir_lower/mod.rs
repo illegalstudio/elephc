@@ -37,6 +37,7 @@ mod program;
 mod property_initializers;
 mod property_default_errors;
 mod reflection;
+pub(crate) mod static_refs;
 mod stmt;
 mod throwable_constructors;
 mod core_methods;
