@@ -323,8 +323,18 @@ fn native_commit(out: &mut String, candidate: usize, expected: usize) {
     instruction(out, &format!("str xzr, [sp, #{candidate}]"), &format!("mov QWORD PTR [rsp + {candidate}], 0"));
 }
 
-/// A real native binding or independent PHPRef owner keeps a canonical clone shared.
-fn expect_shared_native_clone(out: &mut String) {
+/// A real PHP alias keeps an array copy on its persistent wrapper despite artificial cell roots.
+fn expect_shared_array_copy(out: &mut String) {
+    load(out, 0);
+    call(out, "__rt_reference_array_copy");
+    instruction(out, "ldr x9, [sp]", "mov r10, QWORD PTR [rsp]");
+    instruction(out, "cmp x0, x9", "cmp rax, r10");
+    instruction(out, "b.ne Lvalidation_pin_fail", "jne Lvalidation_pin_fail");
+    call(out, "__rt_decref_mixed");
+}
+
+/// A real extra native cell binding keeps the physical cell itself shared during cloning.
+fn expect_shared_native_cell_clone(out: &mut String) {
     load(out, 8);
     call(out, "__rt_reference_cell_clone");
     instruction(out, "ldr x9, [sp, #8]", "mov r10, QWORD PTR [rsp + 8]");
@@ -397,16 +407,21 @@ fn test_native_reference_validation_pins_preserve_copy_semantics_and_retire() {
     instruction(&mut asm, "add x9, sp, #272", "lea r10, [rsp + 272]");
     instruction(&mut asm, "str x9, [sp, #288]", "mov QWORD PTR [rsp + 288], r10");
     enter(&mut asm, 224, 288);
-    expect_shared_native_clone(&mut asm);
+    expect_shared_array_copy(&mut asm);
     leave(&mut asm, 224);
     load(&mut asm, 304);
     call(&mut asm, "__rt_reference_cell_release");
     // A separate PHP alias remains visible despite both roots naming the same staging cell.
     load(&mut asm, 0);
     call(&mut asm, "__rt_incref");
-    expect_shared_native_clone(&mut asm);
+    expect_shared_array_copy(&mut asm);
     load(&mut asm, 0);
     call(&mut asm, "__rt_decref_mixed");
+    load(&mut asm, 8);
+    call(&mut asm, "__rt_incref");
+    expect_shared_native_cell_clone(&mut asm);
+    load(&mut asm, 8);
+    call(&mut asm, "__rt_reference_cell_release");
     expect_detached_array_copy(&mut asm);
     // A singleton canonical clone must contain a different wrapper with the same value.
     load(&mut asm, 8);
