@@ -304,6 +304,50 @@ impl Checker {
             .is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
     }
 
+    /// Records the hash storage a by-reference unpack leaves its source local in.
+    ///
+    /// A direct `f(...$a)` whose unpack reaches a by-reference parameter suffix walks `$a` by
+    /// reference, as `foreach ($a as &$v)` does (`by_ref_suffix_start`), and that walk turns an
+    /// indexed array into hash storage. Later expressions must see it: `f(...$refs);
+    /// g(...$refs);` otherwise sliced the hash as an indexed array and crashed.
+    pub(crate) fn record_by_ref_unpack_outputs(
+        &mut self,
+        sig: &crate::types::FunctionSig,
+        args: &[Expr],
+        call_span: Span,
+        env: &TypeEnv,
+    ) {
+        let mut positional = 0usize;
+        for arg in args {
+            match &arg.kind {
+                ExprKind::Spread(inner) => {
+                    if crate::types::call_args::by_ref_suffix_start(sig, positional).is_none() {
+                        continue;
+                    }
+                    let ExprKind::Variable(name) = &inner.kind else { continue; };
+                    let storage = match env.get(name).map(PhpType::codegen_repr) {
+                        Some(PhpType::Array(_)) => PhpType::AssocArray {
+                            key: Box::new(PhpType::Int),
+                            value: Box::new(PhpType::Mixed),
+                        },
+                        Some(PhpType::AssocArray { key, value })
+                            if value.codegen_repr() != PhpType::Mixed =>
+                        {
+                            PhpType::AssocArray { key, value: Box::new(PhpType::Mixed) }
+                        }
+                        _ => continue,
+                    };
+                    self.boxed_reference_outputs
+                        .entry((self.current_loop_storage_scope.clone(), call_span))
+                        .or_default()
+                        .insert(name.clone(), storage);
+                }
+                ExprKind::NamedArg { .. } => {}
+                _ => positional += 1,
+            }
+        }
+    }
+
     /// Applies one successful call's storage changes before checking subsequent expressions.
     pub(crate) fn apply_boxed_reference_outputs(&mut self, span: Span, env: &mut TypeEnv) {
         let key = (self.current_loop_storage_scope.clone(), span);

@@ -299,6 +299,12 @@ pub(super) fn lower_variadic_tail_source_value(
     prelowered: Option<crate::ir::ValueId>,
     array_ty: &PhpType,
 ) -> LoweredValue {
+    // `f(...[&$x, &$y])`: the planner expands a literal unpack into its items, so a `&$x` item
+    // arrives here as the bare array-reference node. It IS the reference the call transports;
+    // a by-value collector reads the variable it names.
+    if let ExprKind::ArrayReference(inner) = &expr.kind {
+        return lower_variadic_tail_source_value(ctx, inner, by_ref_variadic, prelowered, array_ty);
+    }
     if by_ref_variadic {
         if let Some(value) = prelowered {
             return lowered_value_from_id(ctx, value);

@@ -2,7 +2,7 @@
 title: "hash_file()"
 description: "Generates a hash value using the contents of a given file."
 sidebar:
-  order: 360
+  order: 362
 ---
 
 ## hash_file()

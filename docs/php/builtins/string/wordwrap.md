@@ -2,7 +2,7 @@
 title: "wordwrap()"
 description: "Wraps a string to a given number of characters."
 sidebar:
-  order: 1081
+  order: 1083
 ---
 
 ## wordwrap()

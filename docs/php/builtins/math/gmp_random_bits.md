@@ -2,7 +2,7 @@
 title: "gmp_random_bits()"
 description: "Generates a random GMP number with the given bit count."
 sidebar:
-  order: 638
+  order: 640
 ---
 
 ## gmp_random_bits()

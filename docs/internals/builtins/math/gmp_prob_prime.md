@@ -2,7 +2,7 @@
 title: "gmp_prob_prime() - internals"
 description: "Compiler internals for gmp_prob_prime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 637
+  order: 639
 ---
 
 ## `gmp_prob_prime()` - internals

@@ -2,7 +2,7 @@
 title: "get_debug_type() - internals"
 description: "Compiler internals for get_debug_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1088
+  order: 1090
 ---
 
 ## `get_debug_type()` - internals

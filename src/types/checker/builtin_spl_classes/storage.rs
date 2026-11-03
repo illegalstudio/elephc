@@ -182,6 +182,54 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
             array_append_body(),
         ),
         method_with_body("getArrayCopy", Vec::new(), Some(array_type()), array_copy_body()),
+        method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(property_access(this_expr(), "flags"))),
+        method_with_body(
+            "setFlags",
+            vec![param("flags", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            vec![property_assign_stmt(this_expr(), "flags", var_expr("flags"))],
+        ),
+        // php's `[flags, storage, member properties, null]`, the shape Symfony's var-exporter
+        // `Hydrator` rebuilds an ArrayIterator from.
+        method_with_body("__serialize", Vec::new(), Some(named_type("array")), array_iterator_serialize_body()),
+        method_with_body(
+            "__unserialize",
+            vec![param("data", named_type("array"))],
+            Some(TypeExpr::Void),
+            array_iterator_unserialize_body(),
+        ),
+    ]
+}
+
+/// Builds `ArrayIterator::__serialize()`: the `getArrayCopy()` walk, then php's four-slot array.
+fn array_iterator_serialize_body() -> Vec<Stmt> {
+    let mut body = array_copy_body();
+    body.pop();
+    body.push(return_stmt(expr(crate::parser::ast::ExprKind::ArrayLiteral(vec![
+        property_access(this_expr(), "flags"),
+        var_expr("out"),
+        empty_array_expr(),
+        null_expr(),
+    ]))));
+    body
+}
+
+/// Builds `ArrayIterator::__unserialize($data)`: flags from slot 0 and the storage from slot 1,
+/// split into the parallel key/value lists the constructor builds, with the cursor rewound.
+fn array_iterator_unserialize_body() -> Vec<Stmt> {
+    vec![
+        assign_stmt(
+            "array",
+            cast_expr(CastType::Array, null_coalesce_expr(array_access(var_expr("data"), int_expr(1)), empty_array_expr())),
+        ),
+        property_assign_stmt(this_expr(), "keys", function_call("array_keys", vec![var_expr("array")])),
+        property_assign_stmt(this_expr(), "values", function_call("array_values", vec![var_expr("array")])),
+        property_assign_stmt(this_expr(), "position", int_expr(0)),
+        property_assign_stmt(
+            this_expr(),
+            "flags",
+            cast_expr(CastType::Int, null_coalesce_expr(array_access(var_expr("data"), int_expr(0)), int_expr(0))),
+        ),
     ]
 }
 

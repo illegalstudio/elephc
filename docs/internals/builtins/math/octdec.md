@@ -2,7 +2,7 @@
 title: "octdec() - internals"
 description: "Compiler internals for octdec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 668
+  order: 670
 ---
 
 ## `octdec()` - internals

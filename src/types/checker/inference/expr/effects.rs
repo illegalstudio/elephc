@@ -1027,8 +1027,21 @@ impl Checker {
                 // describes a DESCRIPTOR invocation rather than the callee, so the `ref_params` it
                 // carries are not evidence about this call.
                 let schema_signature = self.instance_call_effect_signature(&object_type, method);
+                // A receiver of a class the build does not declare (`new \Spoofchecker()` without
+                // ext/intl) has no schema either: php raises at run time, and the argument shape
+                // is just as unknown as a gradual receiver's.
+                let receiver_class_outside_build = match object_type.codegen_repr() {
+                    PhpType::Object(class_name) => {
+                        let class_name = class_name.trim_start_matches('\\');
+                        !class_name.is_empty()
+                            && !self.classes.contains_key(class_name)
+                            && !self.interfaces.contains_key(class_name)
+                    }
+                    _ => false,
+                };
                 let by_ref_shape_is_unknown = schema_signature.is_none()
-                    && matches!(object_type.codegen_repr(), PhpType::Mixed);
+                    && (matches!(object_type.codegen_repr(), PhpType::Mixed)
+                        || receiver_class_outside_build);
                 let signature = schema_signature
                     .or_else(|| self.resolve_first_class_callable_sig(&target, expr.span, env).ok());
                 if let Some(signature) = signature {

@@ -2,7 +2,7 @@
 title: "get_cfg_var()"
 description: "Returns a php.ini option's value, or false when it is not set."
 sidebar:
-  order: 702
+  order: 704
 ---
 
 ## get_cfg_var()

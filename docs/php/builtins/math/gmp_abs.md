@@ -2,7 +2,7 @@
 title: "gmp_abs()"
 description: "Absolute value of a GMP number."
 sidebar:
-  order: 602
+  order: 604
 ---
 
 ## gmp_abs()

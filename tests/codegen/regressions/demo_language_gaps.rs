@@ -385,3 +385,432 @@ fn test_two_argument_digests_release_their_operand() {
     assert_eq!(out.stdout, "60\n60\n60\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A method of a class the build does not declare (`new \Spoofchecker()` without ext/intl, symfony/validator's
+/// `NoSuspiciousCharactersValidator`) may bind its arguments by reference, so a bare variable passed to
+/// it is defined, as php leaves it. It used to be `Undefined variable: $errorCode`, a compile error
+/// that handed the whole class file to the runtime; php only raises `Class not found` when it runs.
+#[test]
+fn test_method_on_a_class_outside_the_build_defines_its_out_arguments() {
+    let out = compile_and_run_capture(r#"<?php
+class V {
+    public function validate(mixed $value): int {
+        if ('' === $value = (string) $value) {
+            return -1;
+        }
+        $checker = new \NoSuchChecker();
+        $checker->setChecks(4);
+        if (!$checker->isSuspicious($value, $errorCode)) {
+            return 0;
+        }
+        return $errorCode & 4;
+    }
+}
+$v = new V();
+try { echo $v->validate('abc'), "\n"; } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "Error: Class \"NoSuchChecker\" not found\n");
+}
+
+/// A union of `Stringable` objects and null handed to `Type|string|null` binds through the string arm in
+/// weak mode: each object converts, null stays null, and an object a class member accepts stays one
+/// (symfony/ux-live-component's `LiveComponentDebugCommand::displayType()`, given a
+/// `ReflectionParameter::getType()` result). The call was a compile error.
+#[test]
+fn test_stringable_object_union_binds_through_the_string_arm() {
+    let out = compile_and_run_capture(r#"<?php
+class TypeBox { public function __toString(): string { return 'box'; } }
+final class SubBox extends TypeBox {}
+final class Label { public function __toString(): string { return 'label'; } }
+final class Note { public function __toString(): string { return 'note'; } }
+function pick(int $which): Label|Note|null {
+    return match ($which) { 0 => new Label(), 1 => new Note(), default => null };
+}
+function show(TypeBox|string|null $type): string {
+    return gettype($type) . ':' . ($type instanceof TypeBox ? 'box-object' : var_export($type, true));
+}
+foreach ([0, 1, 2] as $which) {
+    echo show(pick($which)), "\n";
+}
+echo show(new SubBox()), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "string:'label'\nstring:'note'\nNULL:NULL\nobject:box-object\n");
+}
+
+/// The Reflection type objects are `Stringable`, so `ReflectionParameter::getType()` passes to a
+/// `TypeBox|string|null` parameter as its string, like the vendor command that lists live listeners.
+#[test]
+fn test_reflection_type_union_binds_to_a_string_union() {
+    let out = compile_and_run_capture(r#"<?php
+final class TypeBox { public function __toString(): string { return 'box'; } }
+class Shower {
+    public function show(int $x, ?string $y = null): void {}
+    private function display(TypeBox|string|null $type): string { return '[' . (string) $type . ']'; }
+    public function run(): string {
+        $method = new \ReflectionMethod(self::class, 'show');
+        $out = [];
+        foreach ($method->getParameters() as $parameter) {
+            $out[] = $this->display($parameter->getType()) . '$' . $parameter->getName();
+        }
+        return implode(', ', $out);
+    }
+}
+echo (new Shower())->run(), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[int]$x, [?string]$y\n");
+}
+
+/// `ArrayIterator::__serialize()` / `__unserialize()` / `getFlags()` / `setFlags()` (symfony/var-exporter's
+/// `Hydrator` restores an ArrayIterator through `__unserialize([$flags, $storage, []])`). The methods
+/// did not exist, so the whole Hydrator class file was handed to the runtime.
+#[test]
+fn test_array_iterator_serializes_and_restores_like_php() {
+    let out = compile_and_run_capture(r#"<?php
+$it = new ArrayIterator(['a' => 1, 5 => 'x'], ArrayIterator::ARRAY_AS_PROPS);
+var_export($it->__serialize()); echo "\n";
+$r = new ArrayIterator([7]);
+$r->__unserialize([0, ['k' => 'v', 9 => 'w'], []]);
+foreach ($r as $k => $v) { echo $k, '=', $v, ' '; }
+echo count($r), ' ', $r->getFlags(), "\n";
+var_export($r->getArrayCopy()); echo "\n";
+$s = new ArrayIterator(['q' => 1]);
+$s->__unserialize([2, ['z' => 26], []]);
+echo $s->getFlags(), ' ', $s['z'], "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "array (\n  0 => 2,\n  1 => \n  array (\n    'a' => 1,\n    5 => 'x',\n  ),\n  2 => \n  array (\n  ),\n  3 => NULL,\n)\nk=v 9=w 2 0\narray (\n  'k' => 'v',\n  9 => 'w',\n)\n2 26\n");
+}
+
+/// A string offset write into a `string` property (doctrine/dbal's mysqli `Statement::bindValue()`:
+/// `$this->types[$param - 1] = 's'`) writes the byte in place, past the end pads with spaces, and
+/// works through a variable receiver too. The checker refused it although lowering already
+/// replayed such a receiver through a hidden local, so the Statement class went to the runtime.
+#[test]
+fn test_string_offset_write_on_a_string_property() {
+    let out = compile_and_run_capture(r#"<?php
+final class Statement {
+    private string $types;
+    public string $label = 'abc';
+    public function __construct(int $count) { $this->types = str_repeat('s', $count); }
+    public function bind(int $param, string $type): void { $this->types[$param - 1] = $type; }
+    public function types(): string { return $this->types; }
+}
+$s = new Statement(3);
+$s->bind(2, 'i');
+$s->bind(3, 'b');
+echo $s->types(), "\n";
+$s->label[5] = '!';
+echo $s->label, "|\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "sib\nabc  !|\n");
+}
+
+/// A dynamic property read (`$o->$name`) inside an array literal is a boxed value. The literal typed
+/// it `int` through the syntactic fallback, stamped `[0 => $zval[0]->$p]` as `array<int, int>` and
+/// read the boxed array back as an integer: symfony/property-access's `readProperty()` returned
+/// `[0 => 2]` for `[1, 2]`, a silent miscompile on the pre-rebase tree too.
+#[test]
+fn test_dynamic_property_read_inside_an_array_literal_keeps_its_value() {
+    let out = compile_and_run_capture(r#"<?php
+final class Bag { public array $items = [1, 2]; }
+function a(array $zval, string $p): array { return [0 => $zval[0]->$p]; }
+function b(Bag $o, string $p): array { return [0 => $o->$p]; }
+function c(Bag $o, string $p): array { $v = $o->$p; return [0 => $v]; }
+function d(array $zval, string $p): mixed { return $zval[0]->$p; }
+function e(array $zval, string $p): array { return [$zval[0]->$p]; }
+echo json_encode(a([new Bag()], 'items')), json_encode(b(new Bag(), 'items')), json_encode(c(new Bag(), 'items')), json_encode(d([new Bag()], 'items')), json_encode(e([new Bag()], 'items')), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[[1,2]][[1,2]][[1,2]][1,2][[1,2]]\n");
+}
+
+/// An `iterable` that `is_object()` rejects is an array, so after
+/// `if (\is_object($collection)) { $collection = iterator_to_array($collection); }` the haystack of
+/// `in_array($item, $collection, true)` is an array on both edges (symfony/property-access's
+/// `PropertyAccessor::writeCollection()`, refused with "second argument must be array").
+#[test]
+fn test_is_object_false_edge_narrows_an_iterable_to_an_array() {
+    let out = compile_and_run_capture(r#"<?php
+final class Info { public function __construct(private string $name) {} public function getName(): string { return $this->name; } }
+final class Bag {
+    public array $items = [];
+    public function addItem($i): void { $this->items[] = $i; echo "add $i\n"; }
+    public function removeItem($i): void { echo "remove $i\n"; }
+}
+final class Accessor {
+    private const VALUE = 0;
+    private function readProperty(array $zval, string $property): array { return [self::VALUE => $zval[self::VALUE]->$property]; }
+    public function writeCollection(array $zval, string $property, iterable $collection, Info $addMethod, Info $removeMethod): void
+    {
+        $previousValue = $this->readProperty($zval, $property);
+        $previousValue = $previousValue[self::VALUE];
+        $removeMethodName = $removeMethod->getName();
+        $addMethodName = $addMethod->getName();
+        if ($previousValue instanceof \Traversable) {
+            $previousValue = iterator_to_array($previousValue);
+        }
+        if ($previousValue && \is_array($previousValue)) {
+            if (\is_object($collection)) {
+                $collection = iterator_to_array($collection);
+            }
+            foreach ($previousValue as $key => $item) {
+                if (!\in_array($item, $collection, true)) {
+                    unset($previousValue[$key]);
+                    $zval[self::VALUE]->$removeMethodName($item);
+                }
+            }
+        } else {
+            $previousValue = false;
+        }
+        foreach ($collection as $item) {
+            if (!$previousValue || !\in_array($item, $previousValue, true)) {
+                $zval[self::VALUE]->$addMethodName($item);
+            }
+        }
+    }
+}
+$bag = new Bag();
+$bag->items = [1, 2];
+(new Accessor())->writeCollection([$bag], 'items', [2, 3], new Info('addItem'), new Info('removeItem'));
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "remove 1\nadd 3\n");
+}
+
+/// `in_array()` over an `iterable` parameter narrowed by `is_object()`, and php's TypeError for a
+/// Traversable haystack.
+#[test]
+fn test_in_array_on_iterable_parameters_matches_php() {
+    let out = compile_and_run_capture(r#"<?php
+function diff(array $previous, iterable $collection): array {
+    if (\is_object($collection)) {
+        $collection = iterator_to_array($collection);
+    }
+    $kept = [];
+    foreach ($previous as $item) {
+        if (\in_array($item, $collection, true)) {
+            $kept[] = $item;
+        }
+    }
+    return $kept;
+}
+function probe(iterable $c): string {
+    try { return var_export(in_array(1, $c), true); } catch (\TypeError $e) { return $e->getMessage(); }
+}
+echo implode(',', diff([1, 2, 3], [3, 1])), "\n";
+echo implode(',', diff([1, 2, 3], new ArrayIterator([2]))), "\n";
+echo probe([1]), "\n";
+echo probe(new ArrayIterator([1])), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1,3\n2\ntrue\nin_array(): Argument #2 ($haystack) must be of type array, ArrayIterator given\n");
+}
+
+/// `[&$this->pauseExpiry, ..., &$this->remaining, &$this->info]` (symfony/http-client's
+/// `NativeResponse::open()`) shares a `float`, a `?int` and an `array` property with the literal:
+/// writes through the slots reach the properties, and a by-value destructure copies them. Only
+/// `int|float|bool|string` properties could be shared, so the class went to the runtime.
+#[test]
+fn test_array_literal_references_to_nullable_and_array_typed_properties() {
+    let out = compile_and_run_capture(r#"<?php
+final class State { public array $openHandles = []; }
+final class Response {
+    private float $pauseExpiry = 0.0;
+    private ?int $remaining = null;
+    private array $info = ['http_code' => 0];
+    public function __construct(private State $multi) {}
+    public function open(): void
+    {
+        $this->multi->openHandles[1] = [&$this->pauseExpiry, 'h', &$this->remaining, &$this->info];
+    }
+    public function report(): string
+    {
+        return json_encode([$this->pauseExpiry, $this->remaining, $this->info]);
+    }
+}
+$state = new State();
+$r = new Response($state);
+$r->open();
+[$pause, , $remaining, $info] = $state->openHandles[1];
+$state->openHandles[1][0] = 1.5;
+$state->openHandles[1][2] = 42;
+$state->openHandles[1][3]['http_code'] = 200;
+echo $r->report(), "\n";
+echo json_encode([$pause, $remaining, $info]), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[1.5,42,{\"http_code\":200}]\n[0,null,{\"http_code\":0}]\n");
+}
+
+/// `filter_var()` with a literal filter and run-time int flags (symfony/http-client's
+/// `NativeHttpClient::dnsResolve()` passes `FILTER_FLAG_IPV4` or `FILTER_FLAG_IPV6` to
+/// `FILTER_VALIDATE_IP`): the call takes the dynamic dispatch helper, which applies the literal
+/// per-filter lowering under each flag value. It was a compile error.
+#[test]
+fn test_filter_var_with_run_time_int_flags() {
+    let out = compile_and_run_capture(r#"<?php
+function is_literal_ip(string $host): bool {
+    $flag = '' !== $host && '[' === $host[0] && ']' === $host[-1] && str_contains($host, ':') ? \FILTER_FLAG_IPV6 : \FILTER_FLAG_IPV4;
+    $ip = \FILTER_FLAG_IPV6 === $flag ? substr($host, 1, -1) : $host;
+    return (bool) filter_var($ip, \FILTER_VALIDATE_IP, $flag);
+}
+foreach (['127.0.0.1', '[::1]', 'example.com', '::1', '[127.0.0.1]', '256.1.1.1'] as $host) {
+    echo $host, ' ', var_export(is_literal_ip($host), true), "\n";
+}
+$flags = $argc > 5 ? 0 : \FILTER_NULL_ON_FAILURE;
+var_dump(filter_var('abc', \FILTER_VALIDATE_INT, $flags), filter_var('12', \FILTER_VALIDATE_INT, $flags));
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "127.0.0.1 true\n[::1] true\nexample.com false\n::1 false\n[127.0.0.1] false\n256.1.1.1 false\nNULL\nint(12)\n");
+}
+
+/// `foreach ($vars as &$v)` over a by-reference variadic promotes `$v` before its first write.
+/// The prologue left that slot holding the caller's stack word, so the cell adopted a share of
+/// a live block (here `$this->bound`'s default array) and released it: heap-debug reported a
+/// bad refcount, and another caller layout corrupted the heap silently.
+#[test]
+fn test_by_ref_variadic_foreach_starts_from_a_zeroed_value_slot() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+final class Holder {
+    public array $bound = [];
+    public function bind(mixed &...$vars): void {
+        foreach ($vars as $i => &$var) { $this->bound[$i] = &$var; }
+    }
+}
+foreach (['first', 'second'] as $how) {
+    $h = new Holder(); $a = 0; $b = 0;
+    match ($how) { 'first', 'second' => $h->bind($a, $b) };
+    $h->bound[0] = 1; $h->bound[1] = 2;
+    echo "$how: $a $b\n";
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "first: 1 2\nsecond: 1 2\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An unpack into by-reference parameters binds each one to its element (doctrine/dbal
+/// Mysqli\Result: `$refs[$k] = &$value; $stmt->bind_result(...$refs)`). Direct instance and
+/// static calls were refused at check time; through a callable they bound copies.
+#[test]
+fn test_spread_of_reference_elements_binds_by_reference_parameters() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+final class Statement {
+    private array $bound = [];
+    public function bindResult(mixed &...$vars): bool {
+        foreach ($vars as $i => &$var) { $this->bound[$i] = &$var; }
+        return true;
+    }
+    public function fetch(int $row): void { $this->bound[0] = $row; $this->bound[1] = "r$row"; }
+    public static function setAll(mixed &...$vars): void { foreach ($vars as $i => &$var) { $var = "s$i"; } }
+    public function setTwo(&$m, &$n): void { $m = "m"; $n = "n"; }
+}
+final class Result {
+    private array $boundValues = [];
+    public function __construct(private Statement $statement) {
+        $this->boundValues = [null, null];
+        $refs = [];
+        foreach ($this->boundValues as $key => &$value) { $refs[$key] = &$value; }
+        $this->statement->bindResult(...$refs);
+    }
+    public function row(int $row): string {
+        $this->statement->fetch($row);
+        return implode(",", $this->boundValues);
+    }
+}
+$result = new Result(new Statement());
+echo $result->row(1), "|", $result->row(2), "\n";
+$x = 0; $y = 0;
+$refs = [&$x, &$y];
+Statement::setAll(...$refs);
+echo "$x $y\n";
+$c = 0; $d = 0;
+$pair = [];
+$pair[0] = &$c; $pair[1] = &$d;
+(new Statement())->setTwo(...$pair);
+echo "$c $d\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1,r1|2,r2\ns0 s1\nm n\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// php makes an unpacked element that lands on a by-reference parameter a reference to its
+/// source slot: `f(...$plain)` writes `$plain`, only the by-reference suffix of `f($a, &...$rest)`
+/// is bound, and a later copy of the array separates like php.
+#[test]
+fn test_spread_of_plain_elements_into_by_reference_parameters_makes_them_references() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function setAll(mixed &...$vars): void { foreach ($vars as $i => &$var) { $var = "v$i"; } }
+function tail($first, &...$rest): void { $first = "changed"; foreach ($rest as &$r) { $r = "r"; } }
+final class Binder {
+    public static function setAll(mixed &...$vars): void { foreach ($vars as $i => &$var) { $var = "s$i"; } }
+    public function named(&$a, &$b): void { $a = "A"; $b = "B"; }
+}
+$plain = [0, 0];
+setAll(...$plain);
+echo implode(",", $plain), "\n";
+$m = [1, 2, 3];
+tail(...$m);
+echo implode(",", $m), "\n";
+$copy = [0, 0];
+setAll(...$copy);
+$other = $copy;
+$other[0] = "other";
+echo implode(",", $copy), " ", implode(",", $other), "\n";
+$s = [0, 0];
+Binder::setAll(...$s);
+echo implode(",", $s), "\n";
+$n = ['b' => 1, 'a' => 2];
+(new Binder())->named(...$n);
+echo $n['a'], $n['b'], "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "v0,v1\n1,r,r\nv0,v1 other,v1\ns0,s1\nAB\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// `f(...[&$x, &$y])` (direct and through a callable string) lowered the bare array-reference
+/// node and panicked; a declared `array` holding int-keyed hash storage (an int-keyed literal, or a
+/// list a by-reference unpack promoted) was sliced as a packed list and crashed.
+#[test]
+fn test_spread_of_reference_literals_and_int_keyed_hashes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function setAll(mixed &...$vars): void { foreach ($vars as $i => &$var) { $var = "v$i"; } }
+function setTwo(&$m, &$n): void { $m = "m"; $n = "n"; }
+function count_args(...$xs) { return count($xs) . ":" . implode(",", $xs); }
+function relay(array $refs): void {
+    setAll(...$refs);
+    echo count_args(...$refs), "\n";
+}
+$p = 0; $q = 0;
+setAll(...[&$p, &$q]);
+echo "$p $q\n";
+$f = 'setAll';
+$r = 0; $s = 0;
+$f(...[&$r, &$s]);
+echo "$r $s\n";
+$g = 'setTwo';
+$t = 0; $u = 0;
+$refs = [&$t, &$u];
+$g(...$refs);
+echo "$t $u\n";
+$e = 0; $h = 0;
+relay([&$e, &$h]);
+echo "$e $h\n";
+echo count_args(...[5 => 1, 9 => 2]), "\n";
+$keyed = [3 => "a"];
+$keyed[7] = "b";
+(function (array $values) { echo count_args(...$values), "\n"; })($keyed);
+function forward(array $values): void { echo count_args(...$values), "\n"; }
+forward([5 => 1, 9 => 2]);
+forward(['x' => 1, 'y' => 2]);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "v0 v1\nv0 v1\nm n\n2:v0,v1\nv0 v1\n2:1,2\n2:a,b\n2:1,2\n2:1,2\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

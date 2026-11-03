@@ -2,7 +2,7 @@
 title: "sodium_crypto_box_keypair()"
 description: "Generates a random X25519 keypair (secret key followed by public key)."
 sidebar:
-  order: 1030
+  order: 1032
 ---
 
 ## sodium_crypto_box_keypair()

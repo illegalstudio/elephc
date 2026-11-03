@@ -2,7 +2,7 @@
 title: "ini_get_all()"
 description: "Returns every configuration directive, optionally with its access level and scope."
 sidebar:
-  order: 1115
+  order: 1117
 ---
 
 ## ini_get_all()

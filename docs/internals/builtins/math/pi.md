@@ -2,7 +2,7 @@
 title: "pi() - internals"
 description: "Compiler internals for pi(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 669
+  order: 671
 ---
 
 ## `pi()` - internals

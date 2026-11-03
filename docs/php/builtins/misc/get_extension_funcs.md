@@ -2,7 +2,7 @@
 title: "get_extension_funcs()"
 description: "Returns functions exported by a loaded extension or false."
 sidebar:
-  order: 708
+  order: 710
 ---
 
 ## get_extension_funcs()

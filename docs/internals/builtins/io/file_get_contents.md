@@ -2,7 +2,7 @@
 title: "file_get_contents() - internals"
 description: "Compiler internals for file_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 332
+  order: 334
 ---
 
 ## `file_get_contents()` - internals

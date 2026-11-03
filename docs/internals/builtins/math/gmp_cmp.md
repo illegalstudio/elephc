@@ -2,7 +2,7 @@
 title: "gmp_cmp() - internals"
 description: "Compiler internals for gmp_cmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 607
+  order: 609
 ---
 
 ## `gmp_cmp()` - internals

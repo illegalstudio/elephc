@@ -2,7 +2,7 @@
 title: "imageconvolution()"
 description: "Applies a 3x3 convolution matrix to an image."
 sidebar:
-  order: 502
+  order: 504
 ---
 
 ## imageconvolution()

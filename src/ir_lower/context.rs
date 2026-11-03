@@ -783,6 +783,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Set while a container write BORROWS its value operand — the reference belongs to a
     /// hidden temporary that outlives the write. See `with_borrowed_write_operand`.
     write_operand_is_borrowed: bool,
+    /// Set while a DIRECT call (`f(...$a)`, `$o->m(...$a)`) builds its descriptor argument
+    /// container: php makes an element landing on a by-reference parameter a reference to the
+    /// source slot, which `call_user_func()` (values only) must not do.
+    pub(crate) direct_by_ref_unpack: bool,
     eval_barrier_active: bool,
     eval_executed: bool,
     consuming_string_append_enabled: bool,
@@ -1015,6 +1019,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             argument_guards: HashMap::new(),
             argument_guard_scopes: Vec::new(),
             write_operand_is_borrowed: false,
+            direct_by_ref_unpack: false,
             eval_barrier_active: false,
             body_contains_eval: false,
             eval_executed: false,

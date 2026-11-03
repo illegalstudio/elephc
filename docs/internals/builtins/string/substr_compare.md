@@ -2,7 +2,7 @@
 title: "substr_compare() - internals"
 description: "Compiler internals for substr_compare(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1067
+  order: 1069
 ---
 
 ## `substr_compare()` - internals

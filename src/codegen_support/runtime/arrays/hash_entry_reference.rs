@@ -17,7 +17,7 @@
 //!   by-reference walk that already yielded the tail reaches an element appended afterwards.
 
 use crate::codegen_support::callable_invoker_args::{
-    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG,
+    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG, INVOKER_ARG_REF_CELL_TAG,
 };
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -68,7 +68,9 @@ pub fn emit_hash_entry_reference(emitter: &mut Emitter) {
 /// `{12|13, cell, 7}`) already belongs to a reference set. Its cell is the same managed reference
 /// cell shape, so the entry adopts that cell as tag 11 rather than wrapping the marker in a second
 /// cell: wrapping it left `$x` bound to the old cell while writes through the new one replaced
-/// the marker, so `$f(...$a)` into a by-reference variadic never reached `$x`.
+/// the marker, so `$f(...$a)` into a by-reference variadic never reached `$x`. A by-reference
+/// variadic argument (`{11, caller cell, 7}`, boxed by the call) is adopted the same way, so
+/// `foreach ($vars as &$v)` inside the callee writes the caller's variables.
 ///
 /// Input: argument 0 = address of `entry.value_lo` (the by-reference foreach value address).
 /// Output: integer result register = managed reference-cell pointer.
@@ -105,6 +107,8 @@ fn emit_make_reference(emitter: &mut Emitter) {
             emitter.instruction("b.eq __rt_hash_entry_make_reference_marker");  // adopt the cell the marker shares
             emitter.instruction(&format!("cmp x10, #{ARRAY_GLOBAL_REF_CELL_TAG}"));// an element marker sharing a global cell?
             emitter.instruction("b.eq __rt_hash_entry_make_reference_marker");  // adopt the cell the marker shares
+            emitter.instruction(&format!("cmp x10, #{INVOKER_ARG_REF_CELL_TAG}"));// a by-reference variadic argument's caller cell?
+            emitter.instruction("b.eq __rt_hash_entry_make_reference_marker");  // adopt the caller's cell (`foreach ($vars as &$v)`)
             emitter.label("__rt_hash_entry_make_reference_plain_box");
             emitter.instruction("ldr w10, [x9, #-12]");                         // read the cell refcount from the uniform heap header
             emitter.instruction("cmp w10, #1");                                 // is this zval shared with another array's bucket?
@@ -192,6 +196,8 @@ fn emit_make_reference(emitter: &mut Emitter) {
             emitter.instruction("je __rt_hash_entry_make_reference_marker");    // adopt the cell the marker shares
             emitter.instruction(&format!("cmp QWORD PTR [r10], {ARRAY_GLOBAL_REF_CELL_TAG}"));// an element marker sharing a global cell?
             emitter.instruction("je __rt_hash_entry_make_reference_marker");    // adopt the cell the marker shares
+            emitter.instruction(&format!("cmp QWORD PTR [r10], {INVOKER_ARG_REF_CELL_TAG}"));// a by-reference variadic argument's caller cell?
+            emitter.instruction("je __rt_hash_entry_make_reference_marker");    // adopt the caller's cell
             emitter.label("__rt_hash_entry_make_reference_plain_box");
             emitter.instruction("mov r11d, DWORD PTR [r10 - 12]");              // read the cell refcount from the uniform heap header
             emitter.instruction("cmp r11d, 1");                                 // is this zval shared with another array's bucket?

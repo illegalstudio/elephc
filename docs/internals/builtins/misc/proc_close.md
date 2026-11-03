@@ -2,7 +2,7 @@
 title: "proc_close() - internals"
 description: "Compiler internals for proc_close(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 780
+  order: 782
 ---
 
 ## `proc_close()` - internals

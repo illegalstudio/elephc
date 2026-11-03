@@ -2,7 +2,7 @@
 title: "bccomp() - internals"
 description: "Compiler internals for bccomp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 576
+  order: 578
 ---
 
 ## `bccomp()` - internals

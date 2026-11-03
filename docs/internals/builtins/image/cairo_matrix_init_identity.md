@@ -2,7 +2,7 @@
 title: "cairo_matrix_init_identity() - internals"
 description: "Compiler internals for cairo_matrix_init_identity(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 435
+  order: 437
 ---
 
 ## `cairo_matrix_init_identity()` - internals

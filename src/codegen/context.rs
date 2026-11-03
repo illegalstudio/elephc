@@ -84,7 +84,7 @@ pub(crate) fn helper_marker_scope(key: &str) -> u64 {
 /// it has to be identical on every run and every host, which `RandomState` is not. 48 bits keeps
 /// the label short while leaving collisions across a few thousand bodies negligible — and a
 /// collision is an assembler error, never silent.
-fn body_label_scope(name: &str) -> u64 {
+pub(super) fn body_label_scope(name: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in name.as_bytes() {
         hash ^= u64::from(*byte);

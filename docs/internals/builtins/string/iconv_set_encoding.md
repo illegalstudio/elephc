@@ -2,7 +2,7 @@
 title: "iconv_set_encoding() - internals"
 description: "Compiler internals for iconv_set_encoding(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 929
+  order: 931
 ---
 
 ## `iconv_set_encoding()` - internals

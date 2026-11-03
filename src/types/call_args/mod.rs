@@ -15,8 +15,9 @@ mod planner;
 mod static_spread;
 
 pub(crate) use matching::{
-    named_param_index, positional_param_type, regular_param_count, required_param_count,
-    required_argument_binding_signature,
+    by_ref_suffix_start, by_ref_suffix_start_of, named_param_index, spread_binding_window, positional_param_type, regular_param_count,
+    required_param_count,
+    required_argument_binding_signature, spread_reaches_by_ref_suffix,
     variadic_element_type,
 };
 pub(crate) use plan::{

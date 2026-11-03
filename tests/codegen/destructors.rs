@@ -1378,15 +1378,12 @@ echo "end\n";
     );
 }
 
-/// A spread into a by-reference parameter releases its element like any other.
+/// A spread into a by-reference parameter binds the element itself and releases it like any other.
 ///
-/// Asserted as produced, and two lines here are a php divergence this change does NOT address and
-/// must not be read as parity: php binds the array element by reference, so it prints
-/// `takes local` / `destruct local` and then `after spread replaced`, while elephc finds no
-/// writeback target for a spread element, warns, and degrades the parameter to by-value — the
-/// caller's element is left untouched and the callee's replacement dies at the callee's scope exit.
-/// What this fixture pins is the balance: the final `destruct local` was absent before the element
-/// debt was paid, so the spread element outlived the program even in the degraded shape.
+/// php's unpack makes `$args[0]` the by-reference argument (also from a function whose `eval`
+/// gives it the hidden `func_get_args()` collector): the callee's write replaces the element and
+/// destructs the original there, and the replacement dies with `$args`. Every object is
+/// destructed exactly once.
 #[test]
 fn test_object_spread_into_a_by_ref_parameter_destructs_its_element() {
     let out = compile_and_run_capture(
@@ -1408,7 +1405,7 @@ echo "end\n";
     );
     assert_eq!(
         out.stdout,
-        "takes local\ndestruct replaced\nafter spread local\ndestruct local\nend\n"
+        "takes local\ndestruct local\nafter spread replaced\ndestruct replaced\nend\n"
     );
 }
 

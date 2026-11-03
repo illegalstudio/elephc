@@ -2,7 +2,7 @@
 title: "set_time_limit()"
 description: "Limits the maximum execution time."
 sidebar:
-  order: 791
+  order: 793
 ---
 
 ## set_time_limit()

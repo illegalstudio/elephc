@@ -174,6 +174,8 @@ pub(crate) fn mysqli_declarations(php_version: PhpVersion) -> Program {
         }
         declarations.extend([
             procedural::decl_fn_mysqli_stmt_bind_param(),
+            procedural::decl_fn_mysqli_stmt_bind_result(),
+            procedural::decl_fn_mysqli_stmt_fetch(),
             procedural::decl_fn_mysqli_stmt_execute(),
             procedural::decl_fn_mysqli_stmt_get_result(),
             procedural::decl_fn_mysqli_stmt_store_result(),

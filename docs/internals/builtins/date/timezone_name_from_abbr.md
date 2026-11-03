@@ -2,7 +2,7 @@
 title: "timezone_name_from_abbr() - internals"
 description: "Compiler internals for timezone_name_from_abbr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 261
+  order: 263
 ---
 
 ## `timezone_name_from_abbr()` - internals

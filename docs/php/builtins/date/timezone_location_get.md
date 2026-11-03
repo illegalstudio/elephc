@@ -2,7 +2,7 @@
 title: "timezone_location_get()"
 description: "Returns a timezone's country code, latitude, longitude, and comments."
 sidebar:
-  order: 260
+  order: 262
 ---
 
 ## timezone_location_get()

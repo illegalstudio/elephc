@@ -2,7 +2,7 @@
 title: "highlight_string()"
 description: "Syntax highlighting of a string."
 sidebar:
-  order: 920
+  order: 922
 ---
 
 ## highlight_string()

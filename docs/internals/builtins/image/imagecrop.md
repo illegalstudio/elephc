@@ -2,7 +2,7 @@
 title: "imagecrop() - internals"
 description: "Compiler internals for imagecrop(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 517
+  order: 519
 ---
 
 ## `imagecrop()` - internals

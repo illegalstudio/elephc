@@ -133,6 +133,18 @@ impl Checker {
                 ))
             }
             CallableTarget::StaticMethod { receiver, method } => {
+                // A class a closed world never has: the callable's creation raises php's
+                // `Class "X" not found` (see `lower_first_class_callable`), so nothing can be
+                // known, or needs to be, about the signature.
+                if let StaticReceiver::Named(class_name) = receiver {
+                    if crate::closed_world::class_is_absent(class_name.as_str(), |name| {
+                        self.classes.contains_key(name)
+                            || self.interfaces.contains_key(name)
+                            || self.enums.contains_key(name)
+                    }) {
+                        return Ok(dynamic_first_class_callable_sig());
+                    }
+                }
 
                 let method_key = crate::names::php_symbol_key(method);
 

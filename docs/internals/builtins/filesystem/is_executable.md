@@ -2,7 +2,7 @@
 title: "is_executable() - internals"
 description: "Compiler internals for is_executable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 293
+  order: 295
 ---
 
 ## `is_executable()` - internals

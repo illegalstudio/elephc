@@ -12,6 +12,32 @@ use crate::ir_lower::ownership;
 
 /// Lowers first-class callable creation.
 pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
+    // A static method of a class a closed world can never have (the checker accepted it on the
+    // same rule): php raises `Class "X" not found` when the callable is created. The callable
+    // that follows is unreachable and only keeps the expression's `Closure` storage typed.
+    if let CallableTarget::StaticMethod {
+        receiver: crate::parser::ast::StaticReceiver::Named(class_name),
+        ..
+    } = target
+    {
+        if crate::closed_world::class_is_absent(class_name.as_str(), |name| {
+            ctx.classes.contains_key(name)
+                || ctx.interfaces.contains_key(name)
+                || ctx.enums.contains_key(name)
+        }) {
+            let raised = super::late_bound_call::lower_closed_world_class_not_found(
+                ctx,
+                class_name.as_str(),
+                expr,
+            );
+            crate::ir_lower::ownership::release_if_owned(ctx, raised, Some(expr.span));
+            let placeholder = CallableTarget::Function(crate::names::Name::from_parts(
+                crate::names::NameKind::FullyQualified,
+                vec!["strlen".to_string()],
+            ));
+            return lower_first_class_callable(ctx, &placeholder, expr);
+        }
+    }
     if let CallableTarget::Function(name) = target {
         super::late_bound_call::guard_runtime_function_binding(ctx, name.as_str(), expr);
     }

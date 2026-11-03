@@ -2,7 +2,7 @@
 title: "cairo_rotate()"
 description: "Rotates the context's transformation by the given angle in radians."
 sidebar:
-  order: 453
+  order: 455
 ---
 
 ## cairo_rotate()

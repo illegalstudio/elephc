@@ -2,7 +2,7 @@
 title: "gmp_clrbit()"
 description: "Clears a bit in a GMP number."
 sidebar:
-  order: 606
+  order: 608
 ---
 
 ## gmp_clrbit()

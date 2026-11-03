@@ -2,7 +2,7 @@
 title: "hash_pbkdf2() - internals"
 description: "Compiler internals for hash_pbkdf2(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 916
+  order: 918
 ---
 
 ## `hash_pbkdf2()` - internals

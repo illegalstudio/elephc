@@ -2,7 +2,7 @@
 title: "__elephc_opcache_rt_script_field() - internals"
 description: "Compiler internals for __elephc_opcache_rt_script_field(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1297
+  order: 1299
 ---
 
 ## `__elephc_opcache_rt_script_field()` - internals

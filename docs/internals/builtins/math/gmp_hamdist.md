@@ -2,7 +2,7 @@
 title: "gmp_hamdist() - internals"
 description: "Compiler internals for gmp_hamdist(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 618
+  order: 620
 ---
 
 ## `gmp_hamdist()` - internals

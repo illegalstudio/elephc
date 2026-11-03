@@ -2,7 +2,7 @@
 title: "gmp_invert()"
 description: "Modular inverse."
 sidebar:
-  order: 622
+  order: 624
 ---
 
 ## gmp_invert()

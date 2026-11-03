@@ -2,7 +2,7 @@
 title: "is_null() - internals"
 description: "Compiler internals for is_null(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1103
+  order: 1105
 ---
 
 ## `is_null()` - internals

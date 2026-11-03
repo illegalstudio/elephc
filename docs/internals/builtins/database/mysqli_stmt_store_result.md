@@ -2,7 +2,7 @@
 title: "mysqli_stmt_store_result() - internals"
 description: "Compiler internals for mysqli_stmt_store_result(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 191
+  order: 193
 ---
 
 ## `mysqli_stmt_store_result()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1296](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1296) (`mysqli_stmt_store_result`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1323](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1323) (`mysqli_stmt_store_result`)
 - **Function symbol**: `mysqli_stmt_store_result()`
 
 

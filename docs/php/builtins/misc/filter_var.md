@@ -2,7 +2,7 @@
 title: "filter_var()"
 description: "Filters a variable with a specified filter."
 sidebar:
-  order: 692
+  order: 694
 ---
 
 ## filter_var()

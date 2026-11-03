@@ -2,7 +2,7 @@
 title: "gmp_popcount() - internals"
 description: "Compiler internals for gmp_popcount(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 634
+  order: 636
 ---
 
 ## `gmp_popcount()` - internals

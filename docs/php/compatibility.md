@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **1111 / 2169** (51%), classes **193 / 329** (59%), constants **1580 / 3180** (50%).
+Overall coverage: functions **1113 / 2169** (51%), classes **193 / 329** (59%), constants **1580 / 3180** (50%).
 
 ## Coverage by PHP module
 
@@ -43,7 +43,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `ldap` | 0 / 55 · 0% | 0 / 3 · 0% | 0 / 92 · 0% |
 | `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 10 / 28 · 36% |
 | `mbstring` | 65 / 65 · 100% | - | 9 / 9 · 100% |
-| [`mysqli`](./mysqli.md#functions) | 84 / 106 · 79% | 4 / 6 · 67% | 52 / 110 · 47% |
+| [`mysqli`](./mysqli.md#functions) | 86 / 106 · 81% | 4 / 6 · 67% | 52 / 110 · 47% |
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |
 | `openssl` | 4 / 64 · 6% | 0 / 3 · 0% | 3 / 70 · 4% |
 | [`pcntl`](./pcntl.md#functions) | 28 / 28 · 100% | 1 / 1 · 100% | 0 / 129 · 0% |
@@ -93,7 +93,7 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `gd` functions: 83 / 0
 - `gd` constants: 67 / 0
 - `gmp` constants: 9 / 0
-- `mysqli` functions: 84 / 0
+- `mysqli` functions: 86 / 0
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0
 - `random` functions: 9 / 3
@@ -101,7 +101,7 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `standard` functions: 435 / 420
 - `standard` constants: 309 / 288
 
-Of those functions, 201 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
+Of those functions, 203 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
 
 2 symbol(s) exist only inside `eval()` and are not counted in the table: `register_tick_function()`, `unregister_tick_function()`.
 

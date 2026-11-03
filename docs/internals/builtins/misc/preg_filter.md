@@ -2,7 +2,7 @@
 title: "preg_filter() - internals"
 description: "Compiler internals for preg_filter(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 774
+  order: 776
 ---
 
 ## `preg_filter()` - internals

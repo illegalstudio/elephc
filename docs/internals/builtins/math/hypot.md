@@ -2,7 +2,7 @@
 title: "hypot() - internals"
 description: "Compiler internals for hypot(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 654
+  order: 656
 ---
 
 ## `hypot()` - internals

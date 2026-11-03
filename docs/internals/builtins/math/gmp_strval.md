@@ -2,7 +2,7 @@
 title: "gmp_strval() - internals"
 description: "Compiler internals for gmp_strval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 649
+  order: 651
 ---
 
 ## `gmp_strval()` - internals

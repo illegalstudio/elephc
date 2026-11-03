@@ -21,7 +21,7 @@
 //! - Indexed containers are widened to boxed slots first: a marker needs a pointer-sized slot.
 
 use crate::codegen_support::callable_invoker_args::{
-    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG,
+    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG, INVOKER_ARG_REF_CELL_TAG,
 };
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -326,6 +326,15 @@ fn emit_ref_slot_cell_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_ref_slot_cell_existing");                    // share its cell
     emitter.instruction(&format!("cmp x10, #{}", ARRAY_GLOBAL_REF_CELL_TAG));   // is it a reference to a global?
     emitter.instruction("b.eq __rt_ref_slot_cell_existing");                    // share its cell
+    // A by-reference variadic element is the caller's own cell, boxed by the call
+    // (`lower_invoker_ref_variadic_arg_marker`): `foreach ($vars as &$v)` must share it, not wrap the
+    // borrowed marker in a new cell that no caller variable sees.
+    emitter.instruction(&format!("cmp x10, #{}", INVOKER_ARG_REF_CELL_TAG));    // is it a by-reference variadic argument?
+    emitter.instruction("b.ne __rt_ref_slot_cell_take");                        // no: an ordinary box
+    emitter.instruction("ldr x11, [x9, #16]");                                  // the tag the caller's cell stores
+    emitter.instruction("cmp x11, #7");                                         // a boxed Mixed cell has the shared-cell layout
+    emitter.instruction("b.eq __rt_ref_slot_cell_existing");                    // share the caller's cell
+    emitter.label("__rt_ref_slot_cell_take");
     emitter.instruction("mov x0, x9");                                          // the cell takes over the slot's box
     emitter.instruction("b __rt_ref_slot_cell_make");                           // wrap it
     emitter.label("__rt_ref_slot_cell_null");
@@ -438,6 +447,14 @@ fn emit_elem_ref_cell_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_elem_ref_cell_hash_existing");               // share its cell
     emitter.instruction(&format!("cmp x9, #{}", ARRAY_GLOBAL_REF_CELL_TAG));    // is it a reference to a global?
     emitter.instruction("b.eq __rt_elem_ref_cell_hash_existing");               // share its cell
+    // A by-reference variadic element (`foreach ($vars as &$v)` converts the collector to a hash
+    // first): share the caller's boxed cell, as `__rt_ref_slot_cell` does for the list form.
+    emitter.instruction(&format!("cmp x9, #{}", INVOKER_ARG_REF_CELL_TAG));     // is it a by-reference variadic argument?
+    emitter.instruction("b.ne __rt_elem_ref_cell_hash_take");                   // no: an ordinary box
+    emitter.instruction("ldr x9, [x1, #16]");                                   // the tag the caller's cell stores
+    emitter.instruction("cmp x9, #7");                                          // a boxed Mixed cell has the shared-cell layout
+    emitter.instruction("b.eq __rt_elem_ref_cell_hash_existing");               // share the caller's cell
+    emitter.label("__rt_elem_ref_cell_hash_take");
     emitter.instruction("str x1, [sp, #24]");                                   // the cell takes a reference to the entry's box
     emitter.instruction("mov x0, x1");                                          // the setter below releases the bucket's own reference
     emitter.instruction("bl __rt_incref");                                      // so the cell needs one of its own
@@ -502,6 +519,12 @@ fn emit_ref_slot_cell_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_ref_slot_cell_existing");                      // share its cell
     emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG));    // is it a reference to a global?
     emitter.instruction("je __rt_ref_slot_cell_existing");                      // share its cell
+    // See the AArch64 body: a boxed by-reference variadic element shares the caller's cell.
+    emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG));     // is it a by-reference variadic argument?
+    emitter.instruction("jne __rt_ref_slot_cell_take");                         // no: an ordinary box
+    emitter.instruction("cmp QWORD PTR [r10 + 16], 7");                         // a boxed Mixed cell has the shared-cell layout
+    emitter.instruction("je __rt_ref_slot_cell_existing");                      // share the caller's cell
+    emitter.label("__rt_ref_slot_cell_take");
     emitter.instruction("mov rdi, r10");                                        // the cell takes over the slot's box
     emitter.instruction("jmp __rt_ref_slot_cell_make");                         // wrap it
     emitter.label("__rt_ref_slot_cell_null");
@@ -614,6 +637,12 @@ fn emit_elem_ref_cell_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_elem_ref_cell_hash_existing");                 // share its cell
     emitter.instruction(&format!("cmp r10, {}", ARRAY_GLOBAL_REF_CELL_TAG));    // is it a reference to a global?
     emitter.instruction("je __rt_elem_ref_cell_hash_existing");                 // share its cell
+    // See the AArch64 body: a boxed by-reference variadic element shares the caller's cell.
+    emitter.instruction(&format!("cmp r10, {}", INVOKER_ARG_REF_CELL_TAG));     // is it a by-reference variadic argument?
+    emitter.instruction("jne __rt_elem_ref_cell_hash_take");                    // no: an ordinary box
+    emitter.instruction("cmp QWORD PTR [rdi + 16], 7");                         // a boxed Mixed cell has the shared-cell layout
+    emitter.instruction("je __rt_elem_ref_cell_hash_existing");                 // share the caller's cell
+    emitter.label("__rt_elem_ref_cell_hash_take");
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // the cell takes a reference to the entry's box
     emitter.instruction("mov rax, rdi");                                        // the setter below releases the bucket's own reference
     emitter.instruction("call __rt_incref");                                    // so the cell needs one of its own

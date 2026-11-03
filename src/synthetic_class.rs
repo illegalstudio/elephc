@@ -207,6 +207,11 @@ fn name_parts(name: &str) -> Vec<String> {
 // Expression helpers
 // ---------------------------------------------------------------------------
 
+/// `&$source` as the value of an element or property write (`$this->refs[$i] = &$var;`).
+pub fn e_ref(source: Expr) -> Expr {
+    Expr::new(ExprKind::ArrayReference(Box::new(source)), Span::dummy())
+}
+
 /// The `null` literal.
 pub fn e_null() -> Expr {
     Expr::new(ExprKind::Null, Span::dummy())
@@ -2249,7 +2254,7 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
                 audit_expr(arg, out);
             }
         }
-        ExprKind::Spread(inner) => audit_expr(inner, out),
+        ExprKind::Spread(inner) | ExprKind::ArrayReference(inner) => audit_expr(inner, out),
         // Leaves: nothing to descend into. A class-constant read names no function, and a magic
         // constant is substituted for a literal by `magic_constants` before anything runs.
         ExprKind::ScopedConstantAccess { .. }

@@ -2,7 +2,7 @@
 title: "gmp_sub()"
 description: "Subtracts two GMP numbers."
 sidebar:
-  order: 650
+  order: 652
 ---
 
 ## gmp_sub()

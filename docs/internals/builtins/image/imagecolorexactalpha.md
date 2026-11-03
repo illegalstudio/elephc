@@ -2,7 +2,7 @@
 title: "imagecolorexactalpha() - internals"
 description: "Compiler internals for imagecolorexactalpha(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 494
+  order: 496
 ---
 
 ## `imagecolorexactalpha()` - internals

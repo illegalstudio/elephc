@@ -2,7 +2,7 @@
 title: "gmp_abs() - internals"
 description: "Compiler internals for gmp_abs(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 602
+  order: 604
 ---
 
 ## `gmp_abs()` - internals

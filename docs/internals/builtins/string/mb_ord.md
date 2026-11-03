@@ -2,7 +2,7 @@
 title: "mb_ord() - internals"
 description: "Compiler internals for mb_ord(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 976
+  order: 978
 ---
 
 ## `mb_ord()` - internals

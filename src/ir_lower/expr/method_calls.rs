@@ -526,7 +526,13 @@ pub(super) fn lower_runtime_spread_method_call(
     if !args.iter().any(is_spread_arg) {
         return None;
     }
-    if signature.is_some() && has_statically_indexed_trailing_method_spread(ctx, args) {
+    // A by-reference parameter must bind to the unpacked element itself, which only the
+    // descriptor invoker does (per parameter, from the reference marker the unpack keeps).
+    let spreads_into_reference = signature
+        .is_some_and(|sig| crate::types::call_args::spread_reaches_by_ref_suffix(sig, args));
+    if signature.is_some() && !spreads_into_reference
+        && has_statically_indexed_trailing_method_spread(ctx, args)
+    {
         return None;
     }
     // `Fiber::start()` has no emitted method body to build a descriptor over: its callback-shaped
@@ -554,7 +560,16 @@ pub(super) fn lower_runtime_spread_method_call(
         result_type,
         expr.span,
     );
-    let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
+    let arg_container = if spreads_into_reference {
+        // The signature decides which unpacked elements become references to their source slot.
+        let outer = std::mem::replace(&mut ctx.direct_by_ref_unpack, true);
+        let container =
+            super::descriptor_args::lower_named_descriptor_invoker_arg_container(ctx, args, signature, expr.span);
+        ctx.direct_by_ref_unpack = outer;
+        container
+    } else {
+        lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+    };
     Some(emit_callable_descriptor_invoke(ctx, descriptor, arg_container, expr.span))
 }
 

@@ -2,7 +2,7 @@
 title: "gmp_and() - internals"
 description: "Compiler internals for gmp_and(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 604
+  order: 606
 ---
 
 ## `gmp_and()` - internals

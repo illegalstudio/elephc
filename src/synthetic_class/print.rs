@@ -510,10 +510,10 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             value_by_ref,
             body,
         } => {
-            assert!(!value_by_ref, "by-ref foreach is not modelled");
+            let by_ref = if *value_by_ref { "&" } else { "" };
             let binding = match key_var {
-                Some(key) => format!("${key} => ${value_var}"),
-                None => format!("${value_var}"),
+                Some(key) => format!("${key} => {by_ref}${value_var}"),
+                None => format!("{by_ref}${value_var}"),
             };
             format!(
                 "{indent}foreach ({} as {binding}) {}",
@@ -905,6 +905,8 @@ fn render(value: &Expr) -> (String, u8) {
             (format!("${var}({})", argument_list(args)), ATOM)
         }
         ExprKind::Spread(value) => (format!("...{}", at(value, ATOM)), ATOM),
+        // `[&$var]` / `$a[] = &$var`: only meaningful as an array element or assignment source.
+        ExprKind::ArrayReference(value) => (format!("&{}", at(value, ATOM)), ATOM),
         ExprKind::Closure {
             params,
             return_type,

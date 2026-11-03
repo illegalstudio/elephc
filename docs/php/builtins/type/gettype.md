@@ -2,7 +2,7 @@
 title: "gettype()"
 description: "Returns the type of a variable as a string."
 sidebar:
-  order: 1091
+  order: 1093
 ---
 
 ## gettype()

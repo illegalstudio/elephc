@@ -2,7 +2,7 @@
 title: "gmp_invert() - internals"
 description: "Compiler internals for gmp_invert(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 622
+  order: 624
 ---
 
 ## `gmp_invert()` - internals

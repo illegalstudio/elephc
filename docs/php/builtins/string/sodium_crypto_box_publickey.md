@@ -2,7 +2,7 @@
 title: "sodium_crypto_box_publickey()"
 description: "Extracts the public key from a crypto_box keypair."
 sidebar:
-  order: 1031
+  order: 1033
 ---
 
 ## sodium_crypto_box_publickey()

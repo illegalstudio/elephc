@@ -2,7 +2,7 @@
 title: "gmp_root() - internals"
 description: "Compiler internals for gmp_root(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 641
+  order: 643
 ---
 
 ## `gmp_root()` - internals

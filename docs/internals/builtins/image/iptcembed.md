@@ -2,7 +2,7 @@
 title: "iptcembed() - internals"
 description: "Compiler internals for iptcembed(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 560
+  order: 562
 ---
 
 ## `iptcembed()` - internals

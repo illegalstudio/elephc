@@ -2,7 +2,7 @@
 title: "filesize() - internals"
 description: "Compiler internals for filesize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 286
+  order: 288
 ---
 
 ## `filesize()` - internals

@@ -2,7 +2,7 @@
 title: "easter_date() - internals"
 description: "Compiler internals for easter_date(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 231
+  order: 233
 ---
 
 ## `easter_date()` - internals

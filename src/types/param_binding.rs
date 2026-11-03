@@ -734,6 +734,46 @@ fn union_admits_object_as_is(expected: &PhpType, actual: &PhpType) -> bool {
     })
 }
 
+/// Returns the object classes of a gradual union argument PHP's weak mode may bind through the
+/// declared `string` arm, or `None` when the shape does not apply.
+///
+/// The argument must be a union of named objects and, when the declaration admits null, null
+/// (`ReflectionNamedType|ReflectionUnionType|ReflectionIntersectionType|null` handed to
+/// `Type|string|null`, symfony/ux-live-component's `LiveComponentDebugCommand::displayType()`).
+/// The caller still proves, with its own class metadata, that every class is `Stringable` and that
+/// no class-like member of the declaration accepts it as it is.
+pub(crate) fn object_union_string_binding_classes<'a>(
+    expected: &PhpType,
+    actual: &'a PhpType,
+) -> Option<Vec<&'a str>> {
+    if !param_accepts_weak_string_coercion(expected) {
+        return None;
+    }
+    let expected_admits_null = match expected {
+        PhpType::Union(members) => {
+            if members.iter().any(|member| matches!(member, PhpType::Mixed)) {
+                return None;
+            }
+            members.iter().any(|member| matches!(member, PhpType::Void))
+        }
+        _ => false,
+    };
+    let PhpType::Union(members) = actual else {
+        return None;
+    };
+    let mut classes = Vec::new();
+    for member in members {
+        match member {
+            PhpType::Void if expected_admits_null => {}
+            PhpType::Object(name) if !name.is_empty() && !name.eq_ignore_ascii_case("object") => {
+                classes.push(name.as_str());
+            }
+            _ => return None,
+        }
+    }
+    (!classes.is_empty()).then_some(classes)
+}
+
 /// Returns whether a declared parameter contains a `string` arm that PHP may select through
 /// weak object-to-string parameter coercion.
 ///

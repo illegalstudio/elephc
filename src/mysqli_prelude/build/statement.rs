@@ -10,22 +10,18 @@
 //! - TRANSCRIBED from `mysqli_prelude::statement::SRC` (`synthetic_class::transcribe`);
 //!   the oracle `built_declarations_match_the_php_for_every_version` compares the
 //!   built class against that PHP for every profile.
-//! - `bind_param(string $types, mixed &...$vars)` keeps PHP's signature
-//!   (literals are rejected, the variable count is validated against the type
-//!   string), but the variable VALUES are captured at bind time — a documented
-//!   divergence: elephc cannot alias caller variables past the call (variadic
-//!   by-ref elements alias only inside the callee frame, and per-variable
-//!   closure captures need fixed parameter names, whose defaulted-by-ref
-//!   lowering the backend does not support). Re-executing with fresh values
-//!   means re-calling bind_param or using `execute($params)`.
-//! - `bind_result` / `fetch` are deliberately NOT declared: writing a fetched
-//!   row back into caller variables after the binding call is exactly the
-//!   post-call aliasing elephc cannot express, and a silently inert binding
-//!   would be worse than an honest "undefined method". `get_result()` +
-//!   `mysqli_result` fetches cover row reading; `method_exists` stays honest.
+//! - `bind_param(string $types, mixed &...$vars)` keeps PHP's signature and
+//!   semantics: each variable is kept BY REFERENCE, and `execute()` reads its
+//!   value when it runs (the canonical bind-once, assign, execute loop).
+//! - `bind_result(mixed &...$vars)` keeps every caller variable by reference
+//!   too; `fetch()` writes the next row into them and answers php's `true` /
+//!   `null` (no more rows) / `false` (error). A column-count mismatch is php's
+//!   `ArgumentCountError`. doctrine/dbal's `Mysqli\Result` binds a property
+//!   array this way (`$refs = &$this->boundValues; bind_result(...$refs)`).
 //! - `execute` steps once to learn whether a result set exists; `get_result`
 //!   drains the rest and resets the statement so it can be re-executed;
-//!   `store_result` consumes the pending rows so `num_rows` is valid.
+//!   `store_result` buffers the pending rows (so `num_rows` is valid) and
+//!   `fetch` then reads that buffer; without it `fetch` streams.
 
 use crate::parser::ast::{BinOp, CastType, TypeExpr, Stmt};
 use crate::synthetic_class::{
@@ -51,6 +47,10 @@ use crate::synthetic_class::{
     e_this,
     e_this_prop,
     e_var,
+    s_prop_array_assign,
+    s_foreach_by_ref,
+    e_ternary,
+    e_ref,
     method,
     s_array_push,
     s_assign,
@@ -84,9 +84,15 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
         .private_prop("stmt", TypeExpr::Int, Some(e_neg(e_int(1))))
         .private_prop("conn", TypeExpr::Int, Some(e_neg(e_int(1))))
         .private_prop("link", t_nullable(t_class("mysqli")), Some(e_null()))
-        // bind_param state: the type string and the values captured at bind time.
+        // bind_param state: the type string and the caller variables, by reference.
         .private_prop("bindTypes", TypeExpr::Str, Some(e_str("")))
         .private_prop("boundParams", t_array(), Some(e_array(vec![])))
+        // bind_result state: the caller variables fetch() writes each row into.
+        .private_prop("boundResults", t_array(), Some(e_array(vec![])))
+        // store_result buffer: every buffered row's cells, read by fetch() in order.
+        .private_prop("stored", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("storedCells", t_array(), Some(e_array(vec![])))
+        .private_prop("storedCursor", TypeExpr::Int, Some(e_int(0)))
         // Cursor state: execute() pre-steps once; get_result/store_result drain.
         .private_prop("executedOnce", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("hasPending", TypeExpr::Bool, Some(e_bool(false)))
@@ -222,9 +228,6 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
             method("free_result")
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    // Discards a pending buffered result so the statement can be re-executed (php
-                    // frees the client-side buffer). We buffer per-statement in the bridge, so
-                    // draining/resetting the cursor is the equivalent.
                     s_if(
                         e_binop(e_this_prop("hasPending"), BinOp::And, e_binop(e_this_prop("stmt"), BinOp::GtEq, e_int(0))),
                         vec![
@@ -234,6 +237,9 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                         None,
                     ),
                     s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                    s_prop_assign(e_this(), "stored", e_bool(false)),
+                    s_prop_assign(e_this(), "storedCells", e_array(vec![])),
+                    s_prop_assign(e_this(), "storedCursor", e_int(0)),
                 ]),
         )
         .method(
@@ -242,16 +248,19 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                 .variadic_by_ref("vars", Some(t_mixed()))
                 .returns(TypeExpr::Bool)
                 .body(vec![
-                    // Variadic by-ref keeps PHP's signature contract (a literal argument is
-                    // rejected with "must be passed a variable"); the values are captured HERE —
-                    // see the module preamble for the documented divergence from PHP's
-                    // read-at-execute reference semantics.
-                    s_assign("_values", e_array(vec![])),
-                    s_assign("_given", e_call("count", vec![e_var("vars")])),
-                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_given"))), Some(s_expr(e_post_inc("_i"))), vec![
-                        s_array_push("_values", e_index(e_var("vars"), e_var("_i"))),
+                    s_if(
+                        e_not(e_method_call(e_this(), "__elephcBindParamValues", vec![e_var("types"), e_var("vars")])),
+                        vec![
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "boundParams", e_array(vec![])),
+                    s_foreach_by_ref(e_var("vars"), Some("_i"), "_var", vec![
+                        s_prop_array_assign(e_this(), "boundParams", e_var("_i"), e_ref(e_var("_var"))),
                     ]),
-                    s_return(e_method_call(e_this(), "__elephcBindParamValues", vec![e_var("types"), e_var("_values")])),
+                    s_return(e_bool(true)),
                 ]),
         )
         // Shared validation + snapshot behind bind_param (the procedural mysqli_stmt_bind_param
@@ -293,7 +302,97 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                         None,
                     ),
                     s_prop_assign(e_this(), "bindTypes", e_var("types")),
-                    s_prop_assign(e_this(), "boundParams", e_var("values")),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("bind_result")
+                .variadic_by_ref("vars", Some(t_mixed()))
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_assign("_want", e_ternary(e_binop(e_this_prop("stmt"), BinOp::GtEq, e_int(0)), e_call("elephc_pdo_column_count", vec![e_this_prop("stmt")]), e_int(0))),
+                    s_if(
+                        e_binop(e_call("count", vec![e_var("vars")]), BinOp::NotEq, e_var("_want")),
+                        vec![
+                            s_throw(e_new("ArgumentCountError", vec![e_str("Number of bind variables doesn't match number of fields in prepared statement")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "boundResults", e_array(vec![])),
+                    s_foreach_by_ref(e_var("vars"), Some("_i"), "_var", vec![
+                        s_prop_array_assign(e_this(), "boundResults", e_var("_i"), e_ref(e_var("_var"))),
+                    ]),
+                    s_return(e_bool(true)),
+                ]),
+        )
+        .method(
+            method("fetch")
+                .returns(t_nullable(TypeExpr::Bool))
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("stmt"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2050), e_str("mysqli_stmt object is already closed"), e_str("HY000")])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_cols", e_call("count", vec![e_this_prop("boundResults")])),
+                    s_if(
+                        e_this_prop("stored"),
+                        vec![
+                            s_if(
+                                e_binop(e_this_prop("storedCursor"), BinOp::GtEq, e_this_prop("num_rows")),
+                                vec![
+                                    s_return(e_null()),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_assign("_base", e_binop(e_this_prop("storedCursor"), BinOp::Mul, e_this_prop("field_count"))),
+                            s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_cols"))), Some(s_expr(e_post_inc("_i"))), vec![
+                                s_prop_array_assign(e_this(), "boundResults", e_var("_i"), e_index(e_this_prop("storedCells"), e_binop(e_var("_base"), BinOp::Add, e_var("_i")))),
+                            ]),
+                            s_prop_assign(e_this(), "storedCursor", e_binop(e_this_prop("storedCursor"), BinOp::Add, e_int(1))),
+                            s_return(e_bool(true)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_not(e_this_prop("hasPending")),
+                        vec![
+                            s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_rc", e_this_prop("pendingStep")),
+                    s_if(
+                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                            s_return(e_method_call(e_this(), "opFailed", vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("_rc"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                            s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
+                            s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_cols"))), Some(s_expr(e_post_inc("_i"))), vec![
+                        s_prop_array_assign(e_this(), "boundResults", e_var("_i"), e_method_call(e_this(), "columnValue", vec![e_var("_i")])),
+                    ]),
+                    s_prop_assign(e_this(), "pendingStep", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -319,7 +418,6 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                         vec![],
                         None,
                     ),
-                    // Re-execution: rewind the server-side cursor and drop old binds.
                     s_if(
                         e_this_prop("executedOnce"),
                         vec![
@@ -332,7 +430,9 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                     s_prop_assign(e_this(), "executedOnce", e_bool(true)),
                     s_prop_assign(e_this(), "hasPending", e_bool(false)),
                     s_prop_assign(e_this(), "pendingStep", e_int(0)),
-                    // PHP 8.1+: execute's own $params bind as strings, in order.
+                    s_prop_assign(e_this(), "stored", e_bool(false)),
+                    s_prop_assign(e_this(), "storedCells", e_array(vec![])),
+                    s_prop_assign(e_this(), "storedCursor", e_int(0)),
                     s_if(
                         e_binop(e_var("params"), BinOp::StrictNotEq, e_null()),
                         vec![
@@ -374,7 +474,6 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                             ),
                             s_assign("_n", e_call("strlen", vec![e_this_prop("bindTypes")])),
                             s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_n"))), Some(s_expr(e_post_inc("_i"))), vec![
-                                // The values captured by the most recent bind_param call.
                                 s_assign("_value", e_index(e_this_prop("boundParams"), e_var("_i"))),
                                 s_assign("_char", e_call("substr", vec![e_this_prop("bindTypes"), e_var("_i"), e_int(1)])),
                                 s_if(
@@ -425,7 +524,6 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                             s_prop_assign(e_this(), "affected_rows", e_call("elephc_pdo_changes", vec![e_this_prop("conn")])),
                             s_prop_assign(e_this(), "insert_id", e_call("elephc_pdo_last_insert_id", vec![e_this_prop("conn"), e_str("")])),
                             s_expr(e_method_call(e_this(), "refreshLink", vec![])),
-                            // Rewind now so the statement is immediately re-executable.
                             s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
                             s_expr(e_method_call(e_this(), "clearError", vec![])),
                             s_return(e_bool(true)),
@@ -433,8 +531,6 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                         vec![],
                         None,
                     ),
-                    // A result set exists: the first step's verdict (1 = row, 0 = empty) is kept
-                    // pending; get_result()/store_result() drain from here.
                     s_prop_assign(e_this(), "hasPending", e_bool(true)),
                     s_prop_assign(e_this(), "pendingStep", e_var("_rc")),
                     s_prop_assign(e_this(), "num_rows", e_int(0)),
@@ -584,18 +680,19 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                     s_if(
                         e_not(e_this_prop("hasPending")),
                         vec![
-                            // Nothing pending (non-select execute, or already consumed): php-src
-                            // treats this as a successful no-op.
                             s_return(e_bool(true)),
                         ],
                         vec![],
                         None,
                     ),
-                    // Without bind_result/fetch (see the module preamble) the buffered rows have
-                    // no reader; consume and count them so num_rows is valid.
+                    s_assign("_cols", e_this_prop("field_count")),
+                    s_assign("_cells", e_array(vec![])),
                     s_assign("_rowCount", e_int(0)),
                     s_assign("_rc", e_this_prop("pendingStep")),
                     s_while(e_binop(e_var("_rc"), BinOp::Eq, e_int(1)), vec![
+                        s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_cols"))), Some(s_expr(e_post_inc("_i"))), vec![
+                            s_array_push("_cells", e_method_call(e_this(), "columnValue", vec![e_var("_i")])),
+                        ]),
                         s_assign("_rowCount", e_binop(e_var("_rowCount"), BinOp::Add, e_int(1))),
                         s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("stmt")])),
                     ]),
@@ -609,6 +706,9 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                         None,
                     ),
                     s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
+                    s_prop_assign(e_this(), "stored", e_bool(true)),
+                    s_prop_assign(e_this(), "storedCells", e_var("_cells")),
+                    s_prop_assign(e_this(), "storedCursor", e_int(0)),
                     s_prop_assign(e_this(), "num_rows", e_var("_rowCount")),
                     s_prop_assign(e_this(), "affected_rows", e_var("_rowCount")),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
@@ -630,6 +730,9 @@ pub(super) fn decl_class_mysqli_stmt() -> Stmt {
                     s_expr(e_call("elephc_pdo_reset", vec![e_this_prop("stmt")])),
                     s_expr(e_call("elephc_pdo_clear_bindings", vec![e_this_prop("stmt")])),
                     s_prop_assign(e_this(), "hasPending", e_bool(false)),
+                    s_prop_assign(e_this(), "stored", e_bool(false)),
+                    s_prop_assign(e_this(), "storedCells", e_array(vec![])),
+                    s_prop_assign(e_this(), "storedCursor", e_int(0)),
                     s_prop_assign(e_this(), "num_rows", e_int(0)),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
                     s_return(e_bool(true)),

@@ -2,7 +2,7 @@
 title: "password_verify() - internals"
 description: "Compiler internals for password_verify(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1021
+  order: 1023
 ---
 
 ## `password_verify()` - internals

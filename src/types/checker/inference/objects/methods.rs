@@ -853,8 +853,16 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        // `$stmt->bind_result(...$refs)` (doctrine/dbal `Mysqli\Result`): php binds each
+        // by-reference parameter to its unpacked element. Lowering routes such a call through
+        // the descriptor invoker (`lower_runtime_spread_method_call`), which binds reference
+        // markers per parameter, so it is checked under the descriptor contract.
+        let allow_by_ref_spread = args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+            && self.classes.get(class_name)
+                .and_then(|class_info| class_info.methods.get(&php_symbol_key(method)))
+                .is_some_and(|sig| crate::types::call_args::spread_reaches_by_ref_suffix(sig, args));
         self.infer_method_call_on_class_type_with_options(
-            class_name, method, args, expr, env, false,
+            class_name, method, args, expr, env, allow_by_ref_spread,
         )
     }
 
@@ -1808,7 +1816,25 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        self.infer_static_method_call_type_with_options(receiver, method, args, expr, env, false)
+        // Like the instance form: an unpack into a by-reference parameter is checked under the
+        // descriptor contract its lowering uses.
+        let class_name = match receiver {
+            StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+            StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone(),
+            StaticReceiver::Parent => self.current_class.as_ref()
+                .and_then(|class| self.classes.get(class))
+                .and_then(|class_info| class_info.parent.clone()),
+            _ => None,
+        };
+        let method_key = php_symbol_key(method);
+        let allow_by_ref_spread = args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+            && class_name.as_ref().and_then(|class| self.classes.get(class)).is_some_and(|info| {
+                info.static_methods.get(&method_key).or_else(|| info.methods.get(&method_key))
+                    .is_some_and(|sig| crate::types::call_args::spread_reaches_by_ref_suffix(sig, args))
+            });
+        self.infer_static_method_call_type_with_options(
+            receiver, method, args, expr, env, allow_by_ref_spread,
+        )
     }
 
     /// Infers a static method call for descriptor-backed callback paths that can

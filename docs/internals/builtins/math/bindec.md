@@ -2,7 +2,7 @@
 title: "bindec() - internals"
 description: "Compiler internals for bindec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 588
+  order: 590
 ---
 
 ## `bindec()` - internals

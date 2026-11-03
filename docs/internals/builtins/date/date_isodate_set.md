@@ -2,7 +2,7 @@
 title: "date_isodate_set() - internals"
 description: "Compiler internals for date_isodate_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 217
+  order: 219
 ---
 
 ## `date_isodate_set()` - internals

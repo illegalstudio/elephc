@@ -2,7 +2,7 @@
 title: "imagegammacorrect()"
 description: "Applies a gamma correction from one gamma value to another."
 sidebar:
-  order: 532
+  order: 534
 ---
 
 ## imagegammacorrect()

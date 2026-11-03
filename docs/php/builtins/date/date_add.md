@@ -2,7 +2,7 @@
 title: "date_add()"
 description: "Adds an interval to a DateTime, modifying it in place."
 sidebar:
-  order: 204
+  order: 206
 ---
 
 ## date_add()

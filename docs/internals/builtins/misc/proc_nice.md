@@ -2,7 +2,7 @@
 title: "proc_nice() - internals"
 description: "Compiler internals for proc_nice(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 782
+  order: 784
 ---
 
 ## `proc_nice()` - internals

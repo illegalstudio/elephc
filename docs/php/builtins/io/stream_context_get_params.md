@@ -2,7 +2,7 @@
 title: "stream_context_get_params()"
 description: "Retrieves parameters from the specified stream context."
 sidebar:
-  order: 384
+  order: 386
 ---
 
 ## stream_context_get_params()

@@ -2,7 +2,7 @@
 title: "imagefilter() - internals"
 description: "Compiler internals for imagefilter(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 528
+  order: 530
 ---
 
 ## `imagefilter()` - internals

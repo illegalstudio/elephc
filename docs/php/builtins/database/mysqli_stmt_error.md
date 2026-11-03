@@ -2,7 +2,7 @@
 title: "mysqli_stmt_error()"
 description: "Returns the error message of the last call on a statement."
 sidebar:
-  order: 178
+  order: 179
 ---
 
 ## mysqli_stmt_error()

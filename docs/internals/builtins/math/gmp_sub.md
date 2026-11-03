@@ -2,7 +2,7 @@
 title: "gmp_sub() - internals"
 description: "Compiler internals for gmp_sub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 650
+  order: 652
 ---
 
 ## `gmp_sub()` - internals

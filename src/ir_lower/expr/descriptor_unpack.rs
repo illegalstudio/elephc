@@ -137,6 +137,7 @@ pub(super) fn lower_descriptor_unpack_source(
     source: LoweredValue,
     span: Span,
     by_ref_origin: Option<LocalSlotId>,
+    by_ref_from: usize,
 ) {
     // A boxed source keeps the guarded, unreachable iterator path codegen-valid even for
     // a statically non-Traversable object or callable. Evaluation still occurs only once.
@@ -165,7 +166,7 @@ pub(super) fn lower_descriptor_unpack_source(
     }
     // Publish the getIterator owner inside the source/key/value LIFO stack, last,
     // so retirement below is exact reverse order.
-    let (iterator, iterator_owner, _) =
+    let (iterator, iterator_owner, iterator_state) =
         ctx.emit_iter_start_with_origin(source, by_ref_origin.is_some(), by_ref_origin, span);
     let header = ctx.builder.create_named_block("descriptor.unpack.next", Vec::new());
     let body = ctx.builder.create_named_block("descriptor.unpack.body", Vec::new());
@@ -192,20 +193,46 @@ pub(super) fn lower_descriptor_unpack_source(
     ctx.builder.position_at_end(body);
     // The preceding iteration cleared both slots. Publish each fresh result before asking
     // the iterator for another one, since user-defined key/current methods can throw.
-    for (op, slot) in [(Op::IterCurrentKey, &key_slot), (Op::IterCurrentValue, &value_slot)] {
+    let key = ctx.emit_value(
+        Op::IterCurrentKey, vec![iterator.value], None, PhpType::Mixed,
+        Op::IterCurrentKey.default_effects(), Some(span),
+    );
+    ctx.store_local(&key_slot, key, PhpType::Mixed, Some(span));
+    if by_ref_origin.is_some() && by_ref_from > 0 {
+        // Positions before `by_ref_from` bind by-value parameters: php leaves those elements
+        // alone (`f($first, &...$rest)` makes only the tail references), so the entry is only
+        // promoted once the container's next positional key reaches the by-reference suffix.
+        let promote = ctx.builder.create_named_block("descriptor.unpack.value.ref", Vec::new());
+        let plain = ctx.builder.create_named_block("descriptor.unpack.value.plain", Vec::new());
+        let loaded = ctx.builder.create_named_block("descriptor.unpack.value.loaded", Vec::new());
+        let next = ctx.load_local(&state.next_index, Some(span));
+        let bound = emit_i64_at_span(ctx, by_ref_from as i64, span);
+        let reaches = super::dynamic_spreads::compare_ints(ctx, next.value, bound.value, CmpPredicate::Sge, span);
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: reaches.value,
+            then_target: promote, then_args: Vec::new(),
+            else_target: plain, else_args: Vec::new(),
+        });
+        for (block, immediate) in [(promote, Immediate::I64(1)), (plain, Immediate::Bool(true))] {
+            ctx.builder.position_at_end(block);
+            let current = ctx.emit_value(
+                Op::IterCurrentValue, vec![iterator.value], Some(immediate), PhpType::Mixed,
+                Op::IterCurrentValue.default_effects(), Some(span),
+            );
+            ctx.store_local(&value_slot, current, PhpType::Mixed, Some(span));
+            branch_to(ctx, loaded);
+        }
+        ctx.builder.position_at_end(loaded);
+    } else {
         let current = ctx.emit_value(
-            op,
+            Op::IterCurrentValue,
             vec![iterator.value],
-            (op == Op::IterCurrentValue).then_some(if by_ref_origin.is_some() {
-                Immediate::I64(1)
-            } else {
-                Immediate::Bool(true)
-            }),
+            Some(if by_ref_origin.is_some() { Immediate::I64(1) } else { Immediate::Bool(true) }),
             PhpType::Mixed,
-            op.default_effects(),
+            Op::IterCurrentValue.default_effects(),
             Some(span),
         );
-        ctx.store_local(slot, current, PhpType::Mixed, Some(span));
+        ctx.store_local(&value_slot, current, PhpType::Mixed, Some(span));
     }
     let named_key = ctx.builder.create_named_block("descriptor.unpack.key.named", Vec::new());
     let index_check = ctx.builder.create_named_block("descriptor.unpack.key.check", Vec::new());
@@ -262,6 +289,19 @@ pub(super) fn lower_descriptor_unpack_source(
     branch_to(ctx, header);
 
     ctx.builder.position_at_end(exit);
+    // A by-reference walk retains the keys of its next entries and leaves the origin bound to the
+    // walked storage; `iter_end` hands both back, exactly as at a by-reference foreach's exit.
+    // Without it a later by-value unpack of the same local (`f(...$refs); g(...$refs);`) read
+    // the walk's stale state and crashed.
+    if by_ref_origin.is_some() {
+        ctx.emit_void(
+            Op::IterEnd,
+            Vec::new(),
+            Some(Immediate::LocalSlot(iterator_state)),
+            Op::IterEnd.default_effects(),
+            Some(span),
+        );
+    }
     if let Some(slot) = iterator_owner {
         ctx.retire_iter_start_owner(slot, span);
     }

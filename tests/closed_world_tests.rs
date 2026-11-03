@@ -1601,3 +1601,35 @@ echo shift($argc > 5 ? '13/2026' : '12/2026'), "\n";
     assert!(output.status.success(), "run failed: {:?}", output.status);
     assert_eq!(text(&output.stdout), php_stdout(&dir));
 }
+
+/// A first-class callable of a static method on a class a closed world never has
+/// (`\GuzzleHttp\UriTemplate\UriTemplate::expand(...)` behind `class_exists()`, symfony/http-client's
+/// `UriTemplateHttpClient`) compiles: the guarded branch is never taken, and an unguarded one
+/// raises php's `Error: Class "X" not found`. It was `Undefined class`, which handed the class
+/// file to the runtime and failed the closed-world build.
+#[test]
+fn closed_world_static_callable_of_an_absent_class_raises_at_run_time() {
+    let dir = make_test_dir("cw_absent_fcc");
+    fs::write(dir.join("main.php"), r#"<?php
+final class Expander {
+    private function create(): \Closure
+    {
+        if (class_exists(\GuzzleHttp\UriTemplate\UriTemplate::class)) {
+            return \GuzzleHttp\UriTemplate\UriTemplate::expand(...);
+        }
+        if (class_exists(\League\Uri\UriTemplate::class)) {
+            return static fn (string $url, array $vars): string => (new \League\Uri\UriTemplate($url))->expand($vars);
+        }
+        if (class_exists(\Rize\UriTemplate::class)) {
+            return (new \Rize\UriTemplate())->expand(...);
+        }
+        return static fn (string $url, array $vars): string => strtr($url, $vars);
+    }
+    public function run(): string { return ($this->create())('/{a}', ['{a}' => 'x']); }
+}
+echo (new Expander())->run(), "\n";
+try { $f = \Missing\Tool::make(...); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+"#).unwrap();
+    compile_ok(&dir, &["--closed-world"]);
+    assert_eq!(text(&run(&dir).stdout), "/x\nError: Class \"Missing\\Tool\" not found\n");
+}

@@ -2,7 +2,7 @@
 title: "gmp_or()"
 description: "Bitwise OR of two GMP numbers."
 sidebar:
-  order: 631
+  order: 633
 ---
 
 ## gmp_or()

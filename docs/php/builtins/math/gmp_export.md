@@ -2,7 +2,7 @@
 title: "gmp_export()"
 description: "Exports a GMP number as a binary string."
 sidebar:
-  order: 614
+  order: 616
 ---
 
 ## gmp_export()

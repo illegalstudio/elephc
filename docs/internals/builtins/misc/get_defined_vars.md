@@ -2,7 +2,7 @@
 title: "get_defined_vars() - internals"
 description: "Compiler internals for get_defined_vars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 705
+  order: 707
 ---
 
 ## `get_defined_vars()` - internals

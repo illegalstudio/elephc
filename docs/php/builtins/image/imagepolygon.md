@@ -2,7 +2,7 @@
 title: "imagepolygon()"
 description: "Draws the outline of a closed polygon."
 sidebar:
-  order: 544
+  order: 546
 ---
 
 ## imagepolygon()

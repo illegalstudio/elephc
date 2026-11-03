@@ -2,7 +2,7 @@
 title: "cairo_set_matrix()"
 description: "Replaces the context's transformation with the given matrix."
 sidebar:
-  order: 460
+  order: 462
 ---
 
 ## cairo_set_matrix()

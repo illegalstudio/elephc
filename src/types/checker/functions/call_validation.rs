@@ -1246,7 +1246,9 @@ impl Checker {
                 ),
             ));
         }
-        if spread_projects_into_reference {
+        // Under the descriptor contract the invoker binds each unpacked entry to its
+        // by-reference parameter at run time, from the reference marker the unpack keeps.
+        if spread_projects_into_reference && !allow_by_ref_spread {
             return Err(CompileError::new(
                 span,
                 &format!(

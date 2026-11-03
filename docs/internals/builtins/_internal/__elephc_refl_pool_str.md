@@ -2,7 +2,7 @@
 title: "__elephc_refl_pool_str() - internals"
 description: "Compiler internals for __elephc_refl_pool_str(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1327
+  order: 1329
 ---
 
 ## `__elephc_refl_pool_str()` - internals

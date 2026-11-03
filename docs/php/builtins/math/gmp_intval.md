@@ -2,7 +2,7 @@
 title: "gmp_intval()"
 description: "Converts a GMP number to an integer."
 sidebar:
-  order: 621
+  order: 623
 ---
 
 ## gmp_intval()

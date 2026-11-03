@@ -2,7 +2,7 @@
 title: "strftime()"
 description: "Formats a local timestamp with locale-aware specifiers. Deprecated since PHP 8.1."
 sidebar:
-  order: 254
+  order: 256
 ---
 
 ## strftime()

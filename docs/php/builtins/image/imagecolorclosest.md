@@ -2,7 +2,7 @@
 title: "imagecolorclosest()"
 description: "Returns the palette index closest to the requested color."
 sidebar:
-  order: 489
+  order: 491
 ---
 
 ## imagecolorclosest()

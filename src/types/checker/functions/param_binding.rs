@@ -128,6 +128,35 @@ impl Checker {
                     return Ok(());
                 }
             }
+            // A union of `Stringable` objects (and null where the declaration takes it) binds
+            // through the same string arm when no class-like member accepts an object as it is:
+            // lowering converts each object and keeps null (`call_arg_coercion`).
+            if let Some(classes) =
+                crate::types::param_binding::object_union_string_binding_classes(expected, actual)
+            {
+                let class_members: Vec<&str> = match expected {
+                    PhpType::Union(members) => members
+                        .iter()
+                        .filter_map(|member| match member {
+                            PhpType::Object(name) => Some(name.trim_start_matches('\\')),
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                let binds_through_string = classes.iter().all(|class_name| {
+                    let class_name = class_name.trim_start_matches('\\');
+                    self.object_supports_weak_string_coercion(class_name)
+                        && !class_members.iter().any(|member| {
+                            member.eq_ignore_ascii_case(class_name)
+                                || self.is_subclass_of(class_name, member)
+                                || self.object_type_implements_interface(class_name, member)
+                        })
+                });
+                if binds_through_string {
+                    return Ok(());
+                }
+            }
         }
         match classify_param_binding(expected, actual, arg) {
             ParamBinding::Identity | ParamBinding::Cast(_) | ParamBinding::Const(_) => Ok(()),

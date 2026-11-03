@@ -2,7 +2,7 @@
 title: "imageantialias() - internals"
 description: "Compiler internals for imageantialias(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 481
+  order: 483
 ---
 
 ## `imageantialias()` - internals

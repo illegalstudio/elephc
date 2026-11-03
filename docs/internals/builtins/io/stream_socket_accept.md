@@ -2,7 +2,7 @@
 title: "stream_socket_accept() - internals"
 description: "Compiler internals for stream_socket_accept(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 406
+  order: 408
 ---
 
 ## `stream_socket_accept()` - internals

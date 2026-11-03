@@ -2,7 +2,7 @@
 title: "gethostbyaddr()"
 description: "Gets the Internet host name corresponding to a given IP address."
 sidebar:
-  order: 353
+  order: 355
 ---
 
 ## gethostbyaddr()

@@ -2,7 +2,7 @@
 title: "gmp_random_range() - internals"
 description: "Compiler internals for gmp_random_range(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 639
+  order: 641
 ---
 
 ## `gmp_random_range()` - internals

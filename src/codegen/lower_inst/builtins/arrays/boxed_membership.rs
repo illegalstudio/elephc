@@ -66,6 +66,23 @@ pub(super) fn lower_dynamic_membership(
             &wrong,
             &|given| format!("in_array(): Argument #2 ($haystack) must be of type array, {given} given"),
         );
+    } else if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::Iterable) {
+        // An `iterable` the helper refused is a `Traversable` object, and php names its class:
+        // `..., ArrayIterator given`. Hand the object to the same dispatch as an object tag.
+        ctx.load_value_to_result(array)?;
+        let payload = match ctx.emitter.target.arch {
+            Arch::AArch64 => "x1",
+            Arch::X86_64 => "rdi",
+        };
+        abi::emit_reg_move(ctx.emitter, payload, abi::int_result_reg(ctx.emitter));
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 6);
+        let wrong = ctx.next_label("in_array_iterable_wrong_type");
+        abi::emit_jump(ctx.emitter, &wrong);
+        super::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+            ctx,
+            &wrong,
+            &|given| format!("in_array(): Argument #2 ($haystack) must be of type array, {given} given"),
+        );
     } else {
         crate::codegen::lower_inst::exceptions::emit_type_error(
             ctx, "in_array(): Argument #2 ($haystack) must be of type array",

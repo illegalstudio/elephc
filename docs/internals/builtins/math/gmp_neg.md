@@ -2,7 +2,7 @@
 title: "gmp_neg() - internals"
 description: "Compiler internals for gmp_neg(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 629
+  order: 631
 ---
 
 ## `gmp_neg()` - internals

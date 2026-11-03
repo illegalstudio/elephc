@@ -2,7 +2,7 @@
 title: "mysqli_stmt_field_count()"
 description: "Returns how many columns a prepared statement produces."
 sidebar:
-  order: 181
+  order: 183
 ---
 
 ## mysqli_stmt_field_count()

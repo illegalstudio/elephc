@@ -2,7 +2,7 @@
 title: "is_countable()"
 description: "Verifies that the contents of a variable is a countable value."
 sidebar:
-  order: 1096
+  order: 1098
 ---
 
 ## is_countable()

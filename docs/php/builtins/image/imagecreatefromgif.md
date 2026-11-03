@@ -2,7 +2,7 @@
 title: "imagecreatefromgif()"
 description: "Creates an image from a GIF file."
 sidebar:
-  order: 510
+  order: 512
 ---
 
 ## imagecreatefromgif()

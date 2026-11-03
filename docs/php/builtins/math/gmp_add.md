@@ -2,7 +2,7 @@
 title: "gmp_add()"
 description: "Adds two GMP numbers."
 sidebar:
-  order: 603
+  order: 605
 ---
 
 ## gmp_add()

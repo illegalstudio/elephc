@@ -2,7 +2,7 @@
 title: "extension_loaded()"
 description: "Checks whether a named PHP extension is loaded."
 sidebar:
-  order: 691
+  order: 693
 ---
 
 ## extension_loaded()

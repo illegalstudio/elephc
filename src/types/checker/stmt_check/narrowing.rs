@@ -785,6 +785,12 @@ impl Checker {
             PhpType::Iterable if matches!(target, GuardTarget::AnyArray) => {
                 PhpType::Object("Traversable".to_string())
             }
+            // And an `iterable` that is not an object is an array: symfony/property-access's
+            // `PropertyAccessor::writeCollection()` turns an object `$collection` into an array
+            // under `if (\is_object($collection))`, then `in_array($item, $collection, true)`.
+            PhpType::Iterable if matches!(target, GuardTarget::AnyObject) => {
+                PhpType::Array(Box::new(PhpType::Mixed))
+            }
             _ => current.clone(),
         }
     }

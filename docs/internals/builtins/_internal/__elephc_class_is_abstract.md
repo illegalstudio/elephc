@@ -2,7 +2,7 @@
 title: "__elephc_class_is_abstract() - internals"
 description: "Compiler internals for __elephc_class_is_abstract(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1226
+  order: 1228
 ---
 
 ## `__elephc_class_is_abstract()` - internals

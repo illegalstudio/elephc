@@ -472,17 +472,23 @@ function mysqli_stmt_bind_param(mixed $statement, string $types, mixed &...$vars
     if (!($statement instanceof mysqli_stmt)) {
         throw new TypeError("mysqli_stmt_bind_param(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
     }
-    // Same bind-time value capture as the method (forwarding `...$vars` into
-    // bind_param is rejected: a by-ref variadic cannot take spread
-    // arguments); the checker's mysqli friend channel lets this alias reach
-    // the private helper. See statement.rs for the documented divergence
-    // from PHP's read-at-execute reference semantics.
-    $_values = [];
-    $_given = count($vars);
-    for ($_i = 0; $_i < $_given; $_i++) {
-        $_values[] = $vars[$_i];
+    // The method keeps each variable by reference; forwarding the by-ref
+    // variadic keeps the caller's references.
+    return $statement->bind_param($types, ...$vars);
+}
+
+function mysqli_stmt_bind_result(mixed $statement, mixed &...$vars): bool {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_bind_result(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
     }
-    return $statement->__elephcBindParamValues($types, $_values);
+    return $statement->bind_result(...$vars);
+}
+
+function mysqli_stmt_fetch(mixed $statement): ?bool {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_fetch(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->fetch();
 }
 
 function mysqli_stmt_execute(mixed $statement, ?array $params = null): bool {

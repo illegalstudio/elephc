@@ -70,6 +70,22 @@ pub(super) fn lower_static_filter_var(
     } else {
         516 // FILTER_DEFAULT (== FILTER_UNSAFE_RAW)
     };
+    // A literal filter with run-time int flags takes the same helper: its dispatch selects the
+    // literal per-filter lowering for the flags the call carries. The checker accepts exactly
+    // this shape (a non-constant, non-array `$options` of a literal filter).
+    if args.len() == 3
+        && !crate::filter_ext_prelude::EXTENDED_FILTER_IDS.contains(&filter_id)
+        && crate::types::filter_constants::static_filter_options_flags(&args[2]).is_none()
+        && crate::types::filter_constants::static_filter_int_range_options(&args[2]).is_none()
+        && !options_arg_is_array_typed(ctx, &args[2])
+    {
+        return Some(super::lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(crate::filter_var_prelude::DYN_FILTER_VAR_NAME),
+            args,
+            expr,
+        ));
+    }
     // URL, EMAIL, DOMAIN and CALLBACK run in `__elephc_filter_var_ext(value, filter, options)`.
     if crate::filter_ext_prelude::EXTENDED_FILTER_IDS.contains(&filter_id) {
         return Some(super::lower_function_call(

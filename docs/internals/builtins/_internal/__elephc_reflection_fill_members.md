@@ -2,7 +2,7 @@
 title: "__elephc_reflection_fill_members() - internals"
 description: "Compiler internals for __elephc_reflection_fill_members(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1330
+  order: 1332
 ---
 
 ## `__elephc_reflection_fill_members()` - internals

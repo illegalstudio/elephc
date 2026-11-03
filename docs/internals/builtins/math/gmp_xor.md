@@ -2,7 +2,7 @@
 title: "gmp_xor() - internals"
 description: "Compiler internals for gmp_xor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 652
+  order: 654
 ---
 
 ## `gmp_xor()` - internals

@@ -2,7 +2,7 @@
 title: "gmp_gcdext() - internals"
 description: "Compiler internals for gmp_gcdext(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 617
+  order: 619
 ---
 
 ## `gmp_gcdext()` - internals

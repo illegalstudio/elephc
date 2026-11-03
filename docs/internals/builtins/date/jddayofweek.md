@@ -2,7 +2,7 @@
 title: "jddayofweek() - internals"
 description: "Compiler internals for jddayofweek(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 242
+  order: 244
 ---
 
 ## `jddayofweek()` - internals

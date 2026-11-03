@@ -2,7 +2,7 @@
 title: "rename() - internals"
 description: "Compiler internals for rename(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 312
+  order: 314
 ---
 
 ## `rename()` - internals

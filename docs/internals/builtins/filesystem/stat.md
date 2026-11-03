@@ -2,7 +2,7 @@
 title: "stat() - internals"
 description: "Compiler internals for stat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 315
+  order: 317
 ---
 
 ## `stat()` - internals

@@ -2,7 +2,7 @@
 title: "date_sun_info()"
 description: "Returns the sunrise, sunset, and twilight times for a day and location."
 sidebar:
-  order: 223
+  order: 225
 ---
 
 ## date_sun_info()

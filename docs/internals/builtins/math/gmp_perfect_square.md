@@ -2,7 +2,7 @@
 title: "gmp_perfect_square() - internals"
 description: "Compiler internals for gmp_perfect_square(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 633
+  order: 635
 ---
 
 ## `gmp_perfect_square()` - internals

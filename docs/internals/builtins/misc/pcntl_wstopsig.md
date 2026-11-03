@@ -2,7 +2,7 @@
 title: "pcntl_wstopsig() - internals"
 description: "Compiler internals for pcntl_wstopsig(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 766
+  order: 768
 ---
 
 ## `pcntl_wstopsig()` - internals

@@ -2,7 +2,7 @@
 title: "sodium_crypto_box_keypair() - internals"
 description: "Compiler internals for sodium_crypto_box_keypair(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1030
+  order: 1032
 ---
 
 ## `sodium_crypto_box_keypair()` - internals

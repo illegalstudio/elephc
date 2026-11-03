@@ -2,7 +2,7 @@
 title: "imagecolorset() - internals"
 description: "Compiler internals for imagecolorset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 498
+  order: 500
 ---
 
 ## `imagecolorset()` - internals

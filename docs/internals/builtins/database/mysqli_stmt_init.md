@@ -2,7 +2,7 @@
 title: "mysqli_stmt_init() - internals"
 description: "Compiler internals for mysqli_stmt_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 184
+  order: 186
 ---
 
 ## `mysqli_stmt_init()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1583](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1583) (`mysqli_stmt_init`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1610](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1610) (`mysqli_stmt_init`)
 - **Function symbol**: `mysqli_stmt_init()`
 
 

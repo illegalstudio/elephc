@@ -2,7 +2,7 @@
 title: "chmod() - internals"
 description: "Compiler internals for chmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 271
+  order: 273
 ---
 
 ## `chmod()` - internals

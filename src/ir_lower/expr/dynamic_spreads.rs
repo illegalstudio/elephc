@@ -409,7 +409,7 @@ fn set_flag(ctx: &mut LoweringContext<'_, '_>, slot: &str, span: Span) {
 }
 
 /// Compares scalar bookkeeping values with a typed EIR predicate.
-fn compare_ints(ctx: &mut LoweringContext<'_, '_>, left: ValueId, right: ValueId, predicate: CmpPredicate, span: Span) -> LoweredValue {
+pub(super) fn compare_ints(ctx: &mut LoweringContext<'_, '_>, left: ValueId, right: ValueId, predicate: CmpPredicate, span: Span) -> LoweredValue {
     ctx.emit_value(Op::ICmp, vec![left, right], Some(Immediate::CmpPredicate(predicate)),
         PhpType::Bool, Op::ICmp.default_effects(), Some(span))
 }

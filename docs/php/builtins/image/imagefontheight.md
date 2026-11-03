@@ -2,7 +2,7 @@
 title: "imagefontheight()"
 description: "Returns the pixel height of a built-in font."
 sidebar:
-  order: 530
+  order: 532
 ---
 
 ## imagefontheight()

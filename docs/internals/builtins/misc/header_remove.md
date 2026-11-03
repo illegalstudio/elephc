@@ -2,7 +2,7 @@
 title: "header_remove() - internals"
 description: "Compiler internals for header_remove(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 716
+  order: 718
 ---
 
 ## `header_remove()` - internals

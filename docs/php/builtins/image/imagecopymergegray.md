@@ -2,7 +2,7 @@
 title: "imagecopymergegray()"
 description: "Copies a rectangle into another image as grayscale, blending it by a percentage."
 sidebar:
-  order: 505
+  order: 507
 ---
 
 ## imagecopymergegray()

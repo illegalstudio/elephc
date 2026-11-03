@@ -2,7 +2,7 @@
 title: "rtrim() - internals"
 description: "Compiler internals for rtrim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1028
+  order: 1030
 ---
 
 ## `rtrim()` - internals

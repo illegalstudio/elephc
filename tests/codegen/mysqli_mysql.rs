@@ -265,9 +265,7 @@ $db->query("DROP TABLE mn");
 }
 
 /// Prepared statements: `bind_param` + `execute` + `get_result`, with a
-/// re-executable statement. Bound values are captured at bind_param time
-/// (documented divergence from PHP's read-at-execute references), so fresh
-/// values come from re-binding or `execute($params)`.
+/// re-executable statement and a re-bound parameter.
 #[test]
 #[ignore]
 fn test_mysqli_stmt_bind_param_and_get_result() {
@@ -700,12 +698,11 @@ $db->query("DROP TABLE md");
     assert_eq!(out, "2|0");
 }
 
-/// Pins the documented bind_param divergence: values are captured at bind
-/// time, so mutating the variable WITHOUT re-binding executes with the value
-/// seen at bind (PHP's references would read the mutated value instead).
+/// `bind_param` keeps the variable BY REFERENCE, as php does: mutating it without
+/// re-binding executes with the value it holds when `execute()` runs.
 #[test]
 #[ignore]
-fn test_mysqli_stmt_bind_param_snapshot_divergence() {
+fn test_mysqli_stmt_bind_param_reads_the_variable_at_execute() {
     let out = compile_and_run(&my_program(
         r#"
 $db->query("DROP TABLE IF EXISTS msnap");
@@ -720,7 +717,7 @@ echo ($r instanceof mysqli_result) ? $r->fetch_column(0) : "no";
 $db->query("DROP TABLE msnap");
 "#,
     ));
-    assert_eq!(out, "Ada");
+    assert_eq!(out, "Ben");
 }
 
 /// Connection information, ping, charset, autocommit, and a commit round-trip
@@ -829,4 +826,96 @@ $db->query("DROP TABLE msi");
         out,
         "prep|params=1|stmt_insert_id=1|stmt_affected=1|stmt_sqlstate=00000|charset=utf8mb4|field_tell=1|after_seek=0"
     );
+}
+
+/// `bind_result` + `fetch` write each row into the caller's variables, streaming or from a
+/// `store_result` buffer, with php's `true` / `null` / `false` answers; `bind_param` reads its
+/// variables at `execute()`. Includes doctrine/dbal's `Mysqli\Result` shape
+/// (`$refs = &$this->boundValues; bind_result(...$refs)`), the procedural forms, and the
+/// column-count `ArgumentCountError`.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_bind_result_and_fetch() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS b21");
+$db->query("CREATE TABLE b21 (id INT PRIMARY KEY, name VARCHAR(20), score DOUBLE NULL)");
+$ins = $db->prepare("INSERT INTO b21 (id, name, score) VALUES (?, ?, ?)");
+$id = 0; $name = ""; $score = null;
+$ins->bind_param("isd", $id, $name, $score);
+foreach ([[1, "a", 1.5], [2, "b", null], [3, "c", 3.25]] as [$i, $n, $s]) {
+    $id = $i; $name = $n; $score = $s;
+    $ins->execute();
+}
+echo "inserted\n";
+
+$sel = $db->prepare("SELECT id, name, score FROM b21 ORDER BY id");
+$sel->execute();
+$sel->store_result();
+echo "num_rows=", $sel->num_rows, "\n";
+$rid = null; $rname = null; $rscore = null;
+var_dump($sel->bind_result($rid, $rname, $rscore));
+while (($ok = $sel->fetch()) === true) {
+    var_dump($rid, $rname, $rscore);
+}
+var_dump($ok);
+
+// Streaming (no store_result), rebinding after re-execute.
+$sel->execute();
+$sel->bind_result($rid, $rname, $rscore);
+$sel->fetch();
+echo "first again: $rid $rname\n";
+$sel->free_result();
+
+// doctrine/dbal Mysqli\Result shape.
+final class Holder {
+    private array $boundValues = [];
+    public function __construct(private mysqli_stmt $statement) {
+        $statement->store_result();
+        $this->boundValues = array_fill(0, 3, null);
+        $refs = &$this->boundValues;
+        if (!$statement->bind_result(...$refs)) { throw new RuntimeException("bind"); }
+    }
+    public function next(): array|false {
+        $ret = $this->statement->fetch();
+        if ($ret === null) { return false; }
+        $values = [];
+        foreach ($this->boundValues as $v) { $values[] = $v; }
+        return $values;
+    }
+}
+$sel->execute();
+$holder = new Holder($sel);
+while (($row = $holder->next()) !== false) {
+    echo implode("|", array_map(fn($v) => var_export($v, true), $row)), "\n";
+}
+
+// Procedural form.
+$p = mysqli_prepare($db, "SELECT name FROM b21 WHERE id = ?");
+$want = 2;
+mysqli_stmt_bind_param($p, "i", $want);
+mysqli_stmt_execute($p);
+mysqli_stmt_bind_result($p, $pname);
+mysqli_stmt_fetch($p);
+echo "procedural: $pname\n";
+$want = 3;
+mysqli_stmt_execute($p);
+mysqli_stmt_bind_result($p, $pname);
+mysqli_stmt_fetch($p);
+echo "procedural: $pname\n";
+
+mysqli_stmt_close($p);
+$sel->close();
+$count = $db->prepare("SELECT id, name FROM b21");
+try {
+    $count->bind_result($rid);
+} catch (Throwable $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+$count->close();
+$db->query("DROP TABLE b21");
+echo "done\n";
+"#,
+    ));
+    assert_eq!(out, "inserted\nnum_rows=3\nbool(true)\nint(1)\nstring(1) \"a\"\nfloat(1.5)\nint(2)\nstring(1) \"b\"\nNULL\nint(3)\nstring(1) \"c\"\nfloat(3.25)\nNULL\nfirst again: 1 a\n1|'a'|1.5\n2|'b'|NULL\n3|'c'|3.25\nprocedural: b\nprocedural: c\nArgumentCountError: Number of bind variables doesn't match number of fields in prepared statement\ndone\n");
 }

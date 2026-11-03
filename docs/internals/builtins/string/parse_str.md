@@ -2,7 +2,7 @@
 title: "parse_str() - internals"
 description: "Compiler internals for parse_str(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1015
+  order: 1017
 ---
 
 ## `parse_str()` - internals

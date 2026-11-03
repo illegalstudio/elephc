@@ -2,7 +2,7 @@
 title: "bcsub() - internals"
 description: "Compiler internals for bcsub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 587
+  order: 589
 ---
 
 ## `bcsub()` - internals

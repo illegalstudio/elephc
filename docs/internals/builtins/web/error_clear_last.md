@@ -2,7 +2,7 @@
 title: "error_clear_last() - internals"
 description: "Compiler internals for error_clear_last(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1112
+  order: 1114
 ---
 
 ## `error_clear_last()` - internals

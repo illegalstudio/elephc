@@ -2,7 +2,7 @@
 title: "asin()"
 description: "Returns the arcsine of a number in radians."
 sidebar:
-  order: 570
+  order: 572
 ---
 
 ## asin()

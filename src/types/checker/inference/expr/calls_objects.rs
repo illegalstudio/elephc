@@ -202,6 +202,22 @@ impl Checker {
                 Ok(PhpType::Mixed)
             }
             ExprKind::FirstClassCallable(target) => {
+                // `\GuzzleHttp\UriTemplate\UriTemplate::expand(...)` behind `class_exists()`
+                // (symfony/http-client's `UriTemplateHttpClient`): a closed world never has the
+                // class, and lowering raises php's `Class "X" not found` where it would run.
+                if let crate::parser::ast::CallableTarget::StaticMethod {
+                    receiver: crate::parser::ast::StaticReceiver::Named(class_name),
+                    ..
+                } = target
+                {
+                    if crate::closed_world::class_is_absent(class_name.as_str(), |name| {
+                        self.classes.contains_key(name)
+                            || self.interfaces.contains_key(name)
+                            || self.enums.contains_key(name)
+                    }) {
+                        return Ok(PhpType::Callable);
+                    }
+                }
                 self.infer_first_class_callable_target(target, expr.span, env)?;
                 Ok(PhpType::Callable)
             }

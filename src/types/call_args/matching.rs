@@ -110,6 +110,87 @@ pub(crate) fn variadic_element_type(sig: &FunctionSig) -> Option<PhpType> {
     })
 }
 
+/// Returns the first position, at or after `from`, of a by-reference parameter suffix.
+///
+/// php binds every element an unpack places on a by-reference parameter to its source slot.
+/// The descriptor unpack walk promotes by position, so it needs every parameter from that
+/// position on -- the variadic collector included -- to take a reference; a by-value parameter
+/// after it keeps the whole unpack by value. Shared by the checker (which records the source's
+/// new hash storage) and lowering (which performs the walk), so both decide alike.
+pub(crate) fn by_ref_suffix_start(sig: &FunctionSig, from: usize) -> Option<usize> {
+    let is_ref = |index: usize| sig.ref_params.get(index).copied().unwrap_or(false);
+    // The hidden `func_get_args()` collector is not a PHP parameter: a surplus element it takes
+    // was never bound to a by-reference parameter, so it leaves the suffix as declared.
+    if crate::func_args::sig_collects_surplus_args(sig) {
+        return by_ref_suffix_start_of(is_ref, regular_param_count(sig), None, from);
+    }
+    let variadic_by_ref = match sig.variadic.as_ref() {
+        Some(variadic) => Some(is_ref(sig.params.iter().position(|(name, _)| name == variadic)?)),
+        None => None,
+    };
+    by_ref_suffix_start_of(is_ref, regular_param_count(sig), variadic_by_ref, from)
+}
+
+/// [`by_ref_suffix_start`] over raw parameter facts, for a declaration not yet resolved into a
+/// signature: `regular` parameters flagged by `is_ref`, then a variadic collector when
+/// `variadic_by_ref` is `Some` (its by-reference flag).
+pub(crate) fn by_ref_suffix_start_of(
+    is_ref: impl Fn(usize) -> bool,
+    regular: usize,
+    variadic_by_ref: Option<bool>,
+    from: usize,
+) -> Option<usize> {
+    if variadic_by_ref == Some(false) {
+        return None;
+    }
+    let start = (from..regular).rev().take_while(|index| is_ref(*index)).last()
+        .unwrap_or(regular);
+    let suffix_has_reference = start < regular || variadic_by_ref.is_some();
+    suffix_has_reference.then_some(start)
+}
+
+/// Where a call's first unpack can bind: from the positional arguments before it up to (not
+/// including) the first parameter a named argument binds, or `None` without an unpack.
+///
+/// php refuses an unpacked element that lands on a parameter a named argument also binds, so the
+/// unpack never reaches past it. `param_index` resolves a named argument to its declared
+/// position; a name it does not know (collected by a variadic) bounds nothing.
+pub(crate) fn spread_binding_window(
+    args: &[crate::parser::ast::Expr],
+    param_index: impl Fn(&str) -> Option<usize>,
+) -> Option<(usize, usize)> {
+    use crate::parser::ast::ExprKind;
+    let spread = args.iter().position(|arg| matches!(arg.kind, ExprKind::Spread(_)))?;
+    let positional = args[..spread].iter()
+        .filter(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. }))
+        .count();
+    let limit = args.iter()
+        .filter_map(|arg| match &arg.kind {
+            ExprKind::NamedArg { name, .. } => param_index(name),
+            _ => None,
+        })
+        .filter(|index| *index >= positional)
+        .min()
+        .unwrap_or(usize::MAX);
+    Some((positional, limit))
+}
+
+/// Whether a call's first unpack lands on a by-reference parameter suffix
+/// ([`by_ref_suffix_start`] inside its [`spread_binding_window`]).
+///
+/// Only then does a direct call take the descriptor route that binds the unpacked elements by
+/// reference; `f(...[1], value: $a[0])` into `f(int $p, &$value, int $s)` keeps the direct call,
+/// which binds the named element by reference itself. Shared by the checker and lowering.
+pub(crate) fn spread_reaches_by_ref_suffix(sig: &FunctionSig, args: &[crate::parser::ast::Expr]) -> bool {
+    let regular = regular_param_count(sig);
+    spread_binding_window(args, |name| {
+        sig.params[..regular].iter().position(|(param, _)| param == name)
+    })
+    .is_some_and(|(positional, limit)| {
+        by_ref_suffix_start(sig, positional).is_some_and(|start| start < limit)
+    })
+}
+
 /// If the signature is variadic, excludes the variadic slot from the count so that
 /// named arguments address only the caller-visible parameters.
 pub(crate) fn regular_param_count(sig: &FunctionSig) -> usize {

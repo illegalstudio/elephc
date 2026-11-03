@@ -2,7 +2,7 @@
 title: "addcslashes()"
 description: "Quotes the listed characters with C-style backslash escapes."
 sidebar:
-  order: 893
+  order: 895
 ---
 
 ## addcslashes()

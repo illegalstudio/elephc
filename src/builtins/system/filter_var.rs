@@ -135,6 +135,13 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 {
                     "filter_var(): array-form $options (['flags' => ..., 'options' => ...]) is not supported yet"
                 } else {
+                    // Run-time int flags (symfony/http-client's `NativeHttpClient::dnsResolve()`
+                    // picks `FILTER_FLAG_IPV4` or `FILTER_FLAG_IPV6` for `FILTER_VALIDATE_IP`):
+                    // lowering routes the call through `__elephc_filter_var_dyn`, which applies
+                    // the same literal per-filter lowering under each flag value.
+                    if matches!(options_ty.codegen_repr(), PhpType::Int | PhpType::Mixed) {
+                        return Ok(PhpType::Mixed);
+                    }
                     "filter_var(): a dynamic (non-compile-time-constant) $options is not supported yet"
                 };
                 return Err(CompileError::new(cx.span, message));

@@ -2,7 +2,7 @@
 title: "max() - internals"
 description: "Compiler internals for max(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 663
+  order: 665
 ---
 
 ## `max()` - internals

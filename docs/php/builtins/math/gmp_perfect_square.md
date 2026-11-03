@@ -2,7 +2,7 @@
 title: "gmp_perfect_square()"
 description: "Checks whether a GMP number is a perfect square."
 sidebar:
-  order: 633
+  order: 635
 ---
 
 ## gmp_perfect_square()

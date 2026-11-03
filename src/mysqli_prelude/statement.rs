@@ -8,22 +8,18 @@
 //!   the injected prelude).
 //!
 //! Key details:
-//! - `bind_param(string $types, mixed &...$vars)` keeps PHP's signature
-//!   (literals are rejected, the variable count is validated against the type
-//!   string), but the variable VALUES are captured at bind time — a documented
-//!   divergence: elephc cannot alias caller variables past the call (variadic
-//!   by-ref elements alias only inside the callee frame, and per-variable
-//!   closure captures need fixed parameter names, whose defaulted-by-ref
-//!   lowering the backend does not support). Re-executing with fresh values
-//!   means re-calling bind_param or using `execute($params)`.
-//! - `bind_result` / `fetch` are deliberately NOT declared: writing a fetched
-//!   row back into caller variables after the binding call is exactly the
-//!   post-call aliasing elephc cannot express, and a silently inert binding
-//!   would be worse than an honest "undefined method". `get_result()` +
-//!   `mysqli_result` fetches cover row reading; `method_exists` stays honest.
+//! - `bind_param(string $types, mixed &...$vars)` keeps PHP's signature and
+//!   semantics: each variable is kept BY REFERENCE, and `execute()` reads its
+//!   value when it runs (the canonical bind-once, assign, execute loop).
+//! - `bind_result(mixed &...$vars)` keeps every caller variable by reference
+//!   too; `fetch()` writes the next row into them and answers php's `true` /
+//!   `null` (no more rows) / `false` (error). A column-count mismatch is php's
+//!   `ArgumentCountError`. doctrine/dbal's `Mysqli\Result` binds a property
+//!   array this way (`$refs = &$this->boundValues; bind_result(...$refs)`).
 //! - `execute` steps once to learn whether a result set exists; `get_result`
 //!   drains the rest and resets the statement so it can be re-executed;
-//!   `store_result` consumes the pending rows so `num_rows` is valid.
+//!   `store_result` buffers the pending rows (so `num_rows` is valid) and
+//!   `fetch` then reads that buffer; without it `fetch` streams.
 
 /// The `mysqli_stmt` class (fragment without a `<?php` header).
 pub(super) const SRC: &str = r##"
@@ -45,9 +41,17 @@ class mysqli_stmt {
     private int $conn = -1;
     private ?mysqli $link = null;
 
-    // bind_param state: the type string and the values captured at bind time.
+    // bind_param state: the type string and the caller variables, by reference.
     private string $bindTypes = "";
     private array $boundParams = [];
+
+    // bind_result state: the caller variables fetch() writes each row into.
+    private array $boundResults = [];
+
+    // store_result buffer: every buffered row's cells, read by fetch() in order.
+    private bool $stored = false;
+    private array $storedCells = [];
+    private int $storedCursor = 0;
 
     // Cursor state: execute() pre-steps once; get_result/store_result drain.
     private bool $executedOnce = false;
@@ -133,24 +137,26 @@ class mysqli_stmt {
             elephc_pdo_reset($this->stmt);
         }
         $this->hasPending = false;
+        $this->stored = false;
+        $this->storedCells = [];
+        $this->storedCursor = 0;
     }
 
     public function bind_param(string $types, mixed &...$vars): bool {
-        // Variadic by-ref keeps PHP's signature contract (a literal argument
-        // is rejected with "must be passed a variable"); the values are
-        // captured HERE — see the module preamble for the documented
-        // divergence from PHP's read-at-execute reference semantics.
-        $_values = [];
-        $_given = count($vars);
-        for ($_i = 0; $_i < $_given; $_i++) {
-            $_values[] = $vars[$_i];
+        // php reads the bound variables when execute() runs, so each one is
+        // kept by reference rather than copied here.
+        if (!$this->__elephcBindParamValues($types, $vars)) {
+            return false;
         }
-        return $this->__elephcBindParamValues($types, $_values);
+        $this->boundParams = [];
+        foreach ($vars as $_i => &$_var) {
+            $this->boundParams[$_i] = &$_var;
+        }
+        return true;
     }
 
-    // Shared validation + snapshot behind bind_param (the procedural
-    // mysqli_stmt_bind_param alias forwards through bind_param itself).
-    // Private: not part of PHP's mysqli surface.
+    // Shared validation behind bind_param: the type string and the variable
+    // count. Private: not part of PHP's mysqli surface.
     private function __elephcBindParamValues(string $types, array $values): bool {
         $_want = strlen($types);
         if ($_want == 0) {
@@ -167,7 +173,58 @@ class mysqli_stmt {
             return false;
         }
         $this->bindTypes = $types;
-        $this->boundParams = $values;
+        return true;
+    }
+
+    public function bind_result(mixed &...$vars): bool {
+        $_want = $this->stmt >= 0 ? elephc_pdo_column_count($this->stmt) : 0;
+        if (count($vars) != $_want) {
+            throw new ArgumentCountError("Number of bind variables doesn't match number of fields in prepared statement");
+        }
+        $this->boundResults = [];
+        foreach ($vars as $_i => &$_var) {
+            $this->boundResults[$_i] = &$_var;
+        }
+        return true;
+    }
+
+    public function fetch(): ?bool {
+        if ($this->stmt < 0) {
+            $this->syntheticFailure(2050, "mysqli_stmt object is already closed", "HY000");
+            return false;
+        }
+        $_cols = count($this->boundResults);
+        if ($this->stored) {
+            // Rows buffered by store_result().
+            if ($this->storedCursor >= $this->num_rows) {
+                return null;
+            }
+            $_base = $this->storedCursor * $this->field_count;
+            for ($_i = 0; $_i < $_cols; $_i++) {
+                $this->boundResults[$_i] = $this->storedCells[$_base + $_i];
+            }
+            $this->storedCursor = $this->storedCursor + 1;
+            return true;
+        }
+        if (!$this->hasPending) {
+            return null;
+        }
+        $_rc = $this->pendingStep;
+        if ($_rc < 0) {
+            $this->hasPending = false;
+            return $this->opFailed();
+        }
+        if ($_rc == 0) {
+            // The result set is exhausted: rewind so the statement can run again.
+            $this->hasPending = false;
+            elephc_pdo_reset($this->stmt);
+            return null;
+        }
+        for ($_i = 0; $_i < $_cols; $_i++) {
+            $this->boundResults[$_i] = $this->columnValue($_i);
+        }
+        // The next step's verdict is read by the next fetch().
+        $this->pendingStep = elephc_pdo_step($this->stmt);
         return true;
     }
 
@@ -187,6 +244,9 @@ class mysqli_stmt {
         $this->executedOnce = true;
         $this->hasPending = false;
         $this->pendingStep = 0;
+        $this->stored = false;
+        $this->storedCells = [];
+        $this->storedCursor = 0;
         if ($params !== null) {
             // PHP 8.1+: execute's own $params bind as strings, in order.
             $_given = count($params);
@@ -210,7 +270,7 @@ class mysqli_stmt {
             }
             $_n = strlen($this->bindTypes);
             for ($_i = 0; $_i < $_n; $_i++) {
-                // The values captured by the most recent bind_param call.
+                // The bound variable's value now, as php reads it.
                 $_value = $this->boundParams[$_i];
                 $_char = substr($this->bindTypes, $_i, 1);
                 if ($_value === null) {
@@ -351,11 +411,15 @@ class mysqli_stmt {
             // php-src treats this as a successful no-op.
             return true;
         }
-        // Without bind_result/fetch (see the module preamble) the buffered
-        // rows have no reader; consume and count them so num_rows is valid.
+        // Buffer every pending row so num_rows is valid and fetch() reads them.
+        $_cols = $this->field_count;
+        $_cells = [];
         $_rowCount = 0;
         $_rc = $this->pendingStep;
         while ($_rc == 1) {
+            for ($_i = 0; $_i < $_cols; $_i++) {
+                $_cells[] = $this->columnValue($_i);
+            }
             $_rowCount = $_rowCount + 1;
             $_rc = elephc_pdo_step($this->stmt);
         }
@@ -364,6 +428,9 @@ class mysqli_stmt {
             return $this->opFailed();
         }
         elephc_pdo_reset($this->stmt);
+        $this->stored = true;
+        $this->storedCells = $_cells;
+        $this->storedCursor = 0;
         $this->num_rows = $_rowCount;
         $this->affected_rows = $_rowCount;
         $this->clearError();
@@ -377,6 +444,9 @@ class mysqli_stmt {
         elephc_pdo_reset($this->stmt);
         elephc_pdo_clear_bindings($this->stmt);
         $this->hasPending = false;
+        $this->stored = false;
+        $this->storedCells = [];
+        $this->storedCursor = 0;
         $this->num_rows = 0;
         $this->clearError();
         return true;

@@ -2,7 +2,7 @@
 title: "cairo_transform()"
 description: "Composes the given matrix onto the context's transformation."
 sidebar:
-  order: 467
+  order: 469
 ---
 
 ## cairo_transform()

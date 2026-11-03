@@ -2,7 +2,7 @@
 title: "gmp_testbit()"
 description: "Tests a bit in a GMP number."
 sidebar:
-  order: 651
+  order: 653
 ---
 
 ## gmp_testbit()

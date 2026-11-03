@@ -2,7 +2,7 @@
 title: "finfo_open()"
 description: "Creates a finfo instance using the embedded or a custom magic database."
 sidebar:
-  order: 337
+  order: 339
 ---
 
 ## finfo_open()

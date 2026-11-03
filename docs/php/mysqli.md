@@ -112,20 +112,24 @@ $row = $result->fetch_assoc();
 
 - `bind_param($types, ...$vars)` accepts the `i` / `d` / `s` / `b` type
   characters and validates that the variable count matches the type string.
-  **The variable values are captured when `bind_param()` is called** — see
-  divergences below.
+  The variables are bound **by reference**, as in PHP: each `execute()` reads
+  their current values.
 - `execute(?array $params = null)` optionally binds an array per execution
   (every element as a string, `null` as SQL NULL), replacing prior binds for
   that execution.
 - `get_result()` drains the result set into an independent `mysqli_result`
   and leaves the statement re-executable.
-- `store_result()` consumes the pending rows so `$stmt->num_rows` is valid.
+- `store_result()` buffers the pending rows so `$stmt->num_rows` is valid and
+  `fetch()` reads that buffer.
+- `bind_result(...$vars)` binds one variable per result column, by reference
+  (a count mismatch is PHP's `ArgumentCountError`); `fetch()` writes the next
+  row into them and returns `true`, `null` once the rows are exhausted, or
+  `false` on error. Without `store_result()` it streams the pending rows. The
+  procedural `mysqli_stmt_bind_result()` / `mysqli_stmt_fetch()` forward to them.
 - `mysqli::execute_query($sql, $params)` (PHP 8.2+) is
   prepare + execute + get_result in one call.
 - Statement properties: `affected_rows`, `errno`, `error`, `field_count`,
   `insert_id`, `num_rows`, `param_count`, `sqlstate`.
-
-`bind_result()` and `fetch()` are **not provided** — see divergences.
 
 ## multi_query
 
@@ -230,16 +234,8 @@ never leaving a quote reachable. Under `NO_BACKSLASH_ESCAPES` only `'` is double
 
 ## Divergences from php-src
 
-- **`bind_param()` captures values at bind time.** PHP binds *references* and
-  reads the current variable values at each `execute()`; elephc cannot alias
-  caller variables past the call, so the values are snapshotted when
-  `bind_param()` runs. Re-executing with fresh values means re-calling
-  `bind_param()` or passing `execute($params)`. Passing a literal instead of
-  a variable is tolerated (PHP rejects it).
-- **`bind_result()` / `fetch()` are not declared.** Writing fetched rows back
-  into caller variables needs the same cross-call aliasing; a silently inert
-  binding would be worse than an honest absence (`method_exists` stays
-  truthful). Use `get_result()` and the `mysqli_result` fetch family.
+- **A literal passed to `bind_param()` is tolerated** where PHP requires a
+  variable.
 - **`MYSQLI_USE_RESULT` is accepted but still buffered.** True unbuffered
   `use_result()` streaming is out of scope; `use_result()` behaves like
   `store_result()`.
@@ -335,7 +331,6 @@ The v1 subset deliberately omits — calls fail to compile
 - `mysqli_ssl_set` (and `MYSQLI_CLIENT_SSL`, rejected at connect)
 - true unbuffered `use_result`
 - the `mysqli_driver` and `mysqli_warning` objects
-- `bind_result` / `fetch` (see divergences)
 - `mysqli_stmt_data_seek` and `mysqli_stmt_result_metadata` (the statement does
   not buffer its own rows in this model — use `get_result()` and the
   `mysqli_result` fetch family, which do)
@@ -421,11 +416,13 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`mysqli_stat()`](./builtins/database/mysqli_stat.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | - |
 | [`mysqli_stmt_affected_rows()`](./builtins/database/mysqli_stmt_affected_rows.md) | `(mixed $statement): int` | `int` | ✓ | - |
 | [`mysqli_stmt_bind_param()`](./builtins/database/mysqli_stmt_bind_param.md) | `(mixed $statement, string $types, ...$vars): bool` | `bool` | ✓ | - |
+| [`mysqli_stmt_bind_result()`](./builtins/database/mysqli_stmt_bind_result.md) | `(mixed $statement, ...$vars): bool` | `bool` | ✓ | - |
 | [`mysqli_stmt_close()`](./builtins/database/mysqli_stmt_close.md) | `(mixed $statement): bool` | `bool` | ✓ | - |
 | [`mysqli_stmt_errno()`](./builtins/database/mysqli_stmt_errno.md) | `(mixed $statement): int` | `int` | ✓ | - |
 | [`mysqli_stmt_error()`](./builtins/database/mysqli_stmt_error.md) | `(mixed $statement): string` | `string` | ✓ | - |
 | [`mysqli_stmt_error_list()`](./builtins/database/mysqli_stmt_error_list.md) | `(mixed $statement): array` | `array` | ✓ | - |
 | [`mysqli_stmt_execute()`](./builtins/database/mysqli_stmt_execute.md) | `(mixed $statement, ?array $params = null): bool` | `bool` | ✓ | - |
+| [`mysqli_stmt_fetch()`](./builtins/database/mysqli_stmt_fetch.md) | `(mixed $statement): ?bool` | `?bool` | ✓ | - |
 | [`mysqli_stmt_field_count()`](./builtins/database/mysqli_stmt_field_count.md) | `(mixed $statement): int` | `int` | ✓ | - |
 | [`mysqli_stmt_free_result()`](./builtins/database/mysqli_stmt_free_result.md) | `(mixed $statement): void` | `void` | ✓ | - |
 | [`mysqli_stmt_get_result()`](./builtins/database/mysqli_stmt_get_result.md) | `(mixed $statement): mixed` | `mixed` | ✓ | - |

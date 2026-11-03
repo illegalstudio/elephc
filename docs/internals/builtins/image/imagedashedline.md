@@ -2,7 +2,7 @@
 title: "imagedashedline() - internals"
 description: "Compiler internals for imagedashedline(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 519
+  order: 521
 ---
 
 ## `imagedashedline()` - internals

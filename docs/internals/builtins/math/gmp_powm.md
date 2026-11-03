@@ -2,7 +2,7 @@
 title: "gmp_powm() - internals"
 description: "Compiler internals for gmp_powm(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 636
+  order: 638
 ---
 
 ## `gmp_powm()` - internals

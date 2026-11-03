@@ -734,7 +734,7 @@ pub(crate) fn lower_indexed_array_spread_into_array(
         }
         _ => PhpType::Mixed,
     };
-    let source = narrow_gradual_indexed_spread_source(ctx, source, span);
+    let source = narrow_gradual_indexed_spread_source(ctx, source, span, Some("array_values"));
     let len = ctx.emit_value(
         Op::ArrayLen,
         vec![source.value],
@@ -828,6 +828,7 @@ pub(super) fn narrow_gradual_indexed_spread_source(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     span: crate::span::Span,
+    renumber: Option<&'static str>,
 ) -> LoweredValue {
     let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
     // A Traversable (a generator, an `iterable` return) unpacks the values it yields, in order:
@@ -920,7 +921,24 @@ pub(super) fn narrow_gradual_indexed_spread_source(
     if ctx.value_is_owning_temporary(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
-    narrowed
+    // A declared `array` can hold HASH storage under `array<mixed>`: an int-keyed hash
+    // (`[5 => 1, 9 => 2]`), or a list a by-reference walk promoted (`f(...$refs)` into
+    // `&...$vars`). The positional reader below slices it as a packed list and crashed. php
+    // renumbers the integer keys of an unpack. An array literal's slot reader takes
+    // `array_values` (a literal unpack has no names); a call's spread takes `array_merge`, which
+    // renumbers the integer keys and keeps the string keys its named-parameter probes read.
+    // The builtin call retires `narrowed`, its owning temporary operand, itself.
+    let Some(renumber) = renumber else {
+        return narrowed;
+    };
+    super::function_calls::emit_builtin_call_value(
+        ctx,
+        renumber,
+        vec![narrowed.value],
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        span,
+        None,
+    )
 }
 
 /// Emits an integer constant at a specific source span.
@@ -1239,6 +1257,12 @@ pub(super) fn array_literal_element_type_for_ir(
     match &item.kind {
         ExprKind::Null | ExprKind::Throw(_) => PhpType::Mixed,
         ExprKind::ArrayReference(_) => PhpType::Mixed,
+        // `$o->$name` lowers to a boxed `Mixed` read whatever the class declares: the syntactic
+        // fallback typed it `int`, so `[0 => $o->$p]` stamped its hash `array<int, int>` and read
+        // the stored box back as an integer (symfony/property-access's `readProperty()`).
+        ExprKind::DynamicPropertyAccess { .. } | ExprKind::NullsafeDynamicPropertyAccess { .. } => {
+            PhpType::Mixed
+        }
         ExprKind::Cast {
             target: CastType::Array,
             expr: inner,

@@ -2,7 +2,7 @@
 title: "func_num_args()"
 description: "Returns the number of arguments passed to the current function call."
 sidebar:
-  order: 695
+  order: 697
 ---
 
 ## func_num_args()

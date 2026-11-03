@@ -2,7 +2,7 @@
 title: "gmp_divexact() - internals"
 description: "Compiler internals for gmp_divexact(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 613
+  order: 615
 ---
 
 ## `gmp_divexact()` - internals

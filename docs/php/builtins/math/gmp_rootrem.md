@@ -2,7 +2,7 @@
 title: "gmp_rootrem()"
 description: "Integer nth root and remainder."
 sidebar:
-  order: 642
+  order: 644
 ---
 
 ## gmp_rootrem()

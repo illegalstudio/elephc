@@ -2,7 +2,7 @@
 title: "timezone_name_get()"
 description: "Returns a timezone's identifier."
 sidebar:
-  order: 262
+  order: 264
 ---
 
 ## timezone_name_get()

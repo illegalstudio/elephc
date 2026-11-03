@@ -2,7 +2,7 @@
 title: "imageaffine()"
 description: "Returns a copy of an image with an affine matrix applied."
 sidebar:
-  order: 478
+  order: 480
 ---
 
 ## imageaffine()

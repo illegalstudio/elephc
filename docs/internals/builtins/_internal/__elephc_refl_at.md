@@ -2,7 +2,7 @@
 title: "__elephc_refl_at() - internals"
 description: "Compiler internals for __elephc_refl_at(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1325
+  order: 1327
 ---
 
 ## `__elephc_refl_at()` - internals

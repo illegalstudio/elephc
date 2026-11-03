@@ -2,7 +2,7 @@
 title: "gmp_fact()"
 description: "Computes a factorial."
 sidebar:
-  order: 615
+  order: 617
 ---
 
 ## gmp_fact()

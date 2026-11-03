@@ -2,7 +2,7 @@
 title: "strrchr() - internals"
 description: "Compiler internals for strrchr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1056
+  order: 1058
 ---
 
 ## `strrchr()` - internals

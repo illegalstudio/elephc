@@ -2,7 +2,7 @@
 title: "_imagick_color_name() - internals"
 description: "Compiler internals for _imagick_color_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1351
+  order: 1353
 ---
 
 ## `_imagick_color_name()` - internals

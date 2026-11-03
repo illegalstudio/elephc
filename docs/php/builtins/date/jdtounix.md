@@ -2,7 +2,7 @@
 title: "jdtounix()"
 description: "Converts a Julian Day count into a Unix timestamp."
 sidebar:
-  order: 248
+  order: 250
 ---
 
 ## jdtounix()

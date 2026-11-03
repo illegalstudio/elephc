@@ -2,7 +2,7 @@
 title: "proc_open() - internals"
 description: "Compiler internals for proc_open(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 783
+  order: 785
 ---
 
 ## `proc_open()` - internals

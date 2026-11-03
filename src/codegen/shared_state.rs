@@ -83,6 +83,11 @@ pub(crate) struct SharedCodegenState {
     /// class), and a second copy in the same text is a duplicate definition: only the parallel
     /// merge drops copies, and the helpers emitted ahead of the bodies never pass through it.
     emitted_keyed_helpers: HashSet<String>,
+    /// Helper-marker scopes (`{:012x}` of the key's label scope) already present in the merged
+    /// text of a parallel pass. The compiling thread never emitted those helpers itself, so its
+    /// `emitted_keyed_helpers` does not hold their keys; a pass that runs after the last
+    /// de-duplication (the callable-argument normalizer) consults this instead.
+    merged_helper_scopes: HashSet<String>,
     /// Descriptor argument adapters need the shared boxed-callable normalizer.
     pub(super) callable_argument_normalizer: bool,
     generated_runtime_features: GeneratedRuntimeFeatures,
@@ -522,6 +527,7 @@ impl SharedCodegenState {
             emitted_instance_methods: EmittedMethods::default(),
             emitted_static_methods: EmittedMethods::default(),
             emitted_keyed_helpers: HashSet::default(),
+            merged_helper_scopes: HashSet::default(),
             callable_argument_normalizer: false,
             generated_runtime_features: GeneratedRuntimeFeatures::default(),
             runtime_string_descriptor_cases: Vec::new(),
@@ -988,7 +994,19 @@ impl SharedCodegenState {
     /// already emitted it.
     pub(super) fn first_keyed_helper_emission(&mut self, key: &str) -> bool {
         self.touch_cache_keyed();
+        if !self.merged_helper_scopes.is_empty() {
+            let scope = format!("{:012x}", crate::codegen::context::body_label_scope(key));
+            if self.merged_helper_scopes.contains(&scope) {
+                self.emitted_keyed_helpers.insert(key.to_string());
+                return false;
+            }
+        }
         self.emitted_keyed_helpers.insert(key.to_string())
+    }
+
+    /// Records the helper scopes a parallel pass's merged text already defines.
+    pub(super) fn mark_merged_helper_scopes<'a>(&mut self, scopes: impl IntoIterator<Item = &'a String>) {
+        self.merged_helper_scopes.extend(scopes.into_iter().cloned());
     }
 
     /// Starts watching this body for a cache a worker may not reach.

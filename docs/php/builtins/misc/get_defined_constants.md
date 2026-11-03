@@ -2,7 +2,7 @@
 title: "get_defined_constants()"
 description: "Returns constants visible to the current program."
 sidebar:
-  order: 703
+  order: 705
 ---
 
 ## get_defined_constants()

@@ -2,7 +2,7 @@
 title: "gmp_neg()"
 description: "Negates a GMP number."
 sidebar:
-  order: 629
+  order: 631
 ---
 
 ## gmp_neg()

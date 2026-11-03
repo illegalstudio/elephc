@@ -2,7 +2,7 @@
 title: "stream_bucket_make_writeable()"
 description: "Returns a bucket object from the brigade for use in a stream filter."
 sidebar:
-  order: 379
+  order: 381
 ---
 
 ## stream_bucket_make_writeable()

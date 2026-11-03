@@ -2,7 +2,7 @@
 title: "exif_read_data() - internals"
 description: "Compiler internals for exif_read_data(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 470
+  order: 472
 ---
 
 ## `exif_read_data()` - internals

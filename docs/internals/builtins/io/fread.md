@@ -2,7 +2,7 @@
 title: "fread() - internals"
 description: "Compiler internals for fread(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 345
+  order: 347
 ---
 
 ## `fread()` - internals

@@ -2,7 +2,7 @@
 title: "cairo_image_surface_get_width() - internals"
 description: "Compiler internals for cairo_image_surface_get_width(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 433
+  order: 435
 ---
 
 ## `cairo_image_surface_get_width()` - internals

@@ -2,7 +2,7 @@
 title: "unpack() - internals"
 description: "Compiler internals for unpack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1075
+  order: 1077
 ---
 
 ## `unpack()` - internals

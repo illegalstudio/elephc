@@ -2,7 +2,7 @@
 title: "proc_terminate() - internals"
 description: "Compiler internals for proc_terminate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 784
+  order: 786
 ---
 
 ## `proc_terminate()` - internals

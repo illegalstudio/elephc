@@ -205,12 +205,13 @@ fn test_error_string_push_is_not_supported() {
     );
 }
 
-/// Verifies string offset writes into a property are refused with a
-/// diagnostic that names the workaround (they are valid PHP, not lowered yet).
+/// Verifies a string offset write into a property whose receiver cannot be replayed (a call
+/// result) is refused with a diagnostic that names the workaround. A `$this` or variable
+/// receiver is lowered (`demo_language_gaps`).
 #[test]
 fn test_error_string_offset_write_on_property() {
     expect_error(
-        "<?php class B { public string $s = \"abc\"; } $o = new B(); $o->s[0] = \"X\";",
+        "<?php class B { public string $s = \"abc\"; } function b(): B { return new B(); } b()->s[0] = \"X\";",
         "String offset assignment on a property is not supported",
     );
     expect_error(

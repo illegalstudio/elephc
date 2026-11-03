@@ -2,7 +2,7 @@
 title: "is_link()"
 description: "Tells whether the filename is a symbolic link."
 sidebar:
-  order: 295
+  order: 297
 ---
 
 ## is_link()

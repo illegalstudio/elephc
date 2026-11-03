@@ -2,7 +2,7 @@
 title: "mysqli_stmt_insert_id() - internals"
 description: "Compiler internals for mysqli_stmt_insert_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 185
+  order: 187
 ---
 
 ## `mysqli_stmt_insert_id()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1486](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1486) (`mysqli_stmt_insert_id`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1513](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1513) (`mysqli_stmt_insert_id`)
 - **Function symbol**: `mysqli_stmt_insert_id()`
 
 

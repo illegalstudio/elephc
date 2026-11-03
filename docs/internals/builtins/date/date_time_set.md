@@ -2,7 +2,7 @@
 title: "date_time_set() - internals"
 description: "Compiler internals for date_time_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 226
+  order: 228
 ---
 
 ## `date_time_set()` - internals

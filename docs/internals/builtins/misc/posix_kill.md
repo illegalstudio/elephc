@@ -2,7 +2,7 @@
 title: "posix_kill() - internals"
 description: "Compiler internals for posix_kill(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 771
+  order: 773
 ---
 
 ## `posix_kill()` - internals

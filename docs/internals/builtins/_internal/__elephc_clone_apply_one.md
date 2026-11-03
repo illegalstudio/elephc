@@ -2,7 +2,7 @@
 title: "__elephc_clone_apply_one() - internals"
 description: "Compiler internals for __elephc_clone_apply_one(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1227
+  order: 1229
 ---
 
 ## `__elephc_clone_apply_one()` - internals

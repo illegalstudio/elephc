@@ -612,6 +612,31 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
             Some(arg.span),
         );
     }
+    // A union of `Stringable` objects (and null) the checker bound through the declaration's
+    // string arm: each object converts as php's weak mode does, and null stays null.
+    if bindable && !ctx.php_strict_types {
+        let static_ty = argument_static_type(ctx, arg).unwrap_or_else(|| source_php_ty.clone());
+        if let Some(classes) =
+            crate::types::param_binding::object_union_string_binding_classes(declared_param_ty, &static_ty)
+        {
+            let binds_through_string = classes.iter().all(|class_name| {
+                !param_accepts_object_without_string_coercion(
+                    ctx,
+                    declared_param_ty,
+                    &PhpType::Object((*class_name).to_string()),
+                )
+            });
+            if binds_through_string {
+                return apply_scalar_param_cast(
+                    ctx,
+                    CastType::String,
+                    value,
+                    declared_param_ty,
+                    Some(arg.span),
+                );
+            }
+        }
+    }
     if param_ty == PhpType::Callable
         && !sig.ref_params.get(index).copied().unwrap_or(false)
         && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))

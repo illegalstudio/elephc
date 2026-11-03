@@ -2,7 +2,7 @@
 title: "closedir()"
 description: "Closes directory handle."
 sidebar:
-  order: 323
+  order: 325
 ---
 
 ## closedir()

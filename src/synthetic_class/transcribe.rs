@@ -880,13 +880,13 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             value_by_ref,
             body,
         } => {
-            assert!(!value_by_ref, "by-ref foreach is not modelled");
             let key = match key_var {
                 Some(name) => format!("Some({})", lit(name)),
                 None => "None".to_string(),
             };
             format!(
-                "s_foreach({}, {}, {}, {})",
+                "{}({}, {}, {}, {})",
+                if *value_by_ref { "s_foreach_by_ref" } else { "s_foreach" },
                 expr(array, depth),
                 key,
                 lit(value_var),
@@ -910,6 +910,7 @@ fn expr_vec(items: &[Expr], depth: usize) -> String {
 fn expr(value: &Expr, depth: usize) -> String {
     match &value.kind {
         ExprKind::Null => "e_null()".to_string(),
+        ExprKind::ArrayReference(source) => format!("e_ref({})", expr(source, depth)),
         ExprKind::This => "e_this()".to_string(),
         ExprKind::BoolLiteral(flag) => format!("e_bool({})", flag),
         ExprKind::IntLiteral(number) => format!("e_int({})", number),

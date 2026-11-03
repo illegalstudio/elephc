@@ -2,7 +2,7 @@
 title: "gmp_gcd() - internals"
 description: "Compiler internals for gmp_gcd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 616
+  order: 618
 ---
 
 ## `gmp_gcd()` - internals

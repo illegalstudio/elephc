@@ -2,7 +2,7 @@
 title: "gmp_div_q() - internals"
 description: "Compiler internals for gmp_div_q(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 610
+  order: 612
 ---
 
 ## `gmp_div_q()` - internals

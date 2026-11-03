@@ -344,6 +344,7 @@ pub(super) fn emit_module(
         // module's tail passes run on it after `main`, past the last de-duplication) must treat
         // them as defined, or the assembler sees the same symbol twice.
         emitter.mark_shared_bodies_emitted(seen_helpers.iter());
+        shared.mark_merged_helper_scopes(seen_helpers.iter());
         // The appended bodies carried their own section directives; put the emitter back on a
         // known one before the serial pass continues after them.
         emitter.reopen_text_section(None);
@@ -450,6 +451,10 @@ pub(super) fn emit_module(
         // workers emitted, so it can repeat a helper a worker already produced.
         dedupe_emitted_since(emitter, main_started, main_ool_started, &mut seen_helpers);
         emitter.mark_shared_bodies_emitted(seen_helpers.iter());
+        // The module tail (the callable-argument normalizer in `codegen::emit`) runs past this
+        // last de-duplication: a keyed helper it reaches that a worker already emitted must be
+        // referenced, not defined again.
+        shared.mark_merged_helper_scopes(seen_helpers.iter());
     }
     inventory.finish()?;
     // Generate the per-request reset routine only for `--web`, and only after the

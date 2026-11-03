@@ -85,6 +85,10 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
             "offsetSet",
             "offsetUnset",
             "count",
+            "getFlags",
+            "setFlags",
+            "__serialize",
+            "__unserialize",
         ],
         // `$o[] = $v` reaches `append()` through the vtable; it was kept only while `offsetSet()`
         // called it, and an emptied slot made the first push jump to address 0.

@@ -2,7 +2,7 @@
 title: "pathinfo()"
 description: "Returns information about a file path."
 sidebar:
-  order: 305
+  order: 307
 ---
 
 ## pathinfo()

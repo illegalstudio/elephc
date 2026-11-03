@@ -2,7 +2,7 @@
 title: "iptcparse() - internals"
 description: "Compiler internals for iptcparse(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 561
+  order: 563
 ---
 
 ## `iptcparse()` - internals

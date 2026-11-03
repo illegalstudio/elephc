@@ -2,7 +2,7 @@
 title: "jdtojewish()"
 description: "Converts a Julian Day count into a Jewish date string."
 sidebar:
-  order: 246
+  order: 248
 ---
 
 ## jdtojewish()

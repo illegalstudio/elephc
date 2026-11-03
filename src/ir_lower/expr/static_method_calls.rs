@@ -55,6 +55,29 @@ pub(super) fn lower_static_method_call(
     if let Some(value) = lower_scoped_parent_call(ctx, receiver, method, args, expr) {
         return value;
     }
+    // `C::m(...$a)` / `self::m(...$a)` into by-reference parameters: the descriptor invoker binds
+    // each one to its unpacked element (and the signature makes plain elements references), as
+    // the direct function form does. `static::` keeps its late-bound path.
+    if args.iter().any(super::is_spread_arg)
+        && matches!(receiver, StaticReceiver::Named(_) | StaticReceiver::Self_)
+    {
+        let sig = static_method_implementation_signature(ctx, receiver, method).cloned();
+        if let (Some(sig), Some(class_name)) = (sig, static_receiver_class_name(ctx, receiver)) {
+            if crate::types::call_args::spread_reaches_by_ref_suffix(&sig, args) {
+                let callback = Expr::new(
+                    ExprKind::StringLiteral(format!("{class_name}::{method}")),
+                    expr.span,
+                );
+                let outer = std::mem::replace(&mut ctx.direct_by_ref_unpack, true);
+                let result = super::descriptor_invoke::lower_call_user_func_descriptor_invoke(
+                    ctx, &callback, args, Some(&sig), expr,
+                )
+                .expect("by-reference spread static descriptor invocation");
+                ctx.direct_by_ref_unpack = outer;
+                return result;
+            }
+        }
+    }
     if let Some(value) = lower_late_static_dispatch_ladder(ctx, receiver, method, args, expr) {
         return value;
     }

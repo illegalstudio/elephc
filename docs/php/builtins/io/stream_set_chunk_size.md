@@ -2,7 +2,7 @@
 title: "stream_set_chunk_size()"
 description: "Sets the read chunk size on a stream."
 sidebar:
-  order: 402
+  order: 404
 ---
 
 ## stream_set_chunk_size()

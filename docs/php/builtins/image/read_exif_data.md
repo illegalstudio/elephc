@@ -2,7 +2,7 @@
 title: "read_exif_data()"
 description: "Alias of exif_read_data()."
 sidebar:
-  order: 562
+  order: 564
 ---
 
 ## read_exif_data()

@@ -1636,10 +1636,38 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
 }
 
 /// Zero-initializes hidden ref-cell owner slots before any fallback promotion can run.
+///
+/// The VALUE slot of a promotion is zeroed too. `promote_local_ref_cell` moves whatever the
+/// slot holds into the new cell, and a slot that later stores a ref-cell pointer (the `$v` of
+/// `foreach ($vars as &$v)`) is left out of the cleanup-local zeroing. Unwritten, it held the
+/// previous call's stack word: the cell took a share of a live block it never owned, and
+/// releasing the cell freed that block (heap-debug "bad refcount" in `bind(&...$vars)`).
 fn zero_initialize_ref_cell_owner_locals(ctx: &mut FunctionContext<'_>) {
     for (_, _, _, offset) in ref_cell_owner_locals(ctx) {
         abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
     }
+    let mut words = Vec::new();
+    for instruction in &ctx.function.instructions {
+        let (Op::PromoteLocalRefCell, Some(Immediate::LocalSlotPair { first, .. })) =
+            (instruction.op, instruction.immediate.as_ref())
+        else {
+            continue;
+        };
+        if local_slot_is_parameter(ctx.function, *first) {
+            continue;
+        }
+        let Ok(offset) = ctx.local_offset(*first) else { continue; };
+        words.push(offset);
+        let is_string = ctx.function.locals.iter()
+            .find(|local| local.id == *first)
+            .is_some_and(|local| local.php_type.codegen_repr() == PhpType::Str);
+        if is_string {
+            words.push(offset - 8);
+        }
+    }
+    words.sort_unstable();
+    words.dedup();
+    abi::emit_zero_local_slot_words(ctx.emitter, &words);
 }
 
 /// Initializes runtime flags for slots whose raw/ref-cell representation can change.

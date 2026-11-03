@@ -2,7 +2,7 @@
 title: "image_type_to_extension() - internals"
 description: "Compiler internals for image_type_to_extension(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 476
+  order: 478
 ---
 
 ## `image_type_to_extension()` - internals

@@ -2,7 +2,7 @@
 title: "date_parse() - internals"
 description: "Compiler internals for date_parse(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 220
+  order: 222
 ---
 
 ## `date_parse()` - internals

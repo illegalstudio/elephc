@@ -344,7 +344,11 @@ pub(super) fn lower_iter_current_value(
             }
             if indexed_iter_value_needs_detached_cell(&elem, &result_ty) {
                 let result_reg = abi::int_result_reg(ctx.emitter).to_string();
-                super::arrays::emit_mixed_array_get_deref_invoker_ref_cell(ctx, &result_reg);
+                if preserve_reference {
+                    emit_share_indexed_reference_marker_or_detach(ctx, &result_reg);
+                } else {
+                    super::arrays::emit_mixed_array_get_deref_invoker_ref_cell(ctx, &result_reg);
+                }
             } else {
                 retain_current_indexed_value_if_unboxed(&mut ctx.emitter, &elem, &result_ty);
                 box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
@@ -370,6 +374,39 @@ pub(super) fn lower_iter_current_value(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Hands a reference element of an indexed array on as its reference marker; detaches the rest.
+///
+/// An argument unpack (`$f(...[&$x, &$y])`, `$refs[$k] = &$v; $stmt->bind(...$refs)`) asks for
+/// the element's reference to survive (`preserve_reference`). The hash walk already honours it;
+/// the indexed walk dereferenced the `{11|12|13, cell, tag}` marker into a fresh value, so the
+/// descriptor invoker bound a by-reference parameter to a copy and the caller's variable never
+/// changed. The marker box is shared (retained) instead: the invoker binds a by-reference
+/// parameter to its cell and materializes the value for a by-value one, as php's
+/// `SEND_UNPACK` decides per parameter.
+fn emit_share_indexed_reference_marker_or_detach(ctx: &mut FunctionContext<'_>, mixed_reg: &str) {
+    let marker_label = ctx.next_label("iter_unpack_ref_marker");
+    let done_label = ctx.next_label("iter_unpack_ref_done");
+    let detach_label = ctx.next_label("iter_unpack_detach");
+    let tag_reg = abi::secondary_scratch_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", mixed_reg, detach_label)); // a null gap cell has no marker tag to inspect
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", mixed_reg, mixed_reg)); // a null gap cell has no marker tag to inspect
+            ctx.emitter.instruction(&format!("jz {}", detach_label));           // detach (read as null) instead
+        }
+    }
+    abi::emit_load_from_address(ctx.emitter, tag_reg, mixed_reg, 0);
+    super::arrays::emit_branch_if_invoker_ref_cell_tag(ctx, tag_reg, &marker_label);
+    ctx.emitter.label(&detach_label);
+    super::arrays::emit_mixed_array_get_deref_invoker_ref_cell(ctx, mixed_reg);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&marker_label);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);              // the unpack slot shares the element's marker box
+    ctx.emitter.label(&done_label);
 }
 
 /// Returns the declared PHP result type for an `iter_current_value` instruction.
@@ -1437,8 +1474,8 @@ fn lower_dynamic_iter_current_value(
 
     ctx.emitter.label(&indexed_case);
     match ctx.emitter.target.arch {
-        Arch::AArch64 => load_current_dynamic_indexed_value_as_mixed_aarch64(ctx, offset),
-        Arch::X86_64 => load_current_dynamic_indexed_value_as_mixed_x86_64(ctx, offset),
+        Arch::AArch64 => load_current_dynamic_indexed_value_as_mixed_aarch64(ctx, offset, preserve_reference),
+        Arch::X86_64 => load_current_dynamic_indexed_value_as_mixed_x86_64(ctx, offset, preserve_reference),
     }
     abi::emit_jump(ctx.emitter, &done);
 
@@ -2728,6 +2765,7 @@ fn emit_detach_hash_value_box(ctx: &mut FunctionContext<'_>) {
 fn load_current_dynamic_indexed_value_as_mixed_aarch64(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
+    preserve_reference: bool,
 ) {
     let string_case = ctx.next_label("iter_dynamic_indexed_string");
     let loaded = ctx.next_label("iter_dynamic_indexed_loaded");
@@ -2766,6 +2804,13 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the existing-box retention path
 
     ctx.emitter.label(&ref_marker);
+    if preserve_reference {
+        // An argument unpack keeps the element's reference: the descriptor invoker binds a
+        // by-reference parameter to the marker's cell (`emit_share_indexed_reference_marker_or_detach`).
+        ctx.emitter.instruction("mov x0, x3");                                      // hand the marker box itself to the unpack slot
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);          // the unpack slot shares the element's marker box
+        abi::emit_jump(ctx.emitter, &done);
+    }
     emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "x3");
     ctx.emitter.instruction(&format!("b {}", done));                            // expose the referenced PHP value, not its internal marker
 
@@ -2780,6 +2825,7 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
 fn load_current_dynamic_indexed_value_as_mixed_x86_64(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
+    preserve_reference: bool,
 ) {
     let string_case = ctx.next_label("iter_dynamic_indexed_string");
     let loaded = ctx.next_label("iter_dynamic_indexed_loaded");
@@ -2818,6 +2864,13 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the existing-box retention path
 
     ctx.emitter.label(&ref_marker);
+    if preserve_reference {
+        // An argument unpack keeps the element's reference: the descriptor invoker binds a
+        // by-reference parameter to the marker's cell (`emit_share_indexed_reference_marker_or_detach`).
+        ctx.emitter.instruction("mov rax, rcx");                                      // hand the marker box itself to the unpack slot
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);          // the unpack slot shares the element's marker box
+        abi::emit_jump(ctx.emitter, &done);
+    }
     emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "rcx");
     ctx.emitter.instruction(&format!("jmp {}", done));                          // expose the referenced PHP value, not its internal marker
 

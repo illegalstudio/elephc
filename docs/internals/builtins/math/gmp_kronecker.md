@@ -2,7 +2,7 @@
 title: "gmp_kronecker() - internals"
 description: "Compiler internals for gmp_kronecker(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 624
+  order: 626
 ---
 
 ## `gmp_kronecker()` - internals

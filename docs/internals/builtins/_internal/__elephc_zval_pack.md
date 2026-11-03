@@ -2,7 +2,7 @@
 title: "__elephc_zval_pack() - internals"
 description: "Compiler internals for __elephc_zval_pack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1340
+  order: 1342
 ---
 
 ## `__elephc_zval_pack()` - internals

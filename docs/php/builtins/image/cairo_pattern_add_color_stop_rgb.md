@@ -2,7 +2,7 @@
 title: "cairo_pattern_add_color_stop_rgb()"
 description: "Adds an opaque color stop to a gradient pattern."
 sidebar:
-  order: 445
+  order: 447
 ---
 
 ## cairo_pattern_add_color_stop_rgb()

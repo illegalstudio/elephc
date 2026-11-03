@@ -2,7 +2,7 @@
 title: "str_pad() - internals"
 description: "Compiler internals for str_pad(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1039
+  order: 1041
 ---
 
 ## `str_pad()` - internals

@@ -2,7 +2,7 @@
 title: "imagefilledarc()"
 description: "Draws a filled arc, pie slice, or chord."
 sidebar:
-  order: 523
+  order: 525
 ---
 
 ## imagefilledarc()

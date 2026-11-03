@@ -2,7 +2,7 @@
 title: "imagechar()"
 description: "Draws one character horizontally with a built-in font."
 sidebar:
-  order: 484
+  order: 486
 ---
 
 ## imagechar()

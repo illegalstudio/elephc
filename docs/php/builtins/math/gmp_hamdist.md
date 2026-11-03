@@ -2,7 +2,7 @@
 title: "gmp_hamdist()"
 description: "Hamming distance between two GMP numbers."
 sidebar:
-  order: 618
+  order: 620
 ---
 
 ## gmp_hamdist()

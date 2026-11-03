@@ -2,7 +2,7 @@
 title: "password_algos()"
 description: "Returns the identifiers of the available password hashing algorithms (bcrypt)."
 sidebar:
-  order: 1017
+  order: 1019
 ---
 
 ## password_algos()

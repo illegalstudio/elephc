@@ -2,7 +2,7 @@
 title: "gmp_mod()"
 description: "Modulo of two GMP numbers."
 sidebar:
-  order: 627
+  order: 629
 ---
 
 ## gmp_mod()

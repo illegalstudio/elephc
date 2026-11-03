@@ -2,7 +2,7 @@
 title: "password_hash() - internals"
 description: "Compiler internals for password_hash(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1019
+  order: 1021
 ---
 
 ## `password_hash()` - internals

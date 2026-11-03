@@ -2,7 +2,7 @@
 title: "json_last_error_msg()"
 description: "Returns the error string of the last json_encode() or json_decode() call."
 sidebar:
-  order: 566
+  order: 568
 ---
 
 ## json_last_error_msg()

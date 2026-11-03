@@ -354,3 +354,21 @@ echo '|', $e->sqlstate;
     );
     assert_eq!(out, "rt|123|012|2048|00000");
 }
+
+/// A keyed helper a parallel codegen worker emitted (the `mysqli_stmt::bind_param` entry that
+/// `mysqli_stmt_bind_param(...$vars)` reaches) is reused by the module tail. The callable-argument
+/// normalizer is emitted after the last de-duplication and reached the same entry through its
+/// builtin-wrapper chain: the link failed with a duplicate `_eir_shared_callable_instance_method_*`.
+#[test]
+fn test_mysqli_tail_helpers_reuse_worker_emitted_entries() {
+    let out = compile_and_run(
+        r#"<?php
+if ($argc < 99) { echo "ok\n"; exit(0); }
+$db = new mysqli("h", "u", "p", "d");
+$r = $db->query("SELECT 1");
+$f = $r->fetch_field_direct(0);
+echo $f->decimals;
+"#,
+    );
+    assert_eq!(out, "ok\n");
+}

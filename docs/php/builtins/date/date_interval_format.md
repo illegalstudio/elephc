@@ -2,7 +2,7 @@
 title: "date_interval_format()"
 description: "Formats a DateInterval according to a format string."
 sidebar:
-  order: 216
+  order: 218
 ---
 
 ## date_interval_format()

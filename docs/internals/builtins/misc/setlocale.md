@@ -2,7 +2,7 @@
 title: "setlocale() - internals"
 description: "Compiler internals for setlocale(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 792
+  order: 794
 ---
 
 ## `setlocale()` - internals

@@ -37,23 +37,20 @@ use crate::synthetic_class::{
     e_binop,
     e_bool,
     e_call,
-    e_index,
     e_instance_of,
     e_int,
     e_method_call,
     e_new,
     e_not,
     e_null,
-    e_post_inc,
     e_prop,
     e_static_prop,
+    e_spread,
     e_str,
     e_var,
     function,
-    s_array_push,
     s_assign,
     s_expr,
-    s_for,
     s_if,
     s_return,
     s_throw,
@@ -1224,32 +1221,62 @@ pub(super) fn decl_fn_mysqli_execute_query() -> Stmt {
 
 /// `mysqli_stmt_bind_param` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_stmt_bind_param() -> Stmt {
-    function("mysqli_stmt_bind_param")
-        .param("statement", t_mixed())
-        .param("types", TypeExpr::Str)
-        .variadic_by_ref("vars", Some(t_mixed()))
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_if(
-                e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
-                vec![
-                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_bind_param(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
-                ],
-                vec![],
-                None,
-            ),
-            // Same bind-time value capture as the method (forwarding `...$vars` into bind_param is
-            // rejected: a by-ref variadic cannot take spread arguments); the checker's mysqli
-            // friend channel lets this alias reach the private helper. See statement.rs for the
-            // documented divergence from PHP's read-at-execute reference semantics.
-            s_assign("_values", e_array(vec![])),
-            s_assign("_given", e_call("count", vec![e_var("vars")])),
-            s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_given"))), Some(s_expr(e_post_inc("_i"))), vec![
-                s_array_push("_values", e_index(e_var("vars"), e_var("_i"))),
-            ]),
-            s_return(e_method_call(e_var("statement"), "__elephcBindParamValues", vec![e_var("types"), e_var("_values")])),
-        ])
-        .build()
+function("mysqli_stmt_bind_param")
+    .param("statement", t_mixed())
+    .param("types", TypeExpr::Str)
+    .variadic_by_ref("vars", Some(t_mixed()))
+    .returns(TypeExpr::Bool)
+    .body(vec![
+        s_if(
+            e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+            vec![
+                s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_bind_param(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+            ],
+            vec![],
+            None,
+        ),
+        s_return(e_method_call(e_var("statement"), "bind_param", vec![e_var("types"), e_spread(e_var("vars"))])),
+    ])
+    .build()
+}
+
+/// `mysqli_stmt_bind_result` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_bind_result() -> Stmt {
+function("mysqli_stmt_bind_result")
+    .param("statement", t_mixed())
+    .variadic_by_ref("vars", Some(t_mixed()))
+    .returns(TypeExpr::Bool)
+    .body(vec![
+        s_if(
+            e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+            vec![
+                s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_bind_result(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+            ],
+            vec![],
+            None,
+        ),
+        s_return(e_method_call(e_var("statement"), "bind_result", vec![e_spread(e_var("vars"))])),
+    ])
+    .build()
+}
+
+/// `mysqli_stmt_fetch` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_stmt_fetch() -> Stmt {
+function("mysqli_stmt_fetch")
+    .param("statement", t_mixed())
+    .returns(t_nullable(TypeExpr::Bool))
+    .body(vec![
+        s_if(
+            e_not(e_instance_of(e_var("statement"), "mysqli_stmt")),
+            vec![
+                s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_stmt_fetch(): Argument #1 ($statement) must be of type mysqli_stmt, "), BinOp::Concat, e_call("gettype", vec![e_var("statement")])), BinOp::Concat, e_str(" given"))])),
+            ],
+            vec![],
+            None,
+        ),
+        s_return(e_method_call(e_var("statement"), "fetch", vec![])),
+    ])
+    .build()
 }
 
 /// `mysqli_stmt_execute` — transcribed from the PHP form.

@@ -357,6 +357,12 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             scoped_constant_value_type_for_ir(ctx, receiver, name, value)
         }
         ExprKind::DynamicScopedConstantAccess { .. } => PhpType::Mixed,
+        // `$o->$name` lowers to a boxed `Mixed` read whatever the class declares: the syntactic
+        // fallback typed it `int`, so `[0 => $o->$p]` stamped its hash `array<int, int>` and read
+        // the stored box back as an integer (symfony/property-access's `readProperty()`).
+        ExprKind::DynamicPropertyAccess { .. } | ExprKind::NullsafeDynamicPropertyAccess { .. } => {
+            PhpType::Mixed
+        }
         // A nested literal must be typed by the same context-aware function that will lower
         // it, not by the syntactic fallback: `infer_expr_type_syntactic` cannot see a local's
         // type, so it types every `$v` element `Int`. The outer hash then stamped its value

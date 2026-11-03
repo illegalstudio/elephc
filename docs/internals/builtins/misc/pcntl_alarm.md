@@ -2,7 +2,7 @@
 title: "pcntl_alarm() - internals"
 description: "Compiler internals for pcntl_alarm(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 735
+  order: 737
 ---
 
 ## `pcntl_alarm()` - internals

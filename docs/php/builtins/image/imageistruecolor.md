@@ -2,7 +2,7 @@
 title: "imageistruecolor()"
 description: "Reports whether an image is truecolor rather than palette-based."
 sidebar:
-  order: 536
+  order: 538
 ---
 
 ## imageistruecolor()

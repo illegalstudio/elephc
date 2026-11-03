@@ -72,11 +72,13 @@ sidebar:
 | [`mysqli_stat()`](./database/mysqli_stat.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | - |
 | [`mysqli_stmt_affected_rows()`](./database/mysqli_stmt_affected_rows.md) | `(mixed $statement): int` | `int` | ✓ | - |
 | [`mysqli_stmt_bind_param()`](./database/mysqli_stmt_bind_param.md) | `(mixed $statement, string $types, ...$vars): bool` | `bool` | ✓ | - |
+| [`mysqli_stmt_bind_result()`](./database/mysqli_stmt_bind_result.md) | `(mixed $statement, ...$vars): bool` | `bool` | ✓ | - |
 | [`mysqli_stmt_close()`](./database/mysqli_stmt_close.md) | `(mixed $statement): bool` | `bool` | ✓ | - |
 | [`mysqli_stmt_errno()`](./database/mysqli_stmt_errno.md) | `(mixed $statement): int` | `int` | ✓ | - |
 | [`mysqli_stmt_error()`](./database/mysqli_stmt_error.md) | `(mixed $statement): string` | `string` | ✓ | - |
 | [`mysqli_stmt_error_list()`](./database/mysqli_stmt_error_list.md) | `(mixed $statement): array` | `array` | ✓ | - |
 | [`mysqli_stmt_execute()`](./database/mysqli_stmt_execute.md) | `(mixed $statement, ?array $params = null): bool` | `bool` | ✓ | - |
+| [`mysqli_stmt_fetch()`](./database/mysqli_stmt_fetch.md) | `(mixed $statement): ?bool` | `?bool` | ✓ | - |
 | [`mysqli_stmt_field_count()`](./database/mysqli_stmt_field_count.md) | `(mixed $statement): int` | `int` | ✓ | - |
 | [`mysqli_stmt_free_result()`](./database/mysqli_stmt_free_result.md) | `(mixed $statement): void` | `void` | ✓ | - |
 | [`mysqli_stmt_get_result()`](./database/mysqli_stmt_get_result.md) | `(mixed $statement): mixed` | `mixed` | ✓ | - |

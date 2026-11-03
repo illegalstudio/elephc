@@ -2,7 +2,7 @@
 title: "mysqli_stmt_num_rows()"
 description: "Returns how many rows a prepared statement's buffered result has."
 sidebar:
-  order: 186
+  order: 188
 ---
 
 ## mysqli_stmt_num_rows()

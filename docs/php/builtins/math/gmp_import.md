@@ -2,7 +2,7 @@
 title: "gmp_import()"
 description: "Imports a binary string as a GMP number."
 sidebar:
-  order: 619
+  order: 621
 ---
 
 ## gmp_import()

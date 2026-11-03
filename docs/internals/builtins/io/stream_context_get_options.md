@@ -2,7 +2,7 @@
 title: "stream_context_get_options() - internals"
 description: "Compiler internals for stream_context_get_options(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 383
+  order: 385
 ---
 
 ## `stream_context_get_options()` - internals

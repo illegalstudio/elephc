@@ -2,7 +2,7 @@
 title: "cairo_matrix_transform_point()"
 description: "Applies a matrix to a point and returns the transformed [x, y] pair."
 sidebar:
-  order: 440
+  order: 442
 ---
 
 ## cairo_matrix_transform_point()

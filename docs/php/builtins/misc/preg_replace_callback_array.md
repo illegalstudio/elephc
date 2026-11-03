@@ -2,7 +2,7 @@
 title: "preg_replace_callback_array()"
 description: "Performs a regular expression search and replace using one callback per pattern."
 sidebar:
-  order: 778
+  order: 780
 ---
 
 ## preg_replace_callback_array()

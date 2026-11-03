@@ -2,7 +2,7 @@
 title: "gmp_random_bits() - internals"
 description: "Compiler internals for gmp_random_bits(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 638
+  order: 640
 ---
 
 ## `gmp_random_bits()` - internals

@@ -2,7 +2,7 @@
 title: "date_isodate_set()"
 description: "Sets a DateTime from an ISO year, week, and day of week."
 sidebar:
-  order: 217
+  order: 219
 ---
 
 ## date_isodate_set()

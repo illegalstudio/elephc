@@ -2,7 +2,7 @@
 title: "date_format()"
 description: "Formats a date according to a format string."
 sidebar:
-  order: 213
+  order: 215
 ---
 
 ## date_format()

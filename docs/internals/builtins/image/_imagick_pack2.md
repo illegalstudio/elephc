@@ -2,7 +2,7 @@
 title: "_imagick_pack2() - internals"
 description: "Compiler internals for _imagick_pack2(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1356
+  order: 1358
 ---
 
 ## `_imagick_pack2()` - internals

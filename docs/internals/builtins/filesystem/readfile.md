@@ -2,7 +2,7 @@
 title: "readfile() - internals"
 description: "Compiler internals for readfile(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 307
+  order: 309
 ---
 
 ## `readfile()` - internals

@@ -406,10 +406,22 @@ pub(super) fn check_property_array_assign(
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
             if prop_ty == PhpType::Str {
-                return Err(CompileError::new(
-                    span,
-                    super::arrays::STRING_OFFSET_ON_PROPERTY_UNSUPPORTED,
-                ));
+                // php writes the byte in place (doctrine/dbal's mysqli `Statement::bindValue()`:
+                // `$this->types[$param - 1] = 's'`). Lowering replays a receiver that has no
+                // effects (`$this`, a variable) through a hidden local
+                // (`lower_string_property_offset_write`); any other receiver, and a compound
+                // `.=` / `++` the parser desugared with the statement's own span, stays refused.
+                let replayable_receiver = matches!(object.kind, ExprKind::This | ExprKind::Variable(_));
+                if !replayable_receiver || value.span == span {
+                    return Err(CompileError::new(
+                        span,
+                        super::arrays::STRING_OFFSET_ON_PROPERTY_UNSUPPORTED,
+                    ));
+                }
+                if !crate::types::checker::inference::is_valid_string_offset_index(index, &idx_ty) {
+                    return Err(CompileError::new(span, "String index must be integer"));
+                }
+                return Ok(());
             }
             if type_satisfies_array_access(checker, &prop_ty) {
                 return Ok(());

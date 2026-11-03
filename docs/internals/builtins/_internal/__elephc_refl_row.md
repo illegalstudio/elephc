@@ -2,7 +2,7 @@
 title: "__elephc_refl_row() - internals"
 description: "Compiler internals for __elephc_refl_row(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1328
+  order: 1330
 ---
 
 ## `__elephc_refl_row()` - internals

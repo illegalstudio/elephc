@@ -2,7 +2,7 @@
 title: "imagecolorexactalpha()"
 description: "Returns the palette index of an exact color with alpha, or -1."
 sidebar:
-  order: 494
+  order: 496
 ---
 
 ## imagecolorexactalpha()

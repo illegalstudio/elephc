@@ -2,7 +2,7 @@
 title: "imagesy() - internals"
 description: "Compiler internals for imagesy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 556
+  order: 558
 ---
 
 ## `imagesy()` - internals

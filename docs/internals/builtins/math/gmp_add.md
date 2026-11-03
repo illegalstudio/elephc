@@ -2,7 +2,7 @@
 title: "gmp_add() - internals"
 description: "Compiler internals for gmp_add(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 603
+  order: 605
 ---
 
 ## `gmp_add()` - internals

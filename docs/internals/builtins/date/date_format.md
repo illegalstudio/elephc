@@ -2,7 +2,7 @@
 title: "date_format() - internals"
 description: "Compiler internals for date_format(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 213
+  order: 215
 ---
 
 ## `date_format()` - internals

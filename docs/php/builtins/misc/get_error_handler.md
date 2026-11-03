@@ -2,7 +2,7 @@
 title: "get_error_handler()"
 description: "Returns the currently active user error handler, or null when none is installed."
 sidebar:
-  order: 706
+  order: 708
 ---
 
 ## get_error_handler()

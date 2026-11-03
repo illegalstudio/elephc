@@ -2,7 +2,7 @@
 title: "gmp_perfect_power() - internals"
 description: "Compiler internals for gmp_perfect_power(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 632
+  order: 634
 ---
 
 ## `gmp_perfect_power()` - internals

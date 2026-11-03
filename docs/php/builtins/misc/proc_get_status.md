@@ -2,7 +2,7 @@
 title: "proc_get_status()"
 description: "Returns information about a process opened by proc_open()."
 sidebar:
-  order: 781
+  order: 783
 ---
 
 ## proc_get_status()

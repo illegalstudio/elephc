@@ -287,6 +287,22 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return lower_call_user_func_descriptor_invoke(ctx, &callback, args, sig.as_ref(), expr)
             .expect("mb_convert_variables descriptor invocation");
     }
+    // `f(...$refs)` into by-reference parameters goes through the descriptor invoker, which
+    // binds each by-reference parameter to the reference marker the unpack keeps. The checker
+    // validates this call the same way (`Checker::check_function_call`).
+    if args.iter().any(is_spread_arg) {
+        if let Some(sig) = ctx.functions.get(canonical).cloned() {
+            if crate::types::call_args::spread_reaches_by_ref_suffix(&sig, args) {
+                let callback =
+                    Expr::new(ExprKind::StringLiteral(canonical.trim_start_matches('\\').to_string()), expr.span);
+                let outer = std::mem::replace(&mut ctx.direct_by_ref_unpack, true);
+                let result = lower_call_user_func_descriptor_invoke(ctx, &callback, args, Some(&sig), expr)
+                    .expect("by-reference spread descriptor invocation");
+                ctx.direct_by_ref_unpack = outer;
+                return result;
+            }
+        }
+    }
     if let Some(value) =
         compat_preludes::lower_single_arg_assert(ctx, canonical, args, expr)
     {

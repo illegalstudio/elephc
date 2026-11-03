@@ -2,7 +2,7 @@
 title: "debug_backtrace() - internals"
 description: "Compiler internals for debug_backtrace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 684
+  order: 686
 ---
 
 ## `debug_backtrace()` - internals

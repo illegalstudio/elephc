@@ -316,10 +316,19 @@ pub(in crate::types::checker) fn widen_property_for_element_reference(
     // element markers' readers (the `array_splice()` prelude among them) only follow boxed cells.
     // The one php behaviour this gives up is the TypeError for a wrong-typed write through the
     // reference.
+    // A nullable scalar (`private ?int $remaining`, a tagged scalar) and an array
+    // (`private array $info`) are widened the same way: symfony/http-client's `NativeResponse`
+    // shares both with `[&$this->pauseExpiry, ..., &$this->remaining, &$this->info, ...]`.
     let typed_scalar = declared
         && matches!(
             info.properties[slot].1.codegen_repr(),
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
+            PhpType::Int
+                | PhpType::Float
+                | PhpType::Bool
+                | PhpType::Str
+                | PhpType::TaggedScalar
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
         );
     let addressable = !info
         .methods

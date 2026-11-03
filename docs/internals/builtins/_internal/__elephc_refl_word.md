@@ -2,7 +2,7 @@
 title: "__elephc_refl_word() - internals"
 description: "Compiler internals for __elephc_refl_word(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1329
+  order: 1331
 ---
 
 ## `__elephc_refl_word()` - internals

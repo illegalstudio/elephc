@@ -2,7 +2,7 @@
 title: "imagecreatetruecolor()"
 description: "Creates an empty truecolor image of the given size."
 sidebar:
-  order: 516
+  order: 518
 ---
 
 ## imagecreatetruecolor()

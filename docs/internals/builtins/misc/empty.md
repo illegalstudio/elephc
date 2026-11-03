@@ -2,7 +2,7 @@
 title: "empty() - internals"
 description: "Compiler internals for empty(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 688
+  order: 690
 ---
 
 ## `empty()` - internals

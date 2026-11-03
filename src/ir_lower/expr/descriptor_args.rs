@@ -137,11 +137,25 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
     for arg in args {
         match &arg.kind {
             ExprKind::Spread(inner) => {
-                let by_ref_origin = (mb_variables && positional_index >= 2)
+                // php binds every element that lands on a by-reference parameter to the source
+                // slot itself, making it a reference (`f(...$plain)` writes `$plain`). The walk
+                // can only do that wholesale, so it does when EVERY parameter this unpack can
+                // reach is by-reference; a by-value one must not turn its element into a
+                // reference. Reference elements are carried by marker either way.
+                // `by_ref_suffix` is the first position of a by-reference SUFFIX this unpack can
+                // reach: every parameter from there on (variadic included) takes a reference.
+                let by_ref_suffix = if ctx.direct_by_ref_unpack {
+                    sig.and_then(|sig| crate::types::call_args::by_ref_suffix_start(sig, positional_index))
+                } else {
+                    None
+                };
+                let by_ref_origin = ((mb_variables && positional_index >= 2) || by_ref_suffix.is_some())
                     .then(|| crate::ir_lower::stmt::promote_by_ref_foreach_source(ctx, inner, true))
                     .flatten();
                 let source = lower_expr(ctx, inner);
-                lower_descriptor_unpack_source(ctx, &state, source, arg.span, by_ref_origin);
+                lower_descriptor_unpack_source(
+                    ctx, &state, source, arg.span, by_ref_origin, by_ref_suffix.unwrap_or(0),
+                );
             }
             ExprKind::NamedArg { name, value } => {
                 let key = lower_string_literal(ctx, name, arg);

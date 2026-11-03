@@ -2,7 +2,7 @@
 title: "mysqli_thread_id() - internals"
 description: "Compiler internals for mysqli_thread_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 193
+  order: 195
 ---
 
 ## `mysqli_thread_id()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:568](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L568) (`mysqli_thread_id`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:565](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L565) (`mysqli_thread_id`)
 - **Function symbol**: `mysqli_thread_id()`
 
 

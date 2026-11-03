@@ -28,6 +28,18 @@ pub fn is_enabled() -> bool {
     CLOSED_WORLD.with(|cell| cell.get())
 }
 
+/// Whether a closed-world build can never see class-like `name`: it is neither declared in the
+/// program (`declared`) nor a builtin class contract. With no autoloader or interpreter to supply
+/// it, any run-time use is php's `Error: Class "X" not found`, which a guarded optional
+/// dependency (`if (class_exists(...)) { return X::m(...); }`) never reaches.
+pub fn class_is_absent(name: &str, declared: impl Fn(&str) -> bool) -> bool {
+    let name = name.trim_start_matches('\\');
+    is_enabled()
+        && !name.is_empty()
+        && !declared(name)
+        && elephc_builtin_contract::lookup_class(name).is_none()
+}
+
 /// Whether `ELEPHC_CLOSED_WORLD` asks for the mode (`1`, `true`, `on`).
 pub fn requested_by_environment() -> bool {
     matches!(

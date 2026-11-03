@@ -2,7 +2,7 @@
 title: "header_remove()"
 description: "Removes one or all pending HTTP response headers."
 sidebar:
-  order: 716
+  order: 718
 ---
 
 ## header_remove()

@@ -2,7 +2,7 @@
 title: "mb_get_info()"
 description: "Returns the current mbstring request settings or one selected information value."
 sidebar:
-  order: 968
+  order: 970
 ---
 
 ## mb_get_info()

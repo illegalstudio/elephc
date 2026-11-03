@@ -2,7 +2,7 @@
 title: "pcntl_wtermsig()"
 description: "Returns the terminating signal encoded in a child wait status."
 sidebar:
-  order: 767
+  order: 769
 ---
 
 ## pcntl_wtermsig()

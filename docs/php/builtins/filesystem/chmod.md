@@ -2,7 +2,7 @@
 title: "chmod()"
 description: "Changes file mode."
 sidebar:
-  order: 271
+  order: 273
 ---
 
 ## chmod()

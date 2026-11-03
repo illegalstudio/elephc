@@ -2,7 +2,7 @@
 title: "imagewebp() - internals"
 description: "Compiler internals for imagewebp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 559
+  order: 561
 ---
 
 ## `imagewebp()` - internals

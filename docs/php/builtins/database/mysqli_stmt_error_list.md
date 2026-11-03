@@ -2,7 +2,7 @@
 title: "mysqli_stmt_error_list()"
 description: "Returns every error of the last call on a statement."
 sidebar:
-  order: 179
+  order: 180
 ---
 
 ## mysqli_stmt_error_list()

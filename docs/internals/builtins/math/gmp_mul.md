@@ -2,7 +2,7 @@
 title: "gmp_mul() - internals"
 description: "Compiler internals for gmp_mul(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 628
+  order: 630
 ---
 
 ## `gmp_mul()` - internals

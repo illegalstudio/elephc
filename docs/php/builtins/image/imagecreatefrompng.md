@@ -2,7 +2,7 @@
 title: "imagecreatefrompng()"
 description: "Creates an image from a PNG file."
 sidebar:
-  order: 512
+  order: 514
 ---
 
 ## imagecreatefrompng()

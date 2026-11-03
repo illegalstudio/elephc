@@ -2,7 +2,7 @@
 title: "gregoriantojd()"
 description: "Converts a Gregorian date into a Julian Day count."
 sidebar:
-  order: 239
+  order: 241
 ---
 
 ## gregoriantojd()

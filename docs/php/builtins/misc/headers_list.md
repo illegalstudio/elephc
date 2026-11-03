@@ -2,7 +2,7 @@
 title: "headers_list()"
 description: "Returns the pending response headers as `Name: value` lines."
 sidebar:
-  order: 717
+  order: 719
 ---
 
 ## headers_list()

@@ -2,7 +2,7 @@
 title: "gmp_div_qr()"
 description: "Divides two GMP numbers and returns quotient and remainder."
 sidebar:
-  order: 611
+  order: 613
 ---
 
 ## gmp_div_qr()

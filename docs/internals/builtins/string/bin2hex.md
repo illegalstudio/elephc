@@ -2,7 +2,7 @@
 title: "bin2hex() - internals"
 description: "Compiler internals for bin2hex(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 897
+  order: 899
 ---
 
 ## `bin2hex()` - internals

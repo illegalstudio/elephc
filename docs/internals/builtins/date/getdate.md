@@ -2,7 +2,7 @@
 title: "getdate() - internals"
 description: "Compiler internals for getdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 234
+  order: 236
 ---
 
 ## `getdate()` - internals

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:932](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L932) (`mysqli_fetch_assoc`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:929](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L929) (`mysqli_fetch_assoc`)
 - **Function symbol**: `mysqli_fetch_assoc()`
 
 

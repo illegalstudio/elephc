@@ -2,7 +2,7 @@
 title: "round()"
 description: "Rounds a float."
 sidebar:
-  order: 675
+  order: 677
 ---
 
 ## round()

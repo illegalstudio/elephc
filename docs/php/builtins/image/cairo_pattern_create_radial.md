@@ -2,7 +2,7 @@
 title: "cairo_pattern_create_radial()"
 description: "Creates a radial gradient pattern between two circles."
 sidebar:
-  order: 448
+  order: 450
 ---
 
 ## cairo_pattern_create_radial()

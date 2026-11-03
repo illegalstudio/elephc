@@ -2,7 +2,7 @@
 title: "gmp_random_seed() - internals"
 description: "Compiler internals for gmp_random_seed(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 640
+  order: 642
 ---
 
 ## `gmp_random_seed()` - internals

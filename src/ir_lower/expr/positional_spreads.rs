@@ -48,8 +48,11 @@ pub(super) fn lower_positional_spread_args_with_signature(
     // (`collect(...$args)` forwarding a relay's own `...$args`). This path slices the source as an
     // indexed array, which reads a hash's buckets as slots, so the generic tail builder (it
     // spreads each source by its runtime shape) lowers that call instead.
+    // An untyped collector is the same: `count_args(...$values)` over a declared `array` that
+    // holds `[5 => 1, 9 => 2]`, or a list a by-reference unpack promoted to a hash, crashed here.
     if regular_param_count == 0
-        && super::variadic_args::variadic_param_is_iterable(sig)
+        && (super::variadic_args::variadic_param_is_iterable(sig)
+            || variadic_param_is_untyped(sig))
         && !super::variadic_args::variadic_param_is_by_ref(sig)
         && indexed_spread_source_type(ctx, inner).is_some_and(|ty| match &ty {
             PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
@@ -112,7 +115,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
     } else {
         spread
     };
-    let spread = narrow_gradual_indexed_spread_source(ctx, spread, args[spread_idx].span);
+    let spread = narrow_gradual_indexed_spread_source(ctx, spread, args[spread_idx].span, None);
     let spread = root_evaluated_call_argument(ctx, spread, inner.span);
     let spread_type = ctx.builder.value_php_type(spread.value);
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
@@ -223,6 +226,13 @@ pub(super) fn lower_positional_spread_args_with_signature(
     }
 
     Some(coerce_operands_to_params(ctx, sig, operands))
+}
+
+/// Whether the variadic collector takes any value (`...$xs`, `mixed ...$xs`), so no element
+/// coercion stands between the source and the generic tail builder.
+fn variadic_param_is_untyped(sig: &FunctionSig) -> bool {
+    crate::types::call_args::variadic_element_type(sig)
+        .is_some_and(|element| element.codegen_repr() == PhpType::Mixed)
 }
 
 /// Counts a staged unpack using its actual storage representation, not its PHP array hint.

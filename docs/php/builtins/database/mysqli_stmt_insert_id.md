@@ -2,7 +2,7 @@
 title: "mysqli_stmt_insert_id()"
 description: "Returns the id the last prepared INSERT generated."
 sidebar:
-  order: 185
+  order: 187
 ---
 
 ## mysqli_stmt_insert_id()

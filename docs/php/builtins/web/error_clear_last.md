@@ -2,7 +2,7 @@
 title: "error_clear_last()"
 description: "Implemented by the compiler-injected error-handling prelude."
 sidebar:
-  order: 1112
+  order: 1114
 ---
 
 ## error_clear_last()

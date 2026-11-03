@@ -110936,7 +110936,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_affected_rows",
-      "codegen_line": 691,
+      "codegen_line": 688,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111007,7 +111007,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_autocommit",
-      "codegen_line": 373,
+      "codegen_line": 370,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111092,7 +111092,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_begin_transaction",
-      "codegen_line": 270,
+      "codegen_line": 267,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111170,7 +111170,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_character_set_name",
-      "codegen_line": 211,
+      "codegen_line": 208,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111234,7 +111234,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_close",
-      "codegen_line": 133,
+      "codegen_line": 130,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111312,7 +111312,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_commit",
-      "codegen_line": 291,
+      "codegen_line": 288,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111425,7 +111425,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_connect",
-      "codegen_line": 69,
+      "codegen_line": 66,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111516,7 +111516,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_connect_errno",
-      "codegen_line": 587,
+      "codegen_line": 584,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111564,7 +111564,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_connect_error",
-      "codegen_line": 597,
+      "codegen_line": 594,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111627,7 +111627,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_data_seek",
-      "codegen_line": 1089,
+      "codegen_line": 1086,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111698,7 +111698,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_errno",
-      "codegen_line": 615,
+      "codegen_line": 612,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111762,7 +111762,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_error",
-      "codegen_line": 634,
+      "codegen_line": 631,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111826,7 +111826,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_error_list",
-      "codegen_line": 653,
+      "codegen_line": 650,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111897,7 +111897,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_escape_string",
-      "codegen_line": 250,
+      "codegen_line": 247,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -111968,7 +111968,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_execute",
-      "codegen_line": 1564,
+      "codegen_line": 1591,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112046,7 +112046,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_execute_query",
-      "codegen_line": 1206,
+      "codegen_line": 1203,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112131,7 +112131,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_fetch_all",
-      "codegen_line": 1011,
+      "codegen_line": 1008,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112209,7 +112209,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_fetch_array",
-      "codegen_line": 970,
+      "codegen_line": 967,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112280,7 +112280,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_fetch_assoc",
-      "codegen_line": 932,
+      "codegen_line": 929,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112351,7 +112351,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_fetch_column",
-      "codegen_line": 1031,
+      "codegen_line": 1028,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112422,7 +112422,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_fetch_field",
-      "codegen_line": 1109,
+      "codegen_line": 1106,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112493,7 +112493,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_fetch_field_direct",
-      "codegen_line": 1147,
+      "codegen_line": 1144,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112564,7 +112564,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_fetch_fields",
-      "codegen_line": 1128,
+      "codegen_line": 1125,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112628,7 +112628,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_fetch_lengths",
-      "codegen_line": 1602,
+      "codegen_line": 1629,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112706,7 +112706,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_fetch_object",
-      "codegen_line": 990,
+      "codegen_line": 987,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112784,7 +112784,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_fetch_row",
-      "codegen_line": 951,
+      "codegen_line": 948,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112848,7 +112848,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_field_count",
-      "codegen_line": 729,
+      "codegen_line": 726,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112919,7 +112919,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_field_seek",
-      "codegen_line": 1621,
+      "codegen_line": 1648,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -112990,7 +112990,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_field_tell",
-      "codegen_line": 1641,
+      "codegen_line": 1668,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113054,7 +113054,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_free_result",
-      "codegen_line": 1167,
+      "codegen_line": 1164,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113118,7 +113118,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_get_charset",
-      "codegen_line": 1660,
+      "codegen_line": 1687,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113182,7 +113182,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_get_client_info",
-      "codegen_line": 454,
+      "codegen_line": 451,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113246,7 +113246,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_get_client_version",
-      "codegen_line": 530,
+      "codegen_line": 527,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113310,7 +113310,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_get_host_info",
-      "codegen_line": 473,
+      "codegen_line": 470,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113374,7 +113374,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_get_proto_info",
-      "codegen_line": 492,
+      "codegen_line": 489,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113438,7 +113438,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_get_server_info",
-      "codegen_line": 435,
+      "codegen_line": 432,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113502,7 +113502,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_get_server_version",
-      "codegen_line": 511,
+      "codegen_line": 508,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113566,7 +113566,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_info",
-      "codegen_line": 767,
+      "codegen_line": 764,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113622,7 +113622,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_init",
-      "codegen_line": 97,
+      "codegen_line": 94,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113678,7 +113678,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_insert_id",
-      "codegen_line": 710,
+      "codegen_line": 707,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113742,7 +113742,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_more_results",
-      "codegen_line": 855,
+      "codegen_line": 852,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113813,7 +113813,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_multi_query",
-      "codegen_line": 835,
+      "codegen_line": 832,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113884,7 +113884,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_next_result",
-      "codegen_line": 874,
+      "codegen_line": 871,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -113948,7 +113948,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_num_fields",
-      "codegen_line": 1070,
+      "codegen_line": 1067,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -114012,7 +114012,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_num_rows",
-      "codegen_line": 1051,
+      "codegen_line": 1048,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -114090,7 +114090,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_options",
-      "codegen_line": 393,
+      "codegen_line": 390,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -114168,7 +114168,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_ping",
-      "codegen_line": 152,
+      "codegen_line": 149,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -114239,7 +114239,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_prepare",
-      "codegen_line": 1186,
+      "codegen_line": 1183,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -114324,7 +114324,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_query",
-      "codegen_line": 794,
+      "codegen_line": 791,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -114451,7 +114451,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_real_connect",
-      "codegen_line": 107,
+      "codegen_line": 104,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -114571,7 +114571,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_real_escape_string",
-      "codegen_line": 230,
+      "codegen_line": 227,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -114649,7 +114649,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_real_query",
-      "codegen_line": 815,
+      "codegen_line": 812,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -114727,7 +114727,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_release_savepoint",
-      "codegen_line": 353,
+      "codegen_line": 350,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -114876,7 +114876,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_rollback",
-      "codegen_line": 312,
+      "codegen_line": 309,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -114961,7 +114961,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_savepoint",
-      "codegen_line": 333,
+      "codegen_line": 330,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115039,7 +115039,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_select_db",
-      "codegen_line": 171,
+      "codegen_line": 168,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115117,7 +115117,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_set_charset",
-      "codegen_line": 191,
+      "codegen_line": 188,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115202,7 +115202,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_set_opt",
-      "codegen_line": 414,
+      "codegen_line": 411,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115280,7 +115280,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_sqlstate",
-      "codegen_line": 672,
+      "codegen_line": 669,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115344,7 +115344,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stat",
-      "codegen_line": 549,
+      "codegen_line": 546,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115408,7 +115408,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_affected_rows",
-      "codegen_line": 1353,
+      "codegen_line": 1380,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115479,7 +115479,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_bind_param",
-      "codegen_line": 1227,
+      "codegen_line": 1224,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115530,6 +115530,70 @@
       "required_param_count": 1,
       "signature_override_reason": null,
       "supported": true,
+      "variadic": "vars"
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_stmt_bind_result",
+    "description": "Binds variables to a prepared statement's result columns.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_bind_result",
+      "codegen_line": 1245,
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_bind_result",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": "vars"
+    },
+    "since": null,
+    "slug": "mysqli_stmt_bind_result",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
       "variadic": null
     },
     "area": "Database",
@@ -115550,7 +115614,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_close",
-      "codegen_line": 1334,
+      "codegen_line": 1361,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115614,7 +115678,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_errno",
-      "codegen_line": 1372,
+      "codegen_line": 1399,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115678,7 +115742,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_error",
-      "codegen_line": 1391,
+      "codegen_line": 1418,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115742,7 +115806,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_error_list",
-      "codegen_line": 1505,
+      "codegen_line": 1532,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115813,7 +115877,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_execute",
-      "codegen_line": 1257,
+      "codegen_line": 1284,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115867,6 +115931,70 @@
       "variadic": null
     },
     "area": "Database",
+    "canonical_name": "mysqli_stmt_fetch",
+    "description": "Fetches the next result row into the variables bound by mysqli_stmt_bind_result().",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_fetch",
+      "codegen_line": 1265,
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_line": null
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_fetch",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "?bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_stmt_fetch",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
     "canonical_name": "mysqli_stmt_field_count",
     "description": "Returns how many columns a prepared statement produces.",
     "eval": {
@@ -115884,7 +116012,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_field_count",
-      "codegen_line": 1467,
+      "codegen_line": 1494,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -115948,7 +116076,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_free_result",
-      "codegen_line": 1524,
+      "codegen_line": 1551,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116012,7 +116140,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_get_result",
-      "codegen_line": 1277,
+      "codegen_line": 1304,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116076,7 +116204,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_init",
-      "codegen_line": 1583,
+      "codegen_line": 1610,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116140,7 +116268,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_insert_id",
-      "codegen_line": 1486,
+      "codegen_line": 1513,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116204,7 +116332,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_num_rows",
-      "codegen_line": 1410,
+      "codegen_line": 1437,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116268,7 +116396,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_param_count",
-      "codegen_line": 1429,
+      "codegen_line": 1456,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116339,7 +116467,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_prepare",
-      "codegen_line": 1543,
+      "codegen_line": 1570,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116410,7 +116538,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_reset",
-      "codegen_line": 1315,
+      "codegen_line": 1342,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116474,7 +116602,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_sqlstate",
-      "codegen_line": 1448,
+      "codegen_line": 1475,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116538,7 +116666,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_stmt_store_result",
-      "codegen_line": 1296,
+      "codegen_line": 1323,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116609,7 +116737,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_store_result",
-      "codegen_line": 893,
+      "codegen_line": 890,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116680,7 +116808,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_thread_id",
-      "codegen_line": 568,
+      "codegen_line": 565,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116736,7 +116864,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_thread_safe",
-      "codegen_line": 1680,
+      "codegen_line": 1707,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116792,7 +116920,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_use_result",
-      "codegen_line": 913,
+      "codegen_line": 910,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],
@@ -116856,7 +116984,7 @@
       "checker_line": null,
       "codegen_file": "src/mysqli_prelude/build/procedural.rs",
       "codegen_function": "mysqli_warning_count",
-      "codegen_line": 748,
+      "codegen_line": 745,
       "notes": [
         "Implemented by the compiler-injected mysqli prelude."
       ],

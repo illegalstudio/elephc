@@ -2,7 +2,7 @@
 title: "imagecolormatch() - internals"
 description: "Compiler internals for imagecolormatch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 495
+  order: 497
 ---
 
 ## `imagecolormatch()` - internals

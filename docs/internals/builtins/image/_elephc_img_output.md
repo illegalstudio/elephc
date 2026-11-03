@@ -2,7 +2,7 @@
 title: "_elephc_img_output() - internals"
 description: "Compiler internals for _elephc_img_output(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1346
+  order: 1348
 ---
 
 ## `_elephc_img_output()` - internals

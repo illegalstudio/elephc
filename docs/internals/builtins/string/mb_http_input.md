@@ -2,7 +2,7 @@
 title: "mb_http_input() - internals"
 description: "Compiler internals for mb_http_input(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 969
+  order: 971
 ---
 
 ## `mb_http_input()` - internals

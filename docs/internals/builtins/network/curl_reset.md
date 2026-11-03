@@ -2,7 +2,7 @@
 title: "curl_reset() - internals"
 description: "Compiler internals for curl_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 821
+  order: 823
 ---
 
 ## `curl_reset()` - internals

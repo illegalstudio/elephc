@@ -2,7 +2,7 @@
 title: "putenv() - internals"
 description: "Compiler internals for putenv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 306
+  order: 308
 ---
 
 ## `putenv()` - internals

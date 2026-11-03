@@ -2,7 +2,7 @@
 title: "levenshtein()"
 description: "Computes the Levenshtein edit distance between two strings."
 sidebar:
-  order: 940
+  order: 942
 ---
 
 ## levenshtein()

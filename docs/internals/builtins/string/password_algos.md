@@ -2,7 +2,7 @@
 title: "password_algos() - internals"
 description: "Compiler internals for password_algos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1017
+  order: 1019
 ---
 
 ## `password_algos()` - internals

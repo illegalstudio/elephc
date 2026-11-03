@@ -2,7 +2,7 @@
 title: "strftime() - internals"
 description: "Compiler internals for strftime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 254
+  order: 256
 ---
 
 ## `strftime()` - internals

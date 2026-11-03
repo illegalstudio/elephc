@@ -2,7 +2,7 @@
 title: "settype()"
 description: "Sets the type of a variable."
 sidebar:
-  order: 1110
+  order: 1112
 ---
 
 ## settype()

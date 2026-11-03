@@ -2,7 +2,7 @@
 title: "mysqli_use_result()"
 description: "Starts reading a result row by row from the server."
 sidebar:
-  order: 195
+  order: 197
 ---
 
 ## mysqli_use_result()

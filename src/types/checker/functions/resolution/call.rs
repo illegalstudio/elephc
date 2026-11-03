@@ -14,6 +14,30 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use crate::types::checker::Checker;
 
 impl Checker {
+    /// Whether this call's unpack lands on a by-reference parameter suffix of a user function
+    /// (declared or already resolved): the rule lowering routes the call by
+    /// (`crate::types::call_args::spread_reaches_by_ref_suffix`).
+    fn spread_reaches_user_by_ref_suffix(&self, name: &str, args: &[Expr]) -> bool {
+        if let Some(sig) = self.functions.get(name) {
+            return crate::types::call_args::spread_reaches_by_ref_suffix(sig, args);
+        }
+        let Some(decl) = self.fn_decls.get(name) else {
+            return false;
+        };
+        let Some((positional, limit)) = crate::types::call_args::spread_binding_window(
+            args, |param| decl.params.iter().position(|declared| declared == param),
+        ) else {
+            return false;
+        };
+        crate::types::call_args::by_ref_suffix_start_of(
+            |index| decl.ref_params.get(index).copied().unwrap_or(false),
+            decl.params.len(),
+            decl.variadic.as_ref().map(|_| decl.variadic_by_ref),
+            positional,
+        )
+        .is_some_and(|start| start < limit)
+    }
+
     /// Determines the element type for a variadic parameter's container.
     ///
     /// If the element type is `Iterable`, returns `Mixed` since iterables can
@@ -234,6 +258,26 @@ impl Checker {
                     return self.check_function_call(&instantiated, args, span, caller_env);
                 }
             }
+        }
+
+        // `f(...$refs)` into by-reference parameters: php binds each one to its unpacked element.
+        // Lowering sends this call through the descriptor invoker (as `call_user_func()` does),
+        // which binds reference markers per parameter, so it is checked exactly like that call.
+        if self.spread_reaches_user_by_ref_suffix(name, args) {
+            for arg in args {
+                self.infer_descriptor_call_arg_type(arg, caller_env)?;
+            }
+            let target = crate::parser::ast::CallableTarget::Function(
+                crate::names::Name::unqualified(name),
+            );
+            // Resolved, not specialized from this call: specializing re-checks the call as a
+            // plain one, which is the refusal this path replaces.
+            let sig = self.resolve_first_class_callable_sig(&target, span, caller_env)?;
+            let result = self.check_known_callable_call_allowing_by_ref_spread(
+                &sig, args, span, caller_env, &format!("Function '{}'", name),
+            )?;
+            self.record_by_ref_unpack_outputs(&sig, args, span, caller_env);
+            return Ok(result);
         }
 
         if let Some(mut sig) = self.functions.get(name).cloned() {
