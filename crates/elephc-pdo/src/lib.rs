@@ -4520,6 +4520,25 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
     })
 }
 
+/// Returns `1` when a MySQL statement's current result set is followed by another
+/// one (without reading it), backing mysqli's more_results(); `0` otherwise.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_more_results(stmt_id: i64) -> i64 {
+    ffi_guard(0, || {
+        let sguard = lock_recover(stmts());
+        match sguard.get(&stmt_id) {
+            Some(Stmt::Mysql(s)) => {
+                let cguard = lock_recover(conns());
+                match cguard.get(&s.conn_id) {
+                    Some(Conn::Mysql(c)) => i64::from(s.more_results(c)),
+                    _ => 0,
+                }
+            }
+            _ => 0,
+        }
+    })
+}
+
 /// Executes a MySQL statement without reading its first row, backing
 /// mysqli_stmt::execute(): a streaming statement's rows stay on the server until
 /// `elephc_pdo_step` fetches them. `0` on success, the negative `step` error code on

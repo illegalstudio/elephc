@@ -299,7 +299,8 @@ the connection, so a later `real_connect()` on the same object starts clean.
   own accounting and match PHP 8.3 mysqlnd on the same server: `bytes_sent` /
   `packets_sent` / `protocol_overhead_out` (each command counts its physical
   packets plus one, as mysqlnd does), `packets_sent_command`, `bytes_received`
-  (raw socket bytes — after TLS decryption, before decompression),
+  (the bytes consumed — each packet's header and payload, or under
+  compression each compressed frame — after TLS decryption),
   `packets_received`, `protocol_overhead_in`, and the per-packet-type
   `bytes_received_*_packet` / `packets_received_*` pairs, charged through
   php-src's own (shifted) reader tables: result headers show up under
@@ -307,7 +308,12 @@ the connection, so a later `real_connect()` on the same object starts clean.
   `change_user`, EOFs under `rset_header`. A mysqli session negotiates the same
   protocol features mysqlnd does (no MariaDB extended capabilities, no client
   statement cache: every `prepare()` reaches the server and `close()` sends
-  `COM_STMT_CLOSE`). The `mem_*` counters are `"0"`, as in php with its default
+  `COM_STMT_CLOSE`), and reads results when the program consumes them, like
+  mysqlnd: `multi_query()` / `real_query()` / `use_result()` / a statement's
+  `execute()` read a set's header and metadata, its rows are read by
+  `store_result()` / `get_result()` or one per fetch, and `next_result()`
+  reads the next set — so the counters move at the same calls as php's. The
+  `mem_*` counters are `"0"`, as in php with its default
   `mysqlnd.collect_memory_statistics=Off`. The connection-level counters
   (connections, closes, `COM_*` commands, `no_index_used` / `bad_index_used`,
   result-set and buffered-row counts) are tracked too.
@@ -407,10 +413,7 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
 - **Property writes stick**: the public `mysqli` / `mysqli_result` /
   `mysqli_stmt` properties are refreshed after operations but are not
   write-barriered; assigning to them is not rejected.
-- **Statistics timing and decode-time counters**: the bridge reads a result
-  set's rows when `execute()` / `multi_query()` runs rather than on the first
-  fetch, so the wire counters reach php's values once the results are consumed
-  (a snapshot taken in between can differ). The row-decoding counters
+- **Decode-time statistics**: the row-decoding counters
   (`proto_text_fetched_*`, `proto_binary_fetched_*`,
   `bytes_received_real_data_*`) stay `"0"`, and the result-set, free-result,
   and statement-lifecycle counters are approximations of mysqlnd's.

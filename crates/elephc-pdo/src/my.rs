@@ -128,6 +128,8 @@ struct MyDriverOptions {
     /// Whether native prepares go through the client's statement cache. mysqli: no, like
     /// mysqlnd — every prepare() reaches the server and finalize sends COM_STMT_CLOSE.
     stmt_cache: bool,
+    /// Whether streaming statements stop at result-set boundaries (mysqli).
+    lazy_rowsets: bool,
 }
 
 impl Default for MyDriverOptions {
@@ -146,6 +148,7 @@ impl Default for MyDriverOptions {
             handshake_multi_statements: true,
             mariadb_extensions: true,
             stmt_cache: true,
+            lazy_rowsets: false,
             io_timeout_secs: None,
         }
     }
@@ -312,6 +315,8 @@ pub struct MyConn {
     pub buffered_query: bool,
     /// Whether client-side execution accepts more than one SQL statement.
     pub multi_statements: bool,
+    /// Whether streaming statements stop at result-set boundaries (mysqli).
+    pub lazy_rowsets: bool,
     /// Whether finalizing a native statement sends COM_STMT_CLOSE (no statement cache).
     pub closes_statements: bool,
     /// Whether an unbuffered statement still has unread rows.
@@ -403,6 +408,9 @@ pub struct MyStmt {
     pub buffered: bool,
     /// Connection-owned demand stream used when buffering is disabled.
     stream_id: Option<u64>,
+    /// mysqli: at a set boundary `step()` stops (the next set is read by
+    /// `next_rowset()`), instead of PDO's eager advance.
+    lazy_sets: bool,
 }
 
 impl Drop for MyConn {
@@ -450,6 +458,8 @@ impl DerefMut for MyClientSlot {
 /// Commands sent to the MySQL worker.
 enum MyStreamCommand {
     Next,
+    /// Advance to the next result set (read its header and metadata).
+    NextSet,
     Close,
 }
 
@@ -457,7 +467,8 @@ enum MyStreamCommand {
 enum MyStreamResponse {
     Rowset(MyRowset),
     Row(Vec<Cell>),
-    RowsetEnd,
+    /// The current set ended; `true` when the server announced more result sets.
+    RowsetEnd(bool),
     Finished(Conn, u16),
     Failed(Conn, String, i64, String),
 }
@@ -468,6 +479,8 @@ struct MyActiveStream {
     commands: mpsc::Sender<MyStreamCommand>,
     responses: mpsc::Receiver<MyStreamResponse>,
     worker: Option<JoinHandle<()>>,
+    /// Whether the set that last ended announced further result sets.
+    more_sets: bool,
 }
 
 /// One fully materialized MySQL protocol result set.
@@ -750,6 +763,7 @@ fn parse_driver_options(config: &str) -> Result<MyDriverOptions, String> {
             "servermulti" => options.handshake_multi_statements = value != "0",
             "mariadbext" => options.mariadb_extensions = value != "0",
             "stmtcache" => options.stmt_cache = value != "0",
+            "lazysets" => options.lazy_rowsets = value != "0",
             "buffered" => options.buffered_query = value != "0",
             "capath" if !value.is_empty() => options.ssl_ca_path = Some(PathBuf::from(value)),
             "cipher" if !value.is_empty() => options.ssl_cipher = Some(value),
@@ -2000,6 +2014,7 @@ impl MyConn {
             fetch_table_names: false,
             buffered_query: driver_options.buffered_query,
             multi_statements: driver_options.multi_statements,
+            lazy_rowsets: driver_options.lazy_rowsets,
             closes_statements: !driver_options.stmt_cache,
             unbuffered_active: false,
             warning_count: 0,
@@ -2068,7 +2083,7 @@ impl MyConn {
                 }
                 MyStreamResponse::Rowset(_)
                 | MyStreamResponse::Row(_)
-                | MyStreamResponse::RowsetEnd => {}
+                | MyStreamResponse::RowsetEnd(_) => {}
             }
         }
         if let Some(worker) = active.worker.take() {
@@ -2098,6 +2113,7 @@ impl MyConn {
             commands,
             responses,
             worker: Some(worker),
+            more_sets: false,
         };
         match active.responses.recv() {
             Ok(MyStreamResponse::Rowset(rowset)) => {
@@ -2123,7 +2139,7 @@ impl MyConn {
                 }
                 Err(-1)
             }
-            Ok(MyStreamResponse::Row(_) | MyStreamResponse::RowsetEnd) | Err(_) => {
+            Ok(MyStreamResponse::Row(_) | MyStreamResponse::RowsetEnd(_)) | Err(_) => {
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();
                 }
@@ -2180,6 +2196,13 @@ impl MyConn {
         self.activate_stream(command_tx, response_rx, worker)
     }
 
+    /// Whether the active stream `id`'s last ended set announced more result sets.
+    fn stream_more_sets(&self, id: u64) -> bool {
+        self.active_stream
+            .as_ref()
+            .is_some_and(|active| active.id == id && active.more_sets)
+    }
+
     /// Requests one row from the active result set.
     fn next_stream_row(&mut self, id: u64) -> Result<Option<Vec<Cell>>, i64> {
         let Some(active) = self.active_stream.as_mut() else {
@@ -2193,7 +2216,10 @@ impl MyConn {
         }
         match active.responses.recv() {
             Ok(MyStreamResponse::Row(row)) => Ok(Some(row)),
-            Ok(MyStreamResponse::RowsetEnd) => Ok(None),
+            Ok(MyStreamResponse::RowsetEnd(more)) => {
+                active.more_sets = more;
+                Ok(None)
+            }
             Ok(MyStreamResponse::Failed(conn, sqlstate, errcode, message)) => {
                 let warnings = conn.warnings();
                 self.restore_stream_client(conn, warnings);
@@ -2228,6 +2254,11 @@ impl MyConn {
         if active.id != id {
             return Ok(None);
         }
+        // The worker waits at a set boundary until asked: mysqlnd too reads the next
+        // set's header and metadata only when the client advances.
+        if active.commands.send(MyStreamCommand::NextSet).is_err() {
+            return Err(-1);
+        }
         match active.responses.recv() {
             Ok(MyStreamResponse::Rowset(rowset)) => Ok(Some(rowset)),
             Ok(MyStreamResponse::Finished(conn, warnings)) => {
@@ -2252,7 +2283,7 @@ impl MyConn {
                 self.unbuffered_active = false;
                 Err(-1)
             }
-            Ok(MyStreamResponse::Row(_) | MyStreamResponse::RowsetEnd) | Err(_) => Err(-1),
+            Ok(MyStreamResponse::Row(_) | MyStreamResponse::RowsetEnd(_)) | Err(_) => Err(-1),
         }
     }
 
@@ -2815,6 +2846,7 @@ impl MyConn {
                 is_call: sql_is_call_statement(sql),
                 buffered: self.buffered_query,
                 stream_id: None,
+                lazy_sets: self.lazy_rowsets,
             });
         }
         match self.conn.prep(&translated) {
@@ -2885,6 +2917,7 @@ impl MyConn {
                     is_call: sql_is_call_statement(sql),
                     buffered: self.buffered_query,
                     stream_id: None,
+                    lazy_sets: self.lazy_rowsets,
                 })
             }
             Err(e) => {
@@ -3031,6 +3064,7 @@ fn mysql_stream_rowset(
 fn drive_mysql_stream<T: mysql::prelude::Protocol>(
     mut result: QueryResult<'_, '_, '_, T>,
     fetch_table_names: bool,
+    counters: &mysql::IoCounters,
     commands: &mpsc::Receiver<MyStreamCommand>,
     responses: &mpsc::Sender<MyStreamResponse>,
 ) -> Result<(), mysql::Error> {
@@ -3047,8 +3081,15 @@ fn drive_mysql_stream<T: mysql::prelude::Protocol>(
         if responses.send(MyStreamResponse::Rowset(rowset)).is_err() {
             return Ok(());
         }
+        let mut ended = false;
         while let Ok(command) = commands.recv() {
             match command {
+                MyStreamCommand::Next if ended => {
+                    let more = counters.last_status() & 0x0008 != 0;
+                    if responses.send(MyStreamResponse::RowsetEnd(more)).is_err() {
+                        return Ok(());
+                    }
+                }
                 MyStreamCommand::Next => match set.next() {
                     Some(row) => {
                         let decoded = decode_row(row?.unwrap(), &kinds);
@@ -3057,10 +3098,23 @@ fn drive_mysql_stream<T: mysql::prelude::Protocol>(
                         }
                     }
                     None => {
-                        let _ = responses.send(MyStreamResponse::RowsetEnd);
-                        break;
+                        ended = true;
+                        // SERVER_MORE_RESULTS_EXISTS of the set's closing EOF / OK.
+                        let more = counters.last_status() & 0x0008 != 0;
+                        if responses.send(MyStreamResponse::RowsetEnd(more)).is_err() {
+                            return Ok(());
+                        }
                     }
                 },
+                MyStreamCommand::NextSet => {
+                    // Skip whatever rows are left, then read the next set.
+                    if !ended {
+                        for row in set.by_ref() {
+                            row?;
+                        }
+                    }
+                    break;
+                }
                 MyStreamCommand::Close => return Ok(()),
             }
         }
@@ -3078,8 +3132,9 @@ fn run_mysql_native_stream(
     commands: mpsc::Receiver<MyStreamCommand>,
     responses: mpsc::Sender<MyStreamResponse>,
 ) {
+    let counters = conn.io_counters();
     let result = match conn.exec_iter(&statement, values) {
-        Ok(result) => drive_mysql_stream(result, fetch_table_names, &commands, &responses),
+        Ok(result) => drive_mysql_stream(result, fetch_table_names, &counters, &commands, &responses),
         Err(error) => Err(error),
     };
     finish_mysql_stream_worker(conn, result, &responses);
@@ -3093,8 +3148,9 @@ fn run_mysql_text_stream(
     commands: mpsc::Receiver<MyStreamCommand>,
     responses: mpsc::Sender<MyStreamResponse>,
 ) {
+    let counters = conn.io_counters();
     let result = match conn.query_iter(sql) {
-        Ok(result) => drive_mysql_stream(result, fetch_table_names, &commands, &responses),
+        Ok(result) => drive_mysql_stream(result, fetch_table_names, &counters, &commands, &responses),
         Err(error) => Err(error),
     };
     finish_mysql_stream_worker(conn, result, &responses);
@@ -3471,6 +3527,15 @@ impl MyStmt {
 
     /// Advances to the next row: `1` for a row, `0` when exhausted, `-1` on error.
     /// Executes lazily on the first call.
+    /// Whether the current result set is followed by another one, without reading it:
+    /// a streaming set's closing EOF/OK flag, or a buffered statement's remaining sets.
+    pub fn more_results(&self, conn: &MyConn) -> bool {
+        match self.stream_id {
+            Some(stream_id) => conn.stream_more_sets(stream_id),
+            None => !self.remaining_rowsets.is_empty(),
+        }
+    }
+
     /// Executes the statement without reading a row: mysqli_stmt::execute(), which leaves
     /// a result set's rows on the server until they are stored or fetched (mysqlnd). `0` on
     /// success, the negative error code `step()` would return otherwise.
@@ -3500,6 +3565,10 @@ impl MyStmt {
                 Ok(None) => {
                     self.rows.clear();
                     self.cursor = 0;
+                    if self.lazy_sets {
+                        // mysqli advances explicitly (next_result()).
+                        return 0;
+                    }
                     match conn.next_stream_rowset(stream_id) {
                         Ok(Some(rowset)) => self.remaining_rowsets.push(rowset),
                         Ok(None) => self.stream_id = None,

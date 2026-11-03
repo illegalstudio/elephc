@@ -240,6 +240,8 @@ class mysqli {
         $_driverConfig = $_driverConfig . "mariadbext=0;";
         // Every prepare() reaches the server and close() sends COM_STMT_CLOSE.
         $_driverConfig = $_driverConfig . "stmtcache=0;";
+        // Streaming result sets stop at set boundaries until next_result().
+        $_driverConfig = $_driverConfig . "lazysets=1;";
         if (($flags & 32) != 0) {
             $_driverConfig = $_driverConfig . "compress=1;";
         }
@@ -1111,7 +1113,11 @@ class mysqli {
             $this->disableMultiStatements();
             return false;
         }
-        $_rc = elephc_pdo_step($_stmt);
+        // The first set's header and metadata only (2 = no row read yet).
+        $_rc = elephc_pdo_mysql_execute($_stmt);
+        if ($_rc == 0) {
+            $_rc = 2;
+        }
         if ($_rc < 0) {
             $this->opFailed();
             elephc_pdo_finalize($_stmt);
@@ -1134,20 +1140,23 @@ class mysqli {
         if ($this->liveSetPending || $this->streaming) {
             return false;
         }
-        // finishSet() already advanced the statement onto the next set; step
-        // its first row.
         if (!$this->multiMore || $this->liveStmt < 0) {
             $this->multiMore = false;
             return false;
         }
         $this->multiMore = false;
-        $_rc = elephc_pdo_step($this->liveStmt);
-        if ($_rc < 0) {
+        // Read the next set's header and metadata (its rows stay unread).
+        $_advanced = elephc_pdo_next_rowset($this->liveStmt);
+        if ($_advanced < 0) {
             $this->opFailed();
             $this->closeLive();
             return false;
         }
-        $this->enterSet($_rc);
+        if ($_advanced == 0) {
+            $this->closeLive();
+            return false;
+        }
+        $this->enterSet(2);
         return true;
     }
 
@@ -1635,7 +1644,13 @@ class mysqli {
             $this->opFailed();
             return 0;
         }
-        $_rc = elephc_pdo_step($_stmt);
+        // A streaming (real_query / MYSQLI_USE_RESULT) execution reads only the
+        // result header and metadata, like mysqlnd; rows come on demand (2 =
+        // first row not read yet). A stored query() reads everything here anyway.
+        $_rc = $unbuffered ? elephc_pdo_mysql_execute($_stmt) : elephc_pdo_step($_stmt);
+        if ($_rc == 0 && $unbuffered) {
+            $_rc = 2;
+        }
         if ($_rc < 0) {
             $this->opFailed();
             elephc_pdo_finalize($_stmt);
@@ -1763,7 +1778,9 @@ class mysqli {
         $this->liveSetPending = false;
         $this->streaming = false;
         $this->warning_count = elephc_pdo_warning_count($this->conn);
-        $this->multiMore = elephc_pdo_next_rowset($this->liveStmt) == 1;
+        // The set's closing EOF/OK says whether another follows; mysqlnd reads
+        // that next set only on next_result().
+        $this->multiMore = elephc_pdo_mysql_more_results($this->liveStmt) == 1;
         if (!$this->multiMore) {
             elephc_pdo_finalize($this->liveStmt);
             $this->liveStmt = -1;
@@ -1808,7 +1825,7 @@ class mysqli {
         // Cells are buffered FLAT in row-major order (see mysqli_result).
         $_cells = [];
         $_rowCount = 0;
-        $_rc = $firstStep;
+        $_rc = $firstStep == 2 ? elephc_pdo_step($stmt) : $firstStep;
         while ($_rc == 1) {
             for ($_i = 0; $_i < $cols; $_i++) {
                 $_value = $this->columnValue($stmt, $_i);

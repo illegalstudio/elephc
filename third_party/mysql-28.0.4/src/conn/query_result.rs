@@ -54,6 +54,10 @@ enum SetIteratorState {
     Errored(Error),
     /// Next result set isn't handled.
     OnBoundary,
+    /// elephc patch: the current set ended and the server announced another one, which
+    /// is read only when the caller asks for it (`QueryResult::iter`), like mysqlnd's
+    /// `next_result()`.
+    NextPending,
     /// No more result sets.
     Done,
 }
@@ -229,6 +233,11 @@ impl<'c, 't, 'tc, T: crate::prelude::Protocol> QueryResult<'c, 't, 'tc, T> {
     pub fn iter<'d>(&'d mut self) -> Option<ResultSet<'c, 't, 'tc, 'd, T>> {
         use SetIteratorState::*;
 
+        if let NextPending = &self.state {
+            // elephc patch: read the announced next set now.
+            self.state = OnBoundary;
+            self.handle_next();
+        }
         if let OnBoundary | Done = &self.state {
             debug_assert!(
                 !self.conn.more_results_exists(),
@@ -347,7 +356,12 @@ impl<T: crate::prelude::Protocol> Iterator for QueryResult<'_, '_, '_, T> {
                     Some(Ok(row))
                 }
                 Ok(None) => {
-                    self.handle_next();
+                    // elephc patch: defer reading the next set (see `NextPending`).
+                    if self.conn.more_results_exists() {
+                        self.state = NextPending;
+                    } else {
+                        self.handle_next();
+                    }
                     None
                 }
                 Err(e) => {
@@ -356,7 +370,12 @@ impl<T: crate::prelude::Protocol> Iterator for QueryResult<'_, '_, '_, T> {
                 }
             },
             InEmptySet(_) => {
-                self.handle_next();
+                // elephc patch: defer reading the next set (see `NextPending`).
+                if self.conn.more_results_exists() {
+                    self.state = NextPending;
+                } else {
+                    self.handle_next();
+                }
                 None
             }
             Errored(err) => {
@@ -364,6 +383,10 @@ impl<T: crate::prelude::Protocol> Iterator for QueryResult<'_, '_, '_, T> {
                 Some(Err(err))
             }
             OnBoundary => None,
+            NextPending => {
+                self.state = NextPending;
+                None
+            }
             Done => {
                 self.state = Done;
                 None

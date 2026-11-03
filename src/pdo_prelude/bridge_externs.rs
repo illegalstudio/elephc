@@ -301,6 +301,7 @@ extern "elephc_pdo" {
     function elephc_pdo_mysql_io_stat(int $conn, int $which): int;
     function elephc_pdo_mysql_set_server_option(int $conn, int $option): int;
     function elephc_pdo_mysql_execute(int $stmt): int;
+    function elephc_pdo_mysql_more_results(int $stmt): int;
     // v22: a live transaction-state read backing PDO::inTransaction() /
     // beginTransaction()'s already-active guard (P1-g). SQLite reads native
     // autocommit; PostgreSQL/MySQL use bridge-maintained state updated after every

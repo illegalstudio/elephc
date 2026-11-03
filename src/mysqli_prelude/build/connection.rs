@@ -300,6 +300,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_assign("_driverConfig", e_binop(e_var("_driverConfig"), BinOp::Concat, e_str("servermulti=0;"))),
                     s_assign("_driverConfig", e_binop(e_var("_driverConfig"), BinOp::Concat, e_str("mariadbext=0;"))),
                     s_assign("_driverConfig", e_binop(e_var("_driverConfig"), BinOp::Concat, e_str("stmtcache=0;"))),
+                    s_assign("_driverConfig", e_binop(e_var("_driverConfig"), BinOp::Concat, e_str("lazysets=1;"))),
                     s_if(
                         e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(32)), BinOp::NotEq, e_int(0)),
                         vec![
@@ -1729,7 +1730,15 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign("_rc", e_call("elephc_pdo_step", vec![e_var("_stmt")])),
+                    s_assign("_rc", e_call("elephc_pdo_mysql_execute", vec![e_var("_stmt")])),
+                    s_if(
+                        e_binop(e_var("_rc"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_assign("_rc", e_int(2)),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_if(
                         e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
                         vec![
@@ -1776,9 +1785,9 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_prop_assign(e_this(), "multiMore", e_bool(false)),
-                    s_assign("_rc", e_call("elephc_pdo_step", vec![e_this_prop("liveStmt")])),
+                    s_assign("_advanced", e_call("elephc_pdo_next_rowset", vec![e_this_prop("liveStmt")])),
                     s_if(
-                        e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
+                        e_binop(e_var("_advanced"), BinOp::Lt, e_int(0)),
                         vec![
                             s_expr(e_method_call(e_this(), "opFailed", vec![])),
                             s_expr(e_method_call(e_this(), "closeLive", vec![])),
@@ -1787,7 +1796,16 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_expr(e_method_call(e_this(), "enterSet", vec![e_var("_rc")])),
+                    s_if(
+                        e_binop(e_var("_advanced"), BinOp::Eq, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "closeLive", vec![])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_method_call(e_this(), "enterSet", vec![e_int(2)])),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -2588,7 +2606,15 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign("_rc", e_call("elephc_pdo_step", vec![e_var("_stmt")])),
+                    s_assign("_rc", e_ternary(e_var("unbuffered"), e_call("elephc_pdo_mysql_execute", vec![e_var("_stmt")]), e_call("elephc_pdo_step", vec![e_var("_stmt")]))),
+                    s_if(
+                        e_binop(e_binop(e_var("_rc"), BinOp::Eq, e_int(0)), BinOp::And, e_var("unbuffered")),
+                        vec![
+                            s_assign("_rc", e_int(2)),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_if(
                         e_binop(e_var("_rc"), BinOp::Lt, e_int(0)),
                         vec![
@@ -2767,7 +2793,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_this(), "liveSetPending", e_bool(false)),
                     s_prop_assign(e_this(), "streaming", e_bool(false)),
                     s_prop_assign(e_this(), "warning_count", e_call("elephc_pdo_warning_count", vec![e_this_prop("conn")])),
-                    s_prop_assign(e_this(), "multiMore", e_binop(e_call("elephc_pdo_next_rowset", vec![e_this_prop("liveStmt")]), BinOp::Eq, e_int(1))),
+                    s_prop_assign(e_this(), "multiMore", e_binop(e_call("elephc_pdo_mysql_more_results", vec![e_this_prop("liveStmt")]), BinOp::Eq, e_int(1))),
                     s_if(
                         e_not(e_this_prop("multiMore")),
                         vec![
@@ -2826,7 +2852,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     ]),
                     s_assign("_cells", e_array(vec![])),
                     s_assign("_rowCount", e_int(0)),
-                    s_assign("_rc", e_var("firstStep")),
+                    s_assign("_rc", e_ternary(e_binop(e_var("firstStep"), BinOp::Eq, e_int(2)), e_call("elephc_pdo_step", vec![e_var("stmt")]), e_var("firstStep"))),
                     s_while(e_binop(e_var("_rc"), BinOp::Eq, e_int(1)), vec![
                         s_for(Some(s_assign("_i", e_int(0))), Some(e_binop(e_var("_i"), BinOp::Lt, e_var("cols"))), Some(s_expr(e_post_inc("_i"))), vec![
                             s_assign("_value", e_method_call(e_this(), "columnValue", vec![e_var("stmt"), e_var("_i")])),

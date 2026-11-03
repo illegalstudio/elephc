@@ -376,7 +376,8 @@ class mysqli_stmt {
             $_row[] = $this->columnValue($_i);
         }
         $this->num_rows = $this->num_rows + 1;
-        $this->pendingStep = elephc_pdo_step($this->stmt);
+        // The next row (or the set's EOF) is read by the next fetch(), like mysqlnd.
+        $this->pendingStep = 2;
         $this->writeRow($_row);
         return true;
     }
@@ -498,13 +499,18 @@ class mysqli_stmt {
         if (!$this->moreResults) {
             return false;
         }
-        // The probe in finishResultSet() already advanced onto the next set.
         $this->moreResults = false;
         $this->syncLink();
-        $_rc = elephc_pdo_step($this->stmt);
-        if ($_rc < 0) {
+        // Read the next set's header and metadata; its rows stay unread.
+        $_advanced = elephc_pdo_next_rowset($this->stmt);
+        if ($_advanced < 0) {
             return $this->opFailed();
         }
+        if ($_advanced == 0) {
+            elephc_pdo_reset($this->stmt);
+            return false;
+        }
+        $_rc = 2;
         $this->dropStored();
         $this->field_count = elephc_pdo_column_count($this->stmt);
         $this->num_rows = 0;
@@ -758,7 +764,9 @@ class mysqli_stmt {
     private function finishResultSet(): void {
         $this->hasPending = false;
         $this->syncLink();
-        $this->moreResults = elephc_pdo_next_rowset($this->stmt) == 1;
+        // The set's closing EOF says whether another follows; it is read only
+        // by next_result(), like mysqlnd.
+        $this->moreResults = elephc_pdo_mysql_more_results($this->stmt) == 1;
         $this->syncLink();
         if (!$this->moreResults) {
             elephc_pdo_reset($this->stmt);

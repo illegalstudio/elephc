@@ -1605,3 +1605,51 @@ bool(false)
 "#
     );
 }
+
+/// Like mysqlnd, results are read only when the program consumes them: `multi_query()`
+/// reads the first set's header and metadata, `store_result()` its rows, `next_result()`
+/// the next set's header and metadata, `use_result()` nothing and each `fetch_row()` one
+/// row — so the wire counters move at the same calls as php's (packets per call checked
+/// against php 8.3 mysqlnd), with and without MYSQLI_CLIENT_COMPRESS.
+#[test]
+#[ignore]
+fn test_mysqli_results_are_read_when_consumed() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+foreach ([0, MYSQLI_CLIENT_COMPRESS] as $flags) {
+    $link = mysqli_init();
+    $link->real_connect($host, $user, $pass, $dbname, $port, null, $flags);
+    $prev = $link->get_connection_stats();
+    $step = function (string $label) use ($link, &$prev): void {
+        $now = $link->get_connection_stats();
+        echo $label, ":", (int) $now["packets_received"] - (int) $prev["packets_received"], "|";
+        $prev = $now;
+    };
+    $link->multi_query("SELECT 1 UNION SELECT 2; SELECT 3; DO 4; SELECT 5");
+    $step("mq");
+    $r = $link->store_result();
+    $step("store1");
+    $r->free();
+    $link->next_result();
+    $step("next2");
+    $r = $link->use_result();
+    $step("use2");
+    $r->fetch_row();
+    $step("fetch2");
+    $r->free();
+    $step("free2");
+    $link->next_result();
+    $step("next3");
+    $link->next_result();
+    $step("next4");
+    $r = $link->store_result();
+    $step("store4");
+    echo $link->more_results() ? "more" : "done", "\n";
+    $link->close();
+}
+"#,
+    ));
+    let expected = "mq:4|store1:3|next2:3|use2:0|fetch2:1|free2:1|next3:1|next4:3|store4:2|done\n";
+    assert_eq!(out, format!("{expected}{expected}"));
+}

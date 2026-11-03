@@ -244,6 +244,9 @@ pub struct IoCounters {
     /// while another thread owns the `Conn` (a streaming result's metadata EOF).
     last_status: std::sync::atomic::AtomicU64,
     last_warnings: std::sync::atomic::AtomicU64,
+    /// Whether the protocol is compressed: `bytes_received` then counts the raw
+    /// (compressed) socket bytes, otherwise each consumed packet's header + payload.
+    compressed: std::sync::atomic::AtomicBool,
 }
 
 const IO_STAT_ZERO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -254,6 +257,7 @@ pub static GLOBAL_IO_COUNTERS: IoCounters = IoCounters {
     stats: [IO_STAT_ZERO; IO_STAT_NAMES.len()],
     last_status: IO_STAT_ZERO,
     last_warnings: IO_STAT_ZERO,
+    compressed: std::sync::atomic::AtomicBool::new(false),
 };
 
 impl Default for IoCounters {
@@ -262,6 +266,7 @@ impl Default for IoCounters {
             stats: [IO_STAT_ZERO; IO_STAT_NAMES.len()],
             last_status: IO_STAT_ZERO,
             last_warnings: IO_STAT_ZERO,
+            compressed: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -381,6 +386,11 @@ impl IoCounters {
         let physical = (payload / 0xFF_FFFF) as u64 + 1;
         self.add(STAT_OVERHEAD_IN, 4 * physical);
         self.add(STAT_PACKETS_RECEIVED, physical);
+        if !self.compressed.load(std::sync::atomic::Ordering::Relaxed) {
+            // mysqlnd_vio reads exactly each header and payload: count what is
+            // consumed, not what the buffered socket already prefetched.
+            self.add(STAT_BYTES_RECEIVED, payload as u64 + 4 * physical);
+        }
         let bytes = if reader == PacketReader::Row && is_eof_packet(buf) {
             4
         } else {
@@ -402,6 +412,21 @@ impl IoCounters {
 struct CountedStream {
     stream: Stream,
     counters: Arc<IoCounters>,
+    /// Compressed protocol: the current frame's header bytes not yet handed out.
+    frame_header: Vec<u8>,
+    /// Compressed protocol: payload bytes of the current frame not yet handed out.
+    frame_left: usize,
+}
+
+impl CountedStream {
+    fn new(stream: Stream, counters: Arc<IoCounters>) -> Self {
+        CountedStream {
+            stream,
+            counters,
+            frame_header: Vec::new(),
+            frame_left: 0,
+        }
+    }
 }
 
 impl Deref for CountedStream {
@@ -413,8 +438,39 @@ impl Deref for CountedStream {
 
 impl io::Read for CountedStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let read = io::Read::read(&mut self.stream, buf)?;
-        self.counters.add(STAT_BYTES_RECEIVED, read as u64);
+        if !self.counters.compressed.load(std::sync::atomic::Ordering::Relaxed) {
+            // Uncompressed: `raw_read_packet` counts each consumed packet.
+            return io::Read::read(&mut self.stream, buf);
+        }
+        // Compressed: hand the framed reader one compressed frame at a time, read
+        // from the socket only when it asks for more — like mysqlnd_vio, which reads
+        // each 7-byte frame header and then its payload — and count it as read.
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if self.frame_header.is_empty() && self.frame_left == 0 {
+            let mut header = [0u8; 7];
+            let first = io::Read::read(&mut self.stream, &mut header)?;
+            if first == 0 {
+                return Ok(0);
+            }
+            io::Read::read_exact(&mut self.stream, &mut header[first..])?;
+            let length = usize::from(header[0])
+                | usize::from(header[1]) << 8
+                | usize::from(header[2]) << 16;
+            self.counters.add(STAT_BYTES_RECEIVED, 7 + length as u64);
+            self.frame_header = header.to_vec();
+            self.frame_left = length;
+        }
+        if !self.frame_header.is_empty() {
+            let take = self.frame_header.len().min(buf.len());
+            buf[..take].copy_from_slice(&self.frame_header[..take]);
+            self.frame_header.drain(..take);
+            return Ok(take);
+        }
+        let want = self.frame_left.min(buf.len());
+        let read = io::Read::read(&mut self.stream, &mut buf[..want])?;
+        self.frame_left -= read;
         Ok(read)
     }
 }
@@ -898,9 +954,9 @@ impl Conn {
     fn switch_to_ssl(&mut self, ssl_opts: SslOpts) -> Result<()> {
         let stream = self.0.stream.take().expect("incomplete conn");
         let (in_buf, out_buf, codec, stream) = stream.destruct();
-        let CountedStream { stream, counters } = stream;
+        let CountedStream { stream, counters, .. } = stream;
         let stream = stream.make_secure(self.0.opts.get_host(), ssl_opts)?;
-        let stream = MySyncFramed::construct(in_buf, out_buf, codec, CountedStream { stream, counters });
+        let stream = MySyncFramed::construct(in_buf, out_buf, codec, CountedStream::new(stream, counters));
         self.0.stream = Some(stream);
         Ok(())
     }
@@ -945,10 +1001,10 @@ impl Conn {
                 bind_address,
             )?
         };
-        self.0.stream = Some(MySyncFramed::new(CountedStream {
+        self.0.stream = Some(MySyncFramed::new(CountedStream::new(
             stream,
-            counters: Arc::clone(&self.0.io_counters),
-        }));
+            Arc::clone(&self.0.io_counters),
+        )));
         Ok(())
     }
 
@@ -1169,6 +1225,11 @@ impl Conn {
         self.stream_mut()
             .codec_mut()
             .compress(Compression::default());
+        // elephc patch: see `IoCounters::compressed`.
+        self.0
+            .io_counters
+            .compressed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn get_client_flags(&self) -> CapabilityFlags {

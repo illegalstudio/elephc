@@ -617,6 +617,14 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .returns(t_nullable(t_array()))
                 .body(vec![
                     s_if(
+                        e_binop(e_binop(e_this_prop("streamStmt"), BinOp::GtEq, e_int(0)), BinOp::And, e_binop(e_this_prop("streamStep"), BinOp::Eq, e_int(2))),
+                        vec![
+                            s_prop_assign(e_this(), "streamStep", e_call("elephc_pdo_step", vec![e_this_prop("streamStmt")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
                         e_binop(e_binop(e_this_prop("streamStmt"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_this_prop("streamStep"), BinOp::NotEq, e_int(1))),
                         vec![
                             s_expr(e_method_call(e_this(), "endStream", vec![])),
@@ -657,7 +665,7 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         ),
                     ]),
                     s_prop_assign(e_this(), "streamRows", e_binop(e_this_prop("streamRows"), BinOp::Add, e_int(1))),
-                    s_prop_assign(e_this(), "streamStep", e_call("elephc_pdo_step", vec![e_this_prop("streamStmt")])),
+                    s_prop_assign(e_this(), "streamStep", e_int(2)),
                     s_prop_assign(e_this(), "lengths", e_var("_lengths")),
                     s_return(e_var("_row")),
                 ]),
@@ -675,9 +683,25 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_while(e_binop(e_this_prop("streamStep"), BinOp::Eq, e_int(1)), vec![
+                    s_while(e_bool(true), vec![
+                        s_if(
+                            e_binop(e_this_prop("streamStep"), BinOp::Eq, e_int(2)),
+                            vec![
+                                s_prop_assign(e_this(), "streamStep", e_call("elephc_pdo_step", vec![e_this_prop("streamStmt")])),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_if(
+                            e_binop(e_this_prop("streamStep"), BinOp::NotEq, e_int(1)),
+                            vec![
+                                s_break(1),
+                            ],
+                            vec![],
+                            None,
+                        ),
                         s_prop_assign(e_this(), "streamRows", e_binop(e_this_prop("streamRows"), BinOp::Add, e_int(1))),
-                        s_prop_assign(e_this(), "streamStep", e_call("elephc_pdo_step", vec![e_this_prop("streamStmt")])),
+                        s_prop_assign(e_this(), "streamStep", e_int(2)),
                     ]),
                     s_expr(e_method_call(e_this(), "endStream", vec![])),
                 ]),

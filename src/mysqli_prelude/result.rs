@@ -372,6 +372,10 @@ class mysqli_result implements IteratorAggregate {
     // Reads the next row of a MYSQLI_USE_RESULT set from the server; null —
     // and the link released — once the set is exhausted.
     private function streamRow(): ?array {
+        // 2 = the next row was not read yet: like mysqlnd, read it only now.
+        if ($this->streamStmt >= 0 && $this->streamStep == 2) {
+            $this->streamStep = elephc_pdo_step($this->streamStmt);
+        }
         if ($this->streamStmt < 0 || $this->streamStep != 1) {
             $this->endStream();
             $this->lengths = null;
@@ -396,8 +400,8 @@ class mysqli_result implements IteratorAggregate {
             }
         }
         $this->streamRows = $this->streamRows + 1;
-        // A failed advance ends the set like an EOF (the link is reset anyway).
-        $this->streamStep = elephc_pdo_step($this->streamStmt);
+        // The following row (or the set's EOF) is read by the next fetch.
+        $this->streamStep = 2;
         $this->lengths = $_lengths;
         return $_row;
     }
@@ -407,9 +411,15 @@ class mysqli_result implements IteratorAggregate {
         if ($this->streamStmt < 0) {
             return;
         }
-        while ($this->streamStep == 1) {
+        while (true) {
+            if ($this->streamStep == 2) {
+                $this->streamStep = elephc_pdo_step($this->streamStmt);
+            }
+            if ($this->streamStep != 1) {
+                break;
+            }
             $this->streamRows = $this->streamRows + 1;
-            $this->streamStep = elephc_pdo_step($this->streamStmt);
+            $this->streamStep = 2;
         }
         $this->endStream();
     }
