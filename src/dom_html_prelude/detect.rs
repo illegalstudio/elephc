@@ -47,8 +47,20 @@ const DOM_HTML_CLASSES: &[&str] = &[
 /// Returns whether any top-level statement references the Termwind DOM HTML
 /// surface, so the prelude must be injected ahead of user code.
 pub(super) fn program_uses_dom_html(program: &[Stmt]) -> bool {
+    program_uses_classes(program, DOM_HTML_CLASSES)
+}
+
+/// Detects walker references independently of the standalone DOMException declaration.
+pub(super) fn program_uses_dom_walker(program: &[Stmt]) -> bool {
+    let classes: Vec<_> = DOM_HTML_CLASSES.iter().copied()
+        .filter(|name| *name != "DOMException").collect();
+    program_uses_classes(program, &classes)
+}
+
+/// Resolves only the requested fallback classes while retaining shared AST traversal.
+fn program_uses_classes(program: &[Stmt], classes: &[&str]) -> bool {
     crate::name_resolver::resolve_with_additional_global_symbols(
-        program.to_vec(), &[], DOM_HTML_CLASSES,
+        program.to_vec(), &[], classes,
     )
     .is_ok_and(|resolved| resolved.iter().any(stmt_refs_dom))
 }
