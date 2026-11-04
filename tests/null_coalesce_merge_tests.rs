@@ -470,26 +470,23 @@ echo total(["a" => [1, 2]], "zz"), "\n";
     );
 }
 
-/// `??` against a `null` default must NOT widen: the value arm's type is preserved verbatim.
+/// `??` against a `null` default must NOT widen the value arm: a HIT renders exactly as the
+/// stored element, and the merge does not become `mixed` on the way (reference PHP 8.5.6
+/// prints `float(1.5)`).
 ///
-/// `Void` is the identity of the merge, so `$m[$k] ?? null` keeps the value arm's concrete
-/// type instead of becoming `mixed`, and a HIT renders exactly as the stored element.
-/// Reference PHP 8.5.6 prints `float(1.5)`.
-///
-/// NOT pinned here, deliberately: the MISS half of `$m[$k] ?? null`. elephc returns the value
-/// arm's zero (`float(0)`, `int(0)`, `""`) where reference PHP returns `NULL`, for EVERY
-/// element type. That is a third, pre-existing defect — a hint-less function whose `??` merge
-/// resolves to a concrete scalar has nowhere to put PHP null — and it is untouched by this
-/// change. Asserting the miss here would pin the wrong answer.
+/// The MISS half answers `NULL` like PHP since issue #1944: a scalar value arm keeps the null
+/// member beside it (`float|null`), so a hint-less function whose `??` merge resolves to a
+/// scalar has somewhere to put PHP null. Before that, elephc returned the value arm's zero
+/// (`float(0)`, `int(0)`, `""`) for every element type.
 #[test]
 fn coalescing_with_a_null_default_preserves_the_value_arm_type() {
     assert_program_output(
         "coalesce_null_default",
         r#"<?php
 function pick(string $k) { $m = ["a" => 1.5]; return $m[$k] ?? null; }
-var_dump(pick("a"));
+var_dump(pick("a"), pick("zz"));
 "#,
-        "float(1.5)\n",
+        "float(1.5)\nNULL\n",
     );
 }
 

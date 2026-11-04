@@ -265,6 +265,13 @@ pub(super) fn null_coalesce_merge_type(
     if matches!(value_ty, PhpType::Object(_) | PhpType::Callable) && php_type_allows_null(&default_ty) {
         return nullable_aware_branch_merge_type(&value_ty, &default_ty);
     }
+    // `$n ?? null` with `?int $n` (or any unboxed scalar): the null arm is the default's, and
+    // the value's own slot type cannot hold it (`scalar_beside_null_merge_type`).
+    if let Some(nullable) =
+        super::merge_temps::scalar_beside_null_merge_type(&value_ty, default, &default_ty)
+    {
+        return nullable;
+    }
     materialized_merge_type(&value_ty, &default_ty)
 }
 

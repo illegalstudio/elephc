@@ -368,6 +368,8 @@ fn update_static_property_type(
     declaring_class: &str,
     updated_ty: PhpType,
 ) {
+    // A tagged-scalar element is stored boxed, as the instance slot update does.
+    let updated_ty = crate::types::box_tagged_scalar_array_elements(updated_ty);
     for class_info in checker.classes.values_mut() {
         if class_info
             .static_property_declaring_classes
@@ -425,6 +427,8 @@ fn refine_static_property_assignment_type(
         };
         refined_ty
     };
+    // A tagged-scalar element is stored boxed, as the instance slot update does.
+    let refined_ty = crate::types::box_tagged_scalar_array_elements(refined_ty);
     for class_info in checker.classes.values_mut() {
         if class_info
             .static_property_declaring_classes

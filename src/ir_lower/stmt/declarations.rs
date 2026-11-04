@@ -110,8 +110,15 @@ pub(super) fn normalize_materialized_element_type(item_type: PhpType) -> PhpType
 }
 
 /// Normalizes indexed-array write payloads to storage shapes Phase 04 can lower.
+///
+/// A payload whose storage is the inline tagged scalar (`int|null`) becomes a boxed `mixed`
+/// cell: a hash has no tagged entry and the tagged indexed array is an append-only
+/// specialization, so a string-key write of `$n ?? null` or a `?int` parameter widens the
+/// container to `mixed` values (see `box_tagged_scalar_element`).
 pub(super) fn normalize_array_write_element_type(item_type: PhpType) -> PhpType {
-    let item_type = normalize_materialized_element_type(item_type);
+    let item_type = crate::ir_lower::expr::box_tagged_scalar_element(
+        normalize_materialized_element_type(item_type),
+    );
     if item_type.is_refcounted() && !matches!(item_type, PhpType::Str) {
         PhpType::Mixed
     } else {

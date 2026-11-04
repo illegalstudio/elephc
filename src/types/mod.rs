@@ -85,6 +85,8 @@ pub use ffi::{
 pub use model::{PhpType, TypeEnv};
 pub(crate) use model::{
     eir_value_php_type, is_nullable_pointer_type, is_pointer_element_indexed_array,
+    is_unboxed_scalar_type,
+    box_tagged_scalar_array_elements,
     merge_local_pointer_targets, merge_pointer_elements, mixed_box_php_type,
     nullable_pointer_union_member, pointer_element_read_type, pointer_param_display,
 };
