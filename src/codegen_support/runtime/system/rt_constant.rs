@@ -115,6 +115,12 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #8]");                                    // reload the whole name length
     emitter.instruction("sub x3, x3, x9");                                      // drop the class name
     emitter.instruction("sub x3, x3, #2");                                      // and the `::`: the constant-name length
+    emitter.instruction("ldrb w11, [x0]");                                      // load the class name's first byte
+    emitter.instruction("cmp w11, #92");                                        // a fully qualified name may lead with `\\`
+    emitter.instruction("b.ne __rt_constant_class_named");                                 // no leading separator to drop
+    emitter.instruction("add x0, x0, #1");                                      // skip it: class names carry none
+    emitter.instruction("sub x1, x1, #1");                                      // and shorten the class name
+    emitter.label("__rt_constant_class_named");
     emitter.instruction("mov x4, xzr");                                         // no class scope: public constants only
     emitter.instruction("mov x5, xzr");                                         // empty scope name length
     let getter = emitter.target.extern_symbol(CLASS_CONSTANT_GETTER);
@@ -247,6 +253,11 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the whole name length
     emitter.instruction("sub rcx, r9");                                         // drop the class name
     emitter.instruction("sub rcx, 2");                                          // and the `::`: the constant-name length
+    emitter.instruction("cmp BYTE PTR [rdi], 92");                              // a fully qualified name may lead with `\\`
+    emitter.instruction("jne __rt_constant_class_named_x86");                                  // no leading separator to drop
+    emitter.instruction("add rdi, 1");                                          // skip it: class names carry none
+    emitter.instruction("sub rsi, 1");                                          // and shorten the class name
+    emitter.label("__rt_constant_class_named_x86");
     emitter.instruction("xor r8, r8");                                          // no class scope: public constants only
     emitter.instruction("xor r9, r9");                                          // empty scope name length
     let getter = emitter.target.extern_symbol(CLASS_CONSTANT_GETTER);

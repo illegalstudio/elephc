@@ -1443,6 +1443,45 @@ echo select(new ClientState()), "\n";
     assert_eq!(out.stdout, "0\n");
 }
 
+/// `defined()` of a run-time `Class::NAME`, the guard Monolog's `Logger::toMonologLevel()` puts
+/// before its `constant()`: it searched the global constants only, so every enum case and class
+/// constant was undefined and `Level "debug" is not defined` stopped the Symfony Demo.
+#[test]
+fn test_defined_with_a_runtime_class_constant_name() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+namespace App;
+enum Level: int {
+    case Debug = 100;
+    case Info = 200;
+    public const NAMES = ['DEBUG', 'INFO'];
+}
+class K { const A = 1; private const B = 2; }
+function level(string $l): Level {
+    $upper = strtr(substr($l, 0, 1), 'dinweca', 'DINWECA') . strtolower(substr($l, 1));
+    if (\defined(Level::class . '::' . $upper)) {
+        return \constant(Level::class . '::' . $upper);
+    }
+    throw new \InvalidArgumentException("no $l");
+}
+echo level('debug')->name, ' ', level('Info')->value, "\n";
+foreach (['Debug', 'Nope', 'NAMES'] as $n) { var_dump(\defined(Level::class . '::' . $n)); }
+foreach (['App\K::A', 'App\K::Z', 'Missing\K::A', '\App\K::A', 'App\k::a', 'App\K::B', '::', 'A::'] as $n) {
+    var_dump(\defined($n));
+}
+define('PLAIN', 1);
+$g = 'PLAIN';
+var_dump(\defined($g), \constant('\App\K::A'), \defined($g . 'X'));
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "Debug 200\nbool(true)\nbool(false)\nbool(true)\n\
+         bool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n\
+         bool(true)\nint(1)\nbool(false)\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A `static` local handed out by reference (by-ref argument, `&` alias, `use (&$x)`) keeps every
 /// write across calls: Monolog's `BrowserConsoleHandler::handleStyle` shape.
 #[test]
