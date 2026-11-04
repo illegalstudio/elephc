@@ -940,6 +940,10 @@ pub enum Op {
     ConstEnumCase,
     LoadCalledClassId,
     ObjectClassId,
+    /// Address of the value inside the boxed Mixed a managed reference cell owns. A typed
+    /// by-reference parameter writes its raw value there; through the cell itself it would
+    /// overwrite the box pointer.
+    RefCellMixedPayload,
     /// Resolves a runtime class-string (or boxed mixed string) to its closed-world class id.
     /// Returns `-1` when no class name matches.
     ClassNameToId,
@@ -1564,7 +1568,7 @@ impl Op {
             ICheckedDiv => E::ALLOC_HEAP | E::READS_HEAP | E::MAY_THROW,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId | ClosureScopeClassName => E::READS_LOCAL,
-            ObjectClassId => E::READS_HEAP,
+            ObjectClassId | RefCellMixedPayload => E::READS_HEAP,
             ClassNameToId => E::READS_GLOBAL | E::READS_HEAP,
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
@@ -1964,6 +1968,7 @@ impl Op {
             ConstEnumCase => "const_enum_case",
             LoadCalledClassId => "load_called_class_id",
             ObjectClassId => "object_class_id",
+            RefCellMixedPayload => "ref_cell_mixed_payload",
             ClassNameToId => "class_name_to_id",
             DataAddr => "data_addr",
             LoadLocal => "load_local",

@@ -282,6 +282,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ICheckedMul => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_mul_checked"),
         Op::Warn => strings::lower_warn(ctx, &inst),
         Op::ObjectClassId => objects::lower_object_class_id(ctx, &inst),
+        Op::RefCellMixedPayload => arrays::lower_ref_cell_mixed_payload(ctx, &inst),
         Op::ClassNameToId => objects::lower_class_name_to_id(ctx, &inst),
         Op::GlobalRefCell => lower_global_ref_cell(ctx, &inst),
         Op::UnsetGlobal => lower_unset_global(ctx, &inst),

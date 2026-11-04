@@ -1959,7 +1959,7 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
             ctx.store_call_argument_local(array_name, converted, widened_ty, Some(arg.span));
         }
         return Some(managed_element_ref_cell_arg(
-            ctx, array_name, array.span, element_index, arg.span,
+            ctx, array_name, array.span, element_index, param_ty, arg.span,
         ));
     }
     if matches!(local_ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -1968,7 +1968,7 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
         // what puts the cell in the call's unwind ledger: without that, a later argument whose
         // evaluation throws left the cell unreleased.
         return Some(managed_element_ref_cell_arg(
-            ctx, array_name, array.span, element_index, arg.span,
+            ctx, array_name, array.span, element_index, param_ty, arg.span,
         ));
     }
     let PhpType::Array(elem_ty) = local_ty else {
@@ -1976,7 +1976,7 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
     };
     if elem_ty.codegen_repr() == PhpType::Mixed {
         return Some(managed_element_ref_cell_arg(
-            ctx, array_name, array.span, element_index, arg.span,
+            ctx, array_name, array.span, element_index, param_ty, arg.span,
         ));
     }
     if param_ty.codegen_repr() == PhpType::Mixed && elem_ty.codegen_repr() != PhpType::Mixed {
@@ -2002,7 +2002,7 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
         // two aliases of one element pointing at a slot the second argument then replaced with a
         // reference cell, so the callee read that cell pointer as the element's value.
         return Some(managed_element_ref_cell_arg(
-            ctx, array_name, array.span, element_index, arg.span,
+            ctx, array_name, array.span, element_index, param_ty, arg.span,
         ));
     }
     let array_value = ctx.load_local(array_name, Some(array.span));
@@ -2035,6 +2035,7 @@ fn managed_element_ref_cell_arg(
     array_name: &str,
     array_span: Span,
     element_index: &Expr,
+    param_ty: &PhpType,
     arg_span: Span,
 ) -> crate::ir::ValueId {
     let element_index = lower_expr(ctx, element_index);
@@ -2048,7 +2049,21 @@ fn managed_element_ref_cell_arg(
         Some(arg_span),
     );
     crate::ir_lower::stmt::release_persisted_string_operand(ctx, element_index, arg_span);
-    lease_managed_call_argument_ref_cell(ctx, cell, arg_span).value
+    let leased = lease_managed_call_argument_ref_cell(ctx, cell, arg_span);
+    if matches!(param_ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar) {
+        return leased.value;
+    }
+    // The cell's payload is a boxed Mixed, and a typed parameter writes a raw value: `int &$p`
+    // stored 7 over the box pointer, and the next read of the element jumped through it.
+    ctx.emit_value(
+        Op::RefCellMixedPayload,
+        vec![leased.value],
+        None,
+        PhpType::Pointer(None),
+        Op::RefCellMixedPayload.default_effects(),
+        Some(arg_span),
+    )
+    .value
 }
 
 /// Returns true when a local array's concrete slots differ from a generic array parameter.

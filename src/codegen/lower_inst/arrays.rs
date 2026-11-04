@@ -1357,6 +1357,25 @@ fn store_ref_cell_pointer_result(ctx: &mut FunctionContext<'_>, inst: &Instructi
     Ok(())
 }
 
+/// Lowers the address of the value inside the boxed Mixed a managed reference cell owns.
+pub(super) fn lower_ref_cell_mixed_payload(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let cell = *inst
+        .operands
+        .first()
+        .ok_or_else(|| CodegenIrError::invalid_module("ref_cell_mixed_payload without a cell"))?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(cell, result_reg)?;
+    abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("add x0, x0, #8"),             // step over the box's tag word
+        Arch::X86_64 => ctx.emitter.instruction("add rax, 8"),                  // step over the box's tag word
+    }
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
 /// Lowers an indexed-array element address for by-reference call arguments.
 pub(super) fn lower_array_elem_addr(
     ctx: &mut FunctionContext<'_>,

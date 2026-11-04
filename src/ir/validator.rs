@@ -911,7 +911,7 @@ fn validate_opcode_rules(
             check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
-        BufferNew => check_unary(function, inst_id, inst, IrType::I64, "I64"),
+        BufferNew | RefCellMixedPayload => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         LoadLocal
         | LoadRefCell
         | LoadGlobal

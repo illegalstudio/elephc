@@ -1856,6 +1856,37 @@ var_dump($item->flag);
     );
 }
 
+/// A typed by-reference parameter bound to an element whose reference cell owns a boxed Mixed
+/// writes a raw value, so it must land inside the box and not over the box pointer. Reading the
+/// element back then jumped through 7.
+#[test]
+fn test_a_typed_by_ref_parameter_writes_inside_the_elements_box() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function setInt(int &$p) { $p = 7; }
+function setText(string &$p) { $p .= 'b'; }
+function forward(int &$p, callable $c) { return $c($p); }
+$h = ['k' => 1];
+setInt($h['k']);
+var_dump($h);
+$t = ['k' => 'a'];
+setText($t['k']);
+var_dump($t);
+$m = ['k' => 1];
+echo forward($m['k'], function (int &$v) { $v = 9; return 'z'; }), "\n";
+echo $m['k'], "\n";
+$c = function (int &$v) { $v = 4; };
+$c($h['k']);
+echo $h['k'], "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "array(1) {\n  [\"k\"]=>\n  int(7)\n}\narray(1) {\n  [\"k\"]=>\n  string(2) \"ab\"\n}\nz\n9\n4\n"
+    );
+}
+
 /// A write made before the callee throws has already reached the caller's variable, which a
 /// bridge copying the value back after the call would lose.
 #[test]

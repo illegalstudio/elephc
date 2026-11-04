@@ -691,8 +691,9 @@ pub(super) fn plan_ref_arg_temp_cells(
 }
 
 /// Returns whether EIR already acquired the managed array-element cell used by this operand.
-/// `Borrow` marks ledger cleanup and `Move` is a neutral forward, but both still name the same
-/// acquired writable cell and must bypass scalar writeback and backend fallback-cell planning.
+/// `Borrow` marks ledger cleanup, `Move` is a neutral forward and `RefCellMixedPayload` steps into
+/// the cell's box, but all three still name the same acquired writable cell and must bypass scalar
+/// writeback and backend fallback-cell planning.
 fn value_is_acquired_array_element_ref_cell(
     ctx: &FunctionContext<'_>,
     mut value: ValueId,
@@ -710,7 +711,9 @@ fn value_is_acquired_array_element_ref_cell(
             .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
         match inst_ref.op {
             Op::AcquireRefCell => return Ok(true),
-            Op::Borrow | Op::Move => value = expect_operand(inst_ref, 0)?,
+            Op::Borrow | Op::Move | Op::RefCellMixedPayload => {
+                value = expect_operand(inst_ref, 0)?
+            }
             _ => return Ok(false),
         }
     }
@@ -774,7 +777,7 @@ fn preleased_ref_cell_owner(
     if inst_ref.op == Op::Borrow {
         return Ok(None);
     }
-    if inst_ref.op == Op::Move {
+    if matches!(inst_ref.op, Op::Move | Op::RefCellMixedPayload) {
         return preleased_ref_cell_owner(ctx, expect_operand(inst_ref, 0)?);
     }
     if inst_ref.op != Op::AcquireRefCell {
@@ -1231,7 +1234,10 @@ fn array_element_address_source(ctx: &FunctionContext<'_>, value: ValueId) -> Re
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if matches!(inst_ref.op, Op::AcquireRefCell | Op::Borrow | Op::Move) {
+    if matches!(
+        inst_ref.op,
+        Op::AcquireRefCell | Op::Borrow | Op::Move | Op::RefCellMixedPayload
+    ) {
         return array_element_address_source(ctx, expect_operand(inst_ref, 0)?);
     }
     if !matches!(inst_ref.op, Op::ArrayElemAddr | Op::LoadArrayElemRefCell) {
