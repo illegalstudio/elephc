@@ -204,6 +204,10 @@ and the optional-driver live database suites run when you add the PR to the queu
    the same push, since `main` already contains their commits.
 4. If a check fails, the PR leaves the queue and stays open, and the PRs behind it are
    rebuilt without it. Fix the failure, wait for the PR tier, and add it to the queue again.
+   A rebuild (after a push to `main` or when an entry ahead leaves the queue) starts a new
+   merge-group run for the PR while the run of the replaced group would keep going; the
+   first job of `ci.yml` and `pdo-live.yml` in a merge-group run cancels the earlier runs of
+   the same PR (`scripts/ci/cancel_rebuilt_queue_runs.sh`), so they stop holding runners.
 
 #### Labels that run the skipped tiers on a Pull Request
 
