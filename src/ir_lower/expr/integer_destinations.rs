@@ -3,6 +3,7 @@
 //!
 //! Called from:
 //! - Typed destination and declared-local assignment lowering.
+//! - Call argument lowering, which also exposes `float` parameter conversions.
 //!
 //! Key details:
 //! - Only closed add/sub/mul trees with concrete integer leaves are accepted.
@@ -29,7 +30,26 @@ pub(super) fn lower_expr_for_parameter(
         }
     }
     let value = lower_expr_for_destination(ctx, expr, destination);
+    if destination == &PhpType::Float {
+        return coerce_float_arithmetic(ctx, value, expr.span);
+    }
     coerce_integer_arithmetic(ctx, value, destination, expr.span)
+}
+
+/// Exposes a float parameter's conversion of a checked arithmetic tree as one scalar cast.
+///
+/// PHP passes an int|float argument to a `float` parameter as `(float)` of the whole result,
+/// so an overflowed tree keeps its promoted double and an in-range integer converts exactly
+/// once, matching the boxed call-boundary conversion.
+fn coerce_float_arithmetic(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if !checked_integer_tree(ctx, value.value) {
+        return value;
+    }
+    coerce_to_float_at_span(ctx, value, Some(span))
 }
 
 /// Makes a checked arithmetic tree's existing integer destination conversion explicit.

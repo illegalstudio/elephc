@@ -2,13 +2,16 @@
 //! Compares proven integer/float PHP operands without allocating temporary boxes.
 //!
 //! Called from:
-//! - `comparisons::lower_php_rel_cmp` after the closed numeric origin proof.
+//! - `comparisons::lower_php_rel_cmp` and `comparisons::lower_strict_eq` after the closed
+//!   numeric origin proof.
 //!
 //! Key details:
 //! - Integer pairs compare exactly, including values beyond double precision.
 //! - Mixed float comparisons convert signed integers and reject every unordered NaN predicate.
+//! - Strict identity never converts: differing int/float tags are not identical, integers
+//!   compare bitwise and floats compare with IEEE equality, so NaN differs and -0.0 === 0.0.
 
-use crate::codegen::{platform::Arch, Result};
+use crate::codegen::{abi, platform::Arch, Result};
 use crate::codegen::context::FunctionContext;
 use crate::ir::{CmpPredicate, Instruction};
 use super::{expect_cmp_predicate, expect_operand, numeric_payloads, store_if_result};
@@ -79,6 +82,75 @@ pub(super) fn lower(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
         }
     }
     ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `===`/`!==` between proven numeric operands without boxing either side.
+pub(super) fn lower_identity(ctx: &mut FunctionContext<'_>, inst: &Instruction, is_equal: bool) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let (left, right, left_tag, right_tag) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x10", "x11", "x9"),
+        Arch::X86_64 => ("rax", "r10", "r11", "r9"),
+    };
+    ctx.load_value_to_reg(lhs, left)?;
+    ctx.load_value_to_reg(rhs, right)?;
+    numeric_payloads::payload(ctx, lhs, left, left_tag)?;
+    numeric_payloads::payload(ctx, rhs, right, right_tag)?;
+    let mismatch = ctx.next_label("numeric_identity_mismatch");
+    let float = ctx.next_label("numeric_identity_float");
+    let done = ctx.next_label("numeric_identity_done");
+    // -- an integer is never identical to a float, so differing tags decide the result --
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x11, x9");                             // compare both proven numeric runtime tags
+            ctx.emitter.instruction(&format!("b.ne {mismatch}"));               // an int and a float are never identical
+            ctx.emitter.instruction(&format!("cbnz x11, {float}"));             // nonzero matching tags carry two PHP doubles
+            ctx.emitter.instruction("cmp x0, x10");                             // compare both signed integer payloads exactly
+            ctx.emitter.instruction("cset x0, eq");                             // materialize integer identity
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp r11, r9");                             // compare both proven numeric runtime tags
+            ctx.emitter.instruction(&format!("jne {mismatch}"));                // an int and a float are never identical
+            ctx.emitter.instruction("test r11, r11");                           // distinguish integer tags from PHP doubles
+            ctx.emitter.instruction(&format!("jnz {float}"));                   // nonzero matching tags carry two PHP doubles
+            ctx.emitter.instruction("cmp rax, r10");                            // compare both signed integer payloads exactly
+            ctx.emitter.instruction("sete al");                                 // materialize integer identity
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean result without preserving stale high bits
+        }
+    }
+    ctx.emit_branch(&done);
+    ctx.emitter.label(&float);
+    // -- floats are identical under IEEE equality: NaN never matches and -0.0 equals 0.0 --
+    let (left_float, right_float) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("d0", "d1"),
+        Arch::X86_64 => ("xmm0", "xmm1"),
+    };
+    abi::emit_reg_move(ctx.emitter, left_float, left);
+    abi::emit_reg_move(ctx.emitter, right_float, right);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fcmp d0, d1");                             // compare both PHP doubles with IEEE semantics
+            ctx.emitter.instruction("cset x0, eq");                             // unordered NaN operands leave the equal flag clear
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare both PHP doubles with IEEE semantics
+            ctx.emitter.instruction("sete al");                                 // record ordered or unordered equality
+            ctx.emitter.instruction("setnp r10b");                              // reject unordered comparisons involving NaN
+            ctx.emitter.instruction("and al, r10b");                            // keep only ordered equality
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean result without preserving stale high bits
+        }
+    }
+    ctx.emit_branch(&done);
+    ctx.emitter.label(&mismatch);
+    abi::emit_load_int_immediate(ctx.emitter, left, 0);
+    ctx.emitter.label(&done);
+    if !is_equal {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("eor x0, x0, #1"),         // invert numeric identity for !==
+            Arch::X86_64 => ctx.emitter.instruction("xor rax, 1"),              // invert numeric identity for !==
+        }
+    }
     store_if_result(ctx, inst)
 }
 
