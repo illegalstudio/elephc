@@ -307,6 +307,22 @@ impl Checker {
             if expected_ty.codegen_repr() == PhpType::Mixed && can_widen_local {
                 return Ok(());
             }
+            // A previous by-reference call already promoted this local to a boxed Mixed cell
+            // (for example the OO parseCurrency call followed by the procedural one on the same
+            // offset). The static value type stays concrete, but the storage is the boxed cell
+            // every later mixed reference expects.
+            if expected_ty.codegen_repr() == PhpType::Mixed
+                && self.boxed_reference_layout_precedes(arg)
+            {
+                return Ok(());
+            }
+            if expected_ty.codegen_repr() == PhpType::Mixed {
+                if let ExprKind::Variable(name) = &arg.kind {
+                    if self.mixed_storage_locals.contains(name) {
+                        return Ok(());
+                    }
+                }
+            }
             // `lower_by_ref_array_element_arg_with_signature` widens a local
             // indexed array to Mixed slots before taking the element address.
             // Only that addressable shape has this conversion, not arbitrary

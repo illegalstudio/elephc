@@ -1149,6 +1149,9 @@ fn helper_functions() -> Vec<Stmt> {
                     e_str("intl"), e_str("intl_get_error_context"), e_array(vec![]),
                 ])),
                 s_assign("_context", e_call("str_replace", vec![
+                    e_str("UConverter::transcode(): "), e_str(""), e_var("_context"),
+                ])),
+                s_assign("_context", e_call("str_replace", vec![
                     e_str("NumberFormatter::__construct(): "), e_str(""), e_var("_context"),
                 ])),
                 s_assign("_context", e_call("str_replace", vec![
