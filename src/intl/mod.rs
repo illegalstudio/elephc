@@ -6618,9 +6618,51 @@ fn build_resource_bundle_class() -> Stmt {
             s_return(e_cast(CastType::Int, e_call("__elephc_intl_call", vec![e_this_prop("__elephc_handle"), e_str("count"), e_array(vec![])]))),
         ]))
         .method(method("offsetExists").param("offset", t_mixed()).returns(TypeExpr::Bool).body(vec![
-            s_return(e_binop(e_method_call(e_var("this"), "get", vec![e_var("offset")]), BinOp::StrictNotEq, e_null())),
+            // php's internal ResourceBundle has no isset handler: `isset($r[...])` reports
+            // the engine error instead of probing the element.
+            s_throw(e_new("Error", vec![e_str("Cannot use object of type ResourceBundle as array")])),
         ]))
         .method(method("offsetGet").param("offset", t_mixed()).returns(t_mixed()).body(vec![
+            // php's ResourceBundle has no offsetExists handler: isset() reports the engine
+            // "cannot use as array" error, while offsetGet itself validates the offset.
+            s_if(
+                e_not(e_binop(
+                    e_call("is_int", vec![e_var("offset")]),
+                    BinOp::Or,
+                    e_call("is_string", vec![e_var("offset")]),
+                )),
+                vec![s_throw(e_new("TypeError", vec![e_concat_all(vec![
+                    e_str("Cannot access offset of type "),
+                    e_call("__elephc_intl_debug_type", vec![e_var("offset")]),
+                    e_str(" on ResourceBundle"),
+                ])]))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_call("is_string", vec![e_var("offset")]),
+                    BinOp::And,
+                    e_binop(e_var("offset"), BinOp::StrictEq, e_str("")),
+                ),
+                vec![s_throw(e_new("ValueError", vec![e_str("Offset must not be empty")]))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_call("is_int", vec![e_var("offset")]),
+                    BinOp::And,
+                    e_binop(
+                        e_binop(e_var("offset"), BinOp::Lt, e_int(-2_147_483_648)),
+                        BinOp::Or,
+                        e_binop(e_var("offset"), BinOp::Gt, e_int(2_147_483_647)),
+                    ),
+                ),
+                vec![s_throw(e_new("ValueError", vec![e_str("Index must be between -2147483648 and 2147483647")]))],
+                vec![],
+                None,
+            ),
             // php's ArrayAccess error context names the CALLER of the offset access
             // (`main()` or the enclosing function), not ResourceBundle::get().
             s_assign("_result", e_method_call(e_var("this"), "__elephc_call", vec![
