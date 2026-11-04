@@ -10,12 +10,10 @@
 
 use super::*;
 
-/// Value and reference captures prove retained service graphs without repeating their full traversal.
-#[test]
-fn web_application_gc_proves_services_retained_only_by_callable_captures() {
-    for capture in ["$service", "&$service"] {
-        let fixture = Fixture(make_test_dir("web_application_callable_service_proofs"));
-        let source = r#"<?php
+/// Checks one capture mode with the full service graph, request, and teardown assertions.
+fn assert_callable_service_capture(capture: &str) {
+    let fixture = Fixture(make_test_dir("web_application_callable_service_proofs"));
+    let source = r#"<?php
 extern function __elephc_web_gc_visited(): int;
 class CapturedChainNode {
     public static int $destroyed = 0;
@@ -56,27 +54,38 @@ class Application implements Elephc\Web\WorkerApplication {
 }
 Elephc\Web\Worker::register(new Application());
 "#.replace("__CAPTURE__", capture);
-        let binary = compile_web_with_flags(&fixture.0, &source, "app", &["--web-lifecycle=application", "--heap-size=67108864"]);
-        let addr = format!("127.0.0.1:{}", free_port());
-        let _server = spawn_server(&binary, &addr, "1");
-        let mut previous = 0;
-        for request in 1..=30 {
-            let response = body(&addr, "/");
-            let fields: Vec<_> = response.split(':').collect();
-            assert_eq!(&fields[1..], &[request.to_string(), "0".to_string(), "alive".to_string()], "{capture}: {response}");
-            let visited = fields[0].parse::<usize>().unwrap();
-            if request > 3 { assert!(visited >= previous && visited - previous < 1000, "captured service was rescanned: {capture}, {previous} -> {response}"); }
-            previous = visited;
-        }
-        body(&addr, "/drop");
+    let binary = compile_web_with_flags(&fixture.0, &source, "app", &["--web-lifecycle=application", "--heap-size=67108864"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&binary, &addr, "1");
+    let mut previous = 0;
+    for request in 1..=30 {
         let response = body(&addr, "/");
         let fields: Vec<_> = response.split(':').collect();
-        assert_eq!(&fields[1..], &["0", "20001", "dead"], "stale callable proof retained a detached graph: {capture}, {response}");
-        let response = body(&addr, "/replace");
-        assert!(response.ends_with(":1:20001:alive"), "replacement capture was not valid: {capture}, {response}");
-        let response = body(&addr, "/");
-        assert!(response.ends_with(":2:20001:alive"), "replacement capture did not survive: {capture}, {response}");
+        assert_eq!(&fields[1..], &[request.to_string(), "0".to_string(), "alive".to_string()], "{capture}: {response}");
+        let visited = fields[0].parse::<usize>().unwrap();
+        if request > 3 { assert!(visited >= previous && visited - previous < 1000, "captured service was rescanned: {capture}, {previous} -> {response}"); }
+        previous = visited;
     }
+    body(&addr, "/drop");
+    let response = body(&addr, "/");
+    let fields: Vec<_> = response.split(':').collect();
+    assert_eq!(&fields[1..], &["0", "20001", "dead"], "stale callable proof retained a detached graph: {capture}, {response}");
+    let response = body(&addr, "/replace");
+    assert!(response.ends_with(":1:20001:alive"), "replacement capture was not valid: {capture}, {response}");
+    let response = body(&addr, "/");
+    assert!(response.ends_with(":2:20001:alive"), "replacement capture did not survive: {capture}, {response}");
+}
+
+/// A value capture retains the service graph and releases it when the handler is replaced.
+#[test]
+fn web_application_gc_proves_services_retained_only_by_callable_captures_by_value() {
+    assert_callable_service_capture("$service");
+}
+
+/// A reference capture retains the service graph and releases it when the handler is replaced.
+#[test]
+fn web_application_gc_proves_services_retained_only_by_callable_captures_by_reference() {
+    assert_callable_service_capture("&$service");
 }
 
 /// Cold queues, repeated deep reads, invalidated head edges and cyclic teardown stay linear.
