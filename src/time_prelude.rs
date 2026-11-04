@@ -60,6 +60,7 @@ pub(crate) fn time_declarations() -> Program {
             .method(from_minutes())
             .method(from_hours())
             .method(from_iso8601_duration_string())
+            .method(unserialize_method())
             .method(negate())
             .method(absolute())
             .method(add())
@@ -558,6 +559,137 @@ fn from_iso8601_duration_string() -> MethodBuilder {
         .param("specification", TypeExpr::Str)
         .returns(t_class(DURATION_CLASS))
         .body(body)
+}
+
+/// Builds `Duration::__unserialize(array $data): void` with php-src's hydration checks.
+///
+/// The runtime creates the object without running the private constructor, so the readonly
+/// slots are uninitialized and the assignments are legal exactly once. A manual call on an
+/// already-initialized object hits the runtime readonly guard, which is translated to the
+/// same `Invalid serialization data` exception php-src raises.
+fn unserialize_method() -> MethodBuilder {
+    let invalid = || {
+        s_throw(e_new_fq(
+            "\\Exception",
+            vec![e_str("Invalid serialization data for Time\\Duration object")],
+        ))
+    };
+    let seconds = e_var("_seconds");
+    let nanoseconds = e_var("_nanoseconds");
+    let negative = e_var("_negative");
+    let value = |name: &str| e_index(e_var("data"), e_str(name));
+    method("__unserialize")
+        .param("data", t_array())
+        .returns(TypeExpr::Void)
+        .body(vec![
+            s_if(
+                e_binop(
+                    e_call("\\isset", vec![e_this_prop("seconds")]),
+                    BinOp::Or,
+                    e_binop(
+                        e_call("\\isset", vec![e_this_prop("nanoseconds")]),
+                        BinOp::Or,
+                        e_call("\\isset", vec![e_this_prop("negative")]),
+                    ),
+                ),
+                vec![invalid()],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_not(e_call(
+                        "\\array_key_exists",
+                        vec![e_str("seconds"), e_var("data")],
+                    )),
+                    BinOp::Or,
+                    e_binop(
+                        e_not(e_call(
+                            "\\array_key_exists",
+                            vec![e_str("nanoseconds"), e_var("data")],
+                        )),
+                        BinOp::Or,
+                        e_not(e_call(
+                            "\\array_key_exists",
+                            vec![e_str("negative"), e_var("data")],
+                        )),
+                    ),
+                ),
+                vec![invalid()],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_call("\\count", vec![e_var("data")]),
+                    BinOp::StrictNotEq,
+                    e_int(3),
+                ),
+                vec![invalid()],
+                vec![],
+                None,
+            ),
+            s_assign("_seconds", value("seconds")),
+            s_assign("_nanoseconds", value("nanoseconds")),
+            s_assign("_negative", value("negative")),
+            s_if(
+                e_binop(
+                    e_not(e_call("\\is_int", vec![seconds.clone()])),
+                    BinOp::Or,
+                    e_binop(
+                        e_binop(seconds.clone(), BinOp::Lt, e_int(0)),
+                        BinOp::Or,
+                        e_binop(seconds.clone(), BinOp::Gt, e_int(MAX_SECONDS)),
+                    ),
+                ),
+                vec![invalid()],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_not(e_call("\\is_int", vec![nanoseconds.clone()])),
+                    BinOp::Or,
+                    e_binop(
+                        e_binop(nanoseconds.clone(), BinOp::Lt, e_int(0)),
+                        BinOp::Or,
+                        e_binop(nanoseconds.clone(), BinOp::GtEq, e_int(NANOS_PER_SECOND)),
+                    ),
+                ),
+                vec![invalid()],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_not(e_call("\\is_bool", vec![negative.clone()])),
+                vec![invalid()],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_binop(seconds.clone(), BinOp::StrictEq, e_int(0)),
+                    BinOp::And,
+                    e_binop(
+                        e_binop(nanoseconds.clone(), BinOp::StrictEq, e_int(0)),
+                        BinOp::And,
+                        e_var("_negative"),
+                    ),
+                ),
+                vec![invalid()],
+                vec![],
+                None,
+            ),
+            s_try(
+                vec![
+                    s_prop_assign(e_this(), "seconds", seconds),
+                    s_prop_assign(e_this(), "nanoseconds", nanoseconds),
+                    s_prop_assign(e_this(), "negative", e_var("_negative")),
+                ],
+                vec![(vec!["\\Error"], Some("_hydrate_error"), vec![invalid()])],
+                None,
+            ),
+        ])
 }
 
 /// Builds `Duration::negate()`.

@@ -10,6 +10,7 @@ Rust fixtures generated from them. Tests never parse these files at runtime.
 | `ext/intl/tests/grapheme_strrev*.phpt` | `ext/intl/tests/grapheme_strrev*.phpt` | `tests/codegen/strings/grapheme_strrev_php86.rs` |
 | `Zend/tests/readonly_props/readonly_with_default*.phpt` | `Zend/tests/readonly_props` | `tests/codegen/oop/readonly_property_defaults_php86.rs` |
 | `Zend/tests/readonly_props/serialization.phpt` | `Zend/tests/readonly_props` | the defaulted-property portion of the same Rust module |
+| `ext/date/tests/time/duration/serialize.phpt` | `ext/date/tests/time/duration` | `tests/codegen/time_duration_serialization.rs` |
 
 Fixtures that depend on engine internals elephc does not expose (the internal
 `__unserialize` property loader, `ReflectionProperty::setRawValue`, clone-with, and

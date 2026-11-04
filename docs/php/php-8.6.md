@@ -15,7 +15,7 @@ sensitive.
 
 | Feature | Notes |
 |---|---|
-| `Time\Duration` | `final readonly` value class with `seconds`, `nanoseconds`, `negative`; every `from*()` factory; `negate()`, `absolute()`, `add()`, `sub()`, `multiplyBy()`, `divideBy()`, `compare()`; comparison operators through the internal object handler; overflow raises `Time\TimeException`. The php-src `ext/date/tests/time/duration` corpus is migrated into `tests/codegen/time_duration_php_src.rs`. |
+| `Time\Duration` | `final readonly` value class with `seconds`, `nanoseconds`, `negative`; every `from*()` factory; `negate()`, `absolute()`, `add()`, `sub()`, `multiplyBy()`, `divideBy()`, `compare()`; comparison operators through the internal object handler; overflow raises `Time\TimeException`; serialization and `__unserialize()` validation. The php-src `ext/date/tests/time/duration` corpus is migrated into `tests/codegen/time_duration_php_src.rs` and the serialization fixture into `tests/codegen/time_duration_serialization.rs`. |
 | `Time\TimeException` | Extends `\Exception`; every overflow and ISO-8601 parse failure uses php-src's message text. |
 | `clamp()` | Full `mixed` signature. Int, float, and string operands keep the typed runtime path; boolean, null, array, and object operands go through php-src's own polyfill, so PHP's cross-type comparison rules apply. `DateTime`/`DateTimeImmutable` gained the internal comparison adapter this needs. The upstream `ext/standard/tests/math/clamp.phpt` fixture is transcribed in `tests/codegen/math/clamp_php86.rs`. |
 | `grapheme_strrev()` | Now classified as `ext/intl` (PHP 8.6) instead of an elephc extension. Both upstream `ext/intl/tests/grapheme_strrev*.phpt` fixtures pass, including the UBRK_DONE regression and the Arabic grapheme-cluster case. |
@@ -48,10 +48,11 @@ instead of during production.
 
 ## Known deviations
 
-- `Time\Duration` has no `__unserialize()` property loader. Default serialization,
-  including a missing property taking its declared default, works; crafted payloads
-  that rely on php-src's internal hydration validation are outside the supported
-  surface.
+- A structurally malformed serialized payload for `Time\Duration` (for example
+  `O:13:"Time\Duration"::{}`) reaches the generic `unserialize()` warning and
+  returns `false`; php-src wraps it in `Exception: Invalid serialization data`.
+  Well-formed payloads with invalid fields go through `Duration::__unserialize()`
+  and raise that exception.
 - `new Time\Duration()` is rejected while compiling (the constructor is private),
   whereas php-src reports the same invalid program at run time. The factories are the
   only supported construction path in both implementations.

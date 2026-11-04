@@ -1159,7 +1159,7 @@ real-world validation rather than by speculative pass work.
 
 ### PHP 8.6 support
 
-- [x] `Time\Duration` and `Time\TimeException` — full factory/arithmetic/comparison surface with php-src's 64-bit overflow rules, comparison operators, and the migrated `ext/date/tests/time/duration` PHPT corpus
+- [x] `Time\Duration` and `Time\TimeException` — full factory/arithmetic/comparison/serialization surface with php-src's 64-bit overflow rules, comparison operators, and the migrated `ext/date/tests/time/duration` PHPT corpus
 - [x] `clamp()` mixed operands — int/float/string keep the typed path; boolean, null, array, and object operands use php-src's polyfill, with `DateTime`/`DateTimeImmutable` mixed ordering; `ext/standard/tests/math/clamp.phpt` passes
 - [x] `grapheme_strrev()` reclassified as PHP 8.6 `ext/intl`; both upstream `grapheme_strrev*.phpt` fixtures pass after completing the Arabic/Hebrew/Indic/Thai/Tibetan `Grapheme_Extend` ranges
 - [x] Form feed in the default `trim()`/`ltrim()`/`rtrim()`/`chop()` mask under `--php-version=8.6`

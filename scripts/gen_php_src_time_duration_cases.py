@@ -29,7 +29,10 @@ OUTPUT = ROOT / "tests/codegen/time_duration_php_src_cases.rs"
 EXCLUDED_TOP_LEVEL = {
     "new": "needs ReflectionClass::newInstanceWithoutConstructor and internal-class reflection errors",
     "readonly": "needs ReflectionProperty::setRawValue/setRawValueWithoutLazyInitialization and clone-with",
-    "serialize": "needs the internal __unserialize property loader, including readonly reinitialization",
+    "serialize": (
+        "covered by tests/codegen/time_duration_serialization.rs with a mixed-typed helper; "
+        "the generated bundle requires exact PHPT source and cannot narrow unserialize()"
+    ),
     "gh23639": "needs the internal __unserialize property loader and readonly by-reference rejection",
     "oss_fuzz_562721806": "needs the internal __unserialize property loader",
     "z_param_date_time_duration": (
