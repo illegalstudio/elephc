@@ -62,6 +62,7 @@ mod implode_effects;
 mod spread_effects;
 mod call_effect_followups;
 mod strip_tags_effects;
+mod str_replace_search;
 
 #[path = "optimizer/branch_simplification.rs"]
 mod branch_simplification;

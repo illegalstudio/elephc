@@ -491,6 +491,12 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if ($status === -2) { __elephc_simplexml_write_warning('Cannot assign to an array of nodes (duplicate subnodes or attr detected)', $caller); }
     }
     final public function __elephc_append(mixed $value): void { $this->__elephc_dimension_write(null, $value, true); }
+    final public function __elephc_simplexml_root_append_failure(): bool {
+        $handle = $this->__elephc_handle;
+        if ($handle === 0 || elephc_xml_sx_int($handle, 9) === 0) { return false; }
+        __elephc_simplexml_warn("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");
+        return true;
+    }
     final public function __elephc_dimension_unset(mixed $offset): void {
         $handle = $this->__elephc_handle;
         if (is_int($offset)) { elephc_xml_sx_mutate($handle, 14, "", "", "", 0, $offset); }

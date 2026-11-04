@@ -833,3 +833,19 @@ echo '[', $value, ']';
     assert_eq!(out.stderr.matches("Warning: Undefined variable $value").count(), 1, "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A displayed warning keeps PHP's leading newline and `in FILE on line N` suffix.
+#[test]
+fn warning_display_includes_leading_newline_and_location() {
+    let out = compile_and_run_with_heap_debug("<?php\n\necho $missing;\n");
+    assert!(out.success, "stderr={}", out.stderr);
+    let expected = "\nWarning: Undefined variable $missing in ";
+    assert!(out.stderr.starts_with(expected), "{}", out.stderr);
+    let line = out
+        .stderr
+        .lines()
+        .find(|line| line.contains("Undefined variable $missing"))
+        .expect("warning line");
+    assert!(line.ends_with("test.php on line 3"), "{}", line);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

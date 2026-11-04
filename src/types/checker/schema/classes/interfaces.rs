@@ -547,18 +547,19 @@ fn validate_interface_method(
             })
         })
     });
-    // PHP allows `__toString` to omit its declared return, and the internal SimpleXML
-    // classes carry tentative Countable/Stringable returns that `#[ReturnTypeWillChange]`
-    // may replace exactly as php-src's own fixtures do.
+    // PHP allows `__toString` to omit its declared return, and `Countable::count()` carries a
+    // tentative `int` return: any implementor may replace it under
+    // `#[ReturnTypeWillChange]`, not only a SimpleXMLElement subclass. Limit the relaxation to
+    // the representations count() can coerce without an object conversion warning.
+    let count_scalar_return = matches!(
+        actual_sig.return_type.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Mixed
+    );
     let tentative_return = php_symbol_key(required_owner) == "serializable"
         || (method_name == "__tostring" && !actual_sig.declared_return)
         || (method_name == "count"
             && has_return_type_will_change
-            && class
-                .extends
-                .as_deref()
-                .is_some_and(|parent| parent.trim_start_matches('\\')
-                    .eq_ignore_ascii_case("SimpleXMLElement")));
+            && count_scalar_return);
     validate_signature_compatibility(
         actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,

@@ -74,6 +74,10 @@ pub(crate) fn build_class_info_recursive(
     // A failed build must not poison later sibling builds with a stale "circular inheritance"
     // diagnostic: the class is genuinely absent, but it is not still being built.
     building.remove(class_name);
+    // The hint exists only while this class's own ancestry is unresolved. Once the build ends,
+    // `is_subclass_of` reads the registered `ClassInfo`, so a stale entry could otherwise answer
+    // for a later same-named class after a failed build.
+    checker.pending_class_parents.remove(class_name);
     result
 }
 

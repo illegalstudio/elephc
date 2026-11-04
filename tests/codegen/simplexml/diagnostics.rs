@@ -128,3 +128,16 @@ eval($code);
     ));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A failed SimpleXML load returns `false`, so a method call on it must name `false`, not null.
+#[test]
+fn test_simplexml_object_false_method_call_names_false() {
+    if skip_without_xml_native("test_simplexml_object_false_method_call_names_false") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+$xml = @simplexml_load_string('<bad');
+try { $xml->getName(); } catch (Error $error) { echo $error->getMessage(); }
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Call to a member function getName() on false");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

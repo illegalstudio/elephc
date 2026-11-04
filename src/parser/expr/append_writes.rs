@@ -307,7 +307,6 @@ pub(super) fn lower_null_property_write(target: &Expr, rhs: Option<&Expr>, span:
         prelude.push(Stmt::new(StmtKind::Assign { name: name.clone(), value: rhs.clone() }, span));
         Expr::new(ExprKind::Variable(name), span)
     });
-    prelude.extend_from_slice(&append[boundary..]);
 
     let nested = bound_steps.len() > 1;
     let first_property = bound_steps.iter().find_map(|step| match step {
@@ -333,23 +332,51 @@ pub(super) fn lower_null_property_write(target: &Expr, rhs: Option<&Expr>, span:
     }, span);
 
     if let Some(rhs_temp) = rhs_temp {
-        if let Some(container) = append_container(&append[boundary..]) {
+        let append_statements = append[boundary..].to_vec();
+        if let Some(container) = append_container(&append_statements) {
             let is_array = append_helper_call("is_array", vec![container.clone()]);
-            let appended = appended_element(&mut prelude, container, span);
+            let mut else_body = append_statements;
+            let appended = appended_element(&mut else_body, container.clone(), span);
             let lvalue = appended_write_target(appended, bound_steps, span);
             if let Ok(store) = crate::parser::stmt::assignment_target_store_stmt(lvalue, rhs_temp.clone(), span) {
+                // A document-root SimpleXMLElement rejects `$sxe[]` before the append: PHP
+                // notices, throws "Cannot create unnamed attribute", and leaves the tree
+                // unchanged. The runtime probe runs first so no append statement executes on
+                // that path; child selections and ordinary objects keep the write-through.
+                let root_append = append_helper_call(
+                    "__elephc_append_property_root_append",
+                    vec![container],
+                );
                 // Arrays append a null element: release the RHS there before throwing, exactly
                 // like the old dedicated error path. Objects (SimpleXML) write through the new
                 // child view.
-                let then_body = vec![
+                let array_then = vec![
                     unset_temp(&rhs_temp, span),
                     Stmt::new(StmtKind::Throw(error), span),
                 ];
-                prelude.push(Stmt::new(StmtKind::If {
+                else_body.push(Stmt::new(StmtKind::If {
                     condition: is_array,
-                    then_body,
+                    then_body: array_then,
                     elseif_clauses: Vec::new(),
                     else_body: Some(vec![Stmt::new(store, span)]),
+                }, span));
+                let root_then = vec![
+                    unset_temp(&rhs_temp, span),
+                    Stmt::new(StmtKind::Throw(Expr::new(ExprKind::NewObject {
+                        class_name: crate::names::Name::from_parts(
+                            crate::names::NameKind::FullyQualified, vec!["Error".to_string()],
+                        ),
+                        args: vec![Expr::new(
+                            ExprKind::StringLiteral("Cannot create unnamed attribute".to_string()),
+                            span,
+                        )],
+                    }, span)), span),
+                ];
+                prelude.push(Stmt::new(StmtKind::If {
+                    condition: root_append,
+                    then_body: root_then,
+                    elseif_clauses: Vec::new(),
+                    else_body: Some(else_body),
                 }, span));
                 return Some(Expr::new(ExprKind::Assignment {
                     target: Box::new(rhs_temp.clone()),

@@ -1032,7 +1032,7 @@ impl Checker {
                     let literal_str_replace_search = param_idx == 0
                         && callee_desc
                             .trim_start_matches('\\')
-                            .starts_with("str_replace")
+                            .eq_ignore_ascii_case("str_replace")
                         && matches!(&arg.kind, crate::parser::ast::ExprKind::ArrayLiteral(items)
                             if !items.is_empty()
                                 && items.iter().all(|item| matches!(

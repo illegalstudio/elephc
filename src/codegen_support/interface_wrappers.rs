@@ -126,44 +126,84 @@ fn emit_class_interface_return_wrappers(
             )?;
         }
     }
-    // `Countable::count()` is declared as int, but `#[ReturnTypeWillChange]` subclasses may
-    // return a string. PHP's count() casts that result, so the dense count table needs an
-    // adapter that runs the string-to-int conversion after the implementation.
+    // `Countable::count()` is declared as int, but `#[ReturnTypeWillChange]` implementors may
+    // return any scalar or mixed value. PHP's count() casts that result, so the dense count
+    // table needs an adapter that applies the matching int coercion after the implementation.
     if class_info.interfaces.iter().any(|name| name.eq_ignore_ascii_case("Countable")) {
         if let Some(sig) = class_info.methods.get("count") {
-            if sig.return_type.codegen_repr() == PhpType::Str {
-                emit_count_string_wrapper(emitter, class_name, class_info);
+            match sig.return_type.codegen_repr() {
+                PhpType::Str => emit_count_int_wrapper(emitter, class_name, class_info, "__rt_str_to_int"),
+                PhpType::Float => emit_count_int_wrapper(emitter, class_name, class_info, "__rt_php_float_to_int"),
+                PhpType::Mixed => emit_count_int_wrapper(emitter, class_name, class_info, "__rt_mixed_cast_int"),
+                _ => {}
             }
         }
     }
     Ok(())
 }
 
-/// Emits a Countable adapter that calls a string-returning `count()` and casts to int.
-fn emit_count_string_wrapper(emitter: &mut Emitter, class_name: &str, class_info: &ClassInfo) {
+/// Emits a Countable adapter that calls `count()` and applies PHP's int coercion.
+fn emit_count_int_wrapper(
+    emitter: &mut Emitter,
+    class_name: &str,
+    class_info: &ClassInfo,
+    conversion: &str,
+) {
     let implementation = class_info
         .method_impl_classes
         .get("count")
         .map(|owner| method_symbol(owner, "count"))
         .unwrap_or_else(|| method_symbol(class_name, "count"));
-    let wrapper = format!("_count_str_wrap_{}", class_info.class_id);
+    let wrapper = format!("_count_int_wrap_{}", class_info.class_id);
+    // String and mixed results are owned by this adapter; the conversion helper only reads them,
+    // so the payload is released after the integer result has been saved.
+    let owned_payload = match conversion {
+        "__rt_str_to_int" => Some("x1"),
+        "__rt_mixed_cast_int" => Some("x0"),
+        _ => None,
+    };
     emitter.blank();
-    emitter.comment("--- Countable::count string-return adapter ---");
+    emitter.comment("--- Countable::count int-coercion adapter ---");
     emitter.label_global(&wrapper);
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction("stp x29, x30, [sp, #-16]!");                   // preserve wrapper return address
+            emitter.instruction("stp x29, x30, [sp, #-32]!");                   // preserve wrapper return address and result slots
             emitter.instruction("mov x29, sp");                                 // establish the adapter frame
-            emitter.instruction(&format!("bl {implementation}"));               // call the string-returning count()
-            emitter.instruction("bl __rt_str_to_int");                          // apply PHP's string-to-int cast
-            emitter.instruction("ldp x29, x30, [sp], #16");                     // restore the wrapper frame
+            emitter.instruction(&format!("bl {implementation}"));               // call the typed count()
+            if let Some(payload) = owned_payload {
+                emitter.instruction(&format!("str {payload}, [sp, #16]"));      // save the owned payload across the coercion
+            }
+            emitter.instruction(&format!("bl {conversion}"));                   // apply PHP's int coercion
+            if conversion == "__rt_php_float_to_int" {
+                emitter.instruction("mov x0, x9");                              // move the float conversion result into the int result register
+            }
+            emitter.instruction("str x0, [sp, #24]");                           // save the coerced integer result
+            if owned_payload.is_some() {
+                emitter.instruction("ldr x0, [sp, #16]");                       // reload the owned payload
+                emitter.instruction("bl __rt_decref_any");                      // release the count() result after coercion
+                emitter.instruction("ldr x0, [sp, #24]");                       // restore the coerced integer result
+            }
+            emitter.instruction("ldp x29, x30, [sp], #32");                     // restore the wrapper frame
             emitter.instruction("ret");                                         // return the integer count
         }
         crate::codegen_support::platform::Arch::X86_64 => {
             emitter.instruction("push rbp");                                    // preserve the wrapper frame
             emitter.instruction("mov rbp, rsp");                                // establish the adapter frame
-            emitter.instruction(&format!("call {implementation}"));             // call the string-returning count()
-            emitter.instruction("call __rt_str_to_int");                        // apply PHP's string-to-int cast
+            emitter.instruction("sub rsp, 32");                                 // reserve slots for the payload and coerced result
+            emitter.instruction(&format!("call {implementation}"));             // call the typed count()
+            if owned_payload.is_some() {
+                emitter.instruction("mov QWORD PTR [rbp - 8], rax");            // save the owned payload across the coercion
+            }
+            emitter.instruction(&format!("call {conversion}"));                 // apply PHP's int coercion
+            if conversion == "__rt_php_float_to_int" {
+                emitter.instruction("mov rax, r11");                            // move the float conversion result into the int result register
+            }
+            emitter.instruction("mov QWORD PTR [rbp - 16], rax");               // save the coerced integer result
+            if owned_payload.is_some() {
+                emitter.instruction("mov rax, QWORD PTR [rbp - 8]");            // reload the owned payload
+                emitter.instruction("call __rt_decref_any");                    // release the count() result after coercion
+                emitter.instruction("mov rax, QWORD PTR [rbp - 16]");           // restore the coerced integer result
+            }
             emitter.instruction("mov rsp, rbp");                                // restore the wrapper frame
             emitter.instruction("pop rbp");                                     // restore the caller frame
             emitter.instruction("ret");                                         // return the integer count

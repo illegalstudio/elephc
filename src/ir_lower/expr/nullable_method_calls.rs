@@ -11,7 +11,21 @@ use super::*;
 
 /// Emits the PHP fatal terminator for an ordinary method call on null.
 pub(super) fn terminate_method_call_on_null(ctx: &mut LoweringContext<'_, '_>, method: &str) {
-    let message = format!("Call to a member function {}() on null", method);
+    terminate_method_call_on_non_object(ctx, method, "null");
+}
+
+/// Emits the PHP fatal terminator for an ordinary method call on `false`.
+pub(super) fn terminate_method_call_on_false(ctx: &mut LoweringContext<'_, '_>, method: &str) {
+    terminate_method_call_on_non_object(ctx, method, "false");
+}
+
+/// Emits the PHP fatal terminator naming the runtime receiver type.
+fn terminate_method_call_on_non_object(
+    ctx: &mut LoweringContext<'_, '_>,
+    method: &str,
+    receiver: &str,
+) {
+    let message = format!("Call to a member function {}() on {}", method, receiver);
     let message = ctx.intern_string(&message);
     ctx.emit_void(
         Op::ThrowError,

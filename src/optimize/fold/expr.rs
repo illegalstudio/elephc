@@ -209,7 +209,10 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                         && items.iter().all(|item| matches!(item.kind, ExprKind::StringLiteral(_)))
                     {
                         let mut subject = args[2].clone();
-                        for item in items.iter().rev() {
+                        // PHP applies search entries left to right. Wrapping forward puts the
+                        // first entry innermost, so it runs first; reversing applied the last
+                        // entry before it and changed overlapping replacements.
+                        for item in items.iter() {
                             subject = Expr::new(
                                 ExprKind::FunctionCall {
                                     name: name.clone(),

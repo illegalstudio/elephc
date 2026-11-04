@@ -452,5 +452,11 @@ foreach (['SimpleXMLIterator', 'SimpleXMLElement'] as $index => $class) {
         out.stdout,
         "bool(false)\nTypeError:It's not possible to assign a complex type to properties, resource given|SimpleXMLElement is not properly initialized|TypeError:It's not possible to assign a complex type to properties, resource given|SimpleXMLElement is not properly initialized|"
     );
+    assert!(
+        out.stderr
+            .contains("Warning: file_get_contents(): Failed to open stream"),
+        "{}",
+        out.stderr
+    );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

@@ -724,18 +724,30 @@ pub(crate) fn emit_runtime_data_user(
                                     ret == returns
                                         || (interface == "Countable"
                                             && method == "count"
-                                            && ret == PhpType::Str)
+                                            && matches!(
+                                                ret,
+                                                PhpType::Bool
+                                                    | PhpType::Float
+                                                    | PhpType::Str
+                                                    | PhpType::Mixed
+                                            ))
                                 })
                     })
                     .map(|class_info| {
-                        let string_count = interface == "Countable"
+                        // `count()` hands back a bare integer, but the tentative Countable
+                        // contract lets a subclass return any scalar under
+                        // `#[ReturnTypeWillChange]`. Route every non-int/bool representation
+                        // through the adapter that applies PHP's int coercion.
+                        let coerced_count = interface == "Countable"
                             && method == "count"
-                            && class_info
-                                .methods
-                                .get(&method_key)
-                                .is_some_and(|sig| sig.return_type.codegen_repr() == PhpType::Str);
-                        if string_count {
-                            Ok(format!("_count_str_wrap_{}", class_info.class_id))
+                            && class_info.methods.get(&method_key).is_some_and(|sig| {
+                                matches!(
+                                    sig.return_type.codegen_repr(),
+                                    PhpType::Float | PhpType::Str | PhpType::Mixed
+                                )
+                            });
+                        if coerced_count {
+                            Ok(format!("_count_int_wrap_{}", class_info.class_id))
                         } else {
                             source_instance_method_entry(class_info, &method_key, classes)
                         }
