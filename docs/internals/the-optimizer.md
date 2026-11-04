@@ -776,6 +776,15 @@ evaluation and its side effects remain; the binary `md5(..., true)` form,
 non-string operands, the replacement-pair `strtr()` form and any other observer
 keep the real call.
 
+For explicit UTF-8 ASCII mbstring calls, a length fold must also prove that
+argument validation cannot fail. `mb_convert_case()` requires a constant mode in
+`0..=7`; `mb_str_pad()` requires a nonempty ASCII pad and a constant pad type in
+`0..=2`. Other modes and dynamic mode expressions retain the producer, including
+its exceptions and source-order argument effects. Multibyte trim length folds use
+literal character membership, without byte-trim range syntax. The AST shortcut
+for `mb_ereg_match("[0-9A-Za-z]+", $literal)` tests only the first byte, preserving
+the function's start anchoring.
+
 ## Borrowed string reads
 
 `src/ir_lower/expr/borrowed_string_args.rs` admits read-only string subjects for

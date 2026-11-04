@@ -674,7 +674,9 @@ fn try_fold_mb_literal(canonical: &str, args: &[Expr]) -> Option<ExprKind> {
         "mb_ereg_match" if args.len() == 2 => {
             if string(0)? != "[0-9A-Za-z]+" { return None; }
             let subject = string(1)?;
-            Some(ExprKind::BoolLiteral(subject.bytes().any(|byte| byte.is_ascii_alphanumeric())))
+            Some(ExprKind::BoolLiteral(
+                subject.as_bytes().first().is_some_and(|byte| byte.is_ascii_alphanumeric()),
+            ))
         }
         "mb_eregi" if args.len() == 2 => {
             if string(0)? != "[A-Z]+" { return None; }

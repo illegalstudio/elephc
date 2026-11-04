@@ -289,7 +289,29 @@ fn try_lower_trim(
     load_string_arg_to_regs(ctx, inst, 1, name, pointer, length)?;
     abi::emit_call_label(ctx.emitter, "__rt_mb_is_ascii");
     emit_predicate_branch(ctx, &fallback);
-    // Both operands are proven ASCII; bytewise trimming is identical to character trimming.
+    // mbstring masks are literal character sets. Byte trim helpers also parse ranges,
+    // so any dot keeps the shared bridge path, including masks known only at runtime.
+    load_string_arg_to_regs(ctx, inst, 1, name, pointer, length)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // pass the mask pointer as the first libc argument
+            ctx.emitter.instruction("mov x1, #46");                             // search for a dot that could introduce byte-range syntax
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the mask pointer as the first SysV argument
+            ctx.emitter.instruction("mov esi, 46");                             // search for a dot that could introduce byte-range syntax
+        }
+    }
+    ctx.emitter.bl_c("memchr");                                                // find dots without interpreting the mbstring character set
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {fallback}"));           // masks containing dots need literal membership semantics
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // a non-null result means the mask contains a dot
+            ctx.emitter.instruction(&format!("jnz {fallback}"));                // keep literal character-set semantics in the shared bridge
+        }
+    }
     load_string_arg_to_regs(ctx, inst, 0, name, pointer, length)?;
     super::super::common::lower_trim_mask_arg(ctx, inst, name)?;
     super::super::common::load_trim_warning_args(ctx, name)?;
@@ -393,7 +415,7 @@ fn try_lower_str_pad(
         Arch::AArch64 => super::super::replace_wrap::lower_str_pad_aarch64(ctx, &synthetic)?,
         Arch::X86_64 => super::super::replace_wrap::lower_str_pad_x86_64(ctx, &synthetic)?,
     }
-    super::super::emit_str_pad_argument_guards(ctx, true);
+    super::super::emit_str_pad_argument_guards(ctx, true, "mb_str_pad");
     abi::emit_call_label(ctx.emitter, "__rt_str_pad");
     abi::emit_call_label(ctx.emitter, "__rt_str_dup_owned");
     finish_fast_path(ctx, inst, operation, fallback)

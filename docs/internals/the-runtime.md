@@ -528,6 +528,11 @@ case conversion, trimming, padding, slicing, search, splitting, codepoints,
 scrubbing, detection, latin-1 conversion, decimal numeric entities, RFC 2047
 base64 MIME encoding, half-width katakana conversion, and the UTF-8 output-handler
 passthrough, plus the literal `,` split and `[0-9]+`/`#` replacement patterns.
+ASCII multibyte trim calls use the byte-trim helpers only for masks without dots;
+any dot selects the shared bridge, because mbstring character lists have literal
+membership and never expand `a..z` ranges or issue byte-trim range warnings. This
+check also covers masks computed at runtime. Shared padding guards keep the
+caller-visible `str_pad()` or `mb_str_pad()` name in their exception messages.
 When a length-only observation reads a local assigned once from a compile-time
 ASCII literal, the EIR fold replaces case conversion, trimming, padding,
 slicing, width, encoding checks, counting, splitting, search positions, and

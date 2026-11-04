@@ -942,3 +942,22 @@ fn test_fold_mb_literal_mime_and_regex_calls() {
         ExprKind::FunctionCall { .. }
     ));
 }
+
+/// The literal mb_ereg_match shortcut observes the first byte rather than any later hit.
+#[test]
+fn test_fold_mb_ereg_match_literal_preserves_start_anchor() {
+    for (subject, expected) in [("!!!a", false), ("a!!!", true), ("", false), ("abc123", true)] {
+        let call = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("mb_ereg_match"),
+                args: vec![Expr::string_lit("[0-9A-Za-z]+"), Expr::string_lit(subject)],
+            },
+            Span::dummy(),
+        );
+        let folded = fold_constants(vec![Stmt::echo(call)]);
+        let StmtKind::Echo(expr) = &folded[0].kind else {
+            panic!("expected echo");
+        };
+        assert_eq!(expr.kind, ExprKind::BoolLiteral(expected), "subject={subject:?}");
+    }
+}
