@@ -730,12 +730,54 @@ fn emit_to_array_loaded_source(
             super::arrays::values::emit_loaded_assoc_array_values(ctx, &value.codegen_repr())
         }
         PhpType::Iterable => emit_to_array_loaded_iterable(ctx, preserve_keys),
+        PhpType::Mixed | PhpType::Union(_) => emit_to_array_loaded_mixed(ctx, preserve_keys),
         PhpType::Object(_) => emit_to_array_loaded_traversable_object(ctx, preserve_keys),
         other => Err(CodegenIrError::unsupported(format!(
             "iterator_to_array for PHP type {:?}",
             other
         ))),
     }
+}
+
+/// Dispatches a boxed `Mixed` source on its runtime tag, then reuses the iterable path.
+///
+/// php accepts `array|Traversable`; the union result of a call (for example
+/// `ResourceBundle::get()`) is boxed. Arrays and objects keep their payload and go through the
+/// ordinary iterable dispatch; every other tag raises the argument TypeError.
+fn emit_to_array_loaded_mixed(
+    ctx: &mut FunctionContext<'_>,
+    preserve_keys: bool,
+) -> Result<()> {
+    let payload_case = ctx.next_label("iterator_to_array_mixed_payload");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // is the Mixed payload an indexed array?
+            ctx.emitter.instruction(&format!("b.eq {}", payload_case));          // handle it as an array
+            ctx.emitter.instruction("cmp x0, #5");                              // an associative array?
+            ctx.emitter.instruction(&format!("b.eq {}", payload_case));          // handle it as an array
+            ctx.emitter.instruction("cmp x0, #6");                              // an object (possible Traversable)?
+            ctx.emitter.instruction(&format!("b.eq {}", payload_case));          // handle it as an object
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // is the Mixed payload an indexed array?
+            ctx.emitter.instruction(&format!("je {}", payload_case));           // handle it as an array
+            ctx.emitter.instruction("cmp rax, 5");                              // an associative array?
+            ctx.emitter.instruction(&format!("je {}", payload_case));           // handle it as an array
+            ctx.emitter.instruction("cmp rax, 6");                              // an object (possible Traversable)?
+            ctx.emitter.instruction(&format!("je {}", payload_case));           // handle it as an object
+        }
+    }
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "iterator_to_array(): Argument #1 ($iterator) must be of type Traversable|array",
+    );
+    ctx.emitter.label(&payload_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                  // keep the unboxed heap payload
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                 // keep the unboxed heap payload
+    }
+    emit_to_array_loaded_iterable(ctx, preserve_keys)
 }
 
 /// Emits the dynamic preserve-keys branch and boxes both possible result containers as Mixed.

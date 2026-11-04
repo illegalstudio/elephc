@@ -4815,8 +4815,8 @@ fn build_rule_based_break_iterator_class() -> Stmt {
     }
     builder = builder
         .method(method("__construct")
-            .param_default("rules", t_nullable(TypeExpr::Str), e_null())
-            .param_default("compiled", t_nullable(TypeExpr::Bool), e_null())
+            .param_default("rules", t_mixed(), e_null())
+            .param_default("compiled", t_mixed(), e_null())
             .variadic("extra", Some(t_mixed()))
             .body(vec![
                 intl_present_null_guard("IntlRuleBasedBreakIterator::__construct()", "rules", 1, "string", e_str("")),
@@ -4834,6 +4834,20 @@ fn build_rule_based_break_iterator_class() -> Stmt {
                 s_if(e_binop(e_call("func_num_args", vec![]), BinOp::Lt, e_int(1)), vec![
                     s_throw(e_new("ArgumentCountError", vec![e_str("IntlRuleBasedBreakIterator::__construct() expects at least 1 argument, 0 given")])),
                 ], vec![], None),
+                s_if(
+                    e_binop(
+                        e_call("is_array", vec![e_var("rules")]),
+                        BinOp::Or,
+                        e_call("is_object", vec![e_var("rules")]),
+                    ),
+                    vec![s_throw(e_new("TypeError", vec![e_concat_all(vec![
+                        e_str("IntlRuleBasedBreakIterator::__construct(): Argument #1 ($rules) must be of type string, "),
+                        e_call("__elephc_intl_debug_type", vec![e_var("rules")]),
+                        e_str(" given"),
+                    ])]))],
+                    vec![],
+                    None,
+                ),
                 s_if(
                     e_binop(
                         e_call("is_array", vec![e_var("compiled")]),
