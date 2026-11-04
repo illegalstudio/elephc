@@ -21,6 +21,7 @@ sensitive.
 | `grapheme_strrev()` | Now classified as `ext/intl` (PHP 8.6) instead of an elephc extension. Both upstream `ext/intl/tests/grapheme_strrev*.phpt` fixtures pass, including the UBRK_DONE regression and the Arabic grapheme-cluster case. |
 | Default trim mask | `trim()`, `ltrim()`, `rtrim()` and `chop()` include form feed (`\x0C`) under `--php-version=8.6`, and leave it untouched on 8.5 and earlier. |
 | Readonly property defaults | A readonly instance property may declare a default value, including inside a `readonly class`. The default initializes the slot before the constructor runs, so later writes (including from the constructor) raise `Cannot modify readonly property`. Inheritance, get-only interface properties, and serialization follow php-src's `Zend/tests/readonly_props/readonly_with_default*.phpt`. |
+| `#[\Override]` on class constants | Class, interface, enum, enum-case, and trait-composed constants must have a matching parent/interface constant. The php-src `Zend/tests/attributes/override/constants` fixtures for classes, interfaces, enums, cases, and traits are migrated into `tests/codegen/oop/override_constants_php86.rs` and `tests/error_tests/override_constants.rs`. |
 | `SortDirection` | `Ascending` / `Descending`, catalogued as a PHP 8.6 core enum. |
 | `array_filter()` mode validation | An invalid `$mode` raises `ValueError` on the 8.6 profile instead of silently using value mode. |
 | `json_decode()` error positions | Token coordinates in decoder messages follow PHP 8.6. |
@@ -39,7 +40,6 @@ instead of during production.
 | `ReflectionProperty::isReadable()` / `isWriteable()` | The RFC spans visibility, asymmetric visibility, readonly state, hooks, lazy objects, dynamic properties, and a scope/object argument pair. The metadata plumbing is not yet exposed to reflection. |
 | Parameter doc comments (`ReflectionParameter::getDocComment()`) | The parser would need a doc-comment channel on every parameter (functions, methods, closures, arrow functions, hook parameters) and a parallel field across the AST. |
 | Enum `__debugInfo()` | The enum dump path bypasses the object `__debugInfo()` dispatch and needs a distinct `enum(E::C) (N) { … }` renderer. |
-| `#[\Override]` on class constants | Method and property validation already exists; constants and enum cases need their own parent/interface lookup plus trait composition rules. |
 | `__construct()` / `__destruct()` return-value deprecation | The diagnostic is emitted at class-declaration time in php-src; elephc would need a startup diagnostic channel for user declarations. |
 | Secure session ini defaults | `session.use_strict_mode=1`, `session.cookie_httponly=1`, and `session.cookie_samesite=Lax` belong to the web runtime's session defaults and its `ini_get()` surface. |
 | URI builder follow-ups | The `Uri\Rfc3986\Uri` / `Uri\WhatWg\Url` extension is not implemented at all yet. |
@@ -59,6 +59,10 @@ instead of during production.
   writes. Dynamic-name writes (`$object->$name = …`) and `unset()` do not yet
   consult readonly state, matching the pre-existing dynamic-property gap rather
   than the 8.6 defaults change.
+- A trait composition that redeclares an `#[\Override]` constant with a different value is
+  rejected as an incompatible duplicate trait constant before the override rule runs, so
+  the diagnostic differs from php-src's override message while the program is still
+  refused.
 - `grapheme_strrev()` implements the common `Grapheme_Extend` ranges (Latin,
   Hebrew, Arabic, Indic, Thai, Tibetan, variation selectors, emoji modifiers) but
   not the complete UAX #29 rule set (`SpacingMark`, `Prepend`, regional

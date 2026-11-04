@@ -333,6 +333,8 @@ mod random;
 mod bcmath_number;
 #[path = "error_tests/time_duration.rs"]
 mod time_duration;
+#[path = "error_tests/override_constants.rs"]
+mod override_constants;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
 #[path = "error_tests/mbstring.rs"]

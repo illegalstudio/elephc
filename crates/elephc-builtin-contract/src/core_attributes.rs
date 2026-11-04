@@ -26,7 +26,9 @@ pub fn core_attribute_flags(name: &str) -> Option<i64> {
         "attribute" | "allowdynamicproperties" => 1,
         "returntypewillchange" => 4,
         "sensitiveparameter" => 32,
-        "override" => 12,
+        // PHP 8.6 extends #[\Override] from methods/properties to class constants and
+        // enum cases (TARGET_METHOD | TARGET_PROPERTY | TARGET_CLASS_CONSTANT).
+        "override" => 28,
         "deprecated" => 87,
         "nodiscard" => 6,
         "delayedtargetvalidation" => CORE_ATTRIBUTE_TARGET_ALL,

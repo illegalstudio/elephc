@@ -1170,7 +1170,7 @@ real-world validation rather than by speculative pass work.
 - [ ] `ReflectionProperty::isReadable()` / `isWriteable()` — scope/object arguments, visibility, readonly, hooks, and lazy objects
 - [ ] Parameter doc comments and `ReflectionParameter::getDocComment()`
 - [ ] Enum `__debugInfo()` rendering
-- [ ] `#[\Override]` on class constants and enum cases
+- [x] `#[\Override]` on class constants and enum cases — parent/interface lookup for classes, interfaces, enums, cases, and trait composition
 - [ ] `__construct()` / `__destruct()` return-value deprecation
 - [ ] Secure session ini defaults (`use_strict_mode`, `cookie_httponly`, `cookie_samesite`)
 
