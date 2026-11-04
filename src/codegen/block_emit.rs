@@ -1269,15 +1269,15 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::Str(value) => {
             emit_string_literal_default_to_result(ctx, value);
         }
-        // `public static Level $l = Level::Low;` — the same singleton the instance-property
-        // path loads, into the result register this function's caller then stores. See
-        // `LiteralDefaultValue::EnumCase` for why the receiver is only settled here.
+        // Module-aware default resolution supplies the same canonical singleton and ordered
+        // case reads as the instance-property path; store the selected result below.
         LiteralDefaultValue::EnumCase {
             value,
             boxed,
         } => {
             let enum_name = &value.enum_name;
             let case_name = &value.case_name;
+            // Defend against malformed internal metadata despite the earlier resolution.
             let is_case = ctx
                 .module
                 .enum_infos

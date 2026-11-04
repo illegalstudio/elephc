@@ -75,7 +75,9 @@ pub(super) fn register_eval_native_property_default(
         }
     };
     let symbol = match default {
-        EvalNativeCallableDefault::EnumCase { .. } | EvalNativeCallableDefault::Evaluated { .. } => return,
+        EvalNativeCallableDefault::EnumCase { .. } | EvalNativeCallableDefault::Evaluated { .. } => {
+            unreachable!("enum singletons are excluded from compact callable default metadata")
+        }
         EvalNativeCallableDefault::Scalar { kind, payload } => {
             abi::emit_load_int_immediate(
                 ctx.emitter,

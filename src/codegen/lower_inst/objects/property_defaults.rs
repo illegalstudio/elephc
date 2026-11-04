@@ -211,11 +211,8 @@ pub(super) fn emit_property_default(
         } => {
             let enum_name = &value.enum_name;
             let case_name = &value.case_name;
-            // The receiver was taken on shape alone by `literal_default_value`, which has no
-            // module. This is where that is settled: a scoped constant in an object slot whose
-            // receiver is not an enum, or whose name is not one of its cases, has no singleton
-            // to load and is reported unsupported rather than turned into a symbol reference
-            // the assembler would then fail on.
+            // Module-aware default resolution already validated this singleton against the
+            // enum inventory. Keep this defensive invariant check before emitting its symbol.
             let is_case = ctx
                 .module
                 .enum_infos
