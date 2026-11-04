@@ -759,10 +759,12 @@ impl ClosureBuilder {
 
     /// Builds the closure expression.
     pub fn build(self) -> Expr {
+        let mut param_attributes = Vec::new();
+        param_attributes.resize(self.params.len(), Vec::new());
         Expr::new(
             ExprKind::Closure {
                 params: self.params,
-                param_attributes: Vec::new(),
+                param_attributes,
                 variadic: None,
                 variadic_by_ref: false,
                 variadic_type: None,

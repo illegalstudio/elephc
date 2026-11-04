@@ -898,6 +898,7 @@ fn render(value: &Expr) -> (String, u8) {
         ExprKind::Spread(value) => (format!("...{}", at(value, ATOM)), ATOM),
         ExprKind::Closure {
             params,
+            param_attributes,
             return_type,
             body,
             captures,
@@ -925,7 +926,7 @@ fn render(value: &Expr) -> (String, u8) {
             (
                 format!(
                     "function ({}){use_clause}{} {}",
-                    parameter_list(params, &[]),
+                    parameter_list(params, param_attributes),
                     return_hint(return_type),
                     block(body, 0)
                 ),

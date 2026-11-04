@@ -330,10 +330,12 @@ pub(super) fn lower(
         _ => Stmt::new(StmtKind::Return(Some(call_expr)), span),
     };
     let body = vec![body_stmt];
+    let mut closure_param_attributes = Vec::new();
+    closure_param_attributes.resize(params.len(), Vec::new());
     let inner = Expr::new(
         ExprKind::Closure {
             params,
-            param_attributes: Vec::new(),
+            param_attributes: closure_param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -350,15 +352,17 @@ pub(super) fn lower(
     if bound_exprs.is_empty() {
         return Ok(inner);
     }
-    let outer_params = (0..bound_exprs.len())
+    let outer_params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)> = (0..bound_exprs.len())
         .map(|index| (format!("__elephc_pfa_bound_{}", index), None, None, false))
         .collect();
     let mut outer_body = outer_prelude;
     outer_body.push(Stmt::new(StmtKind::Return(Some(inner)), span));
+    let mut outer_param_attributes = Vec::new();
+    outer_param_attributes.resize(outer_params.len(), Vec::new());
     let outer = Expr::new(
         ExprKind::Closure {
             params: outer_params,
-            param_attributes: Vec::new(),
+            param_attributes: outer_param_attributes,
             variadic: None,
             variadic_by_ref: false,
             variadic_type: None,
@@ -838,7 +842,7 @@ fn typed_identity(ty: &TypeExpr, span: Span) -> Expr {
     Expr::new(
         ExprKind::Closure {
             params: vec![("__elephc_pfa_value".to_string(), Some(ty.clone()), None, false)],
-            param_attributes: Vec::new(),
+            param_attributes: vec![Vec::new()],
             variadic: None,
             variadic_by_ref: false,
             variadic_type: None,
