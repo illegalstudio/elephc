@@ -1169,7 +1169,7 @@ real-world validation rather than by speculative pass work.
 - [ ] Stream `error_mode` — exception-on-failure stream option across every wrapper
 - [ ] `ReflectionProperty::isReadable()` / `isWriteable()` — scope/object arguments, visibility, readonly, hooks, and lazy objects
 - [ ] Parameter doc comments and `ReflectionParameter::getDocComment()`
-- [x] Enum `__debugInfo()` rendering — `var_dump()` and `print_r()` render `enum(E::C) (N) { … }` from the returned array; magic-method visibility/parameter/return validation stays as a follow-up
+- [x] Enum `__debugInfo()` rendering — `var_dump()` and `print_r()` render `enum(E::C) (N) { … }` from the returned array; the magic-method visibility warning stays as a follow-up
 - [x] `#[\Override]` on class constants and enum cases — parent/interface lookup for classes, interfaces, enums, cases, and trait composition
 - [x] `__construct()` / `__destruct()` return-value deprecation — startup diagnostics for value returns and generator bodies
 - [x] Secure session ini defaults (`use_strict_mode`, `cookie_httponly`, `cookie_samesite`) — profile-gated bootstrap defaults for the web runtime

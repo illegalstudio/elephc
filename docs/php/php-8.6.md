@@ -23,7 +23,7 @@ sensitive.
 | Readonly property defaults | A readonly instance property may declare a default value, including inside a `readonly class`. The default initializes the slot before the constructor runs, so later writes (including from the constructor) raise `Cannot modify readonly property`. Inheritance, get-only interface properties, and serialization follow php-src's `Zend/tests/readonly_props/readonly_with_default*.phpt`. |
 | Secure session defaults | Under `--php-version=8.6`, `--web` starts with `session.use_strict_mode=1`, `session.cookie_httponly=1`, and `session.cookie_samesite=Lax`. A later `ini_set()` can relax them for the request. The session profile matrix in `tests/web_session_tests.rs` covers 8.2 through 8.6. |
 | Constructor/destructor return deprecation | A `__construct()`/`__destruct()` that returns a value or contains `yield` emits PHP 8.6's `Deprecated:` diagnostic at startup. The upstream `Zend/tests/magic_methods/constructor_destructor_return.phpt` fixture is transcribed into `tests/codegen/oop/constructor_deprecation_php86.rs`. |
-| Enum `__debugInfo()` | An enum case renders `enum(E::C) (N) { … }` from the array returned by `__debugInfo()`. The three php-src `Zend/tests/enum/debugInfo/{backed_enum_value,magic_method,missing_magic}.phpt` fixtures are migrated into `tests/codegen/oop/enum_debug_info_php86.rs`; the magic-method visibility/parameter/return validation fixtures remain out. |
+| Enum `__debugInfo()` | An enum case renders `enum(E::C) (N) { … }` from the array returned by `__debugInfo()`. The three php-src `Zend/tests/enum/debugInfo/{backed_enum_value,magic_method,missing_magic}.phpt` fixtures are migrated into `tests/codegen/oop/enum_debug_info_php86.rs`; the visibility-warning fixture remains out; the parameter and return-type failures are covered by `tests/error_tests/enum_debug_info.rs`. |
 | `#[\Override]` on class constants | Class, interface, enum, enum-case, and trait-composed constants must have a matching parent/interface constant. The php-src `Zend/tests/attributes/override/constants` fixtures for classes, interfaces, enums, cases, and traits are migrated into `tests/codegen/oop/override_constants_php86.rs` and `tests/error_tests/override_constants.rs`. |
 | `SortDirection` | `Ascending` / `Descending`, catalogued as a PHP 8.6 core enum. |
 | `array_filter()` mode validation | An invalid `$mode` raises `ValueError` on the 8.6 profile instead of silently using value mode. |
@@ -63,7 +63,7 @@ instead of during production.
   unconditional top-level/namespace/include-once declarations. A class declared inside a
   runtime branch emits the diagnostic early instead of when that branch executes.
 - An enum's `__debugInfo()` is rendered by `var_dump()` and `print_r()`; the magic-method
-  visibility warning and the parameter/return-type validation fixtures are not emitted yet.
+  visibility warning is not emitted yet.
 - A trait composition that redeclares an `#[\Override]` constant with a different value is
   rejected as an incompatible duplicate trait constant before the override rule runs, so
   the diagnostic differs from php-src's override message while the program is still
