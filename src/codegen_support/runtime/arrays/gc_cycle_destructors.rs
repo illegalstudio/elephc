@@ -101,6 +101,8 @@ fn emit_rescan(emitter: &mut Emitter) {
     if arm {
         emitter.instruction("ldr x11, [x9, #8]");                               // read kind, candidate, and stale incoming-edge metadata
         emitter.instruction("and x12, x11, #0xff");                             // distinguish object destructor state from ordinary container counts
+        emitter.instruction("cmp x12, #2");                                     // raw buffers and strings do not participate in the graph recount
+        emitter.instruction("b.lo __rt_gc_collect_cycles_rescan_next");         // retain their native identity flags across destructor-triggered rescans
         emitter.instruction("cmp x12, #4");                                     // only object allocations use the temporary high refcount bit
         emitter.instruction("b.ne __rt_gc_collect_cycles_rescan_kind_ready");   // retain other heap kinds' counts verbatim
         emitter.instruction("ldr w12, [x9, #4]");                               // inspect real owners after the completed destructor callback
@@ -116,6 +118,8 @@ fn emit_rescan(emitter: &mut Emitter) {
         emitter.instruction("mov r10, QWORD PTR [r8 + 8]");                     // read the packed kind and GC metadata
         emitter.instruction("mov r11, r10");                                    // preserve packed metadata while inspecting object kind
         emitter.instruction("and r11d, 0xff");                                  // isolate the uniform heap allocation kind
+        emitter.instruction("cmp r11d, 2");                                     // raw buffers and strings do not participate in the graph recount
+        emitter.instruction("jb __rt_gc_collect_cycles_rescan_next");           // preserve identity flags until final string release
         emitter.instruction("cmp r11d, 4");                                     // only objects carry temporary destructor refcount state
         emitter.instruction("jne __rt_gc_collect_cycles_rescan_kind_ready");    // leave ordinary array and cell counts unchanged
         emitter.instruction("mov r11d, DWORD PTR [r8 + 4]");                    // inspect owners acquired or removed during destruction

@@ -178,6 +178,18 @@ fn mbstring_ini_identity_hooks_cover_all_targets() {
                 assert!(assembly.contains(&format!("__rt_mbstring_ini_{operation}:")), "{name}, PIC {pic}");
                 assert!(assembly.contains(&target.extern_symbol(&format!("elephc_mbstring_native_string_{operation}_v1"))));
             }
+            for operation in ["bind", "copy", "fresh", "persist"] {
+                let label = format!("__rt_mbstring_ini_{operation}:");
+                let body = assembly.split(&label).nth(1).unwrap()
+                    .split(&target.extern_symbol(&format!("elephc_mbstring_native_string_{operation}_v1")))
+                    .next().unwrap();
+                let marker = if target.arch == Arch::AArch64 {
+                    "orr w9, w9, w10"
+                } else {
+                    "or QWORD PTR [rax - 8], 0x1000000"
+                };
+                assert!(body.contains(marker), "{name}, PIC {pic}: {operation} must mark its identity owner");
+            }
             assert!(assembly.contains(if target.arch == Arch::AArch64 { "stp q30, q31" } else { "and rsp, -16" }));
             assert!(assembly.contains(if target.arch == Arch::AArch64 { "ldp q30, q31" } else { "movdqu xmm15" }));
         }

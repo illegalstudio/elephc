@@ -87,6 +87,10 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10d, r10d");                                     // is this heap block currently live?
     emitter.instruction("jz __rt_gc_collect_cycles_clear_next");                // free-list blocks already keep transient GC metadata cleared
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the full kind word with any stale x86_64 reachable metadata
+    emitter.instruction("mov ecx, r11d");                                       // inspect the physical kind without changing persistent string metadata
+    emitter.instruction("and ecx, 0xff");                                       // discard header flags before identifying graph nodes
+    emitter.instruction("cmp ecx, 2");                                          // raw buffers and strings never carry incoming graph edges
+    emitter.instruction("jb __rt_gc_collect_cycles_clear_next");                // preserve identity flags until the allocation is finally released
     emitter.instruction("mov rcx, 0xffffffff8006ffff");                         // preserve heap marker, storage, completed destructors, and pins while clearing marks
     emitter.instruction("and r11, rcx");                                        // clear the x86_64 transient reachable metadata while preserving kind and value_type bits
     emitter.instruction("or r11, 0x20000");                                     // record membership in the current collection before any destructor allocation
@@ -120,6 +124,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10d, r10d");                                     // is this candidate block live?
     emitter.instruction("jz __rt_gc_collect_cycles_root_next");                 // free-list blocks cannot be GC roots
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the candidate kind word before deciding whether it participates in cycle collection
+    emitter.instruction("cmp r11b, 2");                                         // strings and raw buffers have no cached incoming-edge field
+    emitter.instruction("jb __rt_gc_collect_cycles_root_next");                 // preserve their persistent identity metadata before clearing graph counts
     emitter.instruction("mov rcx, r11");                                        // copy the packed incoming count before clearing it
     emitter.instruction(&format!("shr rcx, {X86_INCOMING_SHIFT}"));             // move the incoming field below the heap marker
     emitter.instruction(&format!("and ecx, {X86_INCOMING_MAX}"));               // retain the exact count or the saturation sentinel
@@ -131,8 +137,6 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_gc_collect_cycles_root_next");                // skip unnecessary classification of a reachable child
     emitter.instruction("mov rcx, r11");                                        // preserve the full kind word while isolating the low-byte heap kind tag
     emitter.instruction("and rcx, 0xff");                                       // isolate the low-byte heap kind tag for candidate dispatch
-    emitter.instruction("cmp rcx, 2");                                          // is this candidate at least an indexed array?
-    emitter.instruction("jb __rt_gc_collect_cycles_root_next");                 // strings and raw buffers never participate in cycle collection
     emitter.instruction("cmp rcx, 5");                                          // is this candidate within the array/hash/object/mixed range?
     emitter.instruction("jbe __rt_gc_collect_cycles_root_known");               // accept existing container candidates
     emitter.instruction(&format!("cmp rcx, {CALLABLE_HEAP_KIND}"));             // callable descriptors own graph captures

@@ -1747,6 +1747,12 @@ identity before allocator reuse. Eval array-reference observers retire before
 this skip, including when a Mixed cell no longer contains its former array
 value. Other allocation kinds retain their existing identity retirement path.
 
+Heap identity registration marks its destination for final retirement, including
+explicit INI binding and metadata copies. Collector metadata clears and
+destructor-triggered rescans leave string and raw-buffer headers untouched:
+these allocations have no cyclic graph edges, and their identity flag must
+survive collection until the final owner releases the allocation.
+
 The native INI registry records origins before the first INI call so copies made
 earlier still share their logical identity. Initially, fresh strings and literals
 store only their kind and length in the allocation-address map. Copying a tracked
