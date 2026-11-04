@@ -595,6 +595,8 @@ fn untyped_property_value_needs_nullable_storage(val_ty: &PhpType) -> bool {
 
 /// Computes the refined stored type for an untyped property after a write, shared by the
 /// instance and static property refinement paths. Returns `None` when the type is unchanged.
+/// Other incompatible writes widen the slot to `Mixed`, preserving both earlier and later
+/// values without imposing the first inferred PHP type on the property.
 ///
 /// Untyped properties start as `Void` (their default is null, implicit or explicit), so a
 /// scalar/array value — whose native slot cannot also represent null — is stored as the
@@ -603,8 +605,7 @@ fn untyped_property_value_needs_nullable_storage(val_ty: &PhpType) -> bool {
 /// their slots already encode null. A later write outside an existing nullable union widens
 /// to `Mixed` (PHP untyped properties accept anything). Untyped non-null defaults keep the
 /// historical rebind, and array-typed slots keep `[]`-placeholder adoption and generic-array
-/// element specialization. Other incompatible writes widen the slot to `Mixed`, preserving
-/// both earlier and later values without imposing the first inferred PHP type on the property.
+/// element specialization.
 pub(super) fn refined_untyped_property_assignment_type(
     checker: &Checker,
     current: &PhpType,
