@@ -1958,3 +1958,29 @@ try { $name->setValue($o, 'y'); } catch (Error $e) { echo $e->getMessage(), "\n"
     );
     assert_eq!(out, "x5\nCannot modify readonly property T::$name\n");
 }
+
+/// An element write creates the array in a typed property that is still uninitialized, whatever
+/// the slot's storage. A property boxed as `mixed` was read first, and the read refused it:
+/// Doctrine's `$this->table['name'] = ...` on a new `ClassMetadata` failed every mapping lookup.
+#[test]
+fn test_an_element_write_initializes_a_typed_boxed_property() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {
+    public mixed $m;
+    public mixed $l;
+    public int $i;
+    public function fill() { $this->m['name'] = strtolower('N'); $this->l[] = 2; return $this; }
+    public function read() { return $this->m['name']; }
+}
+$c = (new C())->fill();
+var_dump($c->m, $c->l);
+try { (new C())->read(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "array(1) {\n  [\"name\"]=>\n  string(1) \"n\"\n}\narray(1) {\n  [0]=>\n  int(2)\n}\nTyped property C::$m must not be accessed before initialization\n"
+    );
+}

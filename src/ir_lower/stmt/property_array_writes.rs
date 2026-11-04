@@ -1311,10 +1311,13 @@ pub(super) fn initialize_uninitialized_array_property_for_write(
     // says whether it has to be boxed on the way into the slot.
     // The lowering type of `?array` is already `Mixed`; the declared union still names the
     // array member to create.
-    let Some(container_ty) = auto_initialized_container_type(property_ty).or_else(|| {
-        declared_object_property_type(ctx, object, property)
-            .and_then(|declared| auto_initialized_container_type(&declared))
-    }) else {
+    let Some(container_ty) = auto_initialized_container_type(property_ty)
+        .or_else(|| {
+            declared_object_property_type(ctx, object, property)
+                .and_then(|declared| auto_initialized_container_type(&declared))
+        })
+        .or_else(|| typed_boxed_property_container(ctx, object, property, property_ty))
+    else {
         return;
     };
     let op = match container_ty.codegen_repr() {
@@ -1376,6 +1379,31 @@ pub(super) fn initialize_uninitialized_array_property_for_write(
     branch_to(ctx, ready);
 
     ctx.builder.position_at_end(ready);
+}
+
+/// The container an element write creates in a typed property stored as a boxed Mixed.
+///
+/// The slot's type no longer names an array here: `mixed` never did, and a declared `array` the
+/// checker widened to `Mixed` lost it. Either way a typed property can sit uninitialized, and php
+/// creates the array on an element write, as `ClassMetadata::initializeReflection()` relies on with
+/// `$this->table['name'] = ...`. An untyped property starts as null and needs none of this.
+fn typed_boxed_property_container(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    property_ty: &PhpType,
+) -> Option<PhpType> {
+    if property_ty.codegen_repr() != PhpType::Mixed {
+        return None;
+    }
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return None;
+    };
+    ctx.classes
+        .get(class_name.trim_start_matches('\\'))?
+        .declared_properties
+        .contains(property)
+        .then(|| PhpType::Array(Box::new(PhpType::Mixed)))
 }
 
 /// Returns the container type PHP auto-initializes an indexed property write into.
