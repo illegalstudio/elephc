@@ -934,7 +934,9 @@ fn test_nullable_fallback_flow_string_chunks_diagnostic_all_targets() {
 
 /// A null default beside a scalar lowers to null-capable merge storage on every target (issue
 /// #1944): no `null` is ever stored into a plain `I64`, `F64` or `Str` slot, so `?int ?? null`
-/// keeps its tag word instead of the in-band sentinel, and the result assembles everywhere.
+/// keeps its tag word instead of the in-band sentinel, and the result assembles everywhere. The
+/// first write of such a value into an empty array or a promoted hash boxes it, so the append,
+/// the offset write and the string-key write lower on every target too.
 #[test]
 fn test_nullable_fallback_flow_scalar_null_default_storage_all_targets() {
     let source = r#"<?php
@@ -942,13 +944,17 @@ function coalesced(?int $n): string { $x = $n ?? null; return $x === null ? "nul
 function shortened(int $n): string { $x = $n ?: null; return $x === null ? "null" : "t" . $x; }
 function missed(int $k): string { $a = [1.5]; $x = $a[$k] ?? null; return $x === null ? "null" : "t" . $x; }
 function strung(?string $s): string { $x = $s ?? null; return $x === null ? "null" : "t" . $x; }
+function pushed(?int $n): int { $a = []; $a[] = $n ?? null; return count($a); }
+function offset(?int $n): int { $a = []; $a[0] = $n ?? null; return count($a); }
+function keyed(?int $n): int { $h = []; $h["k"] = $n ?? null; return count($h); }
 echo coalesced(null), coalesced(6), shortened(0), shortened(6), missed(0), missed(3), strung(null), strung("s");
+echo pushed(null), pushed(6), offset(null), offset(6), keyed(null), keyed(6);
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = crate::codegen::platform::Target::parse(name).unwrap();
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), target);
-        for function_name in ["coalesced", "shortened", "missed", "strung"] {
+        for function_name in ["coalesced", "shortened", "missed", "strung", "pushed", "offset", "keyed"] {
             let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
             for inst in &function.instructions {
                 if inst.op != Op::StoreLocal { continue; }

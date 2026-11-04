@@ -2899,3 +2899,29 @@ for ($i = 0; $i < 2; $i++) {
 "#;
     assert_nullable_flow_cli_heap_output(source, &"[null]1n|[6]1v|{\"k\":null}n|{\"k\":6}v|[null]|[6]|[null]|{\"0\":null,\"k\":null}|{\"0\":0,\"k\":0}|{\"0\":6,\"k\":6}|[null]|[5]|\n".repeat(2));
 }
+
+/// Writes of a tagged scalar into an empty array or a promoted hash box it as `mixed`.
+///
+/// `$a[] = $n ?? null`, `$a[0] = $n ?? null` and `$h["k"] = $n ?? null` over an empty `[]` used to
+/// select tagged storage the backend has no write entry for (`array_push for PHP type
+/// TaggedScalar`, `array_set value PHP type TaggedScalar`, `hash_set value PHP type
+/// TaggedScalar`), as a bare `?int` parameter already did; the first write now widens the
+/// container to boxed `mixed` slots and every consumer reads the int or the null back (#1944).
+#[test]
+fn test_nullable_fallback_flow_tagged_array_writes_runtime() {
+    let source = r#"<?php
+function pushed(?int $n): void { $a = []; $a[] = $n ?? null; echo json_encode($a), count($a); foreach ($a as $v) { echo $v === null ? "n" : "v"; } echo "|"; }
+function offset(?int $n): void { $a = []; $a[0] = $n ?? null; echo json_encode($a), $a[0] === null ? "n" : "v", "|"; }
+function keyed(?int $n): void { $h = []; $h["k"] = $n ?? null; echo json_encode($h), $h["k"] === null ? "n" : "v", "|"; }
+function builtin(?int $n): void { $a = []; array_push($a, $n ?? null); echo json_encode($a), "|"; }
+function shorted(int $n): void { $a = []; $a[] = $n ?: null; $h = []; $h["k"] = $n ?: null; echo json_encode($a), json_encode($h), "|"; }
+function ternar(?int $n): void { $a = []; $a[] = $n ?: null; echo json_encode($a), "|"; }
+function direct(?int $n): void { $a = []; $a[] = $n; $h = []; $h["k"] = $n; $o = []; $o[0] = $n; echo json_encode($a), json_encode($h), json_encode($o), "|"; }
+function grown(?int $n): void { $a = []; $a[] = $n ?? null; $a[] = 7; $a[] = "s"; echo json_encode($a), implode(",", $a), "|"; }
+for ($i = 0; $i < 2; $i++) {
+    pushed(null); pushed(6); offset(null); offset(6); keyed(null); keyed(6); builtin(null); builtin(6);
+    shorted(0); shorted(5); ternar(0); ternar(6); direct(null); direct(6); grown(null); grown(6); echo "\n";
+}
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"[null]1n|[6]1v|[null]n|[6]v|{\"k\":null}n|{\"k\":6}v|[null]|[6]|[null]{\"k\":null}|[5]{\"k\":5}|[null]|[6]|[null]{\"k\":null}[null]|[6]{\"k\":6}[6]|[null,7,\"s\"],7,s|[6,7,\"s\"]6,7,s|\n".repeat(2));
+}
