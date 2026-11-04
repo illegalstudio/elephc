@@ -296,6 +296,10 @@ Supported wrapper methods include `stream_open`, `stream_read`, `stream_write`,
 `stream_set_option`, `stream_cast`, `url_stat`, and the directory methods
 `dir_opendir`, `dir_readdir`, `dir_rewinddir`, and `dir_closedir`.
 
+`file_get_contents()` on a registered wrapper path opens the wrapper and drains
+`stream_read()` to EOF through the same stream helper as `fopen()`. A refused
+`stream_open()` returns `false` after the usual failed-open warning.
+
 `url_stat` is consulted by the whole stat family: `stat()`, `lstat()`,
 `file_exists()`, the integer getters (`filesize()`, `filemtime()`, `fileatime()`,
 `filectime()`, `fileperms()`, `fileowner()`, `filegroup()`, and `fileinode()`),

@@ -1093,3 +1093,31 @@ echo $hits, "\n";
         out.stderr
     );
 }
+
+/// Verifies `#[ReturnTypeWillChange]` lets any Countable implementor return a scalar, and that
+/// `count()` coerces string, bool, float and mixed results exactly as PHP does.
+#[test]
+fn test_countable_tentative_return_scalar_coercion() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class StringCount implements Countable {
+    #[\ReturnTypeWillChange] public function count(): string { return "3"; }
+}
+class BoolCount implements Countable {
+    #[\ReturnTypeWillChange] public function count(): bool { return true; }
+}
+class FloatCount implements Countable {
+    #[\ReturnTypeWillChange] public function count(): float { return 2.9; }
+}
+class MixedCount implements Countable {
+    #[\ReturnTypeWillChange] public function count(): mixed { return 4; }
+}
+function counted(mixed $value): int { return count($value); }
+echo counted(new StringCount()), ':', counted(new BoolCount()), ':';
+echo counted(new FloatCount()), ':', counted(new MixedCount()), "\n";
+"#,
+    );
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "3:1:2:4\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

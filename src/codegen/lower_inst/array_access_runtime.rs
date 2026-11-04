@@ -417,6 +417,9 @@ pub(super) fn class_implements_interface(
     let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
     let mut current = Some(class_name.trim_start_matches('\\'));
     while let Some(candidate) = current {
+        // The XML prelude's SimpleXMLElement implements these interfaces in source, but a
+        // prelude class's interface list is not copied into every EIR class-info clone. The
+        // class name is internal and cannot be redeclared, so answer before the info lookup.
         if candidate.trim_start_matches('\\').eq_ignore_ascii_case("SimpleXMLElement")
             && matches!(interface_key.as_str(), "countable" | "recursiveiterator" | "stringable")
         {
@@ -430,13 +433,6 @@ pub(super) fn class_implements_interface(
             php_symbol_key(interface) == interface_key
                 || interface_satisfies_interface(ctx, interface, interface_name)
         }) {
-            return true;
-        }
-        // The XML prelude's SimpleXMLElement implements these interfaces in source, but a
-        // prelude class's interface list is not copied into every EIR class-info clone.
-        if candidate.trim_start_matches('\\').eq_ignore_ascii_case("SimpleXMLElement")
-            && matches!(interface_key.as_str(), "countable" | "recursiveiterator" | "stringable")
-        {
             return true;
         }
         current = info.parent.as_deref();

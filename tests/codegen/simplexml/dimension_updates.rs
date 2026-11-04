@@ -399,3 +399,27 @@ unset($doc, $view, $holder, $opaque);
     let expected = format!("{}key|key|key|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n{}", "7|".repeat(24), "5|6|5|4|".repeat(3));
     assert_eq!(out.stdout, expected);
 }
+
+/// A document-root `$sxe[]->prop` write notices and fails before appending; a child selection
+/// still autovivifies the appended element, matching PHP's overloaded-element distinction.
+#[test]
+fn test_simplexml_root_append_property_error_bundle() {
+    if skip_without_xml_native("test_simplexml_root_append_property_error_bundle") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
+$xml = new SimpleXMLElement('<r><b/></r>');
+try { $xml[]->p = 'v'; } catch (Error $error) { echo $error->getMessage(), '|'; }
+echo $xml->asXML();
+$child = $xml->b;
+try { $child[]->p = 'w'; } catch (Error $error) { echo 'unexpected:', $error->getMessage(), '|'; }
+echo $xml->asXML();
+restore_error_handler();
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "8:Indirect modification of overloaded element of SimpleXMLElement has no effect|Cannot create unnamed attribute|<?xml version=\"1.0\"?>\n<r><b/></r>\n<?xml version=\"1.0\"?>\n<r><b/><b><p>w</p></b></r>\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Notice:"), "{}", out.stderr);
+}

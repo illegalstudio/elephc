@@ -307,8 +307,12 @@ pub(super) fn magic_call_dispatch_args(
 }
 
 /// Returns whether a receiver type carries PHP's `false` failure sentinel.
+///
+/// Inspect the semantic type, not `codegen_repr()`: a union lowers to `Mixed`, so reading the
+/// representation here made every `Object|false` factory return look false-free and sent it
+/// through the direct dispatcher's "on null" fatal.
 fn value_may_be_false(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> bool {
-    match ctx.builder.value_php_type(value).codegen_repr() {
+    match ctx.builder.value_php_type(value) {
         PhpType::False => true,
         PhpType::Union(members) => members.contains(&PhpType::False),
         _ => false,
@@ -438,7 +442,35 @@ pub(super) fn lower_nullable_regular_method_call(
     });
 
     ctx.builder.position_at_end(fatal_block);
+    // `?Object` only reaches null here, while `Object|false` factory returns carry false.
+    // PHP names the actual value in the fatal, so split the two messages.
+    let null_block = ctx
+        .builder
+        .create_named_block("method.null.fatal", Vec::new());
+    let false_block = ctx
+        .builder
+        .create_named_block("method.false.fatal", Vec::new());
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![object.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: false_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
     terminate_method_call_on_null(ctx, method);
+
+    ctx.builder.position_at_end(false_block);
+    terminate_method_call_on_false(ctx, method);
 
     ctx.builder.position_at_end(call_block);
     // Re-entering a constructor on an existing `Object|false` view must dispatch against
