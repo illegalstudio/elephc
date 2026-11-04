@@ -191,6 +191,44 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
         ExprKind::FunctionCall { name, args } => {
             let args = args.into_iter().map(fold_expr).collect::<Vec<_>>();
+            // `str_replace([literal, ...], 'replacement', $subject)` is a chain of scalar
+            // replacements. Folding it before lowering keeps the runtime's string-only
+            // helper while matching PHP's array-search form for the common literal case.
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("str_replace")
+                && args.len() == 3
+            {
+                if let (
+                    ExprKind::ArrayLiteral(items),
+                    ExprKind::StringLiteral(replacement),
+                ) = (&args[0].kind, &args[1].kind)
+                {
+                    if !items.is_empty()
+                        && items.iter().all(|item| matches!(item.kind, ExprKind::StringLiteral(_)))
+                    {
+                        let mut subject = args[2].clone();
+                        for item in items.iter().rev() {
+                            subject = Expr::new(
+                                ExprKind::FunctionCall {
+                                    name: name.clone(),
+                                    args: vec![
+                                        item.clone(),
+                                        Expr::new(
+                                            ExprKind::StringLiteral(replacement.clone()),
+                                            args[1].span,
+                                        ),
+                                        subject,
+                                    ],
+                                },
+                                span,
+                            );
+                        }
+                        return fold_expr(subject);
+                    }
+                }
+            }
             if let Some(rebound) = namespace_fallbacks::resolve_call(&name, &args, span) {
                 return fold_expr(rebound);
             }

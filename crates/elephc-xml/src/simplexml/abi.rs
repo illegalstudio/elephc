@@ -258,6 +258,12 @@ pub unsafe extern "C" fn elephc_xml_sx_dom_attribute(handle: i64, name: *const c
     guard(|| output(view(handle).and_then(|v| v.first()
         .map(|node| owned_bytes(ffi::dom_attribute_text(node, cstring(bytes(name)).as_ptr())))).unwrap_or_default()))
 }
+/// Sets the backing document encoding for modern DOM serialization.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_xml_sx_set_encoding(handle: i64, encoding: *const c_char) -> i64 {
+    guard(|| view(handle).and_then(|v| v.first()
+        .map(|node| ffi::set_encoding(node, cstring(bytes(encoding)).as_ptr()) as i64)).unwrap_or(0))
+}
 /// Returns the indexed child visited by foreach and explicit iterator methods.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_item(handle: i64, index: i64) -> i64 {

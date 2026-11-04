@@ -599,3 +599,33 @@ unset($capability);
     assert_eq!(out.stdout, "f");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// DOM-created nodes join the document tree, and an imported SimpleXML view shares them.
+///
+/// `appendChild()` attaches a `createElement()` node; `simplexml_import_dom()` binds a view
+/// to it; `unset($view[0])` unlinks the root from the document (PHP's GH-17040 behavior);
+/// and `DOMNode::append("foo")` writes through the same native tree, so XML serialization
+/// and the SimpleXML view both observe the text.
+#[test]
+fn test_simplexml_dom_created_nodes_and_append_bundle() {
+    if skip_without_xml_native("test_simplexml_dom_created_nodes_and_append_bundle") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$dom = new DOMDocument;
+$tag = $dom->appendChild($dom->createElement("style"));
+$html = simplexml_import_dom($tag);
+unset($html[0]);
+$tag->append("foo");
+echo $dom->saveXML(), "|";
+echo $dom->saveXML($tag), "|";
+echo $html->getName(), ":", count($html), ":", (string)$html[0], "|";
+$second = new DOMDocument;
+$div = $second->appendChild($second->createElement("div", "text"));
+echo $second->saveXML(), "|", $div->textContent;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "<?xml version=\"1.0\"?>\n|<style>foo</style>|style:0:foo|<?xml version=\"1.0\"?>\n<div>text</div>|text"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

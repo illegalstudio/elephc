@@ -79,7 +79,7 @@ pub(super) fn check_property_array_push(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let obj_ty = checker.union_single_object_class(&obj_ty)
         .filter(|_| matches!(&obj_ty, PhpType::Union(members)
-            if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void))))
+            if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::False))))
         .map(PhpType::Object).unwrap_or(obj_ty);
     if matches!(&obj_ty, PhpType::Object(name) if name.is_empty()
         || checker.interfaces.contains_key(name)
@@ -225,7 +225,7 @@ pub(super) fn check_property_array_assign(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let obj_ty = checker.union_single_object_class(&obj_ty)
         .filter(|_| matches!(&obj_ty, PhpType::Union(members)
-            if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void))))
+            if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::False))))
         .map(PhpType::Object).unwrap_or(obj_ty);
     if matches!(obj_ty, PhpType::Mixed)
         || matches!(&obj_ty, PhpType::Object(name) if name.is_empty()

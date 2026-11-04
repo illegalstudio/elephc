@@ -262,6 +262,7 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("LIBXML_DTDVALID", Libxml, ConstValue::Int(16)),
     constant!("LIBXML_NOCDATA", Libxml, ConstValue::Int(16384)),
     constant!("LIBXML_NOENT", Libxml, ConstValue::Int(2)),
+    constant!("LIBXML_NO_XXE", Libxml, ConstValue::Int(8388608), since: Php84),
     constant!("LIBXML_NONET", Libxml, ConstValue::Int(2048)),
     constant!("LIBXML_NOWARNING", Libxml, ConstValue::Int(64)),
     constant!("LIBXML_NSCLEAN", Libxml, ConstValue::Int(8192)),

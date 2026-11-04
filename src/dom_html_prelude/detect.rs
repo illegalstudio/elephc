@@ -42,6 +42,7 @@ const DOM_HTML_CLASSES: &[&str] = &[
     "DOMProcessingInstruction",
     "DOMCharacterData",
     "DOMNodeList",
+    "Dom\\XMLDocument",
 ];
 
 /// Returns whether any top-level statement references the Termwind DOM HTML
@@ -67,6 +68,11 @@ fn program_uses_classes(program: &[Stmt], classes: &[&str]) -> bool {
 
 /// Returns whether resolution bound this name to a seeded global DOM class.
 fn name_is_dom_class(name: &Name) -> bool {
+    if matches!(name.parts.as_slice(), [namespace, class_name]
+        if namespace.eq_ignore_ascii_case("Dom") && class_name.eq_ignore_ascii_case("XMLDocument"))
+    {
+        return true;
+    }
     DOM_HTML_CLASSES.iter().any(|candidate| {
         crate::name_resolver::is_additional_global_symbol(name, candidate)
     })

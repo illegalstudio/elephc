@@ -54,3 +54,12 @@ Post-eval typed native parameter reads use explicit owning Mixed value copies wh
 Reflection construction no longer snapshots live static values. Generic accessors build their current maps lazily through EIR and omit uninitialized properties, preserving the destruction timing of displaced objects.
 
 Local append, indexed statements, simple offset expressions, deep local stores/appends/updates and direct reference foreach sources select concrete raw storage or a live borrowed canonical child, keeping value-copy reads separate from mutation receivers. Their CI regressions cover canonical string and array updates, exact written-byte expression results, a headerless raw string cell, raw array writes after opaque eval, nested compound updates, foreach reference writeback, ordinary caller aliases and both optimizer modes. Nested iterator sources, mutating builtin consumers, typed literal reassignments and the complete caller/reference-return flow belong to the deferred generalized integration. The existing gated native body fixture uses an unknown Mixed RHS and still requires the new PHP type, exact mutations and zero live owners.
+
+## php-src 8.5.8 PHPT corpus
+
+- Corpus provenance: `tests/php_src/simplexml/` (PHP 8.5.8 `ext/simplexml/tests`).
+- Migration: `scripts/gen_php_src_simplexml_cases.py` emits inline Rust `#[test]`s in
+  `tests/codegen/simplexml_php_src_cases.rs`; the runner never parses `.phpt`.
+- Latest local run: 154 passed, 0 failed, 2 ignored (both upstream environment skips;
+  every runnable SimpleXML fixture passes). Run with
+  `ELEPHC_TEST_REQUIRE_XML_NATIVE=1 cargo test --test codegen_tests php_src_simplexml`.

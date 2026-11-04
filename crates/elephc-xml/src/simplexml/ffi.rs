@@ -40,6 +40,9 @@ extern "C" {
     /// Sets scalar node content for DOM text, comment, and processing instruction nodes.
     #[link_name = "elephc_libxml2_v1_sx_content"]
     pub(super) fn content(node: Node, value: *const c_char);
+    /// Sets one document's encoding for modern DOM serialization.
+    #[link_name = "elephc_libxml2_v1_sx_set_encoding"]
+    pub(super) fn set_encoding(node: Node, encoding: *const c_char) -> c_int;
     /// Tests the PHP property/dimension check_empty rule without changing bool conversion.
     #[link_name = "elephc_libxml2_v1_sx_empty"]
     pub(super) fn empty(node: Node) -> c_int;

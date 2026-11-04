@@ -491,3 +491,21 @@ echo "done\n";
         out.stderr
     );
 }
+
+/// Verifies array_merge_recursive() projects colliding objects to their property arrays.
+/// Fixture: {k:new P} + {k:new P} → k = {x:[0=>1,1=>1]}, matching PHP's convert_to_array.
+#[test]
+fn test_array_merge_recursive_projects_colliding_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class MergeObject { public int $x = 1; }
+$o = new MergeObject();
+$r = array_merge_recursive(["k" => $o], ["k" => $o]);
+var_dump($r);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(1) {\n  [\"k\"]=>\n  array(1) {\n    [\"x\"]=>\n    array(2) {\n      [0]=>\n      int(1)\n      [1]=>\n      int(1)\n    }\n  }\n}\n"
+    );
+}

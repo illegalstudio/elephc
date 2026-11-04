@@ -32,7 +32,11 @@ mod text;
 use std::sync::OnceLock;
 
 use crate::errors::CompileError;
-use crate::parser::ast::Program;
+use crate::parser::ast::{Program, TypeExpr};
+use crate::synthetic_class::{
+    class, e_int, e_method_call, e_new_fq, e_new_static, e_not, e_null, e_prop, e_str, e_var,
+    method, s_assign, s_expr, s_if, s_return, s_throw, t_class, t_nullable,
+};
 
 /// Parsed prelude cache. The fragment is declaration-only, so one parse is
 /// reused for every injecting compile.
@@ -58,9 +62,89 @@ fn parsed_prelude() -> Program {
                 source_id,
             )
             .expect("dom html prelude must tokenize");
-            crate::parser::parse_internal(&tokens).expect("dom html prelude must parse")
+            let mut program = crate::parser::parse_internal(&tokens)
+                .expect("dom html prelude must parse");
+            program.push(modern_dom_declaration());
+            program
         })
         .clone()
+}
+
+/// Builds the PHP 8.4 `Dom\XMLDocument::createFromFile()` interop surface.
+///
+/// SimpleXML's `simplexml_import_dom()` tests construct a modern document and mutate it
+/// through the imported view. Extending the prelude's legacy `DOMDocument` keeps one live
+/// libxml tree, which is what the import path already shares.
+fn modern_dom_declaration() -> crate::parser::ast::Stmt {
+    class("Dom\\XMLDocument")
+        .extends("\\DOMDocument")
+        .method(method("createFromFile")
+            .static_()
+            .param("filename", TypeExpr::Str)
+            .param_default("options", TypeExpr::Int, e_int(0))
+            .param_default("overrideEncoding", t_nullable(TypeExpr::Str), e_null())
+            .returns(t_class("static"))
+            .body(vec![
+                s_assign("document", e_new_static(Vec::new())),
+                s_if(
+                    e_not(e_method_call(
+                        e_var("document"),
+                        "load",
+                        vec![e_var("filename"), e_var("options")],
+                    )),
+                    vec![s_throw(e_new_fq(
+                        "Exception",
+                        vec![e_str("Failed to load XML from file")],
+                    ))],
+                    Vec::new(),
+                    None,
+                ),
+                s_if(
+                    e_prop(e_var("document"), "__elephc_simplexml"),
+                    vec![s_expr(e_method_call(
+                        e_prop(e_var("document"), "__elephc_simplexml"),
+                        "__elephc_set_document_encoding",
+                        vec![e_str("UTF-8")],
+                    ))],
+                    Vec::new(),
+                    None,
+                ),
+                s_return(e_var("document")),
+            ]))
+        .method(method("createFromString")
+            .static_()
+            .param("source", TypeExpr::Str)
+            .param_default("options", TypeExpr::Int, e_int(0))
+            .param_default("overrideEncoding", t_nullable(TypeExpr::Str), e_null())
+            .returns(t_class("static"))
+            .body(vec![
+                s_assign("document", e_new_static(Vec::new())),
+                s_if(
+                    e_not(e_method_call(
+                        e_var("document"),
+                        "loadXML",
+                        vec![e_var("source"), e_var("options")],
+                    )),
+                    vec![s_throw(e_new_fq(
+                        "Exception",
+                        vec![e_str("Failed to load XML from string")],
+                    ))],
+                    Vec::new(),
+                    None,
+                ),
+                s_if(
+                    e_prop(e_var("document"), "__elephc_simplexml"),
+                    vec![s_expr(e_method_call(
+                        e_prop(e_var("document"), "__elephc_simplexml"),
+                        "__elephc_set_document_encoding",
+                        vec![e_str("UTF-8")],
+                    ))],
+                    Vec::new(),
+                    None,
+                ),
+                s_return(e_var("document")),
+            ]))
+        .build()
 }
 
 /// Prepends the Termwind DOM HTML prelude when the program names a DOM class.

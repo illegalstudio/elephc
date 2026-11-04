@@ -16,7 +16,7 @@ function __elephc_simplexml_file_handle(string $filename, int $options, string $
     $nul = strpos($filename, "\0");
     if ($nul !== false) { $filename = substr($filename, 0, intval($nul)); }
     if (str_contains($filename, '%00')) {
-        __elephc_simplexml_warning('Warning: ' . $caller . ': URI must not contain percent-encoded NUL bytes' . "\n");
+        __elephc_simplexml_warn('Warning: ' . $caller . ': URI must not contain percent-encoded NUL bytes' . "\n");
         return elephc_xml_sx_load_stream($filename, '', -1, $options, $ns, (int)$prefix);
     }
     $separator = strpos($filename, '://');
@@ -60,7 +60,7 @@ function __elephc_simplexml_stream_bytes(string $uri, string $caller): string|fa
     }
     if ($scheme === 'compress.zlib' || $scheme === 'compress.bzip2') { return false; }
     if (!in_array($scheme, stream_get_wrappers(), true)) {
-        __elephc_simplexml_warning('Warning: ' . $caller . ': Unable to find the wrapper "' . $scheme . '" - did you forget to enable it when you configured PHP?' . "\n");
+        __elephc_simplexml_warn('Warning: ' . $caller . ': Unable to find the wrapper "' . $scheme . '" - did you forget to enable it when you configured PHP?' . "\n");
         return false;
     }
     if (!file_exists($uri)) { return false; }
@@ -72,7 +72,7 @@ function __elephc_simplexml_stream_bytes(string $uri, string $caller): string|fa
 function __elephc_simplexml_data_failure(string $uri, string $caller, string $reason): false {
     $function = substr($caller, 0, strlen($caller) - 2);
     $prefix = $reason === 'operation failed' ? '' : 'rfc2397: ';
-    __elephc_simplexml_warning('Warning: ' . $function . '(' . $uri . '): Failed to open stream: ' . $prefix . $reason . "\n");
+    __elephc_simplexml_warn('Warning: ' . $function . '(' . $uri . '): Failed to open stream: ' . $prefix . $reason . "\n");
     return false;
 }
 
@@ -133,8 +133,8 @@ function __elephc_simplexml_filter_bytes(string $uri, string $caller): string|fa
                         if (fnmatch($pattern, $filter)) { $known = true; }
                     }
                     $reason = $known ? 'Unable to create or locate filter "' : 'Unable to locate filter "';
-                    __elephc_simplexml_warning('Warning: ' . $caller . ': ' . $reason . $filter . '"' . "\n");
-                    __elephc_simplexml_warning('Warning: ' . $caller . ': Unable to create filter (' . $filter . ')' . "\n");
+                    __elephc_simplexml_warn('Warning: ' . $caller . ': ' . $reason . $filter . '"' . "\n");
+                    __elephc_simplexml_warn('Warning: ' . $caller . ': Unable to create filter (' . $filter . ')' . "\n");
                 }
             }
         }

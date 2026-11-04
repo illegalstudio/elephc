@@ -167,3 +167,17 @@ echo $node - 1, ':', $node * 2, ':', $node / 4, ':', $node % 3, ':', $node ** 2;
     assert_eq!(out.stdout, "integer:4|double:4.5|integer:1|integer:13|integer:1|double:1001|99:2:2.5:3.5|7:16:2:2:64");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A `simplexml_load_string()` result keeps PHP's `SimpleXMLElement|false` type, and both
+/// dimension and property-array writes must still target its object branch.
+#[test]
+fn test_simplexml_factory_union_dimension_and_property_array_writes() {
+    if skip_without_xml_native("test_simplexml_factory_union_dimension_and_property_array_writes") { return; }
+    let out = compile_and_run(r###"<?php
+$xml = simplexml_load_string('<r><a x="1"/></r>');
+$xml['id'] = '3';
+$xml->a['x'] = '2';
+echo (string)$xml['id'], ':', (string)$xml->a['x'], "\n";
+"###);
+    assert_eq!(out, "3:2\n");
+}

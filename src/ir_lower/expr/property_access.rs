@@ -116,6 +116,107 @@ pub(crate) fn lower_ref_assign_property(
         return;
     };
     let object = lower_expr(ctx, object);
+    // SimpleXML properties are views into the document tree, not shared reference cells.
+    // PHP seeds the new reference with the (auto-vivified) child view, so writes through
+    // `$ref` replace only that independent cell and leave the XML tree untouched.
+    if reference_targets_native_xml_property(ctx, object.value, property) {
+        lower_native_xml_property_reference(ctx, target, object, property, source, span);
+        return;
+    }
+    bind_property_reference_cell(ctx, target, object, property, source, span);
+}
+
+/// Returns whether a property reference must follow the native XML selection protocol.
+///
+/// A concrete SimpleXML receiver is decided statically. An erased or opaque receiver is
+/// decided at run time by `lower_native_xml_property_reference`: ordinary objects keep the
+/// shared property cell, while XML views take an independent value cell.
+fn reference_targets_native_xml_property(
+    ctx: &LoweringContext<'_, '_>, object: crate::ir::ValueId, property: &str,
+) -> bool {
+    if property.starts_with("__elephc_") || !ctx.classes.contains_key("SimpleXMLElement") {
+        return false;
+    }
+    let ty = ctx.builder.value_php_type(object).codegen_repr();
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) || is_opaque_property_object(ctx, &ty) {
+        return true;
+    }
+    singular_object_class(&ty).is_some_and(|(class, _)|
+        crate::types::builtin_classes::native_property_method(
+            class, property, elephc_builtin_contract::ObjectProperty::ReferenceSelect, ctx.classes,
+        ).is_some())
+}
+
+/// Binds the target to the XML reference selection or to the ordinary shared property cell.
+fn lower_native_xml_property_reference(
+    ctx: &mut LoweringContext<'_, '_>, target: &str, object: LoweredValue,
+    property: &str, source: &Expr, span: Span,
+) {
+    let method = elephc_builtin_contract::lookup_class("SimpleXMLElement")
+        .and_then(|class| class.operators)
+        .and_then(|operators| operators.property_method(
+            elephc_builtin_contract::ObjectProperty::ReferenceSelect))
+        .expect("native XML reference adapter is catalogued");
+    let name = Expr::new(ExprKind::StringLiteral(property.into()), source.span);
+    if native_property_method_for_value(
+        ctx, object.value, property, elephc_builtin_contract::ObjectProperty::ReferenceSelect,
+    ).is_some() {
+        let value = lower_method_call_with_receiver_direct(
+            ctx, object, method, &[name], Op::MethodCall, source,
+        );
+        bind_independent_property_reference(ctx, target, value, span);
+        return;
+    }
+    // -- erased receiver: keep ordinary objects on their shared cell and give XML a value cell --
+    let (object, owner) = root_owned_call_operand(ctx, object, span);
+    let class = ctx.intern_class_name("SimpleXMLElement");
+    let condition = ctx.emit_value(Op::InstanceOf, vec![object.value],
+        Some(Immediate::Data(class)), PhpType::Bool,
+        Op::InstanceOf.default_effects(), Some(span));
+    let initial = ctx.initialized_slots_snapshot();
+    let native = ctx.builder.create_named_block("xml.property_reference", Vec::new());
+    let regular = ctx.builder.create_named_block("xml.property_reference.fallback", Vec::new());
+    let merge = ctx.builder.create_named_block("xml.property_reference.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: condition.value,
+        then_target: native,
+        then_args: Vec::new(),
+        else_target: regular,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(native);
+    let receiver = borrow_native_xml_property_receiver(ctx, object, span);
+    let value = lower_method_call_with_receiver_direct(
+        ctx, receiver, method, &[name], Op::MethodCall, source,
+    );
+    bind_independent_property_reference(ctx, target, value, span);
+    branch_to(ctx, merge);
+    let native_initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(regular);
+    ctx.restore_initialized_slots(initial.clone());
+    bind_property_reference_cell(ctx, target, object, property, source, span);
+    branch_to(ctx, merge);
+    let regular_initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &initial, native_initialized, true, regular_initialized, true,
+    ));
+    if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, span); }
+}
+
+/// Seeds an independent managed reference cell with the selected XML view.
+fn bind_independent_property_reference(
+    ctx: &mut LoweringContext<'_, '_>, target: &str, value: LoweredValue, span: Span,
+) {
+    store_value_into_temp(ctx, target, PhpType::Mixed, value, span);
+    ctx.promote_local_ref_cell(target, Some(span));
+}
+
+/// Binds the target to the object's shared reference-property cell.
+fn bind_property_reference_cell(
+    ctx: &mut LoweringContext<'_, '_>, target: &str, object: LoweredValue,
+    property: &str, source: &Expr, span: Span,
+) {
     let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
     let owns_cell = match ctx.builder.value_php_type(object.value).codegen_repr() {
         PhpType::Object(class) => {

@@ -101,12 +101,23 @@ fn name_is_xml_function(name: &Name) -> bool {
         .any(|candidate| crate::name_resolver::is_additional_global_symbol(name, candidate))
 }
 
+/// Returns whether one literal class name (optionally leading `\`) names an XML class.
+fn class_string_is_xml(value: &str) -> bool {
+    let name = value.trim_start_matches('\\');
+    xml_classes().iter().any(|candidate| name.eq_ignore_ascii_case(candidate))
+}
+
 /// Returns whether a resolved name is an XML module class: the seeded global the
 /// resolver bound it to, or the bare single-segment spelling at a class-name position the
 /// resolver leaves as written (a variadic parameter's element type, a `::class` or scoped
 /// constant receiver). Class names are case-insensitive, but a name with namespace segments
 /// is unrelated to the global surface.
 fn name_is_xml_class(name: &Name) -> bool {
+    if matches!(name.parts.as_slice(), [namespace, class_name]
+        if namespace.eq_ignore_ascii_case("Dom") && class_name.eq_ignore_ascii_case("XMLDocument"))
+    {
+        return true;
+    }
     xml_classes().iter().any(|candidate| {
         crate::name_resolver::is_additional_global_symbol(name, candidate)
             || matches!(name.parts.as_slice(), [bare] if bare.eq_ignore_ascii_case(candidate))
@@ -213,9 +224,9 @@ impl Detector {
         match target {
             CallableTarget::Function(name) => name_is_xml_function(name),
             CallableTarget::StaticMethod { receiver, method } =>
-                (method.eq_ignore_ascii_case("loadXML") && self.dom.may_load_static(receiver)) || receiver_refs_xml(receiver),
+                ((method.eq_ignore_ascii_case("loadXML") || method.eq_ignore_ascii_case("load")) && self.dom.may_load_static(receiver)) || receiver_refs_xml(receiver),
             CallableTarget::Method { object, method } => {
-                (method.eq_ignore_ascii_case("loadXML") && self.dom.may_load_xml(object)) || self.expr_refs_xml(object)
+                ((method.eq_ignore_ascii_case("loadXML") || method.eq_ignore_ascii_case("load")) && self.dom.may_load_xml(object)) || self.expr_refs_xml(object)
             },
         }
     }
@@ -318,7 +329,10 @@ impl Detector {
             // `xmlwriter_open_memory()` mint the objects, so a program may parse or write
             // without ever naming a class.
             ExprKind::FunctionCall { name, args } => {
-                name_is_xml_function(name) || self.callback_call_refs_xml(name, args) || args.iter().any(|value| self.expr_refs_xml(value))
+                name_is_xml_function(name)
+                    || self.callback_call_refs_xml(name, args)
+                    || self.stream_wrapper_refs_xml(name, args)
+                    || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::ClosureCall { args, .. } => args.iter().any(|value| self.expr_refs_xml(value)),
             ExprKind::ArrayLiteral(items) => {
@@ -362,7 +376,9 @@ impl Detector {
                 self.expr_refs_xml(callee) || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::NewObject { class_name, args } => {
-                name_is_xml_class(class_name) || self.reflection_constructor_refs_xml(class_name, args)
+                name_is_xml_class(class_name)
+                    || self.reflection_constructor_refs_xml(class_name, args)
+                    || self.reflection_class_refs_xml(class_name, args)
                     || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::NewGeneric { class_type, args } => {
@@ -392,12 +408,12 @@ impl Detector {
             }
             ExprKind::StaticPropertyAccess { receiver, .. } => receiver_refs_xml(receiver),
             ExprKind::MethodCall { object, method, args, .. } => {
-                (method.eq_ignore_ascii_case("loadXML") && self.dom.may_load_xml(object))
+                ((method.eq_ignore_ascii_case("loadXML") || method.eq_ignore_ascii_case("load")) && self.dom.may_load_xml(object))
                     || self.reflection_lookup_refs_xml(object, method, args)
                     || self.expr_refs_xml(object) || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::NullsafeMethodCall { object, method, args, .. } => {
-                (method.eq_ignore_ascii_case("loadXML") && self.dom.may_load_xml(object))
+                ((method.eq_ignore_ascii_case("loadXML") || method.eq_ignore_ascii_case("load")) && self.dom.may_load_xml(object))
                     || self.reflection_lookup_refs_xml(object, method, args)
                     || self.expr_refs_xml(object) || self.optional_args_refs_xml(args)
             }
@@ -413,7 +429,7 @@ impl Detector {
                 result
             },
             ExprKind::StaticMethodCall { receiver, method, args } => {
-                (method.eq_ignore_ascii_case("loadXML") && self.dom.may_load_static(receiver))
+                ((method.eq_ignore_ascii_case("loadXML") || method.eq_ignore_ascii_case("load")) && self.dom.may_load_static(receiver))
                     || receiver_refs_xml(receiver) || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::FirstClassCallable(target) => self.callable_target_refs_xml(target),

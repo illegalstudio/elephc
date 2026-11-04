@@ -11,7 +11,7 @@
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
-use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 use super::assignment_targets::{AssignmentExpressionLowerer, is_assignment_expression_target};
 use super::pratt::{AssignmentOperator, assignment_bp, parse_expr_bp};
@@ -115,24 +115,42 @@ pub(super) fn parse_append_write(
 /// The operation that writes a newly appended element, never an existing array value.
 enum AppendUpdate { Assign, Compound(BinOp), PreIncrement, PostIncrement }
 
-/// Finds a property chain rooted in an implicit null append, never an ordinary assignment result.
-fn null_append_property_chain(target: &Expr) -> Option<(&Expr, Vec<Expr>)> {
+/// One selector between an appended element and the property write that consumes it.
+enum AppendChainStep {
+    /// A named `->property` member.
+    Property(String),
+    /// A computed `->{expr}` member.
+    DynamicProperty(Expr),
+    /// A `[expr]` dimension.
+    Index(Expr),
+}
+
+/// Finds a property/dimension chain rooted in an implicit null append.
+///
+/// The chain may include indexed members (`$x[]->a[0]->b`) because PHP autovivifies each
+/// step on the value the append just produced. A chain that is only read is rejected by
+/// the caller; this helper deliberately does not assign a type to the append result.
+fn null_append_property_chain(target: &Expr) -> Option<(&Expr, Vec<AppendChainStep>)> {
     let mut receiver = target;
-    let mut properties = Vec::new();
+    let mut steps = Vec::new();
     loop {
         match &receiver.kind {
             ExprKind::PropertyAccess { object, property } => {
-                properties.push(Expr::new(ExprKind::StringLiteral(property.clone()), receiver.span));
+                steps.push(AppendChainStep::Property(property.clone()));
                 receiver = object;
             }
             ExprKind::DynamicPropertyAccess { object, property } => {
-                properties.push(*property.clone());
+                steps.push(AppendChainStep::DynamicProperty((**property).clone()));
                 receiver = object;
+            }
+            ExprKind::ArrayAccess { array, index } => {
+                steps.push(AppendChainStep::Index((**index).clone()));
+                receiver = array;
             }
             ExprKind::Assignment { target, .. } if matches!(&target.kind,
                 ExprKind::Variable(name) if name.starts_with("__elephc_append_property_null_")) => {
-                properties.reverse();
-                return (!properties.is_empty()).then_some((receiver, properties));
+                steps.reverse();
+                return (!steps.is_empty()).then_some((receiver, steps));
             }
             _ => return None,
         }
@@ -150,24 +168,137 @@ pub(super) fn is_null_append_receiver(target: &Expr) -> bool {
         ExprKind::Variable(name) if name.starts_with("__elephc_append_property_null_")))
 }
 
-/// Preserves receiver, selector and RHS effects before appending null and throwing PHP's Error.
-/// A deeper property chain fails while modifying its first property, not at its final member.
+/// A chain step whose computed selector has been captured into a compiler local.
+enum BoundAppendStep {
+    Property(String),
+    DynamicProperty(Expr),
+    Index(Expr),
+}
+
+/// Binds one selector before the append so its side effects precede the new child.
+fn bind_append_selector(prelude: &mut Vec<Stmt>, value: Expr, span: Span, index: usize) -> Expr {
+    let name = crate::names::generated_local_name(&format!(
+        "__elephc_append_property_selector_{}_{}_{}", span.line, span.col, index,
+    ));
+    prelude.push(Stmt::new(StmtKind::Assign { name: name.clone(), value }, span));
+    Expr::new(ExprKind::Variable(name), span)
+}
+
+/// Builds a globally resolved helper call with a source-independent span.
+fn append_helper_call(name: &str, args: Vec<Expr>) -> Expr {
+    Expr::new(ExprKind::FunctionCall {
+        name: crate::names::Name::from_parts(
+            crate::names::NameKind::FullyQualified, vec![name.to_string()],
+        ),
+        args,
+    }, Span::synthetic())
+}
+
+/// Returns the container expression of the append statement at the end of `statements`.
+fn append_container(statements: &[Stmt]) -> Option<Expr> {
+    statements.iter().rev().find_map(|statement| match &statement.kind {
+        StmtKind::PropertyArrayPush { object, property, .. } => Some(Expr::new(
+            ExprKind::PropertyAccess {
+                object: object.clone(),
+                property: property.clone(),
+            },
+            statement.span,
+        )),
+        StmtKind::ArrayPush { array, .. } => Some(Expr::new(
+            ExprKind::Variable(array.clone()),
+            statement.span,
+        )),
+        StmtKind::StaticPropertyArrayPush { receiver, property, .. } => Some(Expr::new(
+            ExprKind::StaticPropertyAccess {
+                receiver: receiver.clone(),
+                property: property.clone(),
+            },
+            statement.span,
+        )),
+        _ => None,
+    })
+}
+
+/// Selects the element an append just created from its post-append container.
+///
+/// Arrays expose their final key through `array_key_last`; countable objects such as
+/// SimpleXML expose it as `count($container) - 1`. The result is `Mixed` so the caller's
+/// property write decides at run time whether it targets an object or throws PHP's
+/// "on null" Error for an array's appended null.
+fn appended_element(prelude: &mut Vec<Stmt>, container: Expr, span: Span) -> Expr {
+    let is_array = append_helper_call("is_array", vec![container.clone()]);
+    // The guard proves the cast is only evaluated for arrays; spelling it lets the
+    // checker accept `array_key_last` without knowing the runtime container type.
+    let array_view = Expr::new(ExprKind::Cast {
+        target: CastType::Array,
+        expr: Box::new(container.clone()),
+    }, span);
+    let last_key = append_helper_call("array_key_last", vec![array_view]);
+    let count = append_helper_call("count", vec![container.clone()]);
+    let last_index = Expr::new(ExprKind::BinaryOp {
+        left: Box::new(count),
+        op: BinOp::Sub,
+        right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+    }, span);
+    let index = Expr::new(ExprKind::Ternary {
+        condition: Box::new(is_array),
+        then_expr: Box::new(last_key),
+        else_expr: Box::new(last_index),
+    }, span);
+    let selected = append_helper_call("__elephc_append_element", vec![container, index]);
+    let name = crate::names::generated_local_name(&format!(
+        "__elephc_append_property_result_{}_{}", span.line, span.col,
+    ));
+    prelude.push(Stmt::new(StmtKind::Assign { name: name.clone(), value: selected }, span));
+    Expr::new(ExprKind::Variable(name), span)
+}
+
+/// Builds the lvalue that writes through the appended element and the captured chain.
+fn appended_write_target(mut value: Expr, steps: Vec<BoundAppendStep>, span: Span) -> Expr {
+    for step in steps {
+        value = match step {
+            BoundAppendStep::Property(property) => Expr::new(ExprKind::PropertyAccess {
+                object: Box::new(value),
+                property,
+            }, span),
+            BoundAppendStep::DynamicProperty(property) => Expr::new(ExprKind::DynamicPropertyAccess {
+                object: Box::new(value),
+                property: Box::new(property),
+            }, span),
+            BoundAppendStep::Index(index) => Expr::new(ExprKind::ArrayAccess {
+                array: Box::new(value),
+                index: Box::new(index),
+            }, span),
+        };
+    }
+    value
+}
+
+/// Preserves receiver, selector and RHS effects before appending null, then writes through
+/// the appended element.
+///
+/// Arrays append a null element, so the generated write reaches PHP's catchable
+/// "Attempt to ... property ... on null" Error. SimpleXML appends an empty child view, so
+/// the same write autovivifies and stores the requested value. Increment/decrement keeps the
+/// dedicated error path until its prefix/postfix result contract is shared with this helper.
 pub(super) fn lower_null_property_write(target: &Expr, rhs: Option<&Expr>, span: Span) -> Option<Expr> {
-    let (root, properties) = null_append_property_chain(target)?;
+    let (root, steps) = null_append_property_chain(target)?;
     let ExprKind::Assignment { target: marker, prelude: append, .. } = &root.kind else { return None; };
     let ExprKind::Variable(marker_name) = &marker.kind else { return None; };
     let boundary = append.iter().position(|statement| matches!(&statement.kind,
         StmtKind::Assign { name, .. } if name == marker_name))?;
     let mut prelude = append[..boundary].to_vec();
-    let nested = properties.len() > 1;
-    // Use a distinct namespace from the append's own reserved locals.
-    let mut first_property = None;
-    for (index, property) in properties.into_iter().enumerate() {
-        let name = crate::names::generated_local_name(&format!(
-            "__elephc_append_property_selector_{}_{}_{}", span.line, span.col, index,
-        ));
-        prelude.push(Stmt::new(StmtKind::Assign { name: name.clone(), value: property }, span));
-        if index == 0 { first_property = Some(Expr::new(ExprKind::Variable(name), span)); }
+    let mut bound_steps = Vec::with_capacity(steps.len());
+    for (position, step) in steps.into_iter().enumerate() {
+        bound_steps.push(match step {
+            AppendChainStep::Property(property) => BoundAppendStep::Property(property),
+            AppendChainStep::DynamicProperty(property) => {
+                BoundAppendStep::DynamicProperty(bind_append_selector(&mut prelude, property, span, position))
+            }
+            AppendChainStep::Index(index) => {
+                BoundAppendStep::Index(bind_append_selector(&mut prelude, index, span, position))
+            }
+        });
     }
     let rhs_temp = rhs.map(|rhs| {
         let name = crate::names::generated_local_name(&format!(
@@ -177,7 +308,13 @@ pub(super) fn lower_null_property_write(target: &Expr, rhs: Option<&Expr>, span:
         Expr::new(ExprKind::Variable(name), span)
     });
     prelude.extend_from_slice(&append[boundary..]);
-    let action = if nested { "modify" } else if rhs.is_some() { "assign" } else { "increment/decrement" };
+
+    let nested = bound_steps.len() > 1;
+    let first_property = bound_steps.iter().find_map(|step| match step {
+        BoundAppendStep::Property(name) => Some(Expr::new(ExprKind::StringLiteral(name.clone()), span)),
+        BoundAppendStep::DynamicProperty(value) | BoundAppendStep::Index(value) => Some(value.clone()),
+    });
+    let action = if nested { "modify" } else if rhs_temp.is_some() { "assign" } else { "increment/decrement" };
     let message = Expr::new(ExprKind::BinaryOp {
         left: Box::new(Expr::new(ExprKind::BinaryOp {
             left: Box::new(Expr::new(ExprKind::StringLiteral(
@@ -194,21 +331,68 @@ pub(super) fn lower_null_property_write(target: &Expr, rhs: Option<&Expr>, span:
             crate::names::NameKind::FullyQualified, vec!["Error".to_string()],
         ), args: vec![message],
     }, span);
+
+    if let Some(rhs_temp) = rhs_temp {
+        if let Some(container) = append_container(&append[boundary..]) {
+            let is_array = append_helper_call("is_array", vec![container.clone()]);
+            let appended = appended_element(&mut prelude, container, span);
+            let lvalue = appended_write_target(appended, bound_steps, span);
+            if let Ok(store) = crate::parser::stmt::assignment_target_store_stmt(lvalue, rhs_temp.clone(), span) {
+                // Arrays append a null element: release the RHS there before throwing, exactly
+                // like the old dedicated error path. Objects (SimpleXML) write through the new
+                // child view.
+                let then_body = vec![
+                    unset_temp(&rhs_temp, span),
+                    Stmt::new(StmtKind::Throw(error), span),
+                ];
+                prelude.push(Stmt::new(StmtKind::If {
+                    condition: is_array,
+                    then_body,
+                    elseif_clauses: Vec::new(),
+                    else_body: Some(vec![Stmt::new(store, span)]),
+                }, span));
+                return Some(Expr::new(ExprKind::Assignment {
+                    target: Box::new(rhs_temp.clone()),
+                    value: Box::new(rhs_temp),
+                    result_target: None,
+                    prelude,
+                    conditional_value_temp: None,
+                }, span));
+            }
+        }
+        prelude.push(unset_temp(&rhs_temp, span));
+        let throw = Expr::new(ExprKind::Throw(Box::new(error)), span);
+        let dummy_name = crate::names::generated_local_name(&format!(
+            "__elephc_append_property_unreachable_{}_{}", span.line, span.col,
+        ));
+        let dummy = Expr::new(ExprKind::Variable(dummy_name), span);
+        return Some(Expr::new(ExprKind::Assignment {
+            target: Box::new(dummy.clone()),
+            value: Box::new(throw),
+            result_target: None,
+            prelude,
+            conditional_value_temp: None,
+        }, span));
+    }
+
     let error_name = crate::names::generated_local_name(&format!(
         "__elephc_append_property_error_{}_{}", span.line, span.col,
     ));
     prelude.push(Stmt::new(StmtKind::Assign { name: error_name.clone(), value: error }, span));
-    if let Some(rhs_temp) = rhs_temp {
-        prelude.push(Stmt::new(StmtKind::ExprStmt(Expr::new(ExprKind::FunctionCall {
-            name: crate::names::Name::unqualified("unset"), args: vec![rhs_temp],
-        }, span)), span));
-    }
     let error = Expr::new(ExprKind::Variable(error_name), span);
     let error = Expr::new(ExprKind::Assignment {
         target: Box::new(error.clone()), value: Box::new(error), result_target: None,
         prelude, conditional_value_temp: None,
     }, span);
     Some(Expr::new(ExprKind::Throw(Box::new(error)), span))
+}
+
+/// Releases one compiler temporary before a catchable append-property error.
+fn unset_temp(value: &Expr, span: Span) -> Stmt {
+    Stmt::new(StmtKind::ExprStmt(Expr::new(ExprKind::FunctionCall {
+        name: crate::names::Name::unqualified("unset"),
+        args: vec![value.clone()],
+    }, span)), span)
 }
 
 /// Builds nested containers and the expression result using reserved compiler locals.
