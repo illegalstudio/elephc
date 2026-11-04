@@ -49,16 +49,12 @@ use super::base64_decode_len_sink::Base64DecodeLenSink;
 use super::mb_catalog_count_sink::MbCatalogCountSink;
 use super::mb_detect_order_single_sink::MbDetectOrderSingleSink;
 use super::mb_numericentity_len_sink::MbNumericentityLenSink;
-use super::ereg_search_array_result_sink::EregSearchArrayResultSink;
-use super::ereg_search_literal_state_sink::EregSearchLiteralStateSink;
 use super::gz_len_hoist::GzLenHoist;
 use super::gz_literal_roundtrip_len_sink::GzLiteralRoundtripLenSink;
 use super::hash_algos_count_hoist::HashAlgosCountHoist;
 use super::hash_const_sink::HashConstSink;
-use super::iconv_get_encoding_len_sink::IconvGetEncodingLenSink;
 use super::iconv_mime_literal_sink::IconvMimeLiteralSink;
 use super::iconv_position_const_sink::IconvPositionConstSink;
-use super::mb_convert_variables_len_sink::MbConvertVariablesLenSink;
 use super::mb_parse_str_literal_sink::MbParseStrLiteralSink;
 use super::mb_strlen_const_local_sink::MbStrlenConstLocalSink;
 use super::openssl_cbc_len_sink::OpensslCbcLenSink;
@@ -196,16 +192,12 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(CountCharsCountSink),
         Box::new(MbCatalogCountSink),
         Box::new(MbDetectOrderSingleSink),
-        Box::new(EregSearchArrayResultSink),
-        Box::new(EregSearchLiteralStateSink),
         Box::new(GzLiteralRoundtripLenSink),
         Box::new(GzLenHoist),
         Box::new(HashAlgosCountHoist),
         Box::new(HashConstSink),
-        Box::new(IconvGetEncodingLenSink),
         Box::new(IconvMimeLiteralSink),
         Box::new(IconvPositionConstSink),
-        Box::new(MbConvertVariablesLenSink),
         Box::new(MbParseStrLiteralSink),
         Box::new(MbStrlenConstLocalSink),
         Box::new(OpensslCbcLenSink),

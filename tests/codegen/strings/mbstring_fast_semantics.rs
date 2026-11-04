@@ -168,9 +168,49 @@ echo count(mb_split("@", "a@b")), "|", count(mb_split("@", "©@x")), "\n";
 ini_set("mbstring.regex_retry_limit", "1");
 set_error_handler(function ($number, $message) { echo "warning|"; return true; });
 echo strlen(mb_ereg_replace("[0-9]+", "#", "1234")), "\n";
+mb_ereg_search_init("1234", "[0-9]+");
+echo mb_ereg_search() ? "1" : "0", "\n";
 ini_restore("mbstring.regex_retry_limit");
 try { echo count(mb_split("@", "\xff")); }
 catch (TypeError $e) { echo "count-error\n"; }
 restore_error_handler();
-"##, "4|4|1\n1|2|2\nwarning|0\ncount-error\n");
+"##, "4|4|1\n1|2|2\nwarning|0\nwarning|0\ncount-error\n");
+}
+
+/// Callees retain progressive mutations and read encoding settings established by their caller.
+#[test]
+fn test_mb_fast_semantics_caller_session_state() {
+    assert_mb_fast_cli_semantics(r#"<?php
+function inactiveGlobalProbe(): int { return 0; }
+function callbackProgressivePosition(): int {
+    mb_ereg_search_init("abc123", "[0-9]+"); mb_ereg_search();
+    return mb_ereg_search_getpos();
+}
+function callbackProgressiveArray(): int {
+    mb_ereg_search_init("abc123", "[0-9]+"); $r=mb_ereg_search_pos();
+    return $r[0];
+}
+function callbackIconvWidth(): int { return strlen((string)iconv_get_encoding("internal_encoding")); }
+mb_ereg_search_init("seed00777", "[0-9]+"); mb_ereg_search();
+$callback=$argc>0?"callbackProgressivePosition":"inactiveGlobalProbe";
+echo call_user_func($callback),"|",mb_ereg_search_getpos(),"\n";
+mb_ereg_search_init("seed00777", "[0-9]+"); mb_ereg_search();
+$callback=$argc>0?"callbackProgressiveArray":"inactiveGlobalProbe";
+echo call_user_func($callback),"|",mb_ereg_search_getpos(),"\n";
+set_error_handler(function($n,$m){return true;});
+iconv_set_encoding("internal_encoding", "ISO-8859-1");
+restore_error_handler();
+$callback=$argc>0?"callbackIconvWidth":"inactiveGlobalProbe";
+echo call_user_func($callback),"\n";
+"#, "6|6\n3|6\n10\n");
+}
+
+/// Unobserved converted arrays can still update the request's illegal-character count.
+#[test]
+fn test_mb_fast_semantics_conversion_state() {
+    assert_mb_fast_semantics(r#"<?php
+$items = ["\xff"];
+echo strlen((string)mb_convert_variables("UTF-8", "UTF-8", $items)), "|";
+echo mb_get_info("illegal_chars"), "\n";
+"#, "5|1\n");
 }

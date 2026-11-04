@@ -789,7 +789,11 @@ shortcuts additionally check live UTF-8/default options and limits, plus ASCII s
 using byte scans; other states retain the full regex bridge. Explicit UTF-8 iconv
 position and MIME length folds retain their encoding proof. MIME words with interior
 Base64 padding keep the runtime decoder, whose lenient decoding differs from
-independent padded-quantum decoding.
+independent padded-quantum decoding. Progressive regex sessions and implicit iconv
+encoding getters also retain runtime calls: a function-local absence of setters
+cannot prove caller state or make session mutations unobservable to its caller.
+Likewise, an unobserved `mb_convert_variables()` array does not hide its updates
+to the request's illegal-character counter.
 
 The `count(explode($literal_separator, $subject))` fusion accepts only proven scalar
 string coercions. Other subjects keep the original `explode()` path and diagnostic;
