@@ -8,6 +8,10 @@
 //! - Functions are built with `crate::ir::Builder` so the tests exercise the
 //!   real IR data model without going through AST lowering.
 
+mod array_fill_loop_test;
+mod array_map_sum_add_int_sink_test;
+mod array_get_bounds_test;
+mod array_sum_loop_test;
 mod branch_simplify_test;
 mod borrowed_receiver_roots_test;
 mod boxed_narrowing_test;
@@ -18,12 +22,20 @@ mod buffer_access_test;
 mod buffer_property_reuse_test;
 mod buffer_property_loops_test;
 mod buffer_object_loops_test;
+mod abs_int_sink_test;
+mod json_decode_count_sink_test;
+mod json_encode_len_sink_test;
+mod sqrt_add_int_sink_test;
+mod strpos_int_sink_test;
+mod array_sum_int_direct_test;
+mod array_sum_int_sink_test;
 mod checked_int_sink_test;
 mod checked_int_sink_bound_test;
 mod checked_numeric_chain_test;
 mod clobber_test;
 mod concat_reset_test;
 mod const_fold_test;
+mod count_hoist_test;
 mod cse_test;
 mod dead_inst_test;
 mod dead_store_test;

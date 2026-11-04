@@ -11,7 +11,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
-use crate::ir::Instruction;
+use crate::ir::{Immediate, Instruction, Op, ValueDef};
 use crate::types::PhpType;
 
 use super::super::super::super::context::FunctionContext;
@@ -29,6 +29,13 @@ pub(crate) fn lower_intdiv(
     let done_label = ctx.next_label("intdiv_done");
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
+    // A nonzero literal divisor other than -1 can never raise intdiv()'s zero-divisor
+    // ArithmeticError or its `INT_MIN / -1` overflow, so the cold checks disappear.
+    if let Some(divisor) = literal_int_operand(ctx, rhs) {
+        if divisor != 0 && divisor != -1 {
+            return lower_intdiv_constant(ctx, lhs, divisor, inst);
+        }
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_numeric_as_int(ctx, lhs, "intdiv")?;
@@ -61,6 +68,44 @@ pub(crate) fn lower_intdiv(
     emit_intdiv_overflow_throw(ctx);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
+}
+
+/// Lowers `intdiv()` with a literal divisor that cannot trigger either cold error path.
+fn lower_intdiv_constant(
+    ctx: &mut FunctionContext<'_>,
+    lhs: crate::ir::ValueId,
+    divisor: i64,
+    inst: &Instruction,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_numeric_as_int(ctx, lhs, "intdiv")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x1", divisor);          // materialize the literal divisor after loading the dividend
+            ctx.emitter.instruction("sdiv x0, x0, x1");                         // divide the dividend by the proven-safe literal divisor
+        }
+        Arch::X86_64 => {
+            load_numeric_as_int(ctx, lhs, "intdiv")?;
+            abi::emit_load_int_immediate(ctx.emitter, "r11", divisor);         // materialize the literal divisor after loading the dividend
+            ctx.emitter.instruction("cqo");                                     // sign-extend the dividend across rdx:rax
+            ctx.emitter.instruction("idiv r11");                                // divide by the proven-safe literal divisor
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Returns the literal integer an operand was defined with, when it is a `const_i64`.
+fn literal_int_operand(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Option<i64> {
+    let ValueDef::Instruction { inst, .. } = ctx.function.value(value)?.def else {
+        return None;
+    };
+    let definition = ctx.function.instruction(inst)?;
+    if definition.op != Op::ConstI64 {
+        return None;
+    }
+    match definition.immediate {
+        Some(Immediate::I64(literal)) => Some(literal),
+        _ => None,
+    }
 }
 
 /// Lowers `fdiv()` for concrete integer-like and floating operands.
@@ -241,7 +286,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
                 "mov r10, QWORD PTR [rip + _spl_arithmetic_error_class_id]"
             );                                                                  // load ArithmeticError's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the ArithmeticError class id in the Throwable header
-            ctx.emitter.instruction(&format!("lea r10, [rip + {}]", msg_label));// materialize the static ArithmeticError message pointer
+            ctx.emitter.instruction(&format!("lea r10, [rip + {}]", msg_label)); // materialize the static ArithmeticError message pointer
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the static ArithmeticError message pointer
             ctx.emitter.instruction(
                 &format!("mov QWORD PTR [rax + 16], {}", msg_len)

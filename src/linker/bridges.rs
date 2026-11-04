@@ -125,6 +125,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_openssl",
+        env_var: "ELEPHC_OPENSSL_BRIDGE_LIB_DIR",
+        crate_name: "elephc-openssl",
+        flag_name: "openssl",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The cipher bridge implements PHP's OpenSSL cipher catalog and EVP path.
+        php_extensions: &["openssl"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_bcmath",
         env_var: "ELEPHC_BCMATH_LIB_DIR",
         crate_name: "elephc-bcmath",

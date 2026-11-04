@@ -162,6 +162,57 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("cmn x2, #1");                                          // is this an integer key?
     emitter.instruction("b.eq __rt_json_assoc_key_int");                        // branch on the current JSON object encoder condition
 
+    // -- short plain-ASCII key fast path --
+    // With no active flags, a short key made only of printable ASCII (excluding quote,
+    // backslash and slash) can be written directly at the cursor with its two quotes. This
+    // skips the string encoder and the append copy for the common `{"name":...}` shape.
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x9", "_json_active_flags", 0);
+    emitter.instruction("cbnz x9, __rt_json_assoc_key_slow");                   // any active flag needs the escaping encoder
+    emitter.instruction("cmp x2, #8");                                          // only short keys use the direct copy
+    emitter.instruction("b.hi __rt_json_assoc_key_slow");                       // longer keys keep the general encoder
+    emitter.instruction("mov x12, #0");                                         // initialize the plain-ASCII key scan
+    emitter.label("__rt_json_assoc_key_fast_scan");
+    emitter.instruction("cmp x12, x2");                                         // has every key byte been classified?
+    emitter.instruction("b.ge __rt_json_assoc_key_fast_write");                 // yes: the key is plain ASCII
+    emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next key byte
+    emitter.instruction("sub w14, w13, #32");                                   // rebase printable ASCII 0x20..0x7E onto 0..94
+    emitter.instruction("cmp w14, #95");                                        // control bytes, DEL and UTF-8 bytes need the general encoder
+    emitter.instruction("b.hs __rt_json_assoc_key_slow");                       // fall back for non-printable bytes
+    emitter.instruction("cmp w13, #34");                                        // double quotes need escaping
+    emitter.instruction("b.eq __rt_json_assoc_key_slow");                       // fall back for the quote byte
+    emitter.instruction("cmp w13, #92");                                        // backslashes need escaping
+    emitter.instruction("b.eq __rt_json_assoc_key_slow");                       // fall back for the backslash byte
+    emitter.instruction("cmp w13, #47");                                        // PHP escapes slashes by default
+    emitter.instruction("b.eq __rt_json_assoc_key_slow");                       // fall back for the slash byte
+    emitter.instruction("add x12, x12, #1");                                    // advance the plain-ASCII key scan
+    emitter.instruction("b __rt_json_assoc_key_fast_scan");                     // inspect the next key byte
+
+    emitter.label("__rt_json_assoc_key_fast_write");
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("add x1, x2, #2");                                      // reserve the two quotes and the copied key bytes
+    emitter.instruction("bl __rt_json_buf_ensure");                             // x11 = cursor with the key window available
+    emitter.instruction("mov w12, #34");                                        // ASCII double quote
+    emitter.instruction("strb w12, [x11]");                                     // write the opening key quote
+    emitter.instruction("add x11, x11, #1");                                    // advance past the opening quote
+    emitter.instruction("ldr x1, [sp, #48]");                                   // reload the key pointer after the reservation
+    emitter.instruction("ldr x2, [sp, #56]");                                   // reload the key length after the reservation
+    emitter.instruction("mov x12, #0");                                         // initialize the key copy index
+    emitter.label("__rt_json_assoc_key_fast_copy");
+    emitter.instruction("cmp x12, x2");                                         // have we copied every key byte?
+    emitter.instruction("b.ge __rt_json_assoc_key_fast_close");                 // finish with the closing quote
+    emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next key byte
+    emitter.instruction("strb w13, [x11, x12]");                                // copy it directly to the cursor
+    emitter.instruction("add x12, x12, #1");                                    // advance the key copy index
+    emitter.instruction("b __rt_json_assoc_key_fast_copy");                     // copy the remaining key bytes
+    emitter.label("__rt_json_assoc_key_fast_close");
+    emitter.instruction("add x11, x11, x2");                                    // address the byte after the copied key
+    emitter.instruction("mov w12, #34");                                        // ASCII double quote
+    emitter.instruction("strb w12, [x11]");                                     // write the closing key quote
+    emitter.instruction("add x11, x11, #1");                                    // advance past the closing quote
+    emitter.instruction("str x11, [sp, #136]");                                 // publish the advanced output cursor
+    emitter.instruction("b __rt_json_assoc_key_colon");                         // continue with the colon separator
+
+    emitter.label("__rt_json_assoc_key_slow");
     // String key: sync _concat_off, encode it, and append the quoted slice. A key too long
     // for the scratch tail comes back as its own transient block, which the append releases.
     emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
@@ -200,10 +251,6 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("str x11, [sp, #136]");                                 // save write pos after emitting the JSON key prefix
 
     emitter.label("__rt_json_assoc_after_key_prefix");
-    // -- move concat_off to the current write position so nested encoders append safely --
-    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
-    emitter.instruction("bl __rt_strbuf_sync");                                 // nested JSON/string encoders must not format over the existing key prefix
-
     // -- encode the value according to its per-entry runtime tag --
     emitter.instruction("ldr x12, [sp, #88]");                                  // load the saved per-entry value_tag
     emitter.instruction("cmp x12, #0");                                         // is this value an integer?
@@ -231,17 +278,91 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("b __rt_json_assoc_value_int");                         // a live address encodes as an integer
 
     emitter.label("__rt_json_assoc_value_int");
-    emitter.instruction("ldr x0, [sp, #64]");                                   // load integer payload from value_lo
-    emitter.instruction("bl __rt_itoa");                                        // encode integer payload as decimal digits
-    emitter.instruction("b __rt_json_assoc_value_copy");                        // copy the encoded value into concat_buf
+    // Format the integer directly at the output cursor: reserve one scalar window, write the
+    // digits backwards into it with `__rt_itoa_into`, then move them onto the cursor. This
+    // avoids the shared itoa scratch, the append copy, and its transient-release checks.
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("mov x1, #21");                                         // reserve a full signed 64-bit decimal window
+    emitter.instruction("bl __rt_json_buf_ensure");                             // x11 = cursor with the scalar window available
+    emitter.instruction("ldr x0, [sp, #64]");                                   // load the integer payload from value_lo
+    emitter.instruction("mov x1, x11");                                         // format into the reserved window at the cursor
+    emitter.instruction("bl __rt_itoa_into");                                   // x0 = first digit, x1 = digit count
+    emitter.instruction("ldr x11, [sp, #136]");                                 // restore the output cursor clobbered by itoa_into
+    emitter.instruction("mov x9, x11");                                         // destination cursor for the shifted digits
+    emitter.instruction("mov x10, x0");                                         // source first digit inside the reserved window
+    emitter.label("__rt_json_assoc_value_int_copy");
+    emitter.instruction("cbz x1, __rt_json_assoc_value_int_done");              // stop once every digit has reached the cursor
+    emitter.instruction("ldrb w12, [x10], #1");                                 // load the next digit from the backwards window
+    emitter.instruction("strb w12, [x9], #1");                                  // store it at the forward output cursor
+    emitter.instruction("sub x1, x1, #1");                                      // account for the shifted digit
+    emitter.instruction("b __rt_json_assoc_value_int_copy");                    // shift the remaining digits
+    emitter.label("__rt_json_assoc_value_int_done");
+    emitter.instruction("str x9, [sp, #136]");                                  // publish the advanced output cursor
+    emitter.instruction("b __rt_json_assoc_value_done");                        // finish this entry without the append copy
 
     emitter.label("__rt_json_assoc_value_str");
+    // -- short plain-ASCII value fast path --
+    // The same direct quoted copy as the key path, applied to the value position. Plain
+    // short strings skip both the escaping encoder and the append copy.
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x9", "_json_active_flags", 0);
+    emitter.instruction("cbnz x9, __rt_json_assoc_value_str_slow");             // any active flag needs the escaping encoder
+    emitter.instruction("ldr x2, [sp, #72]");                                   // load string length from value_hi
+    emitter.instruction("cmp x2, #16");                                         // only short values use the direct copy
+    emitter.instruction("b.hi __rt_json_assoc_value_str_slow");                 // longer values keep the general encoder
+    emitter.instruction("ldr x1, [sp, #64]");                                   // load string pointer from value_lo
+    emitter.instruction("mov x12, #0");                                         // initialize the plain-ASCII value scan
+    emitter.label("__rt_json_assoc_value_str_fast_scan");
+    emitter.instruction("cmp x12, x2");                                         // has every value byte been classified?
+    emitter.instruction("b.ge __rt_json_assoc_value_str_fast_write");           // yes: the value is plain ASCII
+    emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next value byte
+    emitter.instruction("sub w14, w13, #32");                                   // rebase printable ASCII 0x20..0x7E onto 0..94
+    emitter.instruction("cmp w14, #95");                                        // control bytes, DEL and UTF-8 bytes need the general encoder
+    emitter.instruction("b.hs __rt_json_assoc_value_str_slow");                 // fall back for non-printable bytes
+    emitter.instruction("cmp w13, #34");                                        // double quotes need escaping
+    emitter.instruction("b.eq __rt_json_assoc_value_str_slow");                 // fall back for the quote byte
+    emitter.instruction("cmp w13, #92");                                        // backslashes need escaping
+    emitter.instruction("b.eq __rt_json_assoc_value_str_slow");                 // fall back for the backslash byte
+    emitter.instruction("cmp w13, #47");                                        // PHP escapes slashes by default
+    emitter.instruction("b.eq __rt_json_assoc_value_str_slow");                 // fall back for the slash byte
+    emitter.instruction("add x12, x12, #1");                                    // advance the plain-ASCII value scan
+    emitter.instruction("b __rt_json_assoc_value_str_fast_scan");               // inspect the next value byte
+
+    emitter.label("__rt_json_assoc_value_str_fast_write");
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("add x1, x2, #2");                                      // reserve the two quotes and the copied value bytes
+    emitter.instruction("bl __rt_json_buf_ensure");                             // x11 = cursor with the value window available
+    emitter.instruction("mov w12, #34");                                        // ASCII double quote
+    emitter.instruction("strb w12, [x11]");                                     // write the opening value quote
+    emitter.instruction("add x11, x11, #1");                                    // advance past the opening quote
+    emitter.instruction("ldr x1, [sp, #64]");                                   // reload the value pointer after the reservation
+    emitter.instruction("ldr x2, [sp, #72]");                                   // reload the value length after the reservation
+    emitter.instruction("mov x12, #0");                                         // initialize the value copy index
+    emitter.label("__rt_json_assoc_value_str_fast_copy");
+    emitter.instruction("cmp x12, x2");                                         // have we copied every value byte?
+    emitter.instruction("b.ge __rt_json_assoc_value_str_fast_close");           // finish with the closing quote
+    emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next value byte
+    emitter.instruction("strb w13, [x11, x12]");                                // copy it directly to the cursor
+    emitter.instruction("add x12, x12, #1");                                    // advance the value copy index
+    emitter.instruction("b __rt_json_assoc_value_str_fast_copy");               // copy the remaining value bytes
+    emitter.label("__rt_json_assoc_value_str_fast_close");
+    emitter.instruction("add x11, x11, x2");                                    // address the byte after the copied value
+    emitter.instruction("mov w12, #34");                                        // ASCII double quote
+    emitter.instruction("strb w12, [x11]");                                     // write the closing value quote
+    emitter.instruction("add x11, x11, #1");                                    // advance past the closing quote
+    emitter.instruction("str x11, [sp, #136]");                                 // publish the advanced output cursor
+    emitter.instruction("b __rt_json_assoc_value_done");                        // finish this entry without the append copy
+
+    emitter.label("__rt_json_assoc_value_str_slow");
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("bl __rt_strbuf_sync");                                 // move nested formatter scratch past the current cursor
     emitter.instruction("ldr x1, [sp, #64]");                                   // load string pointer from value_lo
     emitter.instruction("ldr x2, [sp, #72]");                                   // load string length from value_hi
     emitter.instruction("bl __rt_json_encode_str");                             // encode string payload with JSON escaping and quotes
     emitter.instruction("b __rt_json_assoc_value_copy");                        // copy the encoded value into concat_buf
 
     emitter.label("__rt_json_assoc_value_float");
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("bl __rt_strbuf_sync");                                 // move nested formatter scratch past the current cursor
     emitter.instruction("ldr x9, [sp, #64]");                                   // load float bits from value_lo
     emitter.instruction("fmov d0, x9");                                         // move float bits into the FP argument register
     emitter.instruction("bl __rt_json_encode_float");                           // encode float payload, rejecting Inf/NaN per JSON semantics
@@ -253,21 +374,29 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("b __rt_json_assoc_value_copy");                        // copy the encoded value into concat_buf
 
     emitter.label("__rt_json_assoc_value_array");
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("bl __rt_strbuf_sync");                                 // move nested formatter scratch past the current cursor
     emitter.instruction("ldr x0, [sp, #64]");                                   // load nested array pointer from value_lo
     emitter.instruction("bl __rt_json_encode_array_dynamic");                   // encode nested indexed arrays through the dynamic array JSON helper
     emitter.instruction("b __rt_json_assoc_value_copy");                        // copy the encoded nested array into concat_buf
 
     emitter.label("__rt_json_assoc_value_assoc");
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("bl __rt_strbuf_sync");                                 // move nested formatter scratch past the current cursor
     emitter.instruction("ldr x0, [sp, #64]");                                   // load nested associative array pointer from value_lo
     emitter.instruction("bl __rt_json_encode_assoc");                           // encode the nested associative array recursively
     emitter.instruction("b __rt_json_assoc_value_copy");                        // copy the encoded nested associative array into concat_buf
 
     emitter.label("__rt_json_assoc_value_object");
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("bl __rt_strbuf_sync");                                 // move nested formatter scratch past the current cursor
     emitter.instruction("ldr x0, [sp, #64]");                                   // load nested object pointer from value_lo
     emitter.instruction("bl __rt_json_encode_object");                          // encode the object via the descriptor walker
     emitter.instruction("b __rt_json_assoc_value_copy");                        // copy the encoded object into concat_buf
 
     emitter.label("__rt_json_assoc_value_mixed");
+    emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
+    emitter.instruction("bl __rt_strbuf_sync");                                 // move nested formatter scratch past the current cursor
     emitter.instruction("ldr x0, [sp, #64]");                                   // load boxed mixed pointer from value_lo
     emitter.instruction("bl __rt_json_encode_mixed");                           // encode the boxed mixed payload recursively
     emitter.instruction("b __rt_json_assoc_value_copy");                        // copy the encoded mixed payload into concat_buf
@@ -279,6 +408,7 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
     emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
     emitter.instruction("bl __rt_json_buf_append");                             // copy the encoded value to the cursor, growing first, and release a transient child buffer
 
+    emitter.label("__rt_json_assoc_value_done");
     // -- increment items written --
     emitter.instruction("ldr x5, [sp, #40]");                                   // load items written
     emitter.instruction("add x5, x5, #1");                                      // increment
@@ -514,6 +644,55 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, -1");                                         // is this an integer key?
     emitter.instruction("je __rt_json_assoc_key_int");                          // branch on the current JSON object encoder condition
 
+    // -- short plain-ASCII key fast path --
+    // With no active flags, a short key made only of printable ASCII (excluding quote,
+    // backslash and slash) can be written directly at the cursor with its two quotes.
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);
+    emitter.instruction("test r10, r10");                                       // any active flag needs the escaping encoder
+    emitter.instruction("jnz __rt_json_assoc_key_slow_x");                      // fall back when a flag is active
+    emitter.instruction("cmp rdx, 8");                                          // only short keys use the direct copy
+    emitter.instruction("ja __rt_json_assoc_key_slow_x");                       // longer keys keep the general encoder
+    emitter.instruction("xor ecx, ecx");                                        // initialize the plain-ASCII key scan
+    emitter.label("__rt_json_assoc_key_fast_scan_x");
+    emitter.instruction("cmp rcx, rdx");                                        // has every key byte been classified?
+    emitter.instruction("jge __rt_json_assoc_key_fast_write_x");                // yes: the key is plain ASCII
+    emitter.instruction("movzx r8d, BYTE PTR [rax + rcx]");                     // load the next key byte
+    emitter.instruction("lea r9d, [r8 - 32]");                                  // rebase printable ASCII 0x20..0x7E onto 0..94
+    emitter.instruction("cmp r9d, 95");                                         // control bytes, DEL and UTF-8 bytes need the general encoder
+    emitter.instruction("jae __rt_json_assoc_key_slow_x");                      // fall back for non-printable bytes
+    emitter.instruction("cmp r8d, 34");                                         // double quotes need escaping
+    emitter.instruction("je __rt_json_assoc_key_slow_x");                       // fall back for the quote byte
+    emitter.instruction("cmp r8d, 92");                                         // backslashes need escaping
+    emitter.instruction("je __rt_json_assoc_key_slow_x");                       // fall back for the backslash byte
+    emitter.instruction("cmp r8d, 47");                                         // PHP escapes slashes by default
+    emitter.instruction("je __rt_json_assoc_key_slow_x");                       // fall back for the slash byte
+    emitter.instruction("add rcx, 1");                                          // advance the plain-ASCII key scan
+    emitter.instruction("jmp __rt_json_assoc_key_fast_scan_x");                 // inspect the next key byte
+
+    emitter.label("__rt_json_assoc_key_fast_write_x");
+    emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
+    emitter.instruction("lea rsi, [rdx + 2]");                                  // reserve the two quotes and the copied key bytes
+    emitter.instruction("call __rt_json_buf_ensure");                           // r11 = cursor with the key window available
+    emitter.instruction("mov BYTE PTR [r11], 34");                              // write the opening key quote
+    emitter.instruction("add r11, 1");                                          // advance past the opening quote
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the key pointer after the reservation
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // reload the key length after the reservation
+    emitter.instruction("xor ecx, ecx");                                        // initialize the key copy index
+    emitter.label("__rt_json_assoc_key_fast_copy_x");
+    emitter.instruction("cmp rcx, rdx");                                        // have we copied every key byte?
+    emitter.instruction("jge __rt_json_assoc_key_fast_close_x");                // finish with the closing quote
+    emitter.instruction("mov r9b, BYTE PTR [rax + rcx]");                       // load the next key byte
+    emitter.instruction("mov BYTE PTR [r11 + rcx], r9b");                       // copy it directly to the cursor
+    emitter.instruction("add rcx, 1");                                          // advance the key copy index
+    emitter.instruction("jmp __rt_json_assoc_key_fast_copy_x");                 // copy the remaining key bytes
+    emitter.label("__rt_json_assoc_key_fast_close_x");
+    emitter.instruction("add r11, rdx");                                        // address the byte after the copied key
+    emitter.instruction("mov BYTE PTR [r11], 34");                              // write the closing key quote
+    emitter.instruction("add r11, 1");                                          // advance past the closing quote
+    emitter.instruction("mov QWORD PTR [rbp - 136], r11");                      // publish the advanced output cursor
+    emitter.instruction("jmp __rt_json_assoc_key_colon");                       // continue with the colon separator
+
+    emitter.label("__rt_json_assoc_key_slow_x");
     // String key: sync _concat_off, encode it, and append the quoted slice. A key too long
     // for the scratch tail comes back as its own transient block, which the append releases.
     emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
@@ -550,8 +729,6 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 136], r11");                      // persist the updated write pointer after emitting the full JSON key prefix
 
     emitter.label("__rt_json_assoc_after_key_prefix");
-    emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
-    emitter.instruction("call __rt_strbuf_sync");                               // nested JSON helpers must not format over the existing key prefix
     emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // reload the saved associative-array runtime value tag for runtime JSON dispatch
     emitter.instruction("cmp r10, 0");                                          // is the associative-array value an integer?
     emitter.instruction("je __rt_json_assoc_value_int");                        // encode integer payloads through the decimal integer helper
@@ -578,17 +755,91 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_assoc_value_int");                       // a live address encodes as an integer
 
     emitter.label("__rt_json_assoc_value_int");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the integer payload from the saved hash-entry low payload word
-    emitter.instruction("call __rt_itoa");                                      // encode the integer payload as a decimal JSON slice
-    emitter.instruction("jmp __rt_json_assoc_value_copy");                      // copy the encoded JSON value slice into concat_buf
+    // Format the integer directly at the output cursor: reserve one scalar window, write the
+    // digits backwards into it with `__rt_itoa_into`, then move them onto the cursor.
+    emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
+    emitter.instruction("mov esi, 21");                                         // reserve a full signed 64-bit decimal window
+    emitter.instruction("call __rt_json_buf_ensure");                           // r11 = cursor with the scalar window available
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // load the integer payload from the saved hash-entry low payload word
+    emitter.instruction("mov rsi, r11");                                        // format into the reserved window at the cursor
+    emitter.instruction("call __rt_itoa_into");                                 // rax = first digit, rdx = digit count
+    emitter.instruction("mov rcx, rax");                                        // source first digit inside the reserved window
+    emitter.instruction("mov r8, QWORD PTR [rbp - 136]");                       // restore the output cursor clobbered by itoa_into
+    emitter.instruction("mov r9, rdx");                                         // remaining digit count
+    emitter.label("__rt_json_assoc_value_int_copy_x");
+    emitter.instruction("test r9, r9");                                         // have every digit reached the cursor?
+    emitter.instruction("jz __rt_json_assoc_value_int_done_x");                 // stop once the shift is complete
+    emitter.instruction("mov al, BYTE PTR [rcx]");                              // load the next digit from the backwards window
+    emitter.instruction("mov BYTE PTR [r8], al");                               // store it at the forward output cursor
+    emitter.instruction("add rcx, 1");                                          // advance the backwards source
+    emitter.instruction("add r8, 1");                                           // advance the forward destination
+    emitter.instruction("sub r9, 1");                                           // account for the shifted digit
+    emitter.instruction("jmp __rt_json_assoc_value_int_copy_x");                // shift the remaining digits
+    emitter.label("__rt_json_assoc_value_int_done_x");
+    emitter.instruction("mov QWORD PTR [rbp - 136], r8");                       // publish the advanced output cursor
+    emitter.instruction("jmp __rt_json_assoc_value_done_x");                    // finish this entry without the append copy
 
     emitter.label("__rt_json_assoc_value_str");
+    // -- short plain-ASCII value fast path --
+    // The same direct quoted copy as the key path, applied to the value position.
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);
+    emitter.instruction("test r10, r10");                                       // any active flag needs the escaping encoder
+    emitter.instruction("jnz __rt_json_assoc_value_str_slow_x");                // fall back when a flag is active
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // load the string length from the saved hash-entry high payload word
+    emitter.instruction("cmp rdx, 16");                                         // only short values use the direct copy
+    emitter.instruction("ja __rt_json_assoc_value_str_slow_x");                 // longer values keep the general encoder
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the string pointer from the saved hash-entry low payload word
+    emitter.instruction("xor ecx, ecx");                                        // initialize the plain-ASCII value scan
+    emitter.label("__rt_json_assoc_value_str_fast_scan_x");
+    emitter.instruction("cmp rcx, rdx");                                        // has every value byte been classified?
+    emitter.instruction("jge __rt_json_assoc_value_str_fast_write_x");          // yes: the value is plain ASCII
+    emitter.instruction("movzx r8d, BYTE PTR [rax + rcx]");                     // load the next value byte
+    emitter.instruction("lea r9d, [r8 - 32]");                                  // rebase printable ASCII 0x20..0x7E onto 0..94
+    emitter.instruction("cmp r9d, 95");                                         // control bytes, DEL and UTF-8 bytes need the general encoder
+    emitter.instruction("jae __rt_json_assoc_value_str_slow_x");                // fall back for non-printable bytes
+    emitter.instruction("cmp r8d, 34");                                         // double quotes need escaping
+    emitter.instruction("je __rt_json_assoc_value_str_slow_x");                 // fall back for the quote byte
+    emitter.instruction("cmp r8d, 92");                                         // backslashes need escaping
+    emitter.instruction("je __rt_json_assoc_value_str_slow_x");                 // fall back for the backslash byte
+    emitter.instruction("cmp r8d, 47");                                         // PHP escapes slashes by default
+    emitter.instruction("je __rt_json_assoc_value_str_slow_x");                 // fall back for the slash byte
+    emitter.instruction("add rcx, 1");                                          // advance the plain-ASCII value scan
+    emitter.instruction("jmp __rt_json_assoc_value_str_fast_scan_x");           // inspect the next value byte
+
+    emitter.label("__rt_json_assoc_value_str_fast_write_x");
+    emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
+    emitter.instruction("lea rsi, [rdx + 2]");                                  // reserve the two quotes and the copied value bytes
+    emitter.instruction("call __rt_json_buf_ensure");                           // r11 = cursor with the value window available
+    emitter.instruction("mov BYTE PTR [r11], 34");                              // write the opening value quote
+    emitter.instruction("add r11, 1");                                          // advance past the opening quote
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the value pointer after the reservation
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // reload the value length after the reservation
+    emitter.instruction("xor ecx, ecx");                                        // initialize the value copy index
+    emitter.label("__rt_json_assoc_value_str_fast_copy_x");
+    emitter.instruction("cmp rcx, rdx");                                        // have we copied every value byte?
+    emitter.instruction("jge __rt_json_assoc_value_str_fast_close_x");          // finish with the closing quote
+    emitter.instruction("mov r9b, BYTE PTR [rax + rcx]");                       // load the next value byte
+    emitter.instruction("mov BYTE PTR [r11 + rcx], r9b");                       // copy it directly to the cursor
+    emitter.instruction("add rcx, 1");                                          // advance the value copy index
+    emitter.instruction("jmp __rt_json_assoc_value_str_fast_copy_x");           // copy the remaining value bytes
+    emitter.label("__rt_json_assoc_value_str_fast_close_x");
+    emitter.instruction("add r11, rdx");                                        // address the byte after the copied value
+    emitter.instruction("mov BYTE PTR [r11], 34");                              // write the closing value quote
+    emitter.instruction("add r11, 1");                                          // advance past the closing quote
+    emitter.instruction("mov QWORD PTR [rbp - 136], r11");                      // publish the advanced output cursor
+    emitter.instruction("jmp __rt_json_assoc_value_done_x");                    // finish this entry without the append copy
+
+    emitter.label("__rt_json_assoc_value_str_slow_x");
+    emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
+    emitter.instruction("call __rt_strbuf_sync");                               // move nested formatter scratch past the current cursor
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the string pointer from the saved hash-entry low payload word
     emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // load the string length from the saved hash-entry high payload word
     emitter.instruction("call __rt_json_encode_str");                           // encode the string payload with JSON escaping and quotes
     emitter.instruction("jmp __rt_json_assoc_value_copy");                      // copy the encoded JSON value slice into concat_buf
 
     emitter.label("__rt_json_assoc_value_float");
+    emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
+    emitter.instruction("call __rt_strbuf_sync");                               // move nested formatter scratch past the current cursor
     emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // load the raw float bit-pattern from the saved hash-entry low payload word
     emitter.instruction("movq xmm0, r10");                                      // move the raw float bit-pattern into the x86_64 floating-point argument register
     emitter.instruction("call __rt_json_encode_float");                         // encode the float payload, rejecting Inf/NaN per JSON semantics
@@ -600,21 +851,29 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_assoc_value_copy");                      // copy the encoded JSON value slice into concat_buf
 
     emitter.label("__rt_json_assoc_value_array");
+    emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
+    emitter.instruction("call __rt_strbuf_sync");                               // move nested formatter scratch past the current cursor
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the nested indexed-array pointer from the saved hash-entry low payload word
     emitter.instruction("call __rt_json_encode_array_dynamic");                 // encode the nested indexed array recursively into a JSON slice
     emitter.instruction("jmp __rt_json_assoc_value_copy");                      // copy the encoded JSON value slice into concat_buf
 
     emitter.label("__rt_json_assoc_value_assoc");
+    emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
+    emitter.instruction("call __rt_strbuf_sync");                               // move nested formatter scratch past the current cursor
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the nested associative-array pointer from the saved hash-entry low payload word
     emitter.instruction("call __rt_json_encode_assoc");                         // encode the nested associative array recursively into a JSON slice
     emitter.instruction("jmp __rt_json_assoc_value_copy");                      // copy the encoded JSON value slice into concat_buf
 
     emitter.label("__rt_json_assoc_value_object");
+    emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
+    emitter.instruction("call __rt_strbuf_sync");                               // move nested formatter scratch past the current cursor
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the object pointer from the saved hash-entry low payload word
     emitter.instruction("call __rt_json_encode_object");                        // encode the object via the per-class JSON descriptor walker
     emitter.instruction("jmp __rt_json_assoc_value_copy");                      // copy the encoded JSON value slice into concat_buf
 
     emitter.label("__rt_json_assoc_value_mixed");
+    emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
+    emitter.instruction("call __rt_strbuf_sync");                               // move nested formatter scratch past the current cursor
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the boxed mixed pointer from the saved hash-entry low payload word
     emitter.instruction("call __rt_json_encode_mixed");                         // encode the boxed mixed payload recursively into a JSON slice
     emitter.instruction("jmp __rt_json_assoc_value_copy");                      // copy the encoded JSON value slice into concat_buf
@@ -626,6 +885,8 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rax");                                        // pass the encoded value pointer to the append helper (rdx = length)
     emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
     emitter.instruction("call __rt_json_buf_append");                           // copy the encoded value to the cursor, growing first, and release a transient child buffer
+
+    emitter.label("__rt_json_assoc_value_done_x");
     emitter.instruction("add QWORD PTR [rbp - 40], 1");                         // increment the number of encoded associative-array entries after appending one full key/value pair
     emitter.instruction("jmp __rt_json_assoc_loop");                            // continue iterating the remaining associative-array entries in insertion order
 

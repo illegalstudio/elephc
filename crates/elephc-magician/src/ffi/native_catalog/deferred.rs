@@ -140,6 +140,7 @@ fn numeric_fragment(
             proof.assigned.insert(name.clone());
             true
         }
+        EvalStmt::IncDecVar { name, .. } => proof.binding(name, false),
         EvalStmt::Expr(value) | EvalStmt::Return(Some(value)) => proof.expression(value, 0),
         EvalStmt::Return(None) => true,
         _ => false,

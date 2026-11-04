@@ -161,6 +161,13 @@ pub(crate) const CONCAT_TEMP_HEAP_KIND: u32 = 7;
 /// Independently owned reference cell whose payload descriptor occupies bits 8 through 14.
 pub(crate) const REFERENCE_CELL_HEAP_KIND: u32 = 8;
 
+/// Heap-header flag marking a string whose native identity is registered with mbstring.
+///
+/// Heap identity registration hooks (bind, copy, fresh, and persist) set this bit.
+/// Collector passes preserve it on non-graph string headers, and `__rt_heap_free()` uses it
+/// to skip the full bridge callback for strings without native identity metadata.
+pub(crate) const MBSTRING_IDENTITY_TRACKED: u32 = 1 << 24;
+
 /// Heap-owned callable descriptor with typed capture metadata.
 pub(crate) const CALLABLE_HEAP_KIND: u32 = 9;
 

@@ -731,6 +731,7 @@ fn visit_static_var_declarations(
             | EvalStmt::StaticPropertySet { .. }
             | EvalStmt::TypedVar { .. }
             | EvalStmt::StoreVar { .. }
+            | EvalStmt::IncDecVar { .. }
             | EvalStmt::Throw(_)
             | EvalStmt::TraitDecl(_)
             | EvalStmt::UnsetArrayElement { .. }

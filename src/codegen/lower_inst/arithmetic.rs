@@ -41,24 +41,44 @@ pub(super) fn lower_int_binop(
     let rhs = expect_operand(inst, 1)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let home = inst.result.and_then(|result| ctx.allocation.register_of(result));
+    // The x86_64 two-operand form cannot write the result into the register that
+    // holds the right operand. That fallback computes into the result register,
+    // so the value still needs its usual store-to-home copy.
+    let mut wrote_home = false;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             // Three-operand forms read both register-allocated operands in place.
             let lhs_reg = integer_operand_register(ctx, lhs, result_reg, inst)?;
             let rhs_reg = integer_operand_register(ctx, rhs, scratch_reg, inst)?;
+            let destination = home.unwrap_or(result_reg);
             ctx.emitter.instruction(
-                &format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, lhs_reg, rhs_reg)
-            );                                                                  // compute the integer arithmetic result from both SSA operands
+                &format!("{} {}, {}, {}", aarch64_mnemonic, destination, lhs_reg, rhs_reg)
+            );                                                                  // compute the result directly in its allocated home
+            wrote_home = home.is_some();
         }
         Arch::X86_64 => {
-            load_integer_operand(ctx, lhs, result_reg, inst)?;
             let rhs_reg = integer_operand_register(ctx, rhs, scratch_reg, inst)?;
-            ctx.emitter.instruction(
-                &format!("{} {}, {}", x86_64_mnemonic, result_reg, rhs_reg)
-            );                                                                  // update the integer result register with the arithmetic operand
+            if let Some(destination) = home.filter(|destination| *destination != rhs_reg) {
+                if ctx.allocation.register_of(lhs) != Some(destination) {
+                    load_integer_operand(ctx, lhs, destination, inst)?;
+                }
+                ctx.emitter.instruction(
+                    &format!("{} {}, {}", x86_64_mnemonic, destination, rhs_reg)
+                );                                                              // update the allocated home with the arithmetic operand
+                wrote_home = true;
+            } else {
+                load_integer_operand(ctx, lhs, result_reg, inst)?;
+                ctx.emitter.instruction(
+                    &format!("{} {}, {}", x86_64_mnemonic, result_reg, rhs_reg)
+                );                                                              // update the integer result register with the arithmetic operand
+            }
         }
     }
-    store_if_result(ctx, inst)
+    if !wrote_home {
+        store_if_result(ctx, inst)?;
+    }
+    Ok(())
 }
 
 /// Returns a register holding an integer operand that the consuming instruction only reads.
@@ -391,13 +411,23 @@ pub(super) fn lower_mixed_numeric_binop(
         && is_mixed_like(&lhs_ty)
         && ctx.value_ir_type(lhs)? == IrType::Heap(IrHeapKind::Mixed)
     {
+        let rhs_reg = match ctx.emitter.target.arch {
+            Arch::AArch64 => "x1",
+            Arch::X86_64 => "rdi",
+        };
         if let Some(integer) = integer_rhs_constant(ctx.function, rhs) {
             ctx.load_value_to_result(lhs)?;
-            let rhs_reg = match ctx.emitter.target.arch {
-                Arch::AArch64 => "x1",
-                Arch::X86_64 => "rdi",
-            };
             abi::emit_load_int_immediate(ctx.emitter, rhs_reg, integer);
+            assert!(abi::emit_mixed_numeric_integer_rhs_call(ctx.emitter, op));
+            return store_if_result(ctx, inst);
+        }
+        // A proven scalar counter is already an integer payload. Lend it to the same
+        // read-only integer-rhs helper instead of allocating a Mixed box for it.
+        if ctx.value_ir_type(rhs)? == IrType::I64
+            && matches!(rhs_ty.codegen_repr(), PhpType::Int | PhpType::Bool)
+        {
+            ctx.load_value_to_result(lhs)?;
+            ctx.load_value_to_reg(rhs, rhs_reg)?;
             assert!(abi::emit_mixed_numeric_integer_rhs_call(ctx.emitter, op));
             return store_if_result(ctx, inst);
         }

@@ -8405,7 +8405,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -8535,7 +8535,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -8665,7 +8665,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -32901,7 +32901,12 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "alloc_heap",
+          "may_throw",
+          "may_warn"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -66665,7 +66670,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -67158,7 +67163,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -67337,7 +67342,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -67843,7 +67848,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -68145,7 +68150,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -80002,7 +80007,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
@@ -80124,7 +80129,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
@@ -80506,9 +80511,8 @@
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.intdiv` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -80544,8 +80548,7 @@
         ]
       },
       "lowering": {
-        "kind": "runtime_call",
-        "target": "intdiv"
+        "kind": "eir"
       },
       "ownership": {
         "argument_indexes": [],
@@ -80559,7 +80562,7 @@
       "runtime_functions": [
         "intdiv"
       ],
-      "target_strategy": "runtime_call",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -89076,7 +89079,12 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "alloc_heap",
+          "may_throw",
+          "may_warn"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -111419,7 +111427,7 @@
         "values": [
           {
             "kind": "bridge",
-            "name": "elephc_crypto"
+            "name": "elephc_openssl"
           }
         ]
       },
@@ -111519,7 +111527,7 @@
     },
     "area": "String",
     "canonical_name": "openssl_decrypt",
-    "description": "Decrypts data with a supported AES cipher.",
+    "description": "Decrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog.",
     "eval": {
       "adapter_reason": "capability-dependent",
       "area": "string",
@@ -111647,7 +111655,7 @@
         "values": [
           {
             "kind": "bridge",
-            "name": "elephc_crypto"
+            "name": "elephc_openssl"
           }
         ]
       },
@@ -111796,7 +111804,7 @@
     },
     "area": "String",
     "canonical_name": "openssl_encrypt",
-    "description": "Encrypts data with a supported AES cipher.",
+    "description": "Encrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "string",
@@ -111931,7 +111939,7 @@
         "values": [
           {
             "kind": "bridge",
-            "name": "elephc_crypto"
+            "name": "elephc_openssl"
           }
         ]
       },
@@ -112038,7 +112046,7 @@
     },
     "area": "String",
     "canonical_name": "openssl_get_cipher_methods",
-    "description": "Returns the supported OpenSSL cipher method names.",
+    "description": "Returns PHP's OpenSSL 3.6.4 default-provider cipher method names.",
     "eval": {
       "adapter_reason": "capability-dependent",
       "area": "string",
@@ -112124,7 +112132,7 @@
         "values": [
           {
             "kind": "bridge",
-            "name": "elephc_crypto"
+            "name": "elephc_openssl"
           }
         ]
       },
@@ -126580,7 +126588,12 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "alloc_heap",
+          "may_throw",
+          "may_warn"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -146035,7 +146048,12 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "reads_heap",
+          "alloc_heap",
+          "may_throw",
+          "may_warn"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",

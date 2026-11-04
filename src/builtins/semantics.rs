@@ -543,6 +543,21 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
     }
 }
 
+/// Builds EIR-graph semantics that forward raw operands to one typed runtime target.
+///
+/// The target keeps its argument ABI, effects, result ownership, requirements and dynamic
+/// callable policy. Only the lowering route changes: no PHP builtin-call operand pins or
+/// copies are materialized around a helper that only reads its arguments.
+pub const fn eir_runtime_semantics(
+    target: RuntimeFnId,
+    lower: BuiltinLowerFn,
+) -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(target);
+    semantics.target_strategy = BuiltinTargetStrategy::EirGraph;
+    semantics.lowering = BuiltinLowering::Eir(lower);
+    semantics
+}
+
 /// Builds runtime-call semantics for a builtin that is explicitly unavailable on iOS.
 pub const fn host_only_runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
     let mut semantics = runtime_fn_semantics(target);
