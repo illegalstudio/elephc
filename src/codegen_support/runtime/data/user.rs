@@ -3649,7 +3649,11 @@ fn runtime_debug_info_entry(
     let Some(impl_class) = class_info.method_impl_classes.get(&key) else {
         return none;
     };
-    if classes.get(impl_class).map_or(true, |owner| owner.is_internal && !is_hosted_extension_class(owner)) {
+    if classes.get(impl_class).map_or(true, |owner| {
+        owner.is_internal
+            && !is_hosted_extension_class(owner)
+            && !is_intl_runtime_debug_info_class(impl_class)
+    }) {
         return none;
     }
     let Some(return_type) = class_info.methods.get(&key).map(|sig| sig.return_type.codegen_repr()) else {
@@ -3664,6 +3668,12 @@ fn runtime_debug_info_entry(
         return none;
     }
     Ok((source_instance_method_entry(class_info, &key, classes)?, returns_nothing))
+}
+
+/// IntlTimeZone's synthetic `__debugInfo` is a plain PHP projection, safe for the runtime
+/// walk; unlike the SPL containers it has no NUL-mangled keys. User subclasses inherit it.
+fn is_intl_runtime_debug_info_class(name: &str) -> bool {
+    php_symbol_key(name) == "intltimezone"
 }
 
 /// Selects the source vtable entry without adapting a physical source-variadic slot.

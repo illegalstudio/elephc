@@ -205,33 +205,22 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 }) = args.first()
                 {
                     if let Some(zone) = crate::date_time_zone::split_fixed_zone(literal) {
-                        let mut rewritten = args.clone();
-                        rewritten[0] = Expr::new(
-                            ExprKind::StringLiteral(zone.stripped),
-                            *arg_span,
-                        );
-                        let call = Expr::new(
-                            ExprKind::FunctionCall {
-                                name,
-                                args: rewritten,
+                        return Expr::new(
+                            ExprKind::StaticMethodCall {
+                                receiver: crate::parser::ast::StaticReceiver::Named(
+                                    crate::names::Name::unqualified("DateTime"),
+                                ),
+                                method: "__elephc_strtotime_zone".to_string(),
+                                args: vec![
+                                    Expr::new(
+                                        ExprKind::StringLiteral(zone.stripped),
+                                        *arg_span,
+                                    ),
+                                    Expr::new(ExprKind::IntLiteral(zone.offset), span),
+                                ],
                             },
                             span,
                         );
-                        return if zone.offset == 0 {
-                            call
-                        } else {
-                            Expr::new(
-                                ExprKind::BinaryOp {
-                                    left: Box::new(call),
-                                    op: BinOp::Sub,
-                                    right: Box::new(Expr::new(
-                                        ExprKind::IntLiteral(zone.offset),
-                                        span,
-                                    )),
-                                },
-                                span,
-                            )
-                        };
                     }
                 }
             }

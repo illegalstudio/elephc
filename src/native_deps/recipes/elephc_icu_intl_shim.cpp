@@ -3121,6 +3121,11 @@ struct BreakIteratorObject : IntlObject {
         auto copy = std::make_unique<BreakIteratorObject>();
         copy->iterator.reset(iterator->clone());
         copy->text = text;
+        copy->code_point = code_point;
+        copy->text_started = text_started;
+        copy->utf8_text = utf8_text;
+        copy->position = position;
+        copy->last_code_point = last_code_point;
         if (copy->iterator) copy->iterator->setText(text);
         return copy;
     }
@@ -4645,8 +4650,11 @@ Value idn_operation(const std::string &operation, const std::vector<Value> &args
     // The synthetic PHP wrapper reads element 0 as the return value and element 1 as the
     // by-reference `idna_info` array.
     Value array = Value::array();
+    // php returns false whenever ICU reported any IDNA error, even though it still fills the
+    // by-reference details array with the normalized result.
     array.entries = {
-        {Value::from_int(0), Value::from_string(result)},
+        {Value::from_int(0), info.errors == 0 ? Value::from_string(result)
+                                              : Value::boolean(false)},
         {Value::from_int(1), std::move(details)},
     };
     return array;

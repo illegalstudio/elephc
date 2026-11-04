@@ -1691,6 +1691,28 @@ fn function_from_spec(spec: &IntlFunction) -> Stmt {
         .map(|(index, param)| (index, param.name))
         .collect();
     let mut body = Vec::new();
+    if matches!(spec.name, "idn_to_ascii" | "idn_to_utf8") {
+        // php-src reports the variant through the flags slot and rejects an empty domain before
+        // the IDN bridge runs. Both messages are PHP-level ValueErrors.
+        body.push(s_if(
+            e_binop(e_var("variant"), BinOp::StrictNotEq, e_const("INTL_IDNA_VARIANT_UTS46")),
+            vec![s_throw(e_new("ValueError", vec![e_str(&format!(
+                "{}(): Argument #2 ($flags) must be INTL_IDNA_VARIANT_UTS46",
+                spec.name
+            ))]))],
+            vec![],
+            None,
+        ));
+        body.push(s_if(
+            e_binop(e_var("domain"), BinOp::StrictEq, e_str("")),
+            vec![s_throw(e_new("ValueError", vec![e_str(&format!(
+                "{}(): Argument #1 ($domain) must not be empty",
+                spec.name
+            ))]))],
+            vec![],
+            None,
+        ));
+    }
     if matches!(spec.name, "intlcal_equals" | "intlcal_before" | "intlcal_after" | "intlcal_is_equivalent_to") {
         let message = format!("{}(): Argument #2 ($other) is uninitialized", spec.name);
         body.push(s_if(
@@ -3868,10 +3890,17 @@ fn build_uconverter_class() -> Stmt {
             .body(vec![s_return(e_call("__elephc_intl_invoke_array", vec![
                 e_str("uconverter"), e_str("get_available"), e_array(vec![]),
             ]))]))
-        .method(method("getStandards").static_().returns(t_array())
-            .body(vec![s_return(e_call("__elephc_intl_invoke_array", vec![
-                e_str("uconverter"), e_str("get_standards"), e_array(vec![]),
-            ]))]))
+        .method(method("getStandards").static_().returns(TypeExpr::Array(Box::new(TypeExpr::Str)))
+            .body(vec![
+                s_assign("items", e_call("__elephc_intl_invoke_array", vec![
+                    e_str("uconverter"), e_str("get_standards"), e_array(vec![]),
+                ])),
+                s_assign("result", e_array(vec![])),
+                crate::synthetic_class::s_foreach(e_var("items"), None, "item", vec![
+                    crate::synthetic_class::s_array_push("result", e_cast(CastType::String, e_var("item"))),
+                ]),
+                s_return(e_var("result")),
+            ]))
         .method(method("reasonText").static_().param("reason", TypeExpr::Int).returns(TypeExpr::Str)
             .body(vec![s_return(e_call("__elephc_intl_invoke_string", vec![
                 e_str("uconverter"), e_str("reason_text"), e_array(vec![e_var("reason")]),
@@ -4035,10 +4064,10 @@ fn build_spoofchecker_class() -> Stmt {
 fn build_time_zone_class() -> Stmt {
     let mut builder = class("IntlTimeZone")
         .prop("__elephc_handle", TypeExpr::Int, Some(e_int(0)))
-        .prop("valid", TypeExpr::Bool, Some(crate::synthetic_class::e_bool(true)))
-        .prop("id", TypeExpr::Str, Some(e_str("")))
-        .prop("rawOffset", TypeExpr::Int, Some(e_int(0)))
-        .prop("currentOffset", TypeExpr::Int, Some(e_int(0)));
+        .prop("valid", TypeExpr::Bool, Some(crate::synthetic_class::e_bool(false)))
+        .prop("id", TypeExpr::Str, None)
+        .prop("rawOffset", TypeExpr::Int, None)
+        .prop("currentOffset", TypeExpr::Int, None);
     for (constant, value) in constants_for("IntlTimeZone") {
         builder = builder.constant(constant, const_value_expr(value));
     }
@@ -4174,8 +4203,16 @@ fn build_time_zone_class() -> Stmt {
             .returns(t_mixed())
             .body(vec![s_return(e_call("__elephc_intl_call", vec![e_this_prop("__elephc_handle"), e_var("method"), e_var("args")]))]))
         .method(method("__debugInfo")
-            .returns(t_array())
+            .returns(t_mixed())
             .body(vec![
+                s_if(
+                    e_binop(e_this_prop("valid"), BinOp::StrictEq, crate::synthetic_class::e_bool(false)),
+                    vec![s_return(e_array_assoc(vec![
+                        (e_str("valid"), crate::synthetic_class::e_bool(false)),
+                    ]))],
+                    vec![],
+                    None,
+                ),
                 s_return(e_array_assoc(vec![
                     (e_str("valid"), e_this_prop("valid")),
                     (e_str("id"), e_this_prop("id")),
@@ -4289,6 +4326,43 @@ fn build_time_zone_class() -> Stmt {
         builder = builder.method(method_builder.returns(timezone_method_return(name)));
     }
     builder = builder.method(method("__elephc_static_call").static_().param("method", TypeExpr::Str).param("args", t_mixed()).body(vec![s_return(e_call("__elephc_intl_invoke", vec![e_str("timezone"), e_var("method"), e_var("args")]))]));
+    builder = builder.method(method("__elephc_compare").static_()
+        .param("left", t_mixed())
+        .param("right", t_mixed())
+        .returns(TypeExpr::Int)
+        .body(vec![
+            s_if(
+                e_binop(
+                    e_instance_of(e_var("left"), "IntlTimeZone"),
+                    BinOp::And,
+                    e_instance_of(e_var("right"), "IntlTimeZone"),
+                ),
+                vec![],
+                vec![],
+                Some(vec![s_return(e_int(3))]),
+            ),
+            s_if(
+                e_binop(
+                    e_binop(e_prop(e_var("left"), "valid"), BinOp::StrictEq, crate::synthetic_class::e_bool(false)),
+                    BinOp::Or,
+                    e_binop(e_prop(e_var("right"), "valid"), BinOp::StrictEq, crate::synthetic_class::e_bool(false)),
+                ),
+                vec![s_throw(e_new("Exception", vec![e_str("Comparison with at least one unconstructed IntlTimeZone operand")]))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_method_call(e_var("left"), "getID", vec![]),
+                    BinOp::StrictEq,
+                    e_method_call(e_var("right"), "getID", vec![]),
+                ),
+                vec![s_return(e_int(0))],
+                vec![],
+                None,
+            ),
+            s_return(e_int(1)),
+        ]));
     builder = builder.method(clone_handle_method("IntlTimeZone"));
     builder.build()
 }
@@ -4591,6 +4665,31 @@ fn build_break_iterator_class() -> Stmt {
                     e_var("_items"), e_var("this"), e_int(0),
                 ])),
             ]));
+    builder = builder.method(method("__elephc_compare").static_()
+        .param("left", t_mixed())
+        .param("right", t_mixed())
+        .returns(TypeExpr::Int)
+        .body(vec![
+            s_if(
+                e_binop(
+                    e_instance_of(e_var("left"), "IntlBreakIterator"),
+                    BinOp::And,
+                    e_instance_of(e_var("right"), "IntlBreakIterator"),
+                ),
+                vec![],
+                vec![],
+                Some(vec![s_return(e_int(3))]),
+            ),
+            s_assign("_left", e_method_call(e_var("left"), "getText", vec![])),
+            s_assign("_right", e_method_call(e_var("right"), "getText", vec![])),
+            s_if(
+                e_binop(e_var("_left"), BinOp::StrictEq, e_var("_right")),
+                vec![s_return(e_int(0))],
+                vec![],
+                None,
+            ),
+            s_return(e_int(1)),
+        ]));
     builder = builder.method(clone_handle_method("IntlBreakIterator"));
     builder.build()
 }

@@ -69,6 +69,39 @@ pub(super) fn datetime_date_malformed_message() -> crate::parser::ast::ClassMeth
     built
 }
 
+/// Builds `DateTime::__elephc_strtotime_zone(string $datetime, int $offset): int|false`.
+///
+/// Parses the zone-free text in UTC and applies the fixed offset, so a literal
+/// `strtotime("... PST")` does not inherit the process default zone.
+pub(super) fn datetime_strtotime_zone() -> crate::parser::ast::ClassMethod {
+    let var = e_var;
+    let call = |name: &str, args: Vec<crate::parser::ast::Expr>| e_call(name, args);
+    let body = vec![
+        s_assign("saved", call("date_default_timezone_get", vec![])),
+        s_expr(call("date_default_timezone_set", vec![e_str("UTC")])),
+        s_assign("ts", call("strtotime", vec![var("datetime")])),
+        s_expr(call("date_default_timezone_set", vec![var("saved")])),
+        s_if(
+            e_binop(var("ts"), BinOp::StrictEq, e_bool(false)),
+            vec![s_return(e_bool(false))],
+            vec![],
+            None,
+        ),
+        s_return(e_binop(var("ts"), BinOp::Sub, var("offset"))),
+    ];
+    let mut built = method(
+        "__elephc_strtotime_zone",
+        vec![
+            ("datetime".to_string(), Some(TypeExpr::Str), None, false),
+            ("offset".to_string(), Some(TypeExpr::Int), None, false),
+        ],
+        Some(t_mixed()),
+        body,
+    );
+    built.is_static = true;
+    built
+}
+
 /// Builds `DateTime::__elephc_construct_state(string $datetime, ?DateTimeZone $timezone): array`.
 ///
 /// Returns `[timestamp, timezone_name]`. A timezone inside the string wins over the

@@ -181,6 +181,7 @@ pub(crate) fn inject_builtin_datetime(
         methods.push(datetime_strip_micros());
         methods.push(datetime_split_trailing_zone());
         methods.push(datetime_date_malformed_message());
+        methods.push(datetime_strtotime_zone());
         methods.push(datetime_parse_zone_token());
         methods.push(datetime_zone_offset_parts());
         methods.push(datetime_abbreviation_offsets());

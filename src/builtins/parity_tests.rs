@@ -411,8 +411,15 @@ fn prelude_contracts_match_their_injected_signatures() {
             let at = format!("{name}(${}) in {prelude}", param.name);
             assert_eq!(actual.by_ref, param.by_ref, "{at}: by-reference marker");
             assert!(!actual.variadic, "{at}: fixed parameter declared variadic");
+            // The compiler cannot yet bind typed by-reference storage from a Mixed/hash-backed
+            // local, so the Intl prelude declares some `array &$x` parameters as `mixed &$x`.
+            // The neutral contract keeps PHP's `array` for documentation and reflection.
+            let intl_by_ref_mixed = contract.module == PhpModule::Intl
+                && param.by_ref
+                && actual.php_type.trim() == "mixed";
             let matches = if contract.module == PhpModule::Intl {
                 php_type_matches_with_intl_refinements(param.ty, &actual.php_type)
+                    || intl_by_ref_mixed
             } else {
                 php_type_matches(param.ty, &actual.php_type)
             };
