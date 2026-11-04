@@ -56,9 +56,6 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_mixed_method_call(ctx, inst, object, &method_name);
     }
     if matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
-        if let Some(state) = fiber_state_predicate_method(&method_name) {
-            return lower_mixed_fiber_state_predicate(ctx, inst, object, &method_name, state);
-        }
         return lower_mixed_method_call(ctx, inst, object, &method_name);
     }
     let PhpType::Object(class_name) = object_ty else {
@@ -270,6 +267,13 @@ pub(super) fn lower_mixed_method_candidate_call(
     // `receiver_reg`, which is exactly what `_from_reg` expects.
     if is_throwable_standard_method_call(ctx, &candidate.class_name, method_name) {
         return lower_throwable_standard_method_from_reg(ctx, inst, receiver_reg, method_name);
+    }
+    // Fiber's state predicates are runtime intrinsics with placeholder bodies. Only the
+    // matched Fiber branch calls the runtime predicate: other classes declaring a method of
+    // the same name (`isRunning()` on a user interface) keep their own branch.
+    if let Some(state) = fiber_state_predicate(&candidate.class_name, method_name) {
+        emit_fiber_state_predicate_from_reg(ctx, receiver_reg, state);
+        return store_method_call_result(ctx, inst, &candidate.target);
     }
     abi::emit_push_reg(ctx.emitter, receiver_reg);
     super::method_resolution::emit_method_literal_parameter_guards(

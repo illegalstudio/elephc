@@ -15,6 +15,10 @@
 //! - The optional invoker slot points at a generated uniform runtime adapter whose
 //!   ABI is `(descriptor, argument array, invocation scope) -> Mixed`.
 
+mod object_identity;
+
+pub(crate) use object_identity::emit_require_object_handle;
+
 use crate::codegen_support::abi;
 use crate::codegen_support::data_section::{DataSection, DataWord};
 use crate::codegen_support::emit::Emitter;

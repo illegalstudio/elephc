@@ -513,7 +513,7 @@ pub(super) fn root_user_call_operands(
                 // the unwinder while the alias-returning callee runs; normal control still uses
                 // ReleaseUnlessAliases below to transfer the owner when it comes back unchanged.
                 for pin in pin_in_flight_owners(ctx, &[*operand], span) {
-                    roots.push((index, pin.slot));
+                    roots.push((index, pin.into_temporary_slot()));
                 }
             }
 
@@ -532,7 +532,7 @@ pub(super) fn root_user_call_operands(
                 // The post-call release retires the pin without releasing and then decides the
                 // release against the result.
                 for pin in pin_in_flight_owners(ctx, &[claimed], span) {
-                    roots.push((index, pin.slot));
+                    roots.push((index, pin.into_temporary_slot()));
                 }
             }
             // A later eval barrier can widen a heap local after this call is lowered.
@@ -566,7 +566,7 @@ pub(super) fn root_user_call_operands(
                 })
             {
                 for pin in pin_in_flight_owners(ctx, &[*operand], span) {
-                    roots.push((index, pin.slot));
+                    roots.push((index, pin.into_temporary_slot()));
                 }
             }
             continue;
@@ -927,18 +927,32 @@ pub(crate) fn retire_owned_call_operand(
     );
 }
 
-/// One in-flight owned temporary pinned in an unwind-visible frame slot for a single
-/// throwing instruction.
+/// One temporary owner or provisional local view protected across a throwing window.
 ///
-/// The pin does NOT move ownership. The slot receives a plain `OwnedTemp` store, which retains
-/// nothing, so the SSA temporary keeps its single reference and its ordinary post-instruction
-/// release stays correct on the normal path.
+/// Temporary pins use a non-retaining `OwnedTemp` store. Local views use guards whose
+/// cleanup is pruned when final frame storage lends its payload. Neither path releases
+/// its operand during normal retirement.
 #[derive(Clone)]
-pub(crate) struct PinnedInFlightOwner {
-    /// Hidden `OwnedTemp` the operand pointer is parked in for the throwing window.
-    temp_name: String,
-    /// Owner slot published in the unwind chain for the duration of that window.
-    slot: crate::ir::LocalSlotId,
+pub(crate) enum PinnedInFlightOwner {
+    /// An independent SSA owner parked in a non-retaining hidden slot.
+    Temporary {
+        /// Hidden `OwnedTemp` parking the pointer during the throwing window.
+        temp_name: String,
+        /// Owner slot published in the unwind chain for that window.
+        slot: crate::ir::LocalSlotId,
+    },
+    /// A local-load coercion that may own a retained payload after frame finalization.
+    LocalView { value: crate::ir::ValueId },
+}
+
+impl PinnedInFlightOwner {
+    /// Extracts the owner slot from a record returned by temporary-only pinning.
+    fn into_temporary_slot(self) -> crate::ir::LocalSlotId {
+        match self {
+            Self::Temporary { slot, .. } => slot,
+            Self::LocalView { .. } => unreachable!("a local-view guard has no temporary owner slot"),
+        }
+    }
 }
 
 /// Pins the owned SSA temporaries an instruction that can THROW is about to read.
@@ -1020,7 +1034,7 @@ pub(crate) fn pin_in_flight_owners(
         let slot = ctx.local_slots[&temp_name];
         register_owned_call_operand(ctx, slot, span);
         pinned.push(*operand);
-        records.push(PinnedInFlightOwner { temp_name, slot });
+        records.push(PinnedInFlightOwner::Temporary { temp_name, slot });
     }
     records
 }
@@ -1029,9 +1043,12 @@ pub(crate) fn pin_in_flight_owners(
 pub(crate) fn pinned_transfer_owner(
     ctx: &mut LoweringContext<'_, '_>, pins: &[PinnedInFlightOwner], span: Span,
 ) -> Option<crate::ir::ValueId> {
-    let pin = pins.first()?;
+    let temp_name = match pins.first()? {
+        PinnedInFlightOwner::Temporary { temp_name, .. } => temp_name,
+        PinnedInFlightOwner::LocalView { .. } => unreachable!("a local-view guard cannot transfer ownership"),
+    };
     debug_assert_eq!(pins.len(), 1);
-    let owner = ctx.load_local(&pin.temp_name, Some(span));
+    let owner = ctx.load_local(temp_name, Some(span));
     ctx.builder.set_value_ownership(owner.value, Ownership::Borrowed);
     Some(owner.value)
 }
@@ -1042,24 +1059,30 @@ pub(crate) fn release_pinned_in_flight_owners(
     ctx: &mut LoweringContext<'_, '_>, records: Vec<PinnedInFlightOwner>, span: Span,
 ) {
     for record in records.into_iter().rev() {
-        ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(record.slot)),
+        let slot = record.into_temporary_slot();
+        ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
             Op::ReleaseLocalSlot.default_effects(), Some(span));
-        unregister_owned_call_operand(ctx, record.slot, span);
+        unregister_owned_call_operand(ctx, slot, span);
     }
 }
 
 /// Retires in-flight pins in reverse publication order once the throwing window has closed.
 ///
-/// `UnsetLocal` zeroes the parking slot without releasing it: the reference never left the SSA
-/// temporary, and its own release still follows.
+/// Temporary parking slots are cleared without release; provisional local guards are
+/// detached. Each operand's ordinary consumer still owns its normal-path cleanup.
 pub(crate) fn unpin_in_flight_owners(
     ctx: &mut LoweringContext<'_, '_>,
     records: Vec<PinnedInFlightOwner>,
     span: Span,
 ) {
     for record in records.into_iter().rev() {
-        unregister_owned_call_operand(ctx, record.slot, span);
-        ctx.clear_owned_hidden_temp(&record.temp_name, Some(span));
+        match record {
+            PinnedInFlightOwner::Temporary { temp_name, slot } => {
+                unregister_owned_call_operand(ctx, slot, span);
+                ctx.clear_owned_hidden_temp(&temp_name, Some(span));
+            }
+            PinnedInFlightOwner::LocalView { value } => ctx.unguard_call_argument(value, span),
+        }
     }
 }
 

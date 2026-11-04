@@ -473,7 +473,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EvalConstantFetch => builtins::lower_eval_constant_fetch(ctx, &inst),
         Op::ClosureCapture => lower_closure_capture(ctx, &inst),
         Op::ClosureNew => lower_closure_new(ctx, &inst),
-        Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
+        Op::FirstClassCallableNew | Op::CallableValueNew => lower_first_class_callable_new(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),
         Op::ReleaseUnlessAliases => ownership::lower_release_unless_aliases(ctx, &inst),

@@ -887,8 +887,8 @@ fn dynamic_property_unset_action(
 
 /// Replaces arguments whose declared-parameter binding is decided by their literal spelling.
 ///
-/// Runs before any argument is lowered so a callable-name string never materializes as string
-/// storage and a constant bound to `int`/`float` is emitted already coerced. Positional and
+/// Runs before any argument is lowered so a constant bound to `int`/`float` is emitted already
+/// coerced. Callable-name strings are handled at their parameter storage boundary. Positional and
 /// named arguments are both handled; a spread makes the positional mapping unknowable, so the
 /// remaining arguments are left alone.
 ///

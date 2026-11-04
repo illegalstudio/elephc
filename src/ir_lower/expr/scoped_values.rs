@@ -11,20 +11,30 @@ use super::*;
 
 /// Lowers first-class callable creation.
 pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
+    lower_callable_descriptor(ctx, target, expr, Op::FirstClassCallableNew)
+}
+
+/// Lowers an implicit string or array callable without creating PHP Closure identity.
+pub(super) fn lower_callable_value(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
+    lower_callable_descriptor(ctx, target, expr, Op::CallableValueNew)
+}
+
+/// Shares invocation metadata while preserving whether the source created a PHP object.
+fn lower_callable_descriptor(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr, op: Op) -> LoweredValue {
     if let CallableTarget::Method { object, method } = target {
         let object = lower_expr(ctx, object);
-        return lower_instance_callable_from_receiver(ctx, object, method, expr.span);
+        return lower_instance_callable_descriptor(ctx, object, method, expr.span, op);
     }
     let data = ctx.intern_string(&callable_target_name(target));
     ctx.emit_value(
-        Op::FirstClassCallableNew,
+        op,
         Vec::new(),
         Some(Immediate::ProfiledData {
             data,
             strict_php: crate::strict_php::is_enabled(),
         }),
         PhpType::Callable,
-        Op::FirstClassCallableNew.default_effects(),
+        op.default_effects(),
         Some(expr.span),
     )
 }
@@ -33,11 +43,18 @@ pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, targ
 pub(super) fn lower_instance_callable_from_receiver(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, method: &str, span: crate::span::Span,
 ) -> LoweredValue {
+    lower_instance_callable_descriptor(ctx, receiver, method, span, Op::FirstClassCallableNew)
+}
+
+/// Captures the receiver once for either a PHP Closure or an internal callable value.
+fn lower_instance_callable_descriptor(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, method: &str, span: crate::span::Span, op: Op,
+) -> LoweredValue {
     let data = ctx.intern_string(&format!("object::{method}"));
     ctx.emit_value(
-        Op::FirstClassCallableNew, vec![receiver.value],
+        op, vec![receiver.value],
         Some(Immediate::ProfiledData { data, strict_php: crate::strict_php::is_enabled() }),
-        PhpType::Callable, Op::FirstClassCallableNew.default_effects(), Some(span),
+        PhpType::Callable, op.default_effects(), Some(span),
     )
 }
 

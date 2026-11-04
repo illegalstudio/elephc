@@ -4060,6 +4060,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     // Binding creates a fresh descriptor that owns its receiver capture.
                     | Op::ClosureBind
                     | Op::FirstClassCallableNew
+                    | Op::CallableValueNew
                     | Op::CallableArrayNew
                     | Op::BufferNew
                     | Op::GeneratorNew
@@ -5184,6 +5185,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Finishes capture registration while keeping emitted guards active through invocation.
     pub(crate) fn end_argument_guard_scope(&mut self) {
         self.argument_guard_scopes.pop().expect("balanced argument capture scope");
+    }
+
+    /// Guards provisional owning local views without consuming a live variable's reference.
+    /// Finalization removes these guards when the final slot lends the payload instead.
+    pub(crate) fn guard_owned_local_views(&mut self, values: &[LoweredValue], span: Span) -> Vec<ValueId> {
+        let mut guarded = Vec::new();
+        self.begin_argument_guard_scope();
+        for (index, value) in values.iter().enumerate() {
+            if self.value_is_owned_unboxed_local_load(value.value)
+                && !self.has_call_argument_guard(value.value)
+            {
+                self.guard_call_argument(*value, index, span);
+                guarded.push(value.value);
+            }
+        }
+        self.end_argument_guard_scope();
+        guarded
     }
 
     /// Protects a captured argument in PHP parameter order until normal release or unwinding.

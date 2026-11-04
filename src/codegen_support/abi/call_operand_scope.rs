@@ -2,7 +2,7 @@
 //! Publishes short-lived owner slots in the exception cleanup activation chain.
 //!
 //! Called from:
-//! - EIR call-operand lifetime lowering.
+//! - EIR call-operand lifetime lowering and recursive runtime comparisons.
 //!
 //! Key details:
 //! - A catch in the same PHP frame still unwinds these records before entering its body.
@@ -14,6 +14,29 @@ use super::*;
 use crate::codegen_support::emit::Emitter;
 
 pub(crate) const CALL_OPERAND_OWNER_RECORD_BYTES: usize = 48;
+
+/// Publishes a value in a preallocated owned-value guard before later code can throw.
+pub(crate) fn emit_guard_owned_at_stack(
+    emitter: &mut Emitter,
+    owner: &str,
+    cleanup: &str,
+    record_offset: usize,
+) {
+    let scratch = temp_int_reg(emitter.target);
+    emit_store_to_sp(emitter, owner,
+        record_offset + crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET);
+    emit_symbol_address(emitter, scratch, cleanup);
+    emit_store_to_sp(emitter, scratch, record_offset + 8);
+    emit_temporary_stack_address(emitter, int_arg_reg_name(emitter.target, 0), record_offset);
+    emit_load_int_immediate(emitter, int_arg_reg_name(emitter.target, 1), 0);
+    emit_call_label(emitter, "__rt_exception_guard_owned");
+}
+
+/// Detaches a preallocated value guard while preserving any guards published after it.
+pub(crate) fn emit_unguard_owned_at_stack(emitter: &mut Emitter, record_offset: usize) {
+    emit_temporary_stack_address(emitter, int_arg_reg_name(emitter.target, 0), record_offset);
+    emit_call_label(emitter, "__rt_exception_unguard_owned");
+}
 
 /// Links a caller-owned slot into the cleanup chain without consuming its current payload.
 pub(crate) fn emit_push_call_operand_owner(emitter: &mut Emitter, owner_address: &str, callable: bool) {

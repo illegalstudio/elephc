@@ -529,7 +529,7 @@ pub(super) fn eval_literal_static_method_supported_by_module(
 fn function_references_callable_runtime(module: &Module, function: &Function, accepts: fn(&str) -> bool) -> bool {
     let names = std::cell::OnceCell::new();
     function.instructions.iter().any(|inst| {
-        if inst.op == Op::FirstClassCallableNew {
+        if matches!(inst.op, Op::FirstClassCallableNew | Op::CallableValueNew) {
             let data = match inst.immediate {
                 Some(Immediate::Data(data) | Immediate::ProfiledData { data, .. }) => data,
                 _ => return false,

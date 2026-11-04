@@ -112,6 +112,14 @@ impl Checker {
         self.record_exception_flow(thrown, env);
     }
 
+    /// Publishes a switch warning's evaluated prefix before arm assignments change its state.
+    pub(super) fn record_switch_comparison_exception_flow(&mut self, subject: &Expr, pattern: &Expr, env: &TypeEnv) {
+        if self.finally_flow_frames.is_empty() { return; }
+        let Some(analysis) = &self.exception_analysis else { return; };
+        let thrown = analysis.switch_comparison_throws(subject, pattern);
+        self.record_exception_flow(thrown, env);
+    }
+
     /// Captures the value type retired by an implicit binding replacement.
     pub(super) fn binding_retirement_type(&self, name: &str, env: &TypeEnv) -> PhpType {
         if self.local_flow_read_is_stable(name) {

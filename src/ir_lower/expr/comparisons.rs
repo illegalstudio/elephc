@@ -39,17 +39,17 @@ pub(super) fn lower_compare(
             return result;
         }
         if let Some(result) = object_operators::lower_dynamic_object_binary(ctx, lhs, op, rhs, expr, true,
-            |ctx| lower_compare_values(ctx, lhs, op, rhs, left, right, expr)) {
+            |ctx| lower_compare_values(ctx, lhs, op, rhs, left, right, expr, false)) {
             return result;
         }
     }
-    lower_compare_values(ctx, lhs, op, rhs, left, right, expr)
+    lower_compare_values(ctx, lhs, op, rhs, left, right, expr, true)
 }
 
 /// Lowers ordinary PHP comparisons after an internal value-class handler is excluded.
 fn lower_compare_values(
     ctx: &mut LoweringContext<'_, '_>, mut lhs: LoweredValue, op: &BinOp,
-    mut rhs: LoweredValue, left: &Expr, right: &Expr, expr: &Expr,
+    mut rhs: LoweredValue, left: &Expr, right: &Expr, expr: &Expr, pin_operands: bool,
 ) -> LoweredValue {
     // DateTime-family value comparison: PHP orders `DateTime`/`DateTimeImmutable` by their absolute
     // instant (timestamp seconds + microsecond), independent of the stored timezone. Replace each
@@ -151,6 +151,13 @@ fn lower_compare_values(
         None
     };
     let php_type = if matches!(op, BinOp::Spaceship) { PhpType::Int } else { PhpType::Bool };
+    let local_guards = if matches!(opcode, Op::LooseEq | Op::LooseNotEq) {
+        ctx.guard_owned_local_views(&[lhs, rhs], expr.span)
+    } else { Vec::new() };
+    // Numeric conversion can call a throwing warning handler before operand cleanup.
+    let comparison_pins = if pin_operands && matches!(opcode, Op::LooseEq | Op::LooseNotEq) {
+        pin_in_flight_owners(ctx, &[lhs.value, rhs.value], expr.span)
+    } else { Vec::new() };
     let result = ctx.emit_value(
         opcode,
         vec![lhs.value, rhs.value],
@@ -159,8 +166,16 @@ fn lower_compare_values(
         opcode.default_effects(),
         Some(expr.span),
     );
+    unpin_in_flight_owners(ctx, comparison_pins, expr.span);
+    // Keep the other view guarded while normal cleanup can run destructors.
+    if local_guards.contains(&lhs.value) {
+        ctx.unguard_call_argument(lhs.value, expr.span);
+    }
     release_binary_operand_temporary(ctx, lhs, expr.span);
     if rhs.value != lhs.value {
+        if local_guards.contains(&rhs.value) {
+            ctx.unguard_call_argument(rhs.value, expr.span);
+        }
         release_binary_operand_temporary(ctx, rhs, expr.span);
     }
     result
