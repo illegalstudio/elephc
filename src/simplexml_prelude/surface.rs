@@ -35,6 +35,23 @@ extern "elephc_xml" {
     function elephc_xml_sx_register(int $handle, string $prefix, string $uri): int;
     function elephc_xml_sx_xpath(int $handle, string $expression): int;
     function elephc_xml_sx_namespace(int $handle, int $declared, int $recursive, int $root, int $index, int $field): string;
+    function elephc_xml_sx_set_encoding(int $handle, string $encoding): int;
+}
+
+/**
+ * Reports one PHP diagnostic at the user call site.
+ *
+ * Warnings route through the compiler's internal-warning builtin, which publishes the
+ * caller frame as ` in FILE on line N` for the default display while handing handlers
+ * only the message. Notices and deprecations keep the direct diagnostic channel because
+ * their corpus does not require a caller-location suffix.
+ */
+function __elephc_simplexml_warn(string $message): void {
+    if (str_starts_with($message, 'Warning: ')) {
+        __elephc_builtin_warning(rtrim(substr($message, 9), "\n"));
+        return;
+    }
+    __elephc_simplexml_warning($message);
 }
 
 function __elephc_simplexml_wrap(int $handle, string $class): SimpleXMLElement {
@@ -117,7 +134,7 @@ function __elephc_simplexml_write_warning(string $message, string $sourceCaller 
         else { $caller = $function . '()'; }
         break;
     }
-    __elephc_simplexml_warning('Warning: ' . $caller . ': ' . $message . "\n");
+    __elephc_simplexml_warn('Warning: ' . $caller . ': ' . $message . "\n");
 }
 
 function __elephc_simplexml_report_diagnostics(string $caller, bool $dom = false): void {
@@ -135,7 +152,7 @@ function __elephc_simplexml_report_text(string $text, string $caller, bool $dom 
         $category = 'Warning: ';
         if ($dom && str_starts_with($line, 'Notice: ')) { $category = 'Notice: '; $line = substr($line, 8); }
         elseif ($dom && str_starts_with($line, 'Warning: ')) { $line = substr($line, 9); }
-        __elephc_simplexml_warning($category . $caller . ': ' . $line . "\n");
+        __elephc_simplexml_warn($category . $caller . ': ' . $line . "\n");
     }
 }
 
@@ -148,6 +165,7 @@ final class __ElephcSimpleXMLLease {
 class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     private int $__elephc_handle = 0;
     private int $__elephc_position = -1;
+    private bool $__elephc_recovered = false;
     private mixed $__elephc_current = null;
     private mixed $__elephc_owner = null;
     private mixed $__elephc_write_tmp = null;
@@ -162,6 +180,10 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $required = $document ? 1 : 2;
         if ((elephc_xml_sx_int($handle, 15) & $required) === 0) { throw new Error('SimpleXMLElement is not properly initialized'); }
         return $handle;
+    }
+    final public function __elephc_set_document_encoding(string $encoding): bool {
+        $handle = $this->__elephc_initialized_handle(true);
+        return elephc_xml_sx_set_encoding($handle, $encoding) !== 0;
     }
     public function __construct(string $data, int $options = 0, bool $dataIsURL = false, string $namespaceOrPrefix = "", bool $isPrefix = false) {
         if (strlen($data) > 2147483647) { throw new Exception('SimpleXMLElement::__construct(): Argument #1 ($data) is too long'); }
@@ -182,7 +204,10 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             if ($handle === 0) { throw new Exception("String could not be parsed as XML", 0, $error); }
             throw $error;
         }
-        if ($handle === 0) { throw new Exception("String could not be parsed as XML"); }
+        if ($handle === 0) {
+            if (($options & 1) !== 0) { $this->__elephc_recovered = true; return; }
+            throw new Exception("String could not be parsed as XML");
+        }
         $this->__elephc_current = null;
         $this->__elephc_position = -1;
     }
@@ -195,7 +220,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $this->__elephc_projection_cache = null;
     }
     public function __toString(): string {
-        $handle = $this->__elephc_handle;
+        $handle = $this->__elephc_initialized_handle();
         return elephc_xml_sx_string($handle, 0);
     }
     final public function __elephc_int(): int { $handle = $this->__elephc_handle; return (int)elephc_xml_sx_string($handle, 0); }
@@ -392,14 +417,14 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             return !$throwOnFailure && $create && $numeric ? $selected->__elephc_number() : $selected;
         }
         if (!$create || !is_int($offset)) {
-            __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");
+            __elephc_simplexml_warn("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");
             return null;
         }
         $handle = $this->__elephc_initialized_handle();
         $mode = elephc_xml_sx_int($handle, 5);
         $length = elephc_xml_sx_int($handle, 0);
         if ($mode === 2 && $length === 0) {
-            __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");
+            __elephc_simplexml_warn("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");
             return null;
         }
         if ($mode < 3) {
@@ -418,7 +443,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
                 return null;
             }
         }
-        __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");
+        __elephc_simplexml_warn("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");
         return null;
     }
     final public function __elephc_dimension_set(mixed $offset, mixed $value): void {
@@ -483,8 +508,8 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if ($namespace !== null) { $flags = $flags + 2; }
         $child = elephc_xml_sx_mutate($handle, 20, $qualifiedName, $value ?? "", $namespace ?? "", $flags, 0);
         if ($child <= 0) {
-            if ($child === -10) { __elephc_simplexml_warning("Warning: SimpleXMLElement::addChild(): Cannot add element to attributes\n"); }
-            elseif ($child === -11) { __elephc_simplexml_warning("Warning: SimpleXMLElement::addChild(): Cannot add child. Parent is not a permanent member of the XML tree\n"); }
+            if ($child === -10) { __elephc_simplexml_warn("Warning: SimpleXMLElement::addChild(): Cannot add element to attributes\n"); }
+            elseif ($child === -11) { __elephc_simplexml_warn("Warning: SimpleXMLElement::addChild(): Cannot add child. Parent is not a permanent member of the XML tree\n"); }
             return null;
         }
         return __elephc_simplexml_wrap($child, get_class($this));
@@ -495,9 +520,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $flags = 1;
         if ($namespace !== null) { $flags = 3; }
         $attribute = elephc_xml_sx_mutate($handle, 21, $qualifiedName, $value, $namespace ?? "", $flags, 0);
-        if ($attribute === -12) { __elephc_simplexml_warning("Warning: SimpleXMLElement::addAttribute(): Unable to locate parent Element\n"); }
-        elseif ($attribute === -13) { __elephc_simplexml_warning("Warning: SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace\n"); }
-        elseif ($attribute === -14) { __elephc_simplexml_warning("Warning: SimpleXMLElement::addAttribute(): Attribute already exists\n"); }
+        if ($attribute === -12) { __elephc_simplexml_warn("Warning: SimpleXMLElement::addAttribute(): Unable to locate parent Element\n"); }
+        elseif ($attribute === -13) { __elephc_simplexml_warn("Warning: SimpleXMLElement::addAttribute(): Attribute requires prefix for namespace\n"); }
+        elseif ($attribute === -14) { __elephc_simplexml_warn("Warning: SimpleXMLElement::addAttribute(): Attribute already exists\n"); }
         if ($attribute > 0) { elephc_xml_sx_free($attribute); }
     }
     public function asXML(?string $filename = null): string|bool {
@@ -514,11 +539,15 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         if (elephc_xml_sx_int($handle, 1) === 0) { return false; }
         $xml = (string)hex2bin(elephc_xml_sx_xml_hex($handle, 1));
         if ($filename === null) { return $xml; }
+        if (str_contains($filename, '%00')) {
+            __elephc_simplexml_warn('Warning: SimpleXMLElement::' . $method . '(): URI must not contain percent-encoded NUL bytes' . "\n");
+            return false;
+        }
         if ($filename === '') { throw new ValueError('Path must not be empty'); }
         $written = file_put_contents($filename, $xml);
         if ($written === false || $written < 0) {
             $reason = elephc_xml_sx_file_error();
-            __elephc_simplexml_warning('Warning: SimpleXMLElement::' . $method . '(' . $filename . '): Failed to open stream: ' . $reason . "\n");
+            __elephc_simplexml_warn('Warning: SimpleXMLElement::' . $method . '(' . $filename . '): Failed to open stream: ' . $reason . "\n");
             return false;
         }
         return true;
@@ -558,7 +587,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
                 if ($result === -3) { $type = 'bool'; }
                 elseif ($result === -4) { $type = 'number'; }
                 elseif ($result === -5) { $type = 'string'; }
-                __elephc_simplexml_warning('Warning: SimpleXMLElement::xpath(): XPath expression must return a node set, ' . $type . " returned\n");
+                __elephc_simplexml_warn('Warning: SimpleXMLElement::xpath(): XPath expression must return a node set, ' . $type . " returned\n");
             }
             return false;
         }
@@ -572,10 +601,12 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         return $nodes;
     }
     public function getNamespaces(bool $recursive = false): array {
+        if ($this->__elephc_recovered) { return []; }
         $this->__elephc_initialized_handle();
         return $this->__elephc_namespaces(false, $recursive, false);
     }
     public function getDocNamespaces(bool $recursive = false, bool $fromRoot = true): array|false {
+        if ($this->__elephc_recovered) { return false; }
         $handle = $this->__elephc_initialized_handle($fromRoot);
         if ($fromRoot && (elephc_xml_sx_int($handle, 15) & 4) === 0) { return false; }
         return $this->__elephc_namespaces(true, $recursive, $fromRoot);
@@ -695,7 +726,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             . "\nStack trace:\n" . $error->getTraceAsString()
             . "\n  thrown in " . $error->getFile() . ' on line ' . $error->getLine() . "\n";
         set_error_handler(null);
-        try { __elephc_simplexml_warning($message); }
+        try { __elephc_simplexml_warn($message); }
         finally { restore_error_handler(); }
     }
     public function __elephc_debug_projection(mixed $projection): array<string, mixed> {
@@ -705,7 +736,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $result = ["__elephc_projection_seed" => null];
         unset($result["__elephc_projection_seed"]);
         if ($projection === null) {
-            __elephc_simplexml_warning('Deprecated: Returning null from ' . $class
+            __elephc_simplexml_warn('Deprecated: Returning null from ' . $class
                 . "::__debugInfo() is deprecated, return an empty array instead\n");
         } else {
             foreach ($projection as $key => $value) { $result[(string)$key] = $value; }
@@ -772,6 +803,45 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     public function __elephc_dom_set_attribute(string $name, string $value): bool {
         $handle = $this->__elephc_handle;
         return elephc_xml_sx_mutate($handle, 25, $name, $value, "", 0, 0) !== 0;
+    }
+    /**
+     * Appends a DOM child to this native view.
+     *
+     * Text is attached directly so the DOM node and the SimpleXML view keep sharing one
+     * libxml tree; element children copy their attributes and descendants through the
+     * ordinary addChild/addAttribute surface.
+     */
+    public function __elephc_dom_append_child(mixed $parent, DOMNode $node): DOMNode {
+        $handle = $this->__elephc_initialized_handle();
+        if ($node instanceof DOMText) {
+            $appended = elephc_xml_sx_html_append($handle, 3, '', (string)$node->nodeValue);
+            if ($appended !== 0) { elephc_xml_sx_free($appended); }
+            $node->parentNode = $parent;
+            $node->ownerDocument = $parent instanceof DOMDocument ? $parent : $parent->ownerDocument;
+            return $node;
+        }
+        if ($node instanceof DOMElement) {
+            $child = $this->addChild($node->nodeName);
+            if (!($child instanceof SimpleXMLElement)) { throw new DOMException('Hierarchy Request Error', 3); }
+            $xmlns = $node->__elephc_dom_xmlns;
+            if ($xmlns !== null) { $child->addAttribute('xmlns', (string)$xmlns); }
+            $attributes = $node->__attrs;
+            if (is_array($attributes)) {
+                foreach ($attributes as $pair) {
+                    if (is_array($pair)) { $child->addAttribute((string)$pair[0], (string)$pair[1]); }
+                }
+            }
+            $children = $node->childNodes;
+            if ($children instanceof DOMNodeList) {
+                foreach ($children as $grandchild) {
+                    if ($grandchild instanceof DOMNode) { $child->__elephc_dom_append_child($child, $grandchild); }
+                }
+            }
+            $node->parentNode = $parent;
+            $node->ownerDocument = $parent instanceof DOMDocument ? $parent : $parent->ownerDocument;
+            return $node;
+        }
+        throw new DOMException('Hierarchy Request Error', 3);
     }
     public function __elephc_dom_selections(bool $wholeDocument = false): array {
         $handle = $this->__elephc_handle;
@@ -882,9 +952,17 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
 }
 
-class SimpleXMLIterator extends SimpleXMLElement {}
+class SimpleXMLIterator extends SimpleXMLElement {
+    public function getChildren(): ?SimpleXMLIterator {
+        $value = parent::getChildren();
+        return $value instanceof SimpleXMLIterator ? $value : null;
+    }
+}
 
 function simplexml_load_string(string $data, ?string $class_name = "SimpleXMLElement", int $options = 0, string $namespace_or_prefix = "", bool $is_prefix = false): SimpleXMLElement|false {
+    if ($options > 2147483647 || $options < -2147483648) {
+        throw new ValueError('simplexml_load_string(): Argument #3 ($options) is too large');
+    }
     $class = __elephc_simplexml_class($class_name, 'simplexml_load_string');
     if (strlen($data) > 2147483647) { throw new ValueError('simplexml_load_string(): Argument #1 ($data) is too long'); }
     if (strlen($namespace_or_prefix) > 2147483647) { throw new ValueError('simplexml_load_string(): Argument #4 ($namespace_or_prefix) is too long'); }
@@ -892,6 +970,9 @@ function simplexml_load_string(string $data, ?string $class_name = "SimpleXMLEle
     $handle = elephc_xml_sx_load($data, strlen($data), $options, $namespace_or_prefix, (int)$is_prefix, "");
     if ($handle === 0) {
         __elephc_simplexml_report_diagnostics('simplexml_load_string()');
+        // LIBXML_RECOVER (1) leaves PHP with an uninitialized SimpleXMLElement instead of
+        // returning false, so later methods raise "not properly initialized".
+        if (($options & 1) !== 0) { return __elephc_simplexml_allocate($class); }
         return false;
     }
     $object = __elephc_simplexml_wrap($handle, $class);
@@ -900,11 +981,15 @@ function simplexml_load_string(string $data, ?string $class_name = "SimpleXMLEle
 }
 function simplexml_load_file(string $filename, ?string $class_name = "SimpleXMLElement", int $options = 0, string $namespace_or_prefix = "", bool $is_prefix = false): SimpleXMLElement|false {
     if (strpos($filename, "\0") !== false) { throw new ValueError('simplexml_load_file(): Argument #1 ($filename) must not contain any null bytes'); }
+    if ($options > 2147483647 || $options < -2147483648) {
+        throw new ValueError('simplexml_load_file(): Argument #3 ($options) is too large');
+    }
     $class = __elephc_simplexml_class($class_name, 'simplexml_load_file');
     if ($options < -2147483648 || $options > 2147483647) { throw new ValueError('simplexml_load_file(): Argument #3 ($options) is too large'); }
     $handle = __elephc_simplexml_file_handle($filename, $options, $namespace_or_prefix, $is_prefix, 'simplexml_load_file()');
     if ($handle === 0) {
         __elephc_simplexml_report_diagnostics('simplexml_load_file()');
+        if (($options & 1) !== 0) { return __elephc_simplexml_allocate($class); }
         return false;
     }
     $object = __elephc_simplexml_wrap($handle, $class);
@@ -968,7 +1053,7 @@ function simplexml_import_dom(object $node, ?string $class_name = "SimpleXMLElem
             throw new TypeError('simplexml_import_dom(): Argument #1 ($node) must be a valid XML node');
         }
         if (elephc_xml_sx_int($handle, 4) !== 1) {
-            __elephc_simplexml_warning("Warning: simplexml_import_dom(): Invalid Nodetype to import\n");
+            __elephc_simplexml_warn("Warning: simplexml_import_dom(): Invalid Nodetype to import\n");
             return null;
         }
         return __elephc_simplexml_wrap(elephc_xml_sx_select($handle, 16, '', '', 0, 0), $class);
@@ -989,12 +1074,12 @@ function __elephc_simplexml_import_node(DOMNode $node, string $class): ?SimpleXM
     $document = $node->ownerDocument;
     if ($node instanceof DOMDocument) { $document = $node; }
     if (!($document instanceof DOMDocument)) {
-        __elephc_simplexml_warning("Warning: simplexml_import_dom(): Imported Node must have associated Document\n");
+        __elephc_simplexml_warn("Warning: simplexml_import_dom(): Imported Node must have associated Document\n");
         return null;
     }
     if ((!($node instanceof DOMDocument) && !($node instanceof DOMElement))
         || ($node instanceof DOMDocument && !($document->documentElement instanceof DOMElement))) {
-        __elephc_simplexml_warning("Warning: simplexml_import_dom(): Invalid Nodetype to import\n");
+        __elephc_simplexml_warn("Warning: simplexml_import_dom(): Invalid Nodetype to import\n");
         return null;
     }
     if ($bound instanceof SimpleXMLElement) {

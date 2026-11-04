@@ -69,8 +69,12 @@ pub(crate) fn build_class_info_recursive(
     }
 
     let class = load_class(class_name, class_map)?;
-    build_loaded_class_info(class_name, class, class_map, checker, next_class_id, building)
-        .map_err(|error| locate_at_declaration(error, class_span_of(class_name, class_map)))
+    let result = build_loaded_class_info(class_name, class, class_map, checker, next_class_id, building)
+        .map_err(|error| locate_at_declaration(error, class_span_of(class_name, class_map)));
+    // A failed build must not poison later sibling builds with a stale "circular inheritance"
+    // diagnostic: the class is genuinely absent, but it is not still being built.
+    building.remove(class_name);
+    result
 }
 
 /// The declaration span of `class_name`, when the program declares it.
@@ -210,6 +214,9 @@ fn resolve_parent_info(
             ),
         ));
     }
+    checker
+        .pending_class_parents
+        .insert(class_name.to_string(), parent_name.clone());
     build_class_info_recursive(parent_name, class_map, checker, next_class_id, building)?;
     checker
         .classes

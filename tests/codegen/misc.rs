@@ -797,3 +797,39 @@ echo constant("APP_X"), "|", \constant("APP_X");
     );
     assert_eq!(out, "11|11");
 }
+
+/// A top-level `$GLOBALS` read projects every initialized global, and recursive merges of
+/// colliding object or scalar entries follow PHP's convert-to-array rule.
+#[test]
+fn globals_array_projects_top_level_values_and_merges_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class GlobalsObject { public int $x = 1; }
+$root = new GlobalsObject();
+$n = 7;
+$merged = array_merge_recursive($GLOBALS, $GLOBALS);
+var_dump($merged["root"]);
+var_dump($merged["n"]);
+var_dump(is_array($GLOBALS), $GLOBALS["n"]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(1) {\n  [\"x\"]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(1)\n  }\n}\narray(2) {\n  [0]=>\n  int(7)\n  [1]=>\n  int(7)\n}\nbool(true)\nint(7)\n"
+    );
+}
+
+/// A read before the variable's first store warns and yields null, even though the checker
+/// learned the name from a later assignment in the same scope.
+#[test]
+fn undefined_read_before_first_store_warns_and_reads_null() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo '[', $value, ']';
+$value = 1;
+echo '[', $value, ']';
+"#);
+    assert!(out.success, "stderr={}", out.stderr);
+    assert_eq!(out.stdout, "[][1]");
+    assert_eq!(out.stderr.matches("Warning: Undefined variable $value").count(), 1, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

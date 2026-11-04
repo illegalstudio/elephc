@@ -137,6 +137,7 @@ impl Checker {
             current_loop_storage_scope: crate::types::TOP_LEVEL_SCOPE.to_string(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
+            pending_class_parents: HashMap::new(),
             method_property_refinements: None,
             clone_override_destinations: Default::default(),
             dynamic_property_write_destinations: Default::default(),

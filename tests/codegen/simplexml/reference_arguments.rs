@@ -225,3 +225,32 @@ echo 'after|'; unset($keptReferenceRoot); echo 'end|';
         assert!(!out.stderr.contains("Warning:"), "mode={mode}: {}", out.stderr);
     }
 }
+
+/// Binding a reference to a SimpleXML property seeds an independent cell with the child view.
+///
+/// PHP auto-vivifies the selected child, then writes through the reference cell only: the XML
+/// tree keeps the original value. An ordinary object keeps its shared property cell, so the
+/// XML selection path must not take it over.
+#[test]
+fn test_simplexml_property_reference_binding_bundle() {
+    if skip_without_xml_native("test_simplexml_property_reference_binding_bundle") { return; }
+    let source = r#"<?php
+class PropertyReferencePlain { public int $value = 1; }
+$xml = new SimpleXMLElement('<r><a>old</a></r>');
+$reference =& $xml->a;
+echo get_class($reference), ':', (string)$reference, '|';
+echo $xml->asXML(), '|';
+$missing = new SimpleXMLElement('<a/>');
+$absent =& $missing->a;
+echo $missing->asXML(), '|';
+$plain = new PropertyReferencePlain();
+$shared =& $plain->value;
+$shared = 5;
+echo $plain->value, '|';
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    let expected = "SimpleXMLElement:old|<?xml version=\"1.0\"?>\n<r><a>old</a></r>\n|<?xml version=\"1.0\"?>\n<a><a/></a>\n|5|";
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

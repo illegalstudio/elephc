@@ -92,6 +92,24 @@ that names one the compiled program never spelled gets it created with these
 same contents when the fragment starts; see
 [Scope behavior](eval.md#scope-behavior) for how such a value is shared.
 
+### `$GLOBALS`
+
+A `$GLOBALS` read projects the global symbol table as a `string => mixed`
+associative array. At the top level it contains every initialized top-level
+variable; inside a function it contains the `global $name` aliases and the
+superglobals spelled in that body. This is what lets an ordinary program hand
+the global table to a function such as `array_merge_recursive()`:
+
+```php
+$root = simplexml_load_string('<root><child/></root>');
+var_dump(array_merge_recursive($GLOBALS, $GLOBALS)["root"]);
+```
+
+The projection is a snapshot: writing an element of it does not update the
+corresponding top-level variable. Use an ordinary assignment or `global` for
+writes. `$GLOBALS` is not listed by `get_defined_vars()`, matching its special
+engine role rather than a normal variable.
+
 #### Known limitation
 
 Reading an **element** of the nested `$_SERVER['argv']` does not work: the index

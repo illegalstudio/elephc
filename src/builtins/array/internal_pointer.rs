@@ -13,7 +13,6 @@
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
-use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 /// Validates one internal-array-pointer call and returns its `Mixed` result type.
@@ -35,22 +34,16 @@ pub fn check_array_pointer_call(
     cx: &mut BuiltinCheckCtx,
     name: &str,
 ) -> Result<PhpType, CompileError> {
-    if !matches!(cx.args[0].kind, ExprKind::Variable(_)) {
-        return Err(CompileError::new(
-            cx.span,
-            &format!(
-                "{}() argument must be an array variable: elephc keeps the internal array \
-                 pointer in a hidden slot beside the variable, so properties, array \
-                 elements, and call results have no pointer to move",
-                name,
-            ),
-        ));
-    }
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if !ty.is_php_array() && !matches!(
-        ty,
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
-    ) {
+    let contains_array = |ty: &PhpType| match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => true,
+        PhpType::Union(members) => members.iter().any(|member| matches!(
+            member,
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+        )),
+        _ => false,
+    };
+    if !ty.is_php_array() && !contains_array(&ty) {
         return Err(CompileError::new(
             cx.span,
             &format!("{}() argument must be array", name),

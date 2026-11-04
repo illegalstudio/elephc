@@ -539,7 +539,26 @@ fn validate_interface_method(
         .find(|m| php_symbol_key(&m.name) == method_name);
     let required_owner = interface_info.method_declaring_interfaces
         .get(method_name).map(String::as_str).unwrap_or(interface_name);
-    let tentative_return = php_symbol_key(required_owner) == "serializable";
+    let has_return_type_will_change = actual_method.is_some_and(|method| {
+        method.attributes.iter().any(|group| {
+            group.attributes.iter().any(|attribute| {
+                attribute.name.as_str().trim_start_matches('\\')
+                    .eq_ignore_ascii_case("ReturnTypeWillChange")
+            })
+        })
+    });
+    // PHP allows `__toString` to omit its declared return, and the internal SimpleXML
+    // classes carry tentative Countable/Stringable returns that `#[ReturnTypeWillChange]`
+    // may replace exactly as php-src's own fixtures do.
+    let tentative_return = php_symbol_key(required_owner) == "serializable"
+        || (method_name == "__tostring" && !actual_sig.declared_return)
+        || (method_name == "count"
+            && has_return_type_will_change
+            && class
+                .extends
+                .as_deref()
+                .is_some_and(|parent| parent.trim_start_matches('\\')
+                    .eq_ignore_ascii_case("SimpleXMLElement")));
     validate_signature_compatibility(
         actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,

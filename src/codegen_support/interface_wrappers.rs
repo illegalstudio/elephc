@@ -66,7 +66,7 @@ pub(crate) fn emit_interface_return_wrappers(
 /// * `classes` - Map of all known classes with their method signatures
 fn emit_class_interface_return_wrappers(
     emitter: &mut Emitter,
-    _class_name: &str,
+    class_name: &str,
     class_info: &ClassInfo,
     interfaces: &HashMap<String, InterfaceInfo>,
     classes: &HashMap<String, ClassInfo>,
@@ -126,7 +126,49 @@ fn emit_class_interface_return_wrappers(
             )?;
         }
     }
+    // `Countable::count()` is declared as int, but `#[ReturnTypeWillChange]` subclasses may
+    // return a string. PHP's count() casts that result, so the dense count table needs an
+    // adapter that runs the string-to-int conversion after the implementation.
+    if class_info.interfaces.iter().any(|name| name.eq_ignore_ascii_case("Countable")) {
+        if let Some(sig) = class_info.methods.get("count") {
+            if sig.return_type.codegen_repr() == PhpType::Str {
+                emit_count_string_wrapper(emitter, class_name, class_info);
+            }
+        }
+    }
     Ok(())
+}
+
+/// Emits a Countable adapter that calls a string-returning `count()` and casts to int.
+fn emit_count_string_wrapper(emitter: &mut Emitter, class_name: &str, class_info: &ClassInfo) {
+    let implementation = class_info
+        .method_impl_classes
+        .get("count")
+        .map(|owner| method_symbol(owner, "count"))
+        .unwrap_or_else(|| method_symbol(class_name, "count"));
+    let wrapper = format!("_count_str_wrap_{}", class_info.class_id);
+    emitter.blank();
+    emitter.comment("--- Countable::count string-return adapter ---");
+    emitter.label_global(&wrapper);
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-16]!");                   // preserve wrapper return address
+            emitter.instruction("mov x29, sp");                                 // establish the adapter frame
+            emitter.instruction(&format!("bl {implementation}"));               // call the string-returning count()
+            emitter.instruction("bl __rt_str_to_int");                          // apply PHP's string-to-int cast
+            emitter.instruction("ldp x29, x30, [sp], #16");                     // restore the wrapper frame
+            emitter.instruction("ret");                                         // return the integer count
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the wrapper frame
+            emitter.instruction("mov rbp, rsp");                                // establish the adapter frame
+            emitter.instruction(&format!("call {implementation}"));             // call the string-returning count()
+            emitter.instruction("call __rt_str_to_int");                        // apply PHP's string-to-int cast
+            emitter.instruction("mov rsp, rbp");                                // restore the wrapper frame
+            emitter.instruction("pop rbp");                                     // restore the caller frame
+            emitter.instruction("ret");                                         // return the integer count
+        }
+    }
 }
 
 /// Returns true if an interface method implementation needs a return wrapper.

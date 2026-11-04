@@ -18,7 +18,12 @@ impl Checker {
     /// Accepts scalar names and objects with PHP's public string conversion contract.
     pub(crate) fn valid_dynamic_property_name_type(&self, ty: &PhpType) -> bool {
         match ty {
-            PhpType::Str | PhpType::Int | PhpType::Mixed => true,
+            // PHP coerces every scalar, null, and array to a property-name string at run
+            // time (an array emits its "Array to string conversion" warning); only an
+            // object without __toString is rejected.
+            PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
+            | PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. }
+            | PhpType::Mixed => true,
             PhpType::Object(class) => self.object_type_implements_interface(class, "Stringable")
                 || self.classes.get(class).is_some_and(|info| {
                     let key = crate::names::php_symbol_key("__toString");
