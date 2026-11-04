@@ -111,3 +111,24 @@ Cannot assign float to property Base::$n of type int kept min";
         assert_eq!(run(source, optimized), expected, "optimized={optimized}");
     }
 }
+
+/// A set hook on an int property still receives checked arithmetic instead of the raw slot.
+#[test]
+fn test_integer_property_updates_keep_set_hooks() {
+    let source = r#"<?php
+final class Hooked {
+    public int $n = 1 {
+        set(int $value) { echo "set ", $value, " "; $this->n = $value * 10; }
+    }
+}
+$h = new Hooked();
+$h->n = $h->n + $argc;
+$h->n += $argc;
+echo $h->n;
+"#;
+    let expected = "set 2 set 21 210";
+    php_oracle(source, expected);
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized), expected, "optimized={optimized}");
+    }
+}
