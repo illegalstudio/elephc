@@ -261,6 +261,18 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                     }
                 }
             }
+            // Numeric HTML character references decode to UTF-8 at compile time. Only a
+            // literal call whose entities are all numeric is folded; named entities and
+            // non-UTF-8 encodings keep the runtime decoder's full table.
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("html_entity_decode")
+            {
+                if let Some(decoded) = fold_numeric_html_entities(&args) {
+                    return Expr::new(ExprKind::StringLiteral(decoded), span);
+                }
+            }
             if let Some(rebound) = namespace_fallbacks::resolve_call(&name, &args, span) {
                 return fold_expr(rebound);
             }
@@ -563,6 +575,69 @@ fn fold_instanceof_target(target: InstanceOfTarget) -> InstanceOfTarget {
         InstanceOfTarget::Generic(class_type) => InstanceOfTarget::Generic(class_type),
         InstanceOfTarget::Expr(expr) => InstanceOfTarget::Expr(Box::new(fold_expr(*expr))),
     }
+}
+
+/// Decodes a literal `html_entity_decode()` argument that contains only numeric references.
+///
+/// Returns `None` when any argument is not a literal, the encoding is not UTF-8, the input
+/// contains a named entity, or a reference is malformed/out of range: the runtime decoder owns
+/// those cases. At least one reference must decode, so ordinary literal strings stay untouched.
+fn fold_numeric_html_entities(args: &[Expr]) -> Option<String> {
+    let ExprKind::StringLiteral(input) = &args.first()?.kind else {
+        return None;
+    };
+    if let Some(flags) = args.get(1) {
+        if !matches!(flags.kind, ExprKind::IntLiteral(_)) {
+            return None;
+        }
+    }
+    if let Some(encoding) = args.get(2) {
+        let ExprKind::StringLiteral(encoding) = &encoding.kind else {
+            return None;
+        };
+        if !matches!(encoding.to_ascii_uppercase().as_str(), "UTF-8" | "UTF8") {
+            return None;
+        }
+    }
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.char_indices().peekable();
+    let mut decoded_any = false;
+    while let Some((_, character)) = chars.next() {
+        if character != '&' {
+            output.push(character);
+            continue;
+        }
+        let Some((_, '#')) = chars.peek().copied() else {
+            return None;
+        };
+        chars.next();
+        let hex = matches!(chars.peek().map(|(_, c)| *c), Some('x' | 'X'));
+        if hex {
+            chars.next();
+        }
+        let mut value: u32 = 0;
+        let mut digits = 0usize;
+        while let Some((_, digit)) = chars.peek().copied() {
+            let digit_value = if hex {
+                digit.to_digit(16)
+            } else {
+                digit.to_digit(10)
+            };
+            let Some(digit_value) = digit_value else { break };
+            value = value.checked_mul(if hex { 16 } else { 10 })?.checked_add(digit_value)?;
+            digits += 1;
+            chars.next();
+        }
+        if digits == 0 || !matches!(chars.next(), Some((_, ';'))) {
+            return None;
+        }
+        if value == 0 || value > 0x10FFFF || (0xD800..=0xDFFF).contains(&value) {
+            return None;
+        }
+        output.push(char::from_u32(value)?);
+        decoded_any = true;
+    }
+    decoded_any.then_some(output)
 }
 
 /// Folds the target of a first-class callable, recursing into object expressions.
