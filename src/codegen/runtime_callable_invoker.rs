@@ -231,6 +231,23 @@ pub(crate) fn emit_runtime_callable_invoker_with_exception_boundary(
     emit_runtime_callable_invoker_impl(emitter, data, invoker, true);
 }
 
+/// Files shared owner callbacks outside invoker bodies that may be renamed or deduplicated.
+pub(super) fn prepare_invoker_owner_visitor(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    count: usize,
+    label: &str,
+) -> String {
+    let (visitor, fresh) = data.invoker_owner_visitor(count, format!("{label}__gc_argument_owners"));
+    if fresh {
+        let scope = emitter.begin_out_of_line();
+        InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, count)
+            .emit_frame_visitor(emitter, &visitor);
+        emitter.end_out_of_line(scope);
+    }
+    visitor
+}
+
 /// Bounds every invoker's owners; eval receives a pending throw while native callers rethrow it.
 fn emit_runtime_callable_invoker_impl(
     emitter: &mut Emitter,
@@ -242,8 +259,8 @@ fn emit_runtime_callable_invoker_impl(
     let escape_label = format!("{}_eval_escape", local_label_prefix(invoker.label, emitter.target));
     let argument_owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, invoker.sig.params.len());
     let frame_size = argument_owners.frame_size();
-    let (owner_visitor, emit_owner_visitor) = data.invoker_owner_visitor(
-        invoker.sig.params.len(), format!("{}__gc_argument_owners", invoker.label));
+    let owner_visitor = prepare_invoker_owner_visitor(
+        emitter, data, invoker.sig.params.len(), invoker.label);
     let mut ctx = InvokerEmitContext::new(
         invoker.label,
         argument_owners,
@@ -329,7 +346,6 @@ fn emit_runtime_callable_invoker_impl(
     } else {
         abi::emit_jump(emitter, "__rt_throw_current");
     }
-    if emit_owner_visitor { ctx.argument_owners.emit_frame_visitor(emitter, &owner_visitor); }
 }
 
 /// Boxes the target result into the invoker's uniform Mixed return cell.

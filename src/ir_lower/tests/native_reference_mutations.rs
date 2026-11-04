@@ -10,6 +10,34 @@
 
 use crate::ir::{Immediate, Op, Ownership, RuntimeCallTarget, ValueDef};
 
+/// Final Mixed frame storage cannot rebox an append through a selected native array reference.
+#[test]
+fn native_reference_array_appends_keep_the_selected_payload_on_every_target() {
+    let source = r#"<?php
+function nativeMutationRawArray(array<mixed> &$items, string $code): void {
+    eval($code); $items[] = 1;
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let mut module = super::lower_source_at_for_target(source,
+            std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(name).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "nativeMutationRawArray").unwrap();
+        let raw = function.instructions.iter().find(|inst| inst.op == Op::ArrayPush)
+            .unwrap_or_else(|| panic!("{name}: raw native cells must retain their concrete append"));
+        let receiver = function.value(raw.operands[0]).unwrap();
+        assert!(matches!(receiver.php_type, crate::types::PhpType::Array(_)),
+            "{name}: the raw arm cannot manufacture a boxed owner");
+        let ValueDef::Instruction { inst, .. } = receiver.def else { panic!("{name}: raw receiver"); };
+        assert_eq!(function.instruction(inst).unwrap().op, Op::LoadRefCell);
+        assert_eq!(receiver.ownership, Ownership::Borrowed, "{name}: borrow the actual native payload");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::MixedArrayAppend),
+            "{name}: canonical cells must retain their live boxed append");
+        crate::ir_lower::enable_native_reference_validation(&mut module).unwrap();
+        crate::ir::validate_module(&module).unwrap();
+    }
+}
+
 /// Append and indexed writes use live cells without changing subsequent value-copy semantics.
 #[test]
 fn native_reference_mutations_select_live_layouts_on_every_target() {

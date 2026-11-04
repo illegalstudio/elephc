@@ -11,6 +11,41 @@
 use super::*;
 use crate::codegen_support::platform::{Arch, Target};
 
+/// Renaming and deduplicating eval invokers cannot strand their shared owner callbacks.
+#[test]
+fn eval_invoker_owner_visitors_survive_body_deduplication_on_every_target() {
+    let length = crate::types::first_class_callable_builtin_sig("strlen").unwrap();
+    let kind = crate::types::first_class_callable_builtin_sig("gettype").unwrap();
+    assert_eq!(length.params.len(), kind.params.len());
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let module = Module::new(target);
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        let mut state = EvalCallableEmitState::new();
+        let mut labels = Vec::new();
+        for signature in [&length, &kind, &length] {
+            labels.push(emit_eval_runtime_callable_invoker_inline(
+                &module, &mut emitter, &mut data, &mut state, signature, &[], false, None));
+        }
+        assert_eq!(labels[0], labels[2], "{name}: identical invokers remain deduplicated");
+        assert_ne!(labels[0], labels[1], "{name}: distinct decoding contracts retain separate bodies");
+        let assembly = emitter.output();
+        assert!(!assembly.contains(PENDING_INVOKER_LABEL), "{name}: unresolved placeholder: {assembly}");
+        let callbacks = assembly.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .filter(|symbol| symbol.ends_with("__gc_argument_owners")
+                || symbol.ends_with("__gc_argument_owners_cleanup"))
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(callbacks.len(), 2, "{name}: all invokers must share one callback pair: {assembly}");
+        for callback in callbacks {
+            assert_eq!(assembly.matches(&format!("{callback}:\n")).count(), 1,
+                "{name}: every referenced callback needs one real definition: {assembly}");
+        }
+        assert_eq!(assembly.matches("__rt_gc_frame_owner_slot").count(), length.params.len() + 2,
+            "{name}: callbacks are shared without losing any owner slots: {assembly}");
+    }
+}
+
 /// Eval callable arrays include the native static factory even when it has no EIR body.
 #[test]
 fn eval_static_factory_descriptor_cases_exist_on_every_target() {

@@ -817,14 +817,19 @@ fn emit_eval_runtime_callable_invoker_inline(
         php_return_status: true,
         defaults: &defaults,
     };
+    // Owner callbacks outlive this placeholder body, including when an identical body is dropped.
+    // Allocate their real label before detaching so body renaming cannot invalidate the cache.
+    let owner_label = state.next_label("callable_argument_owners");
+    let _ = super::runtime_callable_invoker::prepare_invoker_owner_visitor(
+        emitter, data, sig.params.len(), &owner_label);
     // See `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
     let scope = emitter.begin_out_of_line();
     super::runtime_callable_invoker::emit_runtime_callable_invoker(emitter, data, &invoker);
     let body = emitter.end_detached(scope);
     // Most callees share a few shapes: an `eval()` program emitted 633 of these invokers with
-    // 148 distinct bodies. The invoker emitter keeps no state outside its text, and its data
-    // entries are content-deduplicated strings and floats, so a body whose text matches an
-    // earlier one is dropped for that one's label.
+    // 148 distinct bodies. Shared owner callbacks are already filed under stable labels, and
+    // data entries are content-deduplicated strings and floats, so a body whose text matches
+    // an earlier one is dropped for that one's label.
     state.emitted_invoker(body, |body| emitter.push_out_of_line(body))
 }
 
