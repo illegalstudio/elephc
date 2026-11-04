@@ -79,7 +79,7 @@ fn emit_openssl_encrypt(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [x10, #40]");                                  // C arg5 = passphrase length
     emitter.instruction("ldr x6, [x10, #56]");                                  // C arg6 = IV pointer
     emitter.instruction("ldr x7, [x10, #64]");                                  // C arg7 = IV length
-    abi::emit_symbol_address(emitter, "x9", "_elephc_crypto_encrypt_fn");
+    abi::emit_symbol_address(emitter, "x9", "_elephc_openssl_encrypt_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load published encryption bridge entry
     emitter.instruction("cbz x9, __rt_openssl_encrypt_fail");                   // missing bridge returns PHP false
     abi::emit_call_reg(emitter, "x9");
@@ -194,7 +194,7 @@ fn emit_openssl_encrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // C arg3 = plaintext length
     emitter.instruction("mov r8, QWORD PTR [r10 + 32]");                        // C arg4 = passphrase pointer
     emitter.instruction("mov r9, QWORD PTR [r10 + 40]");                        // C arg5 = passphrase length
-    abi::emit_load_symbol_to_reg(emitter, "r11", "_elephc_crypto_encrypt_fn", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_elephc_openssl_encrypt_fn", 0);
     emitter.instruction("test r11, r11");                                       // check whether encryption bridge was published
     emitter.instruction("jz __rt_openssl_encrypt_fail_linux_x86_64");           // missing bridge returns PHP false
     abi::emit_call_reg(emitter, "r11");
@@ -317,7 +317,7 @@ fn emit_openssl_decrypt(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [x10, #40]");                                  // C arg5 = passphrase length
     emitter.instruction("ldr x6, [x10, #56]");                                  // C arg6 = IV pointer
     emitter.instruction("ldr x7, [x10, #64]");                                  // C arg7 = IV length
-    abi::emit_symbol_address(emitter, "x9", "_elephc_crypto_decrypt_fn");
+    abi::emit_symbol_address(emitter, "x9", "_elephc_openssl_decrypt_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load published decryption bridge entry
     emitter.instruction("cbz x9, __rt_openssl_decrypt_fail");                   // missing bridge returns PHP false
     abi::emit_call_reg(emitter, "x9");
@@ -405,7 +405,7 @@ fn emit_openssl_decrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // C arg3 = raw ciphertext length
     emitter.instruction("mov r8, QWORD PTR [r10 + 32]");                        // C arg4 = passphrase pointer
     emitter.instruction("mov r9, QWORD PTR [r10 + 40]");                        // C arg5 = passphrase length
-    abi::emit_load_symbol_to_reg(emitter, "r11", "_elephc_crypto_decrypt_fn", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_elephc_openssl_decrypt_fn", 0);
     emitter.instruction("test r11, r11");                                       // check whether decryption bridge was published
     emitter.instruction("jz __rt_openssl_decrypt_fail_linux_x86_64");           // missing bridge returns PHP false
     abi::emit_call_reg(emitter, "r11");

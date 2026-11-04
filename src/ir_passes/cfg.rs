@@ -69,6 +69,31 @@ pub(crate) fn successors(term: &Terminator) -> Vec<BlockId> {
     }
 }
 
+/// Returns true when the CFG has an edge to a block at or before its source in
+/// reverse postorder, the cheap necessary condition for a natural loop.
+pub(crate) fn has_back_edge(func: &Function) -> bool {
+    let order = reverse_postorder(func);
+    let mut position = vec![usize::MAX; func.blocks.len()];
+    for (index, block) in order.iter().enumerate() {
+        if let Some(slot) = position.get_mut(block.as_raw() as usize) {
+            *slot = index;
+        }
+    }
+    func.blocks.iter().any(|block| {
+        let Some(term) = &block.terminator else {
+            return false;
+        };
+        let source = position[block.id.as_raw() as usize];
+        successors(term).iter().any(|successor| {
+            position
+                .get(successor.as_raw() as usize)
+                .copied()
+                .unwrap_or(usize::MAX)
+                <= source
+        })
+    })
+}
+
 /// Builds the predecessor list for every block: `preds[b]` holds each block
 /// whose terminator branches to `b`, in block-index order.
 ///

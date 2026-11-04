@@ -22,6 +22,9 @@ mod gc_writes;
 #[path = "application_gc_paths.rs"]
 mod gc_paths;
 
+#[path = "application_bootstrap_failures.rs"]
+mod bootstrap_failures;
+
 #[path = "application_callable_cycles.rs"]
 mod callable_cycles;
 
@@ -276,53 +279,6 @@ fn web_application_registration_is_typed() {
     assert!(!result.status.success());
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(stderr.contains("WorkerApplication"), "{stderr}");
-}
-
-/// Failed and missing registrations never admit HTTP requests or trigger application shutdown.
-#[test]
-fn web_application_failed_bootstrap_never_serves_requests() {
-    let partial = r#"
-class PartialApplication implements Elephc\Web\WorkerApplication {
-    public function handle(Elephc\Web\Request $request): void {}
-    public function shutdown(): void { file_put_contents('__LOG__', "shutdown\n", FILE_APPEND); }
-    public function __destruct() { file_put_contents('__LOG__', "destroy\n", FILE_APPEND); }
-}
-Elephc\Web\Worker::register(new PartialApplication());
-"#;
-    for bootstrap in [
-        "throw new RuntimeException('bootstrap failed');".to_string(),
-        "usleep(1100000); throw new RuntimeException('slow bootstrap failed');".to_string(),
-        "echo 'no registration';".to_string(),
-        format!("{partial} throw new RuntimeException('after registration');"),
-        format!("{partial} return;"),
-        format!("{partial} Elephc\\Web\\Worker::register(new PartialApplication());"),
-        format!("{partial} Elephc\\Web\\Worker::completeBootstrap(); return;"),
-    ] {
-        let fixture = Fixture(make_test_dir("web_application_boot_failure"));
-        let binary = application(&fixture, &format!("<?php {bootstrap}"));
-        let addr = format!("127.0.0.1:{}", free_port());
-        let stderr_path = fixture.0.join("bootstrap.stderr");
-        let stderr_file = fs::File::create(&stderr_path).unwrap();
-        let mut server = ServerGuard::new(Command::new(binary).args(["--listen", &addr, "--workers", "1"]).stdout(Stdio::null()).stderr(Stdio::from(stderr_file)).spawn().unwrap());
-        let deadline = Instant::now() + Duration::from_secs(25);
-        let status = loop {
-            assert!(TcpStream::connect(&addr).is_err(), "failed bootstrap accepted a connection");
-            if let Some(status) = server.try_wait().unwrap() { break status; }
-            assert!(Instant::now() < deadline, "startup crash-loop protection did not stop the master");
-            std::thread::sleep(Duration::from_millis(25));
-        };
-        assert!(!status.success(), "failed application startup must report failure");
-        let diagnostics = fs::read_to_string(stderr_path).unwrap();
-        if bootstrap.contains("throw new RuntimeException") {
-            assert!(diagnostics.contains("bootstrap RuntimeException: "), "{diagnostics}");
-            assert!(diagnostics.contains(" at ") && diagnostics.contains("app.php:"), "{diagnostics}");
-        }
-        if bootstrap.contains("PartialApplication") {
-            let log = fs::read_to_string(fixture.0.join("lifecycle.log")).unwrap();
-            assert!(!log.is_empty());
-            assert!(log.lines().all(|line| line == "destroy"), "{log}");
-        }
-    }
 }
 
 /// Streams created during bootstrap and retained from a request outlive request resource pruning.

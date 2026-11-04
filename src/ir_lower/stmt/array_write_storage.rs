@@ -370,8 +370,13 @@ pub(super) fn is_empty_indexed_array_element(elem_ty: &PhpType) -> bool {
 }
 
 /// Preserves the first concrete value type written into an empty indexed array.
+///
+/// A first value whose storage is the inline tagged scalar (`int|null`, as `$n ?? null` over a
+/// `?int $n` is) widens the array to boxed `mixed` slots instead: the tagged indexed array has no
+/// `ArrayPush`/`ArraySet` entry for an empty receiver and most consumers refuse it (see
+/// `box_tagged_scalar_element`), so the append and the offset write box the value like a literal.
 pub(super) fn normalize_empty_array_write_element_type(item_type: PhpType) -> PhpType {
-    match normalize_materialized_element_type(item_type) {
+    match crate::ir_lower::expr::box_tagged_scalar_element(normalize_materialized_element_type(item_type)) {
         PhpType::Void => PhpType::Mixed,
         other => other,
     }

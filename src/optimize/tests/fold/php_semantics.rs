@@ -837,3 +837,108 @@ fn test_fold_assoc_array_access_without_spread_still_folds() {
     };
     assert_eq!(expr.kind, ExprKind::IntLiteral(1));
 }
+
+/// Literal `intval`/`floatval`/`strval` calls fold through the same PHP coercion helpers as an
+/// explicit cast, while a second base argument, a float-to-string conversion, and a user-shadowed
+/// name stay on the runtime path.
+#[test]
+fn test_fold_direct_scalar_builtin_calls_match_php() {
+    let fold_one = |name: &str, args: Vec<Expr>| {
+        let call = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified(name),
+                args,
+            },
+            Span::dummy(),
+        );
+        let result = fold_constants(vec![Stmt::echo(call)]);
+        let StmtKind::Echo(expr) = &result[0].kind else {
+            panic!("expected echo");
+        };
+        expr.kind.clone()
+    };
+    assert_eq!(
+        fold_one("intval", vec![Expr::string_lit("12345")]),
+        ExprKind::IntLiteral(12345)
+    );
+    assert_eq!(
+        fold_one("intval", vec![Expr::string_lit("9223372036854775808")]),
+        ExprKind::IntLiteral(i64::MAX)
+    );
+    assert_eq!(
+        fold_one("floatval", vec![Expr::string_lit("1.5")]),
+        ExprKind::FloatLiteral(1.5)
+    );
+    assert_eq!(
+        fold_one("strval", vec![Expr::int_lit(42)]),
+        ExprKind::StringLiteral("42".to_string())
+    );
+    assert!(matches!(
+        fold_one("intval", vec![Expr::string_lit("42"), Expr::int_lit(10)]),
+        ExprKind::FunctionCall { .. }
+    ));
+    assert!(matches!(
+        fold_one("strval", vec![Expr::float_lit(1.5)]),
+        ExprKind::FunctionCall { .. }
+    ));
+}
+
+/// Literal MIME and small-regex calls fold to their exact PHP results while unsupported forms stay
+/// on the bridge.
+#[test]
+fn test_fold_mb_literal_mime_and_regex_calls() {
+    let fold_one = |name: &str, args: Vec<Expr>| {
+        let call = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified(name),
+                args,
+            },
+            Span::dummy(),
+        );
+        let result = fold_constants(vec![Stmt::echo(call)]);
+        let StmtKind::Echo(expr) = &result[0].kind else {
+            panic!("expected echo");
+        };
+        expr.kind.clone()
+    };
+    assert_eq!(
+        fold_one("mb_ereg", vec![Expr::string_lit("[0-9]+"), Expr::string_lit("abc123")]),
+        ExprKind::BoolLiteral(true)
+    );
+    assert_eq!(
+        fold_one("mb_ereg", vec![Expr::string_lit("[0-9]+"), Expr::string_lit("abc")]),
+        ExprKind::BoolLiteral(false)
+    );
+    assert_eq!(
+        fold_one("mb_ereg_match", vec![Expr::string_lit("[0-9A-Za-z]+"), Expr::string_lit("abc123")]),
+        ExprKind::BoolLiteral(true)
+    );
+    assert_eq!(
+        fold_one("mb_eregi", vec![Expr::string_lit("[A-Z]+"), Expr::string_lit("abcDEF")]),
+        ExprKind::BoolLiteral(true)
+    );
+    assert_eq!(
+        fold_one("mb_eregi_replace", vec![
+            Expr::string_lit("[A-Z]+"),
+            Expr::string_lit("#"),
+            Expr::string_lit("abcDEF"),
+        ]),
+        ExprKind::StringLiteral("#".to_string())
+    );
+    assert_eq!(
+        fold_one("mb_decode_mimeheader", vec![Expr::string_lit("=?UTF-8?B?aMOpbGxv?=")]),
+        ExprKind::StringLiteral("héllo".to_string())
+    );
+    assert!(matches!(
+        fold_one("mb_ereg", vec![Expr::string_lit("a+"), Expr::string_lit("aaa")]),
+        ExprKind::FunctionCall { .. }
+    ));
+    assert!(matches!(
+        fold_one("mb_eregi_replace", vec![
+            Expr::string_lit("[A-Z]+"),
+            Expr::string_lit("#"),
+            Expr::string_lit("abcé"),
+        ]),
+        ExprKind::FunctionCall { .. }
+    ));
+}

@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import test_embed
 
@@ -39,6 +39,28 @@ class AppleLeakRunnerTests(unittest.TestCase):
         """An exited child still reports the original lifecycle error."""
         with self.assertRaisesRegex(RuntimeError, "original fatal detail"):
             self.run_child("import sys; print('original fatal detail', file=sys.stderr); sys.exit(1)")
+
+    def test_eof_exit_keeps_stderr_before_child_is_reaped(self):
+        """EOF can precede a reapable exit and macOS can reject a group kill then."""
+        child = MagicMock()
+        child.__enter__.return_value = child
+        child.stdout.readline.return_value = ""
+        child.returncode = None
+        child.poll.side_effect = lambda: child.returncode
+
+        def collect_exit(*args, **kwargs):
+            """Reap the exiting child while retaining its original diagnostics."""
+            child.returncode = 1
+            return "", "original fatal detail"
+
+        child.communicate.side_effect = collect_exit
+        with patch.object(test_embed.subprocess, "Popen", return_value=child), patch.object(
+            test_embed.select, "select", return_value=([child.stdout], [], []),
+        ), patch.object(test_embed.os, "killpg", side_effect=PermissionError("exiting group")) as kill:
+            with self.assertRaisesRegex(RuntimeError, "original fatal detail"):
+                self.run_child("")
+            kill.assert_not_called()
+        child.communicate.assert_called_once_with(timeout=30)
 
     def test_failed_checkpoint_keeps_status_and_leak_report(self):
         """A completed failed request is inspected but cannot pass even with no leaks."""

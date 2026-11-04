@@ -988,6 +988,32 @@ pub(super) fn array_literal_element_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     item: &Expr,
 ) -> PhpType {
+    box_tagged_scalar_element(array_literal_element_type_for_ir_unboxed(ctx, item))
+}
+
+/// Boxes an element whose own storage is the inline tagged scalar (`int|null`) as `mixed`.
+///
+/// An indexed array of 16-byte `{payload, tag}` slots exists only as the append specialization
+/// of `lower_array_push_tagged_scalar_*`: `foreach`, `json_encode` and the value walkers do not
+/// read it, so `[$n]` with `?int $n` iterated as an unsupported element type and encoded `[6]`
+/// as `[null]`, and a hash has no tagged entry at all (`hash_new` had no static tag for it).
+/// A literal item, the first write into an empty array (`$a[] = $n ?? null`, `$a[0] = $n`) and
+/// a string-key write that promotes an indexed array to a hash therefore keep such a value as a
+/// boxed `mixed` cell, which carries the tag and reads back as the int or the null it holds,
+/// the way `[$c ? $n : null]` was built before the merge kept its tag word (#1944).
+pub(in crate::ir_lower) fn box_tagged_scalar_element(element: PhpType) -> PhpType {
+    if element.codegen_repr() == PhpType::TaggedScalar {
+        PhpType::Mixed
+    } else {
+        element
+    }
+}
+
+/// Types one literal item by its own storage, before `box_tagged_scalar_element`.
+fn array_literal_element_type_for_ir_unboxed(
+    ctx: &LoweringContext<'_, '_>,
+    item: &Expr,
+) -> PhpType {
     if let Some(storage) = nullsafe_chain::result_storage_type(item) {
         return storage;
     }

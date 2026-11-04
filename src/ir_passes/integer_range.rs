@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ir::{
     validate_function, BlockId, CmpPredicate, DataPool, Function, Immediate, InstId, IrType,
-    Op, Ownership, PassOrigin, Terminator, ValueDef, ValueId,
+    Op, Ownership, PassOrigin, RuntimeCallTarget, RuntimeFnId, Terminator, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 
@@ -30,6 +30,14 @@ use super::loops::compute_loops;
 
 /// Maximum number of block transfers before a malformed or unexpectedly complex CFG fails closed.
 const MAX_DATAFLOW_STEPS: usize = 100_000;
+
+/// Upper bound for a string length or byte offset returned by an integer sink.
+///
+/// No supported 64-bit target can allocate a heap string this large. The bound is
+/// used only to prove that `length + loop_counter` stays inside i64 when the
+/// counter is bounded by the process argument count; a real allocation is far
+/// smaller.
+const MAX_STRING_METRIC: i64 = i64::MAX / 2;
 
 mod checked_bound;
 
@@ -436,7 +444,78 @@ fn literal_range(function: &Function, value: ValueId) -> Option<IntRange> {
     }
 }
 
+/// Returns the range of an integer runtime sink whose PHP result is a string
+/// length, byte position, or codepoint.
+///
+/// Lengths are non-negative; search positions use `-1` for "not found"; `mb_ord`
+/// uses `-1` for a failed conversion. All are bounded by `MAX_STRING_METRIC` or
+/// the Unicode scalar ceiling, so a loop counter added to them stays in i64.
+fn runtime_string_metric_range(id: RuntimeFnId) -> Option<IntRange> {
+    match id {
+        RuntimeFnId::MbStrlen
+        | RuntimeFnId::MbStrwidth
+        | RuntimeFnId::MbSubstrCount
+        | RuntimeFnId::MbChrLen
+        | RuntimeFnId::MbStrimwidthLen
+        | RuntimeFnId::MbConvertEncodingLen
+        | RuntimeFnId::MbEregReplaceLen
+        | RuntimeFnId::MbEncodeNumericentityLen
+        | RuntimeFnId::MbDecodeNumericentityLen
+        | RuntimeFnId::MbSplitCount
+        | RuntimeFnId::MbStrSplitCount
+        | RuntimeFnId::MbStrstrLen
+        | RuntimeFnId::MbStristrLen
+        | RuntimeFnId::MbStrrchrLen
+        | RuntimeFnId::MbStrrichrLen
+        | RuntimeFnId::MbDetectEncodingLen
+        | RuntimeFnId::MbPreferredMimeNameLen
+        | RuntimeFnId::MbGetInfoLen
+        | RuntimeFnId::MbHttpInputLen
+        | RuntimeFnId::MbRegexSetOptionsLen
+        | RuntimeFnId::MbEncodingAliasesCount
+        | RuntimeFnId::MbListEncodingsCount
+        | RuntimeFnId::Base64EncodedLen
+        | RuntimeFnId::Base64DecodedLen
+        | RuntimeFnId::Bin2HexLen
+        | RuntimeFnId::ChunkSplitLen
+        | RuntimeFnId::StrstrLen
+        | RuntimeFnId::SubstrCount
+        | RuntimeFnId::StrSplitCount
+        | RuntimeFnId::StrWordCount
+        | RuntimeFnId::StripTagsLen
+        | RuntimeFnId::ParseUrlCount
+        | RuntimeFnId::InetPtonLen
+        | RuntimeFnId::JsonDecodeCount => Some(IntRange { lo: 0, hi: MAX_STRING_METRIC }),
+        // `iconv_strlen` returns `int|false`; an integer sink uses -1 for failure.
+        RuntimeFnId::IconvStrlen => Some(IntRange { lo: -1, hi: MAX_STRING_METRIC }),
+        RuntimeFnId::MbOrdInt => Some(IntRange { lo: -1, hi: 0x10FFFF }),
+        RuntimeFnId::MbStrposInt
+        | RuntimeFnId::MbStriposInt
+        | RuntimeFnId::MbStrrposInt
+        | RuntimeFnId::MbStrriposInt => Some(IntRange { lo: -1, hi: MAX_STRING_METRIC }),
+        _ => None,
+    }
+}
+
 /// Computes one instruction's integer interval from the current operand facts.
+/// Returns whether `slot` is the runtime-seeded `$argc` of the main function and is never
+/// assigned by user code. The process argument count is a non-negative C `int`.
+pub(super) fn main_argc_slot(function: &Function, slot: crate::ir::LocalSlotId) -> bool {
+    if !function.flags.is_main {
+        return false;
+    }
+    let Some(local) = function.locals.get(slot.as_raw() as usize) else {
+        return false;
+    };
+    if local.name.as_deref() != Some("argc") {
+        return false;
+    }
+    !function.instructions.iter().any(|inst| {
+        inst.op == Op::StoreLocal
+            && matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot)
+    })
+}
+
 fn instruction_range(
     function: &Function,
     inst: &crate::ir::Instruction,
@@ -451,6 +530,12 @@ fn instruction_range(
         (Op::ConstI64, Some(Immediate::I64(value))) => Some(IntRange::point(*value)),
         (Op::ConstBool, Some(Immediate::Bool(value))) => {
             Some(IntRange::point(i64::from(*value)))
+        }
+        // The process argument count is a non-negative C `int`; seeding it lets range
+        // analysis prove the bounds of `$argc + constant` loop limits and their induction
+        // variables. A user assignment to `$argc` disqualifies the slot below.
+        (Op::LoadLocal, Some(Immediate::LocalSlot(slot))) if main_argc_slot(function, *slot) => {
+            Some(IntRange { lo: 0, hi: i64::from(i32::MAX) })
         }
         (Op::IAdd | Op::ICheckedAdd | Op::ICheckedAddToInt, _) => {
             checked_add(operand(0)?, operand(1)?).or_else(|| scalar_result_top(function, inst))
@@ -472,6 +557,10 @@ fn instruction_range(
             hi: !operand(0)?.lo,
         }),
         (Op::ICmp, _) => Some(IntRange { lo: 0, hi: 1 }),
+        (Op::StrLen, _) => Some(IntRange { lo: 0, hi: MAX_STRING_METRIC }),
+        (Op::RuntimeCall, Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(id)))) => {
+            runtime_string_metric_range(*id)
+        }
         (Op::Cast, Some(Immediate::CastTarget(IrType::I64))) => {
             if inst.result_php_type == PhpType::Bool {
                 Some(IntRange { lo: 0, hi: 1 })

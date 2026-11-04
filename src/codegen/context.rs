@@ -59,6 +59,9 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) shared: &'a mut SharedCodegenState,
     pub(super) placement: ValuePlacement,
     pub(super) allocation: Allocation,
+    /// Latch-keyed duplicated loop tests computed from the finalized EIR CFG.
+    pub(super) rotated_loop_branches:
+        std::collections::HashMap<crate::ir::BlockId, super::rotated_loops::RotatedLoopBranch>,
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
     local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
@@ -193,6 +196,7 @@ impl<'a> FunctionContext<'a> {
             shared,
             placement: layout.value_placement,
             allocation: layout.allocation,
+            rotated_loop_branches: super::rotated_loops::compute(function),
             callee_saved_offsets: layout.callee_saved_offsets,
             local_offsets: layout.local_offsets,
             numeric_cell_offsets: layout.numeric_cell_offsets,
@@ -617,6 +621,17 @@ impl<'a> FunctionContext<'a> {
     /// Returns the frame flag that records whether this slot currently stores a cell pointer.
     pub(super) fn ref_cell_state_offset(&self, slot: LocalSlotId) -> Option<usize> {
         self.ref_cell_state_offsets.get(&slot).copied()
+    }
+
+    /// Returns the distinct frame offsets of checked numeric cells, sorted ascending.
+    ///
+    /// A pointer equal to one of these addresses is a transient int/float cell owned by the
+    /// current frame, so retiring it must not run the heap refcount helper.
+    pub(super) fn numeric_cell_offsets_sorted(&self) -> Vec<usize> {
+        let mut offsets: Vec<usize> = self.numeric_cell_offsets.values().copied().collect();
+        offsets.sort_unstable();
+        offsets.dedup();
+        offsets
     }
 
     /// Returns the required runtime representation flag offset for one dynamic local slot.

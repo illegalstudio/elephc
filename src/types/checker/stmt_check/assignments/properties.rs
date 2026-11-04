@@ -605,7 +605,7 @@ fn untyped_property_value_needs_nullable_storage(val_ty: &PhpType) -> bool {
 /// their slots already encode null. A later write outside an existing nullable union widens
 /// to `Mixed` (PHP untyped properties accept anything). Untyped non-null defaults keep the
 /// historical rebind, and array-typed slots keep `[]`-placeholder adoption and generic-array
-/// element specialization.
+/// element specialization, except that an empty `[]` never narrows an `array<mixed>` slot.
 pub(super) fn refined_untyped_property_assignment_type(
     checker: &Checker,
     current: &PhpType,
@@ -652,6 +652,12 @@ pub(super) fn refined_untyped_property_assignment_type(
                 // as a plain local reassignment overwrites its type. Without this,
                 // the element type stays `Never` and codegen mis-emits later reads.
                 return Some(val_ty.clone());
+            }
+            // `[]` fits any indexed storage: an `array<mixed>` slot keeps its boxed cells
+            // instead of narrowing back to the `array<never>` placeholder, whose next write
+            // of `$n ?? null` would meet a tagged scalar the backend cannot store (#1944).
+            if is_empty_array_placeholder(val_ty) && Checker::is_generic_array_hint(current) {
+                return None;
             }
             let refined_ty = Checker::specialize_generic_array_hint(current, val_ty);
             if refined_ty != *current {
@@ -729,12 +735,17 @@ fn refine_object_property_type(
 /// name lookup points at a separate slot. A non-private array redeclaration also shares the
 /// slot, even when its default has already given it a different element type. All views of an
 /// associative slot need one hash representation that can hold every redeclared default.
+///
+/// An element whose storage is the inline tagged scalar (`int|null`, as `$n ?? null` over a
+/// `?int $n` is) is stored boxed: the slot type drives the backend's `[]` default, reads and
+/// writes, none of which has a tagged entry (`box_tagged_scalar_array_elements`).
 fn update_inherited_property_slot_type(
     checker: &mut Checker,
     class_name: &str,
     property: &str,
     ty: PhpType,
 ) {
+    let ty = crate::types::box_tagged_scalar_array_elements(ty);
     let Some(class_info) = checker.classes.get(class_name) else {
         return;
     };

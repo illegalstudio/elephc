@@ -104,7 +104,8 @@ mod tests {
     /// BUMPED TO 24: retained method reference-return flags and dimension-write statements.
     /// BUMPED TO 25: main's assignment expressions coexist with the SimpleXML layout.
     /// BUMPED TO 26: property updates return values and retain dynamic name evaluation.
-    const RECORDED_FINGERPRINT: u64 = 9116697958139976679;
+    /// BUMPED TO 27: SimpleXML property updates coexist with native variable increment statements.
+    const RECORDED_FINGERPRINT: u64 = 1223055515294891945;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

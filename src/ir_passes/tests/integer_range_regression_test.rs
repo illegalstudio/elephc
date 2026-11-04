@@ -70,6 +70,125 @@ fn shift_widening_invalidates_successor_fact() {
     assert_specialized_op(&mut function, product, Op::ICheckedMulToInt);
 }
 
+/// A string length is bounded, so adding a bounded loop counter cannot overflow.
+#[test]
+fn strlen_plus_bounded_counter_is_unchecked() {
+    let mut function = Function::new("strlen_loop".to_string(), IrType::I64, PhpType::Int);
+    let sum;
+    {
+        let mut builder = Builder::new(&mut function);
+        let slot = builder.add_local(None, IrType::Str, PhpType::Str, LocalKind::PhpLocal);
+        let entry = builder.create_named_block("entry", vec![]);
+        let header = builder.create_named_block("header", vec![(IrType::I64, PhpType::Int)]);
+        let body = builder.create_named_block("body", vec![]);
+        let exit = builder.create_named_block("exit", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let string = builder.emit_load_local(slot, IrType::Str, PhpType::Str);
+        let zero = builder.emit_const_i64(0);
+        builder.terminate(Terminator::Br {
+            target: header,
+            args: vec![zero],
+        });
+
+        builder.position_at_end(header);
+        let counter = builder.block_param(header, 0);
+        let limit = builder.emit_const_i64(100);
+        let condition = emit_icmp(&mut builder, counter, limit, CmpPredicate::Slt);
+        builder.terminate(Terminator::CondBr {
+            cond: condition,
+            then_target: body,
+            then_args: vec![],
+            else_target: exit,
+            else_args: vec![],
+        });
+
+        builder.position_at_end(body);
+        let length = builder
+            .emit(
+                Op::StrLen,
+                vec![string],
+                None,
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .expect("strlen result");
+        sum = emit_scalar_binop(&mut builder, Op::ICheckedAddToInt, length, counter);
+        let one = builder.emit_const_i64(1);
+        let next = emit_scalar_binop(&mut builder, Op::IAdd, counter, one);
+        builder.terminate(Terminator::Br {
+            target: header,
+            args: vec![next],
+        });
+
+        builder.position_at_end(exit);
+        builder.terminate(Terminator::Return { value: Some(counter) });
+    }
+    assert_specialized_op(&mut function, sum, Op::IAdd);
+}
+
+/// An allocation-free `mb_chr` length sink is bounded, so its loop add is unchecked.
+#[test]
+fn mb_chr_len_plus_bounded_counter_is_unchecked() {
+    use crate::ir::{DataId, RuntimeCallTarget, RuntimeFnId};
+    let mut function = Function::new("mb_chr_len_loop".to_string(), IrType::I64, PhpType::Int);
+    let sum;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        let header = builder.create_named_block("header", vec![(IrType::I64, PhpType::Int)]);
+        let body = builder.create_named_block("body", vec![]);
+        let exit = builder.create_named_block("exit", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let codepoint = builder.emit_const_i64(65);
+        let encoding = builder.emit_const_str(DataId::from_raw(0));
+        let length = builder
+            .emit(
+                Op::RuntimeCall,
+                vec![codepoint, encoding],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::MbChrLen,
+                ))),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .expect("mb_chr_len result");
+        let zero = builder.emit_const_i64(0);
+        builder.terminate(Terminator::Br {
+            target: header,
+            args: vec![zero],
+        });
+
+        builder.position_at_end(header);
+        let counter = builder.block_param(header, 0);
+        let limit = builder.emit_const_i64(100);
+        let condition = emit_icmp(&mut builder, counter, limit, CmpPredicate::Slt);
+        builder.terminate(Terminator::CondBr {
+            cond: condition,
+            then_target: body,
+            then_args: vec![],
+            else_target: exit,
+            else_args: vec![],
+        });
+
+        builder.position_at_end(body);
+        sum = emit_scalar_binop(&mut builder, Op::ICheckedAddToInt, length, counter);
+        let one = builder.emit_const_i64(1);
+        let next = emit_scalar_binop(&mut builder, Op::IAdd, counter, one);
+        builder.terminate(Terminator::Br {
+            target: header,
+            args: vec![next],
+        });
+
+        builder.position_at_end(exit);
+        builder.terminate(Terminator::Return { value: Some(counter) });
+    }
+    assert_specialized_op(&mut function, sum, Op::IAdd);
+}
+
 /// Unsupported integer comparison predicates keep both reachable paths at a join.
 #[test]
 fn unsupported_comparison_edges_are_preserved() {

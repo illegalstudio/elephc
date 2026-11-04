@@ -13,9 +13,356 @@ use super::*;
 use elephc_builtin_contract::{RuntimeBuiltinId, TypeSpec};
 
 mod capture;
+mod mbstring_fast;
 
 /// Stages borrowed value descriptors and invokes shared PHP argument preparation on either architecture.
 pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, operation: RuntimeBuiltinId) -> Result<()> {
+    if mbstring_fast::try_lower(ctx, inst, operation)? {
+        return Ok(());
+    }
+    lower_mbstring_impl(ctx, inst, operation, true)
+}
+
+/// Lowers `mb_strlen()` with a direct UTF-8 counter when the encoding is explicitly UTF-8.
+///
+/// The fast path validates the subject and returns `-1` for malformed input, in which case
+/// the shared coordinator runs the same call and reproduces PHP's replacement-character
+/// counting. An omitted, null, or non-UTF-8 encoding stays on the coordinator.
+pub(crate) fn lower_mb_strlen(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operation: RuntimeBuiltinId,
+) -> Result<()> {
+    if operation == RuntimeBuiltinId::MbStrlen
+        && inst.operands.len() == 2
+        && ctx.value_php_type(inst.operands[0])?.codegen_repr() == PhpType::Str
+        && explicit_utf8_encoding(ctx, inst.operands[1])?
+    {
+        // An ASCII subject has one UTF-8 codepoint per byte, so fold the count even when
+        // the literal only became visible after constant propagation.
+        if let Some(subject) = crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(
+            ctx,
+            inst.operands[0],
+        )? {
+            if subject.is_ascii() {
+                abi::emit_load_int_immediate(
+                    ctx.emitter,
+                    abi::int_result_reg(ctx.emitter),
+                    subject.len() as i64,
+                );
+                return store_if_result(ctx, inst);
+            }
+        }
+        let (ptr_reg, len_reg) = (string_ptr_reg(ctx), string_len_reg(ctx));
+        load_string_arg_to_regs(ctx, inst, 0, "mb_strlen", ptr_reg, len_reg)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mb_strlen_utf8");
+        let done = ctx.next_label("mb_strlen_utf8_done");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #-1");                         // did the helper reject malformed UTF-8?
+                ctx.emitter.instruction(&format!("b.ne {done}"));               // a valid count is the final result
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("cmp rax, -1");                         // did the helper reject malformed UTF-8?
+                ctx.emitter.instruction(&format!("jne {done}"));                // a valid count is the final result
+            }
+        }
+        lower_mbstring_impl(ctx, inst, operation, false)?;
+        ctx.emitter.label(&done);
+        return store_if_result(ctx, inst);
+    }
+    lower_mbstring(ctx, inst, operation)
+}
+
+/// Lowers a raw integer mbstring search selected by the position cast sink.
+pub(crate) fn lower_mb_position_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    use crate::ir::RuntimeFnId;
+    let (source, name, label, direction) = match target {
+        RuntimeFnId::MbStrposInt => (
+            RuntimeBuiltinId::MbStrpos,
+            "mb_strpos",
+            "__rt_strpos",
+            super::StringPositionDirection::Forward,
+        ),
+        RuntimeFnId::MbStriposInt => (
+            RuntimeBuiltinId::MbStripos,
+            "mb_stripos",
+            "__rt_stripos",
+            super::StringPositionDirection::Forward,
+        ),
+        RuntimeFnId::MbStrrposInt => (
+            RuntimeBuiltinId::MbStrrpos,
+            "mb_strrpos",
+            "__rt_strrpos",
+            super::StringPositionDirection::Reverse,
+        ),
+        RuntimeFnId::MbStrriposInt => (
+            RuntimeBuiltinId::MbStrripos,
+            "mb_strripos",
+            "__rt_strripos",
+            super::StringPositionDirection::Reverse,
+        ),
+        _ => {
+            return Err(CodegenIrError::invalid_module(
+                "raw mbstring position lowering requires an mbstring position target",
+            ))
+        }
+    };
+    mbstring_fast::lower_position_int(ctx, inst, source, name, label, direction)
+}
+
+/// Lowers a raw integer mbstring substring-search length selected by the length sink.
+pub(crate) fn lower_mb_strstr_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    use crate::ir::RuntimeFnId;
+    let (source, mode) = match target {
+        RuntimeFnId::MbStrstrLen => (RuntimeBuiltinId::MbStrstr, 0),
+        RuntimeFnId::MbStristrLen => (RuntimeBuiltinId::MbStristr, 1),
+        RuntimeFnId::MbStrrchrLen => (RuntimeBuiltinId::MbStrrchr, 2),
+        RuntimeFnId::MbStrrichrLen => (RuntimeBuiltinId::MbStrrichr, 3),
+        _ => {
+            return Err(CodegenIrError::invalid_module(
+                "raw mbstring search-length lowering requires an mbstring length target",
+            ))
+        }
+    };
+    mbstring_fast::lower_strstr_len(ctx, inst, source, mode)
+}
+
+/// Lowers an allocation-free mbstring split count selected by the split count sink.
+pub(crate) fn lower_mb_str_split_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_str_split_count(ctx, inst)
+}
+
+/// Lowers a raw integer mbstring codepoint selected by the position cast sink.
+pub(crate) fn lower_mb_ord_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_ord_int(ctx, inst)
+}
+
+/// Lowers an allocation-free mbstring encoding-detection length selected by the length sink.
+pub(crate) fn lower_mb_detect_encoding_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_detect_encoding_len(ctx, inst)
+}
+
+/// Lowers an allocation-free mbstring codepoint length selected by the length sink.
+pub(crate) fn lower_mb_chr_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_chr_len(ctx, inst)
+}
+
+/// Lowers an allocation-free mbstring trim-width length selected by the length sink.
+pub(crate) fn lower_mb_strimwidth_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_strimwidth_len(ctx, inst)
+}
+
+/// Lowers an allocation-free mbstring conversion length selected by the length sink.
+pub(crate) fn lower_mb_convert_encoding_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_convert_encoding_len(ctx, inst)
+}
+
+/// Lowers an allocation-free numeric-entity encode length selected by the length sink.
+pub(crate) fn lower_mb_encode_numericentity_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_encode_numericentity_len(ctx, inst)
+}
+
+/// Lowers an allocation-free numeric-entity decode length selected by the length sink.
+pub(crate) fn lower_mb_decode_numericentity_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_decode_numericentity_len(ctx, inst)
+}
+
+/// Lowers an allocation-free literal-separator split count selected by the split sink.
+pub(crate) fn lower_mb_split_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_split_count(ctx, inst)
+}
+
+/// Lowers an allocation-free `mb_ereg_replace()` length selected by the length sink.
+pub(crate) fn lower_mb_ereg_replace_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_ereg_replace_len(ctx, inst)
+}
+
+/// Lowers an allocation-free preferred MIME name length selected by the length sink.
+pub(crate) fn lower_mb_preferred_mime_name_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_preferred_mime_name_len(ctx, inst)
+}
+
+/// Lowers the specialized one-element UTF-8 detection-order setter.
+pub(crate) fn lower_mb_detect_order_single(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_detect_order_single(ctx, inst, target)
+}
+
+/// Lowers an allocation-free mbstring alias count selected by the catalog count sink.
+pub(crate) fn lower_mb_encoding_aliases_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_encoding_aliases_count(ctx, inst)
+}
+
+/// Lowers an allocation-free mbstring encoding list count selected by the catalog count sink.
+pub(crate) fn lower_mb_list_encodings_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_list_encodings_count(ctx, inst)
+}
+
+/// Lowers an allocation-free mbstring info length selected by the length sink.
+pub(crate) fn lower_mb_get_info_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_get_info_len(ctx, inst)
+}
+
+/// Lowers a raw integer mbstring setting selected by the integer cast sink.
+pub(crate) fn lower_mb_setting_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    use crate::ir::RuntimeFnId;
+    let (source, helper, string_arg) = match target {
+        RuntimeFnId::MbInternalEncodingInt => (
+            RuntimeBuiltinId::MbInternalEncoding,
+            "elephc_mbstring_internal_encoding_set_v1",
+            true,
+        ),
+        RuntimeFnId::MbLanguageInt => (
+            RuntimeBuiltinId::MbLanguage,
+            "elephc_mbstring_language_set_v1",
+            true,
+        ),
+        RuntimeFnId::MbHttpOutputInt => (
+            RuntimeBuiltinId::MbHttpOutput,
+            "elephc_mbstring_http_output_set_v1",
+            true,
+        ),
+        RuntimeFnId::MbRegexEncodingInt => (
+            RuntimeBuiltinId::MbRegexEncoding,
+            "elephc_mbstring_regex_encoding_set_v1",
+            true,
+        ),
+        RuntimeFnId::MbSubstituteCharacterInt => (
+            RuntimeBuiltinId::MbSubstituteCharacter,
+            "elephc_mbstring_substitute_character_set_v1",
+            false,
+        ),
+        _ => {
+            return Err(CodegenIrError::invalid_module(
+                "raw mbstring setting lowering requires a setting target",
+            ))
+        }
+    };
+    mbstring_fast::lower_setting_int(ctx, inst, source, helper, string_arg)
+}
+
+/// Lowers an allocation-free mbstring regex option length selected by the length sink.
+pub(crate) fn lower_mb_regex_set_options_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_regex_set_options_len(ctx, inst)
+}
+
+/// Lowers an allocation-free mbstring HTTP input length selected by the length sink.
+pub(crate) fn lower_mb_http_input_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _target: crate::ir::RuntimeFnId,
+) -> Result<()> {
+    mbstring_fast::lower_http_input_len(ctx, inst)
+}
+
+/// Returns whether a literal encoding operand names UTF-8 or its `UTF8` alias.
+fn explicit_utf8_encoding(ctx: &FunctionContext<'_>, value: crate::ir::ValueId) -> Result<bool> {
+    let mut value = value;
+    for _ in 0..4 {
+        let Some(definition) = ctx.function.value(value) else {
+            break;
+        };
+        let crate::ir::ValueDef::Instruction { inst, .. } = definition.def else {
+            break;
+        };
+        let Some(instruction) = ctx.function.instruction(inst) else {
+            break;
+        };
+        if instruction.op == crate::ir::Op::Acquire && instruction.operands.len() == 1 {
+            value = instruction.operands[0];
+            continue;
+        }
+        break;
+    }
+    let Some(encoding) = super::super::shared::maybe_const_string_operand(ctx, value)? else {
+        return Ok(false);
+    };
+    Ok(encoding.eq_ignore_ascii_case("UTF-8") || encoding.eq_ignore_ascii_case("UTF8"))
+}
+
+/// Shared mbstring invocation with an optional result store for a fast-path fallback.
+fn lower_mbstring_impl(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operation: RuntimeBuiltinId,
+    store: bool,
+) -> Result<()> {
     let capture = matches!(operation, RuntimeBuiltinId::MbEreg | RuntimeBuiltinId::MbEregi);
     let query = operation == RuntimeBuiltinId::MbParseStr;
     let variables = operation == RuntimeBuiltinId::MbConvertVariables;
@@ -79,11 +426,16 @@ pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, 
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_native");
     }
     abi::emit_release_temporary_stack(ctx.emitter, size);
-    finish_result(ctx, inst, contract.returns)
+    finish_result(ctx, inst, contract.returns, store)
 }
 
 /// Adapts the shared successful result into the PHP type declared by the neutral contract.
-fn finish_result(ctx: &mut FunctionContext<'_>, inst: &Instruction, returns: TypeSpec) -> Result<()> {
+fn finish_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    returns: TypeSpec,
+    store: bool,
+) -> Result<()> {
     let target = ctx.emitter.target;
     if returns == TypeSpec::Str {
         match target.arch {
@@ -94,7 +446,7 @@ fn finish_result(ctx: &mut FunctionContext<'_>, inst: &Instruction, returns: Typ
     if matches!(returns, TypeSpec::Mixed | TypeSpec::Union(_)) {
         abi::emit_call_label(ctx.emitter, "__rt_mbstring_box_result");
     }
-    store_if_result(ctx, inst)
+    if store { store_if_result(ctx, inst) } else { Ok(()) }
 }
 
 /// Invokes the same coordinator over an owned Mixed array without padding or truncating its length.
@@ -140,7 +492,7 @@ fn lower_packed(ctx: &mut FunctionContext<'_>, inst: &Instruction, operation: Ru
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 3), i64::from(strict));
     abi::emit_call_label(ctx.emitter, "__rt_mbstring_native");
     abi::emit_release_temporary_stack(ctx.emitter, size);
-    finish_result(ctx, inst, contract.returns)
+    finish_result(ctx, inst, contract.returns, true)
 }
 
 /// Stores an AArch64 raw value and a borrowed invoker marker with its concrete runtime tag.

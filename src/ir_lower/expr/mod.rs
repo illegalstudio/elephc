@@ -99,6 +99,7 @@ mod named_spreads;
 mod variadic_args;
 mod call_return_types;
 mod indexed_array_literals;
+pub(in crate::ir_lower) use indexed_array_literals::box_tagged_scalar_element;
 mod array_cast_source;
 mod assoc_array_literals;
 mod match_expr;

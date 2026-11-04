@@ -790,6 +790,33 @@ pub(in crate::codegen) fn store_value_to_ref_cell_as(
     store_value_to_raw_ref_cell_as(ctx, slot, value, target_ty, previous)
 }
 
+/// Returns whether `value` is an owned in-place `++`/`--` result.
+///
+/// The increment helper may mutate a unique heap cell and return that same pointer with one
+/// fresh owner. Ownership wrappers (acquire/move/borrow/ensure-owned) are followed so the
+/// ref-cell store can distinguish that new owner from a republished container alias.
+fn value_is_in_place_increment(ctx: &FunctionContext<'_>, mut value: ValueId) -> Result<bool> {
+    if ctx.value_ownership(value)? != Ownership::Owned {
+        return Ok(false);
+    }
+    for _ in 0..8 {
+        let Some(inst) = instruction_for_value(ctx, value)? else {
+            return Ok(false);
+        };
+        match inst.op {
+            Op::StrIncDec => return Ok(true),
+            Op::Acquire | Op::Move | Op::Borrow | Op::EnsureOwned => {
+                let Some(&source) = inst.operands.first() else {
+                    return Ok(false);
+                };
+                value = source;
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(false)
+}
+
 /// Writes through a borrowed address or a managed cell whose payload uses the declared shape.
 fn store_value_to_raw_ref_cell_as(
     ctx: &mut FunctionContext<'_>,
@@ -812,6 +839,14 @@ fn store_value_to_raw_ref_cell_as(
     } else {
         coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
     }
+    // An in-place increment returns a fresh owner even if its pointer is unchanged.
+    let previous = if previous == RefCellStorePrevious::Retire
+        && value_is_in_place_increment(ctx, value)?
+    {
+        RefCellStorePrevious::RetireAcquired
+    } else {
+        previous
+    };
     publish_current_ref_cell_value(ctx, slot, &target_ty, previous)
 }
 

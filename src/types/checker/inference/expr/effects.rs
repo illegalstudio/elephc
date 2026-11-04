@@ -20,7 +20,8 @@ use super::super::super::Checker;
 use super::buffer_merges::buffer_merge_result_type;
 use super::merge_match_arm_result_type;
 use super::null_coalesce::{
-    null_coalesce_buffer_merge_type, null_coalesce_result_type, operand_is_never_null,
+    coalesce_default_type, null_coalesce_buffer_merge_type, null_coalesce_result_type,
+    operand_is_never_null,
 };
 
 /// Returns what a local holds after `++`/`--`, or `None` when the update cannot retype it.
@@ -183,6 +184,7 @@ impl Checker {
                     self.finish_conditional_flow(flow, env);
                     default_ty
                 };
+                let default_ty = coalesce_default_type(default, default_ty);
                 match null_coalesce_buffer_merge_type(
                     self,
                     value,

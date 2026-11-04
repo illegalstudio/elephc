@@ -44,7 +44,9 @@ impl IrPass for LoopCounterVersioning {
 
 /// Bounds code growth and rejects scopes whose storage can be reached implicitly.
 fn run(function: &mut Function, data: &DataPool, pass: &BoundedMixedCounter) -> bool {
-    if function.flags.is_main || function.instructions.len() > 2048 || function.locals.len() > 128
+    if (function.flags.is_main && !super::main_frame_is_private(function, data))
+        || function.instructions.len() > 2048
+        || function.locals.len() > 128
         || function.flags.is_generator || function.flags.is_fiber_wrapper
         || crate::ir_passes::cfg::has_exception_handlers(function)
         || crate::ir_passes::local_scope::has_dynamic_eval(function)

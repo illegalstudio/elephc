@@ -323,7 +323,12 @@ fn validate_instructions(
                 .instruction(*inst_id)
                 .ok_or(ValidationError::UnknownInstruction(*inst_id))?;
             validate_instruction_result(function, block.id, index as u32, *inst_id, inst)?;
-            validate_instruction_effects(*inst_id, inst)?;
+            let operand_type = inst
+                .operands
+                .first()
+                .and_then(|value| function.value(*value))
+                .map(|value| value.php_type.clone());
+            validate_instruction_effects_with_operand(*inst_id, inst, operand_type)?;
             validate_instruction_immediate(*inst_id, inst)?;
             validate_instruction_operands(
                 function,
@@ -383,11 +388,31 @@ fn validate_instruction_result(
 /// the immutable-local pass proves that the named scalar slot cannot change.
 /// Physical property initialization additionally allocates owned reference cells.
 /// A named `prop_set` additionally admits exactly the packed field store effects.
+#[cfg(test)]
 fn validate_instruction_effects(
     inst_id: InstId,
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
-    let expected = if inst.op == Op::MixedUnbox {
+    validate_instruction_effects_with_operand(inst_id, inst, None)
+}
+
+/// Validates one instruction's effects against its canonical contract and an optional
+/// operand PHP type used for type-proven refinements.
+fn validate_instruction_effects_with_operand(
+    inst_id: InstId,
+    inst: &Instruction,
+    operand_type: Option<PhpType>,
+) -> Result<(), ValidationError> {
+    // `(int)` over an int or bool is a representation re-stamp: it cannot warn,
+    // fail, allocate, or observe heap state. The operand may already have been
+    // folded from bool to int, so both types admit the pure refinement.
+    let pure_int_restamp = inst.op == Op::Cast
+        && inst.result_php_type == PhpType::Int
+        && inst.effects.is_pure()
+        && operand_type.is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool));
+    let expected = if pure_int_restamp {
+        Effects::PURE
+    } else if inst.op == Op::MixedUnbox {
         Op::mixed_unbox_effects(&inst.result_php_type)
     } else if inst.op == Op::FToI
         && matches!(
@@ -400,6 +425,14 @@ fn validate_instruction_effects(
         && matches!(inst.immediate, Some(Immediate::PropertyRef { .. }))
     {
         inst.op.default_effects() | Effects::ALLOC_HEAP
+    } else if matches!(
+        inst.op,
+        Op::ICheckedAddToInt | Op::ICheckedSubToInt | Op::ICheckedMulToInt
+    ) && matches!(inst.immediate, Some(Immediate::Data(_)))
+    {
+        // A declared-int return boundary turns the checked arithmetic overflow into PHP's
+        // catchable TypeError, so the specialized producer carries throw/fatal effects.
+        inst.op.default_effects() | Effects::MAY_THROW | Effects::MAY_FATAL
     } else {
         inst.op.default_effects()
     };
@@ -465,6 +498,36 @@ mod instruction_effect_tests {
             instruction.effects = effects | Effects::OUTPUT;
             assert!(validate_instruction_effects(id, &instruction).is_err());
         }
+    }
+
+    /// A pure int re-stamp cast is valid over int or bool operands only.
+    #[test]
+    fn int_restamp_cast_admits_pure_effects_only_for_scalar_operands() {
+        let mut instruction = Instruction::new(
+            Op::Cast,
+            Vec::new(),
+            Some(Immediate::CastTarget(IrType::I64)),
+            None,
+            IrType::I64,
+            PhpType::Int,
+            Ownership::NonHeap,
+            Effects::PURE,
+            None,
+        );
+        let id = InstId::from_raw(0);
+        for ty in [PhpType::Int, PhpType::Bool] {
+            assert_eq!(
+                validate_instruction_effects_with_operand(id, &instruction, Some(ty)),
+                Ok(())
+            );
+        }
+        for ty in [PhpType::Float, PhpType::Str, PhpType::Mixed] {
+            assert!(validate_instruction_effects_with_operand(id, &instruction, Some(ty)).is_err());
+        }
+        instruction.effects = Effects::MAY_WARN;
+        assert!(
+            validate_instruction_effects_with_operand(id, &instruction, Some(PhpType::Bool)).is_err()
+        );
     }
 
     /// Physical initializer writes require allocation effects without weakening ordinary writes.
@@ -1027,6 +1090,59 @@ fn validate_opcode_rules(
         | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey | ArrayGetMixedKey
         | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
+        }
+        // The producer proved the receiver is a private, int-shaped array with reserved capacity.
+        ArrayPushReserved => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            Ok(())
+        }
+        // The producer pass proved the receiver is a private int-shaped packed array and the
+        // requested range is in bounds; the helper returns an owned Mixed int/float cell.
+        ArraySumInt => {
+            check_count(inst_id, inst, 4, "4")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            check_operand_type(function, inst_id, inst, 2, IrType::I64, "I64")?;
+            check_operand_type(function, inst_id, inst, 3, IrType::Heap(IrHeapKind::Mixed), "Heap(Mixed)")?;
+            let result = inst
+                .result
+                .ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::Heap(IrHeapKind::Mixed) {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            if function
+                .value(result)
+                .ok_or(ValidationError::UnknownValue(result))?
+                .php_type
+                != PhpType::Mixed
+            {
+                return Err(ValidationError::PhpTypeMismatch(result));
+            }
+            Ok(())
+        }
+        // The producer pass proved the receiver is a private int-shaped packed array and the
+        // index is in `[0, length)`; the result is a raw PHP int, never PHP null.
+        ArrayGetUnchecked => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            let result = inst
+                .result
+                .ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::I64 {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            if function
+                .value(result)
+                .ok_or(ValidationError::UnknownValue(result))?
+                .php_type
+                != PhpType::Int
+            {
+                return Err(ValidationError::PhpTypeMismatch(result));
+            }
+            Ok(())
         }
         // Typed fetch-for-write reads require an already integer-coerced key. Mixed-result
         // nested parents instead use the storage-aware runtime reader, which accepts string

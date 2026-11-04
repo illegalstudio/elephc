@@ -173,6 +173,13 @@ pub(crate) const JSON_REFERENCE_PROPERTY_FLAG: u64 = 1 << 8;
 /// JSON omits declared properties whose native initialization marker is still unset.
 pub(crate) const JSON_DECLARED_PROPERTY_FLAG: u64 = 1 << 9;
 
+/// Heap-header flag marking a string whose native identity is registered with mbstring.
+///
+/// Heap identity registration hooks (bind, copy, fresh, and persist) set this bit.
+/// Collector passes preserve it on non-graph string headers, and `__rt_heap_free()` uses it
+/// to skip the full bridge callback for strings without native identity metadata.
+pub(crate) const MBSTRING_IDENTITY_TRACKED: u32 = 1 << 24;
+
 /// Heap-owned callable descriptor with typed capture metadata.
 pub(crate) const CALLABLE_HEAP_KIND: u32 = 9;
 

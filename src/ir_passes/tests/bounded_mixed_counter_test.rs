@@ -9,14 +9,35 @@
 
 use crate::ir::{
     validate_function, Builder, CmpPredicate, DataPool, Function, FunctionParam, Immediate,
-    IrHeapKind, IrType, LocalKind, Op, Ownership, Terminator,
+    IrHeapKind, IrType, LocalKind, MixedNumericOp, Op, Ownership, RuntimeCallTarget, RuntimeFnId,
+    Terminator,
 };
 use crate::ir_passes::bounded_mixed_counter::BoundedMixedCounter;
 use crate::ir_passes::driver::IrPass;
 use crate::types::PhpType;
 
+/// Selects the boxed opcode a counter update uses in the fixture.
+#[derive(Clone, Copy)]
+enum CounterUpdate {
+    /// `$i++` / `$i--`, PHP's string-aware increment opcode.
+    StrIncDec,
+    /// `$i += 1` / `$i -= 1`, the ordinary numeric compound assignment.
+    CompoundAssign,
+}
+
 /// Builds a boxed counter with the same increment ownership scaffold as closure loops.
 pub(super) fn counter(predicate: CmpPredicate, delta: i64, seed: i64, escape: bool) -> Function {
+    counter_with_update(predicate, delta, seed, escape, CounterUpdate::StrIncDec)
+}
+
+/// Builds the counter fixture with the requested update opcode shape.
+fn counter_with_update(
+    predicate: CmpPredicate,
+    delta: i64,
+    seed: i64,
+    escape: bool,
+    update_kind: CounterUpdate,
+) -> Function {
     let mut function = Function::new("counter".into(), IrType::I64, PhpType::Int);
     function.params.push(FunctionParam {
         name: "n".into(),
@@ -75,16 +96,32 @@ pub(super) fn counter(predicate: CmpPredicate, delta: i64, seed: i64, escape: bo
     if escape {
         b.terminate(Terminator::Return { value: Some(old) });
     } else {
-        let update = b
-            .emit(
-                Op::StrIncDec,
-                vec![old],
-                Some(Immediate::I64(delta)),
-                IrType::Heap(IrHeapKind::Mixed),
-                PhpType::Mixed,
-                Ownership::Owned,
-            )
-            .unwrap();
+        let update = match update_kind {
+            CounterUpdate::StrIncDec => b
+                .emit(
+                    Op::StrIncDec,
+                    vec![old],
+                    Some(Immediate::I64(delta)),
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .unwrap(),
+            CounterUpdate::CompoundAssign => {
+                let magnitude = if delta < 0 { -delta } else { delta };
+                let step = b.emit_const_i64(magnitude);
+                let opcode = if delta < 0 { MixedNumericOp::Sub } else { MixedNumericOp::Add };
+                b.emit(
+                    Op::MixedNumericBinop,
+                    vec![old, step],
+                    Some(Immediate::MixedNumericOp(opcode)),
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .unwrap()
+            }
+        };
         let copy = b
             .emit(
                 Op::MixedClone,
@@ -149,6 +186,34 @@ fn bounded_mixed_counter_promotes_strict_bounded_recurrences() {
     }
 }
 
+/// `$i += 1` and `$i -= 1` are counter updates just like `$i++` and `$i--`.
+///
+/// The compound form lowers to `mixed_numeric_binop` with a constant step, not `str_inc_dec`,
+/// so it needs the same bounded-recurrence proof to become a raw integer slot.
+#[test]
+fn bounded_mixed_counter_promotes_compound_assignment_recurrences() {
+    for (cmp, delta) in [(CmpPredicate::Slt, 1), (CmpPredicate::Sgt, -1)] {
+        let mut f = counter_with_update(cmp, delta, 0, false, CounterUpdate::CompoundAssign);
+        assert!(validate_function(&f).is_ok(), "{:?}", validate_function(&f));
+        assert!(BoundedMixedCounter::default().run(&mut f, &mut DataPool::default()));
+        assert_eq!(f.locals[1].ir_type, IrType::I64);
+        assert!(!f.instructions.iter().any(|inst| inst.op == Op::MixedNumericBinop));
+        assert!(validate_function(&f).is_ok(), "{:?}", validate_function(&f));
+        assert!(!BoundedMixedCounter::default().run(&mut f, &mut DataPool::default()));
+    }
+}
+
+/// A compound update with an unprovable bound keeps its boxed recurrence untouched.
+#[test]
+fn bounded_mixed_counter_rejects_compound_overflow() {
+    for (cmp, delta) in [(CmpPredicate::Sle, 1), (CmpPredicate::Sge, -1)] {
+        let mut f = counter_with_update(cmp, delta, 0, false, CounterUpdate::CompoundAssign);
+        let before = format!("{f:?}");
+        assert!(!BoundedMixedCounter::default().run(&mut f, &mut DataPool::default()));
+        assert_eq!(format!("{f:?}"), before);
+    }
+}
+
 /// Numeric consumers preserve their Mixed opcode while proven counters become raw integers.
 #[test]
 fn bounded_mixed_counter_allows_numeric_reads_only_after_range_proof() {
@@ -200,9 +265,9 @@ fn bounded_mixed_counter_rejects_possible_overflow() {
     }
 }
 
-/// Pointer returns, reference storage and the executable main entry cannot be scalarized.
+/// Pointer returns, reference storage and an exposed main frame cannot be scalarized.
 #[test]
-fn bounded_mixed_counter_rejects_escapes_and_implicit_storage() {
+fn bounded_mixed_counter_rejects_escapes_and_exposed_main_frame() {
     let mut escape = counter(CmpPredicate::Slt, 1, 0, true);
     assert!(!BoundedMixedCounter::default().run(&mut escape, &mut DataPool::default()));
     for kind in [
@@ -214,9 +279,30 @@ fn bounded_mixed_counter_rejects_escapes_and_implicit_storage() {
         f.add_local(None, IrType::I64, PhpType::Int, kind);
         assert!(!BoundedMixedCounter::default().run(&mut f, &mut DataPool::default()));
     }
-    let mut f = counter(CmpPredicate::Slt, 1, 0, false);
-    f.flags.is_main = true;
-    assert!(!BoundedMixedCounter::default().run(&mut f, &mut DataPool::default()));
+    let mut private_main = counter(CmpPredicate::Slt, 1, 0, false);
+    private_main.flags.is_main = true;
+    assert!(BoundedMixedCounter::default().run(&mut private_main, &mut DataPool::default()));
+
+    let mut exposed = counter(CmpPredicate::Slt, 1, 0, false);
+    exposed.flags.is_main = true;
+    let body = exposed.blocks[2].id;
+    let term = exposed.blocks[2].terminator.take().unwrap();
+    let mut data = DataPool::default();
+    let label = data.intern_string("include once=false required=false");
+    {
+        let mut builder = Builder::new(&mut exposed);
+        builder.position_at_end(body);
+        assert!(builder.emit(
+            Op::RuntimeCall,
+            Vec::new(),
+            Some(Immediate::Data(label)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        ).is_none());
+        builder.terminate(term);
+    }
+    assert!(!BoundedMixedCounter::default().run(&mut exposed, &mut data));
 }
 
 /// Adds a call of data[0] to the boxed-counter fixture after its update.
@@ -424,6 +510,42 @@ fn bounded_mixed_counter_storage_ignores_unrelated_reference_slots() {
         &std::collections::HashMap::new()).slots;
     assert!(slots.contains(&crate::ir::LocalSlotId::from_raw(1)));
     assert!(!slots.contains(&unrelated));
+}
+
+/// A value-only typed arithmetic runtime call keeps its boxed operand by value, so a strict
+/// bounded counter feeding `intdiv()` still promotes to raw SSA instead of staying boxed.
+#[test]
+fn bounded_mixed_counter_promotes_across_value_only_runtime_call() {
+    let mut function = counter(CmpPredicate::Slt, 1, 0, false);
+    let body = function.blocks[2].id;
+    let terminator = function.blocks[2].terminator.take().unwrap();
+    {
+        let mut builder = Builder::new(&mut function);
+        builder.position_at_end(body);
+        let value = builder.emit_load_local(
+            crate::ir::LocalSlotId::from_raw(1),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        let divisor = builder.emit_const_i64(3);
+        builder
+            .emit(
+                Op::RuntimeCall,
+                vec![value, divisor],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::Intdiv,
+                ))),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .unwrap();
+        builder.terminate(terminator);
+    }
+    validate_function(&function).unwrap();
+    assert!(BoundedMixedCounter::default().run(&mut function, &mut DataPool::default()));
+    assert_eq!(function.locals[1].ir_type, IrType::I64);
+    assert!(validate_function(&function).is_ok());
 }
 
 /// Constants and retired bookkeeping in an already optimized preheader do not block a seed guard.

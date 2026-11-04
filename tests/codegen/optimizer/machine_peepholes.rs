@@ -330,7 +330,19 @@ fn test_machine_peephole_example_and_target_assembly() {
             assert!(scaled.contains(instruction), "{target_name}: {scaled}");
         }
         assert!(scaled.contains(if arm { "neg x0, x0, lsl #3" } else { "neg rax" }), "{target_name}: {scaled}");
-        assert!(scaled.contains(if arm { "mul x0, " } else { "imul rax, 11" }), "{target_name}: {scaled}");
+        // The result may be written directly into its allocated home; the multiplier
+        // and its two-operand form are the machine-shape contract here.
+        assert!(
+            scaled.lines().any(|line| {
+                let line = line.trim();
+                if arm {
+                    line.starts_with("mul x") && line.contains(", x10")
+                } else {
+                    line.starts_with("imul ") && line.ends_with(", 11")
+                }
+            }),
+            "{target_name}: {scaled}"
+        );
 
         let hash = function_text(&asm, "rolling_hash");
         // The loop test branches on flags: no boolean is materialized for it.
@@ -356,5 +368,44 @@ fn test_machine_peephole_example_and_target_assembly() {
                 assert_ne!(*next, format!("{label}:"), "{target_name}: redundant jump in {hash}");
             }
         }
+    }
+}
+
+/// A canonical counted loop tests its condition at the latch, so the back edge
+/// returns directly to the body instead of jumping through the loop header.
+#[test]
+fn test_machine_peephole_rotates_counted_loop_back_edge() {
+    let fixture = Fixture::new(
+        r#"<?php
+$n = (int) ($argc + 10);
+$acc = 0;
+for ($i = 0; $i < $n; $i++) { $acc ^= $i + 7; }
+echo $acc, "\n";
+"#,
+    );
+    fixture.assert_all_modes(|argc| {
+        let mut acc = 0;
+        for i in 0..argc + 10 {
+            acc ^= i + 7;
+        }
+        format!("{acc}\n")
+    });
+    for target_name in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
+        let asm = fixture.assembly(target_name);
+        let function = function_text(&asm, "main");
+        let body_start = function
+            .find("@block name=for.body")
+            .unwrap_or_else(|| panic!("{target_name}: no for.body block:\n{function}"));
+        let body = &function[body_start..];
+        let body_end = body.find("@block name=for.exit").unwrap_or(body.len());
+        let body = &body[..body_end];
+        assert!(
+            !body.contains("for_cond"),
+            "{target_name}: the back edge still enters the loop header:\n{body}"
+        );
+        assert!(
+            body.lines().any(|line| line.trim().starts_with("cmp ")),
+            "{target_name}: the latch does not emit the duplicated compare:\n{body}"
+        );
     }
 }

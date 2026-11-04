@@ -15,6 +15,12 @@ pub(super) fn eval_inc_dec_value(
     increment: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !increment && values.is_null(current)? {
+        values.warning(
+            "Warning: Decrement on type null has no effect, this will change in the next major version of PHP\n",
+        )?;
+        return values.retain(current);
+    }
     let one = values.int(1)?;
     let result = if increment {
         values.add(current, one)

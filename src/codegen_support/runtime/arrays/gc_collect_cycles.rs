@@ -104,6 +104,9 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr w12, [x9, #4]");                                   // load this block refcount from the heap header
     emitter.instruction("cbz w12, __rt_gc_collect_cycles_clear_next");          // free-list blocks keep kind=0 and need no reset
     emitter.instruction("ldr x13, [x9, #8]");                                   // load the full kind word with any stale GC metadata
+    emitter.instruction("and x14, x13, #0xff");                                 // distinguish graph nodes from strings with persistent identity flags
+    emitter.instruction("cmp x14, #2");                                         // raw buffers and strings never carry incoming graph edges
+    emitter.instruction("b.lo __rt_gc_collect_cycles_clear_next");              // preserve their metadata for final native identity retirement
     emitter.instruction("mov x14, #0xffff");                                    // preserve kind and indexed element storage
     emitter.instruction("movk x14, #0x8006, lsl #16");                          // preserve destructor completion and snapshot pins while clearing marks
     emitter.instruction("and x13, x13, x14");                                   // clear the transient incoming-count and reachable bits

@@ -36,6 +36,7 @@ env:
     -p elephc-tls
     -p elephc-pdo
     -p elephc-crypto
+    -p elephc-openssl
     -p elephc-bcmath
     -p elephc-gmp
     -p elephc-random
@@ -1146,7 +1147,10 @@ jobs:
     needs: [plan, build-archive-macos-aarch64]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
-    timeout-minutes: 20
+    # The computed-eval web regression compiles three full eval hosts and can
+    # exceed 20 minutes on the loaded extended-tier runners; the test itself is
+    # still bounded by its nextest slow-timeout.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -1217,7 +1221,7 @@ jobs:
     needs: [plan, build-archive-linux-x86_64]
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -1266,7 +1270,7 @@ jobs:
     needs: [plan, build-archive-linux-aarch64]
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -1315,7 +1319,10 @@ jobs:
     needs: [plan, build-archive-macos-aarch64]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
-    timeout-minutes: 40
+    # Each shard compiles and runs roughly 845 codegen fixtures. A loaded
+    # extended-tier runner can exceed 40 minutes even when every test passes,
+    # as the slowest eval fixtures stretch under contention.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

@@ -16,5 +16,6 @@ pub mod libmagic;
 pub mod nghttp2;
 pub mod oniguruma;
 pub mod openssl;
+pub mod openssl_crypto;
 pub mod pcre2;
 pub mod zlib;

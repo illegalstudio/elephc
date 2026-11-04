@@ -38,6 +38,9 @@ pub(super) fn lower(
         RuntimeFnId::Base64Decode => Some({
             crate::codegen::lower_inst::builtins::strings::lower_base64_decode(ctx, inst)
         }),
+        RuntimeFnId::Base64DecodedLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_base64_decoded_len(ctx, inst)
+        }),
         RuntimeFnId::Chop => Some({
             crate::codegen::lower_inst::builtins::strings::lower_trim_like(
                     ctx,
@@ -144,8 +147,14 @@ pub(super) fn lower(
                     "__rt_inet_pton",
                 )
         }),
+        RuntimeFnId::InetPtonLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_inet_pton_len(ctx, inst)
+        }),
         RuntimeFnId::Ip2long => Some({
             crate::codegen::lower_inst::builtins::strings::lower_ip2long(ctx, inst)
+        }),
+        RuntimeFnId::Ip2longInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_ip2long_int(ctx, inst)
         }),
         RuntimeFnId::Lcfirst => Some({
             crate::codegen::lower_inst::builtins::strings::lower_lcfirst(ctx, inst)
