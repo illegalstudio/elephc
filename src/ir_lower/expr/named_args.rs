@@ -133,7 +133,7 @@ fn lower_normalized_args(
         .map(|(index, arg)| {
             let value = match sig.params.get(index).filter(|_| index < regular_count) {
                 Some((_, param_ty)) => lower_expr_for_parameter(
-                    ctx, arg, param_ty, parameter_is_source_typed(sig, index),
+                    ctx, arg, param_ty, super::integer_destinations::parameter_is_source_typed(sig, index),
                 ),
                 None => lower_expr(ctx, arg),
             };
@@ -204,7 +204,7 @@ fn lower_planned_source_arg(
             .and_then(|source| source.param_idx())
             .and_then(|param_index| {
                 let (_, param_ty) = sig.params.get(param_index)?;
-                Some((param_ty.clone(), parameter_is_source_typed(sig, param_index)))
+                Some((param_ty.clone(), super::integer_destinations::parameter_is_source_typed(sig, param_index)))
             });
         match param {
             Some((param_ty, source_typed)) => {

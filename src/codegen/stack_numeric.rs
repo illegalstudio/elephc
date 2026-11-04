@@ -344,9 +344,12 @@ impl Proof<'_> {
                 if inst.op == Op::Release {
                     return true;
                 }
+                // Strict identity copies the tag and payload like an ordered comparison.
+                if domain::identity(inst) && self.numeric_inputs(&inst.operands) {
+                    return self.stable_read(load, user);
+                }
                 let arithmetic = tagged_producer(inst) && self.numeric_inputs(&inst.operands);
-                let comparison = (domain::comparison(inst) || domain::identity(inst))
-                    && self.numeric_inputs(&inst.operands);
+                let comparison = domain::comparison(inst) && self.numeric_inputs(&inst.operands);
                 if !scalar_observation(inst) && !arithmetic && !comparison {
                     return false;
                 }

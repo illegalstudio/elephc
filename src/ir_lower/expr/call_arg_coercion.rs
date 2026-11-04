@@ -88,7 +88,7 @@ pub(super) fn lower_arg_with_signature(
         .then(|| local_values::lower_reference_local(ctx, arg)).flatten();
     let lowered = reference_local.unwrap_or_else(|| match sig.params.get(index) {
         Some((_, param_ty)) => lower_expr_for_parameter(
-            ctx, arg, param_ty, parameter_is_source_typed(sig, index),
+            ctx, arg, param_ty, super::integer_destinations::parameter_is_source_typed(sig, index),
         ),
         None => lower_expr(ctx, arg),
     });
