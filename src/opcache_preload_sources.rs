@@ -93,7 +93,7 @@ pub fn preload_declarations(
     // any class the preload file did not name.
     let _skip_unparseable = crate::resolver::skip_unparseable_includes();
     let (resolved, first_pass_files, sources) =
-        crate::resolver::resolve_collecting_includes_with_defines_and_sources(
+        crate::resolver::resolve_collecting_includes_continuing(
             requires,
             preload_dir,
             defines,
@@ -116,7 +116,7 @@ pub fn preload_declarations(
         resolved
     } else {
         let (extra, _, extra_sources) =
-            crate::resolver::resolve_collecting_includes_with_defines_and_sources(
+            crate::resolver::resolve_collecting_includes_continuing(
                 named,
                 preload_dir,
                 defines,
@@ -550,7 +550,7 @@ fn units_for_paths(
     // Resolved like the preload's units: the resolver inlines each unit's `require` of its file,
     // so the function returns the file's value instead of including it again at run time.
     let base_dir = units[0].canonical_path.parent().unwrap_or(Path::new("/")).to_path_buf();
-    let (resolved, _, _) = crate::resolver::resolve_collecting_includes_with_defines_and_sources(
+    let (resolved, _, _) = crate::resolver::resolve_collecting_includes_continuing(
         functions, &base_dir, defines,
     )?;
     Ok((crate::name_resolver::resolve(resolved)?, units))

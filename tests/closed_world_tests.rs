@@ -622,6 +622,31 @@ fn closed_world_reflected_members_know_their_file_and_lines() {
     );
 }
 
+/// The project's data files are parsed after the entry's includes and join the same compile. They
+/// went through the resolver that starts a compile, which numbered files from 1 again, so a data
+/// file took the identity of a class file: `getFileName()` answered `sg.php` for a Symfony Demo
+/// controller, and every exception named a language table.
+#[test]
+fn closed_world_data_files_keep_the_identity_of_included_class_files() {
+    let dir = make_test_dir("cw_source_identity");
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#).unwrap();
+    fs::write(dir.join("aaa_data.php"), "<?php\nreturn ['a' => 1];\n").unwrap();
+    fs::write(
+        dir.join("lib.php"),
+        "<?php\nclass Lib {\n    public function go() {\n        throw new Exception('x');\n    }\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nrequire __DIR__ . '/lib.php';\necho basename((new ReflectionMethod('Lib', 'go'))->getFileName()), \"\\n\";\ntry { (new Lib())->go(); } catch (Exception $e) { echo basename($e->getFile()), ':', $e->getLine(), \"\\n\"; }\n",
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), "lib.php\nlib.php:4\n");
+    assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+}
+
 /// A backend re-run is a new process: a file the first round classified as harmless (here, one
 /// php refuses to load) stays harmless, while one it inherits with no such verdict still refuses
 /// the build. `KernelBrowser` was a note in the first round of the Symfony Demo build and a
