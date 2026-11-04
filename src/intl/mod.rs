@@ -1728,6 +1728,12 @@ fn function_from_spec(spec: &IntlFunction) -> Stmt {
         .map(|(index, param)| (index, param.name))
         .collect();
     let mut body = Vec::new();
+    if matches!(spec.name, "datefmt_parse" | "datefmt_localtime") {
+        body.extend(intl_parse_offset_preamble(&format!("{}()", spec.name), 3));
+    }
+    if matches!(spec.name, "numfmt_parse" | "numfmt_parse_currency") {
+        body.extend(intl_parse_offset_preamble(&format!("{}()", spec.name), 4));
+    }
     if matches!(spec.name, "idn_to_ascii" | "idn_to_utf8") {
         // php-src reports the variant through the flags slot and rejects an empty domain before
         // the IDN bridge runs. Both messages are PHP-level ValueErrors.
@@ -3170,9 +3176,9 @@ fn build_date_formatter_class() -> Stmt {
         ("setPattern", vec![("pattern", TypeExpr::Str, None, false)], vec![]),
         ("setLenient", vec![("lenient", TypeExpr::Bool, None, false)], vec![]),
         ("isLenient", vec![], vec![]),
-        ("parse", vec![("string", TypeExpr::Str, None, false), ("offset", TypeExpr::Int, Some(e_int(0)), true)], vec!["offset"]),
-        ("parseToCalendar", vec![("string", TypeExpr::Str, None, false), ("offset", TypeExpr::Int, Some(e_int(0)), true)], vec!["offset"]),
-        ("localtime", vec![("string", TypeExpr::Str, None, false), ("offset", TypeExpr::Int, Some(e_int(0)), true)], vec!["offset"]),
+        ("parse", vec![("string", TypeExpr::Str, None, false), ("offset", t_mixed(), Some(e_int(0)), true)], vec!["offset"]),
+        ("parseToCalendar", vec![("string", TypeExpr::Str, None, false), ("offset", t_mixed(), Some(e_int(0)), true)], vec!["offset"]),
+        ("localtime", vec![("string", TypeExpr::Str, None, false), ("offset", t_mixed(), Some(e_int(0)), true)], vec!["offset"]),
         ("getErrorCode", vec![], vec![]),
         ("getErrorMessage", vec![], vec![]),
     ] {
@@ -3386,15 +3392,23 @@ fn date_formatter_method_body(name: &str, params: &[(&str, TypeExpr, Option<Expr
             other => other,
         };
         let args: Vec<Expr> = params.iter().map(|(param, _, _, _)| e_var(param)).collect();
+        let mut preamble = Vec::new();
+        if matches!(name, "parse" | "parseToCalendar" | "localtime") {
+            preamble.extend(intl_parse_offset_preamble(
+                &format!("IntlDateFormatter::{name}()"),
+                2,
+            ));
+        }
         if method_name == "error_code" {
             return vec![s_return(e_call("elephc_intl_error_code", vec![e_this_prop("__elephc_handle")]))];
         }
         if method_name == "error_message" {
             return vec![s_return(e_call("elephc_intl_error_message", vec![e_this_prop("__elephc_handle")]))];
         }
-        let mut body = vec![s_assign("_result", e_method_call(e_var("this"), "__elephc_call", vec![
+        let mut body = preamble;
+        body.push(s_assign("_result", e_method_call(e_var("this"), "__elephc_call", vec![
             e_str(method_name), e_array(args),
-        ]))];
+        ])));
         if outputs.is_empty() {
             body.push(s_return(e_var("_result")));
         } else {
@@ -5968,6 +5982,60 @@ fn build_collator_class() -> Stmt {
     builder.build()
 }
 
+/// Builds the mixed-offset coercion preamble shared by IntlDateFormatter parse entry points.
+///
+/// php accepts the caller's mixed by-reference offset variable and coerces it at the call
+/// boundary: non-numeric strings raise a TypeError, out-of-range floats warn before truncating.
+fn intl_parse_offset_preamble(caller: &str, index: i64) -> Vec<Stmt> {
+    vec![
+        s_if(
+            e_binop(
+                e_binop(
+                    e_call("is_int", vec![e_var("offset")]),
+                    BinOp::Or,
+                    e_call("is_float", vec![e_var("offset")]),
+                ),
+                BinOp::Or,
+                e_binop(
+                    e_call("is_null", vec![e_var("offset")]),
+                    BinOp::Or,
+                    e_binop(
+                        e_call("is_string", vec![e_var("offset")]),
+                        BinOp::And,
+                        e_call("is_numeric", vec![e_var("offset")]),
+                    ),
+                ),
+            ),
+            vec![],
+            vec![],
+            Some(vec![s_throw(e_new("TypeError", vec![e_concat_all(vec![
+                e_str(&format!("{caller}: Argument #{index} ($offset) must be of type int, ")),
+                e_call("__elephc_intl_debug_type", vec![e_var("offset")]),
+                e_str(" given"),
+            ])]))]),
+        ),
+        s_if(
+            e_binop(
+                e_call("is_float", vec![e_var("offset")]),
+                BinOp::And,
+                e_binop(
+                    e_binop(e_var("offset"), BinOp::GtEq, e_float(9_223_372_036_854_775_808.0)),
+                    BinOp::Or,
+                    e_binop(e_var("offset"), BinOp::Lt, e_float(-9_223_372_036_854_775_808.0)),
+                ),
+            ),
+            vec![s_expr(e_call("__elephc_builtin_warning", vec![e_concat_all(vec![
+                e_str("The float "),
+                e_call("sprintf", vec![e_str("%.17G"), e_var("offset")]),
+                e_str(" is not representable as an int, cast occurred"),
+            ])]))],
+            vec![],
+            None,
+        ),
+        s_assign("offset", e_cast(CastType::Int, e_var("offset"))),
+    ]
+}
+
 /// Builds the `NumberFormatter` class.
 fn build_number_formatter_class() -> Stmt {
     let mut builder = class("NumberFormatter").prop("__elephc_handle", TypeExpr::Int, Some(e_int(0)));
@@ -6117,12 +6185,12 @@ fn build_number_formatter_class() -> Stmt {
     }
     builder = builder.method(instance_method(
         "parse",
-        vec![("string", TypeExpr::Str, None, false), ("type", TypeExpr::Int, Some(e_int(0)), false), ("offset", TypeExpr::Int, Some(e_int(0)), true)],
+        vec![("string", TypeExpr::Str, None, false), ("type", TypeExpr::Int, Some(e_int(0)), false), ("offset", t_mixed(), Some(e_int(0)), true)],
         numfmt_parse_body("parse"),
     ));
     builder = builder.method(instance_method(
         "parseCurrency",
-        vec![("string", TypeExpr::Str, None, false), ("currency", t_mixed(), None, true), ("offset", TypeExpr::Int, Some(e_int(0)), true)],
+        vec![("string", TypeExpr::Str, None, false), ("currency", t_mixed(), None, true), ("offset", t_mixed(), Some(e_int(0)), true)],
         numfmt_parse_body("parse_currency"),
     ));
     builder = builder.method(method("__serialize").returns(t_array()).body(vec![
@@ -6213,6 +6281,14 @@ fn numfmt_parse_body(method_name: &str) -> Vec<Stmt> {
     if method_name == "parse" {
         body.extend(numfmt_type_guards("NumberFormatter::parse()", 2, "NumberFormatter::parseCurrency() method"));
     }
+    body.extend(intl_parse_offset_preamble(
+        if method_name == "parse" {
+            "NumberFormatter::parse()"
+        } else {
+            "NumberFormatter::parseCurrency()"
+        },
+        3,
+    ));
     body.push(s_assign("_result", e_method_call(e_var("this"), "__elephc_call", vec![e_str(method_name), e_array(if method_name == "parse_currency" { vec![e_var("string"), e_var("offset")] } else { vec![e_var("string"), e_var("type"), e_var("offset")] })])),);
     body.push(s_if(e_binop(e_var("_result"), BinOp::StrictEq, crate::synthetic_class::e_bool(false)), vec![s_return(crate::synthetic_class::e_bool(false))], vec![], None));
     if method_name == "parse_currency" {

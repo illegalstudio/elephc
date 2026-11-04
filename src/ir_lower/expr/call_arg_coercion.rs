@@ -61,6 +61,26 @@ pub(super) fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
+    // PHP binds an undefined variable passed to a boxed by-reference parameter as a null
+    // reference cell before the call; leaving the frame slot uninitialized crashes the callee.
+    if sig.ref_params.get(index).copied().unwrap_or(false)
+        && sig
+            .params
+            .get(index)
+            .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
+    {
+        if let ExprKind::Variable(name) = &arg.kind {
+            let uninitialized = ctx
+                .local_slots
+                .get(name)
+                .is_none_or(|slot| !ctx.slot_is_initialized(*slot));
+            if uninitialized && !ctx.local_uses_global_storage(name) {
+                let null = crate::ir_lower::expr::scalar_literals::lower_boxed_null(ctx, arg);
+                ctx.store_local(name, null, PhpType::Mixed, Some(arg.span));
+                ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
+            }
+        }
+    }
     guard_boxed_object_reference_argument(ctx, sig, index, arg);
     promote_boxed_reference_local_argument(ctx, sig, index, arg);
     promote_reference_return_local_argument(ctx, sig, index, arg);

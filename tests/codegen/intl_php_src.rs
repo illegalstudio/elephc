@@ -111,15 +111,13 @@ fn copy_tree(source: &Path, destination: &Path) {
 /// and removes the unused wrappers. No test calls the removed wrappers.
 fn normalize_ut_common(source: &str) -> String {
     let mut text = source.replace("$GLOBALS['oo-mode']", "\\__ElephcIntlMode::$oo");
-    // The OO parse methods declare their position parameter as int; the upstream wrappers
-    // are untyped. Give those two wrappers the storage the method expects.
-    text = text.replace("mixed &$position", "int &$position");
-    text = text.replace("mixed &$parse_pos", "int &$parse_pos");
+    // The OO parse methods accept the caller's mixed offset storage and coerce it at the call
+    // boundary, so the upstream wrappers keep their `mixed` reference parameters.
     // The wrappers forward the formatter's `int|float|false` result; elephc's mixed-to-union
     // return conversion currently narrows a boxed float to int, so keep the wrapper `mixed`.
     text = text.replace(
-        "int &$position = null): int|float|false",
-        "int &$position = null): mixed",
+        "mixed &$position = null): int|float|false",
+        "mixed &$position = null): mixed",
     );
     text = text.replace(
         "function ut_nfmt_format_currency(NumberFormatter $fmt, float $number, string $currency)",

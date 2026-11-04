@@ -608,18 +608,6 @@ struct DateFormatterObject : IntlObject {
                 out = Value::boolean(false);
                 return U_PARSE_ERROR;
             }
-            if (method == "parseToCalendar" && simple) {
-                std::unique_ptr<Calendar> calendar(simple->getCalendar()->clone());
-                calendar->setTime(parsed, status);
-                if (U_FAILURE(status)) {
-                    record_error(*this, status, "IntlDateFormatter::parseToCalendar()");
-                    out = Value::boolean(false);
-                    return status;
-                }
-                double millis = double(calendar->getTime(status));
-                out = Value::from_int(int64_t(millis));
-                return U_ZERO_ERROR;
-            }
             if (method == "parseToCalendar") {
                 // PHP's parseToCalendar parses into the formatter's calendar and adopts any
                 // timezone carried by the value. A `VV` field names a zone id; adopt it so a

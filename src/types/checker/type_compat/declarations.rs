@@ -775,6 +775,10 @@ fn requires_by_ref_boxed_storage(ty: &PhpType) -> bool {
 }
 
 /// Returns true when an argument variable's storage can accept boxed or nullable writebacks.
+///
+/// A `Void` slot holds PHP null (for example a `mixed &$position = null` parameter), which a
+/// boxed reference cell can replace without changing any concrete storage representation.
 fn supports_by_ref_boxed_storage(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
+        || matches!(ty, PhpType::Void)
 }
