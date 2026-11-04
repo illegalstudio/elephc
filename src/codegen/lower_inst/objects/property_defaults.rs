@@ -106,7 +106,7 @@ pub(super) fn emit_stacked_property_initialization(
             let object_reg = abi::secondary_scratch_reg(ctx.emitter);
             for default in defaults {
                 abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, object_stack_offset);
-                emit_property_default(ctx, object_reg, default)?;
+                emit_property_default_into_slot_or_cell(ctx, object_reg, default)?;
             }
             Ok(())
         }

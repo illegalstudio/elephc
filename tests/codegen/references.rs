@@ -1905,3 +1905,37 @@ try {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "int(2)\n");
 }
+
+/// An object built by name, by reflection or by cloning such a prototype takes the path that
+/// parks the object on the stack, and that path wrote each default over the slot of a property
+/// held in a reference cell. The first read then followed the value as a cell. Doctrine's cached
+/// `ClassMetadata` is rebuilt this way, so its first entity load took the worker down.
+#[test]
+fn test_a_default_of_a_cell_backed_property_survives_a_dynamic_allocation() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class M {
+    public array $list = [];
+    public bool $flag = false;
+    public int $n = 3;
+    public ?string $s = null;
+    public array $map = ['k' => 1];
+}
+function bind(M $m) { $a = &$m->list; $b = &$m->flag; $c = &$m->n; $d = &$m->s; $e = &$m->map; $a[] = 1; }
+function show($o) {
+    echo count($o->list), var_export($o->flag, true), $o->n, var_export($o->s, true), $o->map['k'], "\n";
+    foreach ($o->list as $k => $v) { echo $k, "\n"; }
+}
+$name = 'M';
+show(new $name());
+$byReflection = (new ReflectionClass($name))->newInstanceWithoutConstructor();
+show($byReflection);
+show(clone $byReflection);
+$o = new M();
+bind($o);
+show($o);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0false3NULL1\n0false3NULL1\n0false3NULL1\n1false3NULL1\n0\n");
+}
