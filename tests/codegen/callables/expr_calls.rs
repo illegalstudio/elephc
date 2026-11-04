@@ -32,11 +32,13 @@ fn asm_has_invokable_object_call(user_asm: &str, class_name: &str) -> bool {
         || user_asm.contains(&eir_method)
 }
 
-/// Counts globally emitted callable artifacts whose assembly labels contain `kind`.
+/// Counts callable entry points without treating their GC visitor/cleanup callbacks as invokers.
 fn global_callable_artifact_count(user_asm: &str, kind: &str) -> usize {
     user_asm
         .lines()
         .filter(|line| line.starts_with(".globl ") && line.contains(kind))
+        .filter(|line| !line.ends_with("__gc_argument_owners")
+            && !line.ends_with("__gc_argument_owners_cleanup"))
         .count()
 }
 

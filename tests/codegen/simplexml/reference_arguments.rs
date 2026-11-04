@@ -10,10 +10,22 @@
 
 use crate::support::*;
 
-/// Native and eval calls create missing paths before subsequent argument side effects.
+/// Native calls create missing paths before subsequent argument side effects.
 #[test]
 fn test_simplexml_reference_arguments_materialize_missing_paths_bundle() {
     if skip_without_xml_native("test_simplexml_reference_arguments_materialize_missing_paths_bundle") { return; }
+    verify_reference_arguments_materialize_missing_paths(false);
+}
+
+/// Eval calls preserve the same six lifetime checkpoints within one catalog compile.
+#[test]
+fn test_simplexml_reference_arguments_materialize_missing_paths_eval_bundle() {
+    if skip_without_xml_native("test_simplexml_reference_arguments_materialize_missing_paths_eval_bundle") { return; }
+    verify_reference_arguments_materialize_missing_paths(true);
+}
+
+/// Keeps every source case, argv checkpoint, expected value and strict heap assertion in both modes.
+fn verify_reference_arguments_materialize_missing_paths(eval_mode: bool) {
     let body = r#"
 function replaceMissingXmlSelection(&$value, string $observed): void {
     echo get_class($value), ':', $observed, '|'; $value = 'replacement';
@@ -99,17 +111,17 @@ runtimeMissingXmlAfterEval(runtimeMissingXmlValue(...), new SimpleXMLElement('<r
     let expected_windows = [expected, &before_variadic, &before_variadic, &before_variadic, &before_variadic, &before_runtime];
     let arguments = ["checkpoint"; 5];
     let argv = (0..=5).map(|length| &arguments[..length]).collect::<Vec<_>>();
-    for (mode, source) in [native, eval].iter().enumerate() {
-        let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(source, &argv);
-        preserve_stdout_mismatches(source, &assembly, &runs, &expected_windows);
-        let mut failures = Vec::new();
-        for (window, (out, expected)) in runs.iter().zip(expected_windows).enumerate() {
-            if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
-                failures.push(format!("mode={mode} window={window}: stdout={} stderr={}", out.stdout, out.stderr));
-            }
+    let mode = usize::from(eval_mode);
+    let source = if eval_mode { &eval } else { &native };
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(source, &argv);
+    preserve_stdout_mismatches(source, &assembly, &runs, &expected_windows);
+    let mut failures = Vec::new();
+    for (window, (out, expected)) in runs.iter().zip(expected_windows).enumerate() {
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} window={window}: stdout={} stderr={}", out.stdout, out.stderr));
         }
-        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Native indirect calls inspect eval closure modes in the closure's owning context.

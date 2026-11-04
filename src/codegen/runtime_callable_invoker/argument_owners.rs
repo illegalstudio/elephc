@@ -42,7 +42,9 @@ impl InvokerArgumentOwners {
     /// Exposes existing argument and result leases while the invoker can be suspended.
     pub(super) fn link_frame(&self, emitter: &mut Emitter, visitor: &str) {
         let base = abi::int_result_reg(emitter);
-        abi::emit_temporary_stack_address(emitter, base, 0);
+        // A data pointer equal to its record identifies a compact single-owner guard.
+        // Point at the separate inventory so the collector selects this extended visitor.
+        abi::emit_temporary_stack_address(emitter, base, abi::CALL_OPERAND_OWNER_RECORD_BYTES);
         abi::emit_link_call_operand_custom_cleanup_at_stack(emitter, base,
             &format!("{visitor}_cleanup"), visitor, 0);
     }
@@ -59,7 +61,8 @@ impl InvokerArgumentOwners {
         abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
         abi::emit_return(emitter);
         let offsets = (0..self.count + 2)
-            .map(|index| self.frame_size - 16 - self.offset(index)).collect::<Vec<_>>();
+            .map(|index| self.frame_size - 16 - self.offset(index)
+                - abi::CALL_OPERAND_OWNER_RECORD_BYTES).collect::<Vec<_>>();
         crate::codegen_support::runtime::emit_native_frame_owners(emitter, visitor, &offsets);
     }
 
@@ -180,11 +183,16 @@ mod tests {
             for index in 0..4 {
                 let offset = owners.frame_size - 16 - owners.offset(index);
                 assert!(offset >= abi::CALL_OPERAND_OWNER_RECORD_BYTES, "{name}: owner overlaps record");
+                let offset = offset - abi::CALL_OPERAND_OWNER_RECORD_BYTES;
                 let address = if target.arch == crate::codegen_support::platform::Arch::AArch64 {
                     format!("add x0, x0, #{offset}")
                 } else { format!("add rdi, {offset}") };
                 assert!(assembly.contains(&address), "{name}: missing slot {index}: {assembly}");
             }
+            let data = if target.arch == crate::codegen_support::platform::Arch::AArch64 {
+                "mov x0, sp\n    add x0, x0, #48"
+            } else { "lea rax, [rsp + 48]" };
+            assert!(assembly.contains(data), "{name}: an extended inventory cannot use the compact guard marker");
             assert!(assembly.contains("invoker_owners_probe_cleanup"), "{name}: {assembly}");
             assert!(assembly.contains("_exc_call_frame_top"), "{name}: {assembly}");
         }

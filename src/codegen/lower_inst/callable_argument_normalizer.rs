@@ -44,7 +44,8 @@ pub(in crate::codegen) fn emit_callable_argument_normalizer(
     abi::store_at_offset(ctx.emitter, nested, saved_nested_offset);
     ctx.store_result_value(helper_value())?;
     if let Some(slot) = callback_context {
-        // The helper has no source eval frame. The retained callback identifies its owner.
+        // Objects identify their own owner. Named callbacks use the scoped native caller
+        // when this helper has no source eval frame of its own.
         abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
         ctx.load_value_to_reg(helper_value(), abi::int_arg_reg_name(ctx.emitter.target, 1))?;
         let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_object_context");

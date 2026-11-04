@@ -65,11 +65,11 @@ pub unsafe extern "C" fn __elephc_eval_class_string_relation_v1(
     }).unwrap_or(0)
 }
 
-/// Resolves an object's owning eval context before falling back to the active caller context.
-/// Dynamic classes can use native stdClass payloads, so ownership lookup precedes class tables.
+/// Resolves a callback's owner before its explicit caller or active native invocation context.
+/// Named callbacks have no object owner and use the existing scoped native-frame context.
 ///
 /// # Safety
-/// `object` must be null or a live boxed object and `ctx` null or a valid context handle.
+/// `object` must be null or a live boxed value and `ctx` null or a valid context handle.
 /// The returned context is borrowed from its existing request host.
 #[cfg(not(test))]
 #[no_mangle]
@@ -83,7 +83,9 @@ pub unsafe extern "C" fn __elephc_eval_object_context(
         let owner = values.object_identity(object).ok().and_then(|identity| {
             crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
         });
-        let resolved = owner.unwrap_or(ctx);
+        let resolved = owner.or_else(|| (!ctx.is_null()).then_some(ctx))
+            .or_else(crate::context::native_frame_active_eval_context)
+            .unwrap_or(std::ptr::null_mut());
         match unsafe { resolved.as_ref() } {
             Some(context) if context.abi_version() == ABI_VERSION => resolved,
             _ => std::ptr::null_mut(),

@@ -8,7 +8,7 @@
 //! - Called-class scope, reference modes, positional extraction, and writeback stay paired.
 
 use super::*;
-use crate::runtime_hooks::owner_frames::with_runtime_owners;
+use crate::runtime_hooks::owner_frames::{with_runtime_owners, with_runtime_scope_owners};
 
 /// Calls a wrapper hook while consuming only the fresh operands synthesized by its caller.
 pub(in crate::interpreter) fn eval_dynamic_method_with_owned_values(
@@ -140,7 +140,11 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
         Some(object),
         false,
     );
-    let result = binding_result.and_then(|()| execute_statements(method.body(), context, &mut method_scope, values));
+    let result = with_runtime_owners(&evaluated_args, || {
+        with_runtime_scope_owners(&mut method_scope, |scope| {
+            binding_result.and_then(|()| execute_statements(method.body(), context, scope, values))
+        })
+    });
     let persist_result = persist_static_locals(
         context,
         &qualified_method_name,
@@ -291,7 +295,11 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
         None,
         true,
     );
-    let result = binding_result.and_then(|()| execute_statements(method.body(), context, &mut method_scope, values));
+    let result = with_runtime_owners(&evaluated_args, || {
+        with_runtime_scope_owners(&mut method_scope, |scope| {
+            binding_result.and_then(|()| execute_statements(method.body(), context, scope, values))
+        })
+    });
     let persist_result = persist_static_locals(
         context,
         &qualified_method_name,

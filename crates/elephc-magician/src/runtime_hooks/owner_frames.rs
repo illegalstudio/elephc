@@ -105,6 +105,30 @@ pub(crate) fn with_runtime_owners<T: RuntimeOwners, R>(owners: &T, consume: impl
     consume()
 }
 
+/// A method scope can change during execution but is frozen while its Fiber is inspected.
+struct RuntimeScopeOwners(*const crate::scope::ElephcEvalScope);
+
+impl RuntimeOwners for RuntimeScopeOwners {
+    /// Borrows current entries only during the collector's pure suspended-stack callback.
+    fn visit_owned_slots(&self, visit: &mut dyn FnMut(*const *mut RuntimeCell)) {
+        // The scoped call keeps this address live. No PHP or scope mutation runs during a visit.
+        unsafe { &*self.0 }.visit_owned_cell_slots(visit);
+    }
+}
+
+/// Publishes an interpreted method's actual scope while its body can enter native suspension.
+pub(crate) fn with_runtime_scope_owners<R>(
+    scope: &mut crate::scope::ElephcEvalScope,
+    consume: impl FnOnce(&mut crate::scope::ElephcEvalScope) -> R,
+) -> R {
+    let owners = RuntimeScopeOwners(std::ptr::from_mut(scope));
+    with_runtime_owners(&owners, || {
+        // Execution and collection alternate on one worker. The visitor never runs concurrently
+        // with this mutable scope access, and no borrowed entry survives the pure callback.
+        consume(unsafe { &mut *owners.0.cast_mut() })
+    })
+}
+
 /// Adopts one temporary owner until the consumer explicitly takes it for cleanup.
 pub(super) fn with_owned_runtime_cell<R>(
     value: RuntimeCellHandle, consume: impl FnOnce(&RuntimeOwnerSlot) -> R,
@@ -172,6 +196,31 @@ unsafe extern "C" fn visit<T: RuntimeOwners>(data: *const c_void, context: *mut 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scope visitor follows current ownership after insertion, replacement and unset.
+    #[test]
+    fn runtime_scope_owners_follow_live_slots_without_snapshot_leases() {
+        use crate::scope::{ElephcEvalScope, ScopeCellOwnership};
+        let first = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
+        let second = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
+        let mut scope = ElephcEvalScope::new();
+        with_runtime_scope_owners(&mut scope, |scope| {
+            scope.set("owned", first, ScopeCellOwnership::Owned);
+            scope.set("alias", first, ScopeCellOwnership::Borrowed);
+            let owners = RuntimeScopeOwners(std::ptr::from_mut(scope));
+            let mut seen = Vec::new();
+            owners.visit_owned_slots(&mut |slot| seen.push((slot as usize, unsafe { *slot })));
+            assert_eq!(seen.len(), 1);
+            assert_eq!(seen[0].1, first.as_ptr());
+            assert_eq!(scope.set("owned", second, ScopeCellOwnership::Owned), Some(first));
+            seen.clear();
+            owners.visit_owned_slots(&mut |slot| seen.push((slot as usize, unsafe { *slot })));
+            assert_eq!(seen.len(), 1);
+            assert_eq!(seen[0].1, second.as_ptr());
+            assert_eq!(scope.unset("owned"), Some(second));
+            owners.visit_owned_slots(&mut |_| panic!("an unset scope entry owns no lease"));
+        });
+    }
 
     /// A value remains one real slot until take detaches it before any possible reentry.
     #[test]
