@@ -745,6 +745,19 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         ast
     };
 
+    // Discover Io\Poll use inside newly loaded classes, resolving only injected declarations.
+    crate::progress::phase("io-poll-autoload-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::io_poll_prelude::inject_after_autoload(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("io-poll-autoload-prelude", phase_started);
+
     // Discover DOM use inside newly loaded classes, resolving only injected declarations.
     crate::progress::phase("dom-html-autoload-prelude");
     let phase_started = Instant::now();

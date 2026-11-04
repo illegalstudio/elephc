@@ -1,0 +1,452 @@
+//! Purpose:
+//! Declares PHP 8.6's `Io\Poll` API and implements its portable `Poll` backend in PHP.
+//!
+//! Called from:
+//! - `crate::core_prelude::inject_if_used` when a program reaches `Io\Poll` or
+//!   `StreamPollHandle`.
+//!
+//! Key details:
+//! - The surface is parsed from one internal PHP source, so namespaces, enums, interfaces,
+//!   exception hierarchies, and readonly metadata stay identical to the engine's declarations.
+//! - The backend maps level-triggered read/write readiness onto `stream_select()`, including
+//!   data already buffered in the stream layer. Edge triggering and hang-up/error precision are
+//!   intentionally limited to what `stream_select()` can observe.
+//! - Watchers hold the context through `WeakReference`, so a watcher does not keep a dropped
+//!   context alive and `isActive()` turns false exactly when the context is gone.
+
+use crate::compiler_stack::with_compiler_stack;
+use crate::parser::ast::Program;
+
+/// The complete `Io\Poll` surface and its `Poll` backend.
+const IO_POLL_PRELUDE_SRC: &str = r#"<?php
+
+namespace Io {
+    class IoException extends \Exception {}
+}
+
+namespace Io\Poll {
+    enum Backend {
+        case Auto;
+        case Poll;
+        case Epoll;
+        case Kqueue;
+        case EventPorts;
+        case WSAPoll;
+
+        public static function getAvailableBackends(): array {
+            return [self::Poll];
+        }
+
+        public function isAvailable(): bool {
+            return $this === self::Poll;
+        }
+
+        public function supportsEdgeTriggering(): bool {
+            return false;
+        }
+    }
+
+    enum Event {
+        case Read;
+        case Write;
+        case Error;
+        case HangUp;
+        case ReadHangUp;
+        case OneShot;
+        case EdgeTriggered;
+    }
+
+    interface Handle {}
+
+    final class Watcher {
+        private \WeakReference $context;
+        private \StreamPollHandle $handle;
+        private array $watchedEvents;
+        private array $triggeredEvents = [];
+        private mixed $data;
+        private bool $active = true;
+        private bool $fired = false;
+
+        public function __construct(\WeakReference $context, \StreamPollHandle $handle, array $events, mixed $data = null) {
+            $this->context = $context;
+            $this->handle = $handle;
+            $this->watchedEvents = $events;
+            $this->data = $data;
+        }
+
+        public function getHandle(): \StreamPollHandle {
+            return $this->handle;
+        }
+
+        public function getWatchedEvents(): array {
+            return $this->watchedEvents;
+        }
+
+        public function getTriggeredEvents(): array {
+            return $this->triggeredEvents;
+        }
+
+        public function getData(): mixed {
+            return $this->data;
+        }
+
+        public function hasTriggered(Event $event): bool {
+            return in_array($event, $this->triggeredEvents, true);
+        }
+
+        public function isActive(): bool {
+            if (!$this->active) {
+                return false;
+            }
+            if (!$this->handle->isValid()) {
+                return false;
+            }
+            return $this->context->get() !== null;
+        }
+
+        public function modify(array $events, mixed $data = null): void {
+            $this->modifyEvents($events);
+            $this->modifyData($data);
+        }
+
+        public function modifyEvents(array $events): void {
+            if ($this->context->get() === null || !$this->active || !$this->handle->isValid()) {
+                throw new InactiveWatcherException('Cannot modify inactive watcher');
+            }
+            Context::validateEvents($events);
+            $this->watchedEvents = $events;
+            $this->triggeredEvents = [];
+            $this->fired = false;
+        }
+
+        public function modifyData(mixed $data): void {
+            if ($this->context->get() === null || !$this->active) {
+                throw new InactiveWatcherException('Cannot modify inactive watcher');
+            }
+            $this->data = $data;
+        }
+
+        public function remove(): void {
+            $context = $this->context->get();
+            if ($context === null) {
+                throw new InactiveWatcherException('Cannot remove inactive watcher');
+            }
+            if (!$this->active) {
+                return;
+            }
+            $this->active = false;
+            $this->triggeredEvents = [];
+            $context->__elephcRemoveWatcher($this);
+        }
+
+        public function __elephcResetTriggered(): void {
+            $this->triggeredEvents = [];
+        }
+
+        public function __elephcMarkTriggered(array $events): void {
+            $this->triggeredEvents = $events;
+            if (in_array(Event::OneShot, $this->watchedEvents, true)) {
+                $this->fired = true;
+            }
+        }
+
+        public function __elephcFired(): bool {
+            return $this->fired;
+        }
+
+        public function __elephcActive(): bool {
+            return $this->active && $this->handle->isValid();
+        }
+
+        public function __elephcStream(): mixed {
+            return $this->handle->getStream();
+        }
+
+        public function __debugInfo(): array {
+            return [];
+        }
+
+        public function __clone() {
+            throw new \Error('Trying to clone an uncloneable object of class Io\\Poll\\Watcher');
+        }
+    }
+
+    final class Context {
+        private Backend $backend;
+        private bool $constructed = false;
+        private array $watchers = [];
+
+        public function __construct(Backend $backend = Backend::Auto) {
+            if ($this->constructed) {
+                throw new \Error('Io\\Poll\\Context object is already constructed');
+            }
+            $this->constructed = true;
+            $actual = $backend === Backend::Auto ? Backend::Poll : $backend;
+            if (!$actual->isAvailable()) {
+                throw new BackendUnavailableException('Backend ' . $actual->name . ' not available');
+            }
+            $this->backend = $actual;
+        }
+
+        public function add(Handle $handle, array $events, mixed $data = null): Watcher {
+            if (!$handle instanceof \StreamPollHandle) {
+                throw new InvalidHandleException('Invalid handle for polling');
+            }
+            if (!$handle->isValid()) {
+                throw new InvalidHandleException('Invalid handle for polling');
+            }
+            self::validateEvents($events);
+            foreach ($this->watchers as $existing) {
+                if ($existing->__elephcActive() && $existing->__elephcStream() === $handle->getStream()) {
+                    throw new HandleAlreadyWatchedException('Handle already added');
+                }
+            }
+            $watcher = new Watcher(\WeakReference::create($this), $handle, $events, $data);
+            $this->watchers[] = $watcher;
+            return $watcher;
+        }
+
+        public function wait(?\Time\Duration $timeout = null, ?int $maxEvents = null): array {
+            if ($timeout !== null && $timeout->negative) {
+                throw new \ValueError('Io\\Poll\\Context::wait(): Argument #1 ($timeout) must not be negative');
+            }
+            if ($maxEvents !== null) {
+                if ($maxEvents < 1) {
+                    throw new \ValueError('Io\\Poll\\Context::wait(): Argument #2 ($maxEvents) must be greater than 0');
+                }
+                if ($maxEvents > 2147483647) {
+                    throw new \ValueError('Io\\Poll\\Context::wait(): Argument #2 ($maxEvents) must be less than or equal to 2147483647');
+                }
+            }
+            $limit = $maxEvents === null ? 2147483647 : $maxEvents;
+            $seconds = 3600;
+            $micros = 0;
+            if ($timeout !== null) {
+                $seconds = $timeout->seconds;
+                $micros = intdiv($timeout->nanoseconds, 1000);
+            }
+
+            $active = [];
+            foreach ($this->watchers as $watcher) {
+                $watcher->__elephcResetTriggered();
+                if (!$watcher->__elephcActive() || $watcher->__elephcFired()) {
+                    continue;
+                }
+                $active[] = $watcher;
+            }
+            if ($active === []) {
+                if ($timeout !== null && ($seconds > 0 || $micros > 0)) {
+                    usleep((int) ($seconds * 1000000 + $micros));
+                }
+                return [];
+            }
+
+            $read = [];
+            $write = [];
+            $except = [];
+            $buffered = [];
+            foreach ($active as $watcher) {
+                $stream = $watcher->__elephcStream();
+                $events = $watcher->getWatchedEvents();
+                $wantsRead = in_array(Event::Read, $events, true);
+                $wantsWrite = in_array(Event::Write, $events, true);
+                $wantsError = in_array(Event::Error, $events, true)
+                    || in_array(Event::HangUp, $events, true)
+                    || in_array(Event::ReadHangUp, $events, true);
+                $meta = stream_get_meta_data($stream);
+                $hasBuffered = $wantsRead && ($meta['unread_bytes'] ?? 0) > 0;
+                if ($hasBuffered) {
+                    $buffered[] = $watcher;
+                } elseif ($wantsRead) {
+                    $read[] = $stream;
+                }
+                if ($wantsWrite) {
+                    $write[] = $stream;
+                }
+                if ($wantsError) {
+                    $except[] = $stream;
+                }
+            }
+
+            $ready = false;
+            if ($read !== [] || $write !== [] || $except !== []) {
+                if ($buffered !== []) {
+                    $seconds = 0;
+                    $micros = 0;
+                }
+                $selected = stream_select($read, $write, $except, $seconds, $micros);
+                if ($selected === false) {
+                    throw new FailedPollWaitException('Failed to wait for events', FailedPollOperationException::ERROR_SYSTEM);
+                }
+                $ready = true;
+            }
+
+            $events = [];
+            foreach ($active as $watcher) {
+                if (count($events) >= $limit) {
+                    break;
+                }
+                $stream = $watcher->__elephcStream();
+                $triggered = [];
+                if (in_array($watcher, $buffered, true) || ($ready && in_array($stream, $read, true))) {
+                    $triggered[] = Event::Read;
+                }
+                if ($ready && in_array($stream, $write, true)) {
+                    $triggered[] = Event::Write;
+                }
+                if ($ready && in_array($stream, $except, true)) {
+                    $triggered[] = Event::Error;
+                }
+                if ($triggered !== []) {
+                    $watcher->__elephcMarkTriggered($triggered);
+                    $events[] = $watcher;
+                }
+            }
+            return $events;
+        }
+
+        public function getBackend(): Backend {
+            return $this->backend;
+        }
+
+        public function __elephcRemoveWatcher(Watcher $watcher): void {
+            foreach ($this->watchers as $index => $candidate) {
+                if ($candidate === $watcher) {
+                    unset($this->watchers[$index]);
+                    $this->watchers = array_values($this->watchers);
+                    return;
+                }
+            }
+        }
+
+        public static function validateEvents(array $events): void {
+            if ($events === []) {
+                throw new \ValueError('At least one event must be watched');
+            }
+            foreach ($events as $event) {
+                if (!$event instanceof Event) {
+                    throw new \TypeError('Watched events must be of type Io\\Poll\\Event');
+                }
+                if ($event === Event::EdgeTriggered) {
+                    throw new BackendUnavailableException('Backend Poll does not support edge triggering');
+                }
+            }
+        }
+
+        public function __debugInfo(): array {
+            return [];
+        }
+
+        public function __clone() {
+            throw new \Error('Trying to clone an uncloneable object of class Io\\Poll\\Context');
+        }
+    }
+
+    class PollException extends \Io\IoException {}
+
+    abstract class FailedPollOperationException extends PollException {
+        public const ERROR_NONE = 0;
+        public const ERROR_SYSTEM = 1;
+        public const ERROR_NOMEM = 2;
+        public const ERROR_INVALID = 3;
+        public const ERROR_EXISTS = 4;
+        public const ERROR_NOTFOUND = 5;
+        public const ERROR_TIMEOUT = 6;
+        public const ERROR_INTERRUPTED = 7;
+        public const ERROR_PERMISSION = 8;
+        public const ERROR_TOOBIG = 9;
+        public const ERROR_AGAIN = 10;
+        public const ERROR_NOSUPPORT = 11;
+    }
+
+    class FailedContextInitializationException extends FailedPollOperationException {}
+    class FailedHandleAddException extends FailedPollOperationException {}
+    class FailedWatcherModificationException extends FailedPollOperationException {}
+    class FailedPollWaitException extends FailedPollOperationException {}
+    class BackendUnavailableException extends PollException {}
+    class InactiveWatcherException extends PollException {}
+    class HandleAlreadyWatchedException extends PollException {}
+    class InvalidHandleException extends PollException {}
+}
+
+namespace {
+    final class StreamPollHandle implements \Io\Poll\Handle {
+        private mixed $stream;
+        private bool $constructed = false;
+
+        public function __construct($stream) {
+            if ($this->constructed) {
+                throw new \Error('StreamPollHandle object is already constructed');
+            }
+            if (!is_resource($stream) || get_resource_type($stream) === 'Unknown') {
+                throw new \TypeError('StreamPollHandle::__construct(): Argument #1 ($stream) must be an open stream resource');
+            }
+            $this->constructed = true;
+            $this->stream = $stream;
+        }
+
+        public function getStream(): mixed {
+            return $this->stream;
+        }
+
+        public function isValid(): bool {
+            return is_resource($this->stream) && get_resource_type($this->stream) !== 'Unknown';
+        }
+
+        public function __debugInfo(): array {
+            return [];
+        }
+
+        public function __clone() {
+            throw new \Error('Trying to clone an uncloneable object of class StreamPollHandle');
+        }
+    }
+}
+"#;
+
+/// Returns whether `usage` reaches the `Io\Poll` surface.
+pub(crate) fn requested(usage: &crate::prelude_prune::usage::Usage) -> bool {
+    usage.classes.iter().any(|name| {
+        name == "streampollhandle"
+            || name == "io\\poll\\handle"
+            || name.starts_with("io\\poll\\")
+    })
+}
+
+/// Injects the surface when only an autoloaded class reaches it.
+///
+/// The early `core_prelude::inject_if_used` pass runs before `autoload::run`, so a class
+/// loaded from a PSR-4 file is not part of the AST it scans. This late pass runs after
+/// autoloading, resolves the prelude's own names, and skips work when the early pass already
+/// recorded the group.
+#[allow(dead_code)]
+pub(crate) fn inject_after_autoload(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Result<Program, crate::errors::CompileError> {
+    with_compiler_stack(|| {
+        if inventory.groups.contains_key("io-poll") {
+            return Ok(program);
+        }
+        let usage = crate::prelude_prune::usage::collect(&program);
+        let requested = crate::codegen_support::compile_php_version()
+            >= crate::php_version::PhpVersion::Php86
+            && requested(&usage);
+        if !requested {
+            return Ok(program);
+        }
+        let mut combined = crate::name_resolver::resolve(declarations())?;
+        inventory.record_program("io-poll", &combined);
+        combined.extend(program);
+        Ok(combined)
+    })
+}
+
+/// Returns the parsed `Io\Poll` declarations.
+pub(crate) fn declarations() -> Program {
+    with_compiler_stack(|| {
+        let tokens = crate::lexer::tokenize(IO_POLL_PRELUDE_SRC)
+            .expect("io poll prelude must tokenize");
+        crate::parser::parse_internal(&tokens).expect("io poll prelude must parse")
+    })
+}

@@ -181,7 +181,11 @@ pub fn inject_if_used(
         let mut declarations = core_declarations();
         let dynamic = usage.introspects || usage.constructs_dynamic_class;
         let weak_map = dynamic || usage.classes.contains("weakmap") || usage.literals.contains("weakmap");
-        let weak_reference = weak_map || usage.classes.contains("weakreference") || usage.literals.contains("weakreference");
+        let io_poll_requested = crate::codegen_support::compile_php_version()
+            >= crate::php_version::PhpVersion::Php86
+            && crate::io_poll_prelude::requested(&usage);
+        let weak_reference = weak_map || io_poll_requested
+            || usage.classes.contains("weakreference") || usage.literals.contains("weakreference");
         declarations.retain(|stmt| {
             let StmtKind::ClassDecl { name, .. } = &stmt.kind else { return false };
             if name == "WeakMap" || name == "__ElephcWeakMapIterator" { return weak_map; }
@@ -191,6 +195,13 @@ pub fn inject_if_used(
             true
         });
         inventory.record_program("core", &declarations);
+        // PHP 8.6's Io\Poll surface is pay-for-use; injecting it before the Time prelude
+        // lets that pass see its ?Time\Duration signature and bring Time\Duration with it.
+        if io_poll_requested {
+            let io_poll = crate::io_poll_prelude::declarations();
+            inventory.record_program("io-poll", &io_poll);
+            declarations.extend(io_poll);
+        }
         // PHP 8.6's stream error surface is pay-for-use: it is injected only for a
         // program that reaches one of its functions, enums, or classes.
         if crate::codegen_support::compile_php_version()

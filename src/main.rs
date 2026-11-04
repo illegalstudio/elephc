@@ -60,6 +60,7 @@ mod shared_ini_prelude;
 mod optimize;
 mod otlp;
 mod parser;
+mod io_poll_prelude;
 mod stream_errors;
 mod stream_errors_prelude;
 pub(crate) mod pfa;

@@ -22,6 +22,7 @@ sensitive.
 | Default trim mask | `trim()`, `ltrim()`, `rtrim()` and `chop()` include form feed (`\x0C`) under `--php-version=8.6`, and leave it untouched on 8.5 and earlier. |
 | Readonly property defaults | A readonly instance property may declare a default value, including inside a `readonly class`. The default initializes the slot before the constructor runs, so later writes (including from the constructor) raise `Cannot modify readonly property`. Inheritance, get-only interface properties, and serialization follow php-src's `Zend/tests/readonly_props/readonly_with_default*.phpt`. |
 | Stream error API | `StreamErrorMode`, `StreamErrorStore`, `StreamErrorCode`, final readonly `StreamError`, `StreamException::getErrors()`, `stream_last_errors()`, `stream_clear_errors()`, and the `stream.error_mode` / `error_store` / `error_handler` context options. `fopen()` runs through an error-aware wrapper: Error mode warns, Exception mode throws, Silent suppresses, and the store/handler policies apply. Nine upstream `ext/standard/tests/streams/stream_errors_*` fixtures are covered in `tests/codegen/io/stream_errors_php86.rs`; the user-wrapper multi-error fixture stays out. |
+| `Io\Poll` | `Io\Poll\Backend`, `Event`, `Handle`, `Watcher`, `Context`, global `StreamPollHandle`, and the `PollException` hierarchy. The portable `Poll` backend reports level Read/Write readiness, buffered data, one-shot rearming, `maxEvents`, `Time\Duration` timeouts, duplicate/closed/invalid handles, and watcher/context lifetime rules. Thirty-two upstream `ext/standard/tests/poll` fixtures are vendored and represented by 24 focused tests in `tests/codegen/io/io_poll_php86.rs`; edge triggering, hang-up precision, and descriptors above 63 remain backend limits. |
 | Parameter doc comments | `/** ... */` before a parameter or after it before the comma is retained as `ReflectionParameter::getDocComment()` for functions, methods, constructors, promoted parameters, closures, arrow functions, and property-hook `set` parameters. The indented upstream fixture passes; the basic fixture is transcribed with its closure/arrow reflection cases removed until dynamic `ReflectionFunction` construction is supported. |
 | Partial function application | `foo(1, ?, ...)` placeholders, named placeholders, trailing `...`, constant-expression partials, inherited parameter names/types/defaults/reference modes, creation-time evaluation, extra-argument forwarding, and closure scope. Ten php-src `Zend/tests/partial_application` fixtures are transcribed into `tests/codegen/oop/partial_application_php86.rs`; the invalid shapes are rejected in `tests/error_tests/partial_application.rs`. |
 | `ReflectionProperty::isReadable()` / `isWritable()` | Report whether a property can be read or written from a class scope, with the optional object adding initialization and readonly state. Visibility, asymmetric write visibility, virtual/backed hooks, `__get`/`__set`/`__isset` fallbacks, static properties, and the readonly `__clone` reinitialization window are covered by the six upstream `ext/reflection/tests/ReflectionProperty_is{Readable,Writable}_*.phpt` fixtures in `tests/codegen/oop/reflection_property_access_php86.rs`. This also implements PHP 8.5's asymmetric visibility for static properties. |
@@ -42,13 +43,20 @@ instead of during production.
 
 | Item | Why it is deferred |
 |---|---|
-| `Io\Poll` | A new platform polling API (`epoll`/`kqueue`/`WSAPoll`). It needs a new native surface per target and an event-loop-free runtime shape. |
 | URI builder follow-ups | The `Uri\Rfc3986\Uri` / `Uri\WhatWg\Url` extension is not implemented at all yet. |
 | `pack()`/`unpack()` float and signed-integer endianness modifiers | The pack/unpack family is tracked separately; the 8.6 modifiers add new format letters and endianness combinations. |
 | Direction-aware property resolution, const object property writes, function-argument error display, closure optimizations, TLS session resumption, SNMP updates | Smaller upstream changes with no standalone user-visible surface in elephc yet. |
 
 ## Known deviations
 
+- `Io\Poll` bundles only the portable `Poll` backend. Edge triggering, precise
+  `HangUp`/`ReadHangUp` reporting, and descriptors above 63 are not available; the
+  platform-specific `Epoll`, `Kqueue`, `EventPorts`, and `WSAPoll` backends raise
+  `BackendUnavailableException`. `get_debug_type()` is not implemented, so the
+  upstream closed-handle fixture is adapted to use `isValid()` instead.
+  `Watcher::getHandle()` returns the concrete `StreamPollHandle` type rather than the
+  `Io\Poll\Handle` interface so the checker accepts the upstream
+  `getHandle()->getStream()` pattern; the returned object still implements the interface.
 - The stream error surface wraps `fopen()` only. Other stream operations still emit PHP 8.5
   warnings, and user-wrapper operations that report several errors (`stream_select()` cast
   failures, over-reading `stream_read()`) are not accumulated. `stream_select()` accepts the

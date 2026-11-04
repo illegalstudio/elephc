@@ -98,8 +98,6 @@ fn lower(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// The mixed prelude helper is kept in sync with the registered contract name.
     #[test]
     fn clamp_mixed_lowering_targets_the_prelude_helper() {

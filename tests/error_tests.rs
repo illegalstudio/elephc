@@ -354,6 +354,8 @@ mod enum_debug_info;
 mod static_asymmetric_visibility;
 #[path = "error_tests/partial_application.rs"]
 mod partial_application;
+#[path = "error_tests/io_poll_php86.rs"]
+mod io_poll_php86;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
 #[path = "error_tests/mbstring.rs"]
