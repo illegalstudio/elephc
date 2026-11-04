@@ -2,8 +2,8 @@
 //! Exposes implicit integer conversions of checked arithmetic as scalar EIR sinks.
 //!
 //! Called from:
-//! - Typed destination and declared-local assignment lowering.
 //! - Declared `int` instance-property stores in `stmt::instance_property_writes`.
+//! - Typed destination and declared-local assignment lowering.
 //!
 //! Key details:
 //! - Only closed add/sub/mul trees with concrete integer leaves are accepted.

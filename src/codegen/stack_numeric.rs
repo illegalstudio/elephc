@@ -186,12 +186,12 @@ impl Proof<'_> {
                 }
                 let user = &self.function.instructions[id.as_raw() as usize];
                 match user.op {
+                    Op::PropertyBoundaryCheckedToInt => int_property_observation(user),
                     Op::Release => true,
                     Op::Acquire | Op::Borrow if user.immediate.is_none() => user
                         .result
                         .is_some_and(|result| self.value_uses(result, producer, seen, stores)),
                     Op::Cast | Op::ReturnBoundaryMixedToInt => scalar_observation(user),
-                    Op::PropertyBoundaryCheckedToInt => int_property_observation(user),
                     _ if domain::comparison(user) && self.numeric_inputs(&user.operands) => true,
                     _ if tagged_producer(user) && self.numeric_inputs(&user.operands) => true,
                     Op::StoreLocal => match user.immediate {
@@ -341,14 +341,15 @@ impl Proof<'_> {
         self.uses.get(&value).is_none_or(|uses| {
             uses.iter().all(|&user| {
                 let inst = &self.function.instructions[user.as_raw() as usize];
+                if int_property_observation(inst) {
+                    return self.stable_read(load, user);
+                }
                 if inst.op == Op::Release {
                     return true;
                 }
                 let arithmetic = tagged_producer(inst) && self.numeric_inputs(&inst.operands);
                 let comparison = domain::comparison(inst) && self.numeric_inputs(&inst.operands);
-                if !scalar_observation(inst) && !int_property_observation(inst) && !arithmetic
-                    && !comparison
-                {
+                if !scalar_observation(inst) && !arithmetic && !comparison {
                     return false;
                 }
                 self.stable_read(load, user)
