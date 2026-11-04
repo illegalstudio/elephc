@@ -1623,6 +1623,19 @@ fn function_declarations() -> Vec<Stmt> {
     // `setlocale()` only for its return value (ICU keeps its own locale). Provide the two
     // process-facing entry points without a separate core builtin surface.
     declarations.push(
+        function("__elephc_intl_gregcal_create_instance_arity")
+            .param("args", t_mixed())
+            .returns(t_mixed())
+            .body(vec![
+                s_expr(e_call("trigger_error", vec![
+                    e_str("Function intlgregcal_create_instance() is deprecated since 8.4, use IntlGregorianCalendar::__construct(), IntlGregorianCalendar::createFromDate(), or IntlGregorianCalendar::createFromDateTime() instead"),
+                    e_const("E_USER_DEPRECATED"),
+                ])),
+                s_throw(e_new("ArgumentCountError", vec![e_str("Too many arguments")])),
+            ])
+            .build(),
+    );
+    declarations.push(
         function("__elephc_intl_ini_set")
             .param("option", TypeExpr::Str)
             .param("value", t_union(vec![

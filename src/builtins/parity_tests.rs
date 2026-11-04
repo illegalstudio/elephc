@@ -456,6 +456,11 @@ fn prelude_contracts_match_their_injected_signatures() {
                     "{at}: contract has default `{}`, the prelude declares none",
                     default_text(&expected)
                 ),
+                // Intl entry points that php validates with ZPP at run time declare their
+                // required parameters as `= null` so the checker accepts a short call; the
+                // synthetic body then raises php's ArgumentCountError. The neutral contract
+                // keeps the stub's required parameter for documentation and reflection.
+                (None, Some("null")) if contract.module == PhpModule::Intl => {}
                 (None, Some(text)) => {
                     panic!("{at}: prelude declares default `{text}`, the contract has none")
                 }

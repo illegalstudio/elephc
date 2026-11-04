@@ -222,6 +222,32 @@ pub(super) fn resolve_expr(
             .into_iter()
             .map(|arg| resolve_expr(&arg, current_namespace, imports, symbols))
             .collect();
+            // php accepts a seventh/eighth positional argument and reports php's own
+            // "Too many arguments" from the entry point. The synthetic declaration has six
+            // parameters, so route the overflow through the prelude helper that evaluates the
+            // arguments (array literal preserves source order) and throws the same error.
+            if function_name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("intlgregcal_create_instance")
+                && resolved_args.len() > 6
+                && resolved_args.iter().all(|arg| {
+                    !matches!(
+                        arg.kind,
+                        ExprKind::NamedArg { .. } | ExprKind::Spread(_)
+                    )
+                })
+            {
+                return Expr {
+                    kind: ExprKind::FunctionCall {
+                        name: resolved_name(
+                            "__elephc_intl_gregcal_create_instance_arity".to_string(),
+                        ),
+                        args: vec![Expr::new(ExprKind::ArrayLiteral(resolved_args), expr.span)],
+                    },
+                    span: expr.span,
+                };
+            }
             // `var_export($v, true)` / `var_export($v)` desugar to the prelude helper that
             // matches the mode's PHP return type exactly. This arm runs BEFORE the
             // `declares_function` guard below because the elephc prelude declares
