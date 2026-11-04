@@ -84,6 +84,9 @@ pub(super) fn scope_may_initialize(ctx: &FunctionContext<'_>, declaring: &str) -
         return true;
     }
     match ctx.function.lexical_class.as_deref() {
+        // `ReflectionProperty::setValue()` writes from the property's own scope, whichever class
+        // its body happens to be compiled in. Only an initialized slot still refuses it.
+        Some(scope) if scope.trim_start_matches('\\').eq_ignore_ascii_case("ReflectionProperty") => true,
         Some(scope) => class_is_or_extends(ctx, scope, declaring),
         None => false,
     }

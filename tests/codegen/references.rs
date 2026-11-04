@@ -1939,3 +1939,22 @@ show($o);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "0false3NULL1\n0false3NULL1\n0false3NULL1\n1false3NULL1\n0\n");
 }
+
+/// `ReflectionProperty::setValue()` initializes a readonly property from the property's own scope.
+/// Its body is compiled in `ReflectionProperty`, which the readonly guard took for the caller's
+/// scope, so Doctrine could not hydrate `App\\Entity\\Tag::$name`.
+#[test]
+fn test_reflection_initializes_a_readonly_property_from_its_own_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public readonly string $name; private readonly int $n; public function n() { return $this->n; } }
+$o = (new ReflectionClass('T'))->newInstanceWithoutConstructor();
+$name = new ReflectionProperty('T', 'name');
+$name->setValue($o, 'x');
+(new ReflectionProperty('T', 'n'))->setValue($o, 5);
+echo $o->name, $o->n(), "\n";
+try { $name->setValue($o, 'y'); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out, "x5\nCannot modify readonly property T::$name\n");
+}
