@@ -465,4 +465,3 @@ fn loop_writes_no_mbstring_state(
     }
     true
 }
-
