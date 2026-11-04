@@ -550,6 +550,27 @@ fn maintained_php_85_session_profile() {
     assert_maintained_php_session_profile("8.5", "7:present:::ValueError:TypeError:ValueError");
 }
 
+/// Verifies the PHP 8.6 secure session defaults.
+#[test]
+fn maintained_php_86_session_profile() {
+    assert_maintained_php_session_profile("8.6", "7:present:1:1:ValueError:TypeError:ValueError");
+}
+
+/// Verifies PHP 8.6 defaults the SameSite cookie attribute to Lax.
+#[test]
+fn php86_session_cookie_samesite_defaults_to_lax() {
+    let source = "<?php echo ini_get('session.cookie_samesite');";
+    let dir = make_test_dir("sess_php86_samesite");
+    let bin = compile_web_with_flags(&dir, source, "app", &["--php-version=8.6"]);
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(response.ends_with("Lax"), "unexpected response: {response:?}");
+}
+
 /// Verifies PHP 8.4 starts emitting the upstream trans-SID deprecation while
 /// PHP 8.3 accepts the same runtime setting without a deprecation.
 #[test]

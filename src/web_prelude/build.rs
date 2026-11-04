@@ -878,6 +878,35 @@ fn decl_stmt_bootstrap_1() -> Stmt {
     s_expr(e_call("elephc_web_session_reset", vec![]))
 }
 
+/// `bootstrap 1b` — the PHP 8.6 secure session defaults.
+///
+/// php-src 8.6 starts a request with `session.use_strict_mode=1`,
+/// `session.cookie_httponly=1` and `session.cookie_samesite=Lax`. The
+/// runtime's state is reset by `bootstrap 1`, so these setters run after it
+/// and before any user code; `ini_set()` can still relax them for the request.
+fn decl_stmt_bootstrap_php86_session_defaults() -> Stmt {
+    s_expr(e_call(
+        "elephc_web_session_set_strict_mode",
+        vec![e_int(1)],
+    ))
+}
+
+/// `bootstrap 1c` — the PHP 8.6 secure cookie defaults, preserving the other five fields.
+fn decl_stmt_bootstrap_php86_cookie_defaults() -> Stmt {
+    s_expr(e_call(
+        "elephc_web_session_set_cookie_params",
+        vec![
+            e_call("elephc_web_session_get_cookie_lifetime", vec![]),
+            e_call("elephc_web_session_get_cookie_path", vec![]),
+            e_call("elephc_web_session_get_cookie_domain", vec![]),
+            e_call("elephc_web_session_get_cookie_secure", vec![]),
+            e_call("elephc_web_session_get_cookie_partitioned", vec![]),
+            e_int(1),
+            e_str("Lax"),
+        ],
+    ))
+}
+
 /// `bootstrap 2` — transcribed from the PHP form.
 fn decl_stmt_bootstrap_2() -> Stmt {
     s_assign("_SERVER", e_array(vec![]))
@@ -5395,6 +5424,11 @@ pub(crate) fn web_declarations_with_environment(
             decl_stmt_bootstrap_43(),
             decl_stmt_bootstrap_44(),
         ]);
+
+        if php_version >= PhpVersion::Php86 {
+            declarations.push(decl_stmt_bootstrap_php86_session_defaults());
+            declarations.push(decl_stmt_bootstrap_php86_cookie_defaults());
+        }
 
         declarations
     })
