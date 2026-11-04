@@ -4065,9 +4065,9 @@ fn build_time_zone_class() -> Stmt {
     let mut builder = class("IntlTimeZone")
         .prop("__elephc_handle", TypeExpr::Int, Some(e_int(0)))
         .prop("valid", TypeExpr::Bool, Some(crate::synthetic_class::e_bool(false)))
-        .prop("id", TypeExpr::Str, None)
-        .prop("rawOffset", TypeExpr::Int, None)
-        .prop("currentOffset", TypeExpr::Int, None);
+        .prop("id", TypeExpr::Str, Some(e_str("")))
+        .prop("rawOffset", TypeExpr::Int, Some(e_int(0)))
+        .prop("currentOffset", TypeExpr::Int, Some(e_int(0)));
     for (constant, value) in constants_for("IntlTimeZone") {
         builder = builder.constant(constant, const_value_expr(value));
     }
