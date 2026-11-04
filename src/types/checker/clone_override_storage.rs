@@ -63,6 +63,15 @@ pub struct CloneOverrideDestinations {
     pub classes: BTreeSet<String>,
 }
 
+/// Dynamic-name property writes (`$o->{$name} = $v`) and the value type each one stores.
+///
+/// A write only widens an untyped slot whose inferred type cannot already hold its value, so a
+/// slot refined to `string` keeps its unboxed storage when only strings are written by name.
+#[derive(Debug, Default, Clone)]
+pub struct DynamicPropertyWriteDestinations {
+    sites: Vec<(CloneOverrideDestinations, PhpType)>,
+}
+
 /// Untyped fixed property slots that a reachable `unset()` can remove.
 ///
 /// The property name is absent for a runtime name, and the class name is absent for a boxed
@@ -159,8 +168,14 @@ pub(in crate::types::checker) fn record_callable_clone_override_destination(
 pub(in crate::types::checker) fn record_dynamic_property_write_destination(
     checker: &mut Checker,
     object_ty: &PhpType,
+    value_ty: &PhpType,
 ) {
-    checker.dynamic_property_write_destinations.record(object_ty);
+    let mut destination = CloneOverrideDestinations::default();
+    destination.record(object_ty);
+    checker
+        .dynamic_property_write_destinations
+        .sites
+        .push((destination, value_ty.clone()));
 }
 
 /// Records the widening a runtime string or boxed callable invocation can reach.
@@ -212,7 +227,9 @@ pub(super) fn widen_clone_override_property_storage(checker: &mut Checker) {
     // name that misses every declared slot still takes the ordinary dynamic-property path
     // (deprecation, or `Cannot create dynamic property` on a readonly class).
     let dynamic_writes = std::mem::take(&mut checker.dynamic_property_write_destinations);
-    widen_untyped_destination_slots(checker, &dynamic_writes, false);
+    for (destination, value_ty) in &dynamic_writes.sites {
+        widen_untyped_destination_slots_for(checker, destination, false, Some(value_ty));
+    }
 }
 
 /// Widens every untyped slot `destinations` can reach to `mixed`, optionally reserving the
@@ -221,6 +238,18 @@ fn widen_untyped_destination_slots(
     checker: &mut Checker,
     destinations: &CloneOverrideDestinations,
     reserve_hash: bool,
+) {
+    widen_untyped_destination_slots_for(checker, destinations, reserve_hash, None);
+}
+
+/// Widens the reachable untyped slots; with `stored`, only those whose inferred type cannot
+/// already hold a value of that type (a dynamic-name write of a string into a slot refined to
+/// `string` needs no boxed storage).
+fn widen_untyped_destination_slots_for(
+    checker: &mut Checker,
+    destinations: &CloneOverrideDestinations,
+    reserve_hash: bool,
+    stored: Option<&PhpType>,
 ) {
     if destinations.is_empty() {
         return;
@@ -239,6 +268,17 @@ fn widen_untyped_destination_slots(
     // child's boxed value back as a raw pointer and a closure-valued slot crashed the process.
     let views = layout_views(checker);
     for (owner, slot) in widened_slots(&views, &sel) {
+        if let Some(stored) = stored {
+            let current = checker
+                .classes
+                .get(&owner)
+                .and_then(|info| info.properties.get(slot))
+                .map(|property| property.1.codegen_repr());
+            let value = stored.codegen_repr();
+            if value != PhpType::Mixed && current.as_ref() == Some(&value) {
+                continue;
+            }
+        }
         for target in slot_inheritors(&views, &owner, slot) {
             if let Some(info) = checker.classes.get_mut(&target) {
                 info.properties[slot].1 = PhpType::Mixed;

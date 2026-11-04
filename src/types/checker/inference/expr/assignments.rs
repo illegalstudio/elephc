@@ -198,14 +198,14 @@ impl Checker {
             &receiver_ty,
         );
         // A runtime name can also land in any UNTYPED declared slot, which php treats as
-        // `mixed`: widen those slots exactly like a clone override's, or a slot inferred as
+        // `mixed`: widen the slots that cannot already hold the value, or a slot inferred as
         // `null` (`public $id;`) rejects the write and a value lands in the property hash.
+        let value_ty = self.infer_type(value, env)?;
         crate::types::checker::clone_override_storage::record_dynamic_property_write_destination(
             self,
             &receiver_ty,
+            &value_ty,
         );
-
-        self.infer_type(value, env)?;
         if let Some(result_target) = result_target {
             self.infer_type(result_target, env)?;
         }

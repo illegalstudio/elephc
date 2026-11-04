@@ -1106,6 +1106,18 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
                 for arg in args {
                     disqualify_root(facts, arg);
                 }
+            } else if let Some(rejects_null) = declared_by_ref_null_rejection(checker, name, args) {
+                // A user / prelude function whose by-reference positions are known: only a
+                // parameter that admits `null` can take a null-only local as boxed storage.
+                // One that rejects it (`int &$n`) keeps the local's `null` storage, so the
+                // binding check reports php's TypeError at compile time.
+                for (arg, rejects) in args.iter().zip(rejects_null) {
+                    if rejects {
+                        disqualify_root(facts, arg);
+                    } else {
+                        disqualify_call_arguments(facts, std::slice::from_ref(arg));
+                    }
+                }
             } else if callee_may_bind_arguments_by_ref(checker, name) {
                 disqualify_call_arguments(facts, args);
             }
@@ -1346,6 +1358,54 @@ fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
         return def.ref_params.iter().any(|by_ref| *by_ref);
     }
     true
+}
+
+/// For a call to a declared function with plain positional arguments, returns per argument
+/// whether it binds a BY-REFERENCE parameter whose declared type rejects `null` (`int &$n`,
+/// `array &$a`). `None` when the mapping is not reliable (unknown callee, a named or spread
+/// argument, or no by-reference parameter at all), leaving the caller's generic handling.
+fn declared_by_ref_null_rejection(checker: &Checker, name: &Name, args: &[Expr]) -> Option<Vec<bool>> {
+    let raw = name.as_str();
+    let trimmed = raw.trim_start_matches('\\');
+    let decl = checker
+        .fn_decls
+        .get(raw)
+        .or_else(|| checker.fn_decls.get(trimmed))?;
+    if decl.variadic_by_ref || !decl.ref_params.iter().any(|by_ref| *by_ref) {
+        return None;
+    }
+    if args
+        .iter()
+        .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
+    {
+        return None;
+    }
+    Some(
+        (0..args.len())
+            .map(|index| {
+                decl.ref_params.get(index).copied().unwrap_or(false)
+                    && decl
+                        .param_types
+                        .get(index)
+                        .and_then(|ty| ty.as_ref())
+                        .is_some_and(|ty| !type_expr_admits_null(ty))
+            })
+            .collect(),
+    )
+}
+
+/// Whether a declared parameter type admits `null` (nullable, a union with `null`, `mixed`).
+fn type_expr_admits_null(ty: &crate::parser::ast::TypeExpr) -> bool {
+    use crate::parser::ast::TypeExpr;
+    match ty {
+        TypeExpr::Nullable(_) => true,
+        TypeExpr::Union(members) => members.iter().any(type_expr_admits_null),
+        TypeExpr::Named(name) => {
+            let name = name.as_str().trim_start_matches('\\');
+            name.eq_ignore_ascii_case("mixed") || name.eq_ignore_ascii_case("null")
+        }
+        _ => false,
+    }
 }
 
 /// Returns whether a called NAME declares a by-reference parameter of pointer type
