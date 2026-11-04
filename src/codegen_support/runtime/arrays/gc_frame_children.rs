@@ -10,7 +10,22 @@
 //! - Only suspended native coroutine stacks are inspected; frame edges remain opaque proofs.
 
 use super::gc_candidates::{load, op, restore, save};
+use crate::codegen_support::abi::CALL_OPERAND_OWNER_RECORD_BYTES;
+use crate::codegen_support::try_handlers::ACTIVATION_OWNER_VISITOR_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, runtime::fibers};
+
+/// Offset of the owner visitor in a call-operand record, the last word of the shorter record.
+const CALL_OPERAND_OWNER_VISITOR_OFFSET: usize = CALL_OPERAND_OWNER_RECORD_BYTES - 8;
+
+/// Loads the visitor at `offset` of the record in `x0`/`rax` into `x10`/`r11`, leaving the walk when
+/// that word lies past the mapped stack.
+fn emit_load_extended_visitor(e: &mut Emitter, offset: usize) {
+    op(e, "ldr x10, [sp, #40]", "mov r11, QWORD PTR [rsp + 40]", "recover the stack bound after classifying the record");
+    op(e, &format!("add x9, x0, #{}", offset + 8), &format!("lea r10, [rax + {}]", offset + 8), "the visitor is the record's last word");
+    op(e, "cmp x9, x10", "cmp r10, r11", "require the complete extended record inside its mapped stack");
+    op(e, "b.hi __rt_gc_frames_done", "ja __rt_gc_frames_done", "reject a truncated extended activation record");
+    op(e, &format!("ldr x10, [x0, #{offset}]"), &format!("mov r11, QWORD PTR [rax + {offset}]"), "read the pure typed owner visitor published with this activation");
+}
 
 /// Emits saved-frame traversal and adapters for transferred guard and call-operand owners.
 pub fn emit_gc_frame_children(e: &mut Emitter) {
@@ -66,11 +81,17 @@ pub fn emit_gc_frame_children(e: &mut Emitter) {
     op(e, "ldr x9, [x0, #16]", "mov r10, QWORD PTR [rax + 16]", "the compact guard ABI identifies itself through its callback data pointer");
     op(e, "cmp x9, x0", "cmp r10, rax", "compact transferred-owner guards remain valid without expanding native records");
     op(e, "b.eq __rt_gc_frames_guard", "je __rt_gc_frames_guard", "select the compact guard adapter before reading extended frame metadata");
-    op(e, "ldr x10, [sp, #40]", "mov r11, QWORD PTR [rsp + 40]", "recover the stack bound after classifying compact guard records");
-    op(e, "add x9, x0, #48", "lea r10, [rax + 48]", "regular frames and call-operand records publish an extended owner visitor");
-    op(e, "cmp x9, x10", "cmp r10, r11", "require the complete extended record inside its mapped stack");
-    op(e, "b.hi __rt_gc_frames_done", "ja __rt_gc_frames_done", "reject a truncated extended activation record");
-    op(e, "ldr x10, [x0, #40]", "mov r11, QWORD PTR [rax + 40]", "read the pure typed owner visitor published with this activation");
+    op(e, "ldr x9, [x0, #8]", "mov r10, QWORD PTR [rax + 8]", "a call-operand record keeps its visitor where a PHP activation keeps its caller file");
+    for symbol in ["__rt_cleanup_call_operand_owner", "__rt_cleanup_call_operand_descriptor"] {
+        abi::emit_symbol_address(e, if e.target.arch == Arch::AArch64 { "x10" } else { "r11" }, symbol);
+        op(e, "cmp x9, x10", "cmp r10, r11", "only the cleanup callback tells the two extended records apart");
+        op(e, "b.eq __rt_gc_frames_operand_record", "je __rt_gc_frames_operand_record", "select the shorter call-operand layout");
+    }
+    emit_load_extended_visitor(e, ACTIVATION_OWNER_VISITOR_OFFSET);
+    abi::emit_jump(e, "__rt_gc_frames_have_visitor");
+    e.label("__rt_gc_frames_operand_record");
+    emit_load_extended_visitor(e, CALL_OPERAND_OWNER_VISITOR_OFFSET);
+    e.label("__rt_gc_frames_have_visitor");
     op(e, "cmp x10, #0", "test r11, r11", "synthetic non-owning activations publish no owner visitor");
     op(e, "b.eq __rt_gc_frames_loop", "jz __rt_gc_frames_loop", "skip activations that own no PHP values");
     abi::emit_jump(e, "__rt_gc_frames_visit");

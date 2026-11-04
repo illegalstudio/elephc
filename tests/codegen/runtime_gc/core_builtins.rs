@@ -1090,3 +1090,31 @@ echo memory_get_peak_usage() - $peak >= 400000 ? "regrow" : "bad";
     );
     assert_eq!(out, "void:high:reset:realreset:regrow");
 }
+
+/// A cycle collection walks the saved frames of a suspended generator. The walker read each PHP
+/// activation's owner visitor where a call-operand record keeps it, which is where a PHP activation
+/// keeps its caller's file descriptor: null from the entry file, data from an included one, and the
+/// collector jumped through it. Symfony UX Icons collects from a `DOMDocument` built in such a stack.
+#[test]
+fn test_collecting_cycles_with_a_generator_suspended_from_an_included_file() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php\nrequire __DIR__ . '/lib.php';\nrun();\n"),
+            (
+                "lib.php",
+                r#"<?php
+function gen() { $o = new stdClass(); $o->v = 'kept'; yield 1; yield $o->v; }
+function run() {
+    $g = gen();
+    echo $g->current(), "\n";
+    gc_collect_cycles();
+    $g->next();
+    echo $g->current(), "\n";
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1\nkept\n");
+}
