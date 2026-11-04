@@ -29,6 +29,7 @@ mod hash_prelude;
 mod core_prelude;
 mod time_prelude;
 mod clamp_prelude;
+mod php86_declarations;
 mod bcmath_prelude;
 mod gmp_prelude;
 mod random_prelude;

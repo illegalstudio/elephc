@@ -49,6 +49,8 @@ pub mod bcmath_prelude;
 pub mod time_prelude;
 /// PHP 8.6 mixed-operand `clamp()` prelude helper.
 pub mod clamp_prelude;
+/// PHP 8.6 declaration-time constructor/destructor deprecations.
+pub mod php86_declarations;
 /// PHP ext/gmp standard-library prelude injection.
 pub mod gmp_prelude;
 pub mod random_prelude;

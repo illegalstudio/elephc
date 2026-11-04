@@ -335,6 +335,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
+    let resolved = elephc::php86_declarations::inject(resolved);
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:

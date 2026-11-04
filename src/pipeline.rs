@@ -306,6 +306,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     timings.record_since("autoload-prelude-probe", phase_started);
     let autoloaded = |group: &str| autoloaded_preludes.contains(group);
 
+    let ast = crate::php86_declarations::inject(ast);
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
     // no-op rather than a smaller binary: `--with-curl` force-injects the whole surface for
