@@ -4024,9 +4024,9 @@ bool php_locale_valid(const std::string &locale) {
 void set_message_formatter_creation_error(UErrorCode status, const std::string &locale,
                                           const UParseError &parse_error, UErrorCode zero_code) {
     if (!php_locale_valid(locale)) {
-        // php's message-formatter constructor/create path reports the generic creation
-        // failure, not the locale-validation detail.
-        set_global_error(U_ILLEGAL_ARGUMENT_ERROR, "message formatter creation failed");
+        // The static MessageFormatter::formatMessage()/parseMessage() path reports this
+        // exact text and its caller-supplied zero code.
+        set_global_error(zero_code, "Creating message formatter failed");
     } else {
         set_global_error(status, "pattern syntax error (" + parse_error_to_string(parse_error) + ")");
     }
@@ -5820,7 +5820,14 @@ std::unique_ptr<IntlObject> open_object(const std::string &kind,
             locale.empty() ? Locale::getDefault() : Locale(locale.c_str()), parse_error, status);
         if (U_FAILURE(status)) {
             delete formatter;
-            set_message_formatter_creation_error(status, locale, parse_error, U_ZERO_ERROR);
+            // The constructor/create path reports the generic creation failure with the
+            // ICU status code, not the static-method wording.
+            if (!php_locale_valid(locale)) {
+                set_global_error(U_ILLEGAL_ARGUMENT_ERROR, "message formatter creation failed");
+            } else {
+                set_global_error(status,
+                    "pattern syntax error (" + parse_error_to_string(parse_error) + ")");
+            }
             return nullptr;
         }
         auto object = std::make_unique<MessageFormatterObject>();
