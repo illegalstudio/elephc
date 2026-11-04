@@ -1821,17 +1821,13 @@ fn function_from_spec(spec: &IntlFunction) -> Stmt {
             vec![],
             None,
         ));
+        // The deprecation belongs to the constant read itself (php-src emits it when the
+        // constant is fetched); the call only rejects the resulting value.
         body.push(s_if(
             e_binop(e_var("type"), BinOp::StrictEq, e_int(4)),
-            vec![
-                s_expr(e_call("trigger_error", vec![
-                    e_str("Constant NumberFormatter::TYPE_CURRENCY is deprecated since 8.3"),
-                    e_const("E_USER_DEPRECATED"),
-                ])),
-                s_throw(e_new("ValueError", vec![e_str(&format!(
-                    "{caller}: Argument #3 ($type) cannot be NumberFormatter::TYPE_CURRENCY constant, use {currency_hint} instead"
-                ))])),
-            ],
+            vec![s_throw(e_new("ValueError", vec![e_str(&format!(
+                "{caller}: Argument #3 ($type) cannot be NumberFormatter::TYPE_CURRENCY constant, use {currency_hint} instead"
+            ))]))],
             vec![],
             None,
         ));
@@ -5994,15 +5990,9 @@ fn numfmt_type_guards(caller: &str, argument: i64, currency_hint: &str) -> Vec<S
         ),
         s_if(
             e_binop(e_var("type"), BinOp::StrictEq, e_int(4)),
-            vec![
-                s_expr(e_call("trigger_error", vec![
-                    e_str("Constant NumberFormatter::TYPE_CURRENCY is deprecated since 8.3"),
-                    e_const("E_USER_DEPRECATED"),
-                ])),
-                s_throw(e_new("ValueError", vec![e_str(&format!(
-                    "{caller}: Argument #{argument} ($type) cannot be NumberFormatter::TYPE_CURRENCY constant, use {currency_hint} instead"
-                ))])),
-            ],
+            vec![s_throw(e_new("ValueError", vec![e_str(&format!(
+                "{caller}: Argument #{argument} ($type) cannot be NumberFormatter::TYPE_CURRENCY constant, use {currency_hint} instead"
+            ))]))],
             vec![],
             None,
         ),
