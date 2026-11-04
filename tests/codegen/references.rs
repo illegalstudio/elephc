@@ -1820,3 +1820,57 @@ for ($i = 0; $i < 3; $i++) {
     assert_eq!(out.stdout, "A0.PHP!|A1.PHP!|A2.PHP!|");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A by-reference parameter handed on to another by-reference callable. What the parameter holds
+/// is the caller's address: inside the Mixed box of a promoted local, inside an object. The marker
+/// retained and released it as if it were an allocation, which rewrote the box's header, then ran
+/// a hash release on it. Symfony's `AbstractAdapter::doGet()` forwards `bool &$save` this way, and
+/// every cache miss took the worker down.
+#[test]
+fn test_a_forwarded_by_ref_parameter_is_not_owned_by_its_marker() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Item { public bool $flag = true; }
+class P {
+    public function go(callable $c) {
+        return $this->run(function (bool &$s) use ($c) { return $c($s); });
+    }
+    public function goText(callable $c) {
+        return $this->runText(function (string &$s) use ($c) { return $c($s); });
+    }
+    private function run(callable $cb) { $s = true; $r = $cb($s); var_dump($s); return $r; }
+    private function runText(callable $cb) { $s = 'a'; $r = $cb($s); var_dump($s); return $r; }
+}
+echo (new P())->go(function (bool &$s) { $s = false; return 'bool'; }), "\n";
+echo (new P())->goText(function (string &$s) { $s .= 'b'; return 'text'; }), "\n";
+function forward(bool &$p, callable $c) { return $c($p); }
+$item = new Item();
+echo forward($item->flag, function (bool &$v) { $v = false; return 'prop'; }), "\n";
+var_dump($item->flag);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool\nstring(2) \"ab\"\ntext\nprop\nbool(false)\n"
+    );
+}
+
+/// A write made before the callee throws has already reached the caller's variable, which a
+/// bridge copying the value back after the call would lose.
+#[test]
+fn test_a_forwarded_by_ref_parameter_keeps_a_write_made_before_a_throw() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function forward(int &$p, callable $c) { return $c($p); }
+$n = 1;
+try {
+    forward($n, function (int &$v) { $v = 2; throw new Exception('stop'); });
+} catch (Exception $e) {
+    var_dump($n);
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "int(2)\n");
+}

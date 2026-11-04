@@ -173,6 +173,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     callables::emit_callable_descriptor_method_name(emitter);
     callables::emit_mixed_spread_array(emitter);
     callables::emit_invoker_ref_cell_to_mixed(emitter);
+    callables::emit_invoker_borrowed_ref_marker(emitter);
     callables::emit_callable_lookup(emitter);
     callables::emit_callable_invoke_owned_args(emitter);
     callables::emit_throw_named_parameter_overwrite(emitter);

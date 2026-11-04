@@ -88,7 +88,7 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     emitter.instruction("cmp x9, #11");                                         // does the boxed payload hold a managed reference cell?
 
-    emitter.instruction("b.eq __rt_mixed_free_deep_value_any");                 // reference cells release through the uniform dispatcher
+    emitter.instruction("b.eq __rt_mixed_free_deep_ref_marker");                // a marker owns its cell unless it borrows it
 
     emitter.instruction("cmp x9, #9");                                          // does the boxed payload hold a resource handle?
 
@@ -105,6 +105,10 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("cmp x9, #7");                                          // restore the heap-backed upper-bound comparison for array/hash/object tags
 
     emitter.instruction("b.hi __rt_mixed_free_deep_box");                       // unknown tags are ignored by mixed deep-free
+
+    emitter.label("__rt_mixed_free_deep_ref_marker");
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the box's heap-kind word
+    emitter.instruction(&format!("tbnz x9, #{}, __rt_mixed_free_deep_box", crate::codegen_support::callable_invoker_args::INVOKER_BORROWED_REF_MARKER_BIT)); // a borrowed address has no share to release
 
     emitter.label("__rt_mixed_free_deep_value_any");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed heap child pointer
@@ -344,7 +348,7 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
 
     emitter.instruction("cmp r10, 11");                                         // does the boxed payload hold a managed reference cell?
 
-    emitter.instruction("je __rt_mixed_free_deep_value_any");                   // reference cells release through the uniform dispatcher
+    emitter.instruction("je __rt_mixed_free_deep_ref_marker");                  // a marker owns its cell unless it borrows it
 
     emitter.instruction("cmp r10, 9");                                          // does the boxed payload hold a resource handle?
 
@@ -361,6 +365,10 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.instruction("cmp r10, 7");                                          // restore the heap-backed upper-bound comparison for array/hash/object tags
 
     emitter.instruction("jg __rt_mixed_free_deep_box");                         // unknown tags are ignored by the current x86_64 mixed deep-free helper
+
+    emitter.label("__rt_mixed_free_deep_ref_marker");
+    emitter.instruction(&format!("test DWORD PTR [rax - 8], {}", 1u32 << crate::codegen_support::callable_invoker_args::INVOKER_BORROWED_REF_MARKER_BIT)); // does this marker borrow its address?
+    emitter.instruction("jnz __rt_mixed_free_deep_box");                        // a borrowed address has no share to release
 
     emitter.label("__rt_mixed_free_deep_value_any");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed string pointer from the mixed payload before releasing it
@@ -595,6 +603,30 @@ mod tests {
             dir_branch: "je __rt_mixed_free_deep_resource_dir\n",
         },
     ];
+
+    /// Only a reference marker consults the borrow bit, and a borrowed one skips the release.
+    #[test]
+    fn only_a_reference_marker_consults_the_borrow_bit() {
+        for shapes in LADDERS {
+            let asm = emit_for(shapes, RuntimeFeatures::none());
+            let (tag, take, skip) = match shapes.arch {
+                Arch::AArch64 => (
+                    "cmp x9, #11\n",
+                    "b.eq __rt_mixed_free_deep_ref_marker\n",
+                    "tbnz x9, #8, __rt_mixed_free_deep_box\n",
+                ),
+                Arch::X86_64 => (
+                    "cmp r10, 11\n",
+                    "je __rt_mixed_free_deep_ref_marker\n",
+                    "jnz __rt_mixed_free_deep_box\n",
+                ),
+            };
+            assert_eq!(asm.matches(take).count(), 1, "tag 7 owns its child unconditionally");
+            let after_tag = asm.split_once(tag).expect("the marker tag is tested").1;
+            assert!(after_tag.trim_start().starts_with(take), "{after_tag}");
+            assert!(asm.contains(skip), "{asm}");
+        }
+    }
 
     /// Emits the helper for one target and feature set.
     fn emit_for(shapes: &LadderShapes, features: RuntimeFeatures) -> String {

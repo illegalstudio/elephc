@@ -545,12 +545,19 @@ pub(super) fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instru
     let source_tag_reg = abi::symbol_scratch_reg(ctx.emitter);
     emit_marker_source_tag(ctx, slot, &source_ty, source_tag_reg)?;
     ctx.materialize_local_storage_address(slot, ref_cell_reg)?;
+    ctx.emitter.comment("cufa_invoker_ref_cell");
+    if ctx.is_by_ref_param_slot(slot) {
+        // The address came from the caller and may sit inside an allocation; see the bit's doc.
+        abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), ref_cell_reg);
+        abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), source_tag_reg);
+        abi::emit_call_label(ctx.emitter, "__rt_invoker_borrowed_ref_marker");
+        return store_if_result(ctx, inst);
+    }
     abi::emit_load_int_immediate(
         ctx.emitter,
         marker_tag_reg,
         callable_invoker_args::INVOKER_ARG_REF_CELL_TAG,
     );
-    ctx.emitter.comment("cufa_invoker_ref_cell");
     emit_box_runtime_payload_as_mixed(ctx.emitter, marker_tag_reg, ref_cell_reg, source_tag_reg);
     store_if_result(ctx, inst)
 }

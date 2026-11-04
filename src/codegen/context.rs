@@ -1004,7 +1004,7 @@ impl<'a> FunctionContext<'a> {
     }
 
     /// Returns true when the local slot is the storage slot for a by-reference parameter.
-    fn is_by_ref_param_slot(&self, slot: LocalSlotId) -> bool {
+    pub(crate) fn is_by_ref_param_slot(&self, slot: LocalSlotId) -> bool {
         self.function
             .params
             .get(slot.as_raw() as usize)

@@ -18,6 +18,14 @@ use crate::types::PhpType;
 /// Internal boxed-Mixed tag used only inside descriptor-invoker argument arrays.
 pub(crate) const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 
+/// Heap-kind word bit of a tag-11 box whose address the marker borrows instead of owning.
+///
+/// A by-reference PARAMETER holds whatever address its caller bound: a heap cell, but also the
+/// payload inside a Mixed box or the element of an array. Those are not allocations, so they have
+/// no refcount to retain or release, and the caller keeps them alive for the whole call anyway.
+/// Byte 1 of the word is free on a Mixed box; only arrays pack a value type there.
+pub(crate) const INVOKER_BORROWED_REF_MARKER_BIT: u32 = 8;
+
 /// Internal boxed-Mixed tag for an array element that owns a share of a global ref-cell.
 ///
 /// Unlike tag 11, releasing this marker decrements the ref-cell itself. The cell keeps the
