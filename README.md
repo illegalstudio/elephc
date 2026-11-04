@@ -70,7 +70,7 @@ See [showcases/http-server/](showcases/http-server/) for full source and build i
 
 An independently maintained showcase: the shareware episode of DOOM played from the original `DOOM1.WAD`, entirely in PHP compiled to a native binary. A BSP column renderer draws DOOM's own 320x200 frame with textured walls, floors and sky, sprites and sector lighting, and the game runs doors, lifts, switches, pickups and the status bar at 35 tics per second.
 
-https://github.com/getelephc/static/blob/main/assets/doom/v0.1.3/doom-walk.mp4
+https://github.com/user-attachments/assets/ddc1e089-2c38-422c-b3e3-6a8d6b7623da
 
 [Download the walkthrough (MP4)](https://raw.githubusercontent.com/getelephc/static/main/assets/doom/v0.1.3/doom-walk.mp4).
 
