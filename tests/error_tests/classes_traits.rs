@@ -1019,3 +1019,23 @@ fn test_error_cannot_override_final_error_methods() {
         "Cannot override final method Error::getPrevious",
     );
 }
+
+/// Verifies a cyclic class-constant definition is reported as a diagnostic instead of
+/// overflowing the compiler stack while inferring the initializer.
+#[test]
+fn test_error_recursive_class_constant_definition() {
+    expect_error(
+        "<?php class C { const A = [self::B]; const B = [self::A]; } var_dump([C::A]);",
+        "recursive definition",
+    );
+}
+
+/// Verifies a global constant cycle is reported as a clean diagnostic instead of recursing
+/// through the constant initializer resolver.
+#[test]
+fn test_error_recursive_global_constant_definition() {
+    expect_error(
+        "<?php const A = B; const B = A; var_dump(A);",
+        "Undefined constant: B",
+    );
+}

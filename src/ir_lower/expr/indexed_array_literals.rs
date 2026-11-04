@@ -1037,8 +1037,12 @@ fn array_literal_element_type_for_ir_unboxed(
         ExprKind::ArrayLiteralAssoc(pairs) => assoc_array_literal_type_for_ir(ctx, pairs, item),
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
-            .map(|(_, ty)| ir_array_storage_type(ty))
-            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+            .and_then(|(kind, _)| {
+                let initializer = Expr::new(kind, item.span);
+                constant_initializer_type_for_ir(ctx, &initializer, None)
+            })
+            .map(ir_array_storage_type)
+            .unwrap_or(PhpType::Mixed),
         ExprKind::ScopedConstantAccess { receiver, name } => {
             scoped_constant_value_type_for_ir(ctx, receiver, name, item)
         }
@@ -1070,26 +1074,27 @@ fn array_literal_element_type_for_ir_unboxed(
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
                 .and_then(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+                .unwrap_or(PhpType::Mixed)
         }
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method)
                 .and_then(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+                .unwrap_or(PhpType::Mixed)
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+            .unwrap_or(PhpType::Mixed),
         ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
             ctx,
             object,
             property,
         )
-        .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
-        // A static buffer or pointer slot holds a raw word the syntactic `int` would cast.
+        .unwrap_or(PhpType::Mixed),
+        // A static buffer or pointer slot holds a raw word the syntactic `int` would cast;
+        // any other static read is typed from its declaration like the load that lowers it.
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_word_type(ctx, receiver, property, item)
                 .map(ir_array_storage_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+                .unwrap_or_else(|| ir_array_storage_type(static_property_result_type(ctx, receiver, property, item)))
         }
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
     }

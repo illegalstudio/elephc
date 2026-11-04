@@ -24,6 +24,8 @@ mod assignments;
 mod nulls;
 #[path = "control_flow/ternary.rs"]
 mod ternary;
+#[path = "control_flow/declared_branch_types.rs"]
+mod declared_branch_types;
 #[path = "control_flow/match_expressions.rs"]
 mod match_expressions;
 #[path = "control_flow/closures.rs"]

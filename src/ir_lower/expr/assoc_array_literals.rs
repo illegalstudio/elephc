@@ -9,6 +9,7 @@
 //! - Construction and owned operands remain rooted across later expressions and hash writes.
 
 use super::*;
+use std::cell::Cell;
 
 /// Lowers an associative array literal.
 pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs: &[(Expr, Expr)], expr: &Expr) -> LoweredValue {
@@ -234,8 +235,12 @@ fn assoc_array_literal_value_type_for_ir_unboxed(
         }
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
-            .map(|(_, ty)| ir_array_storage_type(ty))
-            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
+            .and_then(|(kind, _)| {
+                let initializer = Expr::new(kind, value.span);
+                constant_initializer_type_for_ir(ctx, &initializer, None)
+            })
+            .map(ir_array_storage_type)
+            .unwrap_or(PhpType::Mixed),
         // A class constant or enum case must be typed the way `lower_scoped_constant`
         // resolves it, not by the syntactic `::class`-is-string default, or the hash
         // value-type stamp would diverge from the lowered value and corrupt reads.
@@ -282,70 +287,217 @@ fn assoc_array_literal_value_type_for_ir_unboxed(
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
                 .and_then(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+                .unwrap_or(PhpType::Mixed)
         }
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method)
                 .and_then(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+                .unwrap_or(PhpType::Mixed)
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
+            .unwrap_or(PhpType::Mixed),
         ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
             ctx,
             object,
             property,
         )
-        .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
-        // A static buffer or pointer slot holds a raw word the syntactic `int` would cast.
+        .unwrap_or(PhpType::Mixed),
+        // A static buffer or pointer slot holds a raw word the syntactic `int` would cast;
+        // any other static read is typed from its declaration like the load that lowers it.
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_word_type(ctx, receiver, property, value)
                 .map(ir_array_storage_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
+                .unwrap_or_else(|| ir_array_storage_type(static_property_result_type(ctx, receiver, property, value)))
         }
         _ => ir_array_storage_type(infer_expr_type_syntactic(value)),
+    }
+}
+
+thread_local! {
+    /// Bounds recursive constant-initializer typing for the whole nested resolution.
+    ///
+    /// A cycle such as `class C { const A = [self::B]; const B = [self::A]; }` walks through
+    /// the array-literal typers, which restart a per-call depth counter at zero. The budget has
+    /// to survive those boundaries, so it lives on the thread and is released by the guard.
+    static CONSTANT_INITIALIZER_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Releases the constant-initializer recursion budget when a type resolution returns.
+struct ConstantInitializerDepthGuard;
+
+impl ConstantInitializerDepthGuard {
+    /// Enters one initializer resolution, or reports that the budget is exhausted.
+    fn enter() -> Option<Self> {
+        CONSTANT_INITIALIZER_DEPTH.with(|depth| {
+            if depth.get() >= 16 {
+                None
+            } else {
+                depth.set(depth.get() + 1);
+                Some(Self)
+            }
+        })
+    }
+}
+
+impl Drop for ConstantInitializerDepthGuard {
+    /// Restores the recursion budget after an initializer resolution.
+    fn drop(&mut self) {
+        CONSTANT_INITIALIZER_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
     }
 }
 
 /// Returns the EIR storage value type for a scoped-constant array value,
 /// resolving a class/interface constant the same way `lower_scoped_constant`
 /// lowers it so the hash value-type stamp matches the value actually stored
-/// (rather than the syntactic `::class`-is-string default). Falls back to the
-/// syntactic guess when the constant cannot be resolved.
+/// (rather than the syntactic `::class`-is-string default). An unresolvable
+/// constant is boxed as `Mixed`; the syntactic `ScopedConstantAccess` guess is
+/// `Str`, which mis-stamps arrays and enum cases.
 pub(super) fn scoped_constant_value_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     member: &str,
-    value: &Expr,
+    _value: &Expr,
 ) -> PhpType {
     let class_name = scoped_constant_receiver_name(ctx, receiver);
     let normalized = class_name.trim_start_matches('\\');
-    // An enum case lowers to the case *object* singleton (see `lower_scoped_constant`),
-    // so the hash must box it as a Mixed cell — stamp the value type Mixed to match.
-    if ctx
-        .enums
-        .get(normalized)
-        .is_some_and(|enum_info| enum_info.cases.iter().any(|case| case.name == member))
-    {
+    if is_enum_case(ctx, normalized, member) {
         return PhpType::Mixed;
     }
-    if let Some(const_expr) = ctx.scoped_constant_value(&class_name, member) {
-        // Keep the existing scalar classification, but resolve containers through the same
-        // literal helpers that lower them. Syntactic inference reports Void for null and can
-        // mistake nested scoped constants for strings inside an array initializer.
-        return match &const_expr.kind {
-            ExprKind::Null => PhpType::Mixed,
-            ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, &const_expr),
-            ExprKind::ArrayLiteralAssoc(pairs) => {
-                assoc_array_literal_type_for_ir(ctx, pairs, &const_expr)
+    let Some(const_expr) = ctx.scoped_constant_value(&class_name, member) else {
+        return PhpType::Mixed;
+    };
+    // `self::` and `parent::` inside the initializer bind to the class that DECLARED the
+    // constant, not to the class the access names (`D::A` inheriting `C::A` must resolve
+    // `self::B` in `C`, even when `D` overrides `B`).
+    let declaring = declaring_class_for_constant(ctx, normalized, member);
+    let current_class = declaring.as_deref().unwrap_or(normalized);
+    constant_initializer_type_for_ir(ctx, &const_expr, Some(current_class))
+        .unwrap_or(PhpType::Mixed)
+}
+
+/// Returns the storage type of a constant initializer, following aliases to another constant.
+///
+/// `const A = self::B` stores a `ScopedConstantAccess`, not the array literal `B` names, so a
+/// syntactic guess typed it `Str` and an array-valued alias was cast with `(string)`. Resolve
+/// the alias through the same class/interface lookup and recurse; the thread-local guard bounds
+/// a cyclic declaration that the checker did not reject, including one that cycles through an
+/// array-literal element.
+pub(super) fn constant_initializer_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+    current_class: Option<&str>,
+) -> Option<PhpType> {
+    let Some(_guard) = ConstantInitializerDepthGuard::enter() else {
+        return Some(PhpType::Mixed);
+    };
+    match &expr.kind {
+        ExprKind::Null => Some(PhpType::Mixed),
+        ExprKind::ArrayLiteral(items) => Some(array_literal_type_for_ir(ctx, items, expr)),
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            Some(assoc_array_literal_type_for_ir(ctx, pairs, expr))
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            Some(assoc_array_literal_type_from_entries(ctx, entries, expr))
+        }
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            let target = initializer_receiver_class(ctx, receiver, current_class)?;
+            let normalized = target.trim_start_matches('\\');
+            if is_enum_case(ctx, normalized, name) {
+                return Some(PhpType::Mixed);
             }
-            ExprKind::ArrayLiteralMixed(entries) => {
-                assoc_array_literal_type_from_entries(ctx, entries, &const_expr)
-            }
-            _ => ir_array_storage_type(infer_expr_type_syntactic(&const_expr)),
-        };
+            let nested = ctx.scoped_constant_value(&target, name)?;
+            // The nested initializer's `self`/`parent` bind to the class that declared THAT
+            // constant too, which may be an ancestor of the alias target.
+            let nested_declaring = declaring_class_for_constant(ctx, normalized, name);
+            let nested_class = nested_declaring.as_deref().unwrap_or(normalized);
+            constant_initializer_type_for_ir(ctx, &nested, Some(nested_class))
+        }
+        // The prescanned type is only a placeholder for a non-literal constant, so resolve
+        // the initializer expression itself (an array constant was stored as `Int`, which
+        // turned `[GA]` into one element holding the array count).
+        ExprKind::ConstRef(name) => {
+            let Some((kind, _)) = ctx.constant_value(name.as_str()) else {
+                return Some(PhpType::Mixed);
+            };
+            let nested = Expr::new(kind, expr.span);
+            constant_initializer_type_for_ir(ctx, &nested, current_class)
+        }
+        _ => Some(ir_array_storage_type(infer_expr_type_syntactic(expr))),
     }
-    ir_array_storage_type(infer_expr_type_syntactic(value))
+}
+
+/// Returns the class a `self`/`static`/`parent` receiver names inside a constant initializer.
+fn initializer_receiver_class(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    current_class: Option<&str>,
+) -> Option<String> {
+    match receiver {
+        StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+        StaticReceiver::Self_ | StaticReceiver::Static => current_class.map(str::to_string),
+        StaticReceiver::Parent => {
+            ctx.classes.get(current_class?)?.parent.clone()
+        }
+        StaticReceiver::Generic(_) => None,
+    }
+}
+
+/// Returns true when `class_name::member` names an enum case.
+fn is_enum_case(ctx: &LoweringContext<'_, '_>, class_name: &str, member: &str) -> bool {
+    ctx.enums
+        .get(class_name)
+        .is_some_and(|enum_info| enum_info.cases.iter().any(|case| case.name == member))
+}
+
+/// Returns the class or interface that declares `member`, following the PHP lookup order.
+fn declaring_class_for_constant(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    member: &str,
+) -> Option<String> {
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    let mut interfaces = Vec::new();
+    // PHP builds a class's constant table from its parent chain first and only then adds
+    // interface constants, so a parent class's constant wins over an implemented interface's.
+    while let Some(name) = current {
+        let Some(info) = ctx.classes.get(name) else {
+            break;
+        };
+        if info.constants.contains_key(member) {
+            return Some(name.to_string());
+        }
+        interfaces.extend(info.interfaces.iter().cloned());
+        current = info.parent.as_deref();
+    }
+    for interface in interfaces {
+        if let Some(found) = interface_declaring_constant(ctx, &interface, member, 0) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Returns the parent interface that declares `member`, if the chain reaches one.
+fn interface_declaring_constant(
+    ctx: &LoweringContext<'_, '_>,
+    interface_name: &str,
+    member: &str,
+    depth: usize,
+) -> Option<String> {
+    if depth > 16 {
+        return None;
+    }
+    let normalized = interface_name.trim_start_matches('\\');
+    let info = ctx.interfaces.get(normalized)?;
+    if info.constants.contains_key(member) {
+        return Some(normalized.to_string());
+    }
+    for parent in &info.parents {
+        if let Some(found) = interface_declaring_constant(ctx, parent, member, depth + 1) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// Returns the PHP value shape of an array access before merge or literal storage is selected.
