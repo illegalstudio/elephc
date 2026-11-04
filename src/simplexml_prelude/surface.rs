@@ -616,11 +616,16 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         }
         $child_kind = $mode === 1 ? 10 : 9;
         $child_source = $mode === 1 ? $handle : $base_handle;
-        $children = __elephc_simplexml_wrap(elephc_xml_sx_select($child_source, $child_kind, "", "", 0, 0), 'SimpleXMLElement');
-        if ($children instanceof SimpleXMLElement) {
-            if ($children->count() > 0) {
-                foreach ($children as $name => $child) {
-                    $raw = $child->__elephc_handle_value();
+        $children = elephc_xml_sx_select($child_source, $child_kind, "", "", 0, 0);
+        $has_children = false;
+        try {
+            elephc_xml_sx_iterator($children, 0);
+            while (elephc_xml_sx_iterator($children, 2) !== 0) {
+                $has_children = true;
+                $raw = elephc_xml_sx_iterator($children, 3);
+                try {
+                    // Scalar leaves need their text, without a temporary PHP object per node.
+                    $name = elephc_xml_sx_string($raw, 1);
                     $value = elephc_xml_sx_int($raw, 6) !== 0 ? elephc_xml_sx_string($raw, 0)
                         : __elephc_simplexml_wrap(elephc_xml_sx_alias($raw), get_class($this));
                     if (array_key_exists($name, $result)) {
@@ -629,10 +634,11 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
                             $result[$name] = [$result[$name], $value];
                         }
                     } else { $result[$name] = $value; }
-                }
-                return $result;
+                } finally { elephc_xml_sx_free($raw); }
+                elephc_xml_sx_iterator($children, 1);
             }
-        }
+        } finally { elephc_xml_sx_free($children); }
+        if ($has_children) { return $result; }
         if ($mode !== 1 && elephc_xml_sx_int($base_handle, 11) !== 0) { $result["0"] = elephc_xml_sx_string($base_handle, 0); }
         return $result;
     }
