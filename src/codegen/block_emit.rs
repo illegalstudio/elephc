@@ -293,6 +293,7 @@ pub(super) fn emit_module(
         && !instrumented
     {
         let worker_pass_started = Instant::now();
+        super::context::prefill_module_facts(module, &mut shared);
         let preset = shared.module_preset();
         let template = emitter.fresh();
         let mut data_index = data.merge_index();

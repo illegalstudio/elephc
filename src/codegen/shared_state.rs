@@ -331,6 +331,18 @@ pub(crate) struct ModulePreset {
     /// it read "not decided" as "not shared" and inlined the whole dispatcher at every one of its
     /// sites (about 600 instructions each instead of a call).
     mixed_callable_sharing: super::shared_mixed_callable::MixedCallableSharing,
+    /// Whole-module answers, decided once before any body (`context::prefill_module_facts`). Each
+    /// walks every body of the program, and a worker chunk that had to ask again did so once per
+    /// chunk: 256 scans of each, about 40% of the Symfony Demo's codegen.
+    pcntl_async_signals: Option<bool>,
+    pcntl_signal_handlers: Option<bool>,
+    php_shutdown_drain: Option<bool>,
+    mixed_string_sharing: [Option<bool>; 2],
+    count_guard_sharing: Option<bool>,
+    /// `compatible_class_ids_memo` across chunks: its keys are only known at the sites, so the
+    /// first chunk that asks computes and every other one reads.
+    compatible_class_ids:
+        std::sync::RwLock<crate::fast_hash::FastMap<Vec<String>, std::sync::Arc<[u64]>>>,
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -833,7 +845,19 @@ impl SharedCodegenState {
         if let Some(ids) = self.compatible_class_ids_memo.borrow().get(class_names) {
             return ids.clone();
         }
-        let ids: std::rc::Rc<[u64]> = compute().into();
+        let shared = self.preset.as_ref().map(|preset| &preset.compatible_class_ids);
+        let known = shared
+            .and_then(|memo| memo.read().ok().and_then(|memo| memo.get(class_names).cloned()));
+        let ids: std::rc::Rc<[u64]> = match known {
+            Some(ids) => ids.as_ref().into(),
+            None => {
+                let ids: std::rc::Rc<[u64]> = compute().into();
+                if let Some(mut memo) = shared.and_then(|memo| memo.write().ok()) {
+                    memo.insert(class_names.to_vec(), ids.as_ref().into());
+                }
+                ids
+            }
+        };
         self.compatible_class_ids_memo
             .borrow_mut()
             .insert(class_names.to_vec(), ids.clone());
@@ -1307,6 +1331,12 @@ impl SharedCodegenState {
             builtin_wrappers: self.runtime_builtin_wrappers.clone(),
             extern_wrappers: self.runtime_extern_wrappers.clone(),
             mixed_callable_sharing: self.mixed_callable_sharing.clone(),
+            pcntl_async_signals: self.pcntl_async_signals,
+            pcntl_signal_handlers: self.pcntl_signal_handlers,
+            php_shutdown_drain: self.php_shutdown_drain,
+            mixed_string_sharing: self.mixed_string_sharing,
+            count_guard_sharing: self.count_guard_sharing,
+            compatible_class_ids: Default::default(),
         })
     }
 
@@ -1316,6 +1346,11 @@ impl SharedCodegenState {
             self.preset_eval_registration_helper(label.clone());
         }
         self.mixed_callable_sharing = preset.mixed_callable_sharing.clone();
+        self.pcntl_async_signals = preset.pcntl_async_signals;
+        self.pcntl_signal_handlers = preset.pcntl_signal_handlers;
+        self.php_shutdown_drain = preset.php_shutdown_drain;
+        self.mixed_string_sharing = preset.mixed_string_sharing;
+        self.count_guard_sharing = preset.count_guard_sharing;
         self.preset = Some(std::sync::Arc::clone(preset));
     }
 
@@ -1533,6 +1568,31 @@ mod tests {
                             && php_symbol_key(candidate_method) == method_key
                     })
         })
+    }
+
+    /// A worker chunk inherits every whole-module answer: 256 chunks each walking all the bodies
+    /// was 40% of the Symfony Demo's codegen. A second chunk reuses the class lists of the first.
+    #[test]
+    fn a_worker_chunk_recomputes_no_whole_module_fact() {
+        let module = Module::new(Target::parse("macos-aarch64").expect("target"));
+        let mut serial = SharedCodegenState::for_module(&module);
+        crate::codegen::context::prefill_module_facts(&module, &mut serial);
+        let preset = serial.module_preset();
+
+        let mut chunk = SharedCodegenState::for_module(&module);
+        chunk.apply_module_preset(&preset);
+        chunk.pcntl_async_signals(|| panic!("async signals recomputed"));
+        chunk.pcntl_signal_handlers(|| panic!("signal handlers recomputed"));
+        chunk.php_shutdown_drain(|| panic!("shutdown drain recomputed"));
+        assert!(chunk.mixed_string_sharing(0).is_some() && chunk.mixed_string_sharing(1).is_some());
+        assert!(chunk.count_guard_sharing().is_some());
+
+        let list = ["App\\Base".to_string()];
+        assert_eq!(&*chunk.compatible_class_ids_memoized(&list, || vec![7]), &[7]);
+        let mut other = SharedCodegenState::for_module(&module);
+        other.apply_module_preset(&preset);
+        let ids = other.compatible_class_ids_memoized(&list, || panic!("class list recomputed"));
+        assert_eq!(&*ids, &[7]);
     }
 
     /// Proves the immutable index preserves raw classes and method-only canonicalization.

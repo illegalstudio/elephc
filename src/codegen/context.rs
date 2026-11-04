@@ -248,8 +248,8 @@ impl<'a> FunctionContext<'a> {
         // The process entry is named `main` like a PHP `function main()` would be; both bodies are
         // emitted, so the entry hashes php's own frame name instead and their labels stay apart.
         let label_scope = body_label_scope(if is_main { "{main}" } else { &function.name });
-        // Both of these walk the WHOLE module, and this constructor runs once per body, so
-        // asking them directly is quadratic; `SharedCodegenState` answers each one once.
+        // These walk the WHOLE module, and this constructor runs once per body, so asking them
+        // directly is quadratic; `prefill_module_facts` answers each once, for every chunk.
         let pcntl_async_signals =
             shared.pcntl_async_signals(|| module_uses_pcntl_async_signals(module));
         let pcntl_signal_handlers =
@@ -2406,6 +2406,26 @@ impl<'a> FunctionContext<'a> {
 /// off `--web`, so nothing in the instruction stream would show it. Its presence is decided
 /// earlier, by `error_handling_prelude::inject_if_used` plus the forced-group rule in
 /// `pipeline::compile`, and reading the surviving list here is how codegen learns the answer.
+/// Decides every whole-module fact before the workers start, so `module_preset` carries them to
+/// all the chunks: an unanswered one is recomputed by each of them.
+pub(super) fn prefill_module_facts(module: &Module, shared: &mut SharedCodegenState) {
+    use super::lower_inst::MixedStringContextMode;
+    shared.pcntl_async_signals(|| module_uses_pcntl_async_signals(module));
+    shared.pcntl_signal_handlers(|| module_uses_pcntl_signal_handlers(module));
+    shared.php_shutdown_drain(|| module_declares_shutdown_drain(module));
+    super::shared_mixed_string::module_shares_mixed_string_ladder(
+        module,
+        &MixedStringContextMode::Result,
+        shared,
+    );
+    super::shared_mixed_string::module_shares_mixed_string_ladder(
+        module,
+        &MixedStringContextMode::Stdout,
+        shared,
+    );
+    super::shared_count_guard::module_shares_count_guard(module, shared);
+}
+
 fn module_declares_shutdown_drain(module: &Module) -> bool {
     module
         .functions
