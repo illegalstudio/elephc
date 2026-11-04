@@ -60,6 +60,8 @@ mod shared_ini_prelude;
 mod optimize;
 mod otlp;
 mod parser;
+mod stream_errors;
+mod stream_errors_prelude;
 pub(crate) mod pfa;
 mod php_version;
 mod mysqli_prelude;

@@ -36,5 +36,7 @@ mod paths;
 mod modify;
 #[path = "io/streams_ext.rs"]
 mod streams_ext;
+#[path = "io/stream_errors_php86.rs"]
+mod stream_errors_php86;
 #[path = "io/symlinks.rs"]
 mod symlinks;

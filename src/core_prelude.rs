@@ -191,6 +191,16 @@ pub fn inject_if_used(
             true
         });
         inventory.record_program("core", &declarations);
+        // PHP 8.6's stream error surface is pay-for-use: it is injected only for a
+        // program that reaches one of its functions, enums, or classes.
+        if crate::codegen_support::compile_php_version()
+            >= crate::php_version::PhpVersion::Php86
+            && crate::stream_errors_prelude::requested(&usage)
+        {
+            let stream_errors = crate::stream_errors_prelude::declarations();
+            inventory.record_program("stream-errors", &stream_errors);
+            declarations.extend(stream_errors);
+        }
         declarations.extend(program);
         declarations
     })

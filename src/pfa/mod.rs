@@ -53,6 +53,9 @@ pub fn desugar_for_version(
     program: Vec<crate::parser::ast::Stmt>,
     php_version: elephc_builtin_contract::PhpVersion,
 ) -> Result<Vec<crate::parser::ast::Stmt>, crate::errors::CompileError> {
+    // PHP 8.6 stream calls are rewritten after name resolution, before the checker. This is a
+    // no-op for profiles before 8.6 or programs that do not reach a stream error wrapper.
+    let program = crate::stream_errors::rewrite(program, php_version);
     // Almost every program has no partial application. The parser records whether it saw a
     // marker, so the recursive signature collection and AST walk can be skipped entirely.
     if !take_marker() {

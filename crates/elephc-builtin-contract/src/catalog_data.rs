@@ -32727,6 +32727,12 @@ echo memory_get_peak_usage();
                 default: Some(DefaultSpec::Int(0)),
                 by_ref: false,
             },
+            ParamSpec {
+                name: "context",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
         ],
         variadic: None,
         variadic_by_ref: false,

@@ -918,7 +918,7 @@ fn test_error_rewinddir_wrong_args() {
 fn test_error_stream_select_wrong_args() {
     expect_error(
         "<?php $a = []; stream_select($a);",
-        "stream_select() takes 4 or 5 arguments",
+        "stream_select() takes 4 to 6 arguments",
     );
 }
 

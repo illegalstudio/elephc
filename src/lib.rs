@@ -97,6 +97,8 @@ pub mod object_cast_prelude;
 pub mod optimize;
 /// Parser for PHP syntax.
 pub mod parser;
+pub(crate) mod stream_errors;
+pub(crate) mod stream_errors_prelude;
 #[allow(dead_code)]
 pub mod pfa;
 /// Selected PHP compatibility version for version-sensitive compiler surfaces.
