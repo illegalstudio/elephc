@@ -59,6 +59,17 @@ pub(crate) fn span_through_prev_token(
     }
 }
 
+/// Returns whether an argument list can end at `pos` (a comma or the closing parenthesis).
+///
+/// Used to tell a PHP 8.6 `?`/`...` partial-application placeholder from an expression that
+/// merely starts with the same token.
+fn argument_list_ended(tokens: &[SpannedToken], pos: usize) -> bool {
+    matches!(
+        tokens.get(pos).map(|(token, _)| token),
+        Some(Token::Comma | Token::RParen)
+    )
+}
+
 /// Parse a comma-separated argument list. The opening `(` must already be consumed.
 /// Consumes through the closing `)`.
 pub(crate) fn parse_args(
@@ -84,21 +95,54 @@ pub(crate) fn parse_args(
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
             let spread_span = tokens[*pos].1.span;
             *pos += 1;
-            let inner = parse_expr(tokens, pos)?;
-            args.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+            if argument_list_ended(tokens, *pos) {
+                // PHP 8.6 partial application: `foo(1, ...)` forwards the remaining
+                // arguments. `foo(...)` is first-class-callable syntax and never reaches
+                // this branch.
+                args.push(Expr::new(
+                    ExprKind::Spread(Box::new(Expr::new(
+                        ExprKind::Variable(crate::pfa::VARIADIC_PLACEHOLDER_VAR.to_string()),
+                        spread_span,
+                    ))),
+                    spread_span,
+                ));
+            } else {
+                let inner = parse_expr(tokens, pos)?;
+                args.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+            }
         } else if matches!(tokens.get(*pos + 1), Some((Token::Colon, _)))
             && argument_name_from_token(&tokens[*pos]).is_some()
         {
             let arg_span = tokens[*pos].1.span;
             let name = argument_name_from_token(&tokens[*pos]).unwrap();
             *pos += 2;
-            let value = parse_expr(tokens, pos)?;
+            let value = if tokens.get(*pos).is_some_and(|(token, _)| *token == Token::Question)
+                && argument_list_ended(tokens, *pos + 1)
+            {
+                let value_span = tokens[*pos].1.span;
+                *pos += 1;
+                Expr::new(
+                    ExprKind::Variable(crate::pfa::PLACEHOLDER_VAR.to_string()),
+                    value_span,
+                )
+            } else {
+                parse_expr(tokens, pos)?
+            };
             args.push(Expr::new(
                 ExprKind::NamedArg {
                     name,
                     value: Box::new(value),
                 },
                 arg_span,
+            ));
+        } else if tokens.get(*pos).is_some_and(|(token, _)| *token == Token::Question)
+            && argument_list_ended(tokens, *pos + 1)
+        {
+            let placeholder_span = tokens[*pos].1.span;
+            *pos += 1;
+            args.push(Expr::new(
+                ExprKind::Variable(crate::pfa::PLACEHOLDER_VAR.to_string()),
+                placeholder_span,
             ));
         } else {
             args.push(parse_expr(tokens, pos)?);

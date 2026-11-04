@@ -90,6 +90,7 @@ fn check_source_with_defines_and_options(
     // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
     let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
+    let ast = elephc::pfa::desugar(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
     // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint. A generic
     // CLASS is instantiated by that driver, not by the checker, so a plain `check_with_options`
@@ -123,6 +124,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
+    let ast = elephc::pfa::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
     let (_, result) = elephc::generics::monomorphize(ast, |program, bounds| {
         types::check_with_options_and_bounds(program, types::CheckOptions::default(), bounds)
@@ -339,6 +341,8 @@ mod override_constants;
 mod enum_debug_info;
 #[path = "error_tests/static_asymmetric_visibility.rs"]
 mod static_asymmetric_visibility;
+#[path = "error_tests/partial_application.rs"]
+mod partial_application;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
 #[path = "error_tests/mbstring.rs"]

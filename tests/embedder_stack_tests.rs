@@ -352,6 +352,10 @@ fn post_typecheck_optimizer_survives_the_nesting_limit_on_a_small_embedder_stack
 fn func_args_desugaring_survives_the_nesting_limit_on_a_small_embedder_stack() {
     let report = on_a_small_embedder_stack(|| {
         let ast = parse_deeply_nested();
+        let ast = match elephc::pfa::desugar(ast) {
+            Ok(ast) => ast,
+            Err(error) => panic!("pfa desugar failed: {error:?}"),
+        };
         match elephc::func_args::desugar(ast) {
             Ok(ast) => summarize(ast),
             Err(error) => error.message,

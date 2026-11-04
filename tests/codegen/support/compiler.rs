@@ -401,6 +401,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::pfa::desugar(resolved).expect("pfa desugar failed");
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
     // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint, so every
     // reachable template has become an ordinary monomorphic declaration before lowering. A

@@ -1164,7 +1164,7 @@ real-world validation rather than by speculative pass work.
 - [x] `grapheme_strrev()` reclassified as PHP 8.6 `ext/intl`; both upstream `grapheme_strrev*.phpt` fixtures pass after completing the Arabic/Hebrew/Indic/Thai/Tibetan `Grapheme_Extend` ranges
 - [x] Form feed in the default `trim()`/`ltrim()`/`rtrim()`/`chop()` mask under `--php-version=8.6`
 - [x] Readonly property defaults — declarations, constructor initialisation, inheritance, get-only interface properties, and serialization; `Zend/tests/readonly_props/readonly_with_default*.phpt` pass
-- [ ] Partial function application — `?`/named `?`/trailing `...` placeholders and closure synthesis
+- [x] Partial function application — `?`/named `?`/trailing `...` placeholders, creation-time evaluation, inherited signatures/defaults/reference modes, constant-expression partials, and extra-argument forwarding; ten upstream fixtures plus invalid-shape diagnostics
 - [ ] `Io\Poll` — platform polling API and per-target backend
 - [ ] Stream `error_mode` — exception-on-failure stream option across every wrapper
 - [x] `ReflectionProperty::isReadable()` / `isWritable()` — scope/object arguments, visibility, asymmetric write visibility, readonly/`__clone` state, hooks, static properties, and magic-method fallbacks; PHP 8.5 asymmetric visibility for static properties lands with it

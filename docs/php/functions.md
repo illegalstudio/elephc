@@ -356,6 +356,60 @@ var_dump(call_user_func($callback, "probe", 9));   // string(5) "probe"
 A body that computes its own result keeps its inferred type (`function add($a, $b) { return $a
 + $b; }` still returns `int`), and a declared return type always wins.
 
+## Partial function application (PHP 8.6)
+
+A call may replace one or more arguments with `?`, or end its argument list with `...`, to
+create a closure that completes the call later:
+
+```php
+<?php
+function format(string $prefix, string $name, int $width = 10): string {
+    return $prefix . str_pad($name, $width);
+}
+
+$hello = format('Hello, ', ?);          // one parameter: $name
+echo $hello('Ada');                     // Hello, Ada
+
+$named = format(prefix: 'Hi, ', ?);     // arguments are evaluated now
+$named('Grace');
+
+$thunk = format('Hey, ', 'Linus', ...); // no required parameters
+echo $thunk();                          // Hey, Linus
+
+$withWidth = format(?, ?, ...);         // name and width are exposed
+echo $withWidth('Alan', 4);
+```
+
+- `?` becomes one closure parameter. The parameter inherits the underlying parameter's name,
+  type, optionality, default value, and by-reference mode.
+- A named placeholder (`format(prefix: ?, ...)`) is placed in the closure in the order it is
+  written.
+- `...` exposes every remaining regular parameter in declaration order and forwards any extra
+  arguments to the underlying call. That is how a variadic function keeps its variadic tail and
+  how a non-variadic function still sees extras through `func_get_args()`.
+- Values that are not placeholders are evaluated where the partial application is written, then
+  captured. In `f(?, getArg())`, `getArg()` runs before the closure is returned.
+- A partial application may be used in a constant expression when its captured values are
+  constant expressions.
+- Free functions, static methods, instance methods, invokable objects, closures, and callable
+  variables are supported. Constructors are not: `new C(?)` reports
+  `Cannot create Closure for new expression`.
+
+`foo(...)` on its own remains the first-class-callable syntax; `foo(1, ...)` is the variadic
+partial-application form. Partial application requires `--php-version=8.6`; on earlier profiles
+it is rejected with a diagnostic.
+
+The generated closure accepts extra positional arguments and ignores them when the partial
+application has no `...`, matching PHP's treatment of extra arguments to user functions. It
+also carries a hidden variadic parameter, so reflection reports it as variadic; the visible
+parameter metadata (names, types, defaults, and by-reference modes) matches the underlying
+function.
+
+Magic `__call` / `__callStatic` dispatch and receivers whose class cannot be determined at
+compile time are not supported: elephc reports a diagnostic instead of generating a closure it
+cannot bind safely. Bound values are checked against the inherited parameter type when the
+partial application is created.
+
 ## Global variables
 
 ```php

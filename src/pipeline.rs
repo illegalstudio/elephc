@@ -813,6 +813,21 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     };
     timings.record_since("func-args", phase_started);
 
+    // Desugar PHP 8.6 partial function application into the closure php-src synthesizes.
+    // This runs before the AST optimizer and the checker, so every later pass sees ordinary
+    // closures and the placeholder markers never escape this boundary.
+    crate::progress::phase("pfa");
+    let phase_started = Instant::now();
+    let ast = match crate::pfa::desugar(ast) {
+        Ok(desugared) => desugared,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("pfa", phase_started);
+
     // Complete the OPcache script manifest now that all three groups exist, and re-render the
     // manifest-dependent functions injected above against it. This is a pure substitution of
     // already-declared, already-name-resolved top-level functions, so it cannot disturb the

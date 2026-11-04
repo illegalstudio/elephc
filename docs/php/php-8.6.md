@@ -21,6 +21,7 @@ sensitive.
 | `grapheme_strrev()` | Now classified as `ext/intl` (PHP 8.6) instead of an elephc extension. Both upstream `ext/intl/tests/grapheme_strrev*.phpt` fixtures pass, including the UBRK_DONE regression and the Arabic grapheme-cluster case. |
 | Default trim mask | `trim()`, `ltrim()`, `rtrim()` and `chop()` include form feed (`\x0C`) under `--php-version=8.6`, and leave it untouched on 8.5 and earlier. |
 | Readonly property defaults | A readonly instance property may declare a default value, including inside a `readonly class`. The default initializes the slot before the constructor runs, so later writes (including from the constructor) raise `Cannot modify readonly property`. Inheritance, get-only interface properties, and serialization follow php-src's `Zend/tests/readonly_props/readonly_with_default*.phpt`. |
+| Partial function application | `foo(1, ?, ...)` placeholders, named placeholders, trailing `...`, constant-expression partials, inherited parameter names/types/defaults/reference modes, creation-time evaluation, extra-argument forwarding, and closure scope. Ten php-src `Zend/tests/partial_application` fixtures are transcribed into `tests/codegen/oop/partial_application_php86.rs`; the invalid shapes are rejected in `tests/error_tests/partial_application.rs`. |
 | `ReflectionProperty::isReadable()` / `isWritable()` | Report whether a property can be read or written from a class scope, with the optional object adding initialization and readonly state. Visibility, asymmetric write visibility, virtual/backed hooks, `__get`/`__set`/`__isset` fallbacks, static properties, and the readonly `__clone` reinitialization window are covered by the six upstream `ext/reflection/tests/ReflectionProperty_is{Readable,Writable}_*.phpt` fixtures in `tests/codegen/oop/reflection_property_access_php86.rs`. This also implements PHP 8.5's asymmetric visibility for static properties. |
 | `mysqli_quote_string()` | Escapes a string through `mysqli::real_escape_string()` and wraps it in single quotation marks, as the method `mysqli::quote_string()` and the procedural alias. Covered by the unconnected-object test and an opt-in live MySQL test. |
 | Secure session defaults | Under `--php-version=8.6`, `--web` starts with `session.use_strict_mode=1`, `session.cookie_httponly=1`, and `session.cookie_samesite=Lax`. A later `ini_set()` can relax them for the request. The session profile matrix in `tests/web_session_tests.rs` covers 8.2 through 8.6. |
@@ -39,7 +40,6 @@ instead of during production.
 
 | Item | Why it is deferred |
 |---|---|
-| Partial function application (`foo(1, ?, ...)`) | New call-argument syntax plus a closure-synthesis lowering path. It needs its own parser, checker, and EIR design; it is the largest remaining 8.6 language item. |
 | `Io\Poll` | A new platform polling API (`epoll`/`kqueue`/`WSAPoll`). It needs a new native surface per target and an event-loop-free runtime shape. |
 | Stream `error_mode` | The stream layer currently reports PHP 8.5 warnings; opting into `STREAM_ERRMODE_EXCEPTION` requires a new stream-option ABI across every stream wrapper. |
 | Parameter doc comments (`ReflectionParameter::getDocComment()`) | The parser would need a doc-comment channel on every parameter (functions, methods, closures, arrow functions, hook parameters) and a parallel field across the AST. |
@@ -49,6 +49,12 @@ instead of during production.
 
 ## Known deviations
 
+- Partial application of a magic `__call` / `__callStatic` dispatch, or of a receiver whose
+  class cannot be resolved at compile time, is rejected with a diagnostic rather than
+  synthesized. `new C(?)` is also rejected, matching PHP. Bound values use a generated typed
+  identity closure at creation time; in a `declare(strict_types=1)` file a mismatch may be
+  coerced where php-src raises `TypeError`, and the hidden variadic parameter makes the
+  generated closure appear variadic to reflection.
 - `ReflectionProperty::isReadable()` and `isWritable()` expose `mixed $object` rather than
   `?object $object`, so the static checker accepts dynamic values such as `new $scope`.
   The initialization probe casts the object to an array and compares the mangled backing

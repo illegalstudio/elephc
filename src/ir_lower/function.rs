@@ -685,7 +685,7 @@ pub(crate) fn method_signature_from_ast(method: &ClassMethod) -> FunctionSig {
     if !method.variadic_by_ref {
         if let Some(variadic_type) = &method.variadic_type {
             if let Some((_, php_type)) = signature.params.last_mut() {
-                *php_type = type_expr_to_php_type(variadic_type);
+                *php_type = PhpType::Array(Box::new(type_expr_to_php_type(variadic_type)));
             }
             if let Some(declared) = signature.declared_params.last_mut() {
                 *declared = true;
@@ -1492,6 +1492,7 @@ pub(crate) fn lower_closure_function(
     params: &AstParams,
     variadic: Option<&str>,
     variadic_by_ref: bool,
+    variadic_type: Option<&TypeExpr>,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
@@ -1505,6 +1506,7 @@ pub(crate) fn lower_closure_function(
         params,
         variadic,
         variadic_by_ref,
+        variadic_type,
         return_type,
         body,
         signature_captures,
@@ -1540,6 +1542,7 @@ pub(crate) fn lower_closure_function_with_context(
     params: &AstParams,
     variadic: Option<&str>,
     variadic_by_ref: bool,
+    variadic_type: Option<&TypeExpr>,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
@@ -1555,6 +1558,7 @@ pub(crate) fn lower_closure_function_with_context(
         params,
         variadic,
         variadic_by_ref,
+        variadic_type,
         return_type,
         body,
         signature_captures,
@@ -2330,6 +2334,7 @@ fn closure_signature_from_ast(
     params: &AstParams,
     variadic: Option<&str>,
     variadic_by_ref: bool,
+    variadic_type: Option<&TypeExpr>,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
@@ -2338,6 +2343,16 @@ fn closure_signature_from_ast(
 ) -> FunctionSig {
     let mut signature =
         signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
+    if !variadic_by_ref {
+        if let Some(variadic_type) = variadic_type {
+            if let Some((_, php_type)) = signature.params.last_mut() {
+                *php_type = PhpType::Array(Box::new(type_expr_to_php_type(variadic_type)));
+            }
+            if let Some(declared) = signature.declared_params.last_mut() {
+                *declared = true;
+            }
+        }
+    }
     let owner = ctx.current_class.as_deref();
     let parent = owner.and_then(|owner| ctx.classes.get(owner))
         .and_then(|class| class.parent.as_deref());
