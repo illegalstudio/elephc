@@ -30,6 +30,8 @@ pub(super) fn lower_get_extension_funcs(
     if let Some(name) = crate::codegen::lower_inst::builtins::maybe_const_string_operand(ctx, extension)? {
         if name.eq_ignore_ascii_case("core") {
             emit_boxed_static_string_array(ctx, elephc_builtin_contract::CORE_FUNCTION_NAMES)?;
+        } else if name.eq_ignore_ascii_case("sodium") {
+            emit_boxed_static_string_array(ctx, elephc_builtin_contract::SODIUM_FUNCTIONS)?;
         } else {
             emit_boxed_false(ctx);
         }
@@ -44,17 +46,26 @@ pub(super) fn lower_get_extension_funcs(
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(extension, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-    let matched = ctx.next_label("get_extension_funcs_core");
+    let core_matched = ctx.next_label("get_extension_funcs_core");
+    let sodium_matched = ctx.next_label("get_extension_funcs_sodium");
     let done = ctx.next_label("get_extension_funcs_done");
     crate::codegen::lower_inst::builtins::emit_branch_if_saved_string_matches_ci(
         ctx,
         b"Core",
-        &matched,
+        &core_matched,
+    );
+    crate::codegen::lower_inst::builtins::emit_branch_if_saved_string_matches_ci(
+        ctx,
+        b"sodium",
+        &sodium_matched,
     );
     emit_boxed_false(ctx);
     abi::emit_jump(ctx.emitter, &done);
-    ctx.emitter.label(&matched);
+    ctx.emitter.label(&core_matched);
     emit_boxed_static_string_array(ctx, elephc_builtin_contract::CORE_FUNCTION_NAMES)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&sodium_matched);
+    emit_boxed_static_string_array(ctx, elephc_builtin_contract::SODIUM_FUNCTIONS)?;
     ctx.emitter.label(&done);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())

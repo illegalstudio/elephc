@@ -19,6 +19,7 @@ const PCNTL: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_pcntl"
 const FILEINFO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_fileinfo")];
 const XML: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_xml")];
 const GMP: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_gmp")];
+const SODIUM: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_sodium")];
 const TLS: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_tls")];
 const ZLIB: &[BuiltinRequirement] = &[BuiltinRequirement::SystemLibrary("z")];
 const MBSTRING: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_mbstring")];
@@ -46,6 +47,11 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
         .any(|name| id == BuiltinId::from_canonical_name(name))
     {
         return GMP;
+    }
+    if crate::catalog_sodium::contract_names()
+        .any(|name| id == BuiltinId::from_canonical_name(name))
+    {
+        return SODIUM;
     }
     if matches_name(
         id,

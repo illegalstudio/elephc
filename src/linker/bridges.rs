@@ -179,6 +179,20 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_sodium",
+        env_var: "ELEPHC_SODIUM_LIB_DIR",
+        crate_name: "elephc-sodium",
+        flag_name: "sodium",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The bridge is a thin adapter over libsodium (the managed `libsodium`
+        // catalog package) and owns PHP's procedural `sodium` extension surface.
+        php_extensions: &["sodium"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_mbstring",
         env_var: "ELEPHC_MBSTRING_LIB_DIR",
         crate_name: "elephc-mbstring",

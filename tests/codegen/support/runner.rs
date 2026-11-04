@@ -114,6 +114,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["gmp"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_sodium",
+        package: "elephc-sodium",
+        php_extensions: &["sodium"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_random",
         package: "elephc-random",
         php_extensions: &["random"],
@@ -1367,6 +1372,13 @@ fn test_link_plan(
             push_gmp_native_archives(&mut plan, package);
         }
     }
+    // The sodium bridge declares libsodium's `crypto_*`/`sodium_*` symbols without
+    // linking them; the managed `libsodium` package supplies `libsodium.a` at final link.
+    if named.contains("elephc_sodium") {
+        if let Some(package) = sodium_native_package() {
+            push_sodium_native_archives(&mut plan, package);
+        }
+    }
     for path in extra_link_paths {
         plan.push(LinkItem::SearchPath(path.as_str().into()));
     }
@@ -1432,6 +1444,18 @@ fn push_gmp_native_archives(
     plan.push(LinkItem::SearchPath(package.library_dir.clone()));
     for archive in &package.archives {
         plan.push(LinkItem::managed_archive(archive, GMP_NATIVE_PACKAGE));
+    }
+}
+
+/// Appends the managed native libsodium artifact as an exact archive path.
+fn push_sodium_native_archives(
+    plan: &mut elephc::link_plan::LinkPlan,
+    package: &SodiumNativePackage,
+) {
+    use elephc::link_plan::LinkItem;
+    plan.push(LinkItem::SearchPath(package.library_dir.clone()));
+    for archive in &package.archives {
+        plan.push(LinkItem::managed_archive(archive, SODIUM_NATIVE_PACKAGE));
     }
 }
 

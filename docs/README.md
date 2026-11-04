@@ -53,6 +53,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Random](php/random.md) — PHP's random engines, `Random\Randomizer`, interval boundaries, serialization, and procedural API
 - [GMP](php/gmp.md) — arbitrary-precision integers, the final GMP class, operators, casts, serialization and all 51 functions over a pinned libgmp 6.3.0
 - [iconv](php/iconv.md) — character-set conversion, `//TRANSLIT`/`//IGNORE`, character-oriented string functions, RFC 2047 MIME headers, and the encoding trio
+- [Sodium](php/sodium.md) — authenticated encryption, signatures, key exchange, password hashing, Ristretto255 and the full 110-function ext/sodium surface over a pinned libsodium 1.0.22
 - [PCNTL](php/pcntl.md) — forking, child waits, signals, process replacement, process groups, sessions, daemonization, and target-specific controls
 - [File information](php/fileinfo.md) - MIME types, encodings, custom magic databases and the complete PHP fileinfo surface
 - [Tokenizer](php/tokenizer.md): PHP source inspection, lossless tokens, `PhpToken` and `TOKEN_PARSE`.

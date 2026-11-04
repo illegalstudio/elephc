@@ -1,0 +1,29 @@
+---
+title: "sodium_crypto_box_secretkey()"
+description: "Extracts the secret key from a box key pair."
+---
+
+## sodium_crypto_box_secretkey()
+
+```php
+function sodium_crypto_box_secretkey(string $key_pair): string
+```
+
+Extracts the secret key from a box key pair.
+
+**Parameters**:
+- `$key_pair` (`string`)
+
+**Returns**: `string`
+
+## Availability
+
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
+
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
+
+## Internals
+
+For how `sodium_crypto_box_secretkey` is implemented in the compiler, see [the internals page](../../../internals/builtins/sodium/sodium_crypto_box_secretkey.md).

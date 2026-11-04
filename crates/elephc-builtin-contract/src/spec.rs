@@ -58,6 +58,9 @@ pub enum Area {
     /// The `ext/random` surface declared by the random prelude: its procedural functions,
     /// `Random\*` classes, `MT_RAND_*` constants, and internal helpers.
     Random,
+    /// The `ext/sodium` procedural surface backed by the `elephc_sodium` bridge and the
+    /// managed `libsodium` native package.
+    Sodium,
 }
 
 /// Describes how a PHP-visible catalog entry reaches executable behavior.

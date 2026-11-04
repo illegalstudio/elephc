@@ -300,6 +300,14 @@ const EVAL_CLASS_IMPLEMENTATION_PENDING: &[&str] = &[];
 
 /// PHP-visible AOT contracts that do not yet have a Magician implementation binding.
 const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
+    "sodium_add",
+    "sodium_increment",
+    "sodium_memzero",
+    "sodium_crypto_generichash_update",
+    "sodium_crypto_generichash_final",
+    "sodium_crypto_secretstream_xchacha20poly1305_push",
+    "sodium_crypto_secretstream_xchacha20poly1305_pull",
+    "sodium_crypto_secretstream_xchacha20poly1305_rekey",
     "array_all",
     "array_any",
     "array_diff_assoc",
@@ -378,7 +386,7 @@ mod tests {
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
-        assert_eq!(eval_registry, 755 + curl_surface);
+        assert_eq!(eval_registry, 857 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -400,7 +408,7 @@ mod tests {
         assert_eq!(eval_internal, 134);
         // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 359);
+        assert_eq!(eval_pending, 367);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -410,7 +418,7 @@ mod tests {
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
-        assert_eq!(aot_registry, 824);
+        assert_eq!(aot_registry, 934);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 424 + curl_surface);
@@ -465,11 +473,11 @@ mod tests {
         assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters, plus the fifty-one GMP homes forwarding to the compiled prelude.
-        assert_eq!(interpreter_adapter, 660 + curl_surface);
+        assert_eq!(interpreter_adapter, 762 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls.
-        assert_eq!(unsupported, 493);
+        assert_eq!(unsupported, 501);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

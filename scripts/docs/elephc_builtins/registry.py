@@ -36,6 +36,7 @@ AREAS: list[str] = [
     "Web",
     "Image",
     "XML",
+    "Sodium",
 ]
 
 
@@ -86,6 +87,8 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     "xml": ("XML", "XML"),
     # `ext/random` procedural functions declared by the random prelude.
     "random": ("Math", "Random"),
+    # `ext/sodium` procedural functions backed by the libsodium bridge.
+    "sodium": ("Sodium", "Sodium"),
 }
 
 
@@ -318,6 +321,17 @@ REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
 #   - `None` — leave whatever the parser produced alone (skip refinement).
 ParamSpec = object  # str | Tuple[str, str] | None — kept loose for legibility
 PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
+    # The by-reference sodium mutators expose `mixed` in the AOT contract so the shared
+    # argument planner keeps the caller's lvalue instead of materializing a casted copy;
+    # the helper enforces PHP's real `string` parameter, and the docs report that type.
+    'sodium_add': ['string', 'string'],
+    'sodium_increment': ['string'],
+    'sodium_memzero': ['string'],
+    'sodium_crypto_generichash_update': ['string', 'string'],
+    'sodium_crypto_generichash_final': ['string', 'int'],
+    'sodium_crypto_secretstream_xchacha20poly1305_push': ['string', 'string', 'string', 'int'],
+    'sodium_crypto_secretstream_xchacha20poly1305_pull': ['string', 'string', 'string'],
+    'sodium_crypto_secretstream_xchacha20poly1305_rekey': ['string'],
     'finfo_buffer': ['finfo', 'string', 'int', '?resource'],
     'finfo_file': ['finfo', 'string', 'int', '?resource'],
     'finfo_close': ['finfo'],

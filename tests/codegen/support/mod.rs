@@ -42,6 +42,7 @@ mod c_fixture;
 mod compiler;
 mod curl_native;
 mod gmp_native;
+mod sodium_native;
 mod native_cache;
 pub(crate) mod fileinfo_native;
 mod native_projects;
@@ -63,6 +64,7 @@ pub(crate) use openssl_native::{
 };
 pub(crate) use projects::*;
 pub(crate) use gmp_native::{gmp_native_package, skip_without_gmp_native, GmpNativePackage, GMP_NATIVE_PACKAGE};
+pub(crate) use sodium_native::{skip_without_sodium_native, sodium_native_package, SodiumNativePackage, SODIUM_NATIVE_PACKAGE};
 // Named rather than globbed: `xml_native::available()` would otherwise collide with
 // `curl_native::available()` under two `*` imports. Reach it as
 // `support::xml_native::available()`.

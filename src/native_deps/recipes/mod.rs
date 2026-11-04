@@ -18,4 +18,5 @@ pub mod oniguruma;
 pub mod openssl;
 pub mod openssl_crypto;
 pub mod pcre2;
+pub mod sodium;
 pub mod zlib;

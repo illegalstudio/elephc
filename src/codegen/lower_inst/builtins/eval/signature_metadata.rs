@@ -27,6 +27,15 @@ pub(super) fn function_has_eval_metadata(function: &Function) -> bool {
             .iter()
             .any(|name| name.strip_prefix("gmp_") == Some(helper));
     }
+    if let Some(helper) = function.name.strip_prefix("__elephc_sodium_") {
+        return elephc_builtin_contract::SODIUM_FUNCTIONS
+            .iter()
+            .any(|name| name.strip_prefix("sodium_") == Some(helper))
+            || matches!(
+                helper,
+                "take_state" | "take_payload" | "pull_state" | "pull_result"
+            );
+    }
     !function.name.starts_with('_')
 }
 

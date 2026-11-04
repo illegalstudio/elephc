@@ -196,13 +196,14 @@ def build_home_file_map(repo: Path) -> dict[str, str]:
         if path.name in _NON_HOME_FILES:
             continue
         text = path.read_text(encoding="utf-8")
-        contract_match = _CONTRACT_RE.search(text)
-        if contract_match is None:
-            contract_match = _CORE_HOME_RE.search(text)
-        if not contract_match:
-            continue
-        canonical = contract_match.group(1).lower()
-        out[canonical] = str(path.relative_to(repo))
+        # A home file may declare one contract directly or a macro-generated family
+        # (the sodium bindings keep 110 mechanically identical registrations in one
+        # auditable table), so record every contract spelled in the file.
+        contracts = [match.group(1).lower() for match in _CONTRACT_RE.finditer(text)]
+        if not contracts:
+            contracts = [match.group(1).lower() for match in _CORE_HOME_RE.finditer(text)]
+        for canonical in contracts:
+            out[canonical] = str(path.relative_to(repo))
     return out
 
 

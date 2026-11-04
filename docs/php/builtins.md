@@ -7,7 +7,7 @@ sidebar:
 
 ## Builtins
 
-Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Database](./builtins/database.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [IO](./builtins/io.md) · [Image](./builtins/image.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Network](./builtins/network.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Type](./builtins/type.md) · [Web](./builtins/web.md) · [XML](./builtins/xml.md)
+Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Database](./builtins/database.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [IO](./builtins/io.md) · [Image](./builtins/image.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Network](./builtins/network.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Sodium](./builtins/sodium.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Type](./builtins/type.md) · [Web](./builtins/web.md) · [XML](./builtins/xml.md)
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
@@ -863,6 +863,116 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`spl_classes()`](./builtins/spl/spl_classes.md) | `(): array` | `array` | ✓ | ✓ |
 | [`spl_object_hash()`](./builtins/spl/spl_object_hash.md) | `(object $object): string` | `string` | ✓ | ✓ |
 | [`spl_object_id()`](./builtins/spl/spl_object_id.md) | `(object $object): int` | `int` | ✓ | ✓ |
+| [`sodium_add()`](./builtins/sodium/sodium_add.md) | `(string $string1, string $string2): void` | `void` | ✓ | - |
+| [`sodium_base642bin()`](./builtins/sodium/sodium_base642bin.md) | `(string $string, int $id, string $ignore = ''): string` | `string` | ✓ | ✓ |
+| [`sodium_bin2base64()`](./builtins/sodium/sodium_bin2base64.md) | `(string $string, int $id): string` | `string` | ✓ | ✓ |
+| [`sodium_bin2hex()`](./builtins/sodium/sodium_bin2hex.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`sodium_compare()`](./builtins/sodium/sodium_compare.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
+| [`sodium_crypto_aead_aegis128l_decrypt()`](./builtins/sodium/sodium_crypto_aead_aegis128l_decrypt.md) | `(string $ciphertext, string $additional_data, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_aead_aegis128l_encrypt()`](./builtins/sodium/sodium_crypto_aead_aegis128l_encrypt.md) | `(string $message, string $additional_data, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_aegis128l_keygen()`](./builtins/sodium/sodium_crypto_aead_aegis128l_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_aegis256_decrypt()`](./builtins/sodium/sodium_crypto_aead_aegis256_decrypt.md) | `(string $ciphertext, string $additional_data, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_aead_aegis256_encrypt()`](./builtins/sodium/sodium_crypto_aead_aegis256_encrypt.md) | `(string $message, string $additional_data, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_aegis256_keygen()`](./builtins/sodium/sodium_crypto_aead_aegis256_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_aes256gcm_decrypt()`](./builtins/sodium/sodium_crypto_aead_aes256gcm_decrypt.md) | `(string $ciphertext, string $additional_data, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_aead_aes256gcm_encrypt()`](./builtins/sodium/sodium_crypto_aead_aes256gcm_encrypt.md) | `(string $message, string $additional_data, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_aes256gcm_is_available()`](./builtins/sodium/sodium_crypto_aead_aes256gcm_is_available.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_aead_aes256gcm_keygen()`](./builtins/sodium/sodium_crypto_aead_aes256gcm_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_chacha20poly1305_decrypt()`](./builtins/sodium/sodium_crypto_aead_chacha20poly1305_decrypt.md) | `(string $ciphertext, string $additional_data, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_aead_chacha20poly1305_encrypt()`](./builtins/sodium/sodium_crypto_aead_chacha20poly1305_encrypt.md) | `(string $message, string $additional_data, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_chacha20poly1305_ietf_decrypt()`](./builtins/sodium/sodium_crypto_aead_chacha20poly1305_ietf_decrypt.md) | `(string $ciphertext, string $additional_data, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_aead_chacha20poly1305_ietf_encrypt()`](./builtins/sodium/sodium_crypto_aead_chacha20poly1305_ietf_encrypt.md) | `(string $message, string $additional_data, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_chacha20poly1305_ietf_keygen()`](./builtins/sodium/sodium_crypto_aead_chacha20poly1305_ietf_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_chacha20poly1305_keygen()`](./builtins/sodium/sodium_crypto_aead_chacha20poly1305_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_xchacha20poly1305_ietf_decrypt()`](./builtins/sodium/sodium_crypto_aead_xchacha20poly1305_ietf_decrypt.md) | `(string $ciphertext, string $additional_data, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_aead_xchacha20poly1305_ietf_encrypt()`](./builtins/sodium/sodium_crypto_aead_xchacha20poly1305_ietf_encrypt.md) | `(string $message, string $additional_data, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_aead_xchacha20poly1305_ietf_keygen()`](./builtins/sodium/sodium_crypto_aead_xchacha20poly1305_ietf_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_auth()`](./builtins/sodium/sodium_crypto_auth.md) | `(string $message, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_auth_keygen()`](./builtins/sodium/sodium_crypto_auth_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_auth_verify()`](./builtins/sodium/sodium_crypto_auth_verify.md) | `(string $mac, string $message, string $key): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_box()`](./builtins/sodium/sodium_crypto_box.md) | `(string $message, string $nonce, string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_keypair()`](./builtins/sodium/sodium_crypto_box_keypair.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_keypair_from_secretkey_and_publickey()`](./builtins/sodium/sodium_crypto_box_keypair_from_secretkey_and_publickey.md) | `(string $secret_key, string $public_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_open()`](./builtins/sodium/sodium_crypto_box_open.md) | `(string $ciphertext, string $nonce, string $key_pair): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_box_publickey()`](./builtins/sodium/sodium_crypto_box_publickey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_publickey_from_secretkey()`](./builtins/sodium/sodium_crypto_box_publickey_from_secretkey.md) | `(string $secret_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_seal()`](./builtins/sodium/sodium_crypto_box_seal.md) | `(string $message, string $public_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_seal_open()`](./builtins/sodium/sodium_crypto_box_seal_open.md) | `(string $ciphertext, string $key_pair): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_box_secretkey()`](./builtins/sodium/sodium_crypto_box_secretkey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_box_seed_keypair()`](./builtins/sodium/sodium_crypto_box_seed_keypair.md) | `(string $seed): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_add()`](./builtins/sodium/sodium_crypto_core_ristretto255_add.md) | `(string $p, string $q): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_from_hash()`](./builtins/sodium/sodium_crypto_core_ristretto255_from_hash.md) | `(string $s): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_is_valid_point()`](./builtins/sodium/sodium_crypto_core_ristretto255_is_valid_point.md) | `(string $s): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_random()`](./builtins/sodium/sodium_crypto_core_ristretto255_random.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_add()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_add.md) | `(string $x, string $y): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_complement()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_complement.md) | `(string $s): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_invert()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_invert.md) | `(string $s): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_mul()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_mul.md) | `(string $x, string $y): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_negate()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_negate.md) | `(string $s): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_random()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_random.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_reduce()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_reduce.md) | `(string $s): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_scalar_sub()`](./builtins/sodium/sodium_crypto_core_ristretto255_scalar_sub.md) | `(string $x, string $y): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_core_ristretto255_sub()`](./builtins/sodium/sodium_crypto_core_ristretto255_sub.md) | `(string $p, string $q): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_generichash()`](./builtins/sodium/sodium_crypto_generichash.md) | `(string $message, string $key = '', int $length = 32): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_generichash_final()`](./builtins/sodium/sodium_crypto_generichash_final.md) | `(string $state, int $length = 32): string` | `string` | ✓ | - |
+| [`sodium_crypto_generichash_init()`](./builtins/sodium/sodium_crypto_generichash_init.md) | `(string $key = '', int $length = 32): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_generichash_keygen()`](./builtins/sodium/sodium_crypto_generichash_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_generichash_update()`](./builtins/sodium/sodium_crypto_generichash_update.md) | `(string $state, string $message): bool` | `bool` | ✓ | - |
+| [`sodium_crypto_kdf_derive_from_key()`](./builtins/sodium/sodium_crypto_kdf_derive_from_key.md) | `(int $subkey_length, int $subkey_id, string $context, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_kdf_keygen()`](./builtins/sodium/sodium_crypto_kdf_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_kx_client_session_keys()`](./builtins/sodium/sodium_crypto_kx_client_session_keys.md) | `(string $client_key_pair, string $server_key): array` | `array` | ✓ | ✓ |
+| [`sodium_crypto_kx_keypair()`](./builtins/sodium/sodium_crypto_kx_keypair.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_kx_publickey()`](./builtins/sodium/sodium_crypto_kx_publickey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_kx_secretkey()`](./builtins/sodium/sodium_crypto_kx_secretkey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_kx_seed_keypair()`](./builtins/sodium/sodium_crypto_kx_seed_keypair.md) | `(string $seed): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_kx_server_session_keys()`](./builtins/sodium/sodium_crypto_kx_server_session_keys.md) | `(string $server_key_pair, string $client_key): array` | `array` | ✓ | ✓ |
+| [`sodium_crypto_pwhash()`](./builtins/sodium/sodium_crypto_pwhash.md) | `(int $length, string $password, string $salt, int $opslimit, int $memlimit, int $algo = 2): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_pwhash_scryptsalsa208sha256()`](./builtins/sodium/sodium_crypto_pwhash_scryptsalsa208sha256.md) | `(int $length, string $password, string $salt, int $opslimit, int $memlimit): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_pwhash_scryptsalsa208sha256_str()`](./builtins/sodium/sodium_crypto_pwhash_scryptsalsa208sha256_str.md) | `(string $password, int $opslimit, int $memlimit): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_pwhash_scryptsalsa208sha256_str_verify()`](./builtins/sodium/sodium_crypto_pwhash_scryptsalsa208sha256_str_verify.md) | `(string $hash, string $password): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_pwhash_str()`](./builtins/sodium/sodium_crypto_pwhash_str.md) | `(string $password, int $opslimit, int $memlimit): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_pwhash_str_needs_rehash()`](./builtins/sodium/sodium_crypto_pwhash_str_needs_rehash.md) | `(string $password, int $opslimit, int $memlimit): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_pwhash_str_verify()`](./builtins/sodium/sodium_crypto_pwhash_str_verify.md) | `(string $hash, string $password): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_scalarmult()`](./builtins/sodium/sodium_crypto_scalarmult.md) | `(string $n, string $p): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_scalarmult_base()`](./builtins/sodium/sodium_crypto_scalarmult_base.md) | `(string $secret_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_scalarmult_ristretto255()`](./builtins/sodium/sodium_crypto_scalarmult_ristretto255.md) | `(string $n, string $p): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_scalarmult_ristretto255_base()`](./builtins/sodium/sodium_crypto_scalarmult_ristretto255_base.md) | `(string $n): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_secretbox()`](./builtins/sodium/sodium_crypto_secretbox.md) | `(string $message, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_secretbox_keygen()`](./builtins/sodium/sodium_crypto_secretbox_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_secretbox_open()`](./builtins/sodium/sodium_crypto_secretbox_open.md) | `(string $ciphertext, string $nonce, string $key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_secretstream_xchacha20poly1305_init_pull()`](./builtins/sodium/sodium_crypto_secretstream_xchacha20poly1305_init_pull.md) | `(string $header, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_secretstream_xchacha20poly1305_init_push()`](./builtins/sodium/sodium_crypto_secretstream_xchacha20poly1305_init_push.md) | `(string $key): array` | `array` | ✓ | ✓ |
+| [`sodium_crypto_secretstream_xchacha20poly1305_keygen()`](./builtins/sodium/sodium_crypto_secretstream_xchacha20poly1305_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_secretstream_xchacha20poly1305_pull()`](./builtins/sodium/sodium_crypto_secretstream_xchacha20poly1305_pull.md) | `(string $state, string $ciphertext, string $additional_data = ''): array|false` | `array|false` | ✓ | - |
+| [`sodium_crypto_secretstream_xchacha20poly1305_push()`](./builtins/sodium/sodium_crypto_secretstream_xchacha20poly1305_push.md) | `(string $state, string $message, string $additional_data = '', int $tag = 0): string` | `string` | ✓ | - |
+| [`sodium_crypto_secretstream_xchacha20poly1305_rekey()`](./builtins/sodium/sodium_crypto_secretstream_xchacha20poly1305_rekey.md) | `(string $state): void` | `void` | ✓ | - |
+| [`sodium_crypto_shorthash()`](./builtins/sodium/sodium_crypto_shorthash.md) | `(string $message, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_shorthash_keygen()`](./builtins/sodium/sodium_crypto_shorthash_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign()`](./builtins/sodium/sodium_crypto_sign.md) | `(string $message, string $secret_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_detached()`](./builtins/sodium/sodium_crypto_sign_detached.md) | `(string $message, string $secret_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_ed25519_pk_to_curve25519()`](./builtins/sodium/sodium_crypto_sign_ed25519_pk_to_curve25519.md) | `(string $public_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_ed25519_sk_to_curve25519()`](./builtins/sodium/sodium_crypto_sign_ed25519_sk_to_curve25519.md) | `(string $secret_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_keypair()`](./builtins/sodium/sodium_crypto_sign_keypair.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_keypair_from_secretkey_and_publickey()`](./builtins/sodium/sodium_crypto_sign_keypair_from_secretkey_and_publickey.md) | `(string $secret_key, string $public_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_open()`](./builtins/sodium/sodium_crypto_sign_open.md) | `(string $signed_message, string $public_key): string|false` | `string|false` | ✓ | ✓ |
+| [`sodium_crypto_sign_publickey()`](./builtins/sodium/sodium_crypto_sign_publickey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_publickey_from_secretkey()`](./builtins/sodium/sodium_crypto_sign_publickey_from_secretkey.md) | `(string $secret_key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_secretkey()`](./builtins/sodium/sodium_crypto_sign_secretkey.md) | `(string $key_pair): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_seed_keypair()`](./builtins/sodium/sodium_crypto_sign_seed_keypair.md) | `(string $seed): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_sign_verify_detached()`](./builtins/sodium/sodium_crypto_sign_verify_detached.md) | `(string $signature, string $message, string $public_key): bool` | `bool` | ✓ | ✓ |
+| [`sodium_crypto_stream()`](./builtins/sodium/sodium_crypto_stream.md) | `(int $length, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_stream_keygen()`](./builtins/sodium/sodium_crypto_stream_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_stream_xchacha20()`](./builtins/sodium/sodium_crypto_stream_xchacha20.md) | `(int $length, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_stream_xchacha20_keygen()`](./builtins/sodium/sodium_crypto_stream_xchacha20_keygen.md) | `(): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_stream_xchacha20_xor()`](./builtins/sodium/sodium_crypto_stream_xchacha20_xor.md) | `(string $message, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_stream_xchacha20_xor_ic()`](./builtins/sodium/sodium_crypto_stream_xchacha20_xor_ic.md) | `(string $message, string $nonce, int $counter, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_crypto_stream_xor()`](./builtins/sodium/sodium_crypto_stream_xor.md) | `(string $message, string $nonce, string $key): string` | `string` | ✓ | ✓ |
+| [`sodium_hex2bin()`](./builtins/sodium/sodium_hex2bin.md) | `(string $string, string $ignore = ''): string` | `string` | ✓ | ✓ |
+| [`sodium_increment()`](./builtins/sodium/sodium_increment.md) | `(string $string): void` | `void` | ✓ | - |
+| [`sodium_memcmp()`](./builtins/sodium/sodium_memcmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
+| [`sodium_memzero()`](./builtins/sodium/sodium_memzero.md) | `(string $string): void` | `void` | ✓ | - |
+| [`sodium_pad()`](./builtins/sodium/sodium_pad.md) | `(string $string, int $block_size): string` | `string` | ✓ | ✓ |
+| [`sodium_unpad()`](./builtins/sodium/sodium_unpad.md) | `(string $string, int $block_size): string` | `string` | ✓ | ✓ |
 | [`fsockopen()`](./builtins/streams/fsockopen.md) | `(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed` | `mixed` | ✓ | ✓ |
 | [`pfsockopen()`](./builtins/streams/pfsockopen.md) | `(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_bucket_append()`](./builtins/streams/stream_bucket_append.md) | `(mixed $brigade, mixed $bucket): void` | `void` | ✓ | ✓ |
