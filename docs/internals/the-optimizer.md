@@ -781,9 +781,19 @@ argument validation cannot fail. `mb_convert_case()` requires a constant mode in
 `0..=7`; `mb_str_pad()` requires a nonempty ASCII pad and a constant pad type in
 `0..=2`. Other modes and dynamic mode expressions retain the producer, including
 its exceptions and source-order argument effects. Multibyte trim length folds use
-literal character membership, without byte-trim range syntax. The AST shortcut
-for `mb_ereg_match("[0-9A-Za-z]+", $literal)` tests only the first byte, preserving
-the function's start anchoring.
+literal character membership, without byte-trim range syntax. Literal mbstring
+regex and MIME decode calls retain their runtime calls: regex results depend on
+`mb_regex_encoding()`, and MIME output bytes depend on `mb_internal_encoding()`.
+Literal arguments alone cannot prove those request settings. Regex length/count
+shortcuts additionally check live UTF-8/default options and limits, plus ASCII subjects, before
+using byte scans; other states retain the full regex bridge. Explicit UTF-8 iconv
+position and MIME length folds retain their encoding proof. MIME words with interior
+Base64 padding keep the runtime decoder, whose lenient decoding differs from
+independent padded-quantum decoding.
+
+The `count(explode($literal_separator, $subject))` fusion accepts only proven scalar
+string coercions. Other subjects keep the original `explode()` path and diagnostic;
+the decision happens before lowering the subject so fallback evaluates it once.
 
 ## Borrowed string reads
 

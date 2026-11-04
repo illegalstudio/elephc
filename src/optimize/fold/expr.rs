@@ -523,7 +523,7 @@ fn try_fold_scalar_builtin(name: &Name, args: &[Expr]) -> Option<ExprKind> {
     if active_fold_user_function_exists(&canonical) {
         return None;
     }
-    if let Some(folded) = try_fold_mb_literal(&canonical, args) {
+    if let Some(folded) = try_fold_explicit_encoding_literal(&canonical, args) {
         return Some(folded);
     }
     // `token_name()` only maps the stable tokenizer constant catalog. A literal identifier or
@@ -613,12 +613,11 @@ fn constant_callback_replacement(callback: &Expr) -> Option<&str> {
     Some(replacement)
 }
 
-/// Folds the small literal mbstring regex and MIME forms whose PHP result is deterministic.
+/// Folds literal iconv positions only when their explicit encoding proves byte equivalence.
 ///
-/// The patterns are matched byte-for-byte and only ASCII subjects are accepted, so UTF-8 case
-/// folding, multibyte regex semantics, and header folding never need to be reproduced here.
-/// Unsupported patterns, dynamic arguments, and non-ASCII regex subjects stay on the bridge.
-fn try_fold_mb_literal(canonical: &str, args: &[Expr]) -> Option<ExprKind> {
+/// Mbstring regex and MIME calls read request encoding settings. Literal arguments do not
+/// make those calls constant, so they must retain their runtime state and validation.
+fn try_fold_explicit_encoding_literal(canonical: &str, args: &[Expr]) -> Option<ExprKind> {
     let string = |index: usize| match args.get(index)?.kind {
         ExprKind::StringLiteral(ref value) => Some(value.as_str()),
         _ => None,
@@ -661,48 +660,6 @@ fn try_fold_mb_literal(canonical: &str, args: &[Expr]) -> Option<ExprKind> {
                 .rfind(needle)
                 .map(|position| ExprKind::IntLiteral(position as i64))
         }
-        "mb_decode_mimeheader" if args.len() == 1 => {
-            let encoded = string(0)?;
-            let decoded = decode_mime_b_word(encoded)?;
-            Some(ExprKind::StringLiteral(decoded))
-        }
-        "mb_ereg" if args.len() == 2 => {
-            if string(0)? != "[0-9]+" { return None; }
-            let subject = string(1)?;
-            Some(ExprKind::BoolLiteral(subject.bytes().any(|byte| byte.is_ascii_digit())))
-        }
-        "mb_ereg_match" if args.len() == 2 => {
-            if string(0)? != "[0-9A-Za-z]+" { return None; }
-            let subject = string(1)?;
-            Some(ExprKind::BoolLiteral(
-                subject.as_bytes().first().is_some_and(|byte| byte.is_ascii_alphanumeric()),
-            ))
-        }
-        "mb_eregi" if args.len() == 2 => {
-            if string(0)? != "[A-Z]+" { return None; }
-            let subject = string(1)?;
-            if !subject.is_ascii() { return None; }
-            Some(ExprKind::BoolLiteral(subject.bytes().any(|byte| byte.is_ascii_alphabetic())))
-        }
-        "mb_eregi_replace" if args.len() == 3 => {
-            if string(0)? != "[A-Z]+" { return None; }
-            let replacement = string(1)?;
-            let subject = string(2)?;
-            if !subject.is_ascii() || replacement.bytes().any(|byte| matches!(byte, b'\\' | b'$')) {
-                return None;
-            }
-            let mut output = String::with_capacity(subject.len());
-            let mut in_run = false;
-            for byte in subject.bytes() {
-                if byte.is_ascii_alphabetic() {
-                    if !in_run { output.push_str(replacement); in_run = true; }
-                } else {
-                    output.push(byte as char);
-                    in_run = false;
-                }
-            }
-            Some(ExprKind::StringLiteral(output))
-        }
         _ => None,
     }
 }
@@ -727,7 +684,7 @@ fn decode_base64(payload: &str) -> Option<Vec<u8>> {
     let bytes = payload.as_bytes();
     if bytes.is_empty() || bytes.len() % 4 != 0 { return None; }
     let mut output = Vec::with_capacity(bytes.len() / 4 * 3);
-    for chunk in bytes.chunks(4) {
+    for (index, chunk) in bytes.chunks(4).enumerate() {
         let mut values = [0u8; 4];
         let mut padding = 0usize;
         for (index, &byte) in chunk.iter().enumerate() {
@@ -742,6 +699,8 @@ fn decode_base64(payload: &str) -> Option<Vec<u8>> {
             };
             if byte == b'=' && index < 2 { return None; }
         }
+        // Interior padding is decoded leniently by iconv; per-quantum decoding is not equivalent.
+        if padding > 0 && index + 1 != bytes.len() / 4 { return None; }
         if padding == 2 && (chunk[2] != b'=' || chunk[3] != b'=') { return None; }
         if padding == 1 && chunk[3] != b'=' { return None; }
         output.push((values[0] << 2) | (values[1] >> 4));

@@ -18,6 +18,7 @@ mod aggregate_operand_owners;
 mod loose_comparison_batch;
 mod argument_evaluation_owners;
 mod borrowed_string_reads;
+mod mbstring_fast_semantics;
 mod buffer_element_updates;
 mod ref_local_append;
 mod string_offset_lifetime;

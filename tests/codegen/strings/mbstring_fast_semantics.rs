@@ -23,6 +23,28 @@ fn assert_mb_fast_semantics(source: &str, expected: &str) {
     without_ir_opt(check);
 }
 
+/// Exercises INI wrappers through the CLI pipeline, with managed regex and heap verification.
+fn assert_mb_fast_cli_semantics(source: &str, expected: &str) {
+    for mode in ["--ir-opt=on", "--ir-opt=off"] {
+        let dir = make_cli_test_dir("elephc_mb_fast_request_state");
+        let checked = std::panic::catch_unwind(|| {
+            let path = dir.join("main.php");
+            std::fs::write(&path, source).unwrap();
+            let compile = elephc_cli_command_with_oniguruma(&dir)
+                .args([mode, "--heap-debug", "--quiet"]).arg(&path).output().unwrap();
+            assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+            let out = std::process::Command::new(path.with_extension("")).output().unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{stderr}");
+            assert_eq!(String::from_utf8(out.stdout).unwrap(), expected);
+            assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+            assert!(!stderr.contains("Warning:"), "{stderr}");
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        if let Err(error) = checked { std::panic::resume_unwind(error); }
+    }
+}
+
 /// Length-only observations must retain the producer's argument errors and evaluation order.
 #[test]
 fn test_mb_fast_semantics_length_validation() {
@@ -99,4 +121,56 @@ echo mb_ereg_match("[0-9A-Za-z]+", "a!!!") ? "1" : "0", "|";
 echo mb_ereg_match("[0-9A-Za-z]+", "") ? "1" : "0", "|";
 echo mb_ereg_match("[0-9A-Za-z]+", "abc123") ? "1" : "0", "\n";
 "#, "0|1|0|1\n");
+}
+
+/// MIME output bytes follow each live destination encoding for literals and dynamic sources.
+#[test]
+fn test_mb_fast_semantics_mime_request_encoding() {
+    assert_mb_fast_semantics(r#"<?php
+foreach (["ISO-8859-1", "UTF-16LE", "UTF-8"] as $encoding) {
+    mb_internal_encoding($encoding);
+    echo bin2hex(mb_decode_mimeheader("=?UTF-8?B?w6k=?=")), "|";
+    $word = $argc > 0 ? "=?UTF-8?B?w6k=?=" : "";
+    echo bin2hex(mb_decode_mimeheader($word)), "\n";
+}
+"#, "e9|e9\ne900|e900\nc3a9|c3a9\n");
+}
+
+/// Every literal regex shortcut must honor the request encoding and subsequent changes.
+#[test]
+fn test_mb_fast_semantics_regex_request_encoding() {
+    assert_mb_fast_semantics(r#"<?php
+foreach (["UTF-16LE", "UTF-8"] as $encoding) {
+    mb_regex_encoding($encoding);
+    echo mb_ereg("[0-9]+", "1234") ? "1" : "0", "|";
+    echo mb_ereg_match("[0-9A-Za-z]+", "ab") ? "1" : "0", "|";
+    echo mb_eregi("[A-Z]+", "abcd") ? "1" : "0", "|";
+    echo bin2hex(mb_eregi_replace("[A-Z]+", "X", "abcd")), "\n";
+}
+"#, "0|0|0|61626364\n1|1|1|58\n");
+}
+
+/// Length/count observers preserve non-default syntax, multibyte delimiters and later resets.
+#[test]
+fn test_mb_fast_semantics_regex_observer_state() {
+    assert_mb_fast_cli_semantics(r##"<?php
+mb_regex_encoding("UTF-16LE");
+echo strlen(mb_ereg_replace("[0-9]+", "#", "1234")), "|";
+mb_regex_encoding("UTF-8");
+mb_regex_set_options("b");
+echo strlen(mb_ereg_replace("[0-9]+", "#", "1234")), "|";
+mb_regex_set_options("pr");
+echo strlen(mb_ereg_replace("[0-9]+", "#", "1234")), "\n";
+mb_regex_encoding("SJIS");
+echo count(mb_split("@", "\x81\x40")), "|";
+mb_regex_encoding("UTF-8");
+echo count(mb_split("@", "a@b")), "|", count(mb_split("@", "©@x")), "\n";
+ini_set("mbstring.regex_retry_limit", "1");
+set_error_handler(function ($number, $message) { echo "warning|"; return true; });
+echo strlen(mb_ereg_replace("[0-9]+", "#", "1234")), "\n";
+ini_restore("mbstring.regex_retry_limit");
+try { echo count(mb_split("@", "\xff")); }
+catch (TypeError $e) { echo "count-error\n"; }
+restore_error_handler();
+"##, "4|4|1\n1|2|2\nwarning|0\ncount-error\n");
 }

@@ -533,6 +533,11 @@ any dot selects the shared bridge, because mbstring character lists have literal
 membership and never expand `a..z` ranges or issue byte-trim range warnings. This
 check also covers masks computed at runtime. Shared padding guards keep the
 caller-visible `str_pad()` or `mb_str_pad()` name in their exception messages.
+Regex split-count and replacement-length byte scans first query the shared request
+for UTF-8, default regex options and default resource limits, and require ASCII
+subjects. Other cases use the regex bridge. A failed split result is released
+before raising `count()`'s TypeError; it never becomes a silent zero count.
+
 When a length-only observation reads a local assigned once from a compile-time
 ASCII literal, the EIR fold replaces case conversion, trimming, padding,
 slicing, width, encoding checks, counting, splitting, search positions, and

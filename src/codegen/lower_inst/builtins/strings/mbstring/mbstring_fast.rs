@@ -1711,6 +1711,20 @@ fn verify_full_decimal_map(
     Ok(true)
 }
 
+/// Retains request encoding and syntax semantics before using byte-pattern shortcuts.
+fn emit_regex_ascii_state_probe(ctx: &mut FunctionContext<'_>, fallback: &str) {
+    ctx.emitter.bl_c("elephc_mbstring_regex_ascii_defaults_v1");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz w0, {fallback}"));            // other encoding or syntax states keep the regex bridge
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test eax, eax");                           // does the live request permit ASCII pattern shortcuts?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                 // other encoding or syntax states keep the regex bridge
+        }
+    }
+}
+
 /// Lowers `count(mb_split(...))` for a single literal ASCII separator.
 pub(super) fn lower_split_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let fast = inst.operands.len() == 2
@@ -1719,6 +1733,11 @@ pub(super) fn lower_split_count(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let fallback = ctx.next_label("mb_split_count_fallback");
     let done = ctx.next_label("mb_split_count_done");
     if fast {
+        emit_regex_ascii_state_probe(ctx, &fallback);
+        let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+        load_string_arg_to_regs(ctx, inst, 1, "mb_split", pointer, length)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mb_is_ascii");
+        emit_predicate_branch(ctx, &fallback);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 load_string_arg_to_regs(ctx, inst, 1, "mb_split", "x1", "x2")?;
@@ -1760,12 +1779,24 @@ pub(super) fn lower_split_count(ctx: &mut FunctionContext<'_>, inst: &Instructio
     Ok(())
 }
 
-/// Unboxes a `array|false` cell and returns the array length, falling back to PHP count().
+/// Counts an owned array result or releases false before raising PHP count's TypeError.
 fn emit_boxed_array_length_and_release(ctx: &mut FunctionContext<'_>) {
+    let countable = ctx.next_label("mb_split_count_array");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #32");                         // reserve the cell and its count
             ctx.emitter.instruction("str x0, [sp, #0]");                        // save the boxed array-or-false result
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp x0, #4");                              // is the split result an array container?
+            ctx.emitter.instruction(&format!("b.eq {countable}"));              // array results proceed to the count
+            ctx.emitter.instruction("cmp x0, #5");                              // is the split result an array container?
+            ctx.emitter.instruction(&format!("b.eq {countable}"));              // array results proceed to the count
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // release the owned false cell before throwing
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction("add sp, sp, #32");                         // restore the stack before the exception path
+            crate::codegen::lower_inst::builtins::count_empty::emit_count_type_error(ctx, "false");
+            ctx.emitter.label(&countable);
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the countable cell after tag inspection
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             ctx.emitter.instruction("str x0, [sp, #8]");                        // save the count across the cell release
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the boxed cell
@@ -1776,6 +1807,17 @@ fn emit_boxed_array_length_and_release(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => {
             ctx.emitter.instruction("sub rsp, 32");                             // reserve the cell and its count
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the boxed array-or-false result
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp rax, 4");                              // is the split result an array container?
+            ctx.emitter.instruction(&format!("je {countable}"));                // array results proceed to the count
+            ctx.emitter.instruction("cmp rax, 5");                              // is the split result an array container?
+            ctx.emitter.instruction(&format!("je {countable}"));                // array results proceed to the count
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // release the owned false cell before throwing
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            ctx.emitter.instruction("add rsp, 32");                             // restore the stack before the exception path
+            crate::codegen::lower_inst::builtins::count_empty::emit_count_type_error(ctx, "false");
+            ctx.emitter.label(&countable);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the countable cell after tag inspection
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // save the count across the cell release
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the boxed cell
@@ -1798,6 +1840,7 @@ pub(super) fn lower_ereg_replace_len(
     let fallback = ctx.next_label("mb_ereg_replace_len_fallback");
     let done = ctx.next_label("mb_ereg_replace_len_done");
     if fast {
+        emit_regex_ascii_state_probe(ctx, &fallback);
         let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
         load_string_arg_to_regs(ctx, inst, 2, "mb_ereg_replace", pointer, length)?;
         abi::emit_call_label(ctx.emitter, "__rt_mb_is_ascii");
