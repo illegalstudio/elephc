@@ -80,6 +80,13 @@ pub(super) fn lower_strict_eq(
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?.codegen_repr();
     let rhs_ty = ctx.value_php_type(rhs)?.codegen_repr();
+    // A proven int/float box compares its tag inline instead of boxing a scalar partner.
+    // Two concrete scalars keep the direct typed comparisons below.
+    if (lhs_ty == PhpType::Mixed || rhs_ty == PhpType::Mixed)
+        && crate::codegen::stack_numeric::numeric_identity(ctx.function, &ctx.numeric_values, inst)
+    {
+        return super::numeric_comparisons::lower_identity(ctx, inst, is_equal);
+    }
     // A `?ptr<T>` against `null` tests its pointer word for 0.
     for (pointer, other_ty) in [(lhs, &rhs_ty), (rhs, &lhs_ty)] {
         if matches!(other_ty, PhpType::Void | PhpType::Never)

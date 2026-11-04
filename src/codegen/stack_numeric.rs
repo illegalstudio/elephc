@@ -194,7 +194,8 @@ impl Proof<'_> {
                         .result
                         .is_some_and(|result| self.value_uses(result, producer, seen, stores)),
                     Op::Cast | Op::ReturnBoundaryMixedToInt => scalar_observation(user),
-                    _ if domain::comparison(user) && self.numeric_inputs(&user.operands) => true,
+                    _ if (domain::comparison(user) || domain::identity(user))
+                        && self.numeric_inputs(&user.operands) => true,
                     _ if tagged_producer(user) && self.numeric_inputs(&user.operands) => true,
                     Op::StoreLocal => match user.immediate {
                         Some(Immediate::LocalSlot(slot)) => {
@@ -349,6 +350,10 @@ impl Proof<'_> {
                 if inst.op == Op::Release {
                     return true;
                 }
+                // Strict identity copies the tag and payload like an ordered comparison.
+                if domain::identity(inst) && self.numeric_inputs(&inst.operands) {
+                    return self.stable_read(load, user);
+                }
                 let arithmetic = tagged_producer(inst) && self.numeric_inputs(&inst.operands);
                 let comparison = domain::comparison(inst) && self.numeric_inputs(&inst.operands);
                 if !scalar_observation(inst) && !arithmetic && !comparison {
@@ -423,6 +428,13 @@ fn tagged_producer(inst: &crate::ir::Instruction) -> bool {
 /// Shares the closed numeric proof with comparison lowering; no pointer lifetime is extended.
 pub(super) fn numeric_comparison(function: &Function, proven: &HashSet<ValueId>, inst: &crate::ir::Instruction) -> bool {
     domain::comparison(inst) && inst.operands.len() == 2
+        && (inst.operands.iter().all(|value| proven.contains(value))
+            || domain::inputs(function, &inst.operands))
+}
+
+/// Admits strict identity only when both operands can hold just integer or float tags.
+pub(super) fn numeric_identity(function: &Function, proven: &HashSet<ValueId>, inst: &crate::ir::Instruction) -> bool {
+    domain::identity(inst)
         && (inst.operands.iter().all(|value| proven.contains(value))
             || domain::inputs(function, &inst.operands))
 }

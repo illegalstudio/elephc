@@ -163,7 +163,8 @@ This limits additional stack use to simultaneously live transient values instead
 of the total number of operations in a long expression.
 
 `src/codegen/stack_numeric.rs` proves the complete use graph before frame layout.
-Only same-block scalar observations, closed numeric producers, ownership
+Only same-block scalar observations, numeric ordered or strict identity
+comparisons, closed numeric producers, ownership
 scaffolding and one ordinary local or owned operand slot may consume a selected
 pointer. Declared integer returns copy the payload and retain their type check.
 Every access to the owning slot must preserve the numeric storage contract. A

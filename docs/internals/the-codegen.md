@@ -179,7 +179,9 @@ add/subtract/multiply or numeric increment can reuse a 24-byte frame cell: two i
 checked integer arithmetic, while an existing float remains a float. Both input
 payloads are read before the output cell changes. Proven numeric relational
 comparisons avoid temporary boxes, compare integer pairs exactly and reject
-unordered NaN predicates. Unknown tags, calls, references
+unordered NaN predicates. Proven numeric `===` and `!==` compare tags inline:
+an integer is never identical to a float, integers compare exactly and floats
+use IEEE equality. Unknown tags, calls, references
 and escaping pointers keep ordinary heap-backed operations.
 
 `examples/constant-rematerialization/main.php` demonstrates bounded sample
@@ -190,7 +192,8 @@ accumulation with immediate masks, scaling, increments, and a fixed loop bound.
 Integer destinations expose checked arithmetic conversion in EIR before assigning
 call-operand owners. Direct, method, static and statically known callable arguments,
 including named and static spread arguments, can therefore use the existing checked
-integer sinks. Explicit `int` local declarations apply the same conversion to their
+integer sinks. Exact `float` parameters expose the same tree's float cast, so an
+in-range integer converts once and an overflowed tree passes its promoted double. Explicit `int` local declarations apply the same conversion to their
 initializer and later arithmetic assignments. Inferred locals retain PHP's dynamic
 integer or float result. Only add/subtract/multiply trees with concrete integer
 leaves take this path; unknown Mixed sources keep the ordinary boundary conversion.
@@ -217,7 +220,9 @@ closed numeric add/subtract/multiply or increment; every input must be proven
 integer or float, including all local writers. A float tag remains floating point
 on subsequent operations. A same-block ordered comparison may consume the result
 directly when both operands have proven numeric origins, as in the trial-division
-condition `$divisor * $divisor <= $candidate`. The product retains overflow-to-float
+condition `$divisor * $divisor <= $candidate`. Strict identity against a proven
+numeric partner is admitted on the same terms, including reads of the owning local
+as in `$value = $i * 4; if ($value !== 20)`. The product retains overflow-to-float
 semantics; this does not require or imply an integer range proof for either counter.
 Integer casts of selected frame cells or reads of proven numeric locals inspect
 the runtime tag and load an integer payload directly. A float keeps the existing
