@@ -727,10 +727,12 @@ fn closed_world_roots_the_project_autoload_but_not_its_dev_autoload() {
     )
     .unwrap();
     fs::write(dir.join("src/Listed.php"), "<?php\nnamespace App;\nclass Listed { public function hi() { return 'listed'; } }\n").unwrap();
-    fs::write(dir.join("tests/Broken.php"), "<?php\nnamespace App\\Tests;\nclass Broken { public function x(): int { return 'not an int' . $undefined->y(); } }\nthis is not php\n").unwrap();
+    fs::write(dir.join("lib.php"), "<?php\nclass Lib {}\n").unwrap();
+    fs::write(dir.join("tests/Boot.php"), "<?php\nnamespace App\\Tests;\nrequire __DIR__ . '/../lib.php';\nclass Boot {}\n").unwrap();
     fs::write(
         dir.join("main.php"),
         r#"<?php
+require __DIR__ . '/lib.php';
 $class = 'App\\' . 'Listed';
 var_dump(class_exists($class, false));
 echo (new ReflectionClass($class))->getShortName(), "\n";

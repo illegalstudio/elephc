@@ -913,7 +913,7 @@ impl Checker {
             // A value narrowed to an interface can still be the declared class: only its runtime
             // class decides, as `DefinedTest` handing `TestExpression` a `Node` it narrowed to
             // `SupportDefinedTestInterface` shows. Nothing is proved, so the call runs its guard.
-            if matches!(actual, PhpType::Object(_))
+            if matches!((param_ty, &actual), (PhpType::Object(_), PhpType::Object(_)))
                 && self.definite_param_mismatch_given(param_ty, &actual, arg).is_none()
             {
                 continue;
