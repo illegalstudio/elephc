@@ -3,12 +3,14 @@
 //! Keeps a temporary integer off the managed heap without changing the result representation.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::arithmetic::lower_mixed_numeric_binop()` for constants.
+//! - `crate::codegen::lower_inst::arithmetic::lower_mixed_numeric_binop()` for constants, through
+//!   the operator entries.
 //! - `crate::codegen_support::runtime::strings::str_inc_dec` for increment/decrement deltas.
 //!
 //! Key details:
 //! - The left operand is a borrowed Mixed pointer; the right operand enters as a raw I64.
-//! - Only the three intrinsics below may read this non-owning, headerless stack cell.
+//! - Only the six intrinsics below may read this non-owning, headerless stack cell: the numeric
+//!   helpers, and the operator entries, which only unbox and name it before deferring to them.
 //! - They read/cast the integer payload without retaining or exposing its address and return
 //!   a fresh owned heap cell. Releasing, storing or returning the operand pointer is invalid.
 //! - The 24-byte cell occupies a 32-byte scratch span aligned to 16 bytes, ending after the call.
@@ -35,6 +37,27 @@ pub fn emit_mixed_numeric_integer_rhs_call(emitter: &mut Emitter, op: MixedNumer
         MixedNumericOp::Mul => "__rt_mixed_numeric_mul",
         _ => return false,
     };
+    emit_integer_rhs_call(emitter, helper);
+    true
+}
+
+/// Calls PHP's `+`, `-` or `*` operator entry with an integer RHS, as
+/// [`emit_mixed_numeric_integer_rhs_call`] calls the numeric helper: an array on the left then
+/// raises PHP's `TypeError` instead of being read as a number. Same registers and ownership.
+#[must_use]
+pub fn emit_mixed_operator_integer_rhs_call(emitter: &mut Emitter, op: MixedNumericOp) -> bool {
+    let helper = match op {
+        MixedNumericOp::Add => "__rt_mixed_operator_add",
+        MixedNumericOp::Sub => "__rt_mixed_operator_sub",
+        MixedNumericOp::Mul => "__rt_mixed_operator_mul",
+        _ => return false,
+    };
+    emit_integer_rhs_call(emitter, helper);
+    true
+}
+
+/// Lends the integer in the second operand register to `helper` as a headerless stack cell.
+fn emit_integer_rhs_call(emitter: &mut Emitter, helper: &str) {
     let rhs = match emitter.target.arch {
         Arch::AArch64 => "x1",
         Arch::X86_64 => "rdi",
@@ -56,7 +79,6 @@ pub fn emit_mixed_numeric_integer_rhs_call(emitter: &mut Emitter, op: MixedNumer
     emit_temporary_stack_address(emitter, rhs, 0);
     emit_call_label(emitter, helper);
     emit_release_temporary_stack(emitter, 32);
-    true
 }
 
 #[cfg(test)]

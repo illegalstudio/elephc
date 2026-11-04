@@ -51,6 +51,24 @@ fn binary_op_may_throw(op: &BinOp, right: &Expr) -> bool {
     }
 }
 
+/// Returns whether `+`, `-` or `*` may meet an array operand, which PHP unites (`array + array`)
+/// or refuses with `TypeError: Unsupported operand types`. This pass sees no types, so any operand
+/// but a scalar literal or a scalar cast may hold an array at run time: a statically known array
+/// beside a scalar is a compile error, so the case that reaches a binary is a Mixed operand.
+pub(super) fn array_arithmetic_candidate(left: &Expr, op: &BinOp, right: &Expr) -> bool {
+    matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
+        && (may_hold_array_operand(left) || may_hold_array_operand(right))
+}
+
+/// Literal scalars and scalar casts never evaluate to an array.
+fn may_hold_array_operand(expr: &Expr) -> bool {
+    !literal_scalar_operand(expr)
+        && !matches!(
+            &expr.kind,
+            ExprKind::Cast { target: CastType::Int | CastType::Float | CastType::String | CastType::Bool, .. }
+        )
+}
+
 /// Excludes literal scalar operands while retaining operations that can dispatch object handlers.
 pub(super) fn internal_arithmetic_candidate(left: &Expr, op: &BinOp, right: &Expr) -> bool {
     matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow)
@@ -305,6 +323,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::BinaryOp { left, op, right } => {
             let operands = expr_effect(left).combine(expr_effect(right));
             if binary_op_may_throw(op, right)
+                || array_arithmetic_candidate(left, op, right)
                 || (internal_object_operators_available() && internal_arithmetic_candidate(left, op, right)) {
                 operands.with_may_throw()
             } else {

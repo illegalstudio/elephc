@@ -82,7 +82,7 @@ impl Checker {
                 }
             }
             BinOp::Add => {
-                if is_array_like_type(&lt) || is_array_like_type(&rt) {
+                if is_array_operand_type(&lt) || is_array_operand_type(&rt) {
                     return self.infer_array_union_type(&lt, &rt, left, right, expr);
                 }
                 let lt_ok = is_arithmetic_operand_type(self, &lt);
@@ -295,6 +295,11 @@ impl Checker {
         right: &Expr,
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
+        // A declared `array` is either storage shape until run time, so its union with any
+        // array is the same unrestricted contract; the boxed operand takes the runtime union.
+        if (lt.is_php_array() || rt.is_php_array()) && is_array_operand_type(lt) && is_array_operand_type(rt) {
+            return Ok(PhpType::php_array());
+        }
         match (lt, rt) {
             (PhpType::Array(left_elem), PhpType::Array(right_elem)) => {
                 if is_empty_indexed_array_literal(left) {
@@ -1648,6 +1653,12 @@ fn expr_contains_nullsafe_member(expr: &Expr) -> bool {
 /// Returns `true` if `ty` is an array-like type (flat `Array` or `AssocArray`).
 fn is_array_like_type(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+}
+
+/// Returns `true` if `ty` is an array-like type or the declared `array` contract, whose storage
+/// shape is known only at run time.
+fn is_array_operand_type(ty: &PhpType) -> bool {
+    is_array_like_type(ty) || ty.is_php_array()
 }
 
 /// Returns `true` if `ty` is a valid operand type for numeric binary operators

@@ -216,6 +216,7 @@ mod mixed_free_deep;
 mod mixed_count;
 mod mixed_is_empty;
 mod mixed_numeric_binops;
+mod mixed_operator_binops;
 mod int_checked_binops;
 mod int_pow_checked;
 mod mixed_numeric_pow;
@@ -577,6 +578,7 @@ pub use mixed_free_deep::emit_mixed_free_deep;
 pub use mixed_is_empty::emit_mixed_is_empty;
 /// Emit Mixed emptiness check helper.
 pub use mixed_numeric_binops::emit_mixed_numeric_binops;
+pub use mixed_operator_binops::emit_mixed_operator_binops;
 /// Emit Mixed numeric binary operations helper.
 pub use int_checked_binops::emit_int_checked_binops;
 pub use int_pow_checked::emit_int_pow_checked;

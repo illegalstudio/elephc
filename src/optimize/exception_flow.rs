@@ -873,6 +873,9 @@ impl ExceptionFlowAnalysis {
                 } else if binary_op_has_dynamic_throw(left, op, right) {
                     thrown = thrown.combined(ThrownTypes::unknown());
                 }
+                if effects::array_arithmetic_candidate(left, op, right) {
+                    thrown = thrown.combined(ThrownTypes::exact("TypeError"));
+                }
                 if matches!(op, BinOp::Concat) {
                     thrown = thrown
                         .combined(self.string_conversion_throws(left, class_context))

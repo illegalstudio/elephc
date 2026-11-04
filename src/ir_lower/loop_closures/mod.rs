@@ -168,10 +168,16 @@ fn scalar_nothrow_target(ctx: &LoweringContext<'_, '_>, binding: &StaticCallable
     };
     let fallible = Effects::MAY_THROW | Effects::MAY_FATAL | Effects::MAY_WARN;
     function.instructions.iter().all(|inst| {
-        !inst.effects.intersects(fallible)
+        // A Mixed `+`, `-` or `*` declares `MAY_THROW` for an array operand's TypeError. Here every
+        // input is a proven scalar and no body primitive builds an array, so it cannot arise.
+        let array_operator = inst.op == Op::MixedNumericBinop && matches!(inst.immediate,
+            Some(Immediate::MixedNumericOp(crate::ir::MixedNumericOp::Add
+                | crate::ir::MixedNumericOp::Sub | crate::ir::MixedNumericOp::Mul)));
+        let effects = if array_operator { inst.effects.difference(Effects::MAY_THROW) } else { inst.effects };
+        !effects.intersects(fallible)
             && (scalar_type(&inst.result_php_type) || inst.result_php_type == PhpType::Mixed
                 || inst.result.is_some_and(|value| transport.contains(&value)))
-            && (inst.op == Op::ConcatReset
+            && (inst.op == Op::ConcatReset || pin_bookkeeping(inst.op)
                 || !inst.effects.intersects(Effects::READS_GLOBAL | Effects::WRITES_GLOBAL))
             && scalar_body_primitive(inst.op)
             && (inst.op != Op::MixedNumericBinop || matches!(inst.immediate,
@@ -182,10 +188,16 @@ fn scalar_nothrow_target(ctx: &LoweringContext<'_, '_>, binding: &StaticCallable
     })
 }
 
+/// The balanced unwind-owner push and pop that pin an array operator's owned operand. They only
+/// act when that operator throws, which a body of proven scalars never makes it do.
+fn pin_bookkeeping(op: Op) -> bool {
+    matches!(op, Op::PushCallOperandOwner | Op::PopCallOperandOwner)
+}
+
 /// Fails closed for every call surface and future opcode, even after effect refinement.
 fn scalar_body_primitive(op: Op) -> bool {
     use Op::*;
-    matches!(op, ConstI64 | ConstF64 | ConstBool | ConstNull | LoadLocal | StoreLocal
+    pin_bookkeeping(op) || matches!(op, ConstI64 | ConstF64 | ConstBool | ConstNull | LoadLocal | StoreLocal
         | ZeroLocalSlot | UnsetLocal | ReleaseLocalSlot | ICheckedAdd | ICheckedSub | ICheckedMul
         | FAdd | FSub | FMul | FNeg | IBitAnd | IBitOr | IBitXor | IBitNot
         | ICmp | FCmp | PhpRelCmp | StrictEq | StrictNotEq | LooseEq | LooseNotEq | Spaceship
