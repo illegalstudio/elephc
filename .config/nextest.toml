@@ -18,6 +18,14 @@ platform = 'cfg(target_os = "macos")'
 filter = 'binary(codegen_tests) and (test(=codegen::simplexml::comparisons_and_files::test_simplexml_native_comparison_and_default_namespace_bundle) or test(=codegen::simplexml::dimension_updates::test_simplexml_saved_empty_dimension_write_bundle))'
 threads-required = "num-test-threads"
 
+# The 200,000-node projection completed AOT but exceeded the unchanged 60s runtime
+# limit in eval while sharing its ARM64 shard. Preserve both modes and reserve the pool.
+# The indexed-incdec eval probe also reached its 360s deadline twice in x86_64
+# assembly after 211s of EIR work and 131s of codegen. Keep its source and deadline.
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and (test(=codegen::simplexml::projections::test_simplexml_large_repeated_projection_bundle) or test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle))'
+threads-required = "num-test-threads"
+
 # These target probes hit 60s twice under concurrent x86_64 CI work. Preserve their
 # assertions and deadlines while reserving the pool for each catalog-sized probe.
 [[profile.ci.overrides]]
