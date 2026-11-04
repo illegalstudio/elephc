@@ -4494,7 +4494,11 @@ fn build_break_iterator_class() -> Stmt {
     }
     builder = builder
         .implements("IteratorAggregate")
-        .method(method("__construct").private().body(vec![]))
+        // php declares the base constructor private; expose it so `new IntlBreakIterator()`
+        // reaches the runtime Error instead of being rejected by the checker.
+        .method(method("__construct").body(vec![
+            s_throw(e_new("Error", vec![e_str("Call to private IntlBreakIterator::__construct() from global scope")])),
+        ]))
         .method(method("__elephc_sync_debug").body(vec![
             s_prop_assign(e_var("this"), "valid", e_binop(
                 e_this_prop("__elephc_handle"), BinOp::StrictNotEq, e_int(0),

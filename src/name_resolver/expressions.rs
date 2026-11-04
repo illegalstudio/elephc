@@ -75,8 +75,13 @@ fn deprecated_constant(name: &str) -> Option<(i64, &'static str)> {
 /// error handler answers.
 fn deprecated_constant_read(name: &str, span: Span) -> Option<ExprKind> {
     let (value, message) = deprecated_constant(name)?;
+    Some(deprecated_value_read(value, message, span))
+}
+
+/// Builds the inline `trigger_error(...) ? value : value` read for one deprecation.
+fn deprecated_value_read(value: i64, message: &str, span: Span) -> ExprKind {
     let at = |kind| Expr { kind, span };
-    Some(ExprKind::Ternary {
+    ExprKind::Ternary {
         condition: Box::new(at(ExprKind::FunctionCall {
             name: resolved_name("trigger_error".to_string()),
             args: vec![
@@ -88,7 +93,19 @@ fn deprecated_constant_read(name: &str, span: Span) -> Option<ExprKind> {
         })),
         then_expr: Box::new(at(ExprKind::IntLiteral(value))),
         else_expr: Box::new(at(ExprKind::IntLiteral(value))),
-    })
+    }
+}
+
+/// Builds the read for a deprecated Intl class constant (`NumberFormatter::TYPE_CURRENCY`).
+fn deprecated_class_constant_read(class_name: &str, constant: &str, span: Span) -> Option<ExprKind> {
+    match (class_name.trim_start_matches('\\'), constant) {
+        ("NumberFormatter", "TYPE_CURRENCY") => Some(deprecated_value_read(
+            4,
+            "Constant NumberFormatter::TYPE_CURRENCY is deprecated since 8.3",
+            span,
+        )),
+        _ => None,
+    }
 }
 
 /// Recursively resolves names in an expression, returning a new expression with
@@ -166,6 +183,14 @@ pub(super) fn resolve_expr(
                     ..
                 }) = args.first()
                 {
+                    if let Some((class, constant)) = name.split_once("::") {
+                        if let Some(read) = deprecated_class_constant_read(class, constant, expr.span) {
+                            return Expr {
+                                kind: read,
+                                span: expr.span,
+                            };
+                        }
+                    }
                     if let Some(read) = deprecated_constant_read(name, expr.span) {
                         return Expr {
                             kind: read,
@@ -436,8 +461,8 @@ pub(super) fn resolve_expr(
         ExprKind::ObjectClassName { object } => ExprKind::ObjectClassName {
             object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
         },
-        ExprKind::ScopedConstantAccess { receiver, name } => ExprKind::ScopedConstantAccess {
-            receiver: match receiver {
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            let resolved_receiver = match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
                     resolve_special_or_class_name(name, current_namespace, imports, symbols),
                 )),
@@ -447,9 +472,21 @@ pub(super) fn resolve_expr(
                     resolve_type_expr(class_type, current_namespace, imports, symbols),
                 ),
                 _ => receiver.clone(),
-            },
-            name: name.clone(),
-        },
+            };
+            if !in_constant_expression() {
+                if let StaticReceiver::Named(class) = &resolved_receiver {
+                    if let Some(read) =
+                        deprecated_class_constant_read(class.as_canonical().as_str(), name, expr.span)
+                    {
+                        return Expr { kind: read, span: expr.span };
+                    }
+                }
+            }
+            ExprKind::ScopedConstantAccess {
+                receiver: resolved_receiver,
+                name: name.clone(),
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver: match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
