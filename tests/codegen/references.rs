@@ -833,3 +833,60 @@ ok -9223372036854775808\n\
 err Cannot assign float to reference held by property C::$n of type int\n"
     );
 }
+
+/// Verifies a named argument still receives the object-union runtime guard and unbox.
+#[test]
+fn test_named_object_union_argument_throws_and_unboxes() {
+    let out = compile_and_run(
+        r#"<?php
+class Marker {}
+function take(Marker $m): string { return get_class($m); }
+function id(Marker|false $v): Marker|false { return $v; }
+$v = id(false);
+try { take(m: $v); } catch (TypeError $e) {
+    $message = $e->getMessage();
+    echo str_starts_with($message, 'take(): Argument #1 ($m) must be of type Marker, false given, called in ') ? "prefix-ok" : $message;
+    echo str_contains($message, " on line ") ? ":line-ok\n" : ":no-line\n";
+}
+$ok = id(new Marker());
+echo take(m: $ok), "\n";
+"#,
+    );
+    assert_eq!(out, "prefix-ok:line-ok\nMarker\n");
+}
+
+/// Verifies a by-reference variadic binds and mutates an array property.
+#[test]
+fn test_variadic_by_ref_array_property_binds_by_reference() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public array $items = [1]; }
+function f(&...$refs): void { $refs[0][0] = 9; }
+$box = new Box();
+f($box->items);
+var_export($box->items);
+"#,
+    );
+    assert_eq!(out, "array (\n  0 => 9,\n)");
+}
+
+/// Verifies the plain typed-property reference path rejects a mismatched callee write.
+#[test]
+fn test_by_reference_typed_property_writeback_rejects_a_mismatched_callee_write() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $n = 0; }
+function w(int &$x, mixed $v): void { $x = $v; }
+$c = new C();
+try { w($c->n, "abc"); } catch (TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+var_dump($c->n);
+$d = new C();
+w($d->n, "42");
+var_dump($d->n);
+"#,
+    );
+    assert_eq!(
+        out,
+        "TypeError: Cannot assign string to reference held by property C::$n of type int\nint(0)\nint(42)\n"
+    );
+}

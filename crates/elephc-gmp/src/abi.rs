@@ -4,17 +4,20 @@
 //!
 //! Called from:
 //! - Compiled PHP programs through the prelude's extern block.
-//! - `cargo test -p elephc-gmp` with `ELEPHC_GMP_LIB_DIR` pointing at a built libgmp.
+//! - `cargo test -p elephc-gmp` with `ELEPHC_LIBGMP_DIR` pointing at a built libgmp.
 //!
 //! Key details:
 //! - Every entry point returns a packet in a per-thread `CString` cell, or a plain
 //!   integer/double where the PHP type has a direct C shape.
+//! - `gmp_random_seed`, `gmp_random_bits` and `gmp_random_range` share ONE process-wide
+//!   generator, matching PHP's request-global `GMPG(rand_state)`.
 //! - Panics never cross the FFI boundary: they become an internal-error packet.
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Mutex;
 
 use crate::ffi::*;
 use crate::mpz::Mpz;
@@ -24,9 +27,10 @@ use crate::packet::*;
 thread_local! {
     /// Packet returned by the most recent string-returning call on this thread.
     static PACKET: RefCell<CString> = RefCell::new(CString::default());
-    /// PHP's process-global GMP random state, kept per thread for test isolation.
-    static RANDOM: RefCell<Option<Box<RandomState>>> = const { RefCell::new(None) };
 }
+
+/// PHP's process-global GMP random state, serialized because libgmp is not thread-safe.
+static RANDOM: Mutex<Option<Box<RandomState>>> = Mutex::new(None);
 
 /// Owns one initialized libgmp random state.
 struct RandomState {
@@ -51,6 +55,18 @@ impl RandomState {
         unsafe { __gmp_randseed(&mut raw, seed.as_ptr()) };
         Self { raw }
     }
+}
+
+// The mutex above is the only access gate; libgmp's generator cannot be used concurrently.
+unsafe impl Send for RandomState {}
+
+/// Runs one operation against the one process-wide GMP random generator.
+fn with_random_state<T>(operation: impl FnOnce(&mut RandomState) -> T) -> T {
+    let mut state = RANDOM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let state = state.get_or_insert_with(|| Box::new(RandomState::new()));
+    operation(state)
 }
 
 impl Drop for RandomState {
@@ -272,9 +288,7 @@ pub unsafe extern "C" fn elephc_gmp_random_seed(seed: *const c_char) -> *const c
             Ok(value) => value,
             Err(message) => return value_error(message),
         };
-        RANDOM.with(|state| {
-            let mut state = state.borrow_mut();
-            let state = state.get_or_insert_with(|| Box::new(RandomState::new()));
+        with_random_state(|state| {
             unsafe { __gmp_randseed(&mut state.raw, parsed.as_ptr()) };
         });
         ok("")
@@ -289,9 +303,7 @@ pub extern "C" fn elephc_gmp_random_bits(bits: i64) -> *const c_char {
         if bits <= 0 {
             return value_error("must be between 1 and 2147483647");
         }
-        RANDOM.with(|state| {
-            let mut state = state.borrow_mut();
-            let state = state.get_or_insert_with(|| Box::new(RandomState::new()));
+        with_random_state(|state| {
             let mut result = Mpz::new();
             unsafe {
                 __gmpz_urandomb(result.as_mut_ptr(), &mut state.raw, bits as c_ulong);
@@ -326,9 +338,7 @@ pub unsafe extern "C" fn elephc_gmp_random_range(
             __gmpz_sub(range.as_mut_ptr(), maximum.as_ptr(), minimum.as_ptr());
             __gmpz_add_ui(range.as_mut_ptr(), range.as_ptr(), 1);
         }
-        RANDOM.with(|state| {
-            let mut state = state.borrow_mut();
-            let state = state.get_or_insert_with(|| Box::new(RandomState::new()));
+        with_random_state(|state| {
             let mut result = Mpz::new();
             unsafe {
                 __gmpz_urandomm(result.as_mut_ptr(), &mut state.raw, range.as_ptr());

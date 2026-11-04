@@ -148,11 +148,29 @@ if ($v instanceof Box) { echo readnum($v); }
                 .map(|(before, _)| before.to_string())
         })
         .expect("the fixture must call readnum");
-    // The slot may be narrowed to Object(Box) at the `instanceof`, so the unbox can sit
-    // in an earlier block than the call. The observable invariant is that the argument is
-    // unboxed somewhere before the call, never passed as a raw Mixed cell pointer.
+    // Tie the unbox to this call instead of accepting any earlier unbox in the function.
+    // The ObjectGuard adds diagnostic/source bookkeeping between the unbox and the call, so
+    // the original 12-instruction window is widened to 96 instructions; the negative case
+    // below proves an unrelated earlier unbox still fails the bound.
     assert!(
-        call.contains("__rt_mixed_unbox"),
-        "the narrowed union argument must be unboxed before the call: {call}"
+        unbox_near_prefix_end(&call, "__rt_mixed_unbox", 96),
+        "the narrowed union argument must be unboxed near the call: {call}"
     );
+    let unrelated = format!(
+        "bl __rt_mixed_unbox\n{}bl _fn_readnum\n",
+        "    nop\n".repeat(120)
+    );
+    assert!(
+        !unbox_near_prefix_end(&unrelated, "__rt_mixed_unbox", 96),
+        "an unrelated earlier unbox must not satisfy the call-local assertion"
+    );
+}
+
+/// Returns whether the LAST unbox in `prefix` lies within `window` instructions of its end.
+fn unbox_near_prefix_end(prefix: &str, unbox: &str, window: usize) -> bool {
+    let lines = prefix.lines().collect::<Vec<_>>();
+    let Some(unbox_index) = lines.iter().rposition(|line| line.contains(unbox)) else {
+        return false;
+    };
+    lines.len().saturating_sub(unbox_index) <= window
 }

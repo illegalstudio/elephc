@@ -251,25 +251,10 @@ impl Checker {
             ));
         }
         if self.by_ref_property_place(storage_arg, &PhpType::Mixed, caller_env)? {
-            // A property place is rewritten through its own temporary and write-back; it has no
-            // caller local to widen or to publish as a boxed reference output. Array properties
-            // still need their container payload repacked by the variadic collector, which the
-            // property temporary does not provide.
-            let property_ty = self.infer_type(storage_arg, caller_env)?;
-            if property_ty.is_php_array()
-                || matches!(
-                    property_ty.codegen_repr(),
-                    PhpType::Array(_) | PhpType::AssocArray { .. }
-                )
-            {
-                return Err(CompileError::new(
-                    storage_arg.span,
-                    &format!(
-                        "{} variadic parameter ${} cannot bind an array property by reference; bind the property to a local variable first",
-                        callee_desc, variadic_name
-                    ),
-                ));
-            }
+            // The property rewrite stages the place at its source position and writes it back
+            // after the collector runs. That works for array properties too: the collector
+            // transports the boxed container through the reference marker, and the write-back
+            // repacks the mutated payload into the declared property slot.
             self.record_reference_alias_root(arg);
             return Ok(());
         }

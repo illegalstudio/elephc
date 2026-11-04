@@ -18,6 +18,9 @@ use crate::{
     Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, PhpModule, TypeSpec,
 };
 
+/// The libgmp version pinned by the managed native package and reported by `GMP_VERSION`.
+pub const GMP_VERSION: &str = "6.3.0";
+
 /// Canonical PHP names owned by the GMP extension, in stable order.
 pub const FUNCTIONS: &[&str] = &[
     "gmp_abs",

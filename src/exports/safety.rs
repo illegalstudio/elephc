@@ -142,7 +142,7 @@ fn validate_call_graph(
                         return Err(CompileError::new(instruction.span.unwrap_or(export.span),
                             &format!("PHP export '{}' reaches a core builtin through {} with no audited request-local PHP extension lifecycle", export.name, path.join(" -> "))));
                     }
-                    if matches!(instruction.op, Op::PromoteLocalRefCell | Op::AliasLocalRefCell
+                    if matches!(instruction.op, Op::PromoteLocalRefCell | Op::PromotePropertyRefCell | Op::AliasLocalRefCell
                         | Op::LoadArrayElemRefCell | Op::LoadArrayElemRefCellExisting
                         | Op::BindRefCellPtr | Op::AdoptRefCellPtr | Op::AcquireRefCell) {
                         return Err(CompileError::new(instruction.span.unwrap_or(export.span),

@@ -9,7 +9,8 @@
 //! - The public builtin name and the hidden helper suffix are identical by construction
 //!   (`gmp_strval` -> `__elephc_gmp_strval`); no per-name dispatch table can drift.
 //! - Evaluated builtin arguments arrive in PHP parameter order. The helper adds one
-//!   compiler-owned leading `bool $strict`; eval is always weak mode, so it is `false`.
+//!   compiler-owned leading `bool $strict`, taken from the active eval fragment's
+//!   `declare(strict_types=...)` mode.
 //! - The helper's own defaults, coercions, warnings, and thrown errors are the ones
 //!   compiled callers observe, so AOT and eval share one GMP semantics implementation.
 
@@ -43,7 +44,7 @@ pub(in crate::interpreter) fn eval_gmp_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let function = eval_gmp_host_function(name, context, values)?;
-    let strict = values.bool_value(false)?;
+    let strict = values.bool_value(context.strict_types())?;
     let mut arguments = Vec::with_capacity(evaluated_args.len() + 1);
     arguments.push(EvaluatedCallArg {
         name: None,

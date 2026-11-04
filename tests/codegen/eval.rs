@@ -31092,3 +31092,23 @@ eval('$x = true and false; var_dump($x); $y = 1 or 0; var_dump($y);');
     );
     assert_eq!(out, "bool(true)\nint(1)\n");
 }
+
+/// Verifies an assignment on the right of a binary operator parses inside eval.
+///
+/// PHP's grammar gives assignment tighter binding than the surrounding binary operator when
+/// it appears on the right: `$a == $b = 1` is `$a == ($b = 1)`. The expression-position path
+/// already did this; the eval parser's binary levels used to leave the `=` unparsed.
+#[test]
+fn test_eval_assignment_on_the_right_of_a_binary_operator() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a=0;$b=0; $r = $a == $b = 1; echo (int)$r, $b, "\n";
+$a=0;$b=0; $r = $a === $b = 1; echo (int)$r, (int)$b, "\n";
+$a=0;$b=0; $r = $a < $b = 1; echo (int)$r, $b, "\n";
+$a=0;$b=0; $r = $a && $b = 1; echo (int)$r, $b, "\n";
+$a="x";$b="y"; $r = $a . $b = "z"; echo $r, $b, "\n";
+$a=0;$b=0; $r = $a == $b += 2; echo (int)$r, $b, "\n";');
+"#,
+    );
+    assert_eq!(out, "01\n01\n11\n00\nxzz\n02\n");
+}

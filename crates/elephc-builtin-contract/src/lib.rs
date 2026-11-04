@@ -67,7 +67,7 @@ pub use object_operators::{
     ClassCasts, ClassOperators, ObjectArithmetic, ObjectBitwise, ObjectOrdering, ObjectShift,
     BCMATH_NUMBER_OPERATORS, GMP_CASTS, GMP_OPERATORS,
 };
-pub use catalog_gmp::FUNCTIONS as GMP_FUNCTIONS;
+pub use catalog_gmp::{FUNCTIONS as GMP_FUNCTIONS, GMP_VERSION};
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};
 pub use symbol_registry::{canonical_constant_name, classes, constants, lookup_class, lookup_constant};

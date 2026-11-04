@@ -139,13 +139,24 @@ pub(super) fn rewrite_typed_property_ref_args(
                 value_type.codegen_repr(),
                 PhpType::Object(_) | PhpType::Mixed
             );
+        let place_label = property_place_label(ctx, place_arg);
         // A variadic collector transports reference markers in a boxed array, so its property
-        // places always travel as boxed Mixed cells. Fixed scalar/string/array slots are passed
-        // by address and must stay unboxed; fixed object/mixed slots need the same boxed cell.
+        // places always travel as boxed Mixed cells. Fixed object/mixed slots need the same
+        // boxed cell. Fixed scalar/string/array slots keep their raw payload and are promoted
+        // into a managed cell carrying the typed-reference acceptance rule instead.
         let temp_type = if variadic_tail { PhpType::Mixed } else { value_type.clone() };
         let temp = ctx.declare_synthetic_php_local(temp_type.clone());
         if promoted {
             ctx.promote_local_mixed_ref_cell(&temp, Some(place_arg.span));
+        } else if let Some(type_code) =
+            crate::types::param_binding::property_ref_type_code(&value_type)
+        {
+            let suffix = format!(
+                " to reference held by property {} of type {}",
+                place_label,
+                crate::types::diagnostic_names::php_type_name(&value_type),
+            );
+            ctx.promote_local_property_ref_cell(&temp, &suffix, type_code, Some(place_arg.span));
         }
         // The snapshot and the hidden reference value are taken at THIS argument's source
         // position, not while planning the call: `g(noise(), $box->n)` must observe the
@@ -186,7 +197,7 @@ pub(super) fn rewrite_typed_property_ref_args(
         };
         plans.push(RefPlacePlan {
             index,
-            place_label: property_place_label(ctx, place_arg),
+            place_label,
             place,
             temp,
             temp_type: value_type,

@@ -34,6 +34,8 @@ pub fn eval_scope_name_mask(name: &str) -> u64 {
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalProgram {
     native_generic_syntax: bool,
+    #[serde(default)]
+    strict_types: bool,
     source_len: usize,
     statements: Vec<EvalStmt>,
     scope_access_mask: u64,
@@ -78,6 +80,7 @@ impl EvalProgram {
     pub fn new(source_len: usize, statements: Vec<EvalStmt>) -> Self {
         Self {
             native_generic_syntax: false,
+            strict_types: false,
             source_len,
             statements,
             scope_access_mask: EVAL_SCOPE_ACCESS_ALL,
@@ -101,6 +104,15 @@ impl EvalProgram {
 
     /// Returns whether source used native generic syntax.
     pub(crate) fn native_generic_syntax(&self) -> bool { self.native_generic_syntax }
+
+    /// Records the fragment's `declare(strict_types=...)` mode.
+    pub(crate) fn with_strict_types(mut self, strict_types: bool) -> Self {
+        self.strict_types = strict_types;
+        self
+    }
+
+    /// Returns the fragment's `declare(strict_types=...)` mode.
+    pub(crate) fn strict_types(&self) -> bool { self.strict_types }
 
     /// Records the CLI-populated superglobals (without `$`) this fragment's code names.
     pub fn with_cli_superglobals(mut self, names: Vec<&'static str>) -> Self {

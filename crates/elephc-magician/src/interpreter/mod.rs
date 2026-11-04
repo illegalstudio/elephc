@@ -145,7 +145,11 @@ pub fn execute_program_outcome_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    match execute_program_statements(program, context, scope, values) {
+    let previous_strict_types = context.strict_types();
+    context.set_strict_types(program.strict_types());
+    let executed = execute_program_statements(program, context, scope, values);
+    context.set_strict_types(previous_strict_types);
+    match executed {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
         Ok(EvalControl::Return(result)) => {
             let result = if result.is_borrowed() { values.retain(result)? } else { result };

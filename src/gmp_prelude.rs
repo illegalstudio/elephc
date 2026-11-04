@@ -146,7 +146,7 @@ fn constant_declarations() -> Vec<Stmt> {
         s_const("GMP_LITTLE_ENDIAN", e_int(4)),
         s_const("GMP_BIG_ENDIAN", e_int(8)),
         s_const("GMP_NATIVE_ENDIAN", e_int(16)),
-        s_const("GMP_VERSION", e_str("6.3.0")),
+        s_const("GMP_VERSION", e_str(elephc_builtin_contract::GMP_VERSION)),
     ]
 }
 

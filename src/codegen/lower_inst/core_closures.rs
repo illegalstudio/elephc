@@ -321,6 +321,45 @@ pub(super) fn promote_local_slot_for_ref_capture_unchecked(
     capture_ty: &PhpType,
     release_replaced_value: bool,
 ) -> Result<()> {
+    promote_local_slot_for_ref_cell(
+        ctx,
+        slot,
+        owner_slot,
+        capture_ty,
+        release_replaced_value,
+        None,
+    )
+}
+
+/// Promotes a typed property's temporary into a cell carrying its reference-assignment guard.
+pub(super) fn promote_local_slot_for_property_ref(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    owner_slot: LocalSlotId,
+    capture_ty: &PhpType,
+    suffix_label: &str,
+    suffix_len: usize,
+    type_code: u8,
+) -> Result<()> {
+    promote_local_slot_for_ref_cell(
+        ctx,
+        slot,
+        Some(owner_slot),
+        capture_ty,
+        true,
+        Some((suffix_label, suffix_len, type_code)),
+    )
+}
+
+/// Allocates and installs one managed reference cell, optionally with typed-property metadata.
+fn promote_local_slot_for_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    owner_slot: Option<LocalSlotId>,
+    capture_ty: &PhpType,
+    release_replaced_value: bool,
+    property_metadata: Option<(&str, usize, u8)>,
+) -> Result<()> {
     reject_multiword_ref_param_local(capture_ty, "capture")?;
     let local_ty = ctx.local_php_type(slot)?;
     let offset = ctx.local_offset(slot)?;
@@ -332,9 +371,28 @@ pub(super) fn promote_local_slot_for_ref_capture_unchecked(
         abi::int_arg_reg_name(ctx.emitter.target, 0),
         crate::codegen_support::runtime::reference_cells::payload_tag(&local_ty),
     );
-    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
+    if let Some((suffix_label, suffix_len, type_code)) = property_metadata {
+        abi::emit_symbol_address(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 1),
+            suffix_label,
+        );
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 2),
+            suffix_len as i64,
+        );
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 3),
+            type_code as i64,
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_property_reference_cell_new");
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
+    }
     let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
-    ctx.emitter.instruction(&format!(                                           // keep the promoted closure capture cell while restoring its value
+    ctx.emitter.instruction(&format!(                                           // keep the promoted reference cell while restoring its value
         "mov {}, {}",
         cell_reg,
         abi::int_result_reg(ctx.emitter)

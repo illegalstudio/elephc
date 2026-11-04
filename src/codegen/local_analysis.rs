@@ -154,6 +154,10 @@ fn ref_cell_target_slot(
             Some(Immediate::LocalSlotPair { first, .. }),
         ) => Some(*first),
         (
+            Op::PromotePropertyRefCell,
+            Some(Immediate::PropertyRefCell { first, .. }),
+        ) => Some(*first),
+        (
             Op::BindRefCellPtr | Op::IterCurrentValueRef,
             Some(Immediate::LocalSlot(slot)),
         ) => Some(*slot),

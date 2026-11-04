@@ -275,7 +275,7 @@ jobs:
             --manifest-path examples/gmp/elephc.toml
 
       - name: Test the GMP bridge against managed libgmp
-        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # crates/elephc-gmp/build.rs reads ELEPHC_LIBGMP_DIR, links libgmp.a into
         # the crate's test binary and compiles the libgmp-calling unit tests in
         # behind cfg(elephc_gmp_native). Without the variable those tests take the
         # skip path exercised by the archived non-codegen run. Runs AFTER the
@@ -284,7 +284,7 @@ jobs:
         run: |
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh macos-aarch64)
-          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+          ELEPHC_LIBGMP_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
       - name: Materialize managed native libmagic
         run: |
           ./target/debug/elephc native install --locked \
@@ -491,7 +491,7 @@ jobs:
             --manifest-path examples/gmp/elephc.toml
 
       - name: Test the GMP bridge against managed libgmp
-        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # crates/elephc-gmp/build.rs reads ELEPHC_LIBGMP_DIR, links libgmp.a into
         # the crate's test binary and compiles the libgmp-calling unit tests in
         # behind cfg(elephc_gmp_native). Without the variable those tests take the
         # skip path exercised by the archived non-codegen run. Runs AFTER the
@@ -500,7 +500,7 @@ jobs:
         run: |
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-x86_64)
-          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+          ELEPHC_LIBGMP_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
       - name: Materialize managed native libmagic
         run: |
           ./target/debug/elephc native install --locked \
@@ -699,7 +699,7 @@ jobs:
             --manifest-path examples/gmp/elephc.toml
 
       - name: Test the GMP bridge against managed libgmp
-        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # crates/elephc-gmp/build.rs reads ELEPHC_LIBGMP_DIR, links libgmp.a into
         # the crate's test binary and compiles the libgmp-calling unit tests in
         # behind cfg(elephc_gmp_native). Without the variable those tests take the
         # skip path exercised by the archived non-codegen run. Runs AFTER the
@@ -708,7 +708,7 @@ jobs:
         run: |
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-aarch64)
-          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+          ELEPHC_LIBGMP_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
       - name: Materialize managed native libmagic
         run: |
           ./target/debug/elephc native install --locked \
@@ -2501,6 +2501,17 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Cache managed native gmp
+        # The corpus test is `#[ignore]` so only this dedicated job runs it. Reuse the
+        # same managed libgmp cache key as the other Linux GMP jobs; a warm run skips
+        # the from-source GMP build entirely.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: gmp-native-linux-x86_64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-linux-x86_64-
 
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this

@@ -133,7 +133,7 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("GMP_ROUND_MINUSINF", Gmp, ConstValue::Int(2), route: Prelude),
     constant!("GMP_ROUND_PLUSINF", Gmp, ConstValue::Int(1), route: Prelude),
     constant!("GMP_ROUND_ZERO", Gmp, ConstValue::Int(0), route: Prelude),
-    constant!("GMP_VERSION", Gmp, ConstValue::Str("6.3.0"), route: Prelude),
+    constant!("GMP_VERSION", Gmp, ConstValue::Str(crate::GMP_VERSION), route: Prelude),
     constant!("ICONV_IMPL", Iconv, ConstValue::TargetDependent(ConstType::Str)),
     constant!("ICONV_MIME_DECODE_CONTINUE_ON_ERROR", Iconv, ConstValue::Int(2)),
     constant!("ICONV_MIME_DECODE_STRICT", Iconv, ConstValue::Int(1)),

@@ -139,7 +139,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
     },
     BridgeStaticlib {
         lib_name: "elephc_gmp",
-        env_var: "ELEPHC_GMP_LIB_DIR",
+        env_var: "ELEPHC_GMP_BRIDGE_DIR",
         crate_name: "elephc-gmp",
         flag_name: "gmp",
         whole_archive: false,

@@ -91,15 +91,6 @@ fn test_error_method_by_ref_argument_rejects_unsupported_property_storage() {
     }
 }
 
-/// A by-reference variadic cannot bind an array property through the scalar place rewrite.
-#[test]
-fn test_error_variadic_by_ref_argument_rejects_array_property_storage() {
-    expect_error(
-        "<?php function collect(&...$refs): void {} class Box { public array $items = [1]; } $box = new Box(); collect($box->items);",
-        "cannot bind an array property by reference",
-    );
-}
-
 /// Mixed property storage cannot provide the declared array slot needed by nested ref writeback.
 #[test]
 fn test_error_by_ref_argument_rejects_nested_mixed_property_storage() {

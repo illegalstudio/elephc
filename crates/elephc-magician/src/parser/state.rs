@@ -31,6 +31,8 @@ pub(super) struct Parser {
     pub(super) type_parameter_origins: Vec<usize>,
     pub(super) type_parameter_uses: HashMap<usize, usize>,
     pub(super) native_generic_syntax: bool,
+    /// `declare(strict_types=...)` active for this eval fragment.
+    pub(super) strict_types: bool,
     pub(super) tokens: Vec<TokenKind>,
     pub(super) token_lines: Vec<i64>,
     pub(super) token_phpdoc: Vec<bool>,
@@ -126,6 +128,7 @@ impl Parser {
             type_parameter_origins: Vec::new(),
             type_parameter_uses: HashMap::new(),
             native_generic_syntax: false,
+            strict_types: false,
             tokens,
             token_lines,
             token_phpdoc,
@@ -141,6 +144,9 @@ impl Parser {
     pub(super) fn parse_program(&mut self) -> Result<EvalProgram, EvalParseError> {
         let mut statements = Vec::new();
         while !matches!(self.current(), TokenKind::Eof) {
+            if self.try_parse_strict_types_declare()? {
+                continue;
+            }
             statements.extend(self.parse_stmt()?);
         }
         let cli_superglobals = self.named_cli_superglobals();
@@ -148,7 +154,50 @@ impl Parser {
         Ok(EvalProgram::new(self.source_len, statements)
             .with_cli_superglobals(cli_superglobals)
             .with_native_generic_syntax(self.native_generic_syntax)
-            .with_scope_access_mask(scope_access_mask))
+            .with_scope_access_mask(scope_access_mask)
+            .with_strict_types(self.strict_types))
+    }
+
+    /// Consumes a top-level `declare(strict_types=0|1);` and records its mode.
+    ///
+    /// Only the strict-types directive changes eval semantics here. Any other `declare`
+    /// form is left to the ordinary statement parser, which continues to reject unsupported
+    /// directives rather than silently ignoring them.
+    fn try_parse_strict_types_declare(&mut self) -> Result<bool, EvalParseError> {
+        if !matches!(self.current(), TokenKind::Ident(name) if name.eq_ignore_ascii_case("declare")) {
+            return Ok(false);
+        }
+        let start = self.pos;
+        self.advance();
+        if !self.consume(TokenKind::LParen) {
+            self.pos = start;
+            return Ok(false);
+        }
+        let TokenKind::Ident(key) = self.current() else {
+            self.pos = start;
+            return Ok(false);
+        };
+        if !key.eq_ignore_ascii_case("strict_types") {
+            self.pos = start;
+            return Ok(false);
+        }
+        self.advance();
+        if !self.consume(TokenKind::Equal) {
+            self.pos = start;
+            return Ok(false);
+        }
+        let TokenKind::Int(value) = self.current() else {
+            self.pos = start;
+            return Ok(false);
+        };
+        let strict = *value != 0;
+        self.advance();
+        if !self.consume(TokenKind::RParen) || !self.consume(TokenKind::Semicolon) {
+            self.pos = start;
+            return Ok(false);
+        }
+        self.strict_types = strict;
+        Ok(true)
     }
 
     /// Builds a conservative mask of caller-scope variable names named by this fragment.

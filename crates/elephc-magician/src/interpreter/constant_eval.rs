@@ -163,6 +163,9 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
     if let Some(value) = elephc_pcntl::host_pcntl_int_constant(name) {
         return Some(EvalPredefinedConstant::Int(value));
     }
+    if let Some(value) = eval_gmp_constant(name) {
+        return Some(value);
+    }
     if let Some(value) = eval_target_dependent_constant(name) {
         return Some(value);
     }
@@ -185,6 +188,25 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         // which `every_catalogued_constant_has_its_declared_eval_route` reports.
         ConstValue::TargetDependent(_) => None,
     }
+}
+
+/// Returns the `ext/gmp` constants Magician exposes without a loaded bridge.
+///
+/// Their values are ABI-stable PHP constants (plus the managed libgmp pin), so eval can
+/// answer them even before the GMP prelude helpers are registered.
+fn eval_gmp_constant(name: &str) -> Option<EvalPredefinedConstant> {
+    Some(match name {
+        "GMP_ROUND_ZERO" => EvalPredefinedConstant::Int(0),
+        "GMP_ROUND_PLUSINF" => EvalPredefinedConstant::Int(1),
+        "GMP_ROUND_MINUSINF" => EvalPredefinedConstant::Int(2),
+        "GMP_MSW_FIRST" => EvalPredefinedConstant::Int(1),
+        "GMP_LSW_FIRST" => EvalPredefinedConstant::Int(2),
+        "GMP_LITTLE_ENDIAN" => EvalPredefinedConstant::Int(4),
+        "GMP_BIG_ENDIAN" => EvalPredefinedConstant::Int(8),
+        "GMP_NATIVE_ENDIAN" => EvalPredefinedConstant::Int(16),
+        "GMP_VERSION" => EvalPredefinedConstant::String(elephc_builtin_contract::GMP_VERSION),
+        _ => return None,
+    })
 }
 
 /// Values the catalog marks `TargetDependent`: Magician computes them for the target it is

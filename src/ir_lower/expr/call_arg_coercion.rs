@@ -423,6 +423,53 @@ fn root_prior_argument_preserving_reference_place(
     root_evaluated_call_argument(ctx, lowered, arg.span).value
 }
 
+/// Guards a boxed `Class|false` / `Class|null` argument for an object parameter.
+///
+/// Returns `None` when the argument already carries the declared object representation or
+/// when the guard cannot be safely re-read. Shared by the positional and named-argument paths
+/// so both reject the non-object alternative at the call boundary.
+pub(super) fn guard_object_param_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    value: LoweredValue,
+    arg: &Expr,
+) -> Option<LoweredValue> {
+    let (_, param_ty) = sig.params.get(index)?;
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let PhpType::Object(class_name) = param_ty.codegen_repr() else {
+        return None;
+    };
+    let source_ty = ctx.builder.value_php_type(value.value);
+    let static_ty = argument_static_type(ctx, arg);
+    let guard_ty = static_ty.as_ref().unwrap_or(&source_ty);
+    if let Some(given) = union_object_guard_word(guard_ty, &class_name) {
+        return Some(guard_union_object_param(
+            ctx, sig, index, value, &class_name, Some(given), arg,
+        ));
+    }
+    let rerunnable = matches!(
+        arg.kind,
+        ExprKind::Variable(_)
+            | ExprKind::This
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+    );
+    let already_object = matches!(guard_ty.codegen_repr(), PhpType::Object(_));
+    let literal_null = matches!(arg.kind, ExprKind::Null);
+    if rerunnable && !already_object && !literal_null {
+        return Some(guard_union_object_param(
+            ctx, sig, index, value, &class_name, None, arg,
+        ));
+    }
+    None
+}
+
 /// Coerces a positional argument to storage owned explicitly by EIR when required.
 ///
 /// Integer-to-float conversion selects the callee's floating-point ABI class. Mixed-to-string
@@ -439,56 +486,8 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
     };
-    // PHP accepts a union that names the declared class plus one of `false`/`null` at compile
-    // time and throws `TypeError` at runtime for the other alternative. Extract the object
-    // payload only after the instance check, so the callee never receives a boxed cell where
-    // its ABI expects a raw object pointer.
-    let by_reference = sig.ref_params.get(index).copied().unwrap_or(false);
-    if !by_reference {
-        if let PhpType::Object(class_name) = param_ty {
-        {
-            let source_ty = ctx.builder.value_php_type(value.value);
-            // A union-typed local is stored in a boxed Mixed slot, so its IR type no longer
-            // names the `Class|false` alternative. Recover the checker's static type from the
-            // local/place facts before deciding not to emit the guard.
-            let static_ty = argument_static_type(ctx, arg);
-            let guard_ty = static_ty.as_ref().unwrap_or(&source_ty);
-            let static_given = union_object_guard_word(guard_ty, class_name);
-            if let Some(given) = static_given {
-                return guard_union_object_param(
-                    ctx, sig, index, value, class_name, Some(given), arg,
-                );
-            }
-            // A union-typed local collapsed to a boxed Mixed cell, or an optimized-away
-            // literal, still reaches an object parameter. Guard every source the predicate
-            // above did not describe unless it is already statically the declared class, and
-            // only re-read expressions whose evaluation is side-effect free.
-            let rerunnable = matches!(
-                arg.kind,
-                ExprKind::Variable(_)
-                    | ExprKind::This
-                    | ExprKind::BoolLiteral(_)
-                    | ExprKind::Null
-                    | ExprKind::IntLiteral(_)
-                    | ExprKind::FloatLiteral(_)
-                    | ExprKind::StringLiteral(_)
-            );
-            // A statically-known object already carries the representation the callee's ABI
-            // expects. Subclasses and generic instantiations are accepted by the checker under
-            // their own class names, so a runtime InstanceOf here would reject `Holder<Dog>` for
-            // `Holder<Animal>` or a legitimate subclass. The guard is only for runtime-typed
-            // storage and values optimized from a union.
-            let already_object = matches!(guard_ty.codegen_repr(), PhpType::Object(_));
-            // A literal null is not the boxed union payload this guard exists for. Direct
-            // calls reject it in the checker; a dynamic callable keeps the null-receiver path.
-            let literal_null = matches!(arg.kind, ExprKind::Null);
-            if rerunnable && !already_object && !literal_null {
-                return guard_union_object_param(
-                    ctx, sig, index, value, class_name, None, arg,
-                );
-            }
-        }
-        }
+    if let Some(guarded) = guard_object_param_argument(ctx, sig, index, value, arg) {
+        return guarded;
     }
     // A by-reference parameter must receive the caller's storage, not a converted temporary,
     // so declared-parameter scalar binding never applies to one. The checker keeps those on

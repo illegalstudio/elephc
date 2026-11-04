@@ -86,6 +86,8 @@ pub struct ElephcEvalContext {
     pub(super) included_files: HashSet<String>,
     pub(super) included_file_order: Vec<String>,
     pub(super) included_main_file: Option<String>,
+    /// `declare(strict_types=...)` for the eval fragment currently executing.
+    pub(super) strict_types: bool,
     pub(super) error_reporting: i64,
     pub(super) error_handler: Option<EvalErrorHandlerState>,
     pub(super) error_handler_stack: Vec<Option<EvalErrorHandlerState>>,
@@ -192,6 +194,7 @@ impl ElephcEvalContext {
             included_files: HashSet::new(),
             included_file_order: Vec::new(),
             included_main_file: None,
+            strict_types: false,
             error_reporting: crate::eval_php_profile::eval_all_error_mask(),
             error_handler: None,
             error_handler_stack: Vec::new(),
@@ -295,6 +298,7 @@ impl ElephcEvalContext {
             included_files: HashSet::new(),
             included_file_order: Vec::new(),
             included_main_file: None,
+            strict_types: false,
             error_reporting: crate::eval_php_profile::eval_all_error_mask(),
             error_handler: None,
             error_handler_stack: Vec::new(),
@@ -368,5 +372,15 @@ impl ElephcEvalContext {
         }
         self.abi_owner_count -= 1;
         self.abi_owner_count == 0
+    }
+
+    /// Returns the strict-types mode of the eval fragment currently executing.
+    pub(crate) fn strict_types(&self) -> bool {
+        self.strict_types
+    }
+
+    /// Sets the strict-types mode for the eval fragment currently executing.
+    pub(crate) fn set_strict_types(&mut self, strict_types: bool) {
+        self.strict_types = strict_types;
     }
 }

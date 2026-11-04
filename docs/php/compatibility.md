@@ -92,7 +92,7 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `exif` constants: 1 / 0
 - `gd` functions: 83 / 0
 - `gd` constants: 67 / 0
-- `gmp` constants: 9 / 0
+- `gmp` constants: 9 / 9
 - `mysqli` functions: 84 / 0
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0

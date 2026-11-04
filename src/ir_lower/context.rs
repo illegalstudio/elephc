@@ -3440,6 +3440,39 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots.insert(owner_slot);
     }
 
+    /// Promotes a typed property's copy-in/copy-out temporary, attaching the runtime metadata
+    /// that lets a callee write enforce the property's declared type before coercing.
+    pub(crate) fn promote_local_property_ref_cell(
+        &mut self,
+        name: &str,
+        suffix: &str,
+        type_code: u8,
+        span: Option<Span>,
+    ) {
+        let slot = self.declare_local(name, self.local_type(name));
+        let fallback_ty = self.builder.local_php_type(slot);
+        let owner_slot = self.declare_ref_cell_owner(name, fallback_ty.clone());
+        let suffix = self.intern_string(suffix);
+        self.builder.emit_with_effects(
+            Op::PromotePropertyRefCell,
+            Vec::new(),
+            Some(Immediate::PropertyRefCell {
+                first: slot,
+                second: owner_slot,
+                suffix,
+                type_code,
+            }),
+            IrType::Void,
+            fallback_ty,
+            Ownership::NonHeap,
+            Op::PromotePropertyRefCell.default_effects(),
+            span,
+        );
+        self.mark_ref_bound_local(name);
+        self.initialized_slots.insert(slot);
+        self.initialized_slots.insert(owner_slot);
+    }
+
     /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a
     /// durable heap reference cell suitable for an escaping by-reference parameter.
     pub(crate) fn promote_local_mixed_ref_cell(&mut self, name: &str, span: Option<Span>) {
