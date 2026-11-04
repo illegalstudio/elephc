@@ -148,3 +148,28 @@ if ($value !== 20) { echo sink(($argc & 3) * 16); }
         assert!(!assembly.contains("__rt_mixed_cast_float"), "{target}");
     }
 }
+
+/// Builtin float parameters keep the boxed checked operand their own passes match.
+///
+/// Only a source-typed `float` parameter exposes the conversion; `sqrt($i + c)` must still see
+/// the `ichecked_add` result directly, as the sqrt range reducer requires.
+#[test]
+fn test_numeric_consumers_builtin_float_parameters_keep_checked_operands() {
+    let source = r#"<?php
+function sink(float $value): float { return $value; }
+echo sink($argc + 1), sqrt($argc + 2);
+"#;
+    let ir = super::checked_numeric_chain::emit_main_ir(source, &["--no-ir-opt"]);
+    let lines: Vec<&str> = ir.lines().map(str::trim).collect();
+    let defined_by = |value: &str| lines.iter()
+        .find(|line| line.starts_with(&format!("{value}:")))
+        .copied()
+        .unwrap_or_else(|| panic!("{value} is undefined in\n{ir}"));
+    let operand = |line: &str, op: &str| line.split(op).nth(1).unwrap()
+        .split_whitespace().next().unwrap().to_string();
+    let call = lines.iter().find(|line| line.contains("= call ")).expect("user call");
+    let cast = defined_by(&operand(call, "= call "));
+    assert!(cast.contains("= cast ") && cast.contains(" F64"), "{ir}");
+    let sqrt = lines.iter().find(|line| line.contains("runtime.sqrt")).expect("sqrt call");
+    assert!(defined_by(&operand(sqrt, "= runtime_call ")).contains("= ichecked_add "), "{ir}");
+}

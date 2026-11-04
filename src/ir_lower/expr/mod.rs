@@ -44,7 +44,7 @@ use local_values::lower_local_value;
 mod numeric_binary;
 mod integer_destinations;
 pub(crate) use integer_destinations::coerce_integer_arithmetic;
-use integer_destinations::lower_expr_for_parameter;
+use integer_destinations::{lower_expr_for_parameter, parameter_is_source_typed};
 pub(crate) mod object_operators;
 mod string_concat;
 mod comparisons;

@@ -132,7 +132,9 @@ fn lower_normalized_args(
         .enumerate()
         .map(|(index, arg)| {
             let value = match sig.params.get(index).filter(|_| index < regular_count) {
-                Some((_, param_ty)) => lower_expr_for_parameter(ctx, arg, param_ty),
+                Some((_, param_ty)) => lower_expr_for_parameter(
+                    ctx, arg, param_ty, parameter_is_source_typed(sig, index),
+                ),
                 None => lower_expr(ctx, arg),
             };
             if index + 1 < normalized.len() {
@@ -195,16 +197,20 @@ fn lower_planned_source_arg(
     } else {
         // A regular parameter shapes its literal argument as a positional one does: a null-only
         // literal bound to `array<ptr<T>|null>` keeps pointer storage.
-        let param_ty = plan
+        let param = plan
             .source_values
             .iter()
             .find(|source| source.source_index() == source_index)
             .and_then(|source| source.param_idx())
-            .and_then(|param_index| sig.params.get(param_index))
-            .map(|(_, param_ty)| param_ty.clone());
-        match param_ty {
-            Some(param_ty) => {
-                lower_expr_for_parameter(ctx, &plan.source_args[source_index], &param_ty).value
+            .and_then(|param_index| {
+                let (_, param_ty) = sig.params.get(param_index)?;
+                Some((param_ty.clone(), parameter_is_source_typed(sig, param_index)))
+            });
+        match param {
+            Some((param_ty, source_typed)) => {
+                lower_expr_for_parameter(
+                    ctx, &plan.source_args[source_index], &param_ty, source_typed,
+                ).value
             }
             None => lower_call_source_arg(ctx, &plan.source_args[source_index]),
         }

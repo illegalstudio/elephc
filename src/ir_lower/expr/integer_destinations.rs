@@ -3,7 +3,7 @@
 //!
 //! Called from:
 //! - Typed destination and declared-local assignment lowering.
-//! - Call argument lowering, which also exposes `float` parameter conversions.
+//! - Call argument lowering, which also exposes conversions at source-typed `float` parameters.
 //!
 //! Key details:
 //! - Only closed add/sub/mul trees with concrete integer leaves are accepted.
@@ -12,11 +12,22 @@
 
 use super::*;
 
+/// Returns whether parameter `index` carries a source-written type declaration.
+///
+/// Builtin registry signatures never do, so their arguments keep the operand shapes that
+/// builtin-specific passes match (for example the boxed `sqrt($i + c)` range reducer).
+pub(super) fn parameter_is_source_typed(sig: &crate::types::FunctionSig, index: usize) -> bool {
+    sig.param_type_exprs.get(index).is_some_and(Option::is_some)
+}
+
 /// Lowers parameter storage, preserving implicit callable identity and integer destinations.
+///
+/// `source_typed` admits the float conversion only for user-declared `float` parameters.
 pub(super) fn lower_expr_for_parameter(
     ctx: &mut LoweringContext<'_, '_>,
     expr: &Expr,
     destination: &PhpType,
+    source_typed: bool,
 ) -> LoweredValue {
     if destination.codegen_repr() == PhpType::Callable {
         let source = match &expr.kind {
@@ -30,7 +41,7 @@ pub(super) fn lower_expr_for_parameter(
         }
     }
     let value = lower_expr_for_destination(ctx, expr, destination);
-    if destination == &PhpType::Float {
+    if source_typed && destination == &PhpType::Float {
         return coerce_float_arithmetic(ctx, value, expr.span);
     }
     coerce_integer_arithmetic(ctx, value, destination, expr.span)
