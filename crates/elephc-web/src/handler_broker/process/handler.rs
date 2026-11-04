@@ -72,6 +72,8 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
             remote_port: request.remote_port,
             server_addr: request.server_addr,
             server_port: request.server_port,
+            request_scheme: request.request_scheme,
+            https: request.https,
             protocol: request.protocol,
         },
     );

@@ -401,6 +401,10 @@ elephc --web --web-isolation=request app.php  # discard all native state after e
 elephc --web --web-lifecycle=application bootstrap.php # retain one application per worker
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4
+./app --listen unix:/run/elephc/app.sock  # no TCP port; front it with a proxy
+# Add --trusted-proxy unix when the edge overwrites client Forwarded / X-Forwarded-*.
+# Edge deployment examples (Caddy, nginx, HAProxy, Traefik, Apache, Ferron):
+# docs/beyond-php/web-edge.md
 
 # Bound what one request may cost: bytes, and the time it may take to send them.
 # Both apply in every isolation mode. `--body-read-timeout 0` removes the deadline

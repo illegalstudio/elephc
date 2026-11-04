@@ -42,6 +42,7 @@ The produced binary has no PHP runtime dependency. Run it with `--listen`:
 ```bash
 ./app --listen 127.0.0.1:8080
 ./app --listen 127.0.0.1:8080 --workers 4
+./app --listen unix:/run/elephc/app.sock
 ```
 
 ## Runtime arguments
@@ -50,7 +51,8 @@ The produced binary accepts these arguments at runtime:
 
 | Argument | Required | Default | Description |
 |---|---|---|---|
-| `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
+| `--listen host:port \| unix:/path` | Yes | — | TCP address to bind, or a Unix-domain socket path. Missing `--listen` prints an error to stderr and exits non-zero. Unix socket paths are limited to 100 bytes; a stale socket file is replaced, but a regular file at the path is refused. |
+| `--trusted-proxy LIST` | No | — | Comma-separated IPv4/IPv6 addresses, CIDRs, or `unix` allowed to supply `Forwarded` / `X-Forwarded-*`; repeatable. Without it, forwarded headers do not change `$_SERVER`. |
 | `--workers N` | No | CPU count | Number of worker processes to prefork. Minimum 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. `0` removes the cap in `worker` only: `pool` and `request` hand the body to a separate handler process over the broker protocol, which refuses anything above its own 64 MiB frame limit with the same `413`. |
 | `--max-requests N` | No | `0` (never) | Recycle each worker after N completed requests. It stops accepting, drains active HTTP connections, and exits after isolated handlers/brokers are reaped; the master then respawns it. |
@@ -357,16 +359,79 @@ available. The following are not yet available:
   handler that never returns keeps its process slot while its client remains
   connected. Client disconnect and response-write timeout cancellation still
   reclaim isolated handlers.
-- **`--listen` is TCP only** — Unix-domain-socket listening is not yet supported.
 - **Not supported in this release:** static file serving, in-process
   TLS, HTTP/2–3 — front the server with a reverse proxy for these (below).
 
 ## Behind a reverse proxy
 
-elephc-web speaks HTTP/1.1 in cleartext only. For TLS, HTTP/2/3, static asset
-serving, or virtual hosting, run it behind a reverse proxy (nginx, Caddy,
-HAProxy) that terminates TLS and forwards to `--listen`. A typical setup binds
-the server to `127.0.0.1:8080` and points the proxy at it.
+elephc-web speaks HTTP/1.1 in cleartext only. For TLS, HTTP/2-3, static asset
+serving, or virtual hosting, run it behind an edge (Ferron, nginx, Caddy,
+HAProxy) that terminates TLS and forwards to `--listen`. See
+[Edge Deployment (Ferron)](web-edge.md) for the full two-process profile, Unix
+socket setup, trust boundary, systemd, and containers.
+
+A Unix-domain socket avoids exposing a TCP port:
+
+```bash
+./app --listen unix:/run/elephc/app.sock
+```
+
+The origin creates the socket with owner/group read-write permissions (`0660`),
+so run the origin and the edge under the same group (or a shared runtime
+directory). A Unix-domain peer has no IP
+address, so `REMOTE_ADDR` and `SERVER_ADDR` are empty and `REMOTE_PORT` /
+`SERVER_PORT` are `0`; use the `--trusted-proxy` section below to derive the
+client facts from forwarded headers.
+
+## Trusted proxies
+
+By default the origin trusts only the socket peer. Forwarded headers are
+accepted from that peer but do not change `$_SERVER`: behind a proxy,
+`REMOTE_ADDR` is the proxy address (or empty for a Unix socket),
+`REQUEST_SCHEME` stays `http`, `HTTPS` is absent, and `SERVER_PORT` is the bound
+port (or `0`). This is the same baseline as PHP-FPM behind a proxy that does not
+pass real-IP parameters; frameworks such as Symfony and Laravel can still
+resolve the client from `HTTP_X_FORWARDED_*` with their own trusted-proxy
+configuration.
+
+Opt in when the origin should derive the facts itself:
+
+```bash
+./app --listen 127.0.0.1:8080 --trusted-proxy 127.0.0.1/32
+./app --listen unix:/run/elephc/app.sock --trusted-proxy unix
+```
+
+`--trusted-proxy` is repeatable and accepts comma-separated IPv4/IPv6
+addresses, CIDRs, or the token `unix` for a Unix-domain peer. Only peers in the
+allowlist may supply `Forwarded` or `X-Forwarded-*`; headers from any other peer
+are ignored entirely. RFC 7239 `Forwarded` wins over `X-Forwarded-*` when it is
+present and well-formed. The chain is walked right-to-left, so trusted
+intermediates are skipped and the rightmost untrusted client address is used.
+`X-Forwarded-Proto` drives `REQUEST_SCHEME` and `HTTPS=on` (`HTTPS` is absent for
+HTTP), while `X-Forwarded-Port`, a forwarded `host=` port, or the scheme default
+(443/80) drives `SERVER_PORT`. Repeated scalar headers use the last line and its
+rightmost token, so a proxy that appends wins over the client-supplied value.
+`X-Forwarded-Host` is not used as a port authority. `HTTP_HOST` is not rewritten;
+the raw `HTTP_FORWARDED` and `HTTP_X_FORWARDED_*` keys remain visible exactly as
+sent. The edge must overwrite or remove client-supplied forwarded headers,
+including `Forwarded`, `X-Forwarded-Port`, `X-Forwarded-Host`, and `X-Real-IP`;
+otherwise a client can choose `REMOTE_ADDR`, `SERVER_PORT`, or the apparent
+authority.
+
+The closest PHP-FPM/nginx equivalents are:
+
+| PHP-FPM / nginx | elephc |
+|---|---|
+| `set_real_ip_from 10.0.0.0/8; real_ip_header X-Forwarded-For; real_ip_recursive on;` | `--trusted-proxy 10.0.0.0/8` |
+| `fastcgi_param REMOTE_ADDR $remote_addr;` after `realip` | `--trusted-proxy <proxy CIDR>` |
+| `fastcgi_param HTTPS $https if_not_empty;` | `--trusted-proxy <proxy CIDR>` with `X-Forwarded-Proto: https` |
+| `fastcgi_param SERVER_PORT $server_port;` | `--trusted-proxy <proxy CIDR>` with `X-Forwarded-Port` or the scheme default |
+| PHP-FPM over a Unix socket | `--trusted-proxy unix` |
+
+Do not trust a broad range such as `0.0.0.0/0`: any client that can reach the
+origin could then forge its own address and scheme. Use the narrowest CIDR that
+contains the proxy, or `unix` when the proxy connects over a socket. Without the
+flag, behavior is unchanged byte for byte.
 
 ## Mutual exclusions
 
