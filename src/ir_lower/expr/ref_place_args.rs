@@ -121,6 +121,12 @@ pub(super) fn rewrite_typed_property_ref_args(
             ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. } => {}
             _ => continue,
         }
+        // A property the checker promoted is passed as its own cell: a callee that keeps the
+        // reference, as `new OrderedHashMapIterator($this->managedCursors)` does, would otherwise
+        // keep one to the temporary, and the write-back undoes what it wrote later.
+        if super::call_arg_coercion::reference_property_place_class(ctx, place_arg).is_some() {
+            continue;
+        }
         let Some(place_ty) = static_place_type(ctx, place_arg) else {
             continue;
         };

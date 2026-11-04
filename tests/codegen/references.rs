@@ -2035,3 +2035,44 @@ show(fallback());
     );
     assert_eq!(out, "object Path\nobject Path\nobject Path\nobject Path\nstring plain\n");
 }
+
+
+/// A property handed to a by-reference constructor parameter is bound, not copied and written back:
+/// the object keeps the reference after the call. Symfony's `OrderedHashMap` passes its cursor table
+/// this way, and each iterator removes itself from it in `__destruct()`.
+#[test]
+fn test_a_constructor_keeps_a_reference_to_a_property_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Cursor {
+    public function __construct(private array &$cursors, private int &$total) { $this->cursors[] = 1; }
+    public function bump() { $this->total = 5; }
+    public function __destruct() { array_splice($this->cursors, 0, 1); }
+}
+class Plain {
+    private array $list;
+    public function __construct(array &$list) { $this->list = &$list; }
+    public function add() { $this->list[] = 1; }
+}
+class Map {
+    private array $cursors = [];
+    private int $total = 1;
+    private array $items = [];
+    public function cursor() { return new Cursor($this->cursors, $this->total); }
+    public function plain() { return new Plain($this->items); }
+    public function counts() { return count($this->cursors) . ':' . $this->total . ':' . count($this->items); }
+}
+$map = new Map();
+$cursor = $map->cursor();
+$plain = $map->plain();
+echo $map->counts(), "\n";
+$cursor->bump();
+$plain->add();
+echo $map->counts(), "\n";
+unset($cursor);
+echo $map->counts(), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:1:0\n1:5:1\n0:5:1\n");
+}
