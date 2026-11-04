@@ -245,6 +245,26 @@ pub(super) fn decl_fn_mysqli_real_escape_string() -> Stmt {
         .build()
 }
 
+/// `mysqli_quote_string` — transcribed from the PHP form.
+pub(super) fn decl_fn_mysqli_quote_string() -> Stmt {
+    function("mysqli_quote_string")
+        .param("mysql", t_mixed())
+        .param("string", TypeExpr::Str)
+        .returns(TypeExpr::Str)
+        .body(vec![
+            s_if(
+                e_not(e_instance_of(e_var("mysql"), "mysqli")),
+                vec![
+                    s_throw(e_new("TypeError", vec![e_binop(e_binop(e_str("mysqli_quote_string(): Argument #1 ($mysql) must be of type mysqli, "), BinOp::Concat, e_call("gettype", vec![e_var("mysql")])), BinOp::Concat, e_str(" given"))])),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_method_call(e_var("mysql"), "quote_string", vec![e_var("string")])),
+        ])
+        .build()
+}
+
 /// `mysqli_escape_string` — transcribed from the PHP form.
 pub(super) fn decl_fn_mysqli_escape_string() -> Stmt {
     function("mysqli_escape_string")

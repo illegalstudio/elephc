@@ -1743,6 +1743,10 @@
       {
         "name": "grapheme_strrev",
         "since": "8.6"
+      },
+      {
+        "name": "mysqli_quote_string",
+        "since": "8.6"
       }
     ]
   },

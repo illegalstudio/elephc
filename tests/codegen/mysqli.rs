@@ -244,11 +244,13 @@ $probe = function(callable $fn): string {
 echo $probe(fn() => $db->ping());
 echo "|", $probe(fn() => $db->select_db("nope"));
 echo "|", $probe(fn() => $db->real_escape_string("a'b"));
+echo "|", $probe(fn() => $db->quote_string("a'b"));
+echo "|", $probe(fn() => mysqli_quote_string($db, "a'b"));
 echo "|", $probe(fn() => $db->character_set_name());
 echo "|", $db->options(MYSQLI_OPT_CONNECT_TIMEOUT, 1) ? "opt-T" : "opt-F";
 "#,
     );
-    assert_eq!(out, "err|err|err|err|opt-T");
+    assert_eq!(out, "err|err|err|err|err|err|opt-T");
 }
 
 /// An empty query string throws `ValueError` (php-src's message); a query on an

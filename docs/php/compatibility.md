@@ -109,7 +109,7 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 
 elephc also defines 1 constant(s) at runtime that PHP registers only in specific states and never lists statically: `SID`.
 
-elephc also implements 5 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `SortDirection` (PHP 8.6), `Time\Duration` (PHP 8.6), `Time\TimeException` (PHP 8.6), `clamp()` (PHP 8.6), `grapheme_strrev()` (PHP 8.6).
+elephc also implements 6 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `SortDirection` (PHP 8.6), `Time\Duration` (PHP 8.6), `Time\TimeException` (PHP 8.6), `clamp()` (PHP 8.6), `grapheme_strrev()` (PHP 8.6), `mysqli_quote_string()` (PHP 8.6).
 
 The baseline PHP build does not expose these platform-dependent symbols, so they are excluded from its coverage percentages: `pcntl_getcpu()` (PHP build guard HAVE_SCHED_GETCPU), `pcntl_getqos_class()` (target-specific), `pcntl_setns()` (PHP build guard HAVE_PIDFD_OPEN), `pcntl_setqos_class()` (target-specific).
 

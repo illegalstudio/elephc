@@ -1172,6 +1172,7 @@ real-world validation rather than by speculative pass work.
 - [x] Enum `__debugInfo()` rendering — `var_dump()` and `print_r()` render `enum(E::C) (N) { … }` from the returned array; the magic-method visibility warning stays as a follow-up
 - [x] `#[\Override]` on class constants and enum cases — parent/interface lookup for classes, interfaces, enums, cases, and trait composition
 - [x] `__construct()` / `__destruct()` return-value deprecation — startup diagnostics for value returns and generator bodies
+- [x] `mysqli_quote_string()` / `mysqli::quote_string()` — single-quote-wrapped escape through the existing charset-aware mysqli escape path
 - [x] Secure session ini defaults (`use_strict_mode`, `cookie_httponly`, `cookie_samesite`) — profile-gated bootstrap defaults for the web runtime
 
 ### curl follow-ups

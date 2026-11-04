@@ -112,6 +112,7 @@ pub(crate) fn mysqli_declarations(php_version: PhpVersion) -> Program {
             procedural::decl_fn_mysqli_set_charset(),
             procedural::decl_fn_mysqli_character_set_name(),
             procedural::decl_fn_mysqli_real_escape_string(),
+            procedural::decl_fn_mysqli_quote_string(),
             procedural::decl_fn_mysqli_escape_string(),
             procedural::decl_fn_mysqli_begin_transaction(),
             procedural::decl_fn_mysqli_commit(),

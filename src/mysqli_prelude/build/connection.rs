@@ -579,6 +579,25 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 ]),
         )
         .method(
+            method("quote_string")
+                .param("string", TypeExpr::Str)
+                .returns(TypeExpr::Str)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireInitialized", vec![e_str("mysqli::quote_string")])),
+                    // Always single quotes: PDO::quote()-style, and immune to the
+                    // double-quote / NO_BACKSLASH_ESCAPES breakout.
+                    s_return(e_binop(
+                        e_binop(
+                            e_str("'"),
+                            BinOp::Concat,
+                            e_method_call(e_this(), "real_escape_string", vec![e_var("string")]),
+                        ),
+                        BinOp::Concat,
+                        e_str("'"),
+                    )),
+                ]),
+        )
+        .method(
             method("escape_string")
                 .param("string", TypeExpr::Str)
                 .returns(TypeExpr::Str)

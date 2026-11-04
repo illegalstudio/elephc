@@ -83,6 +83,20 @@ echo $db->real_escape_string("a'b\\c");
     assert_eq!(out, r"a\'b\\c");
 }
 
+/// `quote_string` escapes exactly like `real_escape_string` and wraps the result
+/// in single quotation marks, both as a method and as the procedural alias.
+#[test]
+#[ignore]
+fn test_mysqli_quote_string() {
+    let out = compile_and_run(&my_program(
+        r#"
+echo $db->quote_string("a'b\c");
+echo "|", mysqli_quote_string($db, "a'b\c");
+"#,
+    ));
+    assert_eq!(out, r"'a'b\c'|'a'b\c'");
+}
+
 /// SECURITY: charset-aware escaping is correct for the WHOLE dangerous family,
 /// not just GBK — byte-for-byte against php's captured output for `BF 5C 27 41`.
 /// A single lead/trail band would re-open the breakout on sjis/cp932/euckr/ujis;
