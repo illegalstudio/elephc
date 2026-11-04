@@ -33,11 +33,20 @@ pub(super) fn coerce_to_return_type(
             source_declared_type.codegen_repr(),
             PhpType::Mixed | PhpType::Float | PhpType::TaggedScalar
         );
+    // A declared `string` arm is php's last resort: an object some other member of the union
+    // accepts stays an object. `scalar_param_cast` knows class names, not the hierarchy, so
+    // `Parser::ArithmeticPrimary(): Node|string` stringified every `PathExpression` it returned
+    // and Doctrine wrote the node's dump into the SQL.
+    let object_kept_as_is = crate::ir_lower::expr::param_accepts_object_without_string_coercion(
+        ctx,
+        &return_php_type,
+        &source_declared_type.codegen_repr(),
+    );
     let scalar_cast = crate::types::param_binding::scalar_param_cast(
         &return_php_type,
         &source_declared_type,
     )
-    .filter(|_| !int_boundary_owns_it);
+    .filter(|_| !int_boundary_owns_it && !object_kept_as_is);
     let value = match scalar_cast {
         Some(cast) => crate::ir_lower::expr::apply_scalar_param_cast(
             ctx,

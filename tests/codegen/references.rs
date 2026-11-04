@@ -2007,3 +2007,31 @@ foreach (new IteratorIterator(new Map()) as $k => $v) { echo $k, $v, "\n"; }
     );
     assert_eq!(out, "a1\nb2\na1\nb2\na1\nb2\n");
 }
+
+/// A return type's `string` arm is the last resort: an object another member accepts stays an
+/// object, also when that member is its parent. The comparison was by class name, so a subclass
+/// with `__toString()` came back as its string form and Doctrine wrote an AST dump into its SQL.
+#[test]
+fn test_a_return_union_keeps_a_subclass_object_over_its_string_arm() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Node { public function __toString(): string { return 'dump'; } }
+interface Marker {}
+class Path extends Node implements Marker {}
+class Plain { public function __toString(): string { return 'plain'; } }
+function path(): Path { return new Path(); }
+function byParent(): Node|string { return path(); }
+function nullable(): Node|string|null { return new Path(); }
+function byInterface(): Marker|string { return new Path(); }
+function exact(): Path|string { return new Path(); }
+function fallback(): Node|string { return new Plain(); }
+function show($v) { echo is_string($v) ? 'string ' . $v : 'object ' . get_class($v), "\n"; }
+show(byParent());
+show(nullable());
+show(byInterface());
+show(exact());
+show(fallback());
+"#,
+    );
+    assert_eq!(out, "object Path\nobject Path\nobject Path\nobject Path\nstring plain\n");
+}
