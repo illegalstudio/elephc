@@ -11,6 +11,7 @@ Rust fixtures generated from them. Tests never parse these files at runtime.
 | `Zend/tests/readonly_props/readonly_with_default*.phpt` | `Zend/tests/readonly_props` | `tests/codegen/oop/readonly_property_defaults_php86.rs` |
 | `Zend/tests/readonly_props/serialization.phpt` | `Zend/tests/readonly_props` | the defaulted-property portion of the same Rust module |
 | `ext/date/tests/time/duration/serialize.phpt` | `ext/date/tests/time/duration` | `tests/codegen/time_duration_serialization.rs` |
+| `ext/reflection/tests/ReflectionProperty_is{Readable,Writable}_*.phpt` | `ext/reflection/tests` | `tests/codegen/oop/reflection_property_access_php86.rs` (the readonly fixture replaces dynamic `ReflectionClass` construction with a literal class name and omits the readonly write inside `__clone`) |
 
 Fixtures that depend on engine internals elephc does not expose (the internal
 `__unserialize` property loader, `ReflectionProperty::setRawValue`, clone-with, and

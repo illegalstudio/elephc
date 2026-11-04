@@ -1167,7 +1167,7 @@ real-world validation rather than by speculative pass work.
 - [ ] Partial function application — `?`/named `?`/trailing `...` placeholders and closure synthesis
 - [ ] `Io\Poll` — platform polling API and per-target backend
 - [ ] Stream `error_mode` — exception-on-failure stream option across every wrapper
-- [ ] `ReflectionProperty::isReadable()` / `isWriteable()` — scope/object arguments, visibility, readonly, hooks, and lazy objects
+- [x] `ReflectionProperty::isReadable()` / `isWritable()` — scope/object arguments, visibility, asymmetric write visibility, readonly/`__clone` state, hooks, static properties, and magic-method fallbacks; PHP 8.5 asymmetric visibility for static properties lands with it
 - [ ] Parameter doc comments and `ReflectionParameter::getDocComment()`
 - [x] Enum `__debugInfo()` rendering — `var_dump()` and `print_r()` render `enum(E::C) (N) { … }` from the returned array; the magic-method visibility warning stays as a follow-up
 - [x] `#[\Override]` on class constants and enum cases — parent/interface lookup for classes, interfaces, enums, cases, and trait composition

@@ -33,6 +33,10 @@ mod nested_default_numeric_review;
 mod readonly_initialization;
 #[path = "oop/readonly_property_defaults_php86.rs"]
 mod readonly_property_defaults_php86;
+#[path = "oop/reflection_property_access_php86.rs"]
+mod reflection_property_access_php86;
+#[path = "oop/static_asymmetric_visibility.rs"]
+mod static_asymmetric_visibility;
 #[path = "oop/override_constants_php86.rs"]
 mod override_constants_php86;
 #[path = "oop/enum_debug_info_php86.rs"]

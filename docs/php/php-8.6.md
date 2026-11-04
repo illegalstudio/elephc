@@ -21,6 +21,7 @@ sensitive.
 | `grapheme_strrev()` | Now classified as `ext/intl` (PHP 8.6) instead of an elephc extension. Both upstream `ext/intl/tests/grapheme_strrev*.phpt` fixtures pass, including the UBRK_DONE regression and the Arabic grapheme-cluster case. |
 | Default trim mask | `trim()`, `ltrim()`, `rtrim()` and `chop()` include form feed (`\x0C`) under `--php-version=8.6`, and leave it untouched on 8.5 and earlier. |
 | Readonly property defaults | A readonly instance property may declare a default value, including inside a `readonly class`. The default initializes the slot before the constructor runs, so later writes (including from the constructor) raise `Cannot modify readonly property`. Inheritance, get-only interface properties, and serialization follow php-src's `Zend/tests/readonly_props/readonly_with_default*.phpt`. |
+| `ReflectionProperty::isReadable()` / `isWritable()` | Report whether a property can be read or written from a class scope, with the optional object adding initialization and readonly state. Visibility, asymmetric write visibility, virtual/backed hooks, `__get`/`__set`/`__isset` fallbacks, static properties, and the readonly `__clone` reinitialization window are covered by the six upstream `ext/reflection/tests/ReflectionProperty_is{Readable,Writable}_*.phpt` fixtures in `tests/codegen/oop/reflection_property_access_php86.rs`. This also implements PHP 8.5's asymmetric visibility for static properties. |
 | `mysqli_quote_string()` | Escapes a string through `mysqli::real_escape_string()` and wraps it in single quotation marks, as the method `mysqli::quote_string()` and the procedural alias. Covered by the unconnected-object test and an opt-in live MySQL test. |
 | Secure session defaults | Under `--php-version=8.6`, `--web` starts with `session.use_strict_mode=1`, `session.cookie_httponly=1`, and `session.cookie_samesite=Lax`. A later `ini_set()` can relax them for the request. The session profile matrix in `tests/web_session_tests.rs` covers 8.2 through 8.6. |
 | Constructor/destructor return deprecation | A `__construct()`/`__destruct()` that returns a value or contains `yield` emits PHP 8.6's `Deprecated:` diagnostic at startup. The upstream `Zend/tests/magic_methods/constructor_destructor_return.phpt` fixture is transcribed into `tests/codegen/oop/constructor_deprecation_php86.rs`. |
@@ -41,7 +42,6 @@ instead of during production.
 | Partial function application (`foo(1, ?, ...)`) | New call-argument syntax plus a closure-synthesis lowering path. It needs its own parser, checker, and EIR design; it is the largest remaining 8.6 language item. |
 | `Io\Poll` | A new platform polling API (`epoll`/`kqueue`/`WSAPoll`). It needs a new native surface per target and an event-loop-free runtime shape. |
 | Stream `error_mode` | The stream layer currently reports PHP 8.5 warnings; opting into `STREAM_ERRMODE_EXCEPTION` requires a new stream-option ABI across every stream wrapper. |
-| `ReflectionProperty::isReadable()` / `isWriteable()` | The RFC spans visibility, asymmetric visibility, readonly state, hooks, lazy objects, dynamic properties, and a scope/object argument pair. The metadata plumbing is not yet exposed to reflection. |
 | Parameter doc comments (`ReflectionParameter::getDocComment()`) | The parser would need a doc-comment channel on every parameter (functions, methods, closures, arrow functions, hook parameters) and a parallel field across the AST. |
 | URI builder follow-ups | The `Uri\Rfc3986\Uri` / `Uri\WhatWg\Url` extension is not implemented at all yet. |
 | `pack()`/`unpack()` float and signed-integer endianness modifiers | The pack/unpack family is tracked separately; the 8.6 modifiers add new format letters and endianness combinations. |
@@ -49,6 +49,11 @@ instead of during production.
 
 ## Known deviations
 
+- `ReflectionProperty::isReadable()` and `isWritable()` expose `mixed $object` rather than
+  `?object $object`, so the static checker accepts dynamic values such as `new $scope`.
+  The initialization probe casts the object to an array and compares the mangled backing
+  slot; a readonly initialized property is reported writable inside the matching
+  `__clone` frame, which is php-src's reinitializable window.
 - A structurally malformed serialized payload for `Time\Duration` (for example
   `O:13:"Time\Duration"::{}`) reaches the generic `unserialize()` warning and
   returns `false`; php-src wraps it in `Exception: Invalid serialization data`.

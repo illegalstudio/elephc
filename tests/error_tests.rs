@@ -337,6 +337,8 @@ mod time_duration;
 mod override_constants;
 #[path = "error_tests/enum_debug_info.rs"]
 mod enum_debug_info;
+#[path = "error_tests/static_asymmetric_visibility.rs"]
+mod static_asymmetric_visibility;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
 #[path = "error_tests/mbstring.rs"]

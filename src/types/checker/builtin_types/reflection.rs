@@ -42,6 +42,7 @@ mod class_model;
 mod class_scalar_methods;
 mod class_relations;
 mod class_collections;
+mod member_access;
 mod member_predicates;
 mod property_values;
 mod owner_class;
@@ -72,6 +73,7 @@ use class_relations::*;
 #[allow(unused_imports)]
 use class_collections::*;
 #[allow(unused_imports)]
+use member_access::*;
 use member_predicates::*;
 #[allow(unused_imports)]
 use property_values::*;

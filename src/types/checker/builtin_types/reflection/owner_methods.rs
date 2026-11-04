@@ -366,6 +366,8 @@ pub(super) fn add_reflection_member_flag_methods(
         methods.push(builtin_reflection_property_get_value_method());
         methods.push(builtin_reflection_property_set_value_method());
         methods.push(builtin_reflection_property_is_initialized_method());
+        methods.push(builtin_reflection_property_is_readable_method());
+        methods.push(builtin_reflection_property_is_writable_method());
         methods.push(builtin_reflection_property_modifier_mask_method(
             "isProtectedSet",
             2048,

@@ -1645,7 +1645,7 @@ impl MethodBuilder {
     }
 
     /// Builds the method, prepending the `$_unused` consumption when it is needed.
-    fn build(mut self) -> ClassMethod {
+    pub(crate) fn build(mut self) -> ClassMethod {
         let param_attributes = std::mem::take(&mut self.param_attributes);
         let variadic = self.signature.variadic.take();
         let variadic_by_ref = self.signature.variadic_by_ref;

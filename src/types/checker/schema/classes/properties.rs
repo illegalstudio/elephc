@@ -163,15 +163,7 @@ fn apply_static_property(
             "Property cannot be both final and private",
         ));
     }
-    if prop.set_visibility.is_some() {
-        return Err(CompileError::new(
-            prop.span,
-            &format!(
-                "Static property may not declare asymmetric visibility: {}::${}",
-                class.name, prop.name
-            ),
-        ));
-    }
+    validate_asymmetric_visibility(prop)?;
     if state.property_declaring_classes.contains_key(&prop.name) {
         return Err(CompileError::new(
             prop.span,
@@ -229,7 +221,8 @@ fn apply_static_property(
     state
         .static_property_visibilities
         .insert(prop.name.clone(), prop.visibility.clone());
-    if prop.is_final {
+    apply_set_visibility(state, class, prop);
+    if property_is_effectively_final(prop) {
         state.final_static_properties.insert(prop.name.clone());
     } else {
         state.final_static_properties.remove(&prop.name);
@@ -279,6 +272,26 @@ fn validate_static_property_override(
                 class.name, prop.name
             ),
         ));
+    }
+
+    if let Some(parent_set_visibility) = state.property_set_visibilities.get(&prop.name) {
+        let child_set_visibility = effective_set_visibility(class, prop);
+        if visibility_rank(&child_set_visibility) < visibility_rank(parent_set_visibility) {
+            return Err(CompileError::new(
+                prop.span,
+                &format!(
+                    "Set access level of {}::${} must be {} or weaker (as in class {})",
+                    class.name,
+                    prop.name,
+                    match parent_set_visibility {
+                        Visibility::Public => "public(set)",
+                        Visibility::Protected => "protected(set)",
+                        Visibility::Private => "private(set)",
+                    },
+                    parent_declaring_class,
+                ),
+            ));
+        }
     }
 
     let parent_declared = state.declared_static_properties.contains(&prop.name);
