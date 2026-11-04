@@ -113,7 +113,8 @@ the current stack frame when codegen proves the entire lifetime cannot escape.
 The cell has the ordinary runtime tag and payload but no heap header, and it
 must never reach a heap release or outlive its producing activation. Its
 overflow branch computes the operation's float result from the original
-operands. References, `eval`, suspension, delayed reads and unknown consumers
+operands. A proven numeric local also owns one seed cell for raw integer or float
+stores, so re-entering a counter loop does not box its seed. References, `eval`, suspension, delayed reads and unknown consumers
 retain ordinary heap storage. See
 [Frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells).
 

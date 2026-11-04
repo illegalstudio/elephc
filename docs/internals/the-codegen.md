@@ -225,6 +225,15 @@ it only when the complete function region proves the conditional jump in range.
 Unknown values, references and warning-sensitive string-offset or implicit casts
 keep their existing lowering. This reuses frame proofs without adding graph scans
 or changing the representation of a loop counter.
+A proven numeric local also owns one seed cell when an integer or float value is
+stored into it directly, as `$row = $bounds[$box]->first` stores a packed field. The
+store writes the tag and payload into that cell instead of boxing on the heap.
+Re-entering the loop rewrites the same cell, because every read of the slot copies its
+payload before the next store. An explicit `mixed_box` of a raw integer or float,
+such as a guarded counter's exit publication, is a cell producer when the local is
+its only owner. A guarded entry's tag test reads its seed in the same block as the
+payload copy. Nested loops with field-seeded counters therefore allocate nothing
+per loop entry.
 Private slots in the executable main frame use the same lifetime proof; globals
 retain heap storage. Delayed reads, escaping consumers, aliases, references,
 `eval` and suspension fail the proof.

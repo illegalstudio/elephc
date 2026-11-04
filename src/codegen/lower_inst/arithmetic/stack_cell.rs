@@ -8,6 +8,7 @@
 //! - The usual Mixed tag and payload are preserved, including PHP overflow to float.
 //! - The cell has no heap header and must never escape, acquire children, or be freed.
 //! - Every target uses the same 24-byte layout and the target-aware frame helpers.
+//! - A raw integer/float seed of a proven numeric local writes that slot's own seed cell.
 //! - Tagged numeric arithmetic remains a clobber point, so its extra caller-saved tag registers
 //!   cannot contain unrelated live SSA values. Both operand homes are read first.
 
@@ -63,6 +64,41 @@ pub(in crate::codegen::lower_inst) fn lower_increment(ctx: &mut FunctionContext<
     abi::emit_load_int_immediate(ctx.emitter, right, delta);
     abi::emit_load_int_immediate(ctx.emitter, right_tag, 0);
     tagged(ctx, inst, offset, Op::ICheckedAdd, left_type, PhpType::Int)
+}
+
+/// Publishes a raw integer or float seed through its slot's frame cell instead of a heap box.
+///
+/// The slot's previous occupant was already retired by the preceding `release_local_slot`;
+/// the scalar is loaded before the cell is rewritten, so a slot that still points at this
+/// cell is simply republished with the new payload.
+pub(in crate::codegen::lower_inst) fn store_seed(ctx: &mut FunctionContext<'_>, slot: crate::ir::LocalSlotId, value: crate::ir::ValueId, cell: usize) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    write_scalar(ctx, value, cell)?;
+    let offset = ctx.local_offset(slot)?;
+    abi::store_at_offset(ctx.emitter, result, offset);
+    Ok(())
+}
+
+/// Boxes a raw integer or float seed into its proven frame cell instead of the heap.
+pub(in crate::codegen::lower_inst) fn lower_box(ctx: &mut FunctionContext<'_>, inst: &Instruction, cell: usize) -> Result<()> {
+    write_scalar(ctx, expect_operand(inst, 0)?, cell)?;
+    store_if_result(ctx, inst)
+}
+
+/// Writes one raw scalar and its tag to a cell, leaving the cell address in the result register.
+fn write_scalar(ctx: &mut FunctionContext<'_>, value: crate::ir::ValueId, cell: usize) -> Result<()> {
+    let ty = ctx.load_value_to_result(value)?.codegen_repr();
+    let result = abi::int_result_reg(ctx.emitter);
+    // -- tag the scalar payload in the frame-local Mixed cell --
+    let tag = if ty == PhpType::Float {
+        abi::emit_reg_move(ctx.emitter, result, abi::float_result_reg(ctx.emitter));
+        2
+    } else {
+        0
+    };
+    store(ctx, cell, tag);
+    abi::emit_frame_slot_address(ctx.emitter, result, cell);
+    Ok(())
 }
 
 /// Uses the same caller-saved register set for arithmetic and unary numeric updates.

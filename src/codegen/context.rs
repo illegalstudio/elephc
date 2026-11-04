@@ -61,6 +61,8 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
     local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
+    /// Frame cells owned by proven numeric locals for their raw scalar seed stores.
+    pub(super) numeric_seed_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_local_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
@@ -187,6 +189,7 @@ impl<'a> FunctionContext<'a> {
             callee_saved_offsets: layout.callee_saved_offsets,
             local_offsets: layout.local_offsets,
             numeric_cell_offsets: layout.numeric_cell_offsets,
+            numeric_seed_offsets: layout.numeric_seed_offsets,
             numeric_local_slots: layout.numeric_local_slots,
             numeric_values: layout.numeric_values,
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
@@ -752,6 +755,11 @@ impl<'a> FunctionContext<'a> {
     /// Returns whether every path reaching this instruction stores a ref-cell pointer.
     pub(super) fn local_ref_cell_representation_is_definite(&self, slot: LocalSlotId) -> bool {
         self.local_slot_representation(slot) == LocalSlotRepresentation::RefCell
+    }
+
+    /// Returns whether the current instruction sees only the slot's raw storage word.
+    pub(super) fn local_slot_is_raw(&self, slot: LocalSlotId) -> bool {
+        self.local_slot_representation(slot) == LocalSlotRepresentation::Raw
     }
 
     /// Classifies the slot as raw, definitely ref-cell, or path-dependent at this instruction.
