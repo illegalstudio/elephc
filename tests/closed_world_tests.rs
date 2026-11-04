@@ -595,6 +595,33 @@ fn closed_world_includes_dumped_cache_files_through_computed_paths() {
     assert!(text(&run.stderr).contains("HEAP DEBUG: leak summary: clean"), "{}", text(&run.stderr));
 }
 
+/// A method or function reflected from a run-time value knows where it was declared: the Symfony
+/// Demo reads its controller's source through `getFileName()` on every page, and its row carried
+/// no location, so the file was `""`.
+#[test]
+fn closed_world_reflected_members_know_their_file_and_lines() {
+    let dir = make_test_dir("cw_member_location");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#).unwrap();
+    fs::write(
+        dir.join("src/Ctl.php"),
+        "<?php\nnamespace App;\n\nabstract class Base {\n    public function inherited(int $a): int {\n        return $a;\n    }\n}\n\nfinal class Ctl extends Base {\n    public function index(string $x = 'd'): string\n    {\n        return $x;\n    }\n    public static function st(): int { return 1; }\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nuse App\\Ctl;\nfunction plain(int $x) {\n    return $x;\n}\n$cases = [\n    new ReflectionMethod(new Ctl(), 'index'),\n    new ReflectionMethod(Ctl::class, 'st'),\n    new ReflectionMethod(new Ctl(), 'inherited'),\n    new ReflectionFunction('plain'),\n];\nforeach ($cases as $r) {\n    echo $r->getName(), ' ', basename($r->getFileName()), ' ', $r->getStartLine(), ' ', $r->getEndLine(), \"\\n\";\n}\n$m = new ReflectionMethod(new Ctl(), 'index');\necho trim(file($m->getFileName())[$m->getStartLine() - 1]), \"\\n\";\n",
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(
+        text(&run(&dir).stdout),
+        "index Ctl.php 11 14\nst Ctl.php 15 15\ninherited Ctl.php 5 7\nplain main.php 3 5\n\
+         public function index(string $x = 'd'): string\n"
+    );
+}
+
 /// A backend re-run is a new process: a file the first round classified as harmless (here, one
 /// php refuses to load) stays harmless, while one it inherits with no such verdict still refuses
 /// the build. `KernelBrowser` was a note in the first round of the Symfony Demo build and a

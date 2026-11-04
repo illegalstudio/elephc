@@ -491,6 +491,16 @@ fn method_constructor() -> ClassMethod {
         None,
     ));
     fill.push(s_if(
+        flag_set(member_flag::HAS_FILE),
+        vec![
+            s_prop_assign(e_this(), "__file_name", pool_one(mw(member::DOC))),
+            s_prop_assign(e_this(), "__start_line", mw(member::START_LINE)),
+            s_prop_assign(e_this(), "__end_line", mw(member::END_LINE)),
+        ],
+        vec![],
+        None,
+    ));
+    fill.push(s_if(
         flag_set(member_flag::HAS_PROTOTYPE),
         vec![
             s_prop_assign(e_this(), "__prototype_class", pool_one(mw(member::PROTOTYPE_CLASS))),

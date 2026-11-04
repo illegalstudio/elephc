@@ -87,6 +87,14 @@ impl MemberTables {
                     self.rows.push(row);
                 }
                 let mut row = method_row(ctx, declaring, listed)?;
+                if let Some(location) = method_location(ctx, declaring, &listed.name) {
+                    let flags = match row[member::FLAGS] {
+                        DataWord::U64(flags) => flags,
+                        _ => 0,
+                    };
+                    row[member::FLAGS] = DataWord::U64(flags | member_flag::HAS_FILE as u64);
+                    write_location(ctx.data, &mut row, location);
+                }
                 if !listed.parameters.is_empty() {
                     // Relative until the layout is known: `position + 1`, 0 meaning none.
                     row[member::PARAMETERS] = DataWord::U64(first as u64 + 1);
@@ -517,7 +525,11 @@ pub(super) fn collect_function_members(
         };
         let metadata = reflection_function_owner_metadata(ctx, function)?;
         let key_name = php_symbol_key(&name);
-        let location = source.map(|source| (source.file, source.start_line, source.end_line));
+        let location = match source {
+            Some(source) => Some((source.file, source.start_line, source.end_line)),
+            None if is_closure => None,
+            None => function_location(ctx, &name),
+        };
         let listed = ReflectionListedMember {
             name,
             declaring_class_name: None,
@@ -612,6 +624,57 @@ impl MemberTables {
     }
 }
 
+/// Stores a member's declaring file and line range in its row.
+fn write_location(data: &mut DataSection, row: &mut [DataWord], (file, start, end): (String, u32, u32)) {
+    row[member::DOC] = pool(data, std::slice::from_ref(&file));
+    row[member::START_LINE] = DataWord::U64(u64::from(start));
+    row[member::END_LINE] = DataWord::U64(u64::from(end));
+}
+
+/// Where a compiled method is declared, read from its own span so a trait's method names the
+/// trait's file. `None` for a compiler-provided class: php reports no file for an internal one.
+///
+/// A row is what `new ReflectionMethod($object, $name)` reads at run time, and it carried none:
+/// `getFileName()` answered `""` and the Symfony Demo's source panel could not read the
+/// controller it shows on every page.
+fn method_location(
+    ctx: &FunctionContext<'_>,
+    declaring: &str,
+    method: &str,
+) -> Option<(String, u32, u32)> {
+    let info = ctx.module.class_infos.get(declaring.trim_start_matches('\\'))?;
+    if info.is_internal {
+        return None;
+    }
+    let key = php_symbol_key(method);
+    let span = info
+        .method_decls
+        .iter()
+        .find(|decl| php_symbol_key(&decl.name) == key)
+        .map(|decl| decl.span)
+        .filter(|span| span.line > 0)?;
+    let file = ctx
+        .module
+        .source_files
+        .get(&span.source_id())
+        .or(ctx.module.source_path.as_ref())?
+        .clone();
+    Some((file, span.line, span.end_line.max(span.line)))
+}
+
+/// Where a compiled function is declared. `None` for a function with no recorded lines: every
+/// compiler-provided one, which php reports as internal.
+fn function_location(ctx: &FunctionContext<'_>, name: &str) -> Option<(String, u32, u32)> {
+    let (start, end) = *ctx.module.declared_function_source_lines.get(name)?;
+    let file = ctx
+        .module
+        .declared_function_source_files
+        .get(&php_symbol_key(name))
+        .or(ctx.module.source_path.as_ref())?
+        .clone();
+    Some((file, start, end))
+}
+
 /// Builds the row of one function or closure.
 fn function_row(
     ctx: &mut FunctionContext<'_>,
@@ -632,11 +695,9 @@ fn function_row(
             flags |= bit;
         }
     }
-    if let Some((file, start, end)) = location {
+    if let Some(location) = location {
         flags |= member_flag::HAS_FILE;
-        words[member::DOC] = pool(ctx.data, std::slice::from_ref(&file));
-        words[member::START_LINE] = DataWord::U64(u64::from(start));
-        words[member::END_LINE] = DataWord::U64(u64::from(end));
+        write_location(ctx.data, &mut words, location);
     }
     words[member::FLAGS] = DataWord::U64(flags as u64);
     words[member::TYPE] = encode_type(ctx.data, listed.type_metadata.as_ref());
