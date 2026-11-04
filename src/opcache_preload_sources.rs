@@ -498,8 +498,9 @@ pub fn project_data_units(
     units_for_paths(paths, defines, known)
 }
 
-/// Whether the first statement of a PHP file is a `return`, after its open tag, comments,
-/// `declare` and `namespace`/`use` lines: the only shape `unit_file_is_eligible` can admit.
+/// Whether the first statement of a PHP file is a `return` or a variable assignment, after its
+/// open tag, comments, `declare` and `namespace`/`use` lines: the only shapes
+/// `unit_file_is_eligible` can admit. A cheap filter before that parse, not the decision.
 fn starts_with_return(path: &Path) -> bool {
     let Ok(bytes) = std::fs::read(path) else {
         return false;
@@ -521,7 +522,8 @@ fn starts_with_return(path: &Path) -> bool {
             break;
         }
     }
-    rest.strip_prefix("return").is_some_and(|tail| tail.starts_with([' ', '(', '[', '\n', '\t']))
+    rest.starts_with('$')
+        || rest.strip_prefix("return").is_some_and(|tail| tail.starts_with([' ', '(', '[', '\n', '\t']))
 }
 
 /// Builds and resolves one unit per eligible path that `known` does not already cover.
@@ -571,9 +573,10 @@ fn fold_literal_path(expr: &Expr) -> Option<String> {
 ///
 /// Admitted: `namespace` and `use` statements, then one final `return <expression>` built only
 /// from literals, arrays, constants, `X::class`/`X::CONST` of a NAMED class, `new` of a named
-/// class and operators over those. Nothing in that shape reads or writes a variable, depends on
-/// the calling class (`self`, `static`, `$this`, a closure's bound scope), declares a symbol, or
-/// includes another file -- which are exactly the ways an include's scope shows through.
+/// class and operators over those, plus locals the file writes before reading them and method
+/// calls on those. Nothing in that shape reads a caller's variable, depends on the calling class
+/// (`self`, `static`, `$this`, a closure's bound scope), declares a nameable symbol, or includes
+/// another file -- which are exactly the ways an include's scope shows through.
 fn unit_file_is_eligible(path: &Path, defines: &HashSet<String>) -> bool {
     parse_physical_file(path, defines).is_some_and(|program| unit_body_is_eligible(&program))
 }
@@ -589,17 +592,30 @@ pub(crate) fn parse_physical_file(path: &Path, defines: &HashSet<String>) -> Opt
 
 /// The statement-level half of [`unit_file_is_eligible`].
 fn unit_body_is_eligible(body: &[Stmt]) -> bool {
+    let mut locals = HashSet::new();
     let mut returned = false;
     for stmt in body {
+        // The parser hoists an anonymous class behind the statements of its file: it declares
+        // nothing the caller can name, and its methods have their own scope.
+        if matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name.contains("class@anonymous")) {
+            continue;
+        }
         if returned {
             return false;
         }
         match &stmt.kind {
             StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {}
-            StmtKind::Return(Some(value)) if unit_expr_is_eligible(value) => returned = true,
+            StmtKind::Return(Some(value)) if unit_expr_is_eligible(value, &locals) => returned = true,
+            // A file-level local written before any read (Symfony's dumped translation catalogues:
+            // `$catalogue = new MessageCatalogue(...); ...; return $catalogue;`). It reads nothing
+            // of the caller. An include would also leave it in the caller's scope, but these files
+            // hand their result back through `return`, which is what the caller reads.
+            StmtKind::Assign { name, value } if unit_expr_is_eligible(value, &locals) => {
+                locals.insert(name.clone());
+            }
             // Guards around the value (`if (!class_exists(...)) { class_alias(...); }`): control
             // flow and calls over eligible expressions observe nothing of the caller either.
-            other if unit_guard_statement_is_eligible(other) => {}
+            other if unit_guard_statement_is_eligible(other, &locals) => {}
             _ => return false,
         }
     }
@@ -608,28 +624,29 @@ fn unit_body_is_eligible(body: &[Stmt]) -> bool {
 
 /// A statement that may precede the final `return` of a unit: an `if` chain, a call statement,
 /// or a bare `return;`, built only from eligible expressions.
-fn unit_guard_statement_is_eligible(kind: &StmtKind) -> bool {
-    let block_ok = |body: &[Stmt]| body.iter().all(|stmt| unit_guard_statement_is_eligible(&stmt.kind));
+fn unit_guard_statement_is_eligible(kind: &StmtKind, locals: &HashSet<String>) -> bool {
+    let block_ok =
+        |body: &[Stmt]| body.iter().all(|stmt| unit_guard_statement_is_eligible(&stmt.kind, locals));
     match kind {
         StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
-            unit_expr_is_eligible(condition)
+            unit_expr_is_eligible(condition, locals)
                 && block_ok(then_body)
                 && elseif_clauses
                     .iter()
-                    .all(|(condition, body)| unit_expr_is_eligible(condition) && block_ok(body))
+                    .all(|(condition, body)| unit_expr_is_eligible(condition, locals) && block_ok(body))
                 && else_body.as_deref().is_none_or(block_ok)
         }
-        StmtKind::ExprStmt(expr) => unit_expr_is_eligible(expr),
-        StmtKind::Include { path, .. } => unit_expr_is_eligible(path),
+        StmtKind::ExprStmt(expr) => unit_expr_is_eligible(expr, locals),
+        StmtKind::Include { path, .. } => unit_expr_is_eligible(path, locals),
         StmtKind::Return(None) => true,
-        StmtKind::Return(Some(value)) => unit_expr_is_eligible(value),
+        StmtKind::Return(Some(value)) => unit_expr_is_eligible(value, locals),
         _ => false,
     }
 }
 
 /// The expression-level half of [`unit_file_is_eligible`]: an allow-list, so a construct it does
 /// not know keeps the file interpreted.
-fn unit_expr_is_eligible(expr: &Expr) -> bool {
+fn unit_expr_is_eligible(expr: &Expr, locals: &HashSet<String>) -> bool {
     use crate::parser::ast::StaticReceiver;
     match &expr.kind {
         ExprKind::StringLiteral(_)
@@ -641,13 +658,20 @@ fn unit_expr_is_eligible(expr: &Expr) -> bool {
         ExprKind::ClassConstant { receiver } | ExprKind::ScopedConstantAccess { receiver, .. } => {
             matches!(receiver, StaticReceiver::Named(_))
         }
-        ExprKind::ArrayLiteral(items) => items.iter().all(unit_expr_is_eligible),
+        // A local the file itself wrote: reading it observes nothing of the caller.
+        ExprKind::Variable(name) => locals.contains(name),
+        ExprKind::MethodCall { object, args, .. } => {
+            matches!(object.kind, ExprKind::Variable(_))
+                && unit_expr_is_eligible(object, locals)
+                && args.iter().all(|arg| unit_expr_is_eligible(arg, locals))
+        }
+        ExprKind::ArrayLiteral(items) => items.iter().all(|item| unit_expr_is_eligible(item, locals)),
         ExprKind::ArrayLiteralAssoc(pairs) => pairs
             .iter()
-            .all(|(key, value)| unit_expr_is_eligible(key) && unit_expr_is_eligible(value)),
-        ExprKind::NewObject { args, .. } => args.iter().all(unit_expr_is_eligible),
-        ExprKind::Negate(inner) | ExprKind::Not(inner) => unit_expr_is_eligible(inner),
-        ExprKind::FunctionCall { args, .. } => args.iter().all(unit_expr_is_eligible),
+            .all(|(key, value)| unit_expr_is_eligible(key, locals) && unit_expr_is_eligible(value, locals)),
+        ExprKind::NewObject { args, .. } => args.iter().all(|arg| unit_expr_is_eligible(arg, locals)),
+        ExprKind::Negate(inner) | ExprKind::Not(inner) => unit_expr_is_eligible(inner, locals),
+        ExprKind::FunctionCall { args, .. } => args.iter().all(|arg| unit_expr_is_eligible(arg, locals)),
         // A static closure without captures that names no calling class: its body is its own
         // scope (`return static function (array $context) { return new Kernel(...); }`).
         // The check reads the body's debug form for the receiver variants, as WHOLE words: a
@@ -659,18 +683,18 @@ fn unit_expr_is_eligible(expr: &Expr) -> bool {
                 .iter()
                 .any(|word| contains_whole_word(&text, word))
         }
-        ExprKind::IncludeValue { path, .. } => unit_expr_is_eligible(path),
+        ExprKind::IncludeValue { path, .. } => unit_expr_is_eligible(path, locals),
         ExprKind::BinaryOp { left, right, .. } => {
-            unit_expr_is_eligible(left) && unit_expr_is_eligible(right)
+            unit_expr_is_eligible(left, locals) && unit_expr_is_eligible(right, locals)
         }
         ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
         } => {
-            unit_expr_is_eligible(condition)
-                && unit_expr_is_eligible(then_expr)
-                && unit_expr_is_eligible(else_expr)
+            unit_expr_is_eligible(condition, locals)
+                && unit_expr_is_eligible(then_expr, locals)
+                && unit_expr_is_eligible(else_expr, locals)
         }
         _ => false,
     }
@@ -1253,5 +1277,31 @@ mod tests {
         assert!(!unit_body_is_eligible(&program(scoped)));
         let selfish = "<?php\nreturn static function ($c) { return self::make(); };";
         assert!(!unit_body_is_eligible(&program(selfish)));
+    }
+
+    /// Symfony's dumped translation catalogue writes its locals before reading them; a file that
+    /// reads a variable of its caller, or uses one first and writes it later, stays out.
+    #[test]
+    fn a_file_that_writes_its_locals_before_reading_them_is_a_unit() {
+        let catalogue = "<?php\nuse A\\C;\n$c = new C('fr', []);\n$e = new C('en', []);\n$c->add($e);\nreturn $c;";
+        assert!(unit_body_is_eligible(&program(catalogue)));
+        let reads_caller = "<?php\nreturn $context;";
+        assert!(!unit_body_is_eligible(&program(reads_caller)));
+        let reads_first = "<?php\n$a = $b;\n$b = 1;\nreturn $a;";
+        assert!(!unit_body_is_eligible(&program(reads_first)));
+        let caller_receiver = "<?php\n$x = 1;\n$this->add($x);\nreturn $x;";
+        assert!(!unit_body_is_eligible(&program(caller_receiver)));
+        let conditional = "<?php\nif (A) { $x = 1; }\nreturn 1;";
+        assert!(!unit_body_is_eligible(&program(conditional)));
+    }
+
+    /// A dumped cache value holds anonymous classes, which the parser hoists behind the `return`;
+    /// a named declaration there still keeps the file out.
+    #[test]
+    fn an_anonymous_class_behind_the_return_keeps_a_file_a_unit() {
+        let dumped = "<?php\nreturn [new class() implements I { public function v(): mixed { return 1; } }];";
+        assert!(unit_body_is_eligible(&program(dumped)));
+        let declares = "<?php\nreturn 1;\nclass Named {}";
+        assert!(!unit_body_is_eligible(&program(declares)));
     }
 }

@@ -558,6 +558,43 @@ fn closed_world_class_file_php_refuses_to_load_is_a_note() {
     assert!(text(&run.stderr).contains("HEAP DEBUG: leak summary: clean"), "{}", text(&run.stderr));
 }
 
+/// Dumped cache files reached through computed paths run from the include table: a translation
+/// catalogue that builds its result in locals, and a cache value holding anonymous classes. Both
+/// were missing from it, so a binary with no interpreter answered `Failed to open stream`.
+#[test]
+fn closed_world_includes_dumped_cache_files_through_computed_paths() {
+    let dir = make_test_dir("cw_dumped_cache");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::create_dir_all(dir.join("var")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#).unwrap();
+    fs::write(
+        dir.join("src/Catalogue.php"),
+        "<?php\nnamespace App;\nfinal class Catalogue {\n    private ?Catalogue $fallback = null;\n    public function __construct(public string $locale, private array $messages) {}\n    public function add(Catalogue $c): void { $this->fallback = $c; }\n    public function get(string $k): string { return $this->messages[$k] ?? $this->fallback?->get($k) ?? $k; }\n}\n",
+    )
+    .unwrap();
+    fs::write(dir.join("src/Value.php"), "<?php\nnamespace App;\ninterface Value { public function value(): mixed; }\n").unwrap();
+    fs::write(
+        dir.join("var/catalogue.fr.php"),
+        "<?php\n\nuse App\\Catalogue;\n\n$catalogue = new Catalogue('fr', array (\n  'a' => 'A-fr',\n));\n$catalogueEn = new Catalogue('en', array (\n  'b' => 'B-en',\n));\n$catalogue->add($catalogueEn);\n\nreturn $catalogue;\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("var/metadata.php"),
+        "<?php\n\n// This file has been auto-generated.\n\nreturn [['k' => 0], [0 => new class() implements \\App\\Value { public function value(): mixed { return ['deep' => 42]; } }]];\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nforeach (['fr'] as $locale) {\n    $c = include __DIR__ . '/var/catalogue.' . $locale . '.php';\n    echo $c->locale, ' ', $c->get('a'), ' ', $c->get('b'), ' ', $c->get('c'), \"\\n\";\n}\n$name = 'metadata';\n[$keys, $values] = include __DIR__ . \"/var/$name.php\";\necho json_encode($keys), ' ', json_encode($values[0]->value()), \"\\n\";\n",
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world", "--heap-debug"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    let run = run(&dir);
+    assert_eq!(text(&run.stdout), "fr A-fr B-en c\n{\"k\":0} {\"deep\":42}\n");
+    assert!(text(&run.stderr).contains("HEAP DEBUG: leak summary: clean"), "{}", text(&run.stderr));
+}
+
 /// A backend re-run is a new process: a file the first round classified as harmless (here, one
 /// php refuses to load) stays harmless, while one it inherits with no such verdict still refuses
 /// the build. `KernelBrowser` was a note in the first round of the Symfony Demo build and a
