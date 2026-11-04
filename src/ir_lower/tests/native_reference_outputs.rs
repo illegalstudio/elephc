@@ -30,7 +30,11 @@ function nativeReferenceOutputSnapshots(
 }
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        let supports_pcntl = !target.starts_with("ios-");
+        let source = if supports_pcntl { source.to_owned() } else {
+            source.replace("    pcntl_waitpid(-1, $status, 1, $matches);", "")
+        };
+        let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"),
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
         let function = module.functions.iter().find(|function|
             function.name == "nativeReferenceOutputSnapshots").unwrap();
@@ -49,6 +53,7 @@ function nativeReferenceOutputSnapshots(
             (RuntimeCallTarget::Pcntl(PcntlRuntime::WaitPid), 1, "status", true),
             (RuntimeCallTarget::Pcntl(PcntlRuntime::WaitPid), 3, "matches", false),
         ] {
+            if !supports_pcntl && matches!(builtin, RuntimeCallTarget::Pcntl(_)) { continue; }
             let call = function.instructions.iter().find(|inst| inst.op == Op::RuntimeCall
                 && match inst.immediate {
                     Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target, .. })) =>

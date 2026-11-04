@@ -357,7 +357,7 @@ switches do not update the operating-system thread's stack bounds. Parsing calls
 no PHP and returns its owned program before interpreter execution begins; PHP
 suspension and saved-frame ownership continue on the native coroutine stack.
 
-The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, and `own_call_frame`), so `__rt_fiber_switch` can swap between main and fiber contexts without mixing exception or cleanup chains.
+The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. The main context also saves its magic-setter guard and deep-release GC suppression. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, `own_call_frame`, `own_magic_set_guard`, and `own_gc_release_suppressed`), so `__rt_fiber_switch` restores the execution context belonging to the selected stack.
 
 Every compiled function prologue also consults `_stack_limit`. The main-thread
 floor, derived from `RLIMIT_STACK`, is retained in `_stack_limit_main`; Fiber and
@@ -519,6 +519,13 @@ releases, frees its container, and restores the enclosing GC suppression state
 before propagating. The typed-property unset bridge has a versioned Throwable
 output argument so this propagation returns to Magician as an eval exception
 instead of jumping across Rust frames.
+
+Deep-release GC suppression is saved with its Fiber or Generator when that
+coroutine suspends. The resuming caller regains its own suppression state, so a
+paused destructor cannot block collection on the caller's stack. Resuming the
+coroutine restores its pending release protection before cleanup continues.
+The collector-wide `_gc_collecting` flag remains global across stack switches
+to prevent reentrant collection while the collector itself closes a coroutine.
 
 `__rt_cleanup_invoke` can release a validated scalar Mixed cell without creating
 a new jump buffer. It first authenticates the exact `__rt_decref_any` callback,
@@ -1599,7 +1606,7 @@ Unlike arrays, objects are not resizable. The number of properties is fixed by t
 ## Generator coroutine layout
 
 `Generator` objects are heap-allocated object-kind blocks that reuse the
-232-byte Fiber payload. The first word is the built-in Generator class id, so
+248-byte Fiber payload. The first word is the built-in Generator class id, so
 ordinary `instanceof Generator` and `Iterator` checks still work. Offsets
 `8..176` retain the Fiber state, native stack ownership, saved stack pointer,
 callable/wrapper, caller, transfer and exception state, and seven boxed
@@ -1614,6 +1621,8 @@ Offset  Size  Field
 208      8    auto_key_counter
 216      8    delegated_iter pointer used by `yield from`
 224      8    unused reserved word
+232      8    saved magic-setter guard head
+240      8    saved deep-release GC suppression
 ```
 
 The constructor boxes the generator's parameters and closure captures into the

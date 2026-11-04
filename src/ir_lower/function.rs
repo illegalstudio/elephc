@@ -2225,7 +2225,7 @@ pub(crate) fn eir_signature_with_php_param_contracts(
         if by_ref {
             continue;
         }
-        if index == 1
+        if declared && index == 1
             && owner_name.rsplit_once("::").is_some_and(|(_, method)|
                 matches!(php_symbol_key(method).as_str(), "__call" | "__callstatic"))
             && matches!(php_type, PhpType::Array(element)

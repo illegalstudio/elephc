@@ -246,6 +246,9 @@ $fiber = new Fiber(static function (): void {
     eval('$held = NativeCleanupResultFactory::result();');
 });
 echo $fiber->start(), '|';
+$state = gc_status();
+fwrite(STDERR, 'paused-gc:' . (int)$state['protected'] . ':' . (int)$state['running'] . "\n");
+unset($state);
 unset($fiber);
 gc_collect_cycles();
 echo 'done';
@@ -253,6 +256,7 @@ echo 'done';
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
     assert_eq!(output.stdout, "9|done");
+    assert!(output.stderr.contains("paused-gc:0:0\n"), "{}", output.stderr);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
@@ -273,6 +277,9 @@ $fiber = new Fiber(static function (): void {
     eval('$held = $factory->result();');
 });
 echo $fiber->start(), '|';
+$state = gc_status();
+fwrite(STDERR, 'paused-gc:' . (int)$state['protected'] . ':' . (int)$state['running'] . "\n");
+unset($state);
 unset($fiber);
 gc_collect_cycles();
 echo 'done';
@@ -280,6 +287,7 @@ echo 'done';
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
     assert_eq!(output.stdout, "9|done");
+    assert!(output.stderr.contains("paused-gc:0:0\n"), "{}", output.stderr);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 

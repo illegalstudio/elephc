@@ -32,7 +32,7 @@ echo count(readStaticLifetimeReflector(constructStaticLifetimeReflector()));
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
     crate::ir::validate_module(&module).unwrap();
-    let accessor = module.functions.iter().find(|function|
+    let accessor = module.class_methods.iter().find(|function|
         function.name == "ReflectionClass::getStaticProperties").unwrap();
     assert!(accessor.instructions.iter().any(|inst| inst.op == Op::ReflectionStaticPropertyInitialized),
         "{target}: generic reflection reads the current initialization state");

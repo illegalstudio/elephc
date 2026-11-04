@@ -434,6 +434,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_fiber_main_saved_exc", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_call_frame", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_magic_set_guard", 8, target));
+    out.push_str(&comm_directive("_fiber_main_saved_gc_release_suppressed", 8, target));
     // Call-stack overflow guard state. _stack_limit is the low-water stack address of the
     // execution context that is running right now: every compiled function prologue does an
     // unsigned compare of the stack pointer against it and branches to __rt_stack_overflow

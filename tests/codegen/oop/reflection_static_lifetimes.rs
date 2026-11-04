@@ -90,7 +90,7 @@ echo 'done';
 }
 
 /// Generic class accessors use populated enum slots on builtin and user-derived reflectors.
-/// The enum case keeps its ordinary process-lifetime owner, exactly as a bare case read does.
+/// The enum case keeps its ordinary process-lifetime owner after an enum cases array is released.
 #[test]
 fn test_reflection_enum_inherited_collections_use_enum_metadata() {
     let source = r#"<?php
@@ -117,7 +117,10 @@ enum InheritedReflectionEnumSubject: string {
     public const Extra = 9;
     public function label(): string { return $this->value; }
 }
-echo InheritedReflectionEnumSubject::First->value;
+$cases = InheritedReflectionEnumSubject::cases();
+$case = $cases[0];
+echo $case->value;
+unset($case, $cases);
 "#);
     assert!(baseline.success, "{}", baseline.stderr);
     assert_eq!(baseline.stdout, "first");

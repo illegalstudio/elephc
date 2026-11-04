@@ -61,6 +61,7 @@ fn lower_captured_store(
         emit_store(ctx, parent, key, value, index, span);
     });
     emit_store(ctx, parent, key, value, index, span);
+    if ctx.builder.insertion_block_is_terminated() { return; }
     retire_owner(ctx, key_owner, span);
     retire_owner(ctx, parent_owner, span);
 }
@@ -110,6 +111,7 @@ fn lower_captured_append(
         emit_append(ctx, parent, value, span);
     });
     emit_append(ctx, parent, value, span);
+    if ctx.builder.insertion_block_is_terminated() { return; }
     retire_owner(ctx, parent_owner, span);
 }
 

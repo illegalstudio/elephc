@@ -23,6 +23,13 @@ Reuse the managed libxml2 package and its opaque C shim on all supported targets
 
 Validation follows the user's instruction: local read-only and lightweight source checks only; compilation, linking, executable tests, and target coverage run in the PR's CI.
 
+Keep each published candidate stable until its complete CI run terminates. The next grouped
+CI repair uses owned canonical snapshots for eval access-mask probes, publishes OpenSSL tags
+through the existing native output writer, stops nested-write cleanup after an emitted throw,
+and preserves per-coroutine deep-release suppression across Fiber switches. The global collector
+reentry guard stays global. These repairs retain the executable heap assertions and all-target
+checks; they do not enable generalized typed property promotion or nested iterator extensions.
+
 Draft PR: https://github.com/illegalstudio/elephc/pull/2060. Earlier CI runs passed both Linux builds, both iOS XML/SimpleXML links, native ownership tests, and the isolated array/JSON heap regressions. The integrated work also covers live DOM identity and relationships, text and namespace writes, XPath contexts, and guarded interface receivers. All 22 public PHP class methods are present, including the debug projection. Native and boxed debug calls, side-effecting property-name reads, and production CLI prelude type checking have dedicated regressions. Generated documentation comes from CI artifacts and local JSON-based audits, without invoking Cargo.
 
 The user authorized the supporting native reference refactor and unlimited review rounds. Exact-Mixed native properties and constructor bindings share persistent references with eval. Typed scalar/union promotion remains disabled while generated publishers, validators and lifecycle integration are unfinished. Canonical readers, a weak indexed source registry, original-RHS coercion coordination and invisible native validation roots are preparatory components. Each initially matching property source must independently validate the original RHS; removing a source during coercion does not discard its in-flight result. Temporary roots must preserve PHP clone and array-copy sharing semantics. Keep the PR draft throughout implementation. Greptile is waived because its credits are exhausted; final independent review uses installed-default Grok.

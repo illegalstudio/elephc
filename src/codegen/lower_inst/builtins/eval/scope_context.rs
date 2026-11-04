@@ -9,6 +9,10 @@
 
 use super::*;
 
+#[cfg(test)]
+#[path = "scope_context_tests.rs"]
+mod tests;
+
 /// Where the eval context handle lives while the native inventory is registered.
 ///
 /// The handle is needed by every registration call, and each of those calls
@@ -104,8 +108,8 @@ fn promote_unsafe_eval_scope_access_to_full(
             &next,
         );
         if matches!(local.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-            ctx.load_eval_local_to_result(local.slot)?;
-            emit_branch_if_mixed_numeric_scalar(ctx.emitter, &next);
+            ctx.load_eval_local_snapshot_to_mixed(local.slot)?;
+            emit_branch_if_mixed_numeric_scalar(ctx.emitter, &next, true);
         }
         emit_branch_to_eval_scope_label(ctx, &full);
         ctx.emitter.label(&next);
@@ -123,7 +127,7 @@ fn promote_unsafe_eval_scope_access_to_full(
         );
         if matches!(global.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             load_global_to_result(ctx, global);
-            emit_branch_if_mixed_numeric_scalar(ctx.emitter, &next);
+            emit_branch_if_mixed_numeric_scalar(ctx.emitter, &next, false);
         }
         emit_branch_to_eval_scope_label(ctx, &full);
         ctx.emitter.label(&next);
@@ -141,13 +145,24 @@ fn promote_unsafe_eval_scope_access_to_full(
 fn emit_branch_if_mixed_numeric_scalar(
     emitter: &mut crate::codegen_support::emit::Emitter,
     label: &str,
+    owned: bool,
 ) {
     // -- unbox a selected Mixed binding for its scalar tag --
     emitter.comment(
         "-- accept selected Mixed bindings only when they hold numeric scalars --",
     );
-    abi::emit_call_label(emitter, "__rt_mixed_unbox");
     let tag = abi::int_result_reg(emitter);
+    if owned { abi::emit_push_reg(emitter, tag); }
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    if owned {
+        // The native slot still owns the source payload. Retiring this extra snapshot cannot
+        // destroy that payload, and every outgoing branch must first drop the snapshot lease.
+        abi::emit_push_reg(emitter, tag);
+        abi::emit_load_temporary_stack_slot(emitter, tag, 16);
+        abi::emit_call_label(emitter, "__rt_decref_mixed");
+        abi::emit_pop_reg(emitter, tag);
+        abi::emit_release_temporary_stack(emitter, 16);
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             // -- accept numeric scalar tags on AArch64 --

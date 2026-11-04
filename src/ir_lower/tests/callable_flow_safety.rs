@@ -19,18 +19,31 @@ class EvalOnlyMagicArguments {
     public function __call(string $name, array $arguments): mixed { return $arguments[0](); }
     public static function __callStatic(string $name, array $arguments): mixed { return $arguments[0](); }
 }
+class EvalOnlyUntypedMagicArguments {
+    public function __call($name, $arguments): mixed { return $arguments[0](); }
+    public static function __callStatic($name, $arguments): mixed { return $arguments[0](); }
+}
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-        for method in ["__call", "__callStatic"] {
-            let function = module.functions.iter().find(|function|
-                function.name == format!("EvalOnlyMagicArguments::{method}")).unwrap();
-            let arguments = function.params.iter().find(|parameter| parameter.name == "arguments").unwrap();
-            assert_eq!(arguments.php_type, PhpType::Array(Box::new(PhpType::Mixed)), "{target}: {method}");
-            assert!(function.instructions.iter().any(|instruction|
-                instruction.op == Op::ArrayGet && instruction.result_php_type == PhpType::Mixed),
-                "{target}: {method} must load the supplied callback");
+        for (class, expected) in [("EvalOnlyMagicArguments", PhpType::Array(Box::new(PhpType::Mixed))),
+            ("EvalOnlyUntypedMagicArguments", PhpType::Mixed)] {
+            for method in ["__call", "__callStatic"] {
+                let function = module.class_methods.iter().find(|function|
+                    function.name == format!("{class}::{method}")).unwrap();
+                let arguments = function.params.iter().find(|parameter| parameter.name == "arguments").unwrap();
+                assert_eq!(arguments.php_type, expected, "{target}: {class}::{method}");
+                if expected != PhpType::Mixed {
+                    assert!(function.instructions.iter().any(|instruction|
+                        instruction.op == Op::ArrayGet && instruction.result_php_type == PhpType::Mixed),
+                        "{target}: {method} must load the supplied callback");
+                }
+                let invoke = function.instructions.iter().find(|instruction|
+                    instruction.op == Op::CallableDescriptorInvoke).unwrap();
+                assert_eq!(function.value(invoke.operands[0]).unwrap().php_type, PhpType::Mixed,
+                    "{target}: {class}::{method} must invoke the runtime value");
+            }
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));

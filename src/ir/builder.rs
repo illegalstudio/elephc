@@ -729,7 +729,9 @@ impl<'f> Builder<'f> {
         let block = &self.func.blocks[block.as_raw() as usize];
         assert!(
             block.terminator.is_none(),
-            "attempted to emit an EIR instruction after a terminator"
+            "attempted to emit an EIR instruction after a terminator in {} / {} ({:?})\n{}",
+            self.func.name, block.name, block.terminator,
+            std::backtrace::Backtrace::force_capture(),
         );
     }
 }

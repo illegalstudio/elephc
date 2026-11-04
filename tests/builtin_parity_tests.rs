@@ -362,6 +362,7 @@ fn target_public_name_sets_filter_platform_specific_pcntl_builtins() {
         assert!(!ios_names.contains("pcntl_fork"));
         assert!(!ios_names.contains("pcntl_exec"));
         assert!(!ios_names.contains("pcntl_wait"));
+        assert!(!ios_names.contains("pcntl_waitpid"));
         assert!(!ios_names.contains("pcntl_alarm"));
         assert!(!ios_names.contains("pcntl_signal"));
         assert!(!ios_names.contains("pcntl_daemon"));
