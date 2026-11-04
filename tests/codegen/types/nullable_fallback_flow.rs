@@ -2925,3 +2925,33 @@ for ($i = 0; $i < 2; $i++) {
 "#;
     assert_nullable_flow_cli_heap_output(source, &"[null]1n|[6]1v|[null]n|[6]v|{\"k\":null}n|{\"k\":6}v|[null]|[6]|[null]{\"k\":null}|[5]{\"k\":5}|[null]|[6]|[null]{\"k\":null}[null]|[6]{\"k\":6}[6]|[null,7,\"s\"],7,s|[6,7,\"s\"]6,7,s|\n".repeat(2));
 }
+
+/// Writes of a tagged scalar into an untyped `[]` property store boxed `mixed` elements.
+///
+/// `public $items = []` and `public static $bag = []` adopt the type of their first write, and
+/// the backend builds the slot's `[]` default, reads and writes from it; `$h->items[0] = $n ??
+/// null`, `$h->keyed["k"] = ...` and `Holder::$bag[0] = $n ?: null` therefore failed with
+/// `array default element PHP type TaggedScalar` or crashed `runtime_value_tag`, as a bare
+/// `?int` already did, and an append reached the tagged array `array_shift` refuses. The slot
+/// now stores `mixed` cells, a later `= []` keeps them (it used to narrow the slot back to the
+/// `array<never>` placeholder), and every consumer reads the int or the null back (#1944). Two
+/// untyped-property writes stay out of this fixture because they misbehave for every value
+/// type: a string key on a static array property drops the key, and a sparse int key on a slot
+/// another function already typed fills the hole instead of promoting to a hash.
+#[test]
+fn test_nullable_fallback_flow_tagged_property_writes_runtime() {
+    let source = r#"<?php
+class Holder { public $items = []; public $keyed = []; public $adopted = []; public static $bag = []; }
+function offsetWrite(?int $n): void { $h = new Holder(); $h->items[0] = $n ?? null; Holder::$bag[0] = $n ?: null; echo json_encode($h->items), json_encode(Holder::$bag), $h->items[0] === null ? "n" : "v", "|"; Holder::$bag = []; }
+function keyedWrite(?int $n): void { $h = new Holder(); $h->keyed["k"] = $n ?? null; echo json_encode($h->keyed), "|"; }
+function pushed(?int $n): void { $h = new Holder(); $h->items[] = $n ?? null; $h->items[] = 7; Holder::$bag[] = $n ?? null; echo json_encode($h->items), count($h->items), implode(",", $h->items); foreach ($h->items as $v) { echo $v === null ? "n" : "v"; } $s = array_shift($h->items); echo $s === null ? "N" : "V", json_encode(Holder::$bag), "|"; Holder::$bag = []; }
+function adopted(?int $n): void { $a = []; $a[] = $n ?? null; $h = new Holder(); $h->adopted = $a; $h->items = [$n ?? null]; Holder::$bag = $a; echo json_encode($h->adopted), json_encode($h->items), json_encode(Holder::$bag), "|"; Holder::$bag = []; }
+function resetWrites(?int $n): void { $h = new Holder(); $h->items[] = $n ?? null; $h->items = []; $h->items[] = $n ?? null; $h->items[] = "s"; Holder::$bag = []; Holder::$bag[] = $n ?? null; echo json_encode($h->items), json_encode(Holder::$bag), count(Holder::$bag), "|"; Holder::$bag = []; }
+function bare(?int $n): void { $h = new Holder(); $h->items[0] = $n; $h->keyed["k"] = $n; Holder::$bag[] = $n; echo json_encode($h->items), json_encode($h->keyed), json_encode(Holder::$bag), "|"; Holder::$bag = []; }
+for ($i = 0; $i < 2; $i++) {
+    offsetWrite(null); offsetWrite(6); keyedWrite(null); keyedWrite(6); pushed(null); pushed(6);
+    adopted(null); adopted(6); resetWrites(null); resetWrites(6); bare(null); bare(6); echo "\n";
+}
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"[null][null]n|[6][6]v|{\"k\":null}|{\"k\":6}|[null,7]2,7nvN[null]|[6,7]26,7vvV[6]|[null][null][null]|[6][6][6]|[null,\"s\"][null]1|[6,\"s\"][6]1|[null]{\"k\":null}[null]|[6]{\"k\":6}[6]|\n".repeat(2));
+}

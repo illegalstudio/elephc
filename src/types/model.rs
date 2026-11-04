@@ -488,6 +488,29 @@ pub(crate) fn is_unboxed_scalar_type(php_type: &PhpType) -> bool {
     }
 }
 
+/// Boxes an array element or hash value whose storage is the inline tagged scalar as `mixed`.
+///
+/// An untyped property slot (`public $items = []`, `public static $bag = []`) adopts the type
+/// of the first write, and the backend builds the slot's `[]` default, its reads and its writes
+/// from that type. The tagged scalar (`int|null`) has no entry in those paths: the 16-byte
+/// tagged indexed array is an append-only specialization that `foreach`, `json_encode` and
+/// `array_shift` refuse, and a hash has no tagged value at all. A slot that would hold such an
+/// element therefore stores boxed `mixed` cells, as a local array or a literal does, so
+/// `$c->items[0] = $n ?? null`, `$c->items["k"] = $n` and `C::$bag[] = $n ?: null` read the int
+/// or the null back (#1944). Under the sentinel null representation `int|null` is already
+/// `mixed`, and every other type is returned unchanged.
+pub(crate) fn box_tagged_scalar_array_elements(php_type: PhpType) -> PhpType {
+    match php_type {
+        PhpType::Array(element) if element.codegen_repr() == PhpType::TaggedScalar => {
+            PhpType::Array(Box::new(PhpType::Mixed))
+        }
+        PhpType::AssocArray { key, value } if value.codegen_repr() == PhpType::TaggedScalar => {
+            PhpType::AssocArray { key, value: Box::new(PhpType::Mixed) }
+        }
+        other => other,
+    }
+}
+
 /// Returns whether `ty` is an indexed array whose elements are stored as raw pointer words
 /// (`array<ptr<T>>` or `array<ptr<T>|null>`), as opposed to boxed Mixed cells.
 pub(crate) fn is_pointer_element_indexed_array(ty: &PhpType) -> bool {
