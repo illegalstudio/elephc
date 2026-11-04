@@ -21,6 +21,7 @@ sensitive.
 | `grapheme_strrev()` | Now classified as `ext/intl` (PHP 8.6) instead of an elephc extension. Both upstream `ext/intl/tests/grapheme_strrev*.phpt` fixtures pass, including the UBRK_DONE regression and the Arabic grapheme-cluster case. |
 | Default trim mask | `trim()`, `ltrim()`, `rtrim()` and `chop()` include form feed (`\x0C`) under `--php-version=8.6`, and leave it untouched on 8.5 and earlier. |
 | Readonly property defaults | A readonly instance property may declare a default value, including inside a `readonly class`. The default initializes the slot before the constructor runs, so later writes (including from the constructor) raise `Cannot modify readonly property`. Inheritance, get-only interface properties, and serialization follow php-src's `Zend/tests/readonly_props/readonly_with_default*.phpt`. |
+| Parameter doc comments | `/** ... */` before a parameter or after it before the comma is retained as `ReflectionParameter::getDocComment()` for functions, methods, constructors, promoted parameters, closures, arrow functions, and property-hook `set` parameters. The indented upstream fixture passes; the basic fixture is transcribed with its closure/arrow reflection cases removed until dynamic `ReflectionFunction` construction is supported. |
 | Partial function application | `foo(1, ?, ...)` placeholders, named placeholders, trailing `...`, constant-expression partials, inherited parameter names/types/defaults/reference modes, creation-time evaluation, extra-argument forwarding, and closure scope. Ten php-src `Zend/tests/partial_application` fixtures are transcribed into `tests/codegen/oop/partial_application_php86.rs`; the invalid shapes are rejected in `tests/error_tests/partial_application.rs`. |
 | `ReflectionProperty::isReadable()` / `isWritable()` | Report whether a property can be read or written from a class scope, with the optional object adding initialization and readonly state. Visibility, asymmetric write visibility, virtual/backed hooks, `__get`/`__set`/`__isset` fallbacks, static properties, and the readonly `__clone` reinitialization window are covered by the six upstream `ext/reflection/tests/ReflectionProperty_is{Readable,Writable}_*.phpt` fixtures in `tests/codegen/oop/reflection_property_access_php86.rs`. This also implements PHP 8.5's asymmetric visibility for static properties. |
 | `mysqli_quote_string()` | Escapes a string through `mysqli::real_escape_string()` and wraps it in single quotation marks, as the method `mysqli::quote_string()` and the procedural alias. Covered by the unconnected-object test and an opt-in live MySQL test. |
@@ -42,13 +43,16 @@ instead of during production.
 |---|---|
 | `Io\Poll` | A new platform polling API (`epoll`/`kqueue`/`WSAPoll`). It needs a new native surface per target and an event-loop-free runtime shape. |
 | Stream `error_mode` | The stream layer currently reports PHP 8.5 warnings; opting into `STREAM_ERRMODE_EXCEPTION` requires a new stream-option ABI across every stream wrapper. |
-| Parameter doc comments (`ReflectionParameter::getDocComment()`) | The parser would need a doc-comment channel on every parameter (functions, methods, closures, arrow functions, hook parameters) and a parallel field across the AST. |
 | URI builder follow-ups | The `Uri\Rfc3986\Uri` / `Uri\WhatWg\Url` extension is not implemented at all yet. |
 | `pack()`/`unpack()` float and signed-integer endianness modifiers | The pack/unpack family is tracked separately; the 8.6 modifiers add new format letters and endianness combinations. |
 | Direction-aware property resolution, const object property writes, function-argument error display, closure optimizations, TLS session resumption, SNMP updates | Smaller upstream changes with no standalone user-visible surface in elephc yet. |
 
 ## Known deviations
 
+- Parameter doc comments are attached, but `ReflectionFunction` cannot yet be constructed from a
+  closure or arrow function, so those two parameter lists are parsed and stored without a
+  user-visible reflection path. Doc comments on properties and hook methods themselves are not
+  retained; only parameter comments are.
 - Partial application of a magic `__call` / `__callStatic` dispatch, or of a receiver whose
   class cannot be resolved at compile time, is rejected with a diagnostic rather than
   synthesized. `new C(?)` is also rejected, matching PHP. Bound values use a generated typed

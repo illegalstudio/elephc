@@ -166,6 +166,7 @@ impl Checker {
             }
             ExprKind::Closure {
                 params,
+                param_attributes: _,
                 variadic,
                 variadic_by_ref,
                 variadic_type,

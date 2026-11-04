@@ -99,6 +99,7 @@ pub(crate) fn parse_args(
                 // PHP 8.6 partial application: `foo(1, ...)` forwards the remaining
                 // arguments. `foo(...)` is first-class-callable syntax and never reaches
                 // this branch.
+                crate::pfa::note_marker();
                 args.push(Expr::new(
                     ExprKind::Spread(Box::new(Expr::new(
                         ExprKind::Variable(crate::pfa::VARIADIC_PLACEHOLDER_VAR.to_string()),
@@ -121,6 +122,7 @@ pub(crate) fn parse_args(
             {
                 let value_span = tokens[*pos].1.span;
                 *pos += 1;
+                crate::pfa::note_marker();
                 Expr::new(
                     ExprKind::Variable(crate::pfa::PLACEHOLDER_VAR.to_string()),
                     value_span,
@@ -140,6 +142,7 @@ pub(crate) fn parse_args(
         {
             let placeholder_span = tokens[*pos].1.span;
             *pos += 1;
+            crate::pfa::note_marker();
             args.push(Expr::new(
                 ExprKind::Variable(crate::pfa::PLACEHOLDER_VAR.to_string()),
                 placeholder_span,

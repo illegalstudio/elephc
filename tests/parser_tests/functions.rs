@@ -1087,3 +1087,31 @@ fn test_parse_partial_application_placeholders() {
         other => panic!("Expected Spread, got {:?}", other),
     }
 }
+
+/// Verifies that a PHP 8.6 doc comment before a closure parameter is retained on the closure's
+/// synthetic parameter-attribute channel.
+#[test]
+fn test_parse_closure_parameter_doc_comment() {
+    let stmts = parse_source("<?php $f = function (/** doc */ int $a) {};");
+    let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+        panic!("Expected Assign, got {:?}", stmts[0].kind);
+    };
+    let ExprKind::Closure {
+        param_attributes, ..
+    } = &value.kind
+    else {
+        panic!("Expected Closure, got {:?}", value.kind);
+    };
+    let group = param_attributes[0]
+        .first()
+        .expect("closure parameter should carry the synthetic doc attribute");
+    let attribute = group
+        .attributes
+        .first()
+        .expect("synthetic doc attribute group should not be empty");
+    assert_eq!(attribute.name.as_str(), "__elephc_param_doc");
+    assert!(matches!(
+        &attribute.args.first().map(|arg| &arg.kind),
+        Some(ExprKind::StringLiteral(doc)) if doc == "/** doc */"
+    ));
+}

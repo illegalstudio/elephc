@@ -307,12 +307,17 @@ pub(super) fn lower_closure_with_context(
         ExprKind::Closure { variadic_type, .. } => variadic_type.as_ref(),
         _ => None,
     };
+    let param_attributes = match &expr.kind {
+        ExprKind::Closure { param_attributes, .. } => param_attributes.as_slice(),
+        _ => &[],
+    };
     let source_is_generator = ctx.closure_generator_spans.contains(&expr.span);
     let signature = if contextual_arg_types.is_empty() && bound_this_context.is_none() {
         function::lower_closure_function(
             ctx,
             &name,
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -330,6 +335,7 @@ pub(super) fn lower_closure_with_context(
             ctx,
             &name,
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,

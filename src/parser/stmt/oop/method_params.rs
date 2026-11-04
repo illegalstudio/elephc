@@ -78,9 +78,10 @@ pub(super) fn parse_method_params(
                 break;
             }
         }
+        let leading_doc = crate::parser::doc_comments::doc_comment_before(tokens, *pos);
         // PHP 8.0 parameter attributes — also covers attributes preceding a
         // promoted-property modifier such as `#[Inject] public Foo $f`.
-        let attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
+        let mut attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
         if variadic.is_some() {
             return Err(CompileError::new(
                 span,
@@ -127,6 +128,7 @@ pub(super) fn parse_method_params(
                     variadic = Some(n.clone());
                     variadic_by_ref = is_ref;
                     variadic_type = type_ann;
+                    append_param_doc_comment(tokens, *pos, leading_doc, &mut attributes);
                     param_attributes.push(attributes);
                     *pos += 1;
                 }
@@ -183,6 +185,7 @@ pub(super) fn parse_method_params(
                     });
                     promoted_assignments.push(promoted_property_assignment(&n, param_span));
                 }
+                append_param_doc_comment(tokens, *pos, leading_doc, &mut attributes);
                 param_attributes.push(attributes);
                 params.push((n, type_ann, default, is_ref));
             }
@@ -299,4 +302,17 @@ fn promoted_property_assignment(name: &str, span: Span) -> Stmt {
         },
         span,
     )
+}
+
+/// Attaches a leading or trailing parameter doc comment to the synthetic attribute list.
+fn append_param_doc_comment(
+    tokens: &[SpannedToken],
+    pos: usize,
+    leading: Option<String>,
+    attributes: &mut Vec<AttributeGroup>,
+) {
+    let trailing = crate::parser::doc_comments::doc_comment_before(tokens, pos);
+    if let Some(doc) = trailing.or(leading) {
+        attributes.push(crate::parser::doc_comments::doc_comment_attribute(doc));
+    }
 }

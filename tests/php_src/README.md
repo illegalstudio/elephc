@@ -12,6 +12,7 @@ Rust fixtures generated from them. Tests never parse these files at runtime.
 | `Zend/tests/readonly_props/serialization.phpt` | `Zend/tests/readonly_props` | the defaulted-property portion of the same Rust module |
 | `ext/date/tests/time/duration/serialize.phpt` | `ext/date/tests/time/duration` | `tests/codegen/time_duration_serialization.rs` |
 | `Zend/tests/partial_application/*.phpt` | `Zend/tests/partial_application` | `tests/codegen/oop/partial_application_php86.rs` (the selected fixtures exercise evaluation order, forwarding, variadics, scope, constants, and error-free creation) |
+| `ext/reflection/tests/ReflectionParameter_getDocComment_{basic,indented}.phpt` | `ext/reflection/tests` | `tests/codegen/oop/reflection_parameter_doc_comments_php86.rs` (the basic fixture omits closure/arrow reflection because dynamic `ReflectionFunction` construction is unsupported) |
 | `ext/reflection/tests/ReflectionProperty_is{Readable,Writable}_*.phpt` | `ext/reflection/tests` | `tests/codegen/oop/reflection_property_access_php86.rs` (the readonly fixture replaces dynamic `ReflectionClass` construction with a literal class name and omits the readonly write inside `__clone`) |
 
 Fixtures that depend on engine internals elephc does not expose (the internal

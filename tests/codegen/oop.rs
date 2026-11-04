@@ -37,6 +37,8 @@ mod readonly_property_defaults_php86;
 mod reflection_property_access_php86;
 #[path = "oop/partial_application_php86.rs"]
 mod partial_application_php86;
+#[path = "oop/reflection_parameter_doc_comments_php86.rs"]
+mod reflection_parameter_doc_comments_php86;
 #[path = "oop/static_asymmetric_visibility.rs"]
 mod static_asymmetric_visibility;
 #[path = "oop/override_constants_php86.rs"]

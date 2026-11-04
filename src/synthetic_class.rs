@@ -762,6 +762,7 @@ impl ClosureBuilder {
         Expr::new(
             ExprKind::Closure {
                 params: self.params,
+                param_attributes: Vec::new(),
                 variadic: None,
                 variadic_by_ref: false,
                 variadic_type: None,

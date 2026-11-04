@@ -19,6 +19,23 @@ mod lower;
 mod signatures;
 mod walk;
 
+use std::cell::Cell;
+
+thread_local! {
+    /// Set by the parser when it creates a `?` or trailing `...` marker.
+    static SAW_PFA_MARKER: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Records that the parser created at least one partial-application marker.
+pub(crate) fn note_marker() {
+    SAW_PFA_MARKER.with(|flag| flag.set(true));
+}
+
+/// Returns and clears the marker flag, so a program with no partial application is not walked.
+fn take_marker() -> bool {
+    SAW_PFA_MARKER.with(|flag| flag.replace(false))
+}
+
 /// Sentinel variable name the parser writes for a `?` argument placeholder.
 pub(crate) const PLACEHOLDER_VAR: &str = "__elephc_pfa_placeholder";
 /// Sentinel variable name the parser writes inside the `Spread` of a `...` placeholder.
@@ -36,6 +53,11 @@ pub fn desugar_for_version(
     program: Vec<crate::parser::ast::Stmt>,
     php_version: elephc_builtin_contract::PhpVersion,
 ) -> Result<Vec<crate::parser::ast::Stmt>, crate::errors::CompileError> {
+    // Almost every program has no partial application. The parser records whether it saw a
+    // marker, so the recursive signature collection and AST walk can be skipped entirely.
+    if !take_marker() {
+        return Ok(program);
+    }
     crate::compiler_stack::with_compiler_stack(|| desugar_on_stack(program, php_version))
 }
 

@@ -716,6 +716,48 @@ Both the compile-time rejection and the run-time `Error` are compiler subset lim
 PHP restrictions on reference returns: PHP's references are untyped and have no equivalent
 condition.
 
+## Parameter doc comments (PHP 8.6)
+
+A `/** ... */` comment immediately before a parameter, or after the parameter and before its
+comma, is retained for that parameter. Read it back with
+`ReflectionParameter::getDocComment()`:
+
+```php
+<?php
+function refund(
+    /** The order to refund. */
+    int $orderId,
+    /** Optional partial amount in minor units. */
+    ?int $amount = null,
+): void {}
+
+$parameters = (new ReflectionFunction('refund'))->getParameters();
+echo $parameters[0]->getDocComment(); // /** The order to refund. */
+echo $parameters[1]->getDocComment(); // /** Optional partial amount in minor units. */
+```
+
+Both placements are accepted:
+
+```php
+<?php
+function store(
+    /** Leading placement. */
+    string $first,
+    string $second /** Trailing placement. */,
+): void {}
+```
+
+Only `/**` comments followed by whitespace are doc comments; `/**Not a doc comment */` is an
+ordinary block comment and returns `false`. The raw text, including the delimiters, is
+returned. A trailing comment wins when both placements are present. The channel supports
+functions, methods, constructors (including promoted parameters), closures, arrow functions,
+and property-hook `set` parameters. Reflecting a closure or arrow function requires dynamic
+`ReflectionFunction` construction, which is not supported yet.
+
+Note that `ReflectionFunction::getDocComment()`, `ReflectionMethod::getDocComment()`,
+`ReflectionProperty::getDocComment()`, and hook-method doc comments remain unavailable; only
+parameter comments are retained.
+
 ## Variadic functions
 
 ```php

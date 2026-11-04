@@ -57,6 +57,17 @@ fn check_source_with_defines_and_options(
     defines: &[&str],
     options: types::CheckOptions,
 ) -> Result<(), String> {
+    elephc::compiler_stack::with_compiler_stack(|| {
+        check_source_on_compiler_stack(src, defines, options)
+    })
+}
+
+/// The body of [`check_source_with_defines_and_options`], run on the compiler's grown stack.
+fn check_source_on_compiler_stack(
+    src: &str,
+    defines: &[&str],
+    options: types::CheckOptions,
+) -> Result<(), String> {
     let tokens = tokenize(src).map_err(|e| e.message.clone())?;
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();

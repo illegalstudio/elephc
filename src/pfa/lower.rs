@@ -333,6 +333,7 @@ pub(super) fn lower(
     let inner = Expr::new(
         ExprKind::Closure {
             params,
+            param_attributes: Vec::new(),
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -357,6 +358,7 @@ pub(super) fn lower(
     let outer = Expr::new(
         ExprKind::Closure {
             params: outer_params,
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_by_ref: false,
             variadic_type: None,
@@ -836,6 +838,7 @@ fn typed_identity(ty: &TypeExpr, span: Span) -> Expr {
     Expr::new(
         ExprKind::Closure {
             params: vec![("__elephc_pfa_value".to_string(), Some(ty.clone()), None, false)],
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_by_ref: false,
             variadic_type: None,
