@@ -1984,3 +1984,26 @@ try { (new C())->read(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
         "array(1) {\n  [\"name\"]=>\n  string(1) \"n\"\n}\narray(1) {\n  [0]=>\n  int(2)\n}\nTyped property C::$m must not be accessed before initialization\n"
     );
 }
+
+/// `IteratorIterator` accepts any `Traversable` and follows an aggregate to its iterator, also
+/// through `parent::__construct()`. Symfony's form tree walks an `OrderedHashMap` that way.
+#[test]
+fn test_iterator_iterator_follows_an_aggregate_through_its_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+class Map implements IteratorAggregate {
+    public function getIterator(): Traversable { return new ArrayIterator(['a' => 1, 'b' => 2]); }
+}
+class Outer implements IteratorAggregate {
+    public function getIterator(): Traversable { return new Map(); }
+}
+class Walk extends IteratorIterator {
+    public function __construct(Traversable $t) { parent::__construct($t); }
+}
+foreach (new Walk(new Map()) as $k => $v) { echo $k, $v, "\n"; }
+foreach (new Walk(new Outer()) as $k => $v) { echo $k, $v, "\n"; }
+foreach (new IteratorIterator(new Map()) as $k => $v) { echo $k, $v, "\n"; }
+"#,
+    );
+    assert_eq!(out, "a1\nb2\na1\nb2\na1\nb2\n");
+}

@@ -124,7 +124,7 @@ fn spl_iterator_iterator_methods() -> Vec<ClassMethod> {
                 ),
             ],
             Some(TypeExpr::Void),
-            iterator_iterator_construct_body(),
+            traversable_construct_body(),
         ),
         method_with_body("current", Vec::new(), Some(mixed_type()), inner_return_body("current")),
         method_with_body("key", Vec::new(), Some(mixed_type()), inner_return_body("key")),
@@ -190,6 +190,20 @@ fn spl_infinite_iterator_methods() -> Vec<ClassMethod> {
         ),
         method_with_body("next", Vec::new(), Some(TypeExpr::Void), infinite_next_body()),
     ]
+}
+
+/// Builds the constructor of `IteratorIterator` itself, the one decorator taking any `Traversable`.
+///
+/// php follows an `IteratorAggregate` to the iterator it gives. Symfony's
+/// `InheritDataAwareIterator` extends this class and hands `parent::__construct()` the form's
+/// `OrderedHashMap`, so storing the aggregate as it came failed the `inner` property's type.
+fn traversable_construct_body() -> Vec<Stmt> {
+    let mut body = vec![while_stmt(
+        instanceof_expr(var_expr("iterator"), "IteratorAggregate"),
+        vec![assign_stmt("iterator", method_call(var_expr("iterator"), "getIterator", Vec::new()))],
+    )];
+    body.extend(iterator_iterator_construct_body());
+    body
 }
 
 /// Builds the synthetic method body for iterator iterator construct.
