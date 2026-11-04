@@ -555,6 +555,14 @@ fn value_escapes_comparisons(
                     | Op::LooseNotEq
                     | Op::PhpRelCmp
                     | Op::Spaceship
+                    // An element of a word list is data. Doctrine's `DB2Keywords::getKeywords()`
+                    // lists the SQL word `CLONE`, and function names ignore case, so that one
+                    // element planned 40 104 applicators: 237 MB, 30% of the Symfony Demo's code.
+                    // A callable kept in such a table and called with overrides still gets
+                    // the runtime's catchable refusal, never a silent wrong answer.
+                    | Op::ArrayPush
+                    | Op::ArraySet
+                    | Op::HashSet
             )
     }) || function_terminators_use(function, value)
 }

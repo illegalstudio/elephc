@@ -2134,3 +2134,33 @@ echo get_class((new Child(new Named7()))->node), "\n";
     );
     assert_eq!(compile_and_run(&source), "Named7\n");
 }
+
+/// A word list holding `clone` is not a callable. It used to plan one override applicator per class
+/// and scope profile: 237 MB of code in the Symfony Demo, for Doctrine's list of SQL keywords.
+#[test]
+fn test_a_list_holding_the_word_clone_generates_no_override_applicators() {
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(
+        r#"<?php
+class A { public int $n = 1; }
+class B { public string $s = 'x'; }
+function words() { return ['ALTER', 'CLONE', 'SELECT']; }
+$hash = ['first' => 'clone'];
+echo count(words()), $hash['first'], (new A())->n, (new B())->s, "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "3clone1x\n");
+    assert!(!asm.contains("clone_u_apply"), "applicators were generated");
+}
+
+/// A string that really is the callable still reaches the applicators.
+#[test]
+fn test_clone_called_by_name_with_overrides_still_applies_them() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public int $n = 1; }
+$f = 'clone';
+echo $f(new A(), ['n' => 5])->n, "\n";
+"#,
+    );
+    assert_eq!(out, "5\n");
+}
