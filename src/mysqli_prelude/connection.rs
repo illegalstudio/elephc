@@ -109,6 +109,9 @@ class mysqli {
     // could still connect to a `p:` host), and a `p:` host does.
     private bool $handleAllocated = false;
     private bool $handlePersistent = false;
+    // Whether the link killed its own connection (kill($thread_id)): mysqlnd
+    // considers it gone at once, and every later command fails with 2006.
+    private bool $linkGone = false;
     // The live bridge statement of real_query() / multi_query() /
     // query(MYSQLI_USE_RESULT), kept until every result set is consumed; -1
     // when the link is idle. Its CURRENT set is either unclaimed
@@ -177,6 +180,17 @@ class mysqli {
     // mysqli_connect(): the constructor's connect path on a detached link.
     private function __elephcConnectProcedural(?string $hostname, ?string $username, ?string $password, ?string $database, ?int $port, ?string $socket): bool {
         return $this->connectLink($hostname, $username, $password, $database, $port, $socket, 0, false);
+    }
+
+    // mysqlnd's upsert state after a protocol command that is not a statement
+    // (COM_PING, COM_INIT_DB, COM_REFRESH, COM_DEBUG, COM_PROCESS_KILL,
+    // COM_STATISTICS): affected_rows reads -1, and an OK reply clears the
+    // previous statement's info string (any other reply leaves it).
+    private function adminReply(bool $okPacket): void {
+        $this->affected_rows = -1;
+        if ($okPacket) {
+            $this->info = null;
+        }
     }
 
     // The calls php allows on an unconnected link but not on a closed one.
@@ -382,6 +396,7 @@ class mysqli {
         }
         $this->conn = $_conn;
         $this->linkStatus = 1;
+        $this->linkGone = false;
         $this->multiStatementsOn = false;
         $this->persistent = $_persistent == 1;
         $this->connect_errno = 0;
@@ -557,9 +572,11 @@ class mysqli {
         $this->bump("com_ping");
         // A real COM_PING (no statement, no result set, no status change).
         if (elephc_pdo_mysql_ping($this->conn) < 0) {
+            $this->adminReply(false);
             return $this->opFailed();
         }
         $this->clearError();
+        $this->adminReply(true);
         return true;
     }
 
@@ -601,16 +618,20 @@ class mysqli {
             return false;
         }
         $this->bump("com_process_kill");
-        // COM_PROCESS_KILL is KILL CONNECTION on the wire. Killing our own
-        // connection succeeds even though the server drops the link mid-reply.
-        if (elephc_pdo_exec($this->conn, "KILL CONNECTION " . $process_id) < 0) {
-            if ($process_id == $this->thread_id) {
-                $this->clearError();
-                return true;
-            }
+        // A real COM_PROCESS_KILL, like mysqlnd (MySQL 8.4 removed the command
+        // and answers 1047 "Unknown command"). Killing our own connection does
+        // not wait for the reply: the server drops the link.
+        $_own = $process_id == $this->thread_id;
+        if (elephc_pdo_mysql_process_kill($this->conn, $process_id) < 0) {
+            $this->adminReply(false);
             return $this->opFailed();
         }
         $this->clearError();
+        // Killing our own connection reads no reply; the link is gone.
+        $this->adminReply(!$_own);
+        if ($_own) {
+            $this->linkGone = true;
+        }
         return true;
     }
 
@@ -626,9 +647,11 @@ class mysqli {
         // recorded (errno / error) and returns false without mysqli_report.
         if (elephc_pdo_mysql_refresh($this->conn, $flags) < 0) {
             $this->__elephcAdoptBridgeError();
+            $this->adminReply(false);
             return false;
         }
         $this->clearError();
+        $this->adminReply(true);
         return true;
     }
 
@@ -655,15 +678,18 @@ class mysqli {
 
     public function dump_debug_info(): bool {
         // A real COM_DEBUG: the server writes debug information to its own error
-        // log (it needs the SUPER privilege). Like php, a failure returns false
-        // with the error recorded and no mysqli_report dispatch.
+        // log (it needs the SUPER privilege). mysqlnd reports success whatever the
+        // server answers: a refusal is only recorded in errno / error, with no
+        // mysqli_report dispatch.
         $this->requireInitialized();
         $this->bump("com_debug");
         if (elephc_pdo_mysql_dump_debug_info($this->conn) < 0) {
             $this->__elephcAdoptBridgeError();
-            return false;
+            $this->adminReply(false);
+            return true;
         }
         $this->clearError();
+        $this->adminReply(true);
         return true;
     }
 
@@ -753,11 +779,13 @@ class mysqli {
             return false;
         }
         $this->bump("com_init_db");
-        $_ident = str_replace("`", "``", $database);
-        if (elephc_pdo_exec($this->conn, "USE `" . $_ident . "`") < 0) {
+        // A real COM_INIT_DB, like mysqlnd.
+        if (elephc_pdo_mysql_init_db($this->conn, $database, strlen($database)) < 0) {
+            $this->adminReply(false);
             return $this->opFailed();
         }
         $this->clearError();
+        $this->adminReply(true);
         return true;
     }
 
@@ -779,6 +807,9 @@ class mysqli {
             return $this->opFailed();
         }
         $this->clearError();
+        // The statement's OK packet: no rows affected, no info string.
+        $this->affected_rows = 0;
+        $this->info = null;
         return true;
     }
 
@@ -936,6 +967,8 @@ class mysqli {
             return $this->opFailed();
         }
         $this->clearError();
+        $this->affected_rows = 0;
+        $this->info = null;
         return true;
     }
 
@@ -1378,6 +1411,7 @@ class mysqli {
         // The bridge's server_info is MySQL's own "Uptime: … Questions: …"
         // statistics line — exactly what mysqli::stat() returns.
         $_stat = elephc_pdo_server_info($this->conn);
+        $this->adminReply(false);
         if ($_stat === "") {
             return false;
         }
@@ -1760,6 +1794,10 @@ class mysqli {
     // mysqlnd answers CR_COMMANDS_OUT_OF_SYNC (2014) and the call fails.
     private function requireConnection(): bool {
         $this->requireInitialized();
+        if ($this->linkGone) {
+            $this->syntheticFailure(2006, "MySQL server has gone away", "HY000");
+            return false;
+        }
         if ($this->conn < 0) {
             $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
             return false;

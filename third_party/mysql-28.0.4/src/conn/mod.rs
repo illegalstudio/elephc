@@ -1753,6 +1753,20 @@ impl Conn {
     }
 
     /// elephc patch: executes
+    /// [`COM_PROCESS_KILL`](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_process_kill.html)
+    /// for connection `id` (mysqli's `mysqli::kill()`). `read_reply` is false when a
+    /// connection kills itself: like mysqlnd, the reply is not awaited because the server
+    /// drops the link.
+    pub fn process_kill(&mut self, id: u32, read_reply: bool) -> Result<(), Error> {
+        self.write_command(Command::COM_PROCESS_KILL, &id.to_le_bytes())?;
+        if read_reply {
+            self.drop_packet()
+        } else {
+            Ok(())
+        }
+    }
+
+    /// elephc patch: executes
     /// [`COM_SET_OPTION`](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_set_option.html)
     /// (`0` = `MYSQL_OPTION_MULTI_STATEMENTS_ON`, `1` = `_OFF`), which mysqli toggles around
     /// `multi_query()` like mysqlnd.

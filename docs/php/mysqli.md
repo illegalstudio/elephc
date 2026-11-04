@@ -296,15 +296,26 @@ unconsumed result with the connection, so the next link starts clean.
 
 ## Connection maintenance
 
-- `ping()` sends a real `COM_PING`; `change_user($user, $password, $database)`
-  a real `COM_CHANGE_USER` (the session is reset: an open transaction is rolled
-  back, temporary tables and session variables are dropped).
-- `kill($process_id)` kills a server thread (`ValueError` for a non-positive
-  id); killing the connection's own `thread_id` succeeds like mysqlnd.
+- `ping()` sends a real `COM_PING`, `select_db()` a real `COM_INIT_DB`, and
+  `change_user($user, $password, $database)` a real `COM_CHANGE_USER` (the
+  session is reset: an open transaction is rolled back, temporary tables and
+  session variables are dropped).
+- `kill($process_id)` sends a real `COM_PROCESS_KILL` (`ValueError` for a
+  non-positive id). Killing the connection's own `thread_id` returns `true`
+  without waiting for the reply, and the link is gone from then on: every
+  command fails with 2006 "MySQL server has gone away", like mysqlnd.
 - `refresh($flags)` sends a real `COM_REFRESH` with the `MYSQLI_REFRESH_*`
   bitmask, and `dump_debug_info()` a real `COM_DEBUG` (the server writes its
-  debug information to its error log). Like php, both report a failure through
-  their `false` return and `errno` / `error`, never through `mysqli_report`.
+  debug information to its error log). Neither goes through `mysqli_report`: a
+  refused `refresh()` returns `false` with `errno` / `error` set, while
+  `dump_debug_info()` returns `true` whatever the server answers (a refusal is
+  only recorded in `errno` / `error`), as mysqlnd does.
+- MySQL 8.4 removed `COM_PROCESS_KILL` and `COM_REFRESH`; as with php, `kill()`
+  and `refresh()` then fail with the server's 1047 "Unknown command" (use a
+  `KILL` / `FLUSH` statement instead).
+- After these protocol commands (`ping()`, `select_db()`, `kill()`,
+  `refresh()`, `dump_debug_info()`, `stat()`) `affected_rows` reads `-1` and an
+  OK reply clears `info`, following mysqlnd's upsert state.
 - `stat()` returns MySQL's "Uptime: … Questions: …" status line.
 - `get_warnings()` (and `mysqli_stmt::get_warnings()`) return a
   `mysqli_warning` chain built from `SHOW WARNINGS` — `$message`, `$sqlstate`,

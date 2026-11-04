@@ -7,6 +7,8 @@ workspace `Cargo.toml`, with these additions in `src/conn/mod.rs` (marked `eleph
   upstream crate tracks but does not expose (mysqli's `MYSQLI_REPORT_INDEX`).
 - `Conn::refresh(options)` — `COM_REFRESH` (mysqli's `mysqli::refresh()`).
 - `Conn::dump_debug_info()` — `COM_DEBUG` (mysqli's `mysqli::dump_debug_info()`).
+- `Conn::process_kill(id, read_reply)` — `COM_PROCESS_KILL` (mysqli's `mysqli::kill()`;
+  the reply is skipped when a connection kills itself, like mysqlnd).
 - `Conn::set_server_option(option)` — `COM_SET_OPTION` (mysqli's per-`multi_query()`
   multi-statement toggle), and in `src/conn/opts/mod.rs` the `multi_statements` option
   (`OptsBuilder::multi_statements`, default `true`) that lets a mysqli handshake omit

@@ -3060,6 +3060,48 @@ pub extern "C" fn elephc_pdo_mysql_set_server_option(conn_id: i64, option: i64) 
     })
 }
 
+/// Sends `COM_INIT_DB` on a MySQL connection, backing `mysqli::select_db()`. `1` on
+/// success, `-1` (error recorded) on failure, invalid UTF-8, or a non-MySQL / unknown
+/// handle.
+///
+/// # Safety
+/// `schema` must point to `schema_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_mysql_init_db(conn_id: i64, schema: *const u8, schema_len: i64) -> i64 {
+    ffi_guard(-1, || {
+        if schema.is_null() && schema_len != 0 {
+            return -1;
+        }
+        let bytes = if schema_len <= 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(schema, schema_len as usize) }
+        };
+        let Ok(schema) = std::str::from_utf8(bytes) else {
+            return -1;
+        };
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.init_db(schema),
+            _ => -1,
+        }
+    })
+}
+
+/// Sends `COM_PROCESS_KILL` for connection `id` on a MySQL connection, backing
+/// `mysqli::kill()`. `1` on success, `-1` (error recorded) on failure or for a non-MySQL /
+/// unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_process_kill(conn_id: i64, id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.process_kill(id),
+            _ => -1,
+        }
+    })
+}
+
 /// Sends `COM_DEBUG` on a MySQL connection, backing `mysqli::dump_debug_info()`. `1` on
 /// success, `-1` (error recorded) on failure or for a non-MySQL / unknown handle.
 #[no_mangle]

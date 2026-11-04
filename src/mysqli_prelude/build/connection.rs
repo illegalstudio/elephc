@@ -122,6 +122,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .private_prop("linkStatus", TypeExpr::Int, Some(e_int(0)))
         .private_prop("handleAllocated", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("handlePersistent", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("linkGone", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("liveStmt", TypeExpr::Int, Some(e_neg(e_int(1))))
         .private_prop("liveStep", TypeExpr::Int, Some(e_int(0)))
         .private_prop("liveSetPending", TypeExpr::Bool, Some(e_bool(false)))
@@ -189,6 +190,23 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_return(e_method_call(e_this(), "connectLink", vec![e_var("hostname"), e_var("username"), e_var("password"), e_var("database"), e_var("port"), e_var("socket"), e_int(0), e_bool(false)])),
+                ]),
+        )
+        .method(
+            method("adminReply")
+                .private()
+                .param("okPacket", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "affected_rows", e_neg(e_int(1))),
+                    s_if(
+                        e_var("okPacket"),
+                        vec![
+                            s_prop_assign(e_this(), "info", e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
                 ]),
         )
         .method(
@@ -532,6 +550,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     ),
                     s_prop_assign(e_this(), "conn", e_var("_conn")),
                     s_prop_assign(e_this(), "linkStatus", e_int(1)),
+                    s_prop_assign(e_this(), "linkGone", e_bool(false)),
                     s_prop_assign(e_this(), "multiStatementsOn", e_bool(false)),
                     s_prop_assign(e_this(), "persistent", e_binop(e_var("_persistent"), BinOp::Eq, e_int(1))),
                     s_prop_assign(e_this(), "connect_errno", e_int(0)),
@@ -788,12 +807,14 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_call("elephc_pdo_mysql_ping", vec![e_this_prop("conn")]), BinOp::Lt, e_int(0)),
                         vec![
+                            s_expr(e_method_call(e_this(), "adminReply", vec![e_bool(false)])),
                             s_return(e_method_call(e_this(), "opFailed", vec![])),
                         ],
                         vec![],
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_expr(e_method_call(e_this(), "adminReply", vec![e_bool(true)])),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -872,24 +893,26 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "bump", vec![e_str("com_process_kill")])),
+                    s_assign("_own", e_binop(e_var("process_id"), BinOp::Eq, e_this_prop("thread_id"))),
                     s_if(
-                        e_binop(e_call("elephc_pdo_exec", vec![e_this_prop("conn"), e_binop(e_str("KILL CONNECTION "), BinOp::Concat, e_var("process_id"))]), BinOp::Lt, e_int(0)),
+                        e_binop(e_call("elephc_pdo_mysql_process_kill", vec![e_this_prop("conn"), e_var("process_id")]), BinOp::Lt, e_int(0)),
                         vec![
-                            s_if(
-                                e_binop(e_var("process_id"), BinOp::Eq, e_this_prop("thread_id")),
-                                vec![
-                                    s_expr(e_method_call(e_this(), "clearError", vec![])),
-                                    s_return(e_bool(true)),
-                                ],
-                                vec![],
-                                None,
-                            ),
+                            s_expr(e_method_call(e_this(), "adminReply", vec![e_bool(false)])),
                             s_return(e_method_call(e_this(), "opFailed", vec![])),
                         ],
                         vec![],
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_expr(e_method_call(e_this(), "adminReply", vec![e_not(e_var("_own"))])),
+                    s_if(
+                        e_var("_own"),
+                        vec![
+                            s_prop_assign(e_this(), "linkGone", e_bool(true)),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -919,12 +942,14 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         e_binop(e_call("elephc_pdo_mysql_refresh", vec![e_this_prop("conn"), e_var("flags")]), BinOp::Lt, e_int(0)),
                         vec![
                             s_expr(e_method_call(e_this(), "__elephcAdoptBridgeError", vec![])),
+                            s_expr(e_method_call(e_this(), "adminReply", vec![e_bool(false)])),
                             s_return(e_bool(false)),
                         ],
                         vec![],
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_expr(e_method_call(e_this(), "adminReply", vec![e_bool(true)])),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -966,12 +991,14 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         e_binop(e_call("elephc_pdo_mysql_dump_debug_info", vec![e_this_prop("conn")]), BinOp::Lt, e_int(0)),
                         vec![
                             s_expr(e_method_call(e_this(), "__elephcAdoptBridgeError", vec![])),
-                            s_return(e_bool(false)),
+                            s_expr(e_method_call(e_this(), "adminReply", vec![e_bool(false)])),
+                            s_return(e_bool(true)),
                         ],
                         vec![],
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_expr(e_method_call(e_this(), "adminReply", vec![e_bool(true)])),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -1091,16 +1118,17 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "bump", vec![e_str("com_init_db")])),
-                    s_assign("_ident", e_call("str_replace", vec![e_str("`"), e_str("``"), e_var("database")])),
                     s_if(
-                        e_binop(e_call("elephc_pdo_exec", vec![e_this_prop("conn"), e_binop(e_binop(e_str("USE `"), BinOp::Concat, e_var("_ident")), BinOp::Concat, e_str("`"))]), BinOp::Lt, e_int(0)),
+                        e_binop(e_call("elephc_pdo_mysql_init_db", vec![e_this_prop("conn"), e_var("database"), e_call("strlen", vec![e_var("database")])]), BinOp::Lt, e_int(0)),
                         vec![
+                            s_expr(e_method_call(e_this(), "adminReply", vec![e_bool(false)])),
                             s_return(e_method_call(e_this(), "opFailed", vec![])),
                         ],
                         vec![],
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_expr(e_method_call(e_this(), "adminReply", vec![e_bool(true)])),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -1143,6 +1171,8 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_prop_assign(e_this(), "affected_rows", e_int(0)),
+                    s_prop_assign(e_this(), "info", e_null()),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -1453,6 +1483,8 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
+                    s_prop_assign(e_this(), "affected_rows", e_int(0)),
+                    s_prop_assign(e_this(), "info", e_null()),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -2139,6 +2171,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     ),
                     s_expr(e_method_call(e_this(), "bump", vec![e_str("com_statistics")])),
                     s_assign("_stat", e_call("elephc_pdo_server_info", vec![e_this_prop("conn")])),
+                    s_expr(e_method_call(e_this(), "adminReply", vec![e_bool(false)])),
                     s_if(
                         e_binop(e_var("_stat"), BinOp::StrictEq, e_str("")),
                         vec![
@@ -2796,6 +2829,15 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireInitialized", vec![])),
+                    s_if(
+                        e_this_prop("linkGone"),
+                        vec![
+                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2006), e_str("MySQL server has gone away"), e_str("HY000")])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_if(
                         e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0)),
                         vec![

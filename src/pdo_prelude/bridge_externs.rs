@@ -298,6 +298,8 @@ extern "elephc_pdo" {
     function elephc_pdo_mysql_server_status(int $conn): int;
     function elephc_pdo_mysql_refresh(int $conn, int $options): int;
     function elephc_pdo_mysql_dump_debug_info(int $conn): int;
+    function elephc_pdo_mysql_process_kill(int $conn, int $id): int;
+    function elephc_pdo_mysql_init_db(int $conn, string $schema, int $len): int;
     function elephc_pdo_mysql_io_stat(int $conn, int $which): int;
     function elephc_pdo_mysql_set_server_option(int $conn, int $option): int;
     function elephc_pdo_mysql_execute(int $stmt): int;

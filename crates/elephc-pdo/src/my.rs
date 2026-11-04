@@ -2678,6 +2678,51 @@ impl MyConn {
         }
     }
 
+    /// Sends `COM_INIT_DB`, backing `mysqli::select_db()` (mysqlnd changes the default
+    /// schema with the protocol command, not a `USE` statement). `1` on success, `-1` with
+    /// the error recorded.
+    pub fn init_db(&mut self, schema: &str) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        match self.conn.select_db(schema) {
+            Ok(()) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                1
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
+    /// Sends `COM_PROCESS_KILL` for connection `id`, backing `mysqli::kill()`. A connection
+    /// killing itself does not wait for the reply (the server drops the link), like mysqlnd.
+    /// `1` on success, `-1` with the error recorded (MySQL 8.4 removed the command and
+    /// answers "Unknown command").
+    pub fn process_kill(&mut self, id: i64) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        let Ok(target) = u32::try_from(id) else {
+            return -1;
+        };
+        let own = u64::from(target) == u64::from(self.conn.connection_id());
+        match self.conn.process_kill(target, !own) {
+            Ok(()) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                1
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
     /// Sends `COM_SET_OPTION` (`0` multi-statements on, `1` off), the toggle mysqli wraps
     /// around `multi_query()` / `query()` like mysqlnd. `1` on success, `-1` with the error
     /// recorded.

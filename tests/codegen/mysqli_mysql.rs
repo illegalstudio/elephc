@@ -534,10 +534,12 @@ echo "|", $db->errno;
 
 /// SECURITY: executable comments cannot smuggle a second statement through
 /// `query()`. MySQL's `/*! ... */` and MariaDB's `/*M! ... */` (bare and
-/// versioned) are live SQL — on MariaDB the server expands `/*M!` and would
-/// EXECUTE the hidden statement — so all three are rejected client-side with
-/// 1064. A plain `/* */` and the case-mismatched `/*m!` (inert on the server,
-/// verified on MariaDB 11.8) stay ordinary comments.
+/// versioned) are live SQL where the server expands them, but a mysqli session
+/// runs without server-side multi-statements (like mysqlnd), so the hidden
+/// second statement is a 1064 syntax error from the server instead of being
+/// executed. MySQL does not expand `/*M!` at all, so there it is an ordinary
+/// comment and the query runs, as under php. The case-mismatched `/*m!` is
+/// inert on both servers.
 #[test]
 #[ignore]
 fn test_mysqli_query_rejects_executable_comment_statement() {
@@ -554,7 +556,12 @@ $r = $db->query("SELECT 3 /*m! ; not a second statement */ AS v");
 echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : ("no:" . $db->errno);
 "#,
     ));
-    assert_eq!(out, "F|1064|F|1064|F|1064|3");
+    // MySQL treats MariaDB's `/*M!` as a plain comment, so there the query runs (and
+    // server-side multi-statements are off, so nothing hidden can execute either).
+    assert!(
+        ["F|1064|F|1064|F|1064|3", "F|1064|ok|0|ok|0|3"].contains(&out.as_str()),
+        "unexpected output: {out}"
+    );
 }
 
 /// Reconnecting discards an unconsumed result: `connect()` on a closed object
@@ -1046,7 +1053,9 @@ try {
 /// The connection-maintenance API: a real COM_PING, COM_CHANGE_USER (which
 /// resets session state), killing another connection, `refresh()`, the
 /// public `mysqli_result` constructor over a `real_query()`, MYSQLI_USE_RESULT
-/// observability, and the mysqlnd-style statistics.
+/// observability, and the mysqlnd-style statistics. MySQL 8.4 removed
+/// COM_PROCESS_KILL and COM_REFRESH, which mysqli sends like mysqlnd: there the
+/// server answers 1047 "Unknown command" (php 8.3 behaves the same).
 #[test]
 #[ignore]
 fn test_mysqli_connection_maintenance_and_stats() {
@@ -1058,12 +1067,13 @@ echo "|change=", $db->change_user($user, $pass, $dbname) ? "ok" : "no";
 $row = $db->query("SELECT @marker IS NULL AS cleared")->fetch_row();
 echo "|session-reset=", $row[0];
 $victim = new mysqli($host, $user, $pass, $dbname, $port);
-echo "|kill=", $db->kill($victim->thread_id) ? "ok" : "no";
+mysqli_report(MYSQLI_REPORT_OFF);
+$killed = $db->kill($victim->thread_id);
+echo "|kill=", $killed ? "ok" : ($db->errno == 1047 ? "removed" : "no");
 // FLUSH TABLES needs the RELOAD privilege: either it succeeds or the server's
 // own 1227 "Access denied" comes back (with its plain server text).
-mysqli_report(MYSQLI_REPORT_OFF);
 $refreshed = $db->refresh(MYSQLI_REFRESH_TABLES);
-echo "|refresh=", $refreshed || ($db->errno == 1227 && str_starts_with($db->error, "Access denied")) ? "ok" : "no";
+echo "|refresh=", $refreshed || ($db->errno == 1227 && str_starts_with($db->error, "Access denied")) ? "ok" : ($db->errno == 1047 ? "removed" : "no");
 mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 $db->real_query("SELECT 1 AS a UNION SELECT 2");
 $result = new mysqli_result($db);
@@ -1084,11 +1094,14 @@ $links = mysqli_get_links_stats();
 echo "|links=", $links["total"] >= 1 ? "y" : "n";
 "#,
     ));
-    assert_eq!(
-        out,
-        "ping|change=ok|session-reset=1|kill=ok|refresh=ok|ctor=2:0|use=1:0|use-num-rows-error|after=2|stats=163:q:1"
-            .to_string()
-            + "|links=y"
+    let tail = "|ctor=2:0|use=1:0|use-num-rows-error|after=2|stats=163:q:1|links=y";
+    assert!(
+        [
+            format!("ping|change=ok|session-reset=1|kill=ok|refresh=ok{tail}"),
+            format!("ping|change=ok|session-reset=1|kill=removed|refresh=removed{tail}"),
+        ]
+        .contains(&out),
+        "unexpected output: {out}"
     );
 }
 
@@ -1319,7 +1332,8 @@ echo "|after=", $db->query("SELECT 5")->fetch_row()[0];
 /// MYSQLI_REPORT_INDEX reads the OK/EOF packet's server status flags: a full table scan
 /// raises php's "No index used in query/prepared statement …" (an exception under STRICT),
 /// an indexed lookup does not; `refresh()` and `dump_debug_info()` send real COM_REFRESH /
-/// COM_DEBUG commands, reporting failures through `false` + errno only.
+/// COM_DEBUG commands without mysqli_report dispatch: a refused refresh is `false` +
+/// errno, while `dump_debug_info()` is `true` whatever the server answers (mysqlnd).
 #[test]
 #[ignore]
 fn test_mysqli_report_index_and_raw_protocol_commands() {
@@ -1365,7 +1379,9 @@ $db->query("DROP TABLE msx");
     // The test user may or may not hold RELOAD / SUPER: either the command ran or the
     // server's own 1227 came back — never a client-side substitute.
     assert!(
-        ["ok|debug=ok", "ok|debug=denied", "denied|debug=ok", "denied|debug=denied"].contains(&tail),
+        // dump_debug_info() is true whatever the server answers, like mysqlnd;
+        // MySQL 8.4 removed COM_REFRESH (1047).
+        ["ok|debug=ok", "denied|debug=ok", "err1047|debug=ok"].contains(&tail),
         "unexpected tail: {tail}"
     );
 }
@@ -1830,7 +1846,10 @@ $r = $db->query($q);
 $show("text", $r->fetch_row());
 $show("text", $r->fetch_row());
 foreach ($r->fetch_fields() as $f) {
-    echo $f->name, "=", $f->type, "/", $f->flags, " ";
+    // A TIMESTAMP's flags are the server's own (MariaDB adds UNSIGNED_FLAG).
+    if ($f->name !== "ts") {
+        echo $f->name, "=", $f->type, "/", $f->flags, " ";
+    }
 }
 echo "\n";
 $u = $db->query($q, MYSQLI_USE_RESULT);
@@ -1858,7 +1877,7 @@ $db->query("DROP TABLE mysqli_decode_t");
         out,
         r#"text: string('00007') string('003') string('00000000000000000012') string('2024') string('5') string('18446744073709551615') string('300') string('0000000001.5') string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
 text: string('00000') string('000') string('00000000000000000000') string('1999') string('0') string('0') string('1') string('000000000000') string('1') string('0.0') NULL(NULL) string('4')
-a=3/32864 b=1/32864 c=8/32864 y=13/32864 bt=16/32 b64=16/32 bt9=16/32 fz=4/32864 u=8/32800 d=246/0 ts=7/160 n=3/32768 
+a=3/32864 b=1/32864 c=8/32864 y=13/32864 bt=16/32 b64=16/32 bt9=16/32 fz=4/32864 u=8/32800 d=246/0 n=3/32768 
 unbuf: string('00007') string('003') string('00000000000000000012') string('2024') string('5') string('18446744073709551615') string('300') string('0000000001.5') string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
 binary: string('00007') string('003') string('00000000000000000012') string('2024') integer(5) string('18446744073709551615') integer(300) double(1.5) string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
 binary: string('00000') string('000') string('00000000000000000000') string('1999') integer(0) integer(0) integer(1) double(0.0) integer(1) string('0.0') NULL(NULL) integer(4)
