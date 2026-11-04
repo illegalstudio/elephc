@@ -5519,14 +5519,18 @@ Value static_dispatch(const std::string &family, const std::string &operation_in
                                           &transcoder_status);
             if (transcoder_status == U_BUFFER_OVERFLOW_ERROR) transcoder_status = U_ZERO_ERROR;
             if (U_FAILURE(transcoder_status)) {
-                set_global_error(transcoder_status, "UConverter::transcode()");
+                set_global_error(transcoder_status,
+                    "Error setting encoding: " + std::to_string(int(transcoder_status)) +
+                    " - " + u_errorName(transcoder_status));
                 return Value::boolean(false);
             }
             std::string output(size_t(needed), '\0');
             ucnv_convert(to.c_str(), from.c_str(), output.data(), needed,
                          input.data(), int32_t(input.size()), &transcoder_status);
             if (U_FAILURE(transcoder_status)) {
-                set_global_error(transcoder_status, "UConverter::transcode()");
+                set_global_error(transcoder_status,
+                    "Error setting encoding: " + std::to_string(int(transcoder_status)) +
+                    " - " + u_errorName(transcoder_status));
                 return Value::boolean(false);
             }
             size_t position = 0;

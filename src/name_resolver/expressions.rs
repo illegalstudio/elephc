@@ -172,7 +172,20 @@ pub(super) fn resolve_expr(
             callable: Box::new(resolve_expr(callable, current_namespace, imports, symbols)),
         },
         ExprKind::FunctionCall { name, args } => {
-            let function_name = resolve_function_reference(name, current_namespace, imports, symbols);
+            let mut function_name = resolve_function_reference(name, current_namespace, imports, symbols);
+            // `ini_set("intl.*")` reaches the Intl prelude wrapper; declaring `ini_set` itself
+            // would collide with the opcache/CLI wrapper when both preludes are injected.
+            if function_name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("ini_set")
+                && args.first().is_some_and(|arg| matches!(
+                    &arg.kind,
+                    ExprKind::StringLiteral(option) if option.starts_with("intl.")
+                ))
+            {
+                function_name = resolved_name("__elephc_intl_ini_set".to_string());
+            }
             if function_name
                 .as_canonical()
                 .trim_start_matches('\\')

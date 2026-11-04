@@ -55,6 +55,9 @@ pub fn program_uses_intl(program: &[Stmt]) -> bool {
     let constant_names = intl_constant_names();
     usage.constants.iter().any(|name| constant_names.iter().any(|known| known == name))
         || usage.literals.iter().any(|name| constant_names.iter().any(|known| known == name))
+        // `ini_set("intl.*")` is rewritten to the prelude helper, which must exist even when the
+        // program mentions no other Intl symbol.
+        || usage.literals.iter().any(|literal| literal.starts_with("intl."))
 }
 
 /// Returns whether `name` is one of the synthetic Intl classes.
@@ -1617,7 +1620,7 @@ fn function_declarations() -> Vec<Stmt> {
     // `setlocale()` only for its return value (ICU keeps its own locale). Provide the two
     // process-facing entry points without a separate core builtin surface.
     declarations.push(
-        function("ini_set")
+        function("__elephc_intl_ini_set")
             .param("option", TypeExpr::Str)
             .param("value", t_union(vec![
                 TypeExpr::Str,
@@ -4017,6 +4020,18 @@ fn build_uconverter_class() -> Stmt {
                     e_array(vec![e_var("str"), e_var("toEncoding"), e_var("fromEncoding"), e_var("options")]),
                 ])),
                 s_if(e_binop(e_var("_result"), BinOp::StrictEq, crate::synthetic_class::e_bool(false)), vec![
+                    // php prefixes the encoding failure with the active entry point, then
+                    // honours intl.use_exceptions / intl.error_level.
+                    s_expr(e_call("__elephc_intl_reprefix_error", vec![e_str("UConverter::transcode()")])),
+                    s_assign("_message", e_call("__elephc_intl_invoke_string", vec![
+                        e_str("intl"), e_str("intl_get_error_context"), e_array(vec![]),
+                    ])),
+                    s_if(e_call("__elephc_intl_use_exceptions", vec![]), vec![
+                        s_throw(e_new("IntlException", vec![e_var("_message")])),
+                    ], vec![], None),
+                    s_if(e_binop(e_call("__elephc_intl_error_level", vec![]), BinOp::StrictNotEq, e_int(0)), vec![
+                        s_expr(e_call("__elephc_builtin_warning", vec![e_var("_message")])),
+                    ], vec![], None),
                     s_return(crate::synthetic_class::e_bool(false)),
                 ], vec![], None),
                 s_return(e_cast(CastType::String, e_var("_result"))),
