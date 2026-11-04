@@ -33,6 +33,14 @@ platform = 'cfg(target_arch = "x86_64")'
 filter = 'test(/^ir_lower::tests::instance_dimension_incdec::instance_dimension_incdec_values::/) or test(/^ir_lower::tests::property_element_unset::property_element_unset_known_name_bounds_slot_dispatch::/)'
 threads-required = "num-test-threads"
 
+# This five-target opaque-eval inventory probe passes in 146s on ARM64 but reached
+# its 180s deadline twice while sharing x86_64 workers. Preserve every target,
+# assertion and deadline, reserving the existing pool only for this CI fixture.
+[[profile.ci.overrides]]
+platform = 'cfg(target_arch = "x86_64")'
+filter = 'test(=ir_lower::tests::eval_native_reference_layout::dynamic_eval_unset_keeps_numeric_alias_payloads_in_the_sync_inventory_on_every_target)'
+threads-required = "num-test-threads"
+
 # Phase records show these single-program XML probes reached assembly or linking
 # at 180s under shared work. Reserve the pool without changing sources or budgets.
 [[profile.ci.overrides]]

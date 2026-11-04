@@ -10,11 +10,12 @@
 use crate::ir::{Effects, Immediate, Op};
 
 /// Typed scalar writes stay callback-free while a Mixed-key/value store keeps throwing effects.
+/// The indexed fixture uses a dense key; an unknown integer key may require sparse storage.
 #[test]
 fn typed_container_store_effects_refine_instructions_and_callable_summaries() {
     let source = r#"<?php
-function preciseIndexedWriter(array<int> $items, int $key, int $value): array<int> {
-    $items[$key] = $value; return $items;
+function preciseIndexedWriter(array<int> $items, int $value): array<int> {
+    $items[0] = $value; return $items;
 }
 function preciseHashWriter(array<string, int> $items, string $key, int $value): array<string, int> {
     $items[$key] = $value; return $items;
@@ -22,7 +23,7 @@ function preciseHashWriter(array<string, int> $items, string $key, int $value): 
 function callbackCapableWriter(array $items, mixed $key, mixed $value): array {
     $items[$key] = $value; return $items;
 }
-$indexed = preciseIndexedWriter([1], 0, 2);
+$indexed = preciseIndexedWriter([1], 2);
 $hashed = preciseHashWriter(['x' => 1], 'x', 2);
 $dynamic = callbackCapableWriter([1, 'x'], $argc > 0 ? 0 : 'x', 2);
 echo count($indexed), count($hashed), count($dynamic);

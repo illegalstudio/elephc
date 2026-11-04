@@ -124,6 +124,11 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     );
+    // A completed source function's refusal is definitive. Avoid lowering the prelude's
+    // class catalog when an unsupported native reference already rejects the program.
+    if let Some(error) = super::diagnostics::take_first() {
+        return Err(LoweringError::Unsupported(error));
+    }
     lower_class_like_methods(
         program,
         &mut module,
@@ -139,6 +144,12 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     );
+    // Source bodies have finished their speculative lowering and rollback. A definitive
+    // refusal cannot be repaired by the synthetic eval/reflection helpers below, so report
+    // it before materializing the opaque-eval builtin catalog for a rejected program.
+    if let Some(error) = super::diagnostics::take_first() {
+        return Err(LoweringError::Unsupported(error));
+    }
     function::lower_eval_native_default_helpers(
         &mut module,
         check_result,

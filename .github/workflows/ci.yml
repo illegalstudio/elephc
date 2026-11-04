@@ -287,6 +287,22 @@ jobs:
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh macos-aarch64)
           ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+      - name: Cache managed native openssl-crypto/zlib
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: openssl-crypto-native-macos-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            openssl-crypto-native-macos-aarch64-
+
+      - name: Materialize managed native openssl-crypto/zlib
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/openssl-cipher/elephc.toml
+
       - name: Materialize managed native libmagic
         run: |
           ./target/debug/elephc native install --locked \
@@ -503,6 +519,22 @@ jobs:
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-x86_64)
           ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+      - name: Cache managed native openssl-crypto/zlib
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: openssl-crypto-native-linux-x86_64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            openssl-crypto-native-linux-x86_64-
+
+      - name: Materialize managed native openssl-crypto/zlib
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/openssl-cipher/elephc.toml
+
       - name: Materialize managed native libmagic
         run: |
           ./target/debug/elephc native install --locked \
@@ -711,6 +743,22 @@ jobs:
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-aarch64)
           ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+      - name: Cache managed native openssl-crypto/zlib
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: openssl-crypto-native-linux-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            openssl-crypto-native-linux-aarch64-
+
+      - name: Materialize managed native openssl-crypto/zlib
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/openssl-cipher/elephc.toml
+
       - name: Materialize managed native libmagic
         run: |
           ./target/debug/elephc native install --locked \
@@ -1420,6 +1468,22 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/gmp/elephc.toml
+      - name: Cache managed native openssl-crypto/zlib
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: openssl-crypto-native-macos-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            openssl-crypto-native-macos-aarch64-
+
+      - name: Materialize managed native openssl-crypto/zlib
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/openssl-cipher/elephc.toml
+
       - name: Materialize managed native libmagic
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
@@ -1457,6 +1521,7 @@ jobs:
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_OPENSSL_NATIVE: "1"
         run: |
           "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -1572,6 +1637,22 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/gmp/elephc.toml
+      - name: Cache managed native openssl-crypto/zlib
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: openssl-crypto-native-linux-x86_64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            openssl-crypto-native-linux-x86_64-
+
+      - name: Materialize managed native openssl-crypto/zlib
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/openssl-cipher/elephc.toml
+
       - name: Materialize managed native libmagic
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
@@ -1597,6 +1678,7 @@ jobs:
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_OPENSSL_NATIVE: "1"
           # Preserve the last phase and assembly size if one of these fixtures times out.
           ELEPHC_FIXTURE_PHASE_TIMING: "test_simplexml_generic_property_handoff_bundle,test_simplexml_computed_indexed_incdec_bundle,test_native_dom_exception_accessors_from_eval,test_simplexml_eval_subclass_factories_after_eval_returns,test_simplexml_computed_indexed_incdec_eval_bundle,test_simplexml_reference_arguments_materialize_missing_paths_bundle,test_simplexml_gmp_mixed_operator_dispatch_bundle,test_simplexml_eval_subclass_constructorless_factories,test_simplexml_review_names_and_filter_close_bundle,test_simplexml_native_comparison_and_default_namespace_bundle,test_simplexml_saved_empty_dimension_write_bundle,test_property_dimension_xml_fetch_modes_bundle,test_magic_property_dimension_xml_guards_bundle,test_simplexml_native_debug_projection_bundle,test_simplexml_dimension_write_owners_isolated_bundle"
         run: |
@@ -1714,6 +1796,22 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/gmp/elephc.toml
+      - name: Cache managed native openssl-crypto/zlib
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: openssl-crypto-native-linux-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            openssl-crypto-native-linux-aarch64-
+
+      - name: Materialize managed native openssl-crypto/zlib
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/openssl-cipher/elephc.toml
+
       - name: Materialize managed native libmagic
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
@@ -1731,6 +1829,7 @@ jobs:
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_OPENSSL_NATIVE: "1"
           # Preserve the last phase and assembly size if one of these fixtures times out.
           ELEPHC_FIXTURE_PHASE_TIMING: "test_simplexml_generic_property_handoff_bundle,test_simplexml_computed_indexed_incdec_bundle,test_native_dom_exception_accessors_from_eval,test_simplexml_eval_subclass_factories_after_eval_returns,test_simplexml_computed_indexed_incdec_eval_bundle,test_simplexml_reference_arguments_materialize_missing_paths_bundle,test_simplexml_gmp_mixed_operator_dispatch_bundle,test_simplexml_eval_subclass_constructorless_factories,test_simplexml_review_names_and_filter_close_bundle,test_simplexml_native_comparison_and_default_namespace_bundle,test_simplexml_saved_empty_dimension_write_bundle,test_property_dimension_xml_fetch_modes_bundle,test_magic_property_dimension_xml_guards_bundle,test_simplexml_native_debug_projection_bundle,test_simplexml_dimension_write_owners_isolated_bundle"
         run: |

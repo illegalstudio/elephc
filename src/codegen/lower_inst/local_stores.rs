@@ -12,6 +12,8 @@ use crate::ir::RuntimeCallTarget;
 
 mod owned_output;
 mod native_reference_store;
+#[cfg(test)]
+mod tests;
 pub(super) use native_reference_store::emit_static_if_managed;
 pub(in crate::codegen) use owned_output::publish_current_owned_output;
 
@@ -793,25 +795,35 @@ pub(in crate::codegen) fn store_value_to_ref_cell_as(
 /// Returns whether `value` is an owned in-place `++`/`--` result.
 ///
 /// The increment helper may mutate a unique heap cell and return that same pointer with one
-/// fresh owner. Ownership wrappers (acquire/move/borrow/ensure-owned) are followed so the
+/// fresh owner. Ownership wrappers and transferred merge temporaries are followed so the
 /// ref-cell store can distinguish that new owner from a republished container alias.
-fn value_is_in_place_increment(ctx: &FunctionContext<'_>, mut value: ValueId) -> Result<bool> {
+fn value_is_in_place_increment(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
     if ctx.value_ownership(value)? != Ownership::Owned {
         return Ok(false);
     }
-    for _ in 0..8 {
+    let mut pending = vec![value];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(value) = pending.pop() {
+        if !visited.insert(value) { continue; }
         let Some(inst) = instruction_for_value(ctx, value)? else {
-            return Ok(false);
+            continue;
         };
         match inst.op {
             Op::StrIncDec => return Ok(true),
             Op::Acquire | Op::Move | Op::Borrow | Op::EnsureOwned => {
-                let Some(&source) = inst.operands.first() else {
-                    return Ok(false);
-                };
-                value = source;
+                pending.extend(inst.operands.first().copied());
             }
-            _ => return Ok(false),
+            Op::LoadLocal if ctx.value_ownership(value)? == Ownership::Owned => {
+                let Some(Immediate::LocalSlot(slot)) = inst.immediate else { continue; };
+                if ctx.local_kind(slot)? != LocalKind::OwnedTemp { continue; }
+                // Dynamic object arithmetic transfers a branch result out of this slot.
+                // Its scalar arm can return the same acquired cell as the old pointee.
+                pending.extend(ctx.function.instructions.iter().filter(|store|
+                    store.op == Op::StoreLocal
+                        && store.immediate == Some(Immediate::LocalSlot(slot)))
+                    .filter_map(|store| store.operands.first().copied()));
+            }
+            _ => {}
         }
     }
     Ok(false)
