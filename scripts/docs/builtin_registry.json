@@ -148887,21 +148887,21 @@
           "default": null,
           "name": "search",
           "optional": false,
-          "type": "string"
+          "type": "string|array"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "replace",
           "optional": false,
-          "type": "string"
+          "type": "string|array"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "subject",
           "optional": false,
-          "type": "string"
+          "type": "string|array"
         },
         {
           "by_ref": false,
@@ -148935,21 +148935,21 @@
           "default": null,
           "name": "search",
           "optional": false,
-          "type": "string"
+          "type": "string|array"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "replace",
           "optional": false,
-          "type": "string"
+          "type": "string|array"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "subject",
           "optional": false,
-          "type": "string"
+          "type": "string|array"
         },
         {
           "by_ref": false,
@@ -149031,21 +149031,21 @@
           "default": null,
           "name": "search",
           "optional": false,
-          "type": "string"
+          "type": "string|array"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "replace",
           "optional": false,
-          "type": "string"
+          "type": "string|array"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "subject",
           "optional": false,
-          "type": "string"
+          "type": "string|array"
         },
         {
           "by_ref": false,

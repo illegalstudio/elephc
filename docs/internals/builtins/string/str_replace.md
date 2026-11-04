@@ -37,7 +37,7 @@ description: "Compiler internals for str_replace(): lowering path, type checks, 
 ## Signature summary
 
 ```php
-function str_replace(string $search, string $replace, string $subject, int $count = null): string
+function str_replace(string|array $search, string|array $replace, string|array $subject, int $count = null): string
 ```
 
 ## What the type checker enforces
