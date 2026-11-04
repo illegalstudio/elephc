@@ -1139,6 +1139,31 @@ fn helper_functions() -> Vec<Stmt> {
             .build(),
     );
     helpers.push(
+        function("__elephc_intl_reprefix_error")
+            .param("prefix", TypeExpr::Str)
+            .body(vec![
+                s_assign("_context", e_call("__elephc_intl_invoke_string", vec![
+                    e_str("intl"), e_str("intl_get_error_context"), e_array(vec![]),
+                ])),
+                s_assign("_context", e_call("str_replace", vec![
+                    e_str("MessageFormatter::create(): "), e_str(""), e_var("_context"),
+                ])),
+                s_assign("_context", e_call("str_replace", vec![
+                    e_str("msgfmt_create(): "), e_str(""), e_var("_context"),
+                ])),
+                s_expr(e_call("__elephc_intl_invoke", vec![
+                    e_str("intl"), e_str("intl_set_error"),
+                    e_array(vec![
+                        e_call("__elephc_intl_invoke_int", vec![
+                            e_str("intl"), e_str("intl_get_error_code"), e_array(vec![]),
+                        ]),
+                        e_concat(e_concat(e_var("prefix"), e_str(": ")), e_var("_context")),
+                    ]),
+                ])),
+            ])
+            .build(),
+    );
+    helpers.push(
         function("__elephc_intl_global_fail")
             .param("result", t_mixed())
             .param("prefix", TypeExpr::Str)
@@ -2356,10 +2381,11 @@ fn typed_intl_override(spec: &IntlFunction) -> Option<(TypeExpr, Vec<Stmt>)> {
             ], vec![], None),
             s_return(e_var("_object")),
         ])),
-        "msgfmt_create" => Some((t_class("MessageFormatter"), vec![
+        "msgfmt_create" => Some((t_nullable(t_class("MessageFormatter")), vec![
             s_assign("_object", e_static_call("MessageFormatter", "create", args())),
             s_if(e_binop(e_var("_object"), BinOp::StrictEq, e_null()), vec![
-                s_throw(e_new("IntlException", vec![e_str("MessageFormatter::create(): message formatter creation failed")])),
+                s_expr(e_call("__elephc_intl_reprefix_error", vec![e_str("msgfmt_create()")])),
+                s_return(e_null()),
             ], vec![], None),
             s_return(e_var("_object")),
         ])),
@@ -6014,17 +6040,7 @@ fn build_message_formatter_class() -> Stmt {
             ], vec![], None),
             s_assign("_handle", e_call("__elephc_intl_open", vec![e_str("message"), e_array(vec![e_var("locale"), e_var("pattern")])])),
             s_if(e_binop(e_var("_handle"), BinOp::StrictEq, e_int(0)), vec![
-                s_assign("_message", e_call("__elephc_intl_last_error_message", vec![])),
-                s_if(
-                    e_binop(
-                        e_binop(e_var("_message"), BinOp::StrictEq, e_str("U_ZERO_ERROR")),
-                        BinOp::Or,
-                        e_binop(e_var("_message"), BinOp::StrictEq, e_str("")),
-                    ),
-                    vec![s_throw(e_new("IntlException", vec![e_str("MessageFormatter::__construct(): message formatter creation failed")]))],
-                    vec![],
-                    Some(vec![s_throw(e_new("IntlException", vec![e_concat(e_str("MessageFormatter::__construct(): "), e_var("_message"))]))]),
-                ),
+                s_throw(e_new("IntlException", vec![e_str("MessageFormatter::__construct(): message formatter creation failed")])),
             ], vec![], None),
             s_prop_assign(e_var("this"), "__elephc_handle", e_var("_handle")),
         ]))
@@ -6039,7 +6055,14 @@ fn build_message_formatter_class() -> Stmt {
             s_return(e_call("__elephc_intl_call", vec![e_this_prop("__elephc_handle"), e_var("method"), e_var("args")])),
         ]))
         .method(method("create").static_().param("locale", TypeExpr::Str).param("pattern", TypeExpr::Str).returns(t_nullable(t_class("MessageFormatter"))).body(vec![
-            s_return(e_new("MessageFormatter", vec![e_var("locale"), e_var("pattern")])),
+            s_try(
+                vec![s_return(e_new("MessageFormatter", vec![e_var("locale"), e_var("pattern")]))],
+                vec![(vec!["Throwable"], Some("_error"), vec![
+                    s_expr(e_call("__elephc_intl_reprefix_error", vec![e_str("MessageFormatter::create()")])),
+                    s_return(e_null()),
+                ])],
+                None,
+            ),
         ]))
         .method(method("formatMessage").static_().param("locale", TypeExpr::Str).param("pattern", TypeExpr::Str).param("values", t_mixed()).returns(t_union(vec![TypeExpr::Str, TypeExpr::False])).body(vec![
             s_assign("_result", e_call("__elephc_intl_invoke", vec![e_str("msgfmt"), e_str("msgfmt_format_message"), e_array(vec![e_var("locale"), e_var("pattern"), e_var("values"), e_call("date_default_timezone_get", vec![])])])),

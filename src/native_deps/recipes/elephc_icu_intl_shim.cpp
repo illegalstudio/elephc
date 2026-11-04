@@ -4024,7 +4024,9 @@ bool php_locale_valid(const std::string &locale) {
 void set_message_formatter_creation_error(UErrorCode status, const std::string &locale,
                                           const UParseError &parse_error, UErrorCode zero_code) {
     if (!php_locale_valid(locale)) {
-        set_global_error(zero_code, "Creating message formatter failed");
+        // php's message-formatter constructor/create path reports the generic creation
+        // failure, not the locale-validation detail.
+        set_global_error(U_ILLEGAL_ARGUMENT_ERROR, "message formatter creation failed");
     } else {
         set_global_error(status, "pattern syntax error (" + parse_error_to_string(parse_error) + ")");
     }
