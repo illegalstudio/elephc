@@ -767,6 +767,62 @@ fn unit_function_decl(name: &str, canonical: &Path, span: Span) -> Stmt {
     )
 }
 
+/// The refusal that names a parent class-like no file declares.
+const MISSING_PARENT_REFUSAL: &str = "Unknown class referenced during inheritance flattening: ";
+
+/// The unit of a class file whose parent no file declares.
+///
+/// Such a file is left out of the program, but php can still try to load it: symfony's
+/// `FileLoader` probes every class under `src/`, a fixture over a dev-only bundle included. Loading
+/// asks the autoloaders for the parent and then fails, and Symfony's `ClassExistenceResource` relies
+/// on that first step: its autoloader is what turns the failure into a `ReflectionException`.
+pub fn missing_parent_unit(canonical: &Path, parent: &str) -> (Stmt, crate::ir::IncludeUnit) {
+    let parent = parent.trim().trim_start_matches('\\');
+    let span = Span::dummy();
+    let text = |value: String| Expr::new(ExprKind::StringLiteral(value), span);
+    let autoload = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("spl_autoload_call"),
+            args: vec![text(parent.to_string())],
+        },
+        span,
+    );
+    let error = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified("Error"),
+            args: vec![text(format!("Class \"{parent}\" not found"))],
+        },
+        span,
+    );
+    let function = unit_function_name(canonical);
+    let declaration = Stmt::new(
+        StmtKind::FunctionDecl {
+            type_params: Vec::new(),
+            name: function.clone(),
+            params: Vec::new(),
+            param_attributes: Vec::new(),
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: Some(crate::parser::ast::TypeExpr::Named(crate::names::Name::unqualified(
+                "mixed",
+            ))),
+            by_ref_return: false,
+            body: vec![
+                Stmt::new(StmtKind::ExprStmt(autoload), span),
+                Stmt::new(StmtKind::Throw(error), span),
+            ],
+        },
+        span,
+    );
+    (declaration, crate::ir::IncludeUnit { canonical_path: canonical.to_path_buf(), function })
+}
+
+/// The parent a checker refusal says no file declares.
+pub fn parent_of_missing_parent_refusal(refusal: &str) -> Option<&str> {
+    refusal.split_once(MISSING_PARENT_REFUSAL).map(|(_, parent)| parent)
+}
+
 /// Appends the path of every include guard whose body is entirely declarations.
 fn collect_fully_declared_sources(body: &[Stmt], out: &mut Vec<std::path::PathBuf>) {
     for stmt in body {

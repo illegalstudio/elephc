@@ -75,7 +75,7 @@ pub fn include_table(module: &crate::ir::Module) -> Vec<crate::ir::ClosedInclude
         })
         .map(|unit| (unit.canonical_path.as_path(), unit.function.as_str()))
         .collect();
-    catalog
+    let mut table: Vec<ClosedInclude> = catalog
         .iter()
         .map(|(_, source)| {
             let kind = if let Some(function) = units.get(source.canonical_path.as_path()) {
@@ -87,5 +87,18 @@ pub fn include_table(module: &crate::ir::Module) -> Vec<crate::ir::ClosedInclude
             };
             ClosedInclude { canonical_path: source.canonical_path.clone(), kind }
         })
-        .collect()
+        .collect();
+    // A file left out of the program has no catalog entry, yet its unit answers its include: a
+    // class file whose parent exists nowhere fails the way php's load of it does.
+    let mut unlisted: Vec<(&std::path::Path, &str)> = units
+        .iter()
+        .filter(|(path, _)| !table.iter().any(|entry| entry.canonical_path == **path))
+        .map(|(path, function)| (*path, *function))
+        .collect();
+    unlisted.sort();
+    table.extend(unlisted.into_iter().map(|(path, function)| ClosedInclude {
+        canonical_path: path.to_path_buf(),
+        kind: ClosedIncludeKind::Unit(function.to_string()),
+    }));
+    table
 }

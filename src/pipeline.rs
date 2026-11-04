@@ -939,6 +939,9 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     decl_trace("after autoload-run", &ast);
     // Uses of a class whose file-scope code was hoisted into an initializer call it first.
     let mut ast = ast;
+    for (path, missing) in &declaration_source_files.unbindable_class_files {
+        add_missing_parent_unit(&mut ast, &mut preload_include_units, path, missing);
+    }
     autoload::lazy_init::call_lazy_initializers(&mut ast);
     // A closed world has no interpreter scope for `extract(..., EXTR_REFS)` to publish into.
     if crate::closed_world::is_enabled() {
@@ -1431,6 +1434,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // classes are only probed out of the reasons it refuses the build.
     for remembered in crate::autoload::deferral_memo::load(Path::new(filename)) {
         let path = remembered.path.canonicalize().unwrap_or(remembered.path);
+        let missing = crate::opcache_preload_sources::parent_of_missing_parent_refusal(&remembered.reason);
+        if let (true, Some(parent)) = (crate::closed_world::is_enabled() && deferrable_class_files.contains(&path), missing) {
+            add_missing_parent_unit(&mut ast, &mut preload_include_units, &path, parent);
+        }
         if !deferrable_class_files.contains(&path) || !deferred_class_files.insert(path.clone()) {
             continue;
         }
@@ -1641,6 +1648,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
                 let canonical = Path::new(path)
                     .canonicalize()
                     .unwrap_or_else(|_| PathBuf::from(path));
+                let missing = crate::opcache_preload_sources::parent_of_missing_parent_refusal(message);
+                if let (true, Some(parent)) = (crate::closed_world::is_enabled(), missing) {
+                    add_missing_parent_unit(&mut ast, &mut preload_include_units, &canonical, parent);
+                }
                 if declares_only_probed_classes(&canonical, &deferral_class_files, &probe_only_names) {
                     probe_only_deferred.insert(canonical.clone());
                     errors::report_note(&format!(
@@ -2748,6 +2759,22 @@ fn declares_only_probed_classes<V: AsRef<str>>(
         && declared
             .iter()
             .all(|class| probe_only_names.contains(&crate::names::php_symbol_key(class)))
+}
+
+/// Gives a class file refused for a missing parent the unit that fails like php's load of it.
+/// Once per file: a remembered refusal and a new one can both name it.
+fn add_missing_parent_unit(
+    ast: &mut crate::parser::ast::Program,
+    units: &mut Vec<crate::ir::IncludeUnit>,
+    canonical: &Path,
+    parent: &str,
+) {
+    if units.iter().any(|unit| unit.canonical_path == canonical) {
+        return;
+    }
+    let (declaration, unit) = crate::opcache_preload_sources::missing_parent_unit(canonical, parent);
+    ast.insert(0, declaration);
+    units.push(unit);
 }
 
 /// Whether a checker refusal is a declaration php itself rejects when it loads the file: an

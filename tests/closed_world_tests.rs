@@ -665,6 +665,37 @@ fn closed_world_includes_a_php_data_file_of_any_extension() {
     assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
 }
 
+/// A class file whose parent no file declares stays out of the program, but loading it still does
+/// what php does: it asks the autoloaders for the parent, then fails. Symfony's
+/// `ClassExistenceResource` turns that into the `ReflectionException` its `FileLoader` skips, so a
+/// fixture over a dev-only bundle does not stop `debug:autowiring`.
+#[test]
+fn closed_world_loading_a_class_with_a_missing_parent_fails_like_php() {
+    let dir = make_test_dir("cw_missing_parent");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\\\":"src/"}}}"#).unwrap();
+    fs::write(dir.join("src/Fix.php"), "<?php\nnamespace App;\nuse Vendor\\Missing\\Base;\nclass Fix extends Base {}\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+class Loader {
+    public function load(string $c): void {
+        $f = __DIR__ . '/src/' . substr($c, 4) . '.php';
+        if (str_starts_with($c, 'App\\') && is_file($f)) { require $f; }
+    }
+}
+spl_autoload_register([new Loader(), 'load']);
+try { var_dump(class_exists('App\Fix')); } catch (Throwable $t) { echo get_class($t), ': ', $t->getMessage(), "\n"; }
+spl_autoload_register(function (string $c) { echo "asked $c\n"; throw new ReflectionException("no $c"); });
+try { var_dump(class_exists('App\Fix')); } catch (Throwable $t) { echo get_class($t), ': ', $t->getMessage(), "\n"; }
+"#,
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+}
+
 /// A backend re-run is a new process: a file the first round classified as harmless (here, one
 /// php refuses to load) stays harmless, while one it inherits with no such verdict still refuses
 /// the build. `KernelBrowser` was a note in the first round of the Symfony Demo build and a
@@ -678,7 +709,7 @@ fn closed_world_rerun_keeps_the_harmless_verdict_of_a_deferred_file() {
         "<?php\nspl_autoload_register(function (string $class): void {\n    $file = __DIR__ . \"/src/\" . $class . \".php\";\n    if (is_file($file)) { require $file; }\n});\nfunction never(): string { return (new Browser())->name(); }\necho \"ok\\n\";\nif ($argc > 5) { echo never(), \"\\n\"; }\n",
     )
     .unwrap();
-    fs::write(dir.join("src/Browser.php"), "<?php\nclass Browser extends AbstractBrowserFromDevPackage {}\n").unwrap();
+    fs::write(dir.join("src/Browser.php"), "<?php\nclass Browser {}\n").unwrap();
     let file = dir.join("src/Browser.php").canonicalize().unwrap();
     let rerun = |harmless: bool| {
         let mut cmd = Command::new(elephc_bin());

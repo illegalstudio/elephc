@@ -108,6 +108,18 @@ impl AutoloadIndex {
         self.fqn_to_path.get(key).map(PathBuf::as_path)
     }
 
+    /// Every indexed class of the project itself, sorted: its own `src/`, not its dependencies.
+    pub fn project_classes(&self) -> Vec<String> {
+        let mut classes: Vec<String> = self
+            .fqn_to_path
+            .iter()
+            .filter(|(_, path)| !path.components().any(|part| part.as_os_str() == "vendor"))
+            .map(|(name, _)| name.clone())
+            .collect();
+        classes.sort();
+        classes
+    }
+
     /// True when the index has no PSR-4 mappings and no files entries.
     pub fn is_empty(&self) -> bool {
         self.fqn_to_path.is_empty() && self.files_to_include.is_empty()

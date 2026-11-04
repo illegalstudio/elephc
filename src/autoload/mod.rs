@@ -57,6 +57,9 @@ pub struct DeclarationSourceFiles {
     /// backend cannot lower hands its file back to the runtime through this map, the way a class
     /// body hands back its class file (`autoload::deferral::BackendDeferral`).
     pub eager_function_files: HashMap<String, PathBuf>,
+    /// Closed world only: class files left out because a parent, interface or trait they need
+    /// exists nowhere, each with the name it needs. php still tries to load them.
+    pub unbindable_class_files: Vec<(PathBuf, String)>,
 }
 
 impl DeclarationSourceFiles {
@@ -68,6 +71,7 @@ impl DeclarationSourceFiles {
         self.class_likes.extend(other.class_likes);
         self.functions.extend(other.functions);
         self.eager_function_files.extend(other.eager_function_files);
+        self.unbindable_class_files.extend(other.unbindable_class_files);
         self.unbound_conditional_declaration_sources
             .extend(other.unbound_conditional_declaration_sources);
         self.bound_conditional_declaration_names
@@ -326,6 +330,12 @@ fn run_collecting_included_on_compiler_stack(
                 .into_iter()
                 .map(|name| (0, name)),
         );
+        // A closed world cannot load what it did not compile, and a framework reaches the
+        // project's classes by listing `src/` (Symfony's `FileLoader::findClasses()`), a path no
+        // reference in the code shows. Every class of the project is therefore a root.
+        if crate::closed_world::is_enabled() {
+            reference_points.extend(registry.psr4().project_classes().into_iter().map(|name| (0, name)));
+        }
         let mut insertions: Vec<(usize, Program)> = Vec::new();
         // Class names are case-insensitive: `class_exists("demo\\thing")` names the declared
         // `Demo\Thing`, and an exact-case lookup loaded its file a second time ("Duplicate class
@@ -623,7 +633,7 @@ fn resolve_class(fqn: &str, registry: &Registry) -> Option<PathBuf> {
     None
 }
 
-/// Returns whether the source selected for an autoload demand can bind that class-like symbol.
+/// Returns what stops the source selected for an autoload demand binding that class-like symbol.
 ///
 /// PHP loads a candidate file before it binds the requested declaration. A class whose direct
 /// parent, interface, or used trait cannot itself be found therefore remains absent; code guarded
@@ -631,15 +641,13 @@ fn resolve_class(fqn: &str, registry: &Registry) -> Option<PathBuf> {
 /// the compiler's normal absent-class path. Keeping such a declaration out of the closed world also
 /// prevents an eagerly inspected but dormant file from turning a runtime-conditional failure into a
 /// whole-program schema error.
-fn autoload_target_can_bind(
+fn first_unbindable_dependency(
     program: &Program,
     target: &str,
     declared: &HashSet<String>,
     registry: &Registry,
-) -> bool {
-    let Some(dependencies) = direct_binding_dependencies(program, target) else {
-        return true;
-    };
+) -> Option<String> {
+    let dependencies = direct_binding_dependencies(program, target)?;
     let local = collect_declared_fqns(program)
         .into_iter()
         .map(|name| crate::names::php_symbol_key(&name))
@@ -649,11 +657,11 @@ fn autoload_target_can_bind(
         .map(|name| crate::names::php_symbol_key(name))
         .collect::<HashSet<_>>();
 
-    dependencies.into_iter().all(|dependency| {
-        let key = crate::names::php_symbol_key(&dependency);
-        local.contains(&key)
-            || available.contains(&key)
-            || resolve_class(&dependency, registry).is_some()
+    dependencies.into_iter().find(|dependency| {
+        let key = crate::names::php_symbol_key(dependency);
+        !local.contains(&key)
+            && !available.contains(&key)
+            && resolve_class(dependency, registry).is_none()
     })
 }
 
@@ -951,7 +959,11 @@ fn load_autoloaded_bundle(
         deferred.push(canonical.to_path_buf());
         return Ok(Vec::new());
     }
-    if !autoload_target_can_bind(&loaded, fqn, declared, registry) {
+    if let Some(missing) = first_unbindable_dependency(&loaded, fqn, declared, registry) {
+        if crate::closed_world::is_enabled() {
+            declaration_sources.unbindable_class_files.push((canonical.to_path_buf(), missing));
+            deferred.push(canonical.to_path_buf());
+        }
         return Ok(Vec::new());
     }
     if let Some(missing) = unsatisfiable_file_scope_guard(&loaded, declared, registry) {
