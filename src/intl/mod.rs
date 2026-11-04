@@ -1146,6 +1146,9 @@ fn helper_functions() -> Vec<Stmt> {
                     e_str("intl"), e_str("intl_get_error_context"), e_array(vec![]),
                 ])),
                 s_assign("_context", e_call("str_replace", vec![
+                    e_str("MessageFormatter::__construct(): "), e_str(""), e_var("_context"),
+                ])),
+                s_assign("_context", e_call("str_replace", vec![
                     e_str("MessageFormatter::create(): "), e_str(""), e_var("_context"),
                 ])),
                 s_assign("_context", e_call("str_replace", vec![
@@ -2378,6 +2381,12 @@ fn typed_intl_override(spec: &IntlFunction) -> Option<(TypeExpr, Vec<Stmt>)> {
             s_return(e_var("_object")),
         ])),
         "msgfmt_create" => Some((t_nullable(t_class("MessageFormatter")), vec![
+            message_formatter_reset_error(),
+            message_formatter_arity_guard("msgfmt_create()", 2),
+            message_formatter_null_guard("msgfmt_create()", "locale", 1),
+            message_formatter_string_guard("msgfmt_create()", "locale", 1),
+            message_formatter_null_guard("msgfmt_create()", "pattern", 2),
+            message_formatter_string_guard("msgfmt_create()", "pattern", 2),
             s_assign("_object", e_static_call("MessageFormatter", "create", args())),
             s_if(e_binop(e_var("_object"), BinOp::StrictEq, e_null()), vec![
                 s_expr(e_call("__elephc_intl_reprefix_error", vec![e_str("msgfmt_create()")])),
@@ -6017,6 +6026,64 @@ fn numfmt_parse_body(method_name: &str) -> Vec<Stmt> {
     body
 }
 
+/// Resets the shared Intl error the way each MessageFormatter entry point's prologue does.
+///
+/// php-src clears the global error at the start of every entry point, before argument parsing,
+/// so even an ArgumentCountError leaves `intl_get_error_message()` at `U_ZERO_ERROR`.
+fn message_formatter_reset_error() -> Stmt {
+    s_expr(e_call("__elephc_intl_invoke", vec![
+        e_str("intl"), e_str("intl_set_error"), e_array(vec![e_int(0), e_str("")]),
+    ]))
+}
+
+/// Builds the `func_num_args()` arity guard php's MessageFormatter entry points use.
+fn message_formatter_arity_guard(caller: &str, expected: i64) -> Stmt {
+    s_if(
+        e_binop(e_call("func_num_args", vec![]), BinOp::StrictNotEq, e_int(expected)),
+        vec![s_throw(e_new("ArgumentCountError", vec![e_concat_all(vec![
+            e_str(&format!("{caller} expects exactly {expected} arguments, ")),
+            e_cast(CastType::String, e_call("func_num_args", vec![])),
+            e_str(" given"),
+        ])]))],
+        vec![],
+        None,
+    )
+}
+
+/// Emits php's null-to-string deprecation and coerces the parameter to an empty string.
+fn message_formatter_null_guard(caller: &str, parameter: &str, index: i64) -> Stmt {
+    s_if(
+        e_binop(e_var(parameter), BinOp::StrictEq, e_null()),
+        vec![
+            s_expr(e_call("trigger_error", vec![
+                e_str(&format!(
+                    "{caller}: Passing null to parameter #{index} (${parameter}) of type string is deprecated"
+                )),
+                e_const("E_USER_DEPRECATED"),
+            ])),
+            s_assign(parameter, e_str("")),
+        ],
+        vec![],
+        None,
+    )
+}
+
+/// Builds the runtime TypeError for a MessageFormatter string parameter.
+fn message_formatter_string_guard(caller: &str, parameter: &str, index: i64) -> Stmt {
+    s_if(
+        e_not(e_call("is_string", vec![e_var(parameter)])),
+        vec![s_throw(e_new("TypeError", vec![e_concat_all(vec![
+            e_str(&format!(
+                "{caller}: Argument #{index} (${parameter}) must be of type string, "
+            )),
+            e_call("__elephc_intl_debug_type", vec![e_var(parameter)]),
+            e_str(" given"),
+        ])]))],
+        vec![],
+        None,
+    )
+}
+
 /// Builds the `MessageFormatter` class.
 fn build_message_formatter_class() -> Stmt {
     let mut builder = class("MessageFormatter").prop("__elephc_handle", TypeExpr::Int, Some(e_int(0)));
@@ -6024,13 +6091,28 @@ fn build_message_formatter_class() -> Stmt {
         builder = builder.constant(constant, const_value_expr(value));
     }
     builder = builder
-        .method(method("__construct").param("locale", TypeExpr::Str).param("pattern", TypeExpr::Str).body(vec![
+        .method(method("__construct")
+            .param_default("locale", t_nullable(TypeExpr::Str), e_null())
+            .param_default("pattern", t_nullable(TypeExpr::Str), e_null())
+            .body(vec![
+            message_formatter_reset_error(),
+            message_formatter_arity_guard("MessageFormatter::__construct()", 2),
+            message_formatter_null_guard("MessageFormatter::__construct()", "locale", 1),
+            message_formatter_string_guard("MessageFormatter::__construct()", "locale", 1),
+            message_formatter_null_guard("MessageFormatter::__construct()", "pattern", 2),
+            message_formatter_string_guard("MessageFormatter::__construct()", "pattern", 2),
             s_if(e_binop(e_this_prop("__elephc_handle"), BinOp::StrictNotEq, e_int(0)), vec![
                 s_throw(e_new("IntlException", vec![e_str("MessageFormatter::__construct(): cannot call constructor twice")])),
             ], vec![], None),
             s_assign("_handle", e_call("__elephc_intl_open", vec![e_str("message"), e_array(vec![e_var("locale"), e_var("pattern")])])),
             s_if(e_binop(e_var("_handle"), BinOp::StrictEq, e_int(0)), vec![
-                s_throw(e_new("IntlException", vec![e_str("MessageFormatter::__construct(): message formatter creation failed")])),
+                // php reports the constructor as the failing entry point and throws the
+                // detailed context (generic creation failure or the parse error).
+                s_expr(e_call("__elephc_intl_reprefix_error", vec![e_str("MessageFormatter::__construct()")])),
+                s_assign("_message", e_call("__elephc_intl_invoke_string", vec![
+                    e_str("intl"), e_str("intl_get_error_context"), e_array(vec![]),
+                ])),
+                s_throw(e_new("IntlException", vec![e_var("_message")])),
             ], vec![], None),
             s_prop_assign(e_var("this"), "__elephc_handle", e_var("_handle")),
         ]))
@@ -6044,7 +6126,18 @@ fn build_message_formatter_class() -> Stmt {
         .method(method("__elephc_call").param("method", TypeExpr::Str).param("args", t_mixed()).body(vec![
             s_return(e_call("__elephc_intl_call", vec![e_this_prop("__elephc_handle"), e_var("method"), e_var("args")])),
         ]))
-        .method(method("create").static_().param("locale", TypeExpr::Str).param("pattern", TypeExpr::Str).returns(t_nullable(t_class("MessageFormatter"))).body(vec![
+        .method(method("create")
+            .static_()
+            .param_default("locale", t_nullable(TypeExpr::Str), e_null())
+            .param_default("pattern", t_nullable(TypeExpr::Str), e_null())
+            .returns(t_nullable(t_class("MessageFormatter")))
+            .body(vec![
+            message_formatter_reset_error(),
+            message_formatter_arity_guard("MessageFormatter::create()", 2),
+            message_formatter_null_guard("MessageFormatter::create()", "locale", 1),
+            message_formatter_string_guard("MessageFormatter::create()", "locale", 1),
+            message_formatter_null_guard("MessageFormatter::create()", "pattern", 2),
+            message_formatter_string_guard("MessageFormatter::create()", "pattern", 2),
             s_try(
                 vec![s_return(e_new("MessageFormatter", vec![e_var("locale"), e_var("pattern")]))],
                 vec![(vec!["Throwable"], Some("_error"), vec![

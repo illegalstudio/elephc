@@ -376,7 +376,9 @@ std::string php_number_to_string(double value);
 /* --------------------------------------------------------------------------------------- */
 
 thread_local int32_t global_error_code = 0;
-thread_local std::string global_error_message;
+// php initializes the reporting message to the zero status, so a program that never hit an
+// Intl error still reads `U_ZERO_ERROR` from intl_get_error_message().
+thread_local std::string global_error_message = "U_ZERO_ERROR";
 thread_local std::string global_error_context;
 
 void set_global_error(UErrorCode code, const std::string &context) {
@@ -4027,8 +4029,11 @@ void set_message_formatter_creation_error(UErrorCode status, const std::string &
         // The static MessageFormatter::formatMessage()/parseMessage() path reports this
         // exact text and its caller-supplied zero code.
         set_global_error(zero_code, "Creating message formatter failed");
-    } else {
+    } else if (status == U_PATTERN_SYNTAX_ERROR || status == U_PARSE_ERROR) {
         set_global_error(status, "pattern syntax error (" + parse_error_to_string(parse_error) + ")");
+    } else {
+        // Other parse failures (notably U_UNMATCHED_BRACES) report the generic text.
+        set_global_error(status, "message formatter creation failed");
     }
 }
 
@@ -4974,6 +4979,10 @@ Value static_dispatch(const std::string &family, const std::string &operation_in
             std::string locale, pattern;
             if (!argument_string(args, 0, locale) || !argument_string(args, 1, pattern))
                 return Value::null();
+            if (pattern.empty()) {
+                set_global_error(U_ILLEGAL_ARGUMENT_ERROR, "message formatter creation failed");
+                return Value::null();
+            }
             UParseError parse_error = {0};
             auto *formatter = new MessageFormat(from_utf8(pattern), Locale(locale.c_str()),
                                                 parse_error, status);
@@ -4993,6 +5002,10 @@ Value static_dispatch(const std::string &family, const std::string &operation_in
             std::string locale, pattern, message;
             if (!argument_string(args, 0, locale) || !argument_string(args, 1, pattern) ||
                 !argument_string(args, 2, message)) return Value::boolean(false);
+            if (pattern.empty()) {
+                set_global_error(U_ILLEGAL_ARGUMENT_ERROR, "Creating message formatter failed");
+                return Value::boolean(false);
+            }
             UParseError parse_error = {0};
             MessageFormat formatter(from_utf8(pattern), Locale(locale.c_str()), parse_error, status);
             if (U_FAILURE(status)) {
@@ -5027,6 +5040,10 @@ Value static_dispatch(const std::string &family, const std::string &operation_in
             if (!argument_array(args, 2, values)) return Value::boolean(false);
             std::string timezone;
             optional_string(args, 3, timezone);
+            if (pattern.empty()) {
+                set_global_error(U_ZERO_ERROR, "Creating message formatter failed");
+                return Value::boolean(false);
+            }
             UParseError parse_error = {0};
             MessageFormat formatter(from_utf8(pattern), Locale(locale.c_str()), parse_error, status);
             if (U_FAILURE(status)) {
@@ -5815,6 +5832,19 @@ std::unique_ptr<IntlObject> open_object(const std::string &kind,
             status = U_ILLEGAL_ARGUMENT_ERROR;
             return nullptr;
         }
+        if (!pattern.empty() && !valid_utf8(pattern)) {
+            // php converts the pattern to UTF-16 before handing it to ICU; an invalid UTF-8
+            // byte string fails there instead of reaching the message parser.
+            status = U_INVALID_CHAR_FOUND;
+            set_global_error(U_INVALID_CHAR_FOUND, "error converting pattern to UTF-16");
+            return nullptr;
+        }
+        if (pattern.empty()) {
+            // ICU accepts an empty MessagePattern, but php's formatter rejects it.
+            status = U_ILLEGAL_ARGUMENT_ERROR;
+            set_global_error(U_ILLEGAL_ARGUMENT_ERROR, "message formatter creation failed");
+            return nullptr;
+        }
         UParseError parse_error = {0};
         auto *formatter = new MessageFormat(from_utf8(pattern),
             locale.empty() ? Locale::getDefault() : Locale(locale.c_str()), parse_error, status);
@@ -5824,9 +5854,12 @@ std::unique_ptr<IntlObject> open_object(const std::string &kind,
             // ICU status code, not the static-method wording.
             if (!php_locale_valid(locale)) {
                 set_global_error(U_ILLEGAL_ARGUMENT_ERROR, "message formatter creation failed");
-            } else {
+            } else if (status == U_PATTERN_SYNTAX_ERROR || status == U_PARSE_ERROR) {
                 set_global_error(status,
                     "pattern syntax error (" + parse_error_to_string(parse_error) + ")");
+            } else {
+                // Other parse failures (notably U_UNMATCHED_BRACES) report the generic text.
+                set_global_error(status, "message formatter creation failed");
             }
             return nullptr;
         }
