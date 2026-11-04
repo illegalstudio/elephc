@@ -190,9 +190,8 @@ impl Proof<'_> {
                     Op::Acquire | Op::Borrow if user.immediate.is_none() => user
                         .result
                         .is_some_and(|result| self.value_uses(result, producer, seen, stores)),
-                    Op::Cast | Op::ReturnBoundaryMixedToInt | Op::PropertyBoundaryCheckedToInt => {
-                        scalar_observation(user)
-                    }
+                    Op::Cast | Op::ReturnBoundaryMixedToInt => scalar_observation(user),
+                    Op::PropertyBoundaryCheckedToInt => int_property_observation(user),
                     _ if domain::comparison(user) && self.numeric_inputs(&user.operands) => true,
                     _ if tagged_producer(user) && self.numeric_inputs(&user.operands) => true,
                     Op::StoreLocal => match user.immediate {
@@ -347,7 +346,9 @@ impl Proof<'_> {
                 }
                 let arithmetic = tagged_producer(inst) && self.numeric_inputs(&inst.operands);
                 let comparison = domain::comparison(inst) && self.numeric_inputs(&inst.operands);
-                if !scalar_observation(inst) && !arithmetic && !comparison {
+                if !scalar_observation(inst) && !int_property_observation(inst) && !arithmetic
+                    && !comparison
+                {
                     return false;
                 }
                 self.stable_read(load, user)
@@ -428,10 +429,9 @@ pub(super) fn numeric_value(function: &Function, proven: &HashSet<ValueId>, valu
     proven.contains(&value) || domain::inputs(function, &[value])
 }
 
-/// Copies a scalar payload without exposing its address; declared returns and declared int
-/// property stores retain their checks.
+/// Copies a scalar payload without exposing its address; declared returns retain their checks.
 fn scalar_observation(inst: &crate::ir::Instruction) -> bool {
-    (matches!(inst.op, Op::ReturnBoundaryMixedToInt | Op::PropertyBoundaryCheckedToInt)
+    (inst.op == Op::ReturnBoundaryMixedToInt
         && inst.operands.len() == 1
         && inst.result_type == IrType::I64 && inst.result_php_type == PhpType::Int)
         || (inst.op == Op::Cast
@@ -440,6 +440,15 @@ fn scalar_observation(inst: &crate::ir::Instruction) -> bool {
             (Some(Immediate::CastTarget(IrType::I64)), PhpType::Int)
                 | (Some(Immediate::CastTarget(IrType::F64)), PhpType::Float)
         ))
+}
+
+/// Copies a checked payload into a declared `int` property word; the narrowing keeps PHP's
+/// typed-property TypeError and never retains or frees the cell.
+fn int_property_observation(inst: &crate::ir::Instruction) -> bool {
+    inst.op == Op::PropertyBoundaryCheckedToInt
+        && inst.operands.len() == 1
+        && inst.result_type == IrType::I64
+        && inst.result_php_type == PhpType::Int
 }
 
 /// Finds the defining instruction for a non-parameter SSA value.
