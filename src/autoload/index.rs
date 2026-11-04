@@ -108,12 +108,31 @@ impl AutoloadIndex {
         self.fqn_to_path.get(key).map(PathBuf::as_path)
     }
 
-    /// Every indexed class of the project itself, sorted: its own `src/`, not its dependencies.
-    pub fn project_classes(&self) -> Vec<String> {
+    /// Every indexed class under the root manifest's own `autoload` PSR-4 directories, sorted.
+    ///
+    /// Its `src/`, then: neither its dependencies nor `autoload-dev`, whose test classes bootstrap
+    /// by requiring `vendor/autoload.php` and belong to another program.
+    pub fn project_classes(&self, project_root: &Path) -> Vec<String> {
+        let manifest = std::fs::read_to_string(project_root.join("composer.json")).unwrap_or_default();
+        let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap_or_default();
+        let directories: Vec<PathBuf> = manifest["autoload"]["psr-4"]
+            .as_object()
+            .into_iter()
+            .flat_map(|prefixes| prefixes.values())
+            .flat_map(|value| match value {
+                serde_json::Value::Array(paths) => paths.clone(),
+                other => vec![other.clone()],
+            })
+            .filter_map(|value| value.as_str().map(|path| project_root.join(path)))
+            .map(|path| path.canonicalize().unwrap_or(path))
+            .collect();
         let mut classes: Vec<String> = self
             .fqn_to_path
             .iter()
-            .filter(|(_, path)| !path.components().any(|part| part.as_os_str() == "vendor"))
+            .filter(|(_, path)| {
+                let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+                directories.iter().any(|directory| path.starts_with(directory))
+            })
             .map(|(name, _)| name.clone())
             .collect();
         classes.sort();

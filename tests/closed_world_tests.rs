@@ -696,6 +696,52 @@ try { var_dump(class_exists('App\Fix')); } catch (Throwable $t) { echo get_class
     assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
 }
 
+/// A function no code calls can still be reached by the name a string holds: a closed world keeps
+/// it for `ReflectionFunction`, `function_exists()` and a call through the name.
+#[test]
+fn closed_world_keeps_a_function_only_a_string_names() {
+    let source = r#"<?php
+namespace App { function by_name(int $v): int { return $v + 1; } }
+namespace {
+function pick() { return ['n' => 'App\by_name']; }
+$name = pick()['n'];
+$r = new ReflectionFunction($name);
+echo $r->getName(), ' ', $r->getNumberOfParameters(), "\n";
+var_dump(function_exists($name));
+}
+"#;
+    let (stdout, _, dir) = closed_run("cw_function_by_string", source);
+    assert_eq!(stdout, php_stdout(&dir));
+}
+
+/// The project's `autoload` classes are compiled whether or not code names them, the ones of
+/// `autoload-dev` are not: a test class's `bootstrap.php` requires `vendor/autoload.php`.
+#[test]
+fn closed_world_roots_the_project_autoload_but_not_its_dev_autoload() {
+    let dir = make_test_dir("cw_project_roots");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::create_dir_all(dir.join("tests")).unwrap();
+    fs::write(
+        dir.join("composer.json"),
+        r#"{"autoload":{"psr-4":{"App\\\\":"src/"}},"autoload-dev":{"psr-4":{"App\\\\Tests\\\\":"tests/"}}}"#,
+    )
+    .unwrap();
+    fs::write(dir.join("src/Listed.php"), "<?php\nnamespace App;\nclass Listed { public function hi() { return 'listed'; } }\n").unwrap();
+    fs::write(dir.join("tests/Broken.php"), "<?php\nnamespace App\\Tests;\nclass Broken { public function x(): int { return 'not an int' . $undefined->y(); } }\nthis is not php\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$class = 'App\\' . 'Listed';
+var_dump(class_exists($class, false));
+echo (new ReflectionClass($class))->getShortName(), "\n";
+"#,
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert!(text(&run(&dir).stdout).ends_with("Listed\n"), "{}", text(&run(&dir).stdout));
+}
+
 /// A backend re-run is a new process: a file the first round classified as harmless (here, one
 /// php refuses to load) stays harmless, while one it inherits with no such verdict still refuses
 /// the build. `KernelBrowser` was a note in the first round of the Symfony Demo build and a
