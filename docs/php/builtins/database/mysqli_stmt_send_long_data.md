@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_send_long_data()"
 description: "Sends parameter data in chunks."
-sidebar:
-  order: 201
 ---
 
 ## mysqli_stmt_send_long_data()
@@ -22,8 +20,9 @@ Sends parameter data in chunks.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

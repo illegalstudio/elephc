@@ -27,7 +27,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_fetch_lengths(mixed $result): ?array
+function mysqli_fetch_lengths(mixed $result): mixed
 ```
 
 ## What the type checker enforces

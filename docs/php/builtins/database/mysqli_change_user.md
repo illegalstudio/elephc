@@ -1,8 +1,6 @@
 ---
 title: "mysqli_change_user()"
 description: "Changes the user of the database connection."
-sidebar:
-  order: 105
 ---
 
 ## mysqli_change_user()
@@ -23,8 +21,9 @@ Changes the user of the database connection.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

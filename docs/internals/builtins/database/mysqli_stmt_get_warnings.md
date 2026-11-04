@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_get_warnings() - internals"
 description: "Compiler internals for mysqli_stmt_get_warnings(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 191
 ---
 
 ## `mysqli_stmt_get_warnings()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1863](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1863) (`mysqli_stmt_get_warnings`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_stmt_get_warnings`)
 - **Function symbol**: `mysqli_stmt_get_warnings()`
 
 

@@ -1,8 +1,6 @@
 ---
 title: "mysqli_dump_debug_info() - internals"
 description: "Compiler internals for mysqli_dump_debug_info(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 114
 ---
 
 ## `mysqli_dump_debug_info()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:530](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L530) (`mysqli_dump_debug_info`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_dump_debug_info`)
 - **Function symbol**: `mysqli_dump_debug_info()`
 
 

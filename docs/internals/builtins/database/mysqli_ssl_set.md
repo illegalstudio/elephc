@@ -1,8 +1,6 @@
 ---
 title: "mysqli_ssl_set() - internals"
 description: "Compiler internals for mysqli_ssl_set(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 174
 ---
 
 ## `mysqli_ssl_set()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:444](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L444) (`mysqli_ssl_set`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_ssl_set`)
 - **Function symbol**: `mysqli_ssl_set()`
 
 

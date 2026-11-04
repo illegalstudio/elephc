@@ -1,8 +1,6 @@
 ---
 title: "mysqli_poll() - internals"
 description: "Compiler internals for mysqli_poll(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 157
 ---
 
 ## `mysqli_poll()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1141](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1141) (`mysqli_poll`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_poll`)
 - **Function symbol**: `mysqli_poll()`
 
 

@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_fetch()"
 description: "Fetches the next row into the bound result variables."
-sidebar:
-  order: 187
 ---
 
 ## mysqli_stmt_fetch()
@@ -20,8 +18,9 @@ Fetches the next row into the bound result variables.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

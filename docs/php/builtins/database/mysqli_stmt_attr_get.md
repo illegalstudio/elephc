@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_attr_get()"
 description: "Returns the current value of a statement attribute."
-sidebar:
-  order: 177
 ---
 
 ## mysqli_stmt_attr_get()
@@ -21,8 +19,9 @@ Returns the current value of a statement attribute.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

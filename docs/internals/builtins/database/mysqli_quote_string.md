@@ -1,8 +1,6 @@
 ---
 title: "mysqli_quote_string() - internals"
 description: "Compiler internals for mysqli_quote_string(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 160
 ---
 
 ## `mysqli_quote_string()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:259](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L259) (`mysqli_quote_string`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_quote_string`)
 - **Function symbol**: `mysqli_quote_string()`
 
 

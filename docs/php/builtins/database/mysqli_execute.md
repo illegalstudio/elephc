@@ -6,13 +6,14 @@ description: "Alias of mysqli_stmt_execute()."
 ## mysqli_execute()
 
 ```php
-function mysqli_execute(mixed $statement): bool
+function mysqli_execute(mixed $statement, ?array $params = null): bool
 ```
 
 Alias of mysqli_stmt_execute().
 
 **Parameters**:
 - `$statement` (`mixed`)
+- `$params` (`?array`), default `null`, optional
 
 **Returns**: `bool`
 

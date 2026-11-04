@@ -1,8 +1,6 @@
 ---
 title: "mysqli_kill() - internals"
 description: "Compiler internals for mysqli_kill(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 149
 ---
 
 ## `mysqli_kill()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:490](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L490) (`mysqli_kill`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_kill`)
 - **Function symbol**: `mysqli_kill()`
 
 

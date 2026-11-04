@@ -1,8 +1,6 @@
 ---
 title: "mysqli_quote_string()"
 description: "Escapes a string and wraps it in single quotes."
-sidebar:
-  order: 160
 ---
 
 ## mysqli_quote_string()
@@ -21,8 +19,9 @@ Escapes a string and wraps it in single quotes.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

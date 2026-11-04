@@ -1,8 +1,6 @@
 ---
 title: "mysqli_get_client_stats()"
 description: "Returns client per-process statistics."
-sidebar:
-  order: 137
 ---
 
 ## mysqli_get_client_stats()
@@ -19,8 +17,9 @@ Returns client per-process statistics.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

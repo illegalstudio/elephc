@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_more_results() - internals"
 description: "Compiler internals for mysqli_stmt_more_results(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 194
 ---
 
 ## `mysqli_stmt_more_results()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1763](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1763) (`mysqli_stmt_more_results`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_stmt_more_results`)
 - **Function symbol**: `mysqli_stmt_more_results()`
 
 

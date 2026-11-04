@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_bind_result()"
 description: "Binds variables to a prepared statement for result storage."
-sidebar:
-  order: 180
 ---
 
 ## mysqli_stmt_bind_result()
@@ -21,8 +19,9 @@ Binds variables to a prepared statement for result storage.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

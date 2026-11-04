@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_attr_set()"
 description: "Changes the behavior of a prepared statement."
-sidebar:
-  order: 178
 ---
 
 ## mysqli_stmt_attr_set()
@@ -22,8 +20,9 @@ Changes the behavior of a prepared statement.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_result_metadata() - internals"
 description: "Compiler internals for mysqli_stmt_result_metadata(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 200
 ---
 
 ## `mysqli_stmt_result_metadata()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1724](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1724) (`mysqli_stmt_result_metadata`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_stmt_result_metadata`)
 - **Function symbol**: `mysqli_stmt_result_metadata()`
 
 

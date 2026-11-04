@@ -1,8 +1,6 @@
 ---
 title: "mysqli_get_links_stats()"
 description: "Returns information about open and cached links."
-sidebar:
-  order: 141
 ---
 
 ## mysqli_get_links_stats()
@@ -19,8 +17,9 @@ Returns information about open and cached links.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

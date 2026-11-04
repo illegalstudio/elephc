@@ -1,8 +1,6 @@
 ---
 title: "mysqli_kill()"
 description: "Asks the server to kill a MySQL thread."
-sidebar:
-  order: 149
 ---
 
 ## mysqli_kill()
@@ -21,8 +19,9 @@ Asks the server to kill a MySQL thread.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

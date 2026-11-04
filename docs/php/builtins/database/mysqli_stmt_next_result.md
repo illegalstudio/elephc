@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_next_result()"
 description: "Moves to the next result of a multiple-result statement."
-sidebar:
-  order: 195
 ---
 
 ## mysqli_stmt_next_result()
@@ -20,8 +18,9 @@ Moves to the next result of a multiple-result statement.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

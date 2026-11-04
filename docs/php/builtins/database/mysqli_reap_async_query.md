@@ -1,8 +1,6 @@
 ---
 title: "mysqli_reap_async_query()"
 description: "Returns the result of an async query."
-sidebar:
-  order: 164
 ---
 
 ## mysqli_reap_async_query()
@@ -20,8 +18,9 @@ Returns the result of an async query.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

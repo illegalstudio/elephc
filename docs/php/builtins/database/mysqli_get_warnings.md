@@ -1,8 +1,6 @@
 ---
 title: "mysqli_get_warnings()"
 description: "Returns the warnings of the last statement."
-sidebar:
-  order: 145
 ---
 
 ## mysqli_get_warnings()
@@ -20,8 +18,9 @@ Returns the warnings of the last statement.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

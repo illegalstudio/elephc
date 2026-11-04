@@ -1,8 +1,6 @@
 ---
 title: "mysqli_get_connection_stats()"
 description: "Returns statistics about the client connection."
-sidebar:
-  order: 139
 ---
 
 ## mysqli_get_connection_stats()
@@ -20,8 +18,9 @@ Returns statistics about the client connection.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

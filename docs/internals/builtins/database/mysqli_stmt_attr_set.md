@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_attr_set() - internals"
 description: "Compiler internals for mysqli_stmt_attr_set(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 178
 ---
 
 ## `mysqli_stmt_attr_set()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1842](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1842) (`mysqli_stmt_attr_set`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_stmt_attr_set`)
 - **Function symbol**: `mysqli_stmt_attr_set()`
 
 

@@ -1,8 +1,6 @@
 ---
 title: "mysqli_dump_debug_info()"
 description: "Asks the server to write debugging information to its log."
-sidebar:
-  order: 114
 ---
 
 ## mysqli_dump_debug_info()
@@ -20,8 +18,9 @@ Asks the server to write debugging information to its log.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

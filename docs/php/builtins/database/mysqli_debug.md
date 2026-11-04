@@ -1,8 +1,6 @@
 ---
 title: "mysqli_debug()"
 description: "Performs debugging operations."
-sidebar:
-  order: 113
 ---
 
 ## mysqli_debug()
@@ -20,8 +18,9 @@ Performs debugging operations.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
