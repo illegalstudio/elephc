@@ -10,6 +10,14 @@ slow-timeout = { period = "60s", terminate-after = 1 }
 filter = 'binary(codegen_tests) and (test(=codegen::runtime_gc::property_dimension_fetch_modes::test_property_dimension_xml_fetch_modes_bundle) or test(=codegen::runtime_gc::property_magic_dimension_guards::test_magic_property_dimension_xml_guards_bundle) or test(=codegen::simplexml::debug::test_simplexml_native_debug_projection_bundle) or test(=codegen::simplexml::dimension_owners::test_simplexml_dimension_write_owners_isolated_bundle))'
 test-group = 'simplexml-large-bundles'
 
+# These two single-compile XML catalog probes each reached 360s twice while
+# sharing a macOS shard. Reserve the existing pool without changing their cases
+# or timeout, and use CI fixture phase records to distinguish assembly from run.
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary(codegen_tests) and (test(=codegen::simplexml::comparisons_and_files::test_simplexml_native_comparison_and_default_namespace_bundle) or test(=codegen::simplexml::dimension_updates::test_simplexml_saved_empty_dimension_write_bundle))'
+threads-required = "num-test-threads"
+
 # A fixture bundle (tests/codegen/support/bundle.rs) compiles several opaque-eval programs as
 # one: one catalog compile per optimizer mode instead of one per fixture, but the run itself
 # still executes every case under heap diagnostics, so the single test runs longer than any of
