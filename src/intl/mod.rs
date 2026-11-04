@@ -6621,7 +6621,39 @@ fn build_resource_bundle_class() -> Stmt {
             s_return(e_binop(e_method_call(e_var("this"), "get", vec![e_var("offset")]), BinOp::StrictNotEq, e_null())),
         ]))
         .method(method("offsetGet").param("offset", t_mixed()).returns(t_mixed()).body(vec![
-            s_return(e_method_call(e_var("this"), "get", vec![e_var("offset")])),
+            // php's ArrayAccess error context names the CALLER of the offset access
+            // (`main()` or the enclosing function), not ResourceBundle::get().
+            s_assign("_result", e_method_call(e_var("this"), "__elephc_call", vec![
+                e_str("get"), e_array(vec![e_var("offset"), crate::synthetic_class::e_bool(true)]),
+            ])),
+            s_assign("_bt", e_call("debug_backtrace", vec![])),
+            s_assign("_caller", e_str("main")),
+            s_if(
+                call_isset(e_index(e_index(e_var("_bt"), e_int(1)), e_str("function"))),
+                vec![s_assign("_caller", e_cast(
+                    CastType::String,
+                    e_index(e_index(e_var("_bt"), e_int(1)), e_str("function")),
+                ))],
+                vec![],
+                None,
+            ),
+            s_assign("_checked", e_call("__elephc_intl_object_fail", vec![
+                e_var("this"), e_var("_result"),
+                e_concat(e_var("_caller"), e_str("()")),
+            ])),
+            s_if(
+                e_binop(
+                    e_binop(e_var("_checked"), BinOp::StrictEq, crate::synthetic_class::e_bool(false)),
+                    BinOp::And,
+                    e_binop(e_call("__elephc_intl_invoke_int", vec![
+                        e_str("intl"), e_str("intl_get_error_code"), e_array(vec![]),
+                    ]), BinOp::StrictNotEq, e_int(0)),
+                ),
+                vec![s_return(e_null())],
+                vec![],
+                None,
+            ),
+            s_return(e_var("_checked")),
         ]))
         .method(method("offsetSet").param("offset", t_mixed()).param("value", t_mixed()).returns(TypeExpr::Void).body(vec![
             s_throw(e_new("Error", vec![e_str("Cannot use object of type ResourceBundle as array")])),
