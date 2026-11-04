@@ -122,6 +122,19 @@ fn unset_array_access_has_property_array_receiver(
     )
 }
 
+/// Whether `class_name` keeps `property` in no slot of its own and no `__set` intercepts it, so
+/// an element unset has to find the property on the run-time object: in a descendant's slot, or
+/// in the per-instance hash of `#[AllowDynamicProperties]` and of every class under `eval`.
+fn unset_property_has_no_slot(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    ctx.classes.get(class_name).is_some_and(|info| {
+        info.visible_property(property).is_none() && !info.methods.contains_key("__set")
+    })
+}
+
 /// Returns true when the receiver is a property of a GENERIC object — one whose class the compiler
 /// cannot name, so there is no declared slot to walk, only a boxed cell to read and write back.
 ///
@@ -146,19 +159,15 @@ fn unset_array_access_has_generic_object_property_receiver(
     ) {
         return true;
     }
-    // A receiver class that holds no `$property` while a descendant declares it resolves the
-    // property on the run-time object, like a gradual receiver (symfony/http-client's
-    // `unset($multi->hosts[$host])` on a `ClientState`).
+    // A receiver class with no `$property` slot resolves the property on the run-time object,
+    // like a gradual receiver: a descendant may declare it (symfony/http-client's
+    // `unset($multi->hosts[$host])` on a `ClientState`) or its dynamic hash may hold it.
     let receiver_ty = match &object.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         _ => unset_operand_type(ctx, object),
     };
     if let PhpType::Object(class_name) = &receiver_ty {
-        if crate::ir_lower::stmt::property_array_writes::property_declared_only_by_descendants(
-            ctx,
-            class_name.trim_start_matches('\\'),
-            property,
-        ) {
+        if unset_property_has_no_slot(ctx, class_name.trim_start_matches('\\'), property) {
             return true;
         }
     }
@@ -726,9 +735,7 @@ fn lower_unset_gradual_property_element(
     // from the run-time class. The box is this site's own temporary, retired at the merge.
     let descendant_box = match ctx.builder.value_php_type(object.value) {
         PhpType::Object(class_name)
-            if crate::ir_lower::stmt::property_array_writes::property_declared_only_by_descendants(
-                ctx, class_name.trim_start_matches('\\'), property,
-            ) =>
+            if unset_property_has_no_slot(ctx, class_name.trim_start_matches('\\'), property) =>
         {
             Some(ctx.box_value_as_mixed(*object, PhpType::Mixed, Some(expr.span)))
         }

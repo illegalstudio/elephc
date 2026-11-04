@@ -1404,6 +1404,45 @@ echo R::select($s), ' ', json_encode($s->openHandles), ' ', count((new Unrelated
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// An element unset of a property the class keeps in its dynamic hash, or in no slot at all:
+/// `#[AllowDynamicProperties]` refused it, and so did every class of a program holding `eval`,
+/// which reserves that hash everywhere (`CurlResponse::select()` in the Symfony Demo).
+#[test]
+fn test_element_unset_of_a_property_without_a_slot() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+#[\AllowDynamicProperties]
+class Bag { public array $own = [1, 2]; }
+function drop(Bag $b, string $k): void {
+    unset($b->extra[$k]);
+    unset($b->own[0]);
+}
+$b = new Bag();
+$b->extra = ['a' => 1, 'b' => 2];
+drop($b, 'a');
+echo json_encode($b), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "{\"own\":{\"1\":2},\"extra\":{\"b\":2}}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ClientState { public array $openHandles = []; }
+final class CurlClientState extends ClientState { public array $pauseExpiries = []; }
+function select(ClientState $multi): int {
+    $n = 0;
+    foreach ($multi->pauseExpiries ?? [] as $id => $expiry) {
+        unset($multi->pauseExpiries[$id]);
+        $n++;
+    }
+    return $n;
+}
+if ($argc > 7) { eval($argv[1]); }
+echo select(new ClientState()), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0\n");
+}
+
 /// A `static` local handed out by reference (by-ref argument, `&` alias, `use (&$x)`) keeps every
 /// write across calls: Monolog's `BrowserConsoleHandler::handleStyle` shape.
 #[test]
