@@ -375,10 +375,25 @@ fn collect_php_files(dir: &Path, out: &mut Vec<PathBuf>) {
         };
         if kind.is_dir() {
             collect_php_files(&path, out);
-        } else if kind.is_file() && path.extension().is_some_and(|ext| ext == "php") {
+        } else if kind.is_file()
+            && (path.extension().is_some_and(|ext| ext == "php") || opens_with_php_tag(&path))
+        {
             out.push(path);
         }
     }
+}
+
+/// Whether a file of any other name is PHP too.
+///
+/// `include` goes by the content: symfony/ux-live-component dumps its template map to
+/// `var/cache/prod/live_components_twig_templates.map`, and a closed world that only knew `.php`
+/// answered that include with a failed open.
+fn opens_with_php_tag(path: &Path) -> bool {
+    let mut head = [0u8; 5];
+    std::fs::File::open(path)
+        .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut head))
+        .is_ok()
+        && &head == b"<?php"
 }
 
 

@@ -647,6 +647,24 @@ fn closed_world_data_files_keep_the_identity_of_included_class_files() {
     assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
 }
 
+/// `include` goes by a file's content, not its name: a dumped `.map` is a data file like any other.
+#[test]
+fn closed_world_includes_a_php_data_file_of_any_extension() {
+    let dir = make_test_dir("cw_map_extension");
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\\\":"src/"}}}"#).unwrap();
+    fs::write(dir.join("templates.map"), "<?php\n\nreturn ['a' => 'first'];\n").unwrap();
+    fs::write(dir.join("notes.map"), "not php at all\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\n$file = __DIR__ . '/templates' . '.map';\n$map = include $file;\necho $map['a'], \"\\n\";\n",
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), "first\n");
+    assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+}
+
 /// A backend re-run is a new process: a file the first round classified as harmless (here, one
 /// php refuses to load) stays harmless, while one it inherits with no such verdict still refuses
 /// the build. `KernelBrowser` was a note in the first round of the Symfony Demo build and a
