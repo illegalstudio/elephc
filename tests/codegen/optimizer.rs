@@ -50,6 +50,7 @@ mod method_loop_counters;
 #[path = "optimizer/checked_numeric_chain.rs"]
 mod checked_numeric_chain;
 mod integer_destinations;
+mod integer_property_updates;
 mod counter_fast_paths;
 mod counter_region_comparisons;
 #[path = "optimizer/concat_reset.rs"]

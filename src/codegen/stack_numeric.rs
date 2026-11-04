@@ -190,7 +190,9 @@ impl Proof<'_> {
                     Op::Acquire | Op::Borrow if user.immediate.is_none() => user
                         .result
                         .is_some_and(|result| self.value_uses(result, producer, seen, stores)),
-                    Op::Cast | Op::ReturnBoundaryMixedToInt => scalar_observation(user),
+                    Op::Cast | Op::ReturnBoundaryMixedToInt | Op::PropertyBoundaryCheckedToInt => {
+                        scalar_observation(user)
+                    }
                     _ if domain::comparison(user) && self.numeric_inputs(&user.operands) => true,
                     _ if tagged_producer(user) && self.numeric_inputs(&user.operands) => true,
                     Op::StoreLocal => match user.immediate {
@@ -426,9 +428,10 @@ pub(super) fn numeric_value(function: &Function, proven: &HashSet<ValueId>, valu
     proven.contains(&value) || domain::inputs(function, &[value])
 }
 
-/// Copies a scalar payload without exposing its address; declared returns retain their checks.
+/// Copies a scalar payload without exposing its address; declared returns and declared int
+/// property stores retain their checks.
 fn scalar_observation(inst: &crate::ir::Instruction) -> bool {
-    (inst.op == Op::ReturnBoundaryMixedToInt
+    (matches!(inst.op, Op::ReturnBoundaryMixedToInt | Op::PropertyBoundaryCheckedToInt)
         && inst.operands.len() == 1
         && inst.result_type == IrType::I64 && inst.result_php_type == PhpType::Int)
         || (inst.op == Op::Cast

@@ -450,6 +450,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ReturnBoundaryMixedToInt => {
             mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, &inst)
         }
+        Op::PropertyBoundaryCheckedToInt => {
+            mixed_narrowing::lower_property_boundary_checked_to_int(ctx, &inst)
+        }
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, &inst),
         Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),

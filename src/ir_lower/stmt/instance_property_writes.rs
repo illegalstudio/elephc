@@ -480,6 +480,15 @@ fn lower_property_assign_value(
         lower_property_hook_set(ctx, object.value, property, value, span);
         return;
     }
+    // Every accessor route has returned, so a checked integer result headed for a plain declared
+    // `int` slot can be verified here and stored as a raw word instead of a heap-boxed Mixed.
+    let value = if preserve_property_operand || retained_abstract_setter {
+        value
+    } else {
+        crate::ir_lower::expr::narrow_checked_integer_for_int_property(
+            ctx, object.value, property, value, span,
+        )
+    };
     let data = ctx.intern_string(property);
     // A declared property store carries MAY_THROW: the weak typed-property guard raises PHP's
     // catchable TypeError, and a Stringable receiver can throw out of its own __toString. Both

@@ -1189,6 +1189,13 @@ pub enum Op {
     /// (`"f(): Return value must be of type int, "`), to which codegen appends the runtime
     /// type word and `" returned"`. Result: `I64`.
     ReturnBoundaryMixedToInt,
+    /// Narrows a checked integer add/sub/mul result stored into a DECLARED `int` property.
+    /// The operand can only hold an int or the float promoted by overflow (boxed Mixed, or a
+    /// raw I64/F64 after constant folding): an int forwards, a float inside `[-2^63, 2^63)`
+    /// truncates exactly (every such float is integral), and any other float throws the
+    /// catchable `TypeError` whose complete text is the immediate's data id
+    /// (`"Cannot assign float to property C::$p of type int"`). Result: `I64`.
+    PropertyBoundaryCheckedToInt,
     ClassConstant,
     ScopedConstantGet,
     ClassAttrNames,
@@ -1568,7 +1575,8 @@ impl Op {
             IterEnd => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_DEOPT,
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
             EnumBackingStringToInt | EnumBackingMixedToInt | PackedFieldMixedToInt
-            | PackedFieldMixedToFloat | PackedFieldMixedToBool | ReturnBoundaryMixedToInt => {
+            | PackedFieldMixedToFloat | PackedFieldMixedToBool | ReturnBoundaryMixedToInt
+            | PropertyBoundaryCheckedToInt => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
@@ -1898,6 +1906,7 @@ impl Op {
             PackedFieldMixedToFloat => "packed_field_mixed_to_float",
             PackedFieldMixedToBool => "packed_field_mixed_to_bool",
             ReturnBoundaryMixedToInt => "return_boundary_mixed_to_int",
+            PropertyBoundaryCheckedToInt => "property_boundary_checked_to_int",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",
             ClassAttrNames => "class_attr_names",

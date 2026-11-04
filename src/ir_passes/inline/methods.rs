@@ -418,6 +418,7 @@ fn op_is_frame_independent(op: Op) -> bool {
             | Op::StrLen
             | Op::StrPersist
             | Op::ReturnBoundaryMixedToInt
+            | Op::PropertyBoundaryCheckedToInt
             // A message fixed at lowering, such as a receiver null check an earlier round
             // spliced into this body: `emit_error` reads nothing from the frame.
             | Op::ThrowError
