@@ -1672,6 +1672,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _vd_enum_prefix\n_vd_enum_prefix:\n    .ascii \"enum(\"\n");
     out.push_str(".globl _vd_enum_sep\n_vd_enum_sep:\n    .ascii \"::\"\n");
     out.push_str(".globl _vd_enum_close\n_vd_enum_close:\n    .ascii \")\\n\"\n");
+    out.push_str(".globl _vd_enum_count_open\n_vd_enum_count_open:\n    .ascii \") (\"\n");
     out.push_str(".globl _pr_spaces\n_pr_spaces:\n    .ascii \"                                                                \"\n");
     out.push_str(".globl _ftp_user_cmd\n_ftp_user_cmd:\n    .ascii \"USER anonymous\\x0d\\n\"\n");
     out.push_str(".globl _ftp_pass_cmd\n_ftp_pass_cmd:\n    .ascii \"PASS anonymous@\\x0d\\n\"\n");

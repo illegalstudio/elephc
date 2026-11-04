@@ -35,6 +35,8 @@ mod readonly_initialization;
 mod readonly_property_defaults_php86;
 #[path = "oop/override_constants_php86.rs"]
 mod override_constants_php86;
+#[path = "oop/enum_debug_info_php86.rs"]
+mod enum_debug_info_php86;
 #[path = "oop/readonly_native_properties.rs"]
 mod readonly_native_properties;
 #[path = "oop/callables/mod.rs"]

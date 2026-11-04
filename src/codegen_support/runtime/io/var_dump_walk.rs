@@ -1167,7 +1167,17 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #0");                                          // is this instance an enum case?
     emitter.instruction("b.lt __rt_vd_val_obj_plain");                          // a plain class falls through to the object body
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the enum instance pointer
+    emitter.instruction("bl __rt_vd_seen_find");                                // has this enum case already been dumped?
+    emitter.instruction("cbnz x0, __rt_vd_val_recursion");                      // PHP renders a revisited enum as *RECURSION*
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the enum instance pointer
+    emitter.instruction("bl __rt_vd_seen_push");                                // mark the enum case as being walked
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the enum instance pointer
+    emitter.instruction("bl __rt_vd_debuginfo_enum");                           // render through __debugInfo() when the enum declares one
+    emitter.instruction("cbnz x0, __rt_vd_val_enum_debug_written");             // the whole enum block was written
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the enum instance pointer
     emitter.instruction("bl __rt_var_dump_emit_enum_line");                     // emit `<indent>enum(E::C)\n`
+    emitter.label("__rt_vd_val_enum_debug_written");
+    emitter.instruction("bl __rt_vd_seen_pop");                                 // the enum case is no longer on the walk stack
     emitter.instruction("b __rt_vd_val_done");                                  // value rendered
     emitter.label("__rt_vd_val_obj_plain");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
@@ -1304,7 +1314,19 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 0");                                          // is this instance an enum case?
     emitter.instruction("jl __rt_vd_val_obj_plain_x86");                        // a plain class falls through to the object body
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the enum instance pointer
+    emitter.instruction("call __rt_vd_seen_find");                              // has this enum case already been dumped?
+    emitter.instruction("test rax, rax");                                       // did the guard report a revisit?
+    emitter.instruction("jnz __rt_vd_val_recursion_x86");                       // PHP renders a revisited enum as *RECURSION*
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the enum instance pointer
+    emitter.instruction("call __rt_vd_seen_push");                              // mark the enum case as being walked
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the enum instance pointer
+    emitter.instruction("call __rt_vd_debuginfo_enum");                         // render through __debugInfo() when the enum declares one
+    emitter.instruction("test rax, rax");                                       // was the whole enum block written?
+    emitter.instruction("jnz __rt_vd_val_enum_debug_written_x86");              // the whole enum block was written
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the enum instance pointer
     emitter.instruction("call __rt_var_dump_emit_enum_line");                   // emit `<indent>enum(E::C)\n`
+    emitter.label("__rt_vd_val_enum_debug_written_x86");
+    emitter.instruction("call __rt_vd_seen_pop");                               // the enum case is no longer on the walk stack
     emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
     emitter.label("__rt_vd_val_obj_plain_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
