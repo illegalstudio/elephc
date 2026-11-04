@@ -18,6 +18,19 @@ platform = 'cfg(target_os = "macos")'
 filter = 'binary(codegen_tests) and (test(=codegen::simplexml::comparisons_and_files::test_simplexml_native_comparison_and_default_namespace_bundle) or test(=codegen::simplexml::dimension_updates::test_simplexml_saved_empty_dimension_write_bundle))'
 threads-required = "num-test-threads"
 
+# These target probes hit 60s twice under concurrent x86_64 CI work. Preserve their
+# assertions and deadlines while reserving the pool for each catalog-sized probe.
+[[profile.ci.overrides]]
+platform = 'cfg(target_arch = "x86_64")'
+filter = 'test(/^ir_lower::tests::instance_dimension_incdec::instance_dimension_incdec_values::/) or test(/^ir_lower::tests::property_element_unset::property_element_unset_known_name_bounds_slot_dispatch::/)'
+threads-required = "num-test-threads"
+
+# Phase records show these single-program XML probes reached assembly or linking
+# at 180s under shared work. Reserve the pool without changing sources or budgets.
+[[profile.ci.overrides]]
+filter = 'test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_constructorless_factories) or test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_factories_after_eval_returns) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval)'
+threads-required = "num-test-threads"
+
 # A fixture bundle (tests/codegen/support/bundle.rs) compiles several opaque-eval programs as
 # one: one catalog compile per optimizer mode instead of one per fixture, but the run itself
 # still executes every case under heap diagnostics, so the single test runs longer than any of
