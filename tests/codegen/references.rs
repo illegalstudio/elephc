@@ -2107,3 +2107,30 @@ class S {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(true)\nint(7)\nstring(2) \"ab\"\nint(1)\n");
 }
+
+/// A value narrowed to an interface can still be the class a parent constructor declares. Past a
+/// few implementers the narrowing keeps the interface alone, which the checker took for a proved
+/// mismatch: it compiled an unconditional `TypeError`, and `lint:twig` met it on every `default`.
+#[test]
+fn test_a_constructor_argument_narrowed_to_an_interface_is_checked_at_run_time() {
+    let implementers: String = (0..40)
+        .map(|n| format!("class Named{n} extends Node implements Marked {{ public function mark(): void {{}} }}\n"))
+        .collect();
+    let source = format!(
+        r#"<?php
+class Node {{}}
+interface Marked {{ public function mark(): void; }}
+{implementers}
+class Base {{ public function __construct(public Node $node) {{}} }}
+class Child extends Base {{
+    public function __construct(Node $node) {{
+        if (!$node instanceof Marked) {{ throw new Exception('unmarked'); }}
+        $node->mark();
+        parent::__construct($node);
+    }}
+}}
+echo get_class((new Child(new Named7()))->node), "\n";
+"#
+    );
+    assert_eq!(compile_and_run(&source), "Named7\n");
+}

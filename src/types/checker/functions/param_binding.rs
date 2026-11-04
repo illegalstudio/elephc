@@ -444,7 +444,7 @@ impl Checker {
     /// to an array parameter, and two unrelated classes (neither a subtype of the other, so no
     /// run-time subclass of the argument's class can be the parameter's class either). Anything
     /// involving an interface, a union, `mixed` or a boolean of unknown value stays a refusal.
-    fn definite_param_mismatch_given(
+    pub(crate) fn definite_param_mismatch_given(
         &self,
         expected: &PhpType,
         actual: &PhpType,

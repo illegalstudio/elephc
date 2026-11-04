@@ -910,6 +910,14 @@ impl Checker {
             if Self::types_compatible(param_ty, &actual) || self.type_accepts(param_ty, &actual) {
                 continue;
             }
+            // A value narrowed to an interface can still be the declared class: only its runtime
+            // class decides, as `DefinedTest` handing `TestExpression` a `Node` it narrowed to
+            // `SupportDefinedTestInterface` shows. Nothing is proved, so the call runs its guard.
+            if matches!(actual, PhpType::Object(_))
+                && self.definite_param_mismatch_given(param_ty, &actual, arg).is_none()
+            {
+                continue;
+            }
             return Ok(Some(format!(
                 "{}::__construct(): Argument #{} (${}) must be of type {}, {} given",
                 class_name,
