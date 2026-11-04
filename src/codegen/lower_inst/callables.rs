@@ -562,6 +562,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         string_type_error,
         candidate_names.as_deref(),
         arity,
+        eval_fallback_slot.map(|_| fatal_label.as_str()),
     )?;
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -1165,13 +1166,14 @@ fn emit_runtime_string_descriptor_value_impl(
     Ok(())
 }
 
-/// Selects a callable descriptor from a string payload just returned by `__rt_mixed_unbox`.
+/// Selects a native string descriptor, forwarding a miss to eval when the caller owns that path.
 fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx: &mut FunctionContext<'_>,
     op_name: &str,
     type_error: Option<&'static str>,
     candidate_names: Option<&[String]>,
     arity: Option<usize>,
+    eval_fallback: Option<&str>,
 ) -> Result<()> {
     let cases = runtime_string_descriptor_cases_at_arity(
         ctx,
@@ -1181,6 +1183,10 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
         arity,
     )?;
     if cases.is_empty() {
+        if let Some(fallback) = eval_fallback {
+            abi::emit_jump(ctx.emitter, fallback);
+            return Ok(());
+        }
         return Err(CodegenIrError::unsupported(format!(
             "{} for runtime string with no descriptor targets",
             op_name
@@ -1217,7 +1223,10 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
-    if let Some(message) = type_error {
+    if let Some(fallback) = eval_fallback {
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        abi::emit_jump(ctx.emitter, fallback);
+    } else if let Some(message) = type_error {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         super::exceptions::emit_type_error(ctx, message);
     } else {

@@ -117,6 +117,11 @@ mod tests {
             let wrapper = helper.find("__elephc_eval_wrap_callback").unwrap();
             assert!(owner < probe && probe < wrapper,
                 "{name}: native shape misses must discover and probe the callback's real owner");
+            let string_miss = helper.lines().skip_while(|line|
+                !(line.contains("_mixed_string_descriptor_missing_") && line.ends_with(':')))
+                .skip(1).take_while(|line| !line.ends_with(':')).collect::<Vec<_>>().join("\n");
+            assert!(string_miss.contains("mixed_callable_value_not_callable"),
+                "{name}: an unknown native name must reach the eval callback probe: {string_miss}");
     }
 
     /// Verifies eval owner discovery on macOS ARM64.
