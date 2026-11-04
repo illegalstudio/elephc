@@ -42,6 +42,8 @@ use super::{
 };
 use crate::codegen::{CodegenIrError, Result};
 
+mod native_origins;
+
 const ITER_SOURCE_OFFSET_DELTA: usize = 0;
 const ITER_CURSOR_OFFSET_DELTA: usize = 8;
 const ITER_KEY_LO_OFFSET_DELTA: usize = 16;
@@ -754,16 +756,8 @@ fn emit_load_origin_container(
     let state_offset = match origin.storage {
         IterOriginStorage::Raw => return,
         IterOriginStorage::RefCell => {
-            match ctx.emitter.target.arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("ldr {dest}, [{dest}]"));  // a definite reference origin stores its value behind the incoming cell pointer
-                }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction(                                    // a definite reference origin stores its value behind the incoming cell pointer
-                        &format!("mov {dest}, QWORD PTR [{dest}]")
-                    );
-                }
-            }
+            let label = ctx.next_label("iter_reference_origin");
+            native_origins::load(ctx.emitter, dest, &label);
             return;
         }
         IterOriginStorage::Dynamic { state_offset } => state_offset,
@@ -778,15 +772,14 @@ fn emit_load_origin_container(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbz {scratch}, {direct}"));       // a raw slot already holds the container itself
-            ctx.emitter.instruction(&format!("ldr {dest}, [{dest}]"));          // a promoted slot holds it behind the alias address
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {scratch}, {scratch}"));     // is this slot still in its raw representation?
             ctx.emitter.instruction(&format!("jz {direct}"));                   // a raw slot already holds the container itself
-            ctx.emitter
-                .instruction(&format!("mov {dest}, QWORD PTR [{dest}]"));        // a promoted slot holds it behind the alias address
         }
     }
+    let label = ctx.next_label("iter_reference_origin");
+    native_origins::load(ctx.emitter, dest, &label);
     ctx.emitter.label(&direct);
 }
 

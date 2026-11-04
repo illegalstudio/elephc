@@ -35,6 +35,13 @@ The two macOS XML probes that each reached the existing 360-second per-test cap
 already compile one program. Keep both fixtures and their assertions intact, reserve
 exclusive nextest scheduling on macOS, and record their compilation/link/run phases
 before considering any fixture rewrite. Sharding preserves all existing deadlines.
+The following required repair preserves the original untyped magic callback fixture
+and corrects its checker body seed. Existing descriptor invoker and invocation-wrapper
+leases are exposed through the shared native frame-slot visitor while their inner
+exception boundaries retain cleanup responsibility. Direct native array mutation
+roots use their selected writable view, and iterator relocation follows canonical
+reference children. Nested iterator-source expansion remains deferred. X86 target
+probes reserve the nextest pool without changing their 60-second deadline.
 
 Draft PR: https://github.com/illegalstudio/elephc/pull/2060. Earlier CI runs passed both Linux builds, both iOS XML/SimpleXML links, native ownership tests, and the isolated array/JSON heap regressions. The integrated work also covers live DOM identity and relationships, text and namespace writes, XPath contexts, and guarded interface receivers. All 22 public PHP class methods are present, including the debug projection. Native and boxed debug calls, side-effecting property-name reads, and production CLI prelude type checking have dedicated regressions. Generated documentation comes from CI artifacts and local JSON-based audits, without invoking Cargo.
 

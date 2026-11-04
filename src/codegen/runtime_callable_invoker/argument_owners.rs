@@ -28,7 +28,8 @@ impl InvokerArgumentOwners {
         Self {
             first_offset: base_frame_size - 8,
             count,
-            frame_size: base_frame_size + ((count + 2) * 8).div_ceil(16) * 16,
+            frame_size: base_frame_size + ((count + 2) * 8).div_ceil(16) * 16
+                + abi::CALL_OPERAND_OWNER_RECORD_BYTES,
             descriptor_slots: vec![false; count],
         }
     }
@@ -36,6 +37,30 @@ impl InvokerArgumentOwners {
     /// Returns the aligned frame size including every argument and the boxed return slot.
     pub(super) fn frame_size(&self) -> usize {
         self.frame_size
+    }
+
+    /// Exposes existing argument and result leases while the invoker can be suspended.
+    pub(super) fn link_frame(&self, emitter: &mut Emitter, visitor: &str) {
+        let base = abi::int_result_reg(emitter);
+        abi::emit_temporary_stack_address(emitter, base, 0);
+        abi::emit_link_call_operand_custom_cleanup_at_stack(emitter, base,
+            &format!("{visitor}_cleanup"), visitor, 0);
+    }
+
+    /// Removes the exact record after the local exception boundary has finished its cleanup.
+    pub(super) fn unlink_frame(&self, emitter: &mut Emitter) {
+        abi::emit_unlink_call_operand_owner_in_frame(emitter, self.frame_size - 16);
+    }
+
+    /// Borrows the same physical slots that normal and exceptional invoker cleanup consume.
+    pub(super) fn emit_frame_visitor(&self, emitter: &mut Emitter, visitor: &str) {
+        // The invoker's inner handler drains these slots after native unwinding returns to it.
+        emitter.label_global(&format!("{visitor}_cleanup"));
+        abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+        abi::emit_return(emitter);
+        let offsets = (0..self.count + 2)
+            .map(|index| self.frame_size - 16 - self.offset(index)).collect::<Vec<_>>();
+        crate::codegen_support::runtime::emit_native_frame_owners(emitter, visitor, &offsets);
     }
 
     /// Returns the frame offset of an argument slot or the final boxed-return slot.
@@ -138,6 +163,32 @@ impl InvokerArgumentOwners {
 mod tests {
     use super::*;
     use crate::codegen::platform::Target;
+
+    /// The actual invoker argument, return and pending-exception slots remain Fiber edges.
+    #[test]
+    fn invoker_owner_frames_visit_every_cleanup_slot_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(super::super::INVOKER_BOUNDARY_FRAME_SIZE, 2);
+            owners.initialize(&mut emitter);
+            owners.link_frame(&mut emitter, "invoker_owners_probe");
+            owners.unlink_frame(&mut emitter);
+            owners.emit_frame_visitor(&mut emitter, "invoker_owners_probe");
+            let assembly = emitter.output();
+            assert_eq!(assembly.matches("__rt_gc_frame_owner_slot").count(), 4, "{name}: {assembly}");
+            for index in 0..4 {
+                let offset = owners.frame_size - 16 - owners.offset(index);
+                assert!(offset >= abi::CALL_OPERAND_OWNER_RECORD_BYTES, "{name}: owner overlaps record");
+                let address = if target.arch == crate::codegen_support::platform::Arch::AArch64 {
+                    format!("add x0, x0, #{offset}")
+                } else { format!("add rdi, {offset}") };
+                assert!(assembly.contains(&address), "{name}: missing slot {index}: {assembly}");
+            }
+            assert!(assembly.contains("invoker_owners_probe_cleanup"), "{name}: {assembly}");
+            assert!(assembly.contains("_exc_call_frame_top"), "{name}: {assembly}");
+        }
+    }
 
     /// Raw callable values retire descriptors, while managed callable reference cells retire cells.
     #[test]

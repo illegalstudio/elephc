@@ -186,6 +186,13 @@ impl Checker {
                                 .map(|(_, t)| t.clone())
                                 .unwrap_or(PhpType::Int)
                         };
+                        // An unused untyped magic argument list has no element evidence yet.
+                        // Its Never seed must not turn a runtime callback into a null read.
+                        let ty = if type_ann.is_none() && i == 1
+                            && matches!(method_key.as_str(), "__call" | "__callstatic")
+                            && matches!(&ty, PhpType::Array(element)
+                                if matches!(element.as_ref(), PhpType::Never | PhpType::Void))
+                        { PhpType::Mixed } else { ty };
                         // Match build_method_sig and the runtime hydration adapter:
                         // user hooks consume boxed PHP arrays, synthetic SPL keeps
                         // the raw representation declared by its generated signature.

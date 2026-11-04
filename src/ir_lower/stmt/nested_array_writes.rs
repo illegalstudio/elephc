@@ -515,6 +515,14 @@ fn lower_static_update_parent(
     span: Span,
 ) -> LoweredValue {
     let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else {
+        if let ExprKind::Variable(name) = &read.kind {
+            if ctx.live_native_mutation_locals.contains_key(name)
+                && matches!(ctx.local_mutation_type(name).codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed)
+            {
+                return load_array_local_for_write(ctx, name, span);
+            }
+        }
         if let ExprKind::PropertyAccess { object, property } = &read.kind {
             return crate::ir_lower::expr::lower_nested_assignment_property_source(
                 ctx, object, property, read, PropertyDimensionFetchMode::ReadWrite,

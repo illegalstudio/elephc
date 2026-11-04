@@ -242,6 +242,8 @@ fn emit_runtime_callable_invoker_impl(
     let escape_label = format!("{}_eval_escape", local_label_prefix(invoker.label, emitter.target));
     let argument_owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, invoker.sig.params.len());
     let frame_size = argument_owners.frame_size();
+    let (owner_visitor, emit_owner_visitor) = data.invoker_owner_visitor(
+        invoker.sig.params.len(), format!("{}__gc_argument_owners", invoker.label));
     let mut ctx = InvokerEmitContext::new(
         invoker.label,
         argument_owners,
@@ -278,6 +280,7 @@ fn emit_runtime_callable_invoker_impl(
         abi::int_arg_reg_name(emitter.target, 2),
         INVOKER_SCOPE_OFFSET,
     );
+    ctx.argument_owners.link_frame(emitter, &owner_visitor);
     emit_invoker_exception_boundary_push(
         emitter,
         INVOKER_BOUNDARY_BASE_OFFSET,
@@ -306,6 +309,7 @@ fn emit_runtime_callable_invoker_impl(
     }
     ctx.argument_owners.finish_return(emitter);
     emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
+    ctx.argument_owners.unlink_frame(emitter);
     // Restore before tearing down the frame (and on the escape path below): the boxed
     // Mixed result travels in return registers, which these loads never touch.
     emit_invoker_callee_saved_restores(emitter);
@@ -314,6 +318,7 @@ fn emit_runtime_callable_invoker_impl(
     emitter.label(&escape_label);
     emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
     ctx.argument_owners.release_all(emitter);
+    ctx.argument_owners.unlink_frame(emitter);
     if catch_native_throws {
         emit_null_invoker_result(emitter);
     }
@@ -324,6 +329,7 @@ fn emit_runtime_callable_invoker_impl(
     } else {
         abi::emit_jump(emitter, "__rt_throw_current");
     }
+    if emit_owner_visitor { ctx.argument_owners.emit_frame_visitor(emitter, &owner_visitor); }
 }
 
 /// Boxes the target result into the invoker's uniform Mixed return cell.
@@ -3676,6 +3682,33 @@ fn emit_invoker_throwable(
 mod tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
+
+    /// A full eval catalog must not duplicate identical owner visitors for every signature.
+    #[test]
+    fn invokers_share_owner_visitors_by_layout_on_every_target() {
+        let signature = crate::types::first_class_callable_builtin_sig("strlen").unwrap();
+        let defaults = vec![None; signature.params.len()];
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            let mut data = DataSection::new();
+            for label in ["first_owner_invoker", "second_owner_invoker"] {
+                let invoker = RuntimeCallableInvoker {
+                    label, sig: &signature, captures: &[], mbstring_operation: None,
+                    mbstring_variable_ref_warnings: false, owns_string_return: false,
+                    php_return_status: false, defaults: &defaults,
+                };
+                emit_runtime_callable_invoker_impl(&mut emitter, &mut data, &invoker, true);
+            }
+            let assembly = emitter.output();
+            assert_eq!(assembly.matches("first_owner_invoker__gc_argument_owners:").count(), 1,
+                "{name}: emit the shared layout once");
+            assert!(!assembly.contains("second_owner_invoker__gc_argument_owners:"),
+                "{name}: equivalent invokers reuse the first visitor");
+            assert_eq!(assembly.matches("__rt_gc_frame_owner_slot").count(), signature.params.len() + 2,
+                "{name}: the shared visitor covers arguments, result and pending exception");
+        }
+    }
 
     /// Identical signatures cannot share an invoker when their string-result owner contracts differ.
     #[test]

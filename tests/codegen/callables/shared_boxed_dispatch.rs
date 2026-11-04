@@ -111,7 +111,7 @@ unset($nativeCallback, $code);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
-/// Cancelling suspended native constructor, instance and static bridges retires adapted callbacks.
+/// Cancelling suspended native constructor, method and free-function bridges retires adapted callbacks.
 /// The callback is declared in the eval activation that adapts it; PHP's shared declaration is guarded.
 #[test]
 fn test_eval_callable_argument_owners_retire_abandoned_bridge_frames_bundle() {
@@ -121,9 +121,10 @@ class NativeSharedPausedCast {
     public function pause(callable $callback): void { echo 'method|'; $callback(); }
     public static function pauseStatic(callable $callback): void { echo 'static|'; $callback(); }
 }
+function nativeSharedPausedCastFunction(callable $callback): void { echo 'function|'; $callback(); }
 
 echo 'ready|';
-for ($mode = 0; $mode < 3; $mode++) {
+for ($mode = 0; $mode < 4; $mode++) {
     $fiber = new Fiber(static function () use ($mode): void {
         echo 'fiber|';
         eval('
@@ -135,7 +136,8 @@ for ($mode = 0; $mode < 3; $mode++) {
             elseif ($mode === 1) {
                 $consumer = new NativeSharedPausedCast("evalSharedPausedCast", false);
                 $consumer->pause("evalSharedPausedCast");
-            } else { NativeSharedPausedCast::pauseStatic("evalSharedPausedCast"); }
+            } elseif ($mode === 2) { NativeSharedPausedCast::pauseStatic("evalSharedPausedCast"); }
+            else { nativeSharedPausedCastFunction("evalSharedPausedCast"); }
         ');
     });
     echo 'start|';
@@ -147,7 +149,7 @@ echo 'done';
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
-    assert_eq!(output.stdout, "ready|start|fiber|eval|ctor|callback|7|start|fiber|eval|ctor|method|callback|7|start|fiber|eval|static|callback|7|done");
+    assert_eq!(output.stdout, "ready|start|fiber|eval|ctor|callback|7|start|fiber|eval|ctor|method|callback|7|start|fiber|eval|static|callback|7|start|fiber|eval|function|callback|7|done");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 

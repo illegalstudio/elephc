@@ -600,7 +600,7 @@ pub(crate) fn promote_by_ref_foreach_source(
             // HashToMixed consumes its input owner at the COW boundary. A synthetic
             // reference alias loads the static/property/parent payload borrowed, so give
             // the conversion its own owner before it can retire the source generation.
-            let hash = ctx.load_local(name, Some(array.span));
+            let hash = ctx.load_local_for_mutation(name, Some(array.span));
             let hash = if ctx.is_ref_bound_local(name) {
                 crate::ir_lower::ownership::acquire_if_refcounted(
                     ctx,
@@ -632,7 +632,7 @@ pub(crate) fn promote_by_ref_foreach_source(
     // ArrayToHash consumes its input owner. Retain only a synthetic reference alias: an
     // ordinary local deliberately transfers its old owner into the conversion, while the
     // alias must leave the property or parent element's owner intact until store-back.
-    let array_value = ctx.load_local(name, Some(array.span));
+    let array_value = ctx.load_local_for_mutation(name, Some(array.span));
     let array_value = if ctx.is_ref_bound_local(name) {
         crate::ir_lower::ownership::acquire_if_refcounted(
             ctx,

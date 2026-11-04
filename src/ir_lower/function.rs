@@ -2340,7 +2340,7 @@ fn magic_method_param_keeps_eir_contract(
             // The $args array keeps its contract only once call sites have
             // specialized the element type. The checker seeds it as
             // Array<Never>; eval-only magic calls never specialize it, and a
-            // Never element would lower every $args[N] read to an empty
+            // Never or normalized Void element would lower every $args[N] read to an empty
             // constant, so those fall back to the boxed Mixed widening.
             (param_index == 0 && matches!(php_type.codegen_repr(), PhpType::Str))
                 || (param_index == 1
@@ -2349,7 +2349,7 @@ fn magic_method_param_keeps_eir_contract(
                     // Never seed to Void and would hide it.
                     && !matches!(
                         php_type,
-                        PhpType::Array(elem) if matches!(elem.as_ref(), PhpType::Never)
+                        PhpType::Array(elem) if matches!(elem.as_ref(), PhpType::Never | PhpType::Void)
                     ))
         }
         _ => false,
