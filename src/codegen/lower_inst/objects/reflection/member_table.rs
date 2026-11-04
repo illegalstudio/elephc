@@ -513,18 +513,37 @@ pub(super) fn collect_function_members(
     builtin_names: &[String],
 ) -> Result<()> {
     let module = ctx.module;
+    // A function of an included file is compiled under a generated symbol. Its row answers to the
+    // public name, which only the dispatch groups record: `new ReflectionFunction($name)` found
+    // nothing for `twig_get_form_parent()`, and `debug:twig` stopped there.
+    let public_names: std::collections::HashMap<String, String> =
+        crate::ir::function_variants::collect_dispatch_groups(module)
+            .into_iter()
+            .flat_map(|group| {
+                let public = group.name.trim_start_matches('\\').to_string();
+                group
+                    .variants
+                    .into_iter()
+                    .map(move |variant| (variant.trim_start_matches('\\').to_string(), public.clone()))
+            })
+            .collect();
     for function in module.functions.iter().chain(module.closures.iter()) {
         if function.flags.is_main || function.flags.is_method || function.signature.is_none() {
             continue;
         }
         let is_closure = function.flags.is_closure;
         let source = if is_closure { core_closures_php_source(ctx, function) } else { None };
+        let symbol = function.name.trim_start_matches('\\');
         let name = match &source {
             Some(source) => source.name.clone(),
-            None => function.name.trim_start_matches('\\').to_string(),
+            None => public_names.get(symbol).cloned().unwrap_or_else(|| symbol.to_string()),
         };
         let metadata = reflection_function_owner_metadata(ctx, function)?;
         let key_name = php_symbol_key(&name);
+        // The live variant of a name is known at run time only; the first row answers for it.
+        if tables.has_function(&key_name) {
+            continue;
+        }
         let location = match source {
             Some(source) => Some((source.file, source.start_line, source.end_line)),
             None if is_closure => None,

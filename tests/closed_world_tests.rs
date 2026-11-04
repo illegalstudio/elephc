@@ -744,6 +744,48 @@ echo (new ReflectionClass($class))->getShortName(), "\n";
     assert!(text(&run(&dir).stdout).ends_with("Listed\n"), "{}", text(&run(&dir).stdout));
 }
 
+/// `class_exists()` runs the loaders whatever spelling names the class: a property read was asked
+/// natively only, so `ClassExistenceResource` never learned that a fixture over a dev-only bundle
+/// cannot load. A name held in an element and one that takes the variant path too.
+#[test]
+fn closed_world_probe_of_a_property_runs_the_autoloaders() {
+    let (stdout, _, dir) = closed_run(
+        "cw_probe_property",
+        r#"<?php
+class Holder { public string $name = 'Far\\Away'; public array $names = ['k' => 'Far\\Other'];
+    public function probe() { return class_exists($this->name); }
+    public function element() { return class_exists($this->names['k']); } }
+spl_autoload_register(function (string $c) { echo "asked $c\n"; });
+$h = new Holder();
+var_dump($h->probe(), $h->element());
+"#,
+    );
+    assert!(stdout.contains("asked Far\\Away"), "{stdout}");
+    assert_eq!(stdout, php_stdout(&dir));
+}
+
+/// A function of an included file is compiled under a generated symbol and answers to its public
+/// name: `debug:twig` reflects `twig_get_form_parent()` from a string.
+#[test]
+fn closed_world_reflects_a_function_of_an_included_file_by_name() {
+    let dir = make_test_dir("cw_variant_reflection");
+    fs::write(dir.join("lib.php"), "<?php\nnamespace App;\nfunction by_name(int $v): int { return $v + 1; }\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+require __DIR__ . '/lib.php';
+$name = 'App\\' . 'by_' . 'name';
+$r = new ReflectionFunction($name);
+echo $r->getName(), ' ', $r->getNumberOfParameters(), "\n";
+echo $name(2), "\n";
+"#,
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+}
+
 /// A backend re-run is a new process: a file the first round classified as harmless (here, one
 /// php refuses to load) stays harmless, while one it inherits with no such verdict still refuses
 /// the build. `KernelBrowser` was a note in the first round of the Symfony Demo build and a

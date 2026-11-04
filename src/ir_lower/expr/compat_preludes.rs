@@ -970,12 +970,7 @@ pub(super) fn lower_backend_gap_builtin_shape(
             .to_ascii_lowercase()
             .starts_with("__elephc_autoload");
         if let Some(kind) = kind {
-            let simple_name = args.first().is_some_and(|name| {
-                matches!(
-                    name.kind,
-                    ExprKind::Variable(_) | ExprKind::StringLiteral(_) | ExprKind::ClassConstant { .. }
-                )
-            });
+            let simple_name = args.first().is_some_and(rereadable_class_name);
             let autoloads = match args.len() {
                 1 => true,
                 2 => matches!(args[1].kind, ExprKind::BoolLiteral(true)),
@@ -1390,4 +1385,21 @@ pub(super) fn routed_spread_entries(
             })
             .collect()
     })
+}
+
+/// Whether the class-name argument of an existence probe can be evaluated twice, as the retry after
+/// the loaders ran needs. `ClassExistenceResource` asks `class_exists($this->resource)`, so a read of
+/// a property or an element counts: left out, that probe never ran an autoloader.
+fn rereadable_class_name(name: &Expr) -> bool {
+    match &name.kind {
+        ExprKind::Variable(_)
+        | ExprKind::This
+        | ExprKind::StringLiteral(_)
+        | ExprKind::ClassConstant { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => rereadable_class_name(object),
+        ExprKind::ArrayAccess { array, index } => {
+            rereadable_class_name(array) && rereadable_class_name(index)
+        }
+        _ => false,
+    }
 }
