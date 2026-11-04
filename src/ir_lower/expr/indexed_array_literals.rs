@@ -26,6 +26,9 @@ pub(super) fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Ex
         let array_ty = array_literal_type_for_ir(ctx, items, expr);
         return lower_array_literal_without_spread(ctx, items, expr, array_ty);
     }
+    if let Some(routed) = super::compat_preludes::routed_spread_items(ctx, items) {
+        return lower_array_literal(ctx, &routed, expr);
+    }
     // Validate boxed spreads as they are evaluated, before later element side effects.
     // Root owned items across subsequent evaluation and allocate the destination only once
     // every spread has a valid concrete container layout.
@@ -92,14 +95,52 @@ pub(super) fn lower_boxed_array_spread_source(
     span: Span,
 ) -> LoweredValue {
     let (source, owner) = root_owned_call_operand(ctx, source, span);
+    // A boxed value may hold a `Traversable`, which the runtime unpack below cannot read: the
+    // helper turns it into an array and hands an array back as it is (`crate::spread_prelude`).
+    let helper = crate::spread_prelude::SPREAD_SOURCE_NAME;
+    let mut collector_owner = None;
+    let (unpacked, helper_owner) = if let Some(collects) =
+        ctx.functions.get(helper).map(|sig| sig.variadic.is_some())
+    {
+        let mut operands = vec![source.value];
+        // A program with `eval` gives every function the hidden `func_get_args()` collector.
+        if collects {
+            let empty = ctx.emit_value(
+                Op::ArrayNew,
+                Vec::new(),
+                Some(Immediate::Capacity(0)),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                Op::ArrayNew.default_effects(),
+                Some(span),
+            );
+            let (empty, owner) = root_owned_call_operand(ctx, empty, span);
+            operands.push(empty.value);
+            collector_owner = owner;
+        }
+        let data = ctx.intern_function_name(helper);
+        let array = ctx.emit_value(
+            Op::Call,
+            operands,
+            Some(Immediate::Data(data)),
+            PhpType::Mixed,
+            effects_lookup::user_call_effects(helper),
+            Some(span),
+        );
+        root_owned_call_operand(ctx, array, span)
+    } else {
+        (source, None)
+    };
     let result = ctx.emit_value(
         Op::RuntimeCall,
-        vec![source.value],
+        vec![unpacked.value],
         Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ArrayUnpackToHash)),
         PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
         effects_lookup::runtime_effects(),
         Some(span),
     );
+    for slot in [helper_owner, collector_owner].into_iter().flatten() {
+        retire_owned_call_operand(ctx, slot, span);
+    }
     if let Some(slot) = owner {
         retire_owned_call_operand(ctx, slot, span);
     }
@@ -412,6 +453,9 @@ pub(super) fn lower_mixed_array_literal(
     entries: &[ArrayEntry],
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(routed) = super::compat_preludes::routed_spread_entries(ctx, entries) {
+        return lower_mixed_array_literal(ctx, &routed, expr);
+    }
     let hash_ty = assoc_array_literal_type_from_entries(ctx, entries, expr);
     let value_ty = match hash_ty.codegen_repr() {
         PhpType::AssocArray { value, .. } => value.codegen_repr(),
@@ -1121,7 +1165,7 @@ pub(super) fn is_null_only_literal(expr: &Expr) -> bool {
 }
 
 /// Returns the source of a mixed-literal spread entry, which holds the `ExprKind::Spread` node.
-fn spread_entry_source(entry: &Expr) -> &Expr {
+pub(super) fn spread_entry_source(entry: &Expr) -> &Expr {
     match &entry.kind {
         ExprKind::Spread(source) => source,
         _ => entry,

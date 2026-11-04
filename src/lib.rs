@@ -77,6 +77,7 @@ mod csv_prelude;
 mod exec_prelude;
 mod stream_select_prelude;
 mod min_max_prelude;
+mod spread_prelude;
 mod count_recursive_prelude;
 mod numeric_string_arg_prelude;
 mod array_fill_keys_prelude;

@@ -1482,6 +1482,59 @@ var_dump(\defined($g), \constant('\App\K::A'), \defined($g . 'X'));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// An array literal spreads any `Traversable`: string keys stay and integer keys renumber, so
+/// this is not `iterator_to_array()`. symfony/ux-icons' `[...$svgElement->attributes]` threw
+/// `Only arrays and Traversables can be unpacked` on every Symfony Demo page.
+#[test]
+fn test_array_literal_spread_of_a_traversable() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Agg implements IteratorAggregate {
+    public function __construct(private array $v) {}
+    public function getIterator(): Iterator { return new ArrayIterator($this->v); }
+}
+class Holder { public $attributes; public ?Agg $typed = null; }
+function dup() { yield 0 => 'a'; yield 0 => 'b'; yield 's' => 'c'; yield 's' => 'd'; yield from ['e']; }
+function m($o) { return ['first' => 1, ...$o, 'last' => 2]; }
+function l($o) { return [0, ...$o, 9]; }
+function badkey() { yield 1.5 => 'x'; }
+$h = new Holder();
+$h->attributes = new Agg(['a', 'b']);
+$h->typed = new Agg(['k' => 't']);
+echo json_encode([...$h->attributes]), json_encode([...$h->typed]), "\n";
+echo json_encode(m(new Agg(['x' => 'X', 'y']))), json_encode(m(dup())), json_encode(m(['k' => 'v', 7])), "\n";
+echo json_encode(l(dup())), json_encode(l([3 => 'p', 'q' => 'r'])), "\n";
+foreach ([badkey(), null, 5, 1.5, new stdClass()] as $v) {
+    try { l($v); } catch (Error $e) { echo get_class($e), ':', $e->getMessage(), "\n"; }
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "[\"a\",\"b\"]{\"k\":\"t\"}\n\
+         {\"first\":1,\"x\":\"X\",\"0\":\"y\",\"last\":2}{\"first\":1,\"0\":\"a\",\"1\":\"b\",\"s\":\"d\",\"2\":\"e\",\"last\":2}{\"first\":1,\"k\":\"v\",\"0\":7,\"last\":2}\n\
+         {\"0\":0,\"1\":\"a\",\"2\":\"b\",\"s\":\"d\",\"3\":\"e\",\"4\":9}{\"0\":0,\"1\":\"p\",\"q\":\"r\",\"2\":9}\n\
+         Error:Keys must be of type int|string during array unpacking\n\
+         Error:Only arrays and Traversables can be unpacked, null given\n\
+         Error:Only arrays and Traversables can be unpacked, int given\n\
+         Error:Only arrays and Traversables can be unpacked, float given\n\
+         TypeError:Only arrays and Traversables can be unpacked, stdClass given\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The Symfony Demo's own shape: a `DOMNamedNodeMap` in an untyped property, keyed by attribute
+/// name. No heap check: `DOMDocument` itself leaks two blocks (elephc-1cx.46).
+#[test]
+fn test_array_literal_spread_of_dom_attributes_keeps_their_names() {
+    let out = compile_and_run(r#"<?php
+$d = new DOMDocument();
+$d->loadXML('<svg a="1" b="2"><g/></svg>');
+$svg = $d->documentElement;
+echo json_encode(array_map(static fn (DOMAttr $a) => $a->value, [...$svg->attributes])), "\n";
+"#);
+    assert_eq!(out, "{\"a\":\"1\",\"b\":\"2\"}\n");
+}
+
 /// A `static` local handed out by reference (by-ref argument, `&` alias, `use (&$x)`) keeps every
 /// write across calls: Monolog's `BrowserConsoleHandler::handleStyle` shape.
 #[test]

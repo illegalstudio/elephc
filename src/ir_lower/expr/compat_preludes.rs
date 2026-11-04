@@ -1319,3 +1319,75 @@ fn array_merge_operand_requires_prelude(ctx: &LoweringContext<'_, '_>, expr: &Ex
         _ => false,
     }
 }
+
+/// Returns whether a spread source is an object, which the literal would read as an `iterable`
+/// and list, dropping its string keys. A boxed source is decided on its lowered value instead
+/// (`lower_boxed_array_spread_source`): its static type can say `mixed` over array storage.
+fn spread_source_may_not_be_an_array(ctx: &LoweringContext<'_, '_>, source: &Expr) -> bool {
+    // Its own result is an array: routing it again would never end.
+    if matches!(&source.kind, ExprKind::FunctionCall { name, .. }
+        if name.as_str() == crate::spread_prelude::SPREAD_SOURCE_NAME)
+    {
+        return false;
+    }
+    matches!(materialized_expr_type_for_merge(ctx, source).codegen_repr(), PhpType::Object(_))
+}
+
+/// Wraps one spread source in the conversion helper.
+fn routed_spread_source(source: &Expr) -> Expr {
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified(crate::spread_prelude::SPREAD_SOURCE_NAME),
+            args: vec![source.clone()],
+        },
+        source.span,
+    )
+}
+
+/// Rewrites the spreads of an array literal whose source is not proven to be an array, or `None`
+/// when there is none: a typed source keeps the native copy. See `crate::spread_prelude`.
+pub(super) fn routed_spread_items(
+    ctx: &LoweringContext<'_, '_>,
+    items: &[Expr],
+) -> Option<Vec<Expr>> {
+    let routes = |item: &Expr| {
+        matches!(&item.kind, ExprKind::Spread(source) if spread_source_may_not_be_an_array(ctx, source))
+    };
+    items.iter().any(routes).then(|| {
+        items
+            .iter()
+            .map(|item| match &item.kind {
+                ExprKind::Spread(source) if routes(item) => Expr::new(
+                    ExprKind::Spread(Box::new(routed_spread_source(source))),
+                    item.span,
+                ),
+                _ => item.clone(),
+            })
+            .collect()
+    })
+}
+
+/// `routed_spread_items` for a literal that also holds keyed entries.
+pub(super) fn routed_spread_entries(
+    ctx: &LoweringContext<'_, '_>,
+    entries: &[crate::parser::ast::ArrayEntry],
+) -> Option<Vec<crate::parser::ast::ArrayEntry>> {
+    use crate::parser::ast::ArrayEntry;
+    let routes = |entry: &ArrayEntry| {
+        matches!(entry, ArrayEntry::Spread(source)
+            if spread_source_may_not_be_an_array(ctx, super::indexed_array_literals::spread_entry_source(source)))
+    };
+    entries.iter().any(routes).then(|| {
+        entries
+            .iter()
+            .map(|entry| match entry {
+                ArrayEntry::Spread(source) if routes(entry) => {
+                    ArrayEntry::Spread(routed_spread_source(
+                        super::indexed_array_literals::spread_entry_source(source),
+                    ))
+                }
+                _ => entry.clone(),
+            })
+            .collect()
+    })
+}

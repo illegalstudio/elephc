@@ -241,10 +241,19 @@ impl Scanner<'_> {
                 {
                     self.scan_array_callable(values);
                 }
+                // Lowering routes a spread source it cannot prove to be an array to this helper,
+                // once it knows the type; no call of it exists in the tree.
+                if values.iter().any(|value| matches!(value.kind, ExprKind::Spread(_))) {
+                    self.record_callable(crate::spread_prelude::SPREAD_SOURCE_NAME);
+                }
                 self.scan_exprs(values);
             }
             ExprKind::ArrayLiteralAssoc(values) => { for (key, value) in values { self.scan_expr(key); self.scan_expr(value); } }
-            ExprKind::ArrayLiteralMixed(entries) => { for entry in entries { for expr in entry.exprs() { self.scan_expr(expr); } } }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                if entries.iter().any(|entry| matches!(entry, crate::parser::ast::ArrayEntry::Spread(_))) {
+                    self.record_callable(crate::spread_prelude::SPREAD_SOURCE_NAME);
+                }
+                for entry in entries { for expr in entry.exprs() { self.scan_expr(expr); } } }
             ExprKind::Match { subject, arms, default } => {
                 self.scan_expr(subject);
                 for (patterns, value) in arms { self.scan_exprs(patterns); self.scan_expr(value); }

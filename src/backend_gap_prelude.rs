@@ -1014,6 +1014,8 @@ pub fn inject_if_used(
     let needs_stream_select = usage.references(crate::stream_select_prelude::STREAM_SELECT_NAME);
     // And so is a one-argument `min()` / `max()` over a gradual operand.
     let needs_min_max_mixed = usage.references(crate::min_max_prelude::MIN_MAX_MIXED_NAME);
+    // And so is a spread into an array literal: the source's type decides the route.
+    let needs_spread_source = usage.references(crate::spread_prelude::SPREAD_SOURCE_NAME);
     // And so is `count($value, COUNT_RECURSIVE)` over a receiver that can nest.
     let needs_count_recursive =
         usage.references(crate::count_recursive_prelude::COUNT_RECURSIVE_NAME);
@@ -1079,6 +1081,7 @@ pub fn inject_if_used(
         && !needs_exec_full
         && !needs_stream_select
         && !needs_min_max_mixed
+        && !needs_spread_source
         && !needs_count_recursive
         && !needs_numeric_string_arg
         && !needs_array_fill_keys_mixed
@@ -1178,6 +1181,11 @@ pub fn inject_if_used(
     }
     if needs_min_max_mixed {
         let declarations = crate::min_max_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_spread_source {
+        let declarations = crate::spread_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

@@ -16,6 +16,19 @@ use crate::parser::ast::{ArrayEntry, Expr, ExprKind};
 use crate::types::{merge_array_key_types, normalized_array_key_type, PhpType, TypeEnv};
 
 impl Checker {
+    /// Resolves the helper lowering routes a spread source through (`crate::spread_prelude`).
+    ///
+    /// Signatures are resolved at the calls the checker meets, and this call only appears at
+    /// lowering, once the source's type is known: unresolved, it was an undefined function.
+    fn resolve_spread_source_helper(&mut self, env: &TypeEnv) {
+        let name = crate::spread_prelude::SPREAD_SOURCE_NAME;
+        if self.functions.contains_key(name) || !self.fn_decls.contains_key(name) {
+            return;
+        }
+        let call = crate::synthetic_class::e_call(name, vec![crate::synthetic_class::e_null()]);
+        let _ = self.infer_type(&call, env);
+    }
+
     /// Infers types for literals, variables, arrays, branches, unary operators, and casts.
     pub(super) fn infer_basic_expr_type(
         &mut self,
@@ -188,6 +201,9 @@ impl Checker {
                 })
             }
             ExprKind::ArrayLiteralMixed(entries) => {
+                if entries.iter().any(|entry| matches!(entry, ArrayEntry::Spread(_))) {
+                    self.resolve_spread_source_helper(env);
+                }
                 // A literal that mixes a spread with explicit keys is always associative: the
                 // explicit key rules out packed storage, and the spread means the key set is
                 // not a compile-time fact. The KEY type is therefore `Mixed` regardless of how
@@ -256,6 +272,9 @@ impl Checker {
             ExprKind::ArrayLiteral(elems) => {
                 if elems.is_empty() {
                     return Ok(PhpType::Array(Box::new(PhpType::Never)));
+                }
+                if elems.iter().any(|elem| matches!(elem.kind, ExprKind::Spread(_))) {
+                    self.resolve_spread_source_helper(env);
                 }
                 // Every spread source is typed ONCE. The hash-spread scan types the sources in
                 // order, up to the first one that makes the literal a hash, and whichever merge

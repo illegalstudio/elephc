@@ -109,7 +109,7 @@ fn test_core_boxed_array_spread_rejects_scalar_values() {
 function rejectBoxedSpread(mixed $items): array { return [...$items]; }
 try { rejectBoxedSpread(7); } catch (Error $error) { echo $error->getMessage(); }
 "#;
-    assert_eq!(compile_and_run(source), "Only arrays and Traversables can be unpacked");
+    assert_eq!(compile_and_run(source), "Only arrays and Traversables can be unpacked, int given");
 }
 
 /// Invalid spreads retire earlier temporary owners and prevent later element side effects.

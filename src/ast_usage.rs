@@ -794,6 +794,10 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         }
         ExprKind::ArrayLiteral(items) => {
             for item in items {
+                // A spread source's type decides whether it goes through the helper.
+                if matches!(item.kind, ExprKind::Spread(_)) {
+                    record_name(usage, crate::spread_prelude::SPREAD_SOURCE_NAME);
+                }
                 scan_expr(item, usage);
             }
         }
@@ -805,6 +809,9 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         }
         ExprKind::ArrayLiteralMixed(entries) => {
             for entry in entries {
+                if matches!(entry, crate::parser::ast::ArrayEntry::Spread(_)) {
+                    record_name(usage, crate::spread_prelude::SPREAD_SOURCE_NAME);
+                }
                 for expr in entry.exprs() {
                     scan_expr(expr, usage);
                 }
