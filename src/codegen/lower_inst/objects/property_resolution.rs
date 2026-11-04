@@ -1290,7 +1290,25 @@ pub(super) fn property_abstract_receiver(
     if class_info.is_abstract || module_descendant_declares_property(ctx, normalized, backing) {
         return Ok(Some(normalized.to_string()));
     }
+    // The checker typed the read from a descendant that reachability then PRUNED (no instance of
+    // it is ever created: symfony/http-client's `CurlClientState`, read through `ClientState` in
+    // a Symfony Demo that never builds a curl client). No live object can hold the slot, so the
+    // read is the polymorphic one with no candidate: php's missing property at run time.
+    if !class_info.dynamic_property_hash_is_name_addressable()
+        && !module_class_or_descendant_has_magic_get(ctx, normalized)
+    {
+        return Ok(Some(normalized.to_string()));
+    }
     Ok(None)
+}
+
+/// Returns whether `ancestor` or a module class descending from it declares `__get`.
+fn module_class_or_descendant_has_magic_get(ctx: &FunctionContext<'_>, ancestor: &str) -> bool {
+    ctx.module.class_infos.iter().any(|(name, info)| {
+        info.methods.contains_key("__get")
+            && (name.trim_start_matches('\\') == ancestor
+                || class_descends_from_module_class(ctx, name, ancestor))
+    })
 }
 
 /// Returns whether any class in the module descending from `ancestor` declares `property`.

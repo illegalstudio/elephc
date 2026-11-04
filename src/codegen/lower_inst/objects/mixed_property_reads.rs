@@ -34,15 +34,8 @@ fn lower_polymorphic_object_prop_get_from_loaded_object(
     property: &str,
 ) -> Result<()> {
     let candidates = polymorphic_property_candidates(ctx, target_name, property, inst)?;
-    if candidates.is_empty() && !target_name.trim_start_matches('\\').is_empty() {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} for polymorphic property {}::${}",
-            inst.op.name(),
-            target_name,
-            property
-        )));
-    }
-
+    // No candidate is a valid answer: the classes declaring the name were pruned, so every live
+    // object takes the miss arm, which is php's `Undefined property`.
     let miss_label = ctx.next_label("interface_prop_miss");
     let done_label = ctx.next_label("interface_prop_done");
     let stdclass_label = target_name

@@ -1370,6 +1370,40 @@ $f(-1, 0);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A property only a never-instantiated subclass declares, read and unset through the parent
+/// type: reachability prunes the subclass after the checker typed the access from it
+/// (symfony/http-client's `CurlClientState` in a Symfony Demo that builds no curl client), and
+/// both accesses were refused. An unrelated class declaring the same name changes nothing.
+#[test]
+fn test_property_of_a_pruned_subclass_through_the_parent_type() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ClientState { public array $openHandles = []; }
+final class CurlClientState extends ClientState { public array $pauseExpiries = []; public int $n = 0; }
+class Unrelated { public array $pauseExpiries = [1]; }
+final class R {
+    public static function select(ClientState $multi): int {
+        $n = 0;
+        foreach ($multi->pauseExpiries ?? [] as $id => $expiry) {
+            unset($multi->pauseExpiries[$id]);
+            $n++;
+        }
+        unset($multi->openHandles[1]);
+        return $n;
+    }
+    public static function peek(ClientState $multi) {
+        return @$multi->n;
+    }
+}
+$s = new ClientState();
+$s->openHandles = [1 => 'a', 2 => 'b'];
+var_dump(R::peek($s));
+echo R::select($s), ' ', json_encode($s->openHandles), ' ', count((new Unrelated())->pauseExpiries), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "NULL\n0 {\"2\":\"b\"} 1\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A `static` local handed out by reference (by-ref argument, `&` alias, `use (&$x)`) keeps every
 /// write across calls: Monolog's `BrowserConsoleHandler::handleStyle` shape.
 #[test]

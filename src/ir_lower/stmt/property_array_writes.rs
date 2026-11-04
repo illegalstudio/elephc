@@ -1434,9 +1434,11 @@ pub(in crate::ir_lower) fn is_generic_object_receiver(
     receiver_stores_property_dynamically(ctx, object, property)
 }
 
-/// Whether `class_name` does not hold `property` itself (no slot, no `__set`, no dynamic hash)
-/// while a descendant declares it: the receiver holds that descendant at run time, so the
-/// element write resolves the property on the run-time object, as through an interface.
+/// Whether `class_name` does not hold `property` itself (no slot, no `__set`, no dynamic hash):
+/// only a descendant can, so the element write resolves the property on the run-time object, as
+/// through an interface. Reachability may have pruned that descendant from `ctx.classes` after
+/// the checker typed the access from it, so no live descendant is required: a Symfony Demo never
+/// builds a `CurlClientState`, whose `$pauseExpiries` `CurlResponse::select()` still reaches.
 pub(in crate::ir_lower) fn property_declared_only_by_descendants(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
@@ -1446,11 +1448,6 @@ pub(in crate::ir_lower) fn property_declared_only_by_descendants(
         info.visible_property(property).is_none()
             && !info.methods.contains_key("__set")
             && !info.dynamic_property_hash_is_name_addressable()
-            && ctx.classes.iter().any(|(candidate, candidate_info)| {
-                candidate.as_str() != class_name
-                    && crate::types::class_inherits_from(ctx.classes, candidate, class_name)
-                    && candidate_info.visible_property(property).is_some()
-            })
     })
 }
 
