@@ -14,6 +14,14 @@ use crate::ir::RuntimeCallTarget;
 pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
+    if let Some(cell) = ctx.numeric_seed_offsets.get(&slot).copied() {
+        let seed = ctx.function.value(value).is_some_and(|metadata| {
+            crate::codegen::stack_numeric::scalar_numeric(&metadata.ir_type, &metadata.php_type)
+        });
+        if seed && ctx.local_slot_is_raw(slot) {
+            return super::arithmetic::stack_cell::store_seed(ctx, slot, value, cell);
+        }
+    }
     let reset_concat_after_store =
         inst.span.is_some_and(|span| span.line > 0) && value_is_acquire_of_str_concat(ctx, value)?;
     ctx.store_value_to_local(slot, value)?;

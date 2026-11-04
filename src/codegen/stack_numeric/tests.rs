@@ -478,3 +478,115 @@ fn stack_numeric_backing_cell_write_invalidates_before_store() {
     crate::ir::validate_function(&function).unwrap();
     assert!(!candidates(&function).contains(&next), "the old payload must survive until its cast");
 }
+
+/// A raw integer seed of a proven numeric local gets its slot's frame cell; escapes keep the heap box.
+#[test]
+fn stack_numeric_raw_seed_uses_slot_cell_only_for_private_slots() {
+    let (function, _) = fixture(false, false);
+    let slot = LocalSlotId::from_raw(0);
+    assert_eq!(plan(&function).seed_slots, vec![slot]);
+    assert!(plan(&function).locals.contains(&slot));
+    let (function, _) = fixture(true, false);
+    assert!(plan(&function).seed_slots.is_empty());
+    // A float seed of the same local takes the same cell; it is stored with the float tag.
+    let (mut function, _) = fixture(false, false);
+    let term = function.blocks[0].terminator.take().unwrap();
+    let mut builder = Builder::new(&mut function);
+    builder.position_at_end(crate::ir::BlockId::from_raw(0));
+    let half = builder.emit_const_f64(0.5);
+    builder.emit_store_local(slot, half);
+    builder.terminate(term);
+    crate::ir::validate_function(&function).unwrap();
+    assert_eq!(plan(&function).seed_slots, vec![slot]);
+    let (mut function, _) = fixture(false, false);
+    let copy = function.add_local(
+        Some("copy".into()),
+        IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed,
+        LocalKind::PhpLocal,
+    );
+    let term = function.blocks[0].terminator.take().unwrap();
+    let mut builder = Builder::new(&mut function);
+    builder.position_at_end(crate::ir::BlockId::from_raw(0));
+    let pointer = builder.emit_load_local(slot, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+    let owner = builder
+        .emit(
+            Op::Acquire,
+            vec![pointer],
+            None,
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            Ownership::Owned,
+        )
+        .unwrap();
+    builder.emit_store_local(copy, owner);
+    builder.terminate(term);
+    assert!(plan(&function).seed_slots.is_empty());
+}
+
+/// A guarded counter's exit box of a raw integer is a cell when its only owner is the numeric local.
+#[test]
+fn stack_numeric_exit_box_seed_uses_frame_cell() {
+    let build = |escape: bool| {
+        let mut function = Function::new("exit_box".into(), IrType::I64, PhpType::Int);
+        let slot = function.add_local(
+            Some("counter".into()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let other = function.add_local(
+            Some("other".into()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let three = builder.emit_const_i64(3);
+        let boxed = builder
+            .emit(
+                Op::MixedBox,
+                vec![three],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::MaybeOwned,
+            )
+            .unwrap();
+        builder.emit(
+            Op::ReleaseLocalSlot,
+            vec![],
+            Some(Immediate::LocalSlot(slot)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        builder.emit_store_local(slot, boxed);
+        if escape {
+            builder.emit_store_local(other, boxed);
+        }
+        let old = builder.emit_load_local(slot, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+        let next = builder
+            .emit(
+                Op::StrIncDec,
+                vec![old],
+                Some(Immediate::I64(1)),
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Owned,
+            )
+            .unwrap();
+        builder.emit_store_local(slot, next);
+        let result = builder.emit_load_local(slot, IrType::I64, PhpType::Int);
+        builder.terminate(Terminator::Return { value: Some(result) });
+        crate::ir::validate_function(&function).unwrap();
+        (function, boxed)
+    };
+    let (function, boxed) = build(false);
+    assert!(candidates(&function).contains(&boxed));
+    let (function, boxed) = build(true);
+    assert!(!candidates(&function).contains(&boxed));
+}
