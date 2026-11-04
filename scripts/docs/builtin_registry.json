@@ -33478,28 +33478,26 @@
     "eval_only": false,
     "examples": [],
     "in_catalog": true,
-    "is_extension": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.clamp` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
       "sig_file": "src/builtins/math/clamp.rs"
     },
-    "module": "elephc",
+    "module": "standard",
     "name": "clamp",
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic"
       },
       "effects": {
         "kind": "static",
@@ -33508,12 +33506,11 @@
         ]
       },
       "lowering": {
-        "kind": "runtime_call",
-        "target": "clamp"
+        "kind": "eir"
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -33523,7 +33520,7 @@
       "runtime_functions": [
         "clamp"
       ],
-      "target_strategy": "runtime_call",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -33563,7 +33560,7 @@
       "return_type": "mixed",
       "variadic": null
     },
-    "since": null,
+    "since": "8.6",
     "slug": "clamp",
     "sub_area": "Math"
   },
@@ -66390,7 +66387,7 @@
     "eval_only": false,
     "examples": [],
     "in_catalog": true,
-    "is_extension": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -66405,7 +66402,7 @@
       "sig_arm": null,
       "sig_file": "src/builtins/string/grapheme_strrev.rs"
     },
-    "module": "elephc",
+    "module": "intl",
     "name": "grapheme_strrev",
     "semantics": {
       "argument_lowering": "standard",
@@ -66460,7 +66457,7 @@
       "return_type": "mixed",
       "variadic": null
     },
-    "since": null,
+    "since": "8.6",
     "slug": "grapheme_strrev",
     "sub_area": "String"
   },

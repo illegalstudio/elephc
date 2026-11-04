@@ -38,6 +38,10 @@ pub fn emit_rtrim(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_rtrim_strip");                               // if newline, strip it
     emitter.instruction("cmp w10, #11");                                        // check for vertical tab (0x0B)
     emitter.instruction("b.eq __rt_rtrim_strip");                               // if vertical tab, strip it
+    if crate::codegen_support::compile_php_version().version_id() >= 80600 {
+        emitter.instruction("cmp w10, #12");                                    // check for form feed (0x0C), added to PHP's default mask in 8.6
+        emitter.instruction("b.eq __rt_rtrim_strip");                           // if form feed, strip it
+    }
     emitter.instruction("cmp w10, #13");                                        // check for carriage return (0x0D)
     emitter.instruction("b.eq __rt_rtrim_strip");                               // if CR, strip it
     emitter.instruction("b __rt_rtrim_done");                                   // byte outside PHP's default trim mask found, stop trimming
@@ -75,6 +79,10 @@ fn emit_rtrim_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_rtrim_strip_x86");                             // strip the trailing newline and continue trimming from the new end
     emitter.instruction("cmp sil, 11");                                         // is the trailing byte a vertical tab that rtrim() should discard?
     emitter.instruction("je __rt_rtrim_strip_x86");                             // strip the trailing vertical tab and continue trimming from the new end
+    if crate::codegen_support::compile_php_version().version_id() >= 80600 {
+        emitter.instruction("cmp sil, 12");                                     // is the trailing byte a form feed that PHP 8.6 rtrim() should discard?
+        emitter.instruction("je __rt_rtrim_strip_x86");                         // strip the trailing form feed and continue trimming from the new end
+    }
     emitter.instruction("cmp sil, 13");                                         // is the trailing byte a carriage return that rtrim() should discard?
     emitter.instruction("je __rt_rtrim_strip_x86");                             // strip the trailing carriage return and continue trimming from the new end
     emitter.instruction("jmp __rt_rtrim_done_x86");                             // stop once the trailing byte is outside PHP's default trim mask

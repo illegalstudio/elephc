@@ -45,6 +45,10 @@ pub(crate) mod global_decls;
 mod progress;
 /// Immutable BCMath Number standard-library prelude injection.
 pub mod bcmath_prelude;
+/// PHP 8.6 `Time\Duration` and `Time\TimeException` standard-library prelude injection.
+pub mod time_prelude;
+/// PHP 8.6 mixed-operand `clamp()` prelude helper.
+pub mod clamp_prelude;
 /// PHP ext/gmp standard-library prelude injection.
 pub mod gmp_prelude;
 pub mod random_prelude;

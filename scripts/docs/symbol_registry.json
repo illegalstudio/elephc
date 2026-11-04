@@ -4289,6 +4289,42 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "date",
+      "name": "Time\\Duration",
+      "php_manual": null,
+      "since": "8.6"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "date",
+      "name": "Time\\TimeException",
+      "php_manual": null,
+      "since": "8.6"
+    },
+    {
+      "aot": {
         "kind": "checker-injected",
         "supported": true
       },

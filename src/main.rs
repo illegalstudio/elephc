@@ -27,6 +27,8 @@ mod generics;
 mod global_decls;
 mod hash_prelude;
 mod core_prelude;
+mod time_prelude;
+mod clamp_prelude;
 mod bcmath_prelude;
 mod gmp_prelude;
 mod random_prelude;

@@ -1148,10 +1148,13 @@ impl RuntimeFnId {
                 sig.return_type = PhpType::Mixed;
             }
             RuntimeFnId::Clamp => {
-                set_callable_param_type(sig, 0, PhpType::Int);
-                set_callable_param_type(sig, 1, PhpType::Int);
-                set_callable_param_type(sig, 2, PhpType::Int);
-                sig.return_type = PhpType::Int;
+                // PHP 8.6's clamp() is `mixed` in and out; the typed int/float/string
+                // forms are only a direct-call fast path, so the callable wrapper must
+                // keep mixed storage for NAN, null, array, boolean and object operands.
+                set_callable_param_type(sig, 0, PhpType::Mixed);
+                set_callable_param_type(sig, 1, PhpType::Mixed);
+                set_callable_param_type(sig, 2, PhpType::Mixed);
+                sig.return_type = PhpType::Mixed;
             }
             RuntimeFnId::Sort
             | RuntimeFnId::Rsort

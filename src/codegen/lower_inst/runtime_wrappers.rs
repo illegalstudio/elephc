@@ -583,24 +583,27 @@ impl crate::builtins::semantics::BuiltinLoweringContext
         )
     }
 
-    /// A synthetic wrapper has no function-name pool to intern a callee into, and no
-    /// registry builtin that composes user calls admits a runtime-selected callable
-    /// (`BuiltinCallablePolicy::StaticOnly`), so this is never reached; it answers a
-    /// null constant rather than a call so a future policy change fails visibly in tests
-    /// instead of emitting an unresolved symbol.
+    /// Emits a direct call to a prelude helper from a synthetic wrapper.
+    ///
+    /// A registry builtin whose EIR lowering composes PHP helpers (`clamp`'s mixed path
+    /// is the first with a dynamic callable policy) must reproduce that call here:
+    /// answering a null constant would hand the descriptor caller a value the callee
+    /// never produced.
     fn emit_user_call(
         &mut self,
-        _name: &str,
-        _operands: Vec<ValueId>,
+        name: &str,
+        operands: Vec<ValueId>,
         php_type: PhpType,
         span: Option<crate::span::Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let data = self.data.intern_function_name(name);
+        let effects = Op::Call.default_effects();
         self.emit_value(
-            Op::ConstNull,
-            Vec::new(),
-            None,
+            Op::Call,
+            operands,
+            Some(Immediate::Data(data)),
             php_type,
-            Op::ConstNull.default_effects(),
+            effects,
             span,
         )
     }

@@ -10026,8 +10026,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("clamp"),
         name: "clamp",
         area: Area::Math,
-        module: PhpModule::Elephc,
-        since: None,
+        module: PhpModule::Standard,
+        since: Some(PhpVersion::Php86),
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10061,7 +10061,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.clamp.php"),
         deprecation: None,
-        extension: true,
+        extension: false,
         internal: false,
         requirements: &[],
     },
@@ -15277,8 +15277,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("grapheme_strrev"),
         name: "grapheme_strrev",
         area: Area::String,
-        module: PhpModule::Elephc,
-        since: None,
+        module: PhpModule::Intl,
+        since: Some(PhpVersion::Php86),
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15300,7 +15300,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.grapheme-strrev.php"),
         deprecation: None,
-        extension: true,
+        extension: false,
         internal: false,
         requirements: &[],
     },

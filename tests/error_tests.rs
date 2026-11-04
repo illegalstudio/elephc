@@ -70,6 +70,8 @@ fn check_source_with_defines_and_options(
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::time_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::clamp_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -108,6 +110,8 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::time_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::clamp_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -327,6 +331,8 @@ mod math_builtins;
 mod random;
 #[path = "error_tests/bcmath_number.rs"]
 mod bcmath_number;
+#[path = "error_tests/time_duration.rs"]
+mod time_duration;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
 #[path = "error_tests/mbstring.rs"]

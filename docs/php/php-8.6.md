@@ -1,0 +1,74 @@
+---
+title: "PHP 8.6"
+description: "PHP 8.6 language and library support in elephc: what ships, what changed in the runtime, and what remains."
+sidebar:
+  order: 22
+---
+
+<!-- Keep this page in sync with ROADMAP.md and the php-src 8.6 corpus under tests/php_src. -->
+
+PHP 8.6 is a minor release. elephc keeps the existing `--php-version` profiles and
+adds the 8.6 behaviour behind `--php-version=8.6` where the change is profile
+sensitive.
+
+## Delivered
+
+| Feature | Notes |
+|---|---|
+| `Time\Duration` | `final readonly` value class with `seconds`, `nanoseconds`, `negative`; every `from*()` factory; `negate()`, `absolute()`, `add()`, `sub()`, `multiplyBy()`, `divideBy()`, `compare()`; comparison operators through the internal object handler; overflow raises `Time\TimeException`. The php-src `ext/date/tests/time/duration` corpus is migrated into `tests/codegen/time_duration_php_src.rs`. |
+| `Time\TimeException` | Extends `\Exception`; every overflow and ISO-8601 parse failure uses php-src's message text. |
+| `clamp()` | Full `mixed` signature. Int, float, and string operands keep the typed runtime path; boolean, null, array, and object operands go through php-src's own polyfill, so PHP's cross-type comparison rules apply. `DateTime`/`DateTimeImmutable` gained the internal comparison adapter this needs. The upstream `ext/standard/tests/math/clamp.phpt` fixture is transcribed in `tests/codegen/math/clamp_php86.rs`. |
+| `grapheme_strrev()` | Now classified as `ext/intl` (PHP 8.6) instead of an elephc extension. Both upstream `ext/intl/tests/grapheme_strrev*.phpt` fixtures pass, including the UBRK_DONE regression and the Arabic grapheme-cluster case. |
+| Default trim mask | `trim()`, `ltrim()`, `rtrim()` and `chop()` include form feed (`\x0C`) under `--php-version=8.6`, and leave it untouched on 8.5 and earlier. |
+| Readonly property defaults | A readonly instance property may declare a default value, including inside a `readonly class`. The default initializes the slot before the constructor runs, so later writes (including from the constructor) raise `Cannot modify readonly property`. Inheritance, get-only interface properties, and serialization follow php-src's `Zend/tests/readonly_props/readonly_with_default*.phpt`. |
+| `SortDirection` | `Ascending` / `Descending`, catalogued as a PHP 8.6 core enum. |
+| `array_filter()` mode validation | An invalid `$mode` raises `ValueError` on the 8.6 profile instead of silently using value mode. |
+| `json_decode()` error positions | Token coordinates in decoder messages follow PHP 8.6. |
+
+## Deliberately deferred
+
+These PHP 8.6 items are not implemented yet. Each has a tracked follow-up; the
+list is here so a PHP 8.6 program that depends on one fails visibly during review
+instead of during production.
+
+| Item | Why it is deferred |
+|---|---|
+| Partial function application (`foo(1, ?, ...)`) | New call-argument syntax plus a closure-synthesis lowering path. It needs its own parser, checker, and EIR design; it is the largest remaining 8.6 language item. |
+| `Io\Poll` | A new platform polling API (`epoll`/`kqueue`/`WSAPoll`). It needs a new native surface per target and an event-loop-free runtime shape. |
+| Stream `error_mode` | The stream layer currently reports PHP 8.5 warnings; opting into `STREAM_ERRMODE_EXCEPTION` requires a new stream-option ABI across every stream wrapper. |
+| `ReflectionProperty::isReadable()` / `isWriteable()` | The RFC spans visibility, asymmetric visibility, readonly state, hooks, lazy objects, dynamic properties, and a scope/object argument pair. The metadata plumbing is not yet exposed to reflection. |
+| Parameter doc comments (`ReflectionParameter::getDocComment()`) | The parser would need a doc-comment channel on every parameter (functions, methods, closures, arrow functions, hook parameters) and a parallel field across the AST. |
+| Enum `__debugInfo()` | The enum dump path bypasses the object `__debugInfo()` dispatch and needs a distinct `enum(E::C) (N) { … }` renderer. |
+| `#[\Override]` on class constants | Method and property validation already exists; constants and enum cases need their own parent/interface lookup plus trait composition rules. |
+| `__construct()` / `__destruct()` return-value deprecation | The diagnostic is emitted at class-declaration time in php-src; elephc would need a startup diagnostic channel for user declarations. |
+| Secure session ini defaults | `session.use_strict_mode=1`, `session.cookie_httponly=1`, and `session.cookie_samesite=Lax` belong to the web runtime's session defaults and its `ini_get()` surface. |
+| URI builder follow-ups | The `Uri\Rfc3986\Uri` / `Uri\WhatWg\Url` extension is not implemented at all yet. |
+| `pack()`/`unpack()` float and signed-integer endianness modifiers | The pack/unpack family is tracked separately; the 8.6 modifiers add new format letters and endianness combinations. |
+| Direction-aware property resolution, const object property writes, function-argument error display, closure optimizations, TLS session resumption, SNMP updates | Smaller upstream changes with no standalone user-visible surface in elephc yet. |
+
+## Known deviations
+
+- `Time\Duration` has no `__unserialize()` property loader. Default serialization,
+  including a missing property taking its declared default, works; crafted payloads
+  that rely on php-src's internal hydration validation are outside the supported
+  surface.
+- `new Time\Duration()` is rejected while compiling (the constructor is private),
+  whereas php-src reports the same invalid program at run time. The factories are the
+  only supported construction path in both implementations.
+- A readonly property's default is enforced by the static checker for named
+  writes. Dynamic-name writes (`$object->$name = …`) and `unset()` do not yet
+  consult readonly state, matching the pre-existing dynamic-property gap rather
+  than the 8.6 defaults change.
+- `grapheme_strrev()` implements the common `Grapheme_Extend` ranges (Latin,
+  Hebrew, Arabic, Indic, Thai, Tibetan, variation selectors, emoji modifiers) but
+  not the complete UAX #29 rule set (`SpacingMark`, `Prepend`, regional
+  indicators). The upstream fixtures pass.
+
+## References
+
+- [PHP 8.6 RFC index](https://wiki.php.net/rfc#php_86)
+- [`Time\Duration` RFC](https://wiki.php.net/rfc/duration_class)
+- [`clamp()` RFC](https://wiki.php.net/rfc/clamp_v2)
+- [Readonly property defaults RFC](https://wiki.php.net/rfc/readonly_property_defaults)
+- [Partial function application v2 RFC](https://wiki.php.net/rfc/partial_function_application_v2)
+- [PHP 8.6 essentials (Les-Tilleuls.coop)](https://les-tilleuls.coop/blog/ce-quil-faut-retenir-des-nouveautes-de-php-8-6)

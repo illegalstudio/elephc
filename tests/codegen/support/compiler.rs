@@ -371,6 +371,8 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::time_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::clamp_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let force_gmp = FORCE_GMP_PRELUDE.with(|flag| flag.replace(false));
     let resolved = elephc::gmp_prelude::inject_if_used(resolved, force_gmp, &mut prelude_inventory);

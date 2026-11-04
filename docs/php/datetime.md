@@ -446,7 +446,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`timezone_transitions_get()`](./builtins/date/timezone_transitions_get.md) | `(mixed $object, int $timestampBegin = PHP_INT_MIN, int $timestampEnd = PHP_INT_MAX): mixed` | `mixed` | ✓ | ✓ |
 | [`timezone_version_get()`](./builtins/date/timezone_version_get.md) | `(): string` | `string` | ✓ | ✓ |
 
-Classes: `DateError`, `DateException`, `DateInterval`, `DateInvalidOperationException`, `DateInvalidTimeZoneException`, `DateMalformedIntervalStringException`, `DateMalformedPeriodStringException`, `DateMalformedStringException`, `DateObjectError`, `DatePeriod`, `DateRangeError`, `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`.
+Classes: `DateError`, `DateException`, `DateInterval`, `DateInvalidOperationException`, `DateInvalidTimeZoneException`, `DateMalformedIntervalStringException`, `DateMalformedPeriodStringException`, `DateMalformedStringException`, `DateObjectError`, `DatePeriod`, `DateRangeError`, `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `Time\Duration`, `Time\TimeException`.
 
 Constants: `SUNFUNCS_RET_DOUBLE`, `SUNFUNCS_RET_STRING`, `SUNFUNCS_RET_TIMESTAMP`.
 

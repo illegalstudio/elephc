@@ -953,8 +953,8 @@ fn runtime_builtin_descriptor_cases_at_arity(
         {
             continue;
         }
-        // GMP's EIR lowering forwards to prelude helpers. Without the injected prelude
-        // (`--with-gmp`, or a compiled GMP reference) there is no helper to wrap, and a
+        // GMP's and clamp's EIR lowerings forward to prelude helpers. Without the injected
+        // prelude (`--with-gmp`, or a compiled reference) there is no helper to wrap, and a
         // callable-table entry would only fail codegen on an unrelated eval host.
         if elephc_builtin_contract::lookup(name)
             .is_some_and(|contract| contract.module == elephc_builtin_contract::PhpModule::Gmp)
@@ -963,6 +963,15 @@ fn runtime_builtin_descriptor_cases_at_arity(
                 .functions
                 .iter()
                 .any(|function| function.name == "__elephc_gmp_abs")
+        {
+            continue;
+        }
+        if name == "clamp"
+            && !ctx
+                .module
+                .functions
+                .iter()
+                .any(|function| function.name == crate::clamp_prelude::CLAMP_HELPER)
         {
             continue;
         }

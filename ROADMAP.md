@@ -1157,6 +1157,23 @@ real-world validation rather than by speculative pass work.
 - [ ] FFI documentation for C, Rust, Python, Go
 - [x] Apple notarization for direct downloads (codesign + notarytool)
 
+### PHP 8.6 support
+
+- [x] `Time\Duration` and `Time\TimeException` — full factory/arithmetic/comparison surface with php-src's 64-bit overflow rules, comparison operators, and the migrated `ext/date/tests/time/duration` PHPT corpus
+- [x] `clamp()` mixed operands — int/float/string keep the typed path; boolean, null, array, and object operands use php-src's polyfill, with `DateTime`/`DateTimeImmutable` mixed ordering; `ext/standard/tests/math/clamp.phpt` passes
+- [x] `grapheme_strrev()` reclassified as PHP 8.6 `ext/intl`; both upstream `grapheme_strrev*.phpt` fixtures pass after completing the Arabic/Hebrew/Indic/Thai/Tibetan `Grapheme_Extend` ranges
+- [x] Form feed in the default `trim()`/`ltrim()`/`rtrim()`/`chop()` mask under `--php-version=8.6`
+- [x] Readonly property defaults — declarations, constructor initialisation, inheritance, get-only interface properties, and serialization; `Zend/tests/readonly_props/readonly_with_default*.phpt` pass
+- [ ] Partial function application — `?`/named `?`/trailing `...` placeholders and closure synthesis
+- [ ] `Io\Poll` — platform polling API and per-target backend
+- [ ] Stream `error_mode` — exception-on-failure stream option across every wrapper
+- [ ] `ReflectionProperty::isReadable()` / `isWriteable()` — scope/object arguments, visibility, readonly, hooks, and lazy objects
+- [ ] Parameter doc comments and `ReflectionParameter::getDocComment()`
+- [ ] Enum `__debugInfo()` rendering
+- [ ] `#[\Override]` on class constants and enum cases
+- [ ] `__construct()` / `__destruct()` return-value deprecation
+- [ ] Secure session ini defaults (`use_strict_mode`, `cookie_httponly`, `cookie_samesite`)
+
 ### curl follow-ups
 
 - [ ] A bundled CA trust store — still the only answer for an image that ships no root store at all (`FROM scratch`, distroless), where runtime discovery finds nothing and `CURLOPT_CAINFO`/`$CURL_CA_BUNDLE` remain required. Not the same thing as discovery: a bundled store is certificate material elephc itself would have to ship, pin, and keep current

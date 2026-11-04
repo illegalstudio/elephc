@@ -1065,10 +1065,12 @@ mod tests {
             assert_eq!(sig.return_type, PhpType::Mixed, "{name}");
         }
 
+        // PHP 8.6's clamp() is `mixed` in and out: the wrapper must preserve NAN, null,
+        // array, boolean, and object operands instead of coercing them to integers.
         let mut clamp = callable_wrapper_sig(&function_sig("clamp").expect("clamp signature"));
         crate::ir::RuntimeFnId::Clamp.refine_runtime_callable_wrapper_sig(&mut clamp);
-        assert!(clamp.params.iter().all(|(_, ty)| *ty == PhpType::Int));
-        assert_eq!(clamp.return_type, PhpType::Int);
+        assert!(clamp.params.iter().all(|(_, ty)| *ty == PhpType::Mixed));
+        assert_eq!(clamp.return_type, PhpType::Mixed);
 
         let mut sort = callable_wrapper_sig(&function_sig("sort").expect("sort signature"));
         crate::ir::RuntimeFnId::Sort.refine_runtime_callable_wrapper_sig(&mut sort);

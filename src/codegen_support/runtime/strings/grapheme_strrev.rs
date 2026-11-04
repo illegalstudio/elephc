@@ -12,6 +12,43 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+/// Unicode `Grapheme_Extend` ranges the scanner attaches to the preceding base scalar.
+///
+/// This is the practical subset the backend needs for ordinary text: combining
+/// diacritics, Arabic/Hebrew vowel points, Indic matras, Thai/Tibetan marks, variation
+/// selectors, and emoji skin-tone modifiers. Full UAX #29 segmentation also needs the
+/// `SpacingMark`, `Prepend`, and regional-indicator rules, which this scanner does not
+/// implement; that limitation is documented on `grapheme_strrev`.
+const GRAPHEME_EXTEND_RANGES: &[(u32, u32)] = &[
+    (0x0300, 0x036f),
+    (0x0483, 0x0489),
+    (0x0591, 0x05bd),
+    (0x05bf, 0x05bf),
+    (0x05c1, 0x05c2),
+    (0x05c4, 0x05c5),
+    (0x05c7, 0x05c7),
+    (0x0610, 0x061a),
+    (0x064b, 0x065f),
+    (0x0670, 0x0670),
+    (0x06d6, 0x06ed),
+    (0x0900, 0x0903),
+    (0x093a, 0x094f),
+    (0x0951, 0x0957),
+    (0x0962, 0x0963),
+    (0x0e31, 0x0e31),
+    (0x0e34, 0x0e3a),
+    (0x0e47, 0x0e4e),
+    (0x0f71, 0x0f84),
+    (0x0f86, 0x0f87),
+    (0x0f8d, 0x0fbc),
+    (0x1ab0, 0x1aff),
+    (0x1dc0, 0x1dff),
+    (0x20d0, 0x20ff),
+    (0xfe00, 0xfe0f),
+    (0xfe20, 0xfe2f),
+    (0x1f3fb, 0x1f3ff),
+];
+
 /// Emits the grapheme-aware string reversal runtime helper for the active target.
 ///
 /// Input is the standard PHP string pair (`x1`/`x2` on ARM64, `rax`/`rdx` on
@@ -72,13 +109,9 @@ pub fn emit_grapheme_strrev(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_grapheme_include_prev");                     // include the scalar before a ZWJ in the same grapheme cluster
     emitter.instruction("cmp x5, x17");                                         // is the previous scalar a zero-width joiner?
     emitter.instruction("b.eq __rt_grapheme_include_prev");                     // include the ZWJ so the following emoji/text unit stays joined
-    emit_extend_range_check(emitter, "x16", 0x0300, 0x036f);
-    emit_extend_range_check(emitter, "x16", 0x1ab0, 0x1aff);
-    emit_extend_range_check(emitter, "x16", 0x1dc0, 0x1dff);
-    emit_extend_range_check(emitter, "x16", 0x20d0, 0x20ff);
-    emit_extend_range_check(emitter, "x16", 0xfe00, 0xfe0f);
-    emit_extend_range_check(emitter, "x16", 0xfe20, 0xfe2f);
-    emit_extend_range_check(emitter, "x16", 0x1f3fb, 0x1f3ff);
+    for (start, end) in GRAPHEME_EXTEND_RANGES {
+        emit_extend_range_check(emitter, "x16", *start, *end);
+    }
     emitter.instruction("b __rt_grapheme_cluster_copy");                        // no left extension rule matched, so copy the current cluster
 
     emitter.label("__rt_grapheme_include_prev");
@@ -281,13 +314,9 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_grapheme_include_prev_x");                     // include the scalar before a ZWJ in the same grapheme cluster
     emitter.instruction("cmp r9, 8205");                                        // is the previous scalar a zero-width joiner?
     emitter.instruction("je __rt_grapheme_include_prev_x");                     // include the ZWJ so the following emoji/text unit stays joined
-    emit_extend_range_check_x86_64(emitter, "r11", 0x0300, 0x036f);
-    emit_extend_range_check_x86_64(emitter, "r11", 0x1ab0, 0x1aff);
-    emit_extend_range_check_x86_64(emitter, "r11", 0x1dc0, 0x1dff);
-    emit_extend_range_check_x86_64(emitter, "r11", 0x20d0, 0x20ff);
-    emit_extend_range_check_x86_64(emitter, "r11", 0xfe00, 0xfe0f);
-    emit_extend_range_check_x86_64(emitter, "r11", 0xfe20, 0xfe2f);
-    emit_extend_range_check_x86_64(emitter, "r11", 0x1f3fb, 0x1f3ff);
+    for (start, end) in GRAPHEME_EXTEND_RANGES {
+        emit_extend_range_check_x86_64(emitter, "r11", *start, *end);
+    }
     emitter.instruction("jmp __rt_grapheme_cluster_copy_x");                    // no left extension rule matched, so copy the current cluster
 
     emitter.label("__rt_grapheme_include_prev_x");
