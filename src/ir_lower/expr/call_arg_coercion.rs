@@ -1888,6 +1888,25 @@ pub(super) fn reference_property_place_class(
         .then_some(class)
 }
 
+/// Whether a reference-promoted property can hand a by-reference parameter its own cell.
+///
+/// A cell holding a boxed Mixed cannot serve a parameter that writes a raw value: `bool &$x` stored
+/// a bare 1 where `Symfony\\Component\\VarDumper\\Caster\\LinkStub::$inVendor` kept a box, and the next
+/// read jumped through it. That parameter takes the read and write-back path, which converts.
+pub(super) fn property_cell_serves_param(
+    ctx: &LoweringContext<'_, '_>,
+    place: &Expr,
+    param_ty: &PhpType,
+) -> bool {
+    if reference_property_place_class(ctx, place).is_none() {
+        return false;
+    }
+    let boxed = |ty: PhpType| matches!(ty, PhpType::Mixed | PhpType::Union(_));
+    boxed(param_ty.codegen_repr())
+        || !super::ref_place_args::static_place_type(ctx, place)
+            .is_some_and(|ty| boxed(ty.codegen_repr()))
+}
+
 /// Lowers `$object->property` as a by-reference argument bound to the property's own cell.
 ///
 /// php binds the parameter to the property's slot, so `new Svc($this->p)` with
@@ -1906,7 +1925,9 @@ fn lower_by_ref_property_arg_with_signature(
     if !sig.ref_params.get(index).copied().unwrap_or(false) {
         return None;
     }
-    reference_property_place_class(ctx, arg)?;
+    if !property_cell_serves_param(ctx, arg, &sig.params.get(index)?.1) {
+        return None;
+    }
     // One alias per source position: two property arguments of one call must not share a slot.
     let alias = crate::names::generated_local_name(&format!(
         "by_ref_property_arg_{}_{}_{index}",

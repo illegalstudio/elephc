@@ -124,7 +124,7 @@ pub(super) fn rewrite_typed_property_ref_args(
         // A property the checker promoted is passed as its own cell: a callee that keeps the
         // reference, as `new OrderedHashMapIterator($this->managedCursors)` does, would otherwise
         // keep one to the temporary, and the write-back undoes what it wrote later.
-        if super::call_arg_coercion::reference_property_place_class(ctx, place_arg).is_some() {
+        if super::call_arg_coercion::property_cell_serves_param(ctx, place_arg, &expected_ty) {
             continue;
         }
         let Some(place_ty) = static_place_type(ctx, place_arg) else {
@@ -718,7 +718,19 @@ fn prepare_ref_place_args_for(
         } else {
             lower_expr(ctx, &place)
         };
-        let needs_adapter = declared_local_ref_needs_adapter(ctx, sig, param_index, place_arg);
+        // A parameter that writes a raw value needs a raw temporary, whichever place it stands
+        // for: a boxed one would take the bare value and the write-back would store it as a box.
+        let raw_param_over_boxed_read = !builtin_callee
+            && !mb_variables
+            && sig.params.get(param_index).is_some_and(|(_, param_ty)| {
+                !matches!(param_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            })
+            && matches!(
+                ctx.builder.value_php_type(read.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            );
+        let needs_adapter = raw_param_over_boxed_read
+            || declared_local_ref_needs_adapter(ctx, sig, param_index, place_arg);
         let value_type = if needs_adapter {
             normalize_value_php_type(sig.params.get(param_index)?.1.codegen_repr())
         } else {
@@ -1051,7 +1063,7 @@ fn is_rewritable_non_local_ref_place(
     // A reference-promoted property is passed as its own cell to a user callee
     // (`call_arg_coercion::lower_by_ref_property_arg_with_signature`); a copy written back after
     // the call would give the callee a reference to the temporary instead.
-    if !builtin_callee && super::call_arg_coercion::reference_property_place_class(ctx, arg).is_some() {
+    if !builtin_callee && super::call_arg_coercion::property_cell_serves_param(ctx, arg, param_type) {
         return false;
     }
     // An element of a local hash, boxed array or boxed list binds the element's managed cell

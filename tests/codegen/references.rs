@@ -2076,3 +2076,34 @@ echo $map->counts(), "\n";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "1:1:0\n1:5:1\n0:5:1\n");
 }
+
+/// A property boxed as `mixed` keeps its box when a typed by-reference parameter writes it. The
+/// cell itself would take the raw value, as `LinkStub::$inVendor` did: the next read of the
+/// property jumped through a bare 1.
+#[test]
+fn test_a_typed_by_ref_parameter_converts_through_a_boxed_property() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class S {
+    public mixed $flag = false;
+    public mixed $number = 0;
+    public mixed $text = 'a';
+    public mixed $list = [];
+    private function setFlag(bool &$x) { $x = true; }
+    private function setNumber(int &$x) { $x = 7; }
+    private function setText(string &$x) { $x .= 'b'; }
+    private function setList(array &$x) { $x[] = 1; }
+    public function go() {
+        $this->setFlag($this->flag);
+        $this->setNumber($this->number);
+        $this->setText($this->text);
+        $this->setList($this->list);
+        var_dump($this->flag, $this->number, $this->text, count($this->list));
+    }
+}
+(new S())->go();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nint(7)\nstring(2) \"ab\"\nint(1)\n");
+}
