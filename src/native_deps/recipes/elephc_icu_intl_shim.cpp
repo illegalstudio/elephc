@@ -5786,6 +5786,7 @@ std::unique_ptr<IntlObject> open_object(const std::string &kind,
         if (U_FAILURE(local_status) || formatter == nullptr) {
             delete formatter;
             status = local_status == U_ZERO_ERROR ? U_ILLEGAL_ARGUMENT_ERROR : local_status;
+            set_global_error(status, "number formatter creation failed");
             return nullptr;
         }
         if (has_pattern && !pattern_style) {
@@ -5795,6 +5796,7 @@ std::unique_ptr<IntlObject> open_object(const std::string &kind,
         if (U_FAILURE(local_status)) {
             delete formatter;
             status = local_status;
+            set_global_error(status, "number formatter creation failed");
             return nullptr;
         }
         auto object = std::make_unique<NumberFormatterObject>();

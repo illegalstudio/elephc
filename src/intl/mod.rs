@@ -1146,6 +1146,15 @@ fn helper_functions() -> Vec<Stmt> {
                     e_str("intl"), e_str("intl_get_error_context"), e_array(vec![]),
                 ])),
                 s_assign("_context", e_call("str_replace", vec![
+                    e_str("NumberFormatter::__construct(): "), e_str(""), e_var("_context"),
+                ])),
+                s_assign("_context", e_call("str_replace", vec![
+                    e_str("NumberFormatter::create(): "), e_str(""), e_var("_context"),
+                ])),
+                s_assign("_context", e_call("str_replace", vec![
+                    e_str("numfmt_create(): "), e_str(""), e_var("_context"),
+                ])),
+                s_assign("_context", e_call("str_replace", vec![
                     e_str("MessageFormatter::__construct(): "), e_str(""), e_var("_context"),
                 ])),
                 s_assign("_context", e_call("str_replace", vec![
@@ -2373,20 +2382,39 @@ fn typed_intl_override(spec: &IntlFunction) -> Option<(TypeExpr, Vec<Stmt>)> {
             ])),
             s_return(e_null()),
         ])),
-        "numfmt_create" => Some((t_class("NumberFormatter"), vec![
+        "numfmt_create" => Some((t_nullable(t_class("NumberFormatter")), vec![
+            intl_reset_error(),
+            intl_minimum_arity_guard("numfmt_create()", 2),
+            intl_null_guard("numfmt_create()", "locale", 1, "string", e_str("")),
+            intl_string_guard("numfmt_create()", "locale", 1),
+            intl_null_guard("numfmt_create()", "style", 2, "int", e_int(0)),
+            intl_int_guard("numfmt_create()", "style", 2),
+            s_if(
+                e_binop(
+                    e_binop(e_var("locale"), BinOp::StrictNotEq, e_str("")),
+                    BinOp::And,
+                    e_not(e_call("__elephc_intl_locale_valid", vec![e_var("locale")])),
+                ),
+                vec![s_throw(e_new("ValueError", vec![e_concat_all(vec![
+                    e_str("numfmt_create(): Argument #1 ($locale) \""),
+                    e_var("locale"), e_str("\" is invalid"),
+                ])]))],
+                vec![], None,
+            ),
             s_assign("_object", e_static_call("NumberFormatter", "create", args())),
             s_if(e_binop(e_var("_object"), BinOp::StrictEq, e_null()), vec![
-                s_throw(e_new("IntlException", vec![e_str("NumberFormatter::create(): unable to create formatter")])),
+                s_expr(e_call("__elephc_intl_reprefix_error", vec![e_str("numfmt_create()")])),
+                s_return(e_null()),
             ], vec![], None),
             s_return(e_var("_object")),
         ])),
         "msgfmt_create" => Some((t_nullable(t_class("MessageFormatter")), vec![
-            message_formatter_reset_error(),
+            intl_reset_error(),
             message_formatter_arity_guard("msgfmt_create()", 2),
-            message_formatter_null_guard("msgfmt_create()", "locale", 1),
-            message_formatter_string_guard("msgfmt_create()", "locale", 1),
-            message_formatter_null_guard("msgfmt_create()", "pattern", 2),
-            message_formatter_string_guard("msgfmt_create()", "pattern", 2),
+            intl_null_guard("msgfmt_create()", "locale", 1, "string", e_str("")),
+            intl_string_guard("msgfmt_create()", "locale", 1),
+            intl_null_guard("msgfmt_create()", "pattern", 2, "string", e_str("")),
+            intl_string_guard("msgfmt_create()", "pattern", 2),
             s_assign("_object", e_static_call("MessageFormatter", "create", args())),
             s_if(e_binop(e_var("_object"), BinOp::StrictEq, e_null()), vec![
                 s_expr(e_call("__elephc_intl_reprefix_error", vec![e_str("msgfmt_create()")])),
@@ -5868,11 +5896,17 @@ fn build_number_formatter_class() -> Stmt {
     builder = builder
         .method(method("__construct")
             .param_default("locale", t_nullable(TypeExpr::Str), e_null())
-            .param_default("style", TypeExpr::Int, e_class_const("NumberFormatter", "DECIMAL"))
+            .param_default("style", t_nullable(TypeExpr::Int), e_null())
             .param_default("pattern", t_nullable(TypeExpr::Str), e_null())
             .body(vec![
+            intl_reset_error(),
+            intl_minimum_arity_guard("NumberFormatter::__construct()", 2),
+            intl_null_guard("NumberFormatter::__construct()", "locale", 1, "string", e_str("")),
+            intl_string_guard("NumberFormatter::__construct()", "locale", 1),
+            intl_null_guard("NumberFormatter::__construct()", "style", 2, "int", e_int(0)),
+            intl_int_guard("NumberFormatter::__construct()", "style", 2),
             s_if(e_binop(e_this_prop("__elephc_handle"), BinOp::StrictNotEq, e_int(0)), vec![
-                s_throw(e_new("IntlException", vec![e_str("NumberFormatter::__construct(): cannot call constructor twice")])),
+                s_throw(e_new("Error", vec![e_str("NumberFormatter object is already constructed")])),
             ], vec![], None),
             s_if(
                 e_binop(
@@ -5893,7 +5927,11 @@ fn build_number_formatter_class() -> Stmt {
             ),
             s_assign("_handle", e_call("__elephc_intl_open", vec![e_str("number"), e_array(vec![e_var("locale"), e_var("style"), e_var("pattern")])])),
             s_if(e_binop(e_var("_handle"), BinOp::StrictEq, e_int(0)), vec![
-                s_throw(e_new("IntlException", vec![e_str("NumberFormatter::__construct(): unable to create formatter")])),
+                s_expr(e_call("__elephc_intl_reprefix_error", vec![e_str("NumberFormatter::__construct()")])),
+                s_assign("_message", e_call("__elephc_intl_invoke_string", vec![
+                    e_str("intl"), e_str("intl_get_error_context"), e_array(vec![]),
+                ])),
+                s_throw(e_new("IntlException", vec![e_var("_message")])),
             ], vec![], None),
             s_prop_assign(e_var("this"), "__elephc_handle", e_var("_handle")),
         ]))
@@ -5907,14 +5945,41 @@ fn build_number_formatter_class() -> Stmt {
         .method(method("__elephc_call").param("method", TypeExpr::Str).param("args", t_mixed()).body(vec![
             s_return(e_call("__elephc_intl_call", vec![e_this_prop("__elephc_handle"), e_var("method"), e_var("args")])),
         ]))
-        .method(method("create").static_().param("locale", TypeExpr::Str).param("style", TypeExpr::Int).param_default("pattern", t_nullable(TypeExpr::Str), e_null()).returns(t_nullable(t_class("NumberFormatter"))).body(vec![
-            s_if(e_not(e_call("__elephc_intl_locale_valid", vec![e_var("locale")])), vec![
-                s_throw(e_new("ValueError", vec![e_concat_all(vec![
+        .method(method("create")
+            .static_()
+            .param_default("locale", t_nullable(TypeExpr::Str), e_null())
+            .param_default("style", t_nullable(TypeExpr::Int), e_null())
+            .param_default("pattern", t_nullable(TypeExpr::Str), e_null())
+            .returns(t_nullable(t_class("NumberFormatter")))
+            .body(vec![
+            intl_reset_error(),
+            intl_minimum_arity_guard("NumberFormatter::create()", 2),
+            intl_null_guard("NumberFormatter::create()", "locale", 1, "string", e_str("")),
+            intl_string_guard("NumberFormatter::create()", "locale", 1),
+            intl_null_guard("NumberFormatter::create()", "style", 2, "int", e_int(0)),
+            intl_int_guard("NumberFormatter::create()", "style", 2),
+            s_if(
+                e_binop(
+                    e_binop(e_var("locale"), BinOp::StrictNotEq, e_str("")),
+                    BinOp::And,
+                    e_not(e_call("__elephc_intl_locale_valid", vec![e_var("locale")])),
+                ),
+                vec![s_throw(e_new("ValueError", vec![e_concat_all(vec![
                     e_str("NumberFormatter::create(): Argument #1 ($locale) \""),
                     e_var("locale"), e_str("\" is invalid"),
                 ])]))],
-                vec![], None),
-            s_return(e_new("NumberFormatter", vec![e_var("locale"), e_var("style"), e_var("pattern")])),
+                vec![], None,
+            ),
+            s_try(
+                vec![s_return(e_new("NumberFormatter", vec![
+                    e_var("locale"), e_var("style"), e_var("pattern"),
+                ]))],
+                vec![(vec!["IntlException"], Some("_error"), vec![
+                    s_expr(e_call("__elephc_intl_reprefix_error", vec![e_str("NumberFormatter::create()")])),
+                    s_return(e_null()),
+                ])],
+                None,
+            ),
         ]));
     for (name, params, outputs, bridge) in [
         ("format", vec![("num", t_union(vec![TypeExpr::Int, TypeExpr::Float]), None, false), ("type", TypeExpr::Int, Some(e_int(0)), false)], Vec::<&str>::new(), "format"),
@@ -6026,11 +6091,11 @@ fn numfmt_parse_body(method_name: &str) -> Vec<Stmt> {
     body
 }
 
-/// Resets the shared Intl error the way each MessageFormatter entry point's prologue does.
+/// Resets the shared Intl error the way an Intl entry point's prologue does.
 ///
 /// php-src clears the global error at the start of every entry point, before argument parsing,
 /// so even an ArgumentCountError leaves `intl_get_error_message()` at `U_ZERO_ERROR`.
-fn message_formatter_reset_error() -> Stmt {
+fn intl_reset_error() -> Stmt {
     s_expr(e_call("__elephc_intl_invoke", vec![
         e_str("intl"), e_str("intl_set_error"), e_array(vec![e_int(0), e_str("")]),
     ]))
@@ -6050,33 +6115,57 @@ fn message_formatter_arity_guard(caller: &str, expected: i64) -> Stmt {
     )
 }
 
-/// Emits php's null-to-string deprecation and coerces the parameter to an empty string.
-fn message_formatter_null_guard(caller: &str, parameter: &str, index: i64) -> Stmt {
+/// Emits php's null-to-scalar deprecation and coerces the parameter to `replacement`.
+fn intl_null_guard(caller: &str, parameter: &str, index: i64, ty: &str, replacement: Expr) -> Stmt {
     s_if(
         e_binop(e_var(parameter), BinOp::StrictEq, e_null()),
         vec![
             s_expr(e_call("trigger_error", vec![
                 e_str(&format!(
-                    "{caller}: Passing null to parameter #{index} (${parameter}) of type string is deprecated"
+                    "{caller}: Passing null to parameter #{index} (${parameter}) of type {ty} is deprecated"
                 )),
                 e_const("E_USER_DEPRECATED"),
             ])),
-            s_assign(parameter, e_str("")),
+            s_assign(parameter, replacement),
         ],
         vec![],
         None,
     )
 }
 
-/// Builds the runtime TypeError for a MessageFormatter string parameter.
-fn message_formatter_string_guard(caller: &str, parameter: &str, index: i64) -> Stmt {
+/// Builds the runtime TypeError for an Intl string parameter.
+fn intl_string_guard(caller: &str, parameter: &str, index: i64) -> Stmt {
+    intl_type_guard(caller, parameter, index, "string", e_call("is_string", vec![e_var(parameter)]))
+}
+
+/// Builds the runtime TypeError for an Intl int parameter.
+fn intl_int_guard(caller: &str, parameter: &str, index: i64) -> Stmt {
+    intl_type_guard(caller, parameter, index, "int", e_call("is_int", vec![e_var(parameter)]))
+}
+
+/// Builds the runtime TypeError for one scalar parameter whose shape check failed.
+fn intl_type_guard(caller: &str, parameter: &str, index: i64, ty: &str, accepted: Expr) -> Stmt {
     s_if(
-        e_not(e_call("is_string", vec![e_var(parameter)])),
+        e_not(accepted),
         vec![s_throw(e_new("TypeError", vec![e_concat_all(vec![
             e_str(&format!(
-                "{caller}: Argument #{index} (${parameter}) must be of type string, "
+                "{caller}: Argument #{index} (${parameter}) must be of type {ty}, "
             )),
             e_call("__elephc_intl_debug_type", vec![e_var(parameter)]),
+            e_str(" given"),
+        ])]))],
+        vec![],
+        None,
+    )
+}
+
+/// Builds the `func_num_args()` guard for an entry point requiring a minimum arity.
+fn intl_minimum_arity_guard(caller: &str, minimum: i64) -> Stmt {
+    s_if(
+        e_binop(e_call("func_num_args", vec![]), BinOp::Lt, e_int(minimum)),
+        vec![s_throw(e_new("ArgumentCountError", vec![e_concat_all(vec![
+            e_str(&format!("{caller} expects at least {minimum} arguments, ")),
+            e_cast(CastType::String, e_call("func_num_args", vec![])),
             e_str(" given"),
         ])]))],
         vec![],
@@ -6095,12 +6184,12 @@ fn build_message_formatter_class() -> Stmt {
             .param_default("locale", t_nullable(TypeExpr::Str), e_null())
             .param_default("pattern", t_nullable(TypeExpr::Str), e_null())
             .body(vec![
-            message_formatter_reset_error(),
+            intl_reset_error(),
             message_formatter_arity_guard("MessageFormatter::__construct()", 2),
-            message_formatter_null_guard("MessageFormatter::__construct()", "locale", 1),
-            message_formatter_string_guard("MessageFormatter::__construct()", "locale", 1),
-            message_formatter_null_guard("MessageFormatter::__construct()", "pattern", 2),
-            message_formatter_string_guard("MessageFormatter::__construct()", "pattern", 2),
+            intl_null_guard("MessageFormatter::__construct()", "locale", 1, "string", e_str("")),
+            intl_string_guard("MessageFormatter::__construct()", "locale", 1),
+            intl_null_guard("MessageFormatter::__construct()", "pattern", 2, "string", e_str("")),
+            intl_string_guard("MessageFormatter::__construct()", "pattern", 2),
             s_if(e_binop(e_this_prop("__elephc_handle"), BinOp::StrictNotEq, e_int(0)), vec![
                 s_throw(e_new("IntlException", vec![e_str("MessageFormatter::__construct(): cannot call constructor twice")])),
             ], vec![], None),
@@ -6132,12 +6221,12 @@ fn build_message_formatter_class() -> Stmt {
             .param_default("pattern", t_nullable(TypeExpr::Str), e_null())
             .returns(t_nullable(t_class("MessageFormatter")))
             .body(vec![
-            message_formatter_reset_error(),
+            intl_reset_error(),
             message_formatter_arity_guard("MessageFormatter::create()", 2),
-            message_formatter_null_guard("MessageFormatter::create()", "locale", 1),
-            message_formatter_string_guard("MessageFormatter::create()", "locale", 1),
-            message_formatter_null_guard("MessageFormatter::create()", "pattern", 2),
-            message_formatter_string_guard("MessageFormatter::create()", "pattern", 2),
+            intl_null_guard("MessageFormatter::create()", "locale", 1, "string", e_str("")),
+            intl_string_guard("MessageFormatter::create()", "locale", 1),
+            intl_null_guard("MessageFormatter::create()", "pattern", 2, "string", e_str("")),
+            intl_string_guard("MessageFormatter::create()", "pattern", 2),
             s_try(
                 vec![s_return(e_new("MessageFormatter", vec![e_var("locale"), e_var("pattern")]))],
                 vec![(vec!["Throwable"], Some("_error"), vec![
