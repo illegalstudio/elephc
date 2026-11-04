@@ -26,6 +26,7 @@
 //! - Add `pub mod <name>;` here for every new system builtin home.
 
 pub mod __elephc_builtin_deprecated;
+pub mod __elephc_call_strict_types;
 pub mod __elephc_builtin_warning;
 pub mod __elephc_class_has_constructor;
 pub mod __elephc_class_is_abstract;

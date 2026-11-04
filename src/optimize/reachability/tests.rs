@@ -1294,6 +1294,59 @@ fn prune_structural_interface_method_does_not_widen_hazards() {
     assert!(!has_method(&program, "T", "unused"));
 }
 
+/// Verifies a recorded backend-required prelude function survives without an AST reference.
+#[test]
+fn prune_keeps_recorded_backend_required_prelude_function() {
+    let source = r#"<?php
+function __elephc_array_rand(array $array, int $num = 1): mixed { return $num; }
+function unused_prelude_helper(): int { return 1; }
+echo "array_rand";
+"#;
+    let program = parse(source);
+    let mut check = crate::types::check(&program).expect("fixture must type check");
+    let mut inventory = PreludeInventory::new();
+    inventory.record_program("random", &program);
+    inventory.record_required_function("random", "__elephc_array_rand");
+    let roots = HashSet::new();
+    let program = prune_unreachable_declarations(
+        program,
+        &mut check,
+        PruneOptions {
+            inventory: &inventory,
+            forced_groups: &roots,
+            exported_functions: &roots,
+            eval_forced: false,
+        },
+    );
+    assert!(has_function(&program, "__elephc_array_rand"));
+    assert!(!has_function(&program, "unused_prelude_helper"));
+}
+
+/// Verifies the same helper is pruned when no prelude records it as backend-required.
+#[test]
+fn prune_drops_unreferenced_prelude_function_without_a_required_record() {
+    let source = r#"<?php
+function __elephc_array_rand(array $array, int $num = 1): mixed { return $num; }
+echo "array_rand";
+"#;
+    let program = parse(source);
+    let mut check = crate::types::check(&program).expect("fixture must type check");
+    let mut inventory = PreludeInventory::new();
+    inventory.record_program("random", &program);
+    let roots = HashSet::new();
+    let program = prune_unreachable_declarations(
+        program,
+        &mut check,
+        PruneOptions {
+            inventory: &inventory,
+            forced_groups: &roots,
+            exported_functions: &roots,
+            eval_forced: false,
+        },
+    );
+    assert!(!has_function(&program, "__elephc_array_rand"));
+}
+
 /// Verifies explicitly marked compiler-owned closure dispatch does not pin sibling methods.
 #[test]
 fn prune_ignores_internal_prelude_closure_dispatch_hazard() {

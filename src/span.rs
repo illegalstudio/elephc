@@ -117,7 +117,7 @@ pub struct SpanCounters {
     next_synthetic_source_id: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// Source position span for AST nodes.
 pub struct Span {
     pub line: u32,
@@ -197,6 +197,22 @@ impl Span {
     pub fn source_path(self) -> Option<String> {
         let source_id = self.source_id();
         SOURCE_PATHS.with(|paths| paths.borrow().get(&source_id).cloned())
+    }
+
+    /// Snapshot of the source identities registered on this thread and their files.
+    ///
+    /// EIR lowering copies this into the module so codegen, which may run on another
+    /// thread, can still name the physical file of an instruction's span. Identities are
+    /// thread-local, so the snapshot — not the live table — is what keeps two parallel
+    /// compilations from naming each other's files.
+    pub fn registered_source_paths() -> Vec<(u32, String)> {
+        SOURCE_PATHS.with(|paths| {
+            paths
+                .borrow()
+                .iter()
+                .map(|(id, path)| (*id, path.clone()))
+                .collect()
+        })
     }
 
     /// Resets source identities at the beginning of a compile's root include resolution.

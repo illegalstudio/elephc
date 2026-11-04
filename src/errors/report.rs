@@ -54,7 +54,6 @@ pub fn print_error(error: &CompileError) {
 pub fn print_warning(warning: &CompileWarning) {
     let kind = match warning.kind {
         crate::errors::WarningKind::Warning => "warning",
-        crate::errors::WarningKind::Deprecation => "deprecated",
     };
     let file = diagnostic_file(&None, warning.span);
     let plain = format_diagnostic(kind, &file, warning.span, &warning.message);

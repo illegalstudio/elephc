@@ -64,6 +64,10 @@ pub(super) fn lower_core_builtin(
         CoreBuiltinOp::BuiltinDeprecated => handlers::lower_trigger_error(ctx, inst, Some(b"Deprecated: "))?,
         CoreBuiltinOp::BuiltinWarning => handlers::lower_trigger_error(ctx, inst, Some(b"Warning: "))?,
         CoreBuiltinOp::DiagnosticCallerLine => backtrace::lower_diagnostic_caller_line(ctx),
+        CoreBuiltinOp::DiagnosticCallerFile => backtrace::lower_diagnostic_caller_file(ctx),
+        CoreBuiltinOp::DeprecatedOnceBegin => handlers::lower_deprecated_once_begin(ctx, inst)?,
+        CoreBuiltinOp::PublishCallStrictness => handlers::lower_publish_call_strictness(ctx, inst)?,
+        CoreBuiltinOp::CallStrictTypes => handlers::lower_call_strict_types(ctx, inst)?,
         CoreBuiltinOp::GetDefinedConstants => constants::lower_get_defined_constants(ctx, inst)?,
         CoreBuiltinOp::GetDefinedVars => {
             return Err(CodegenIrError::invalid_module(

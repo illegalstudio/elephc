@@ -29,6 +29,12 @@ pub struct PreludeGroup {
     pub methods: HashSet<(String, String, bool)>,
     pub externs: HashSet<String>,
     pub internal_callable_methods: HashSet<(String, String, bool)>,
+    /// Compiler-owned functions codegen calls without a PHP-level reference to them.
+    ///
+    /// A builtin lowered onto a prelude helper names that helper from EIR, after reachability has
+    /// run, so no AST node keeps it alive. Recording it here roots the declaration for exactly
+    /// the programs whose backend path needs it.
+    pub required_functions: HashSet<String>,
 }
 
 impl PreludeInventory {
@@ -51,6 +57,21 @@ impl PreludeInventory {
     pub fn record_program(&mut self, id: &str, prelude: &[Stmt]) {
         let group = self.group_mut(id);
         record_statements(group, prelude, None);
+    }
+
+    /// Records one prelude function that codegen must keep without an AST reference to it.
+    pub fn record_required_function(&mut self, id: &str, name: &str) {
+        let key = php_symbol_key(name);
+        let group = self.group_mut(id);
+        group.required_functions.insert(key);
+    }
+
+    /// Returns every declaration codegen reaches directly rather than through PHP source.
+    pub(crate) fn required_functions(&self) -> HashSet<String> {
+        self.groups
+            .values()
+            .flat_map(|group| group.required_functions.iter().cloned())
+            .collect()
     }
 
     /// Marks one compiler-owned method whose dynamic-call syntax only invokes closures created internally.
