@@ -5071,7 +5071,8 @@ fn timezone_arg_expr(name: &str) -> Expr {
 /// Builds `IntlCalendar` with the factory, field accessors, and wall-time surface.
 fn build_calendar_class() -> Stmt {
     let mut builder = class("IntlCalendar")
-        .prop("__elephc_handle", TypeExpr::Int, Some(e_int(0)));
+        .prop("__elephc_handle", TypeExpr::Int, Some(e_int(0)))
+        .prop("valid", TypeExpr::Bool, Some(crate::synthetic_class::e_bool(false)));
     for (constant, value) in constants_for("IntlCalendar") {
         builder = builder.constant(constant, const_value_expr(value));
     }
@@ -5084,14 +5085,21 @@ fn build_calendar_class() -> Stmt {
         .method(method("__elephc_from_handle").static_().param("handle", TypeExpr::Int).returns(t_class("static")).body(vec![
             s_assign("_object", e_new_static(vec![])),
             s_prop_assign(e_var("_object"), "__elephc_handle", e_var("handle")),
+            s_prop_assign(e_var("_object"), "valid", crate::synthetic_class::e_bool(true)),
             s_return(e_var("_object")),
         ]))
+        .method(method("__debugInfo")
+            .returns(t_array())
+            .body(vec![s_return(e_array_assoc(vec![
+                (e_str("valid"), e_this_prop("valid")),
+            ]))]))
         .method(method("__elephc_open").static_().param("zone", TypeExpr::Str).param("locale", t_nullable(TypeExpr::Str)).returns(t_nullable(t_class("static"))).body(vec![
             s_assign("_locale", e_ternary(e_binop(e_var("locale"), BinOp::StrictEq, e_null()), e_str(""), e_var("locale"))),
             s_assign("_handle", e_call("__elephc_intl_open", vec![e_str("calendar"), e_array(vec![e_var("zone"), e_var("_locale")])])),
             s_if(e_binop(e_var("_handle"), BinOp::StrictEq, e_int(0)), vec![s_return(e_null())], vec![], None),
             s_assign("_object", e_new_static(vec![])),
             s_prop_assign(e_var("_object"), "__elephc_handle", e_var("_handle")),
+            s_prop_assign(e_var("_object"), "valid", crate::synthetic_class::e_bool(true)),
             s_return(e_var("_object")),
         ]))
         .method(method("__elephc_call").param("method", TypeExpr::Str).param("args", t_mixed()).returns(t_mixed()).body(vec![
@@ -5711,6 +5719,7 @@ fn build_gregorian_calendar_class() -> Stmt {
                     s_throw(e_new("IntlException", vec![e_str("IntlGregorianCalendar::__construct(): calendar creation failed")])),
                 ], vec![], None),
                 s_prop_assign(e_var("this"), "__elephc_handle", e_var("_handle")),
+                s_prop_assign(e_var("this"), "valid", crate::synthetic_class::e_bool(true)),
                 s_if(
                     e_binop(
                         e_binop(e_var("_count"), BinOp::Gt, e_int(2)),

@@ -3673,7 +3673,10 @@ fn runtime_debug_info_entry(
 /// IntlTimeZone's synthetic `__debugInfo` is a plain PHP projection, safe for the runtime
 /// walk; unlike the SPL containers it has no NUL-mangled keys. User subclasses inherit it.
 fn is_intl_runtime_debug_info_class(name: &str) -> bool {
-    php_symbol_key(name) == "intltimezone"
+    matches!(
+        php_symbol_key(name).as_str(),
+        "intltimezone" | "intlcalendar" | "intlgregoriancalendar"
+    )
 }
 
 /// Selects the source vtable entry without adapting a physical source-variadic slot.
