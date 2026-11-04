@@ -26,7 +26,7 @@ pub(crate) fn publish_elephc_random_function_pointers(emitter: &mut Emitter) {
                 .extern_symbol("elephc_random_mt_uniform");
             abi::emit_extern_symbol_address(emitter, "x9", &symbol);
             abi::emit_symbol_address(emitter, "x10", SLOT);
-            emitter.instruction("str x9, [x10]");                                   // publish the global Mt19937 range entry into its runtime slot
+            emitter.instruction("str x9, [x10]");                               // publish the global Mt19937 range entry into its runtime slot
         }
         Arch::X86_64 => {
             let symbol = emitter

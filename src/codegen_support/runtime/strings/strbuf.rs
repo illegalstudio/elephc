@@ -288,7 +288,7 @@ fn emit_publish_offset_x86_64(emitter: &mut Emitter, suffix: &str) {
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", STRBUF_START)); // load the buffer start to classify its storage
     abi::emit_symbol_address(emitter, "r9", "_concat_buf");
     emitter.instruction("sub r10, r9");                                         // candidate scratch offset of the buffer start
-    emitter.instruction(&format!("cmp r10, {}", emitter.concat_capacity));          // does the buffer live outside the scratch window (unsigned: heap wraps high)?
+    emitter.instruction(&format!("cmp r10, {}", emitter.concat_capacity));      // does the buffer live outside the scratch window (unsigned: heap wraps high)?
     emitter.instruction(&format!("jae {}", heap));                              // a heap buffer holds no scratch
     emitter.instruction("mov r10, r11");                                        // copy the cursor before turning it into an offset
     emitter.instruction("sub r10, r9");                                         // reserve the scratch up to the live cursor
@@ -385,7 +385,7 @@ fn emit_strbuf_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r9", "_concat_buf");
     emitter.instruction("mov r10, rax");                                        // copy the result pointer before turning it into an offset
     emitter.instruction("sub r10, r9");                                         // candidate scratch offset of the result
-    emitter.instruction(&format!("cmp r10, {}", emitter.concat_capacity));          // does the result live in the scratch window?
+    emitter.instruction(&format!("cmp r10, {}", emitter.concat_capacity));      // does the result live in the scratch window?
     emitter.instruction("jb __rt_strbuf_finish_owned_done_x86");                // scratch results need no ownership stamp
     emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(1))); // owned-string heap kind with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // the caller now owns the block like any heap string result
@@ -400,7 +400,7 @@ fn emit_strbuf_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r9", "_concat_buf");
     emitter.instruction("mov r10, rax");                                        // copy the start before turning it into an offset
     emitter.instruction("sub r10, r9");                                         // candidate scratch offset of the buffer start
-    emitter.instruction(&format!("cmp r10, {}", emitter.concat_capacity));          // does the buffer live outside the scratch window?
+    emitter.instruction(&format!("cmp r10, {}", emitter.concat_capacity));      // does the buffer live outside the scratch window?
     emitter.instruction("jb __rt_strbuf_release_done_x86");                     // scratch bytes hold no owner to free
     emitter.instruction("jmp __rt_heap_free");                                  // free the grown heap block (rax) and return to the producer
     emitter.label("__rt_strbuf_release_done_x86");
@@ -471,7 +471,7 @@ fn emit_strbuf_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r8", "_concat_buf");
     emitter.instruction("mov r9, rax");                                         // copy the reservation before turning it into an offset
     emitter.instruction("sub r9, r8");                                          // candidate scratch offset of the reservation
-    emitter.instruction(&format!("cmp r9, {}", emitter.concat_capacity));           // did the reservation land in the scratch window?
+    emitter.instruction(&format!("cmp r9, {}", emitter.concat_capacity));       // did the reservation land in the scratch window?
     emitter.instruction("jb __rt_strbuf_reserve_temp_done_x86");                // scratch reservations need no stamp
     emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND))); // transient string kind with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // let a parent release it or str_persist adopt it

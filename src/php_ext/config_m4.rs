@@ -72,6 +72,7 @@ pub struct ExtensionConfig {
 pub struct FunctionProbe(std::rc::Rc<dyn Fn(&str, &[String], &[String]) -> bool>);
 
 impl FunctionProbe {
+    /// Wraps a target-link probe that receives the function and active library search state.
     pub fn new(probe: impl Fn(&str, &[String], &[String]) -> bool + 'static) -> Self {
         Self(std::rc::Rc::new(probe))
     }
@@ -83,6 +84,7 @@ impl FunctionProbe {
 }
 
 impl std::fmt::Debug for FunctionProbe {
+    /// Formats the probe's type without exposing the opaque callback.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("FunctionProbe")
     }
@@ -94,6 +96,7 @@ impl std::fmt::Debug for FunctionProbe {
 pub struct HeaderProbe(std::rc::Rc<dyn Fn(&str, &[String]) -> bool>);
 
 impl HeaderProbe {
+    /// Wraps a target-compile probe that receives the header and active include directories.
     pub fn new(probe: impl Fn(&str, &[String]) -> bool + 'static) -> Self {
         Self(std::rc::Rc::new(probe))
     }
@@ -105,6 +108,7 @@ impl HeaderProbe {
 }
 
 impl std::fmt::Debug for HeaderProbe {
+    /// Formats the probe's type without exposing the opaque callback.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("HeaderProbe")
     }

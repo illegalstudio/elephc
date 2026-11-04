@@ -321,7 +321,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // key_lo
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // key_hi (-1 for int keys)
-    emitter.instruction("call __rt_unser_store_entry");                        // insert the entry, reusing a duplicate key's box
+    emitter.instruction("call __rt_unser_store_entry");                         // insert the entry, reusing a duplicate key's box
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the updated hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // keep the unfinished array reachable by exception cleanup
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the entry index
@@ -496,7 +496,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // $data hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // key_lo
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // key_hi (-1 for int keys)
-    emitter.instruction("call __rt_unser_store_entry");                        // insert the entry, reusing a duplicate key's box
+    emitter.instruction("call __rt_unser_store_entry");                         // insert the entry, reusing a duplicate key's box
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save the updated $data hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 112], rax");                      // keep unfinished hydration data reachable by exception cleanup
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the entry index
@@ -547,7 +547,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rdi + 24]");                       // opaque property hash
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // serialized property key pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // serialized property key length
-    emitter.instruction("call __rt_unser_store_entry");                        // insert the property, reusing a duplicate key's box
+    emitter.instruction("call __rt_unser_store_entry");                         // insert the property, reusing a duplicate key's box
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // incomplete-object payload after a possible hash grow
     emitter.instruction("mov QWORD PTR [r10 + 24], rax");                       // retain updated property hash pointer
     emitter.label("__rt_unser_obj_skip_prop_store_x");

@@ -24,6 +24,13 @@ pub(crate) struct CheckerExceptionAnalysis {
 pub(crate) struct CheckerThrownTypes(ThrownTypes);
 
 impl CheckerExceptionAnalysis {
+    /// Reports the comparison's own throws after a switch label has been evaluated.
+    pub(crate) fn switch_comparison_throws(&self, subject: &Expr, pattern: &Expr) -> CheckerThrownTypes {
+        CheckerThrownTypes(if binary_op_has_dynamic_throw(subject, &BinOp::Eq, pattern) {
+            ThrownTypes::unknown()
+        } else { ThrownTypes::default() })
+    }
+
     /// Computes AST summaries with registered nominal parents before body checking.
     pub(crate) fn new(program: &Program, registered_parents: &[(String, String)]) -> Self {
         let effects = CallableEffectAnalysis::from_program(program);

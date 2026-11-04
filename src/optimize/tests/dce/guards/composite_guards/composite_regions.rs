@@ -66,13 +66,10 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_demorgan_equivalent_gua
     assert_eq!(else_body, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
 }
 
-/// Verifies DCE prunes the inner if region when the outer guard is a loose equality (value == 0)
-/// and the inner guard is the loose negation (value != 0), which is always false inside the outer true-branch.
-/// The nested if with `echo 8` and `echo 7` should collapse to `echo 7` in the outer then-body.
-#[test]
-fn test_eliminate_dead_code_prunes_nested_if_region_from_loose_comparison_guard() {
-    let loose_eq = Expr::binop(Expr::var("value"), BinOp::Eq, Expr::int_lit(0));
-    let loose_neq = Expr::binop(Expr::var("value"), BinOp::NotEq, Expr::int_lit(0));
+/// Builds complementary nested comparison guards and returns the optimized inner region.
+fn optimized_nested_comparison_body(equal: BinOp, unequal: BinOp) -> Vec<Stmt> {
+    let equal_condition = Expr::binop(Expr::var("value"), equal, Expr::int_lit(0));
+    let unequal_condition = Expr::binop(Expr::var("value"), unequal, Expr::int_lit(0));
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
@@ -86,10 +83,10 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_loose_comparison_guard(
             by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
-                    condition: loose_eq,
+                    condition: equal_condition,
                     then_body: vec![Stmt::new(
                         StmtKind::If {
-                            condition: loose_neq,
+                            condition: unequal_condition,
                             then_body: vec![Stmt::echo(Expr::int_lit(8))],
                             elseif_clauses: Vec::new(),
                             else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
@@ -113,7 +110,32 @@ fn test_eliminate_dead_code_prunes_nested_if_region_from_loose_comparison_guard(
     let StmtKind::If { then_body, .. } = &body[0].kind else {
         panic!("expected if");
     };
-    assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+    then_body.clone()
+}
+
+/// A loose comparison can invoke a handler that changes the value before the inner guard.
+#[test]
+fn test_eliminate_dead_code_keeps_nested_loose_comparison_warning_boundary() {
+    let body = optimized_nested_comparison_body(BinOp::Eq, BinOp::NotEq);
+    assert_eq!(
+        body,
+        vec![Stmt::new(
+            StmtKind::If {
+                condition: Expr::binop(Expr::var("value"), BinOp::NotEq, Expr::int_lit(0)),
+                then_body: vec![Stmt::echo(Expr::int_lit(8))],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::echo(Expr::int_lit(7))]),
+            },
+            Span::dummy(),
+        )]
+    );
+}
+
+/// Strict comparison cannot warn, so its complementary inner branch still folds away.
+#[test]
+fn test_eliminate_dead_code_prunes_nested_if_region_from_strict_comparison_guard() {
+    let body = optimized_nested_comparison_body(BinOp::StrictEq, BinOp::StrictNotEq);
+    assert_eq!(body, vec![Stmt::echo(Expr::int_lit(7))]);
 }
 
 /// Verifies DCE prunes the inner if region when the outer guard is a strict greater-than (value > 10)

@@ -312,10 +312,10 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("cmp x11, x10");                                        // is the class id within the metadata tables?
     emitter.instruction("b.hs __elephc_eval_value_object_property_len_zero");   // incomplete or unknown ids expose no properties
     abi::emit_symbol_address(emitter, "x10", "_class_object_dynamic_prop_flags"); // resolve the dynamic-property storage flags
-    emitter.instruction("ldr x12, [x10, x11, lsl #3]");                        // does this class own a dynamic-property tail?
+    emitter.instruction("ldr x12, [x10, x11, lsl #3]");                         // does this class own a dynamic-property tail?
     emitter.instruction("cbz x12, __elephc_eval_value_object_property_len_zero"); // classes without the tail expose no dynamic properties
     abi::emit_symbol_address(emitter, "x10", "_class_object_payload_sizes");    // resolve the class payload-size table
-    emitter.instruction("ldr x12, [x10, x11, lsl #3]");                        // load the object payload size
+    emitter.instruction("ldr x12, [x10, x11, lsl #3]");                         // load the object payload size
     emitter.instruction("sub x12, x12, #8");                                    // the dynamic hash is the last payload word
     emitter.instruction("ldr x9, [x9, x12]");                                   // load the dynamic-property hash pointer
     emitter.instruction("cbz x9, __elephc_eval_value_object_property_len_zero"); // null property hashes are treated as empty objects
@@ -348,10 +348,10 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("cmp x11, x10");                                        // is the class id within the metadata tables?
     emitter.instruction("b.hs __elephc_eval_value_object_property_iter_key_null"); // incomplete or unknown ids expose no properties
     abi::emit_symbol_address(emitter, "x10", "_class_object_dynamic_prop_flags"); // resolve the dynamic-property storage flags
-    emitter.instruction("ldr x12, [x10, x11, lsl #3]");                        // does this class own a dynamic-property tail?
+    emitter.instruction("ldr x12, [x10, x11, lsl #3]");                         // does this class own a dynamic-property tail?
     emitter.instruction("cbz x12, __elephc_eval_value_object_property_iter_key_null"); // classes without the tail expose no keys
     abi::emit_symbol_address(emitter, "x10", "_class_object_payload_sizes");    // resolve the class payload-size table
-    emitter.instruction("ldr x12, [x10, x11, lsl #3]");                        // load the object payload size
+    emitter.instruction("ldr x12, [x10, x11, lsl #3]");                         // load the object payload size
     emitter.instruction("sub x12, x12, #8");                                    // the dynamic hash is the last payload word
     emitter.instruction("ldr x9, [x9, x12]");                                   // load the dynamic-property hash pointer
     emitter.instruction("cbz x9, __elephc_eval_value_object_property_iter_key_null"); // null property hashes produce a null key

@@ -37,6 +37,14 @@ mod borrowed_array_widening;
 mod mixed_method_dispatch;
 #[path = "regressions/switch_and_float_params.rs"]
 mod switch_and_float_params;
+#[path = "regressions/loose_comparison_batch.rs"]
+mod loose_comparison_batch;
+#[path = "regressions/loose_comparison_ref_cells.rs"]
+mod loose_comparison_ref_cells;
+#[path = "regressions/loose_comparison_callable_values.rs"]
+mod loose_comparison_callable_values;
+#[path = "regressions/loose_comparison_checker_flow.rs"]
+mod loose_comparison_checker_flow;
 #[path = "regressions/return_this_ownership.rs"]
 mod return_this_ownership;
 #[path = "regressions/symbol_collisions.rs"]
