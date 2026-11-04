@@ -10,16 +10,16 @@
 
 use super::*;
 
-/// Builds the loose array equality condition used before and inside the loop.
-fn array_equality_condition() -> Expr {
-    Expr::binop(Expr::var("a"), BinOp::Eq, Expr::var("b"))
+/// Builds the selected array equality condition before and inside the loop.
+fn array_equality_condition(comparison: BinOp) -> Expr {
+    Expr::binop(Expr::var("a"), comparison, Expr::var("b"))
 }
 
 /// Builds a nested equality branch whose optimized shape exposes stale guards.
-fn guarded_array_equality() -> Stmt {
+fn guarded_array_equality(comparison: BinOp) -> Stmt {
     Stmt::new(
         StmtKind::If {
-            condition: array_equality_condition(),
+            condition: array_equality_condition(comparison),
             then_body: vec![Stmt::echo(Expr::int_lit(7))],
             elseif_clauses: Vec::new(),
             else_body: Some(vec![Stmt::echo(Expr::int_lit(8))]),
@@ -29,7 +29,7 @@ fn guarded_array_equality() -> Stmt {
 }
 
 /// Runs DCE and returns the optimized body of a guarded `foreach` fixture.
-fn optimized_foreach_body(value_by_ref: bool) -> Vec<Stmt> {
+fn optimized_foreach_body(value_by_ref: bool, comparison: BinOp) -> Vec<Stmt> {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "run".into(),
@@ -43,7 +43,7 @@ fn optimized_foreach_body(value_by_ref: bool) -> Vec<Stmt> {
             by_ref_return: false,
             body: vec![Stmt::new(
                 StmtKind::If {
-                    condition: array_equality_condition(),
+                    condition: array_equality_condition(comparison.clone()),
                     then_body: vec![Stmt::new(
                         StmtKind::Foreach {
                             array: Expr::var("a"),
@@ -58,7 +58,7 @@ fn optimized_foreach_body(value_by_ref: bool) -> Vec<Stmt> {
                                     },
                                     Span::dummy(),
                                 ),
-                                guarded_array_equality(),
+                                guarded_array_equality(comparison),
                             ],
                         },
                         Span::dummy(),
@@ -111,7 +111,7 @@ fn optimized_post_foreach_guard_body() -> Vec<Stmt> {
                 ),
                 Stmt::new(
                     StmtKind::If {
-                        condition: array_equality_condition(),
+                        condition: array_equality_condition(BinOp::StrictEq),
                         then_body: vec![
                             Stmt::new(
                                 StmtKind::Assign {
@@ -120,7 +120,7 @@ fn optimized_post_foreach_guard_body() -> Vec<Stmt> {
                                 },
                                 Span::dummy(),
                             ),
-                            guarded_array_equality(),
+                            guarded_array_equality(BinOp::StrictEq),
                         ],
                         elseif_clauses: Vec::new(),
                         else_body: None,
@@ -145,7 +145,7 @@ fn optimized_post_foreach_guard_body() -> Vec<Stmt> {
 /// Verifies writes through a by-ref value invalidate guards on the iterable root.
 #[test]
 fn test_eliminate_dead_code_invalidates_iterable_guard_for_by_ref_foreach_value() {
-    let body = optimized_foreach_body(true);
+    let body = optimized_foreach_body(true, BinOp::StrictEq);
 
     assert!(matches!(body[1].kind, StmtKind::If { .. }));
 }
@@ -153,7 +153,7 @@ fn test_eliminate_dead_code_invalidates_iterable_guard_for_by_ref_foreach_value(
 /// Verifies a by-value iteration keeps valid guards on the unchanged iterable root.
 #[test]
 fn test_eliminate_dead_code_keeps_iterable_guard_for_by_value_foreach_value() {
-    let body = optimized_foreach_body(false);
+    let body = optimized_foreach_body(false, BinOp::StrictEq);
 
     assert_eq!(body[1], Stmt::echo(Expr::int_lit(7)));
 }
@@ -164,4 +164,11 @@ fn test_eliminate_dead_code_invalidates_iterable_guard_for_lingering_foreach_ali
     let body = optimized_post_foreach_guard_body();
 
     assert!(matches!(body[1].kind, StmtKind::If { .. }));
+}
+
+/// Array loose equality can warn, so its handler effects prevent reusing the outer guard.
+#[test]
+fn test_eliminate_dead_code_keeps_loose_comparison_warning_boundary_inside_foreach() {
+    let body = optimized_foreach_body(false, BinOp::Eq);
+    assert_eq!(body[1], guarded_array_equality(BinOp::Eq));
 }

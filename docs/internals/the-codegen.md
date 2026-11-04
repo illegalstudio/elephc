@@ -14,6 +14,40 @@ Codegen is a single EIR pipeline. The checked and optimized AST is always
 lowered into EIR, IR passes run over that module, and `src/codegen/` emits the
 user assembly for the selected target.
 
+Switch dispatch uses integer comparisons only for PHP integer subjects and labels.
+Other PHP values use loose equality, preserving boolean conversion, array comparison
+rules and object-to-number warnings. Float comparisons with null test numeric zero
+without the NAN warning emitted by an explicit boolean conversion.
+Owned operands and temporary comparison boxes publish exception cleanup records
+until normal retirement, including when a warning handler throws into a local catch.
+The checker records a switch comparison's exception state after evaluating its label
+and before entering an arm, so catch bindings and pre-arm values join correctly.
+Recursive array/property comparisons use the same ABI guard builder for their owned
+cells. A scalar fallback publishes each source owner once. Simple variable switch
+subjects reload their storage between labels so callbacks can update later matches.
+Dynamic variable subjects have no unused initial load. Each reload retires its own
+converted value, with provisional local guards protecting owned unboxed views if
+a comparison callback throws; finalization removes cleanup for borrowed views.
+The same local-view guards protect direct equality operands and evaluated case labels.
+Pending operands publish those guards before later expressions that can unwind, then
+detach them before the consuming comparison takes over their cleanup.
+Boxed reference operands also pass their stable storage address to
+`__rt_mixed_loose_eq_refs`. An object conversion warning selects its wording from
+the original numeric tag, then reloads the current box after the handler returns.
+Assignments through the reference can retire the original box, so retaining or
+casting that saved box would preserve a stale value or read freed storage.
+The converted object becomes a borrowed stack cell containing integer or float one;
+the complete equality table then compares it with the updated operand. This also
+handles new strings, arrays, objects and Closure descriptors, including a second
+conversion warning or throw. Scalar conversion keeps the structural recursion depth.
+Closure descriptors use the shared warning helper's fixed class spelling in both
+the generic table and specialized Mixed/number comparisons. Implicit string and
+array callables use `CallableValueNew` instead of `FirstClassCallableNew`, retaining
+the same invocation descriptor and captures without PHP object identity. Numeric
+comparison checks the descriptor's object handle before selecting Closure conversion;
+invocation target kinds alone do not distinguish these PHP value forms. Each global runtime
+entry explicitly branches to its shared body so linker section collection retains it.
+
 ## Pipeline Position
 
 Internal value classes can declare operator adapters in their shared

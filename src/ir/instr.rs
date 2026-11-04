@@ -1217,6 +1217,8 @@ pub enum Op {
     ClosureCall,
     ExprCall,
     FirstClassCallableNew,
+    /// Materializes an implicit string/array callable descriptor without PHP object identity.
+    CallableValueNew,
     CallableArrayNew,
     /// Invokes a descriptor with callback, argument container, and optional source-strict Bool.
     CallableDescriptorInvoke,
@@ -1409,7 +1411,7 @@ impl Op {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
-            | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
+            | FirstClassCallableNew | CallableValueNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
             }
@@ -1550,10 +1552,12 @@ impl Op {
             }
             SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
             | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
-            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp
+            | InstanceOfDynamic | MixedNumericBinop | PhpRelCmp
             | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
+            // Object/number conversion can invoke an arbitrary PHP warning handler.
+            LooseEq | LooseNotEq => E::READS_HEAP | E::MAY_DEOPT | E::MAY_WARN | E::MAY_THROW,
             // `++`/`--` on a string reads the operand's payload, may write the shared
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.
@@ -1921,6 +1925,7 @@ impl Op {
             ClosureCall => "closure_call",
             ExprCall => "expr_call",
             FirstClassCallableNew => "first_class_callable_new",
+            CallableValueNew => "callable_value_new",
             CallableArrayNew => "callable_array_new",
             CallableDescriptorInvoke => "callable_descriptor_invoke",
             PipeCall => "pipe_call",
