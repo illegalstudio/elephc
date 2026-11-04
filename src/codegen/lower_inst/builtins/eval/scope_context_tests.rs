@@ -37,3 +37,29 @@ fn numeric_scope_probe_retires_owned_snapshot_before_all_branches_on_every_targe
         }
     }
 }
+
+/// Every supported target accepts only integer, float, and boolean Mixed tags.
+#[test]
+fn eval_scope_scalar_proof_covers_all_supported_targets() {
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let mut emitter = Emitter::new(Target::parse(target).unwrap());
+        emit_branch_if_mixed_numeric_scalar(&mut emitter, "scalar_ok", false);
+        let asm = emitter.output();
+        assert!(asm.contains("__rt_mixed_unbox"), "{target}: {asm}");
+        for tag in [0, 2, 3] {
+            let compare = if target == "linux-x86_64" {
+                format!("cmp rax, {tag}")
+            } else {
+                format!("cmp x0, #{tag}")
+            };
+            assert!(asm.contains(&compare), "{target}: {asm}");
+        }
+        assert_eq!(asm.matches("scalar_ok").count(), 3, "{target}: {asm}");
+    }
+}

@@ -1396,21 +1396,6 @@ impl<'a> FunctionContext<'a> {
         }
     }
 
-    /// Releases the value held by a string-producing by-reference output before overwriting it.
-    pub(super) fn release_local_before_string_writeback(
-        &mut self,
-        slot: LocalSlotId,
-    ) -> Result<()> {
-        let ty = self.local_php_type(slot)?.codegen_repr();
-        if !matches!(ty, PhpType::Str | PhpType::Mixed) {
-            return Err(CodegenIrError::unsupported(format!(
-                "string writeback into PHP type {:?}",
-                ty
-            )));
-        }
-        self.release_local_before_refcounted_writeback(slot)
-    }
-
     /// Releases a refcounted or boxed local value before a runtime-owned output replaces it.
     pub(super) fn release_local_before_refcounted_writeback(
         &mut self,
