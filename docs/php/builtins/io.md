@@ -85,7 +85,7 @@ sidebar:
 | [`stream_is_local()`](./io/stream_is_local.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_isatty()`](./io/stream_isatty.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_resolve_include_path()`](./io/stream_resolve_include_path.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_select()`](./io/stream_select.md) | `(array $read, array $write, array $except, int $seconds, int $microseconds = 0): int` | `int` | ✓ | ✓ |
+| [`stream_select()`](./io/stream_select.md) | `(array $read, array $write, array $except, int $seconds, int $microseconds = 0, mixed $context = null): int` | `int` | ✓ | ✓ |
 | [`stream_set_blocking()`](./io/stream_set_blocking.md) | `(resource $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
 | [`stream_set_chunk_size()`](./io/stream_set_chunk_size.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`stream_set_read_buffer()`](./io/stream_set_read_buffer.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |

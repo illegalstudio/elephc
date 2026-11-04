@@ -1,0 +1,10 @@
+[package]
+name = "elephc-pack"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "IEEE-754 bit helpers for elephc's pack()/unpack() implementation"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]

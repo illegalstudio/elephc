@@ -112358,6 +112358,67 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "format",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "values"
+    },
+    "area": "String",
+    "canonical_name": "pack",
+    "description": "Packs data into a binary string.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/pack_prelude.rs",
+      "codegen_function": "pack",
+      "notes": [
+        "Implemented by the compiler-injected pack prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "standard",
+    "name": "pack",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "format",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": "values"
+    },
+    "since": null,
+    "slug": "pack",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -137549,6 +137610,13 @@
           "name": "microseconds",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 4,
@@ -137603,6 +137671,13 @@
           "name": "microseconds",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 4,
@@ -137723,6 +137798,13 @@
           "name": "microseconds",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "int",
@@ -147079,6 +147161,95 @@
     "since": null,
     "slug": "unlink",
     "sub_area": "Filesystem"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "format",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "offset",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "unpack",
+    "description": "Unpacks data from a binary string.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/pack_prelude.rs",
+      "codegen_function": "unpack",
+      "notes": [
+        "Implemented by the compiler-injected pack prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "standard",
+    "name": "unpack",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "format",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "array|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "unpack",
+    "sub_area": "String"
   },
   {
     "aot": {

@@ -22,6 +22,7 @@ sensitive.
 | Default trim mask | `trim()`, `ltrim()`, `rtrim()` and `chop()` include form feed (`\x0C`) under `--php-version=8.6`, and leave it untouched on 8.5 and earlier. |
 | Readonly property defaults | A readonly instance property may declare a default value, including inside a `readonly class`. The default initializes the slot before the constructor runs, so later writes (including from the constructor) raise `Cannot modify readonly property`. Inheritance, get-only interface properties, and serialization follow php-src's `Zend/tests/readonly_props/readonly_with_default*.phpt`. |
 | Stream error API | `StreamErrorMode`, `StreamErrorStore`, `StreamErrorCode`, final readonly `StreamError`, `StreamException::getErrors()`, `stream_last_errors()`, `stream_clear_errors()`, and the `stream.error_mode` / `error_store` / `error_handler` context options. `fopen()` runs through an error-aware wrapper: Error mode warns, Exception mode throws, Silent suppresses, and the store/handler policies apply. Nine upstream `ext/standard/tests/streams/stream_errors_*` fixtures are covered in `tests/codegen/io/stream_errors_php86.rs`; the user-wrapper multi-error fixture stays out. |
+| `pack()` / `unpack()` endianness | `<`/`>` modifiers on `s`, `S`, `l`, `L`, `q`, `Q`, `f`, and `d`, with the upstream rejection messages for inherent-endian and unsupported codes. The base `pack`/`unpack` family is implemented as an AOT prelude, including named unpack elements, offsets, repeats, padding, integer widths, and IEEE-754 floats through the `elephc_pack` bridge. The upstream `pack_endian_modifiers*`, `unpack_endian_modifier_names*`, `pack_float`, `pack_A`, `pack_Z`, `pack_arrays`, `unpack_offset`, and `unpack_error` fixtures are represented in `tests/codegen/strings/pack_unpack_php86.rs`; 10 focused tests pass. |
 | `Io\Poll` | `Io\Poll\Backend`, `Event`, `Handle`, `Watcher`, `Context`, global `StreamPollHandle`, and the `PollException` hierarchy. The portable `Poll` backend reports level Read/Write readiness, buffered data, one-shot rearming, `maxEvents`, `Time\Duration` timeouts, duplicate/closed/invalid handles, and watcher/context lifetime rules. Thirty-two upstream `ext/standard/tests/poll` fixtures are vendored and represented by 24 focused tests in `tests/codegen/io/io_poll_php86.rs`; edge triggering, hang-up precision, and descriptors above 63 remain backend limits. |
 | Parameter doc comments | `/** ... */` before a parameter or after it before the comma is retained as `ReflectionParameter::getDocComment()` for functions, methods, constructors, promoted parameters, closures, arrow functions, and property-hook `set` parameters. The indented upstream fixture passes; the basic fixture is transcribed with its closure/arrow reflection cases removed until dynamic `ReflectionFunction` construction is supported. |
 | Partial function application | `foo(1, ?, ...)` placeholders, named placeholders, trailing `...`, constant-expression partials, inherited parameter names/types/defaults/reference modes, creation-time evaluation, extra-argument forwarding, and closure scope. Ten php-src `Zend/tests/partial_application` fixtures are transcribed into `tests/codegen/oop/partial_application_php86.rs`; the invalid shapes are rejected in `tests/error_tests/partial_application.rs`. |
@@ -44,11 +45,13 @@ instead of during production.
 | Item | Why it is deferred |
 |---|---|
 | URI builder follow-ups | The `Uri\Rfc3986\Uri` / `Uri\WhatWg\Url` extension is not implemented at all yet. |
-| `pack()`/`unpack()` float and signed-integer endianness modifiers | The pack/unpack family is tracked separately; the 8.6 modifiers add new format letters and endianness combinations. |
 | Direction-aware property resolution, const object property writes, function-argument error display, closure optimizations, TLS session resumption, SNMP updates | Smaller upstream changes with no standalone user-visible surface in elephc yet. |
 
 ## Known deviations
 
+- `pack()`/`unpack()` are declared by an AOT prelude. Literal `eval` source that names them
+  gets the prelude through usage detection; opaque dynamic eval source needs `--with-pack`. The prelude's float conversions link the small
+  `elephc_pack` bridge, so a program that never calls `pack`/`unpack` links nothing.
 - `Io\Poll` bundles only the portable `Poll` backend. Edge triggering, precise
   `HangUp`/`ReadHangUp` reporting, and descriptors above 63 are not available; the
   platform-specific `Epoll`, `Kqueue`, `EventPorts`, and `WSAPoll` backends raise

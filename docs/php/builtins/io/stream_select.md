@@ -6,7 +6,7 @@ description: "Runs the equivalent of the select() system call on the given array
 ## stream_select()
 
 ```php
-function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = 0): int
+function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = 0, mixed $context = null): int
 ```
 
 Runs the equivalent of the select() system call on the given arrays of streams.
@@ -17,6 +17,7 @@ Runs the equivalent of the select() system call on the given arrays of streams.
 - `$except` (`array`), passed by reference
 - `$seconds` (`int`)
 - `$microseconds` (`int`), default `0`, optional
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `int`
 

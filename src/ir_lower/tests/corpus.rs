@@ -145,6 +145,7 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         // codegen fixtures compile these examples with --php-version=8.6.
         "partial-application",
         "io-poll",
+        "pack-unpack",
         "web-session-upload",
         // The application contract is injected only by --web-lifecycle=application;
         // web_application_example_reuses_its_counter covers its real compilation profile.

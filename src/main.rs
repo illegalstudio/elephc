@@ -61,6 +61,7 @@ mod optimize;
 mod otlp;
 mod parser;
 mod io_poll_prelude;
+mod pack_prelude;
 mod stream_errors;
 mod stream_errors_prelude;
 pub(crate) mod pfa;

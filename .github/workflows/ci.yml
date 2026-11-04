@@ -41,6 +41,7 @@ env:
     -p elephc-random
     -p elephc-mbstring
     -p elephc-iconv
+    -p elephc-pack
     -p elephc-phar
     -p elephc-tz
     -p elephc-image

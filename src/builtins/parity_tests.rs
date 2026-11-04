@@ -46,6 +46,10 @@ fn php_visible_extension_builtins() -> Vec<String> {
 /// surface sit inside the same structural audits.
 fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program)> {
     let mut built = vec![
+        (
+            "pack_prelude",
+            crate::pack_prelude::declarations(crate::php_version::PhpVersion::Php86),
+        ),
         ("bcmath_prelude", crate::bcmath_prelude::bcmath_declarations()),
         ("time_prelude", crate::time_prelude::time_declarations()),
         ("clamp_prelude", crate::clamp_prelude::clamp_declarations()),

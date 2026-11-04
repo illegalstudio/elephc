@@ -399,7 +399,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`stream_is_local()`](./builtins/io/stream_is_local.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_isatty()`](./builtins/io/stream_isatty.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_resolve_include_path()`](./builtins/io/stream_resolve_include_path.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_select()`](./builtins/io/stream_select.md) | `(array $read, array $write, array $except, int $seconds, int $microseconds = 0): int` | `int` | ✓ | ✓ |
+| [`stream_select()`](./builtins/io/stream_select.md) | `(array $read, array $write, array $except, int $seconds, int $microseconds = 0, mixed $context = null): int` | `int` | ✓ | ✓ |
 | [`stream_set_blocking()`](./builtins/io/stream_set_blocking.md) | `(resource $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
 | [`stream_set_chunk_size()`](./builtins/io/stream_set_chunk_size.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`stream_set_read_buffer()`](./builtins/io/stream_set_read_buffer.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
@@ -987,6 +987,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`openssl_encrypt()`](./builtins/string/openssl_encrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = '', int $tag_length = 16): mixed` | `mixed` | ✓ | ✓ |
 | [`openssl_get_cipher_methods()`](./builtins/string/openssl_get_cipher_methods.md) | `(bool $aliases = false): array` | `array` | ✓ | ✓ |
 | [`ord()`](./builtins/string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
+| [`pack()`](./builtins/string/pack.md) | `(string $format, ...$values): string` | `string` | ✓ | - |
 | [`parse_url()`](./builtins/string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`printf()`](./builtins/string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |
 | [`quoted_printable_encode()`](./builtins/string/quoted_printable_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |
@@ -1030,6 +1031,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`trim()`](./builtins/string/trim.md) | `(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string` | `string` | ✓ | ✓ |
 | [`ucfirst()`](./builtins/string/ucfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`ucwords()`](./builtins/string/ucwords.md) | `(string $string, string $separators = " \t\r\n\x0C\x0B"): string` | `string` | ✓ | ✓ |
+| [`unpack()`](./builtins/string/unpack.md) | `(string $format, string $string, int $offset = 0): array|false` | `array|false` | ✓ | - |
 | [`urldecode()`](./builtins/string/urldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`urlencode()`](./builtins/string/urlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`vprintf()`](./builtins/string/vprintf.md) | `(string $format, array $values): int` | `int` | ✓ | ✓ |

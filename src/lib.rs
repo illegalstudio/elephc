@@ -98,6 +98,7 @@ pub mod optimize;
 /// Parser for PHP syntax.
 pub mod parser;
 pub(crate) mod io_poll_prelude;
+pub(crate) mod pack_prelude;
 pub(crate) mod stream_errors;
 pub(crate) mod stream_errors_prelude;
 #[allow(dead_code)]

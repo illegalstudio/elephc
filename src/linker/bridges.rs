@@ -355,6 +355,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         },
     },
     BridgeStaticlib {
+        lib_name: "elephc_pack",
+        env_var: "ELEPHC_PACK_LIB_DIR",
+        crate_name: "elephc-pack",
+        flag_name: "pack",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The bridge backs PHP's core pack()/unpack() float bit conversions.
+        php_extensions: &[],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_zend",
         env_var: "ELEPHC_ZEND_LIB_DIR",
         crate_name: "elephc-zend",
