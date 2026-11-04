@@ -11,6 +11,30 @@
 
 use super::*;
 
+/// Registers a resolved enum case as lazy singleton lookup data for property reflection.
+///
+/// # Safety
+/// The context and borrowed UTF-8 buffers must be valid for their declared lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_register_native_property_default_enum_case(
+    ctx: *mut ElephcEvalContext, key: *const u8, key_len: u64,
+    case_key: *const u8, case_key_len: u64,
+) -> i32 {
+    let outcome = std::panic::catch_unwind(|| unsafe {
+        let Ok(case_key) = abi_name_to_string(case_key, case_key_len) else { return 0; };
+        let Some((class_name, constant)) = split_property_key(&case_key) else { return 0; };
+        if class_name.trim_start_matches('\\').is_empty() { return 0; }
+        let default = NativeCallableDefault::Expression {
+            expression: Box::new(crate::eval_ir::EvalExpr::ClassConstantFetch {
+                class_name: class_name.to_string(), constant: constant.to_string(),
+            }),
+            lexical_class: class_name.to_string(), reflection_factory: None,
+        };
+        register_native_property_default_inner(ctx, key, key_len, default).unwrap_or(0)
+    }).ok();
+    unsafe { crate::ffi::native_catalog::record_registration_result(ctx, outcome.unwrap_or(0)) }
+}
+
 /// Registers a class-initialization Error without materializing any property default.
 ///
 /// # Safety

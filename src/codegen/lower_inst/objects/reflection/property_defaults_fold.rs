@@ -16,6 +16,9 @@ pub(super) fn reflection_folded_property_default(
     ctx: &FunctionContext<'_>, declaring_class: Option<&str>, default: &Expr,
 ) -> Option<ReflectionParameterDefaultValue> {
     let context = ConstDefaultContext { module: ctx.module, current_class: declaring_class };
+    if let Some((enum_name, case_name)) = const_default_values::resolve_enum_case_default(default, &context) {
+        return Some(ReflectionParameterDefaultValue::EnumCase { enum_name, case_name });
+    }
     let mut default = default.clone();
     fold(&mut default, &context);
     crate::types::deferred_defaults::prune_literal_branches(&mut default);

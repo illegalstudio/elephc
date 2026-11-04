@@ -11,6 +11,7 @@ use super::*;
 
 /// Selects direct literal copies or the class's EIR initializer for object property slots.
 pub(super) fn collect_property_initialization(
+    module: &crate::ir::Module,
     class_info: &ClassInfo,
     inst: &Instruction,
 ) -> PropertyInitialization {
@@ -33,10 +34,26 @@ pub(super) fn collect_property_initialization(
             continue;
         }
         let offset = 8 + index * 16;
+        let declaring_class = class_info.property_declaring_classes.get(property)
+            .map(String::as_str);
+        let context = crate::codegen::const_default_values::ConstDefaultContext {
+            module, current_class: declaring_class,
+        };
+        let resolved = crate::codegen::const_default_values::resolve_enum_case_default(default_expr, &context)
+            .map(|(enum_name, name)| crate::parser::ast::ExprKind::ScopedConstantAccess {
+                receiver: crate::parser::ast::StaticReceiver::Named(enum_name.into()), name,
+            });
+        // Other scoped constants keep ordinary EIR initialization; their spelling alone does
+        // not identify an enum case, especially in a mixed or union property slot.
+        if resolved.is_none() && matches!(default_expr.kind,
+            crate::parser::ast::ExprKind::ScopedConstantAccess { .. })
+        {
+            return PropertyInitialization::Thunk { class_id: class_info.class_id };
+        }
         let Ok(value) = literal_default_value(
             &format!("property ${}", property),
             php_type,
-            &default_expr.kind,
+            resolved.as_ref().unwrap_or(&default_expr.kind),
             inst.op.name(),
         ) else {
             // The class initializer is ordinary EIR and can preserve lazy branches in constant
@@ -190,6 +207,7 @@ pub(super) fn emit_property_default(
         LiteralDefaultValue::EnumCase {
             enum_name,
             case_name,
+            boxed,
         } => {
             // The receiver was taken on shape alone by `literal_default_value`, which has no
             // module. This is where that is settled: a scoped constant in an object slot whose
@@ -228,10 +246,12 @@ pub(super) fn emit_property_default(
             // way the boxed-literal arms below preserve it. The materializer above makes no
             // such demand: it promises to preserve every caller-saved integer register.
             abi::emit_push_reg(ctx.emitter, object_reg);
-            abi::emit_incref_if_refcounted(
-                ctx.emitter,
-                &crate::types::PhpType::Object(enum_name.clone()),
-            );
+            let case_type = crate::types::PhpType::Object(enum_name.clone());
+            if *boxed {
+                emit_box_current_value_as_mixed(ctx.emitter, &case_type);
+            } else {
+                abi::emit_incref_if_refcounted(ctx.emitter, &case_type);
+            }
             abi::emit_pop_reg(ctx.emitter, object_reg);
             let int_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_store_to_address(ctx.emitter, int_reg, object_reg, default.offset);

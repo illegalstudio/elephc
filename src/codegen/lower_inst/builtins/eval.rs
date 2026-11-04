@@ -225,6 +225,7 @@ struct EvalNativePropertyDefaultRegistration {
 /// Property default metadata separates stored values from deferred materialization failures.
 enum EvalNativePropertyDefault {
     Value(EvalNativeCallableDefault),
+    EnumCase { enum_name: String, case_name: String },
     DeferredError(String),
 }
 

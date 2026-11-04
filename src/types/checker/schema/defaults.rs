@@ -234,7 +234,9 @@ fn validate_class_defaults(checker: &mut Checker, class_name: &str, errors: &mut
     let Some(class_info) = checker.classes.get(class_name).cloned() else {
         return;
     };
+    let previous_class = checker.current_class.replace(class_name.to_string());
     validate_class_property_defaults(checker, class_name, &class_info, errors);
+    checker.current_class = previous_class;
 
     for method in &class_info.method_decls {
         let method_key = php_symbol_key(&method.name);

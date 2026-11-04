@@ -10,6 +10,31 @@
 
 use super::*;
 
+/// Deferring private-shadow defaults still rejects missing cases and incompatible aliases.
+#[test]
+fn test_enum_property_defaults_reject_invalid_shadow_defaults() {
+    for (default, message) in [
+        ("Level::Missing", "Undefined enum case: Level::Missing"),
+        ("Holder::WRONG", "default expects Level, got int"),
+    ] {
+        let source = format!("<?php enum Level {{ case Low; }}
+            class Holder {{ const WRONG = 7; }}
+            class Base {{ private int $value = 1; }}
+            class Config extends Base {{ public Level $value = {default}; }}");
+        expect_error(&source, message);
+    }
+}
+
+/// PHP forbids late-static constant receivers in both instance and static defaults.
+#[test]
+fn test_enum_property_defaults_reject_late_static_receivers() {
+    for modifier in ["", "static "] {
+        expect_error(&format!("<?php enum Level {{ case Low; }}
+            class Config {{ const LOW = Level::Low; public {modifier}Level $value = static::LOW; }}"),
+            "\"static::\" is not allowed in compile-time constants");
+    }
+}
+
 /// Closure and arrow parent class-name defaults are legal declarations without a parent.
 #[test]
 fn test_property_default_sixth_review_parentless_closure_default() {

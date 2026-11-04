@@ -1201,10 +1201,14 @@ fn emit_static_property_default(
     expr: &ExprKind,
 ) -> Result<()> {
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
-    let resolved = super::const_default_values::resolve_const_default(
-        &crate::parser::ast::Expr::new(expr.clone(), crate::span::Span::synthetic()),
-        &super::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name),
-    ).and_then(super::const_default_values::resolved_literal_default);
+    let default = crate::parser::ast::Expr::new(expr.clone(), crate::span::Span::synthetic());
+    let context = super::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name);
+    let resolved = super::const_default_values::resolve_enum_case_default(&default, &context)
+        .map(|(enum_name, name)| crate::parser::ast::ExprKind::ScopedConstantAccess {
+            receiver: crate::parser::ast::StaticReceiver::Named(enum_name.into()), name,
+        })
+        .or_else(|| super::const_default_values::resolve_const_default(&default, &context)
+            .and_then(super::const_default_values::resolved_literal_default));
     let expr = resolved.as_ref().unwrap_or(expr);
     let value = literal_default_value(
         &format!("static property {}::${}", class_name, property),
@@ -1276,6 +1280,7 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::EnumCase {
             enum_name,
             case_name,
+            boxed,
         } => {
             let is_case = ctx
                 .module
@@ -1299,10 +1304,12 @@ fn emit_static_property_default_value(
             // `Config::$shared = Level::High;` releases the global's only reference. There is
             // no object register to preserve here — the caller stores straight from the
             // result register.
-            abi::emit_incref_if_refcounted(
-                ctx.emitter,
-                &crate::types::PhpType::Object(enum_name.clone()),
-            );
+            let case_type = crate::types::PhpType::Object(enum_name.clone());
+            if *boxed {
+                crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &case_type);
+            } else {
+                abi::emit_incref_if_refcounted(ctx.emitter, &case_type);
+            }
         }
         LiteralDefaultValue::Null => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);

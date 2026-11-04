@@ -10,6 +10,9 @@
 
 use crate::support::*;
 
+#[path = "objects/enum_property_defaults.rs"]
+mod enum_property_defaults;
+
 #[path = "objects/classes.rs"]
 mod classes;
 #[path = "objects/gc_aliasing.rs"]

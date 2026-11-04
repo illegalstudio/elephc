@@ -7,7 +7,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Each fixture runs under `--heap-debug` and asserts `leak summary: clean`.
+//! - Array fixtures assert a clean heap; enum defaults leave only the fixed singleton cache.
 //! - Objects are constructed in a LOOP on purpose: the plain boxer retains without
 //!   releasing and leaks exactly one block per object, which a single construction hides.
 //! - Both literal spellings are covered together — keyed (`["k" => 1]`) and positional
@@ -180,4 +180,33 @@ echo "\n";
         "an integer-keyed default on a union slot leaked: {}",
         out.stderr
     );
+}
+
+/// Repeated boxed-default allocation and replacement leaves only the fixed enum cache.
+#[test]
+fn test_enum_property_defaults_ownership() {
+    let source = r#"<?php
+enum Level { case Low; case High; }
+class Config {
+    public ?Level $value = Level::Low;
+    public mixed $other = Level::Low;
+    public static ?Level $shared = Level::Low;
+}
+for ($i = 0; $i < ITERATIONS; $i++) {
+    $c = new Config();
+    $c->value = Level::High;
+    $c->other = Level::High;
+    Config::$shared = Level::High;
+    Config::$shared = Level::Low;
+}
+echo Level::Low->name, ':', Level::High->name;
+"#;
+    for iterations in [8, 64] {
+        let out = compile_and_run_with_heap_debug(&source.replace("ITERATIONS", &iterations.to_string()));
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, "Low:High", "{}", out.stderr);
+        // As in the existing enum GC fixtures, the two cached singleton objects stay live.
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: live_blocks=2 live_bytes=80"),
+            "{}", out.stderr);
+    }
 }

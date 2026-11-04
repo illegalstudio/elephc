@@ -279,6 +279,7 @@ enum ReflectionParameterDefaultValue {
     Float(f64),
     Str(String),
     Null,
+    EnumCase { enum_name: String, case_name: String },
     DeferredError(String),
     EirHelper(String),
     Object {

@@ -98,6 +98,7 @@ pub(crate) enum LiteralDefaultValue {
     EnumCase {
         enum_name: String,
         case_name: String,
+        boxed: bool,
     },
 }
 
@@ -327,7 +328,7 @@ pub(crate) fn literal_default_value(
         // `public Level $level = Level::Low;` — the enum case singleton, not a literal. See
         // `LiteralDefaultValue::EnumCase` for why the receiver is taken on shape alone here.
         (
-            PhpType::Object(_),
+            PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_),
             ExprKind::ScopedConstantAccess {
                 receiver: crate::parser::ast::StaticReceiver::Named(enum_name),
                 name: case_name,
@@ -335,6 +336,7 @@ pub(crate) fn literal_default_value(
         ) => Ok(LiteralDefaultValue::EnumCase {
             enum_name: enum_name.to_string(),
             case_name: case_name.clone(),
+            boxed: matches!(php_type, PhpType::Mixed | PhpType::Union(_)),
         }),
         _ => Err(unsupported_literal_default(context, php_type, op_name)),
     }

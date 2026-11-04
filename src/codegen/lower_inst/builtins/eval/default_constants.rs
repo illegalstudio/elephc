@@ -36,6 +36,14 @@ pub(super) fn eval_native_property_default(
         if let Some(message) = crate::types::deferred_defaults::unconditional_error_message(default) {
             return Some(EvalNativePropertyDefault::DeferredError(message.to_string()));
         }
+        if let Some((enum_name, case_name)) =
+            crate::codegen::const_default_values::resolve_enum_case_default(default,
+                &crate::codegen::const_default_values::ConstDefaultContext {
+                    module: default_context.module, current_class: default_context.current_class,
+                })
+        {
+            return Some(EvalNativePropertyDefault::EnumCase { enum_name, case_name });
+        }
         return eval_native_literal_default(default)
             .or_else(|| eval_native_array_default(default, default_context, 0))
             .map(EvalNativePropertyDefault::Value);

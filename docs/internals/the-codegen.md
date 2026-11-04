@@ -856,6 +856,14 @@ trips `heap debug detected bad refcount`.
 
 ### Reflection constant values
 
+Enum case property defaults use the bounded `resolve_enum_case_default` lookup in
+`src/codegen/const_default_values.rs`. It follows class, interface and trait constant
+aliases in each constant's declaration scope and returns the canonical enum/case names.
+Instance and static initialization retain the lazy singleton; nullable, union and
+mixed slots box that borrowed object. Reflection uses the same lookup, and eval
+registers an owned constant-fetch expression so reading a default preserves singleton
+identity without constructing another enum object.
+
 Static Reflection metadata folds constant expressions at compile time in
 `reflection_constant_value` (`src/codegen/lower_inst/objects/reflection/names_constants.rs`),
 which is distinct from the pure `resolve_const_default` resolver in

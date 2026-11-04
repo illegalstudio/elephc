@@ -549,12 +549,17 @@ fn apply_private_parent_property_shadowing(
     let declared_ty = resolve_property_declared_type(checker, &class.name, prop)?;
     let is_declared_slot = declared_ty.is_some();
     let ty = if let Some(declared_ty) = declared_ty {
-        checker.validate_declared_default_type(
-            &declared_ty,
-            prop.default.as_ref(),
-            prop.span,
-            &format!("Property {}::${} default", class.name, prop.name),
-        )?;
+        // Scoped constants require the completed enum/class schemas, just as on a fresh slot.
+        if !matches!(prop.default.as_ref().map(|default| &default.kind),
+            Some(ExprKind::ScopedConstantAccess { .. }))
+        {
+            checker.validate_declared_default_type(
+                &declared_ty,
+                prop.default.as_ref(),
+                prop.span,
+                &format!("Property {}::${} default", class.name, prop.name),
+            )?;
+        }
         state.declared_properties.insert(prop.name.clone());
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {

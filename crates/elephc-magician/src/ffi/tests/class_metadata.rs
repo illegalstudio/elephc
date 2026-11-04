@@ -10,6 +10,31 @@
 
 use super::*;
 
+/// Enum property defaults own their lookup names and reject malformed ABI registrations.
+#[test]
+fn register_native_property_default_enum_case_owns_metadata() {
+    let mut context = ElephcEvalContext::new();
+    let key = b"Config::level";
+    let mut case_key = b"Level::Low".to_vec();
+    assert_eq!(unsafe { __elephc_eval_register_native_property_default_enum_case(
+        &mut context, key.as_ptr(), key.len() as u64, case_key.as_ptr(), case_key.len() as u64,
+    ) }, 1);
+    case_key.fill(0);
+    let default = context.native_property_default("Config", "level").unwrap();
+    assert_eq!(default, NativeCallableDefault::Expression {
+        expression: Box::new(crate::eval_ir::EvalExpr::ClassConstantFetch {
+            class_name: "Level".into(), constant: "Low".into(),
+        }),
+        lexical_class: "Level".into(), reflection_factory: None,
+    });
+    for invalid in ["Level", "Level::", "::Low", "\\::Low"] {
+        assert_eq!(unsafe { __elephc_eval_register_native_property_default_enum_case(
+            &mut context, key.as_ptr(), key.len() as u64, invalid.as_ptr(), invalid.len() as u64,
+        ) }, 0);
+        assert_eq!(context.native_property_default("Config", "level"), Some(default.clone()));
+    }
+}
+
 /// Native class errors copy borrowed bytes and reject invalid registrations without replacement.
 #[test]
 fn register_native_class_default_error_owns_metadata() {

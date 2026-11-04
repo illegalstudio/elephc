@@ -109,6 +109,32 @@ pub(in crate::codegen) fn resolve_const_default(
     resolve_const_default_at(expr, context, 0)
 }
 
+/// Resolves an enum singleton default through bounded aliases in their declaration scope.
+pub(in crate::codegen) fn resolve_enum_case_default(
+    expr: &Expr, context: &ConstDefaultContext<'_>,
+) -> Option<(String, String)> {
+    resolve_enum_case_default_at(expr, context, 0)
+}
+
+/// Follows class-like constant aliases without constructing or copying an enum object.
+fn resolve_enum_case_default_at(
+    expr: &Expr, context: &ConstDefaultContext<'_>, depth: usize,
+) -> Option<(String, String)> {
+    if depth > MAX_CONST_DEFAULT_DEPTH { return None; }
+    let ExprKind::ScopedConstantAccess { receiver, name } = &expr.kind else { return None; };
+    let class_name = resolve_static_receiver_name(context, receiver)?;
+    if let Some((enum_name, _)) = context.module.enum_infos.iter().find(|(candidate, info)|
+        php_symbol_key(candidate) == php_symbol_key(&class_name)
+            && info.cases.iter().any(|case| case.name == *name))
+    {
+        return Some((enum_name.clone(), name.clone()));
+    }
+    let (owner, value) = const_default_class_constant_expr(context.module, &class_name, name)
+        .or_else(|| const_default_interface_constant_expr(context.module, &class_name, name))
+        .or_else(|| const_default_trait_constant_expr(context.module, &class_name, name))?;
+    resolve_enum_case_default_at(value, &ConstDefaultContext::for_class(context.module, owner), depth + 1)
+}
+
 /// Converts a resolved scalar to its PHP literal without changing its numeric type.
 pub(in crate::codegen) fn resolved_scalar_literal(value: ConstDefaultValue) -> Option<ExprKind> {
     match value {
