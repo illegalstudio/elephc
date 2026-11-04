@@ -686,6 +686,10 @@ fn parse_array_literal_with_terminator(
     let mut next_auto_key = 0i64;
     let mut auto_key_initialized = false;
     let mut auto_key_overflowed = false;
+    // A non-literal key (a class constant, a variable) can be an integer larger than any seen,
+    // so a following bare element cannot be assigned a key here; the mixed literal builder
+    // derives the next auto index from the evaluated keys.
+    let mut auto_key_unknown = false;
     while *pos < tokens.len() && tokens[*pos].0 != *closing {
         if !first {
             if tokens[*pos].0 != Token::Comma {
@@ -728,6 +732,7 @@ fn parse_array_literal_with_terminator(
             reject_reference_array_element(tokens, pos, closing)?;
             let value = parse_expr(tokens, pos)?;
             auto_key_overflowed |= explicit_integer_array_key(&expr) == Some(i64::MAX);
+            auto_key_unknown |= explicit_key_may_hide_auto_index(&expr);
             update_next_auto_key_from_explicit_key(
                 &expr,
                 &mut next_auto_key,
@@ -739,9 +744,11 @@ fn parse_array_literal_with_terminator(
                 mixed_elems.push(ArrayEntry::Keyed(expr, value));
             }
         } else if is_assoc {
-            if (auto_key_overflowed || next_auto_key < 0) && mixed_elems.is_empty() {
-                // Preserve implicit keys for profile-dependent negative cursors and overflow.
-                // Runtime construction raises overflow only if this value is evaluated.
+            if (auto_key_overflowed || auto_key_unknown || next_auto_key < 0)
+                && mixed_elems.is_empty()
+            {
+                // Preserve implicit keys for profile-dependent negative cursors, overflow, and
+                // keys only the runtime can evaluate.
                 migrate_assoc_pairs_to_mixed(&mut assoc_elems, &mut mixed_elems);
             }
             if mixed_elems.is_empty() {
@@ -911,6 +918,18 @@ fn explicit_integer_array_key(key: &Expr) -> Option<i64> {
         },
         _ => None,
     }
+}
+
+/// Returns whether an explicit key's value could be an integer this parser cannot evaluate.
+///
+/// String literals are string keys (including numeric strings that are not canonical integers)
+/// and `null` becomes the empty string, so neither can move PHP's next auto index. Everything
+/// else — class constants, constants, variables, calls, non-integral float literals — may.
+fn explicit_key_may_hide_auto_index(key: &Expr) -> bool {
+    if explicit_integer_array_key(key).is_some() {
+        return false;
+    }
+    !matches!(&key.kind, ExprKind::StringLiteral(_) | ExprKind::Null)
 }
 
 /// Returns the integer key for a float literal PHP casts without truncation.
