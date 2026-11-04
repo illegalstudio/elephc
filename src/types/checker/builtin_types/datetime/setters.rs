@@ -381,5 +381,6 @@ pub(super) fn datetime_shared_methods() -> Vec<ClassMethod> {
         datetime_immutable_format(),
         datetime_get_offset(),
         datetime_diff_method(),
+        super::interface::datetime_compare_adapter(),
     ]
 }

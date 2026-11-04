@@ -207,7 +207,7 @@ pub(crate) fn lower_stream_select(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    ensure_arg_count_between(inst, "stream_select", 4, 5)?;
+    ensure_arg_count_between(inst, "stream_select", 4, 6)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     for idx in 0..3 {
         let value = expect_operand(inst, idx)?;

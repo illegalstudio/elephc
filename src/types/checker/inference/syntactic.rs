@@ -396,6 +396,18 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             "ptr_sizeof" | "ptr_get" | "__elephc_ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
             _ => PhpType::Int,
         },
+        // `Enum::Case->name` is always a string and `->value` is the backing scalar.
+        // The syntactic walk has no class table, so recognize the enum-case shape before
+        // the `_ => Int` fallback would type a readonly default as an integer.
+        ExprKind::PropertyAccess { object, property }
+            if matches!(object.kind, ExprKind::ScopedConstantAccess { .. }) =>
+        {
+            match property.as_str() {
+                "name" => PhpType::Str,
+                "value" => PhpType::Mixed,
+                _ => PhpType::Int,
+            }
+        }
         ExprKind::NullCoalesce { value, default } => {
             let left_ty = infer_expr_type_syntactic(value);
             // A default that never yields (`throw`, `exit`) is not a null arm.

@@ -306,6 +306,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     timings.record_since("autoload-prelude-probe", phase_started);
     let autoloaded = |group: &str| autoloaded_preludes.contains(group);
 
+    let ast = crate::php86_declarations::inject(ast);
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
     // no-op rather than a smaller binary: `--with-curl` force-injects the whole surface for
@@ -531,6 +532,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         &mut prelude_inventory,
     );
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::time_prelude::inject_if_used(ast, autoloaded("time"), &mut prelude_inventory);
+    let ast = crate::clamp_prelude::inject_if_used(ast, autoloaded("clamp"), &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
     let ast = crate::gmp_prelude::inject_if_used(ast, with_crates.contains("gmp"), &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(ast, with_crates.contains("random"), &mut prelude_inventory);
@@ -742,6 +745,19 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         ast
     };
 
+    // Discover Io\Poll use inside newly loaded classes, resolving only injected declarations.
+    crate::progress::phase("io-poll-autoload-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::io_poll_prelude::inject_after_autoload(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("io-poll-autoload-prelude", phase_started);
+
     // Discover DOM use inside newly loaded classes, resolving only injected declarations.
     crate::progress::phase("dom-html-autoload-prelude");
     let phase_started = Instant::now();
@@ -809,6 +825,21 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         }
     };
     timings.record_since("func-args", phase_started);
+
+    // Desugar PHP 8.6 partial function application into the closure php-src synthesizes.
+    // This runs before the AST optimizer and the checker, so every later pass sees ordinary
+    // closures and the placeholder markers never escape this boundary.
+    crate::progress::phase("pfa");
+    let phase_started = Instant::now();
+    let ast = match crate::pfa::desugar(ast) {
+        Ok(desugared) => desugared,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("pfa", phase_started);
 
     // Complete the OPcache script manifest now that all three groups exist, and re-render the
     // manifest-dependent functions injected above against it. This is a pure substitution of

@@ -32,6 +32,10 @@ mod mbstring_exception;
 mod search;
 #[path = "strings/transform.rs"]
 mod transform;
+#[path = "strings/trim_php86.rs"]
+mod trim_php86;
+#[path = "strings/grapheme_strrev_php86.rs"]
+mod grapheme_strrev_php86;
 #[path = "strings/implode_boxed.rs"]
 mod implode_boxed;
 #[path = "strings/encoding.rs"]

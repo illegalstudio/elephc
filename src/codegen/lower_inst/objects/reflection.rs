@@ -49,6 +49,7 @@ mod method_members;
 mod property_members;
 mod property_defaults_fold;
 mod default_members;
+mod parameter_doc_comments;
 mod parameter_defaults;
 mod object_defaults;
 mod default_export;
@@ -199,6 +200,8 @@ struct ReflectionParameterMember {
     declaring_function: Option<ReflectionDeclaringFunctionMember>,
     attr_names: Vec<String>,
     attr_args: Vec<Option<Vec<AttrArgEntry>>>,
+    /// Raw PHP 8.6 parameter doc comment, when one was declared.
+    doc_comment: Option<String>,
     position: i64,
     is_optional: bool,
     is_variadic: bool,

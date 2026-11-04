@@ -117,6 +117,8 @@ mod runtime_reachability;
 mod runtime_introspection;
 mod math;
 mod gmp_phpt;
+mod time_duration_php_src;
+mod time_duration_serialization;
 mod gmp_eval;
 mod gmp_class;
 mod gmp_math;

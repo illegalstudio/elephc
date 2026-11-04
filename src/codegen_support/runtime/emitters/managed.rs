@@ -295,11 +295,13 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_obj_enum_name_offset(emitter);
     objects::emit_obj_enum_case_name(emitter);
     objects::emit_var_dump_emit_enum_line(emitter);
+    objects::emit_var_dump_open_enum_n(emitter);
     objects::emit_pr_obj_desc(emitter);
     objects::emit_print_r_object(emitter);
     objects::emit_obj_dump_dyn_props(emitter);
     objects::emit_obj_debuginfo_fetch(emitter);
     objects::emit_vd_debuginfo_object(emitter);
+    objects::emit_vd_debuginfo_enum(emitter);
     objects::emit_pr_debuginfo_object(emitter);
     objects::emit_obj_dyn_prop_at(emitter);
     objects::emit_obj_prop_count(emitter);

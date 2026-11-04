@@ -129,6 +129,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         },
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -143,7 +144,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
                 params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &body);
             ExprKind::Closure {
-                params, variadic, variadic_by_ref, variadic_type, return_type,
+                params, param_attributes, variadic, variadic_by_ref, variadic_type, return_type,
                 body: with_return_boundary_facts(Some(&facts), ||
                     crate::optimize::generator_bodies::rewrite_preserving_yield(body, prune_block)),
                 is_arrow, is_static, captures, capture_refs, by_ref_return,

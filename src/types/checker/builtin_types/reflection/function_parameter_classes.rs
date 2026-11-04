@@ -48,6 +48,13 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
             // to be absent and `__toString` read `__name`, so `(string) $parameter` answered
             // the bare name (#1080).
             builtin_property("__string", Visibility::Private, Some(TypeExpr::Str), empty_string()),
+            builtin_property(
+                "__has_doc_comment",
+                Visibility::Private,
+                Some(TypeExpr::Bool),
+                bool_lit(false),
+            ),
+            builtin_property("__doc_comment", Visibility::Private, Some(TypeExpr::Str), empty_string()),
             builtin_property("__position", Visibility::Private, Some(TypeExpr::Int), int_lit(0)),
             builtin_property(
                 "__optional",
@@ -171,6 +178,7 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
             builtin_reflection_parameter_is_default_value_constant_method(),
             builtin_reflection_parameter_get_default_value_constant_name_method(),
             builtin_reflection_parameter_get_default_value_method(),
+            builtin_reflection_parameter_get_doc_comment_method(),
             builtin_reflection_slot_getter("getDeclaringClass", "__declaring_class", mixed_type()),
             builtin_reflection_slot_getter(
                 "getDeclaringFunction",
@@ -501,6 +509,47 @@ pub(super) fn builtin_reflection_parameter_can_be_passed_by_value_method() -> Cl
                 ))),
                 dummy_span,
             ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds `ReflectionParameter::getDocComment(): string|false`.
+pub(super) fn builtin_reflection_parameter_get_doc_comment_method() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    ClassMethod {
+        type_params: Vec::new(),
+        name: "getDocComment".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Union(vec![TypeExpr::Str, TypeExpr::Bool])),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::If {
+                condition: reflection_this_property("__has_doc_comment", dummy_span),
+                then_body: vec![Stmt::new(
+                    StmtKind::Return(Some(reflection_this_property("__doc_comment", dummy_span))),
+                    dummy_span,
+                )],
+                elseif_clauses: Vec::new(),
+                else_body: Some(vec![Stmt::new(
+                    StmtKind::Return(Some(Expr::new(
+                        ExprKind::BoolLiteral(false),
+                        dummy_span,
+                    ))),
+                    dummy_span,
+                )]),
+            },
             dummy_span,
         )],
         span: dummy_span,

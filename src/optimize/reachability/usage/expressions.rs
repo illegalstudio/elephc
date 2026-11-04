@@ -292,6 +292,10 @@ impl Scanner<'_> {
         for helper in crate::builtins::gmp::prelude_helpers_for(&key) {
             self.record_callable(helper);
         }
+        // `clamp`'s mixed-operand EIR lowering calls the prelude helper directly.
+        if key == "clamp" {
+            self.record_callable(crate::clamp_prelude::CLAMP_HELPER);
+        }
         let normalized = self.normalized_function_arguments(&key, args);
         let first = normalized.first().map(unwrap_named_arg);
         match key.as_str() {

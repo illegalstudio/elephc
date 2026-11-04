@@ -445,6 +445,50 @@ Stream resources, standard streams, wrappers (`php://`, `data://`, `phar://`,
 `glob://`), stream contexts, filters, sockets, TLS, process pipes, and user
 wrappers are documented in [Streams](streams.md).
 
+## Io\Poll (PHP 8.6)
+
+`Io\Poll` waits for readiness on stream descriptors without blocking on a single
+stream. elephc implements the portable `Poll` backend; `Backend::getAvailableBackends()`
+reports `[Backend::Poll]`, and the platform-specific `Epoll`, `Kqueue`, `EventPorts`,
+and `WSAPoll` cases report themselves unavailable.
+
+```php
+<?php
+[$reader, $writer] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+
+$context = new Io\Poll\Context(Io\Poll\Backend::Poll);
+$watcher = $context->add(
+    new StreamPollHandle($reader),
+    [Io\Poll\Event::Read, Io\Poll\Event::OneShot],
+    'reader',
+);
+
+fwrite($writer, "hello from the other side\n");
+
+foreach ($context->wait(Time\Duration::fromSeconds(1)) as $event) {
+    if ($event->hasTriggered(Io\Poll\Event::Read)) {
+        echo fread($event->getHandle()->getStream(), 1024);
+    }
+}
+```
+
+The surface includes `Io\Poll\Backend`, `Event`, `Handle`, `Watcher`, `Context`,
+`StreamPollHandle`, and the `PollException` / `FailedPollOperationException`
+hierarchy with its `ERROR_*` codes. Level-triggered read and write readiness,
+data already buffered by the stream layer, one-shot watchers, `maxEvents`,
+`Time\Duration` timeouts, duplicate-handle rejection, closed-stream
+deactivation, and watcher/context lifetime rules are implemented.
+
+Known limits:
+
+- Edge triggering is not supported by the `Poll` backend
+  (`Backend::Poll->supportsEdgeTriggering()` returns `false`).
+- `HangUp` and `ReadHangUp` are not distinguished from descriptor readiness;
+  `Error` is reported only when `stream_select()`'s exceptional set fires.
+- The runtime's `stream_select()` examines descriptors `0..63`.
+- Only the `Poll` backend is bundled. `Epoll`, `Kqueue`, `EventPorts`, and
+  `WSAPoll` constructors raise `BackendUnavailableException`.
+
 ## File system
 
 | Function | Signature | Description |

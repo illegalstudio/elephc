@@ -344,6 +344,11 @@ class mysqli {
         return __elephc_ptr_read_string(elephc_pdo_blob_data_ptr(), $_len);
     }
 
+    public function quote_string(string $string): string {
+        $this->requireInitialized("mysqli::quote_string");
+        return "'" . $this->real_escape_string($string) . "'";
+    }
+
     public function escape_string(string $string): string {
         return $this->real_escape_string($string);
     }

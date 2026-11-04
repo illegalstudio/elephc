@@ -59,7 +59,7 @@ pub(super) fn scan_tokens_in_source(
     }
 
     loop {
-        skip_whitespace_and_comments(&mut cursor);
+        let doc_comment = skip_whitespace_and_comments(&mut cursor);
 
         if cursor.is_eof() {
             tokens.push(spanned(Token::Eof, cursor.span()));
@@ -77,15 +77,19 @@ pub(super) fn scan_tokens_in_source(
             ));
         } else if cursor.peek() == Some('"') {
             // Double-quoted strings may contain interpolation ($var)
+            let first = tokens.len();
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
             tokens.extend(string_tokens);
+            attach_doc_comment(&mut tokens, first, doc_comment);
         } else if cursor.remaining().starts_with("<<<") {
             // Heredoc/nowdoc — may contain interpolation ($var) for heredoc
             cursor.advance(); // consume first <
             cursor.advance(); // consume second <
             cursor.advance(); // consume third <
+            let first = tokens.len();
             let heredoc_tokens = literals::scan_heredoc(&mut cursor)?;
             tokens.extend(heredoc_tokens);
+            attach_doc_comment(&mut tokens, first, doc_comment);
         } else {
             let starts_word = cursor.peek().is_some_and(literals::is_ident_start);
             let remaining_before = cursor.remaining();
@@ -103,7 +107,7 @@ pub(super) fn scan_tokens_in_source(
             } else {
                 TokenMetadata::new(span)
             };
-            tokens.push((token, metadata));
+            tokens.push((token, metadata.with_doc_comment(doc_comment)));
         }
     }
 
@@ -112,9 +116,11 @@ pub(super) fn scan_tokens_in_source(
 }
 
 /// Skips all whitespace, `//` line comments, `#` line comments (but not `#[` attribute
-/// groups), and `/* */` block comments. Uses `continue` to re-check after each comment
-/// type so adjacent comment forms are all skipped.
-fn skip_whitespace_and_comments(cursor: &mut Cursor) {
+/// groups), and `/* */` block comments. Returns the last `/** ... */` doc comment encountered,
+/// including its delimiters, so the caller can attach it to the next token. A later non-doc
+/// comment does not erase an earlier doc comment; PHP keeps the last doc comment.
+fn skip_whitespace_and_comments(cursor: &mut Cursor) -> Option<String> {
+    let mut doc_comment = None;
     loop {
         while let Some(ch) = cursor.peek() {
             if ch.is_ascii_whitespace() {
@@ -140,6 +146,11 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
         }
 
         if cursor.remaining().starts_with("/*") {
+            let before = cursor.remaining();
+            // PHP only recognizes a doc comment when `/**` is followed by whitespace;
+            // `/**Not a doc comment */` is an ordinary block comment.
+            let is_doc = before.starts_with("/**")
+                && before.as_bytes().get(3).is_some_and(u8::is_ascii_whitespace);
             cursor.advance();
             cursor.advance();
             loop {
@@ -152,10 +163,26 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
                     _ => {}
                 }
             }
+            if is_doc {
+                let consumed = before.len() - cursor.remaining().len();
+                doc_comment = Some(before[..consumed].to_string());
+            }
             continue;
         }
 
         break;
+    }
+    doc_comment
+}
+
+/// Attaches a leading doc comment to the first token emitted by a literal scanner.
+fn attach_doc_comment(tokens: &mut [SpannedToken], first: usize, doc_comment: Option<String>) {
+    let Some(doc_comment) = doc_comment else {
+        return;
+    };
+    if let Some((_, metadata)) = tokens.get_mut(first) {
+        *metadata = std::mem::replace(metadata, TokenMetadata::new(metadata.span))
+            .with_doc_comment(Some(doc_comment));
     }
 }
 

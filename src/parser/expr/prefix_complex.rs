@@ -14,7 +14,7 @@ use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
 use crate::parser::ast::{
-    CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr,
+    AttributeGroup, CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr,
 };
 use crate::parser::stmt::{
     looks_like_typed_param, parse_anonymous_class, parse_block, parse_name, parse_type_arguments_only, parse_type_expr,
@@ -167,7 +167,7 @@ pub(super) fn parse_closure(
         return Err(CompileError::new(span, "Unexpected token: Function"));
     }
     *pos = after_fn + 1;
-    let (params, variadic, variadic_by_ref, variadic_type) =
+    let (params, param_attributes, variadic, variadic_by_ref, variadic_type) =
         parse_closure_params(tokens, pos, span)?;
     let mut captures = Vec::new();
     let mut capture_refs = Vec::new();
@@ -222,6 +222,7 @@ pub(super) fn parse_closure(
     Ok(Expr::new(
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -253,7 +254,7 @@ pub(super) fn parse_arrow_closure(
         return Err(CompileError::new(span, "Expected '(' after 'fn'"));
     }
     *pos += 1;
-    let (params, variadic, variadic_by_ref, variadic_type) =
+    let (params, param_attributes, variadic, variadic_by_ref, variadic_type) =
         parse_closure_params(tokens, pos, span)?;
     let return_type = parse_optional_closure_return_type(tokens, pos, span)?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
@@ -268,7 +269,8 @@ pub(super) fn parse_arrow_closure(
     let body = vec![Stmt::new(StmtKind::Return(Some(body_expr)), span)];
     Ok(Expr::new(
         ExprKind::Closure {
-            params,
+            params: params.into_iter().collect(),
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -553,6 +555,7 @@ fn parse_closure_params(
 ) -> Result<
     (
         Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)>,
+        Vec<Vec<AttributeGroup>>,
         Option<String>,
         bool,
         Option<crate::parser::ast::TypeExpr>,
@@ -560,6 +563,7 @@ fn parse_closure_params(
     CompileError,
 > {
     let mut params = Vec::new();
+    let mut param_attributes = Vec::new();
     let mut variadic = None;
     let mut variadic_by_ref = false;
     let mut variadic_type = None;
@@ -577,8 +581,9 @@ fn parse_closure_params(
                 break;
             }
         }
+        let leading_doc = crate::parser::doc_comments::doc_comment_before(tokens, *pos);
         // PHP 8.0 closure-parameter attributes (`fn(#[X] $a) => …`).
-        crate::parser::consume_attribute_lists(tokens, pos)?;
+        let mut attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
         if variadic.is_some() {
             return Err(CompileError::new(
                 span,
@@ -605,6 +610,8 @@ fn parse_closure_params(
                     variadic = Some(name.clone());
                     variadic_by_ref = is_ref;
                     variadic_type = type_ann;
+                    append_closure_param_doc(tokens, *pos, leading_doc, &mut attributes);
+                    param_attributes.push(attributes);
                     *pos += 1;
                 }
                 _ => return Err(CompileError::new(span, "Expected variable after '...'")),
@@ -621,6 +628,8 @@ fn parse_closure_params(
                 } else {
                     None
                 };
+                append_closure_param_doc(tokens, *pos, leading_doc, &mut attributes);
+                param_attributes.push(attributes);
                 params.push((name, type_ann, default, is_ref));
             }
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
@@ -630,7 +639,20 @@ fn parse_closure_params(
         return Err(CompileError::new(span, "Expected ')' after parameters"));
     }
     *pos += 1;
-    Ok((params, variadic, variadic_by_ref, variadic_type))
+    Ok((params, param_attributes, variadic, variadic_by_ref, variadic_type))
+}
+
+/// Attaches a leading or trailing closure-parameter doc comment.
+fn append_closure_param_doc(
+    tokens: &[SpannedToken],
+    pos: usize,
+    leading: Option<String>,
+    attributes: &mut Vec<AttributeGroup>,
+) {
+    let trailing = crate::parser::doc_comments::doc_comment_before(tokens, pos);
+    if let Some(doc) = trailing.or(leading) {
+        attributes.push(crate::parser::doc_comments::doc_comment_attribute(doc));
+    }
 }
 
 /// Parses the tail of a function-style call once the name and its opening `(` have been

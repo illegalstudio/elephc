@@ -219,19 +219,40 @@ fn test_attribute_on_static_arrow_function() {
 /// Verifies attribute on closure parameter.
 #[test]
 fn test_attribute_on_closure_parameter() {
-    // `#[Sensitive]` on a closure parameter parses without error and does not alter the AST.
-    let with_attr = parse_source("<?php $f = function (#[Sensitive] string $s): void { };");
-    let without = parse_source("<?php $f = function (string $s): void { };");
-    assert_eq!(with_attr, without);
+    // `#[Sensitive]` on a closure parameter is retained so reflection can see it.
+    let stmts = parse_source("<?php $f = function (#[Sensitive] string $s): void { };");
+    let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+        panic!("Expected Assign");
+    };
+    let ExprKind::Closure {
+        param_attributes, ..
+    } = &value.kind
+    else {
+        panic!("Expected Closure");
+    };
+    assert_eq!(param_attributes.len(), 1);
+    assert_eq!(
+        param_attributes[0][0].attributes[0].name.as_str(),
+        "Sensitive"
+    );
 }
 
 /// Verifies attribute on arrow function parameter.
 #[test]
 fn test_attribute_on_arrow_function_parameter() {
-    // `#[X]` on an arrow function parameter parses without error and does not alter the AST.
-    let with_attr = parse_source("<?php $f = fn (#[X] int $a) => $a + 1;");
-    let without = parse_source("<?php $f = fn (int $a) => $a + 1;");
-    assert_eq!(with_attr, without);
+    // `#[X]` on an arrow function parameter is retained so reflection can see it.
+    let stmts = parse_source("<?php $f = fn (#[X] int $a) => $a + 1;");
+    let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+        panic!("Expected Assign");
+    };
+    let ExprKind::Closure {
+        param_attributes, ..
+    } = &value.kind
+    else {
+        panic!("Expected Closure");
+    };
+    assert_eq!(param_attributes.len(), 1);
+    assert_eq!(param_attributes[0][0].attributes[0].name.as_str(), "X");
 }
 
 /// Verifies stacked attributes on parameter.

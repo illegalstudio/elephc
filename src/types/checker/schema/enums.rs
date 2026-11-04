@@ -211,6 +211,30 @@ pub(crate) fn build_enum_info(
                 &format!("Duplicate enum case: {}::{}", name, case.name),
             ));
         }
+        if case
+            .attributes
+            .iter()
+            .flat_map(|group| &group.attributes)
+            .any(|attribute| {
+                super::validation::matches_global_builtin_attribute(attribute, "Override")
+            })
+            && !implements.iter().any(|interface| {
+                super::class_constants::interface_chain_has_constant(
+                    checker,
+                    interface.as_str(),
+                    &case.name,
+                    &mut HashSet::new(),
+                )
+            })
+        {
+            return Err(CompileError::new(
+                case.span,
+                &format!(
+                    "{}::{} has #[\\Override] attribute, but no matching parent constant exists",
+                    name, case.name
+                ),
+            ));
+        }
 
         let value = match (&resolved_backing, &case.value) {
             (None, None) => None,

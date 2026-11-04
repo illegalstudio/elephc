@@ -335,6 +335,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
+    let resolved = elephc::php86_declarations::inject(resolved);
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
@@ -371,6 +372,8 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::time_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::clamp_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let force_gmp = FORCE_GMP_PRELUDE.with(|flag| flag.replace(false));
     let resolved = elephc::gmp_prelude::inject_if_used(resolved, force_gmp, &mut prelude_inventory);
@@ -398,6 +401,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::pfa::desugar(resolved).expect("pfa desugar failed");
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
     // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint, so every
     // reachable template has become an ordinary monomorphic declaration before lowering. A

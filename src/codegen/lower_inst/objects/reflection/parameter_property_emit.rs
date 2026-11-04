@@ -103,6 +103,7 @@ pub(super) fn emit_reflection_parameter_properties(
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let public_name_offset = reflection_property_offset(class_info, "name")?;
     let name_offset = reflection_property_offset(class_info, "__name")?;
+    let doc_comment_offset = reflection_property_offset(class_info, "__doc_comment")?;
     let default_value_constant_name_offset =
         reflection_property_offset(class_info, "__default_value_constant_name")?;
     let default_value_object_class_offset =
@@ -114,6 +115,18 @@ pub(super) fn emit_reflection_parameter_properties(
         public_name_offset + 8,
     );
     emit_reflection_string_property(ctx, &parameter.name, name_offset, name_offset + 8);
+    emit_reflection_owner_bool_property(
+        ctx,
+        "ReflectionParameter",
+        "__has_doc_comment",
+        parameter.doc_comment.is_some(),
+    )?;
+    emit_reflection_string_property(
+        ctx,
+        parameter.doc_comment.as_deref().unwrap_or(""),
+        doc_comment_offset,
+        doc_comment_offset + 8,
+    );
     let parameter_string = reflection_parameter_to_string(parameter);
     emit_reflection_owner_dump_property(
         ctx,

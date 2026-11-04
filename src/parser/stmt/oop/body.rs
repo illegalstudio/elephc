@@ -1046,8 +1046,10 @@ fn parse_property_hooks(
         // Optional set-hook parameter list: `set(Type $value)` (the type is accepted but the
         // property type governs); the default parameter name is `$value`.
         let mut set_param = "value".to_string();
+        let mut hook_param_attributes = Vec::new();
         if is_set && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
             *pos += 1;
+            let leading_doc = crate::parser::doc_comments::doc_comment_before(tokens, *pos);
             if looks_like_typed_param(tokens, *pos) {
                 let _ = parse_type_expr(tokens, pos, hook_span)?;
             }
@@ -1062,6 +1064,11 @@ fn parse_property_hooks(
                         "Expected '$value' parameter in set hook",
                     ))
                 }
+            }
+            let trailing_doc = crate::parser::doc_comments::doc_comment_before(tokens, *pos);
+            if let Some(doc) = trailing_doc.or(leading_doc) {
+                hook_param_attributes
+                    .push(crate::parser::doc_comments::doc_comment_attribute(doc));
             }
             expect_token(
                 tokens,
@@ -1151,7 +1158,7 @@ fn parse_property_hooks(
                     is_final: false,
                     has_body: true,
                     params: vec![(set_param, prop_type.cloned(), None, false)],
-                    param_attributes: vec![Vec::new()],
+                    param_attributes: vec![hook_param_attributes],
                     variadic: None,
                     variadic_by_ref: false,
                     variadic_type: None,

@@ -1157,6 +1157,24 @@ real-world validation rather than by speculative pass work.
 - [ ] FFI documentation for C, Rust, Python, Go
 - [x] Apple notarization for direct downloads (codesign + notarytool)
 
+### PHP 8.6 support
+
+- [x] `Time\Duration` and `Time\TimeException` — full factory/arithmetic/comparison/serialization surface with php-src's 64-bit overflow rules, comparison operators, and the migrated `ext/date/tests/time/duration` PHPT corpus
+- [x] `clamp()` mixed operands — int/float/string keep the typed path; boolean, null, array, and object operands use php-src's polyfill, with `DateTime`/`DateTimeImmutable` mixed ordering; `ext/standard/tests/math/clamp.phpt` passes
+- [x] `grapheme_strrev()` reclassified as PHP 8.6 `ext/intl`; both upstream `grapheme_strrev*.phpt` fixtures pass after completing the Arabic/Hebrew/Indic/Thai/Tibetan `Grapheme_Extend` ranges
+- [x] Form feed in the default `trim()`/`ltrim()`/`rtrim()`/`chop()` mask under `--php-version=8.6`
+- [x] Readonly property defaults — declarations, constructor initialisation, inheritance, get-only interface properties, and serialization; `Zend/tests/readonly_props/readonly_with_default*.phpt` pass
+- [x] Partial function application — `?`/named `?`/trailing `...` placeholders, creation-time evaluation, inherited signatures/defaults/reference modes, constant-expression partials, and extra-argument forwarding; ten upstream fixtures plus invalid-shape diagnostics
+- [x] `Io\Poll` — enum/exception/context/watcher/handle API and portable `Poll` backend; level readiness, buffered data, one-shot, maxEvents, Duration timeouts, and lifetime rules; 32 upstream fixtures vendored and represented by 24 focused tests, with edge triggering, hang-up precision, and fds above 63 left as backend limits
+- [x] Stream error API — `StreamErrorMode`/`StreamErrorStore`/`StreamErrorCode` enums, `StreamError`, `StreamException::getErrors()`, `stream_last_errors()`/`stream_clear_errors()`, context options, and error-aware `fopen()`; nine upstream fixtures pass, while user-wrapper multi-error accumulation remains a follow-up
+- [x] `ReflectionProperty::isReadable()` / `isWritable()` — scope/object arguments, visibility, asymmetric write visibility, readonly/`__clone` state, hooks, static properties, and magic-method fallbacks; PHP 8.5 asymmetric visibility for static properties lands with it
+- [x] Parameter doc comments and `ReflectionParameter::getDocComment()` — leading/trailing `/** ... */` comments on functions, methods, constructors, promoted parameters, closures, arrows, and property-hook set parameters; the indented upstream fixture passes and the basic fixture is transcribed minus dynamic closure reflection
+- [x] Enum `__debugInfo()` rendering — `var_dump()` and `print_r()` render `enum(E::C) (N) { … }` from the returned array; the magic-method visibility warning stays as a follow-up
+- [x] `#[\Override]` on class constants and enum cases — parent/interface lookup for classes, interfaces, enums, cases, and trait composition
+- [x] `__construct()` / `__destruct()` return-value deprecation — startup diagnostics for value returns and generator bodies
+- [x] `mysqli_quote_string()` / `mysqli::quote_string()` — single-quote-wrapped escape through the existing charset-aware mysqli escape path
+- [x] Secure session ini defaults (`use_strict_mode`, `cookie_httponly`, `cookie_samesite`) — profile-gated bootstrap defaults for the web runtime
+
 ### curl follow-ups
 
 - [ ] A bundled CA trust store — still the only answer for an image that ships no root store at all (`FROM scratch`, distroless), where runtime discovery finds nothing and `CURLOPT_CAINFO`/`$CURL_CA_BUNDLE` remain required. Not the same thing as discovery: a bundled store is certificate material elephc itself would have to ship, pin, and keep current

@@ -114,6 +114,13 @@ function mysqli_real_escape_string(mixed $mysql, string $string): string {
     return $mysql->real_escape_string($string);
 }
 
+function mysqli_quote_string(mixed $mysql, string $string): string {
+    if (!($mysql instanceof mysqli)) {
+        throw new TypeError("mysqli_quote_string(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
+    }
+    return $mysql->quote_string($string);
+}
+
 function mysqli_escape_string(mixed $mysql, string $string): string {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_escape_string(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");

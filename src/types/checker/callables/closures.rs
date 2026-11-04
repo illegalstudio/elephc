@@ -157,6 +157,7 @@ impl Checker {
     pub(crate) fn resolve_closure_signature_with_param_hints(
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+        param_attributes: &[Vec<crate::parser::ast::AttributeGroup>],
         variadic: &Option<String>,
         variadic_by_ref: bool,
         variadic_type: &Option<TypeExpr>,
@@ -183,7 +184,7 @@ impl Checker {
         Ok(FunctionSig {
             params: closure_sig.params,
             param_type_exprs: closure_sig.param_type_exprs,
-            param_attributes: Vec::new(),
+            param_attributes: param_attributes.to_vec(),
             defaults: closure_sig.defaults,
             return_type,
             declared_return,
@@ -335,6 +336,7 @@ impl Checker {
         match &expr.kind {
             ExprKind::Closure {
                 params,
+                param_attributes,
                 variadic,
                 variadic_by_ref,
                 variadic_type,
@@ -347,6 +349,7 @@ impl Checker {
             } => self
                 .resolve_closure_signature_with_param_hints(
                     params,
+                    param_attributes,
                     variadic,
                     *variadic_by_ref,
                     variadic_type,

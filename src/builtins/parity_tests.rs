@@ -47,6 +47,8 @@ fn php_visible_extension_builtins() -> Vec<String> {
 fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program)> {
     let mut built = vec![
         ("bcmath_prelude", crate::bcmath_prelude::bcmath_declarations()),
+        ("time_prelude", crate::time_prelude::time_declarations()),
+        ("clamp_prelude", crate::clamp_prelude::clamp_declarations()),
         ("hash_prelude", crate::hash_prelude::hash_declarations()),
         ("core_prelude", crate::core_prelude::core_declarations()),
         ("random_prelude", crate::random_prelude::random_declarations()),

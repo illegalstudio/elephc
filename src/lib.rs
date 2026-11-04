@@ -45,6 +45,12 @@ pub(crate) mod global_decls;
 mod progress;
 /// Immutable BCMath Number standard-library prelude injection.
 pub mod bcmath_prelude;
+/// PHP 8.6 `Time\Duration` and `Time\TimeException` standard-library prelude injection.
+pub mod time_prelude;
+/// PHP 8.6 mixed-operand `clamp()` prelude helper.
+pub mod clamp_prelude;
+/// PHP 8.6 declaration-time constructor/destructor deprecations.
+pub mod php86_declarations;
 /// PHP ext/gmp standard-library prelude injection.
 pub mod gmp_prelude;
 pub mod random_prelude;
@@ -91,6 +97,11 @@ pub mod object_cast_prelude;
 pub mod optimize;
 /// Parser for PHP syntax.
 pub mod parser;
+pub(crate) mod io_poll_prelude;
+pub(crate) mod stream_errors;
+pub(crate) mod stream_errors_prelude;
+#[allow(dead_code)]
+pub mod pfa;
 /// Selected PHP compatibility version for version-sensitive compiler surfaces.
 pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.

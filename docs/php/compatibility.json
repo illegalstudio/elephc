@@ -43,10 +43,6 @@
         "name": "buffer_ptr"
       },
       {
-        "area": "Math",
-        "name": "clamp"
-      },
-      {
         "area": "Class",
         "name": "class_attribute_args"
       },
@@ -57,10 +53,6 @@
       {
         "area": "Class",
         "name": "class_get_attributes"
-      },
-      {
-        "area": "String",
-        "name": "grapheme_strrev"
       },
       {
         "area": "Type",
@@ -1732,10 +1724,31 @@
       {
         "name": "SortDirection",
         "since": "8.6"
+      },
+      {
+        "name": "Time\\Duration",
+        "since": "8.6"
+      },
+      {
+        "name": "Time\\TimeException",
+        "since": "8.6"
       }
     ],
     "constants": [],
-    "functions": []
+    "functions": [
+      {
+        "name": "clamp",
+        "since": "8.6"
+      },
+      {
+        "name": "grapheme_strrev",
+        "since": "8.6"
+      },
+      {
+        "name": "mysqli_quote_string",
+        "since": "8.6"
+      }
+    ]
   },
   "pecl": [
     {

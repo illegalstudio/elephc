@@ -393,7 +393,10 @@ fn check_object_property_write(
         let readonly_write_guard = class_info.readonly_properties.contains(property)
             && !(checker.current_class.as_deref()
                 == Some(declaring_class.as_str())
-                && checker.current_method.as_deref() == Some("__construct")
+                && matches!(
+                    checker.current_method.as_deref(),
+                    Some("__construct" | "__unserialize")
+                )
                 && (!span.identifies_a_node() || legacy_untyped_slot))
             && !internal_pdo_statement_initializer;
         // Public readonly overwrites raise their catchable Error before setter access matters.

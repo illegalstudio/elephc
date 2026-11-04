@@ -141,6 +141,10 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         "pdo-sqlsrv",
         "web-session",
         "web-session-trans-sid",
+        // Partial function application and Io\Poll are PHP 8.6 syntax; the dedicated
+        // codegen fixtures compile these examples with --php-version=8.6.
+        "partial-application",
+        "io-poll",
         "web-session-upload",
         // The application contract is injected only by --web-lifecycle=application;
         // web_application_example_reuses_its_counter covers its real compilation profile.
