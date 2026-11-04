@@ -791,15 +791,3 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 [[profile.ci.overrides]]
 filter = 'binary(elephc) and test(=ir_lower::tests::eval_default_helpers::deep_native_defaults_get_compiled_helpers_on_every_target)'
 slow-timeout = { period = "180s", terminate-after = 1 }
-
-# Each PHP 8.5.8 SimpleXML PHPT fixture compiles the complete XML/SimpleXML prelude and links
-# the managed libxml2 bridge. Under a loaded host a single compile can exceed the default
-# three-minute termination window, so give the migrated corpus the same bounded budget as
-# the other catalog-sized integration probes.
-[[profile.default.overrides]]
-filter = 'binary(codegen_tests) and test(~simplexml_php_src)'
-slow-timeout = { period = "60s", terminate-after = 5 }
-
-[[profile.ci.overrides]]
-filter = 'binary(codegen_tests) and test(~simplexml_php_src)'
-slow-timeout = { period = "60s", terminate-after = 5 }

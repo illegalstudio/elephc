@@ -160,25 +160,39 @@ pub(super) fn run_case(source: &str) -> String {
     link_assets(&work);
     fs::write(work.join("test.php"), source).expect("fixture source");
 
-    let (_success, actual) = compile_and_capture(source, &work);
+    let (success, actual) = compile_and_capture(source, &work);
     let _ = fs::remove_dir_all(&work);
+    // PHP aborts on an uncaught fatal; a fixture that prints the fatal line and keeps running
+    // would otherwise satisfy the message-only comparison below.
+    if actual.contains("Fatal error:") {
+        assert!(
+            !success,
+            "fatal fixture exited successfully:\n{actual}"
+        );
+    }
     actual
+}
+
+/// Rewrites `var_dump()` object handles to the opaque `#N` placeholder.
+///
+/// Handles are allocation order, not observable program state, so comparisons replace them.
+/// The match is scoped to `object(...)#N` because a bare `#<digits>` also appears in PHP
+/// argument numbers (`Argument #1`) and XML character references (`&#38;`), which must stay
+/// literal for the assertion to mean anything.
+fn normalize_handles(text: &str) -> String {
+    regex::Regex::new(r"object\(([^)\r\n]*)\)#\d+")
+        .expect("object handle regex")
+        .replace_all(text, "object($1)#N")
+        .into_owned()
 }
 
 /// Asserts an exact php-src `EXPECT` while treating object handles as opaque identities.
 ///
-/// PHP's `var_dump()` prints `#N`, but the numeric handle is allocation order, not
-/// observable program state. Both sides normalize every handle to the same placeholder, so
-/// the comparison checks the dumped shape and values without requiring php-src's allocator
-/// history (which can also reuse a handle for different wrappers).
+/// Both sides normalize object handles to the same placeholder, so the comparison checks the
+/// dumped shape and values without requiring php-src's allocator history (which can also
+/// reuse a handle for different wrappers).
 pub(super) fn assert_exact(actual: &str, expected: &str) {
-    fn normalize(text: &str) -> String {
-        regex::Regex::new(r"#\d+")
-            .expect("object handle regex")
-            .replace_all(text, "#N")
-            .into_owned()
-    }
-    assert_eq!(normalize(actual), normalize(expected));
+    assert_eq!(normalize_handles(actual), normalize_handles(expected));
 }
 
 /// Asserts a fatal fixture's message line.
@@ -201,11 +215,11 @@ pub(super) fn assert_fatal_format(actual: &str, expected: &str) {
 
 /// Asserts one php-src `EXPECTF` pattern against a fixture's merged output.
 pub(super) fn assert_format(actual: &str, expected: &str) {
-    // php-src's EXPECTF usually writes `#%d`, but a few fixtures embed one concrete handle.
-    // Handles are allocation order, so treat every literal `#N` as the format token.
-    let expected = regex::Regex::new(r"#\d+")
+    // php-src's EXPECTF usually writes `object(Foo)#%d`, but a few fixtures embed one concrete
+    // handle. Rewrite only `object(...)#N` so `Argument #1` and `&#38;` keep their literal value.
+    let expected = regex::Regex::new(r"object\(([^)\r\n]*)\)#\d+")
         .expect("object handle regex")
-        .replace_all(expected.trim(), "#%d")
+        .replace_all(expected.trim(), "object($1)#%d")
         .into_owned();
     let pattern = format!("^{}$", expectf_to_regex(&expected));
     let regex = RegexBuilder::new(&pattern)
@@ -216,5 +230,18 @@ pub(super) fn assert_format(actual: &str, expected: &str) {
         regex.is_match(actual),
         "--- pattern ---\n{pattern}\n--- expected ---\n{}\n--- actual ---\n{actual}",
         expected.trim()
+    );
+}
+
+/// Verifies handle normalization cannot swallow non-handle `#<digits>` text.
+#[test]
+fn test_handle_normalization_keeps_argument_numbers_and_entities_literal() {
+    assert_eq!(
+        normalize_handles("object(SimpleXMLElement)#12 (0) {\n}"),
+        "object(SimpleXMLElement)#N (0) {\n}"
+    );
+    assert_eq!(
+        normalize_handles("Argument #1 ($qualifiedName) and a &#38; b"),
+        "Argument #1 ($qualifiedName) and a &#38; b"
     );
 }
