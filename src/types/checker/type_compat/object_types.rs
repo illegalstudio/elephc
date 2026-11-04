@@ -424,6 +424,16 @@ impl Checker {
             return;
         };
 
+        // The promoted property has no default expression, so this write types its slot, and
+        // the backend builds the slot's reads and writes from it: an `array<int|null>` argument
+        // (`new Holder($a)` after `$a[] = $n ?? null`) is stored with boxed elements, as every
+        // other untyped slot update does (#1944). The parameter takes the same type so the
+        // constructor body's `$this->items = $items` sees no change.
+        let stored_ty = if param_is_ref {
+            PhpType::Mixed
+        } else {
+            crate::types::box_tagged_scalar_array_elements(arg_ty.clone())
+        };
         for sharer in self.property_sharers(&prop_name, &declaring_class) {
             let Some(class_info) = self.classes.get_mut(&sharer) else {
                 continue;
@@ -433,11 +443,7 @@ impl Checker {
             if !property_has_declared_type {
                 if let Some(slot) = class_info.visible_property_index(&prop_name) {
                     if let Some(prop) = class_info.properties.get_mut(slot) {
-                        prop.1 = if param_is_ref {
-                            PhpType::Mixed
-                        } else {
-                            arg_ty.clone()
-                        };
+                        prop.1 = stored_ty.clone();
                     }
                 }
             }
@@ -450,11 +456,7 @@ impl Checker {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
                     if !sig.declared_params.get(param_index).copied().unwrap_or(false) {
                         if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                            *param_ty = if param_is_ref {
-                                PhpType::Mixed
-                            } else {
-                                arg_ty.clone()
-                            };
+                            *param_ty = stored_ty.clone();
                         }
                     }
                 }

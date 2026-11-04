@@ -936,7 +936,8 @@ fn test_nullable_fallback_flow_string_chunks_diagnostic_all_targets() {
 /// #1944): no `null` is ever stored into a plain `I64`, `F64` or `Str` slot, so `?int ?? null`
 /// keeps its tag word instead of the in-band sentinel, and the result assembles everywhere. The
 /// first write of such a value into an empty array, a promoted hash or an untyped `[]` property
-/// boxes it, so the append, the offset write and the string-key write lower on every target too.
+/// boxes it, so the append, the offset write, the string-key write, a reset to `[]`, a promoted
+/// constructor argument and a nested row lower on every target too.
 #[test]
 fn test_nullable_fallback_flow_scalar_null_default_storage_all_targets() {
     let source = r#"<?php
@@ -950,16 +951,20 @@ function keyed(?int $n): int { $h = []; $h["k"] = $n ?? null; return count($h); 
 class Holder { public $items = []; public $keyed = []; public static $bag = []; }
 function propOffset(?int $n): int { $h = new Holder(); $h->items[0] = $n ?? null; return count($h->items); }
 function propKeyed(?int $n): int { $h = new Holder(); $h->keyed["k"] = $n ?? null; return count($h->keyed); }
-function propPushed(?int $n): int { $h = new Holder(); $h->items[] = $n ?? null; Holder::$bag[] = $n ?: null; return count($h->items) + count(Holder::$bag); }
+function propPushed(?int $n): int { $h = new Holder(); $h->items[] = $n ?? null; Holder::$bag[] = $n ?: null; $h->items = []; Holder::$bag = []; $h->items[] = $n ?? null; return count($h->items) + count(Holder::$bag); }
+class Promoted { public function __construct(public $items = []) {} }
+function promoted(?int $n): int { $a = []; $a[] = $n ?? null; $h = new Promoted($a); $c = 0; foreach ($h->items as $v) { $c += $v === null ? 0 : 1; } return $c; }
+function nested(?int $n): int { $h = new Holder(); $row = []; $row[] = $n ?? null; $h->items = []; $h->items[] = $row; $c = 0; foreach ($h->items[0] as $v) { $c += $v === null ? 0 : 1; } return $c; }
 echo coalesced(null), coalesced(6), shortened(0), shortened(6), missed(0), missed(3), strung(null), strung("s");
 echo pushed(null), pushed(6), offset(null), offset(6), keyed(null), keyed(6);
 echo propOffset(null), propOffset(6), propKeyed(null), propKeyed(6), propPushed(null), propPushed(6);
+echo promoted(null), promoted(6), nested(null), nested(6);
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = crate::codegen::platform::Target::parse(name).unwrap();
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), target);
-        for function_name in ["coalesced", "shortened", "missed", "strung", "pushed", "offset", "keyed", "propOffset", "propKeyed", "propPushed"] {
+        for function_name in ["coalesced", "shortened", "missed", "strung", "pushed", "offset", "keyed", "propOffset", "propKeyed", "propPushed", "promoted", "nested"] {
             let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
             for inst in &function.instructions {
                 if inst.op != Op::StoreLocal { continue; }

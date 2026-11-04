@@ -2955,3 +2955,25 @@ for ($i = 0; $i < 2; $i++) {
 "#;
     assert_nullable_flow_cli_heap_output(source, &"[null][null]n|[6][6]v|{\"k\":null}|{\"k\":6}|[null,7]2,7nvN[null]|[6,7]26,7vvV[6]|[null][null][null]|[6][6][6]|[null,\"s\"][null]1|[6,\"s\"][6]1|[null]{\"k\":null}[null]|[6]{\"k\":6}[6]|\n".repeat(2));
 }
+
+/// Arrays of tagged scalars adopted by a promoted constructor parameter or nested in a
+/// property store boxed elements all the way down.
+///
+/// `new Promoted($a)` after `$a[] = $n ?? null` typed the promoted slot straight from the
+/// argument (`propagate_constructor_arg_type`), and `$h->rows[] = $row` kept `array<int|null>`
+/// as the inner element, so `foreach ($h->items as $v)` and `array_shift($h->rows[0])` met the
+/// tagged element the iterator and shift lowerings refuse. Both now store `mixed` cells (#1944).
+#[test]
+fn test_nullable_fallback_flow_tagged_property_adoption_runtime() {
+    let source = r#"<?php
+class Promoted { public function __construct(public $items = []) {} }
+class Required { public function __construct(public $items) {} }
+class Nested { public $rows = []; public static $bag = []; public $lit = []; }
+function promoted(?int $n): void { $a = []; $a[] = $n ?? null; $h = new Promoted($a); foreach ($h->items as $v) { echo $v === null ? "n" : "v"; } $s = array_shift($h->items); echo $s === null ? "N" : "V", json_encode($h->items), "|"; }
+function required(?int $n): void { $r = new Required([$n ?? null]); foreach ($r->items as $v) { echo $v === null ? "n" : "v"; } echo json_encode($r->items), count($r->items), "|"; }
+function written(?int $n): void { $h = new Promoted(); $h->items[] = $n ?? null; $a = []; $a[] = $n ?? null; $a[] = 7; $g = new Promoted($a); echo json_encode($h->items), json_encode($g->items), implode(",", $g->items), "|"; }
+function nested(?int $n): void { $h = new Nested(); $row = []; $row[] = $n ?? null; $h->rows[] = $row; Nested::$bag[] = $row; $h->lit = [[$n ?? null]]; foreach ($h->rows[0] as $v) { echo $v === null ? "n" : "v"; } $s = array_shift(Nested::$bag[0]); echo $s === null ? "N" : "V", json_encode($h->rows), json_encode($h->lit), json_encode(Nested::$bag), "|"; Nested::$bag = []; }
+for ($i = 0; $i < 2; $i++) { promoted(null); promoted(6); required(null); required(6); written(null); written(6); nested(null); nested(6); echo "\n"; }
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"nN[]|vV[]|n[null]1|v[6]1|[null][null,7],7|[6][6,7]6,7|nN[[null]][[null]][[]]|vV[[6]][[6]][[]]|\n".repeat(2));
+}

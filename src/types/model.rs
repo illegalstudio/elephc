@@ -497,17 +497,32 @@ pub(crate) fn is_unboxed_scalar_type(php_type: &PhpType) -> bool {
 /// `array_shift` refuse, and a hash has no tagged value at all. A slot that would hold such an
 /// element therefore stores boxed `mixed` cells, as a local array or a literal does, so
 /// `$c->items[0] = $n ?? null`, `$c->items["k"] = $n` and `C::$bag[] = $n ?: null` read the int
-/// or the null back (#1944). Under the sentinel null representation `int|null` is already
-/// `mixed`, and every other type is returned unchanged.
+/// or the null back (#1944). Nested arrays are walked, so `$h->rows[] = $row` over an
+/// `array<int|null>` row stores `array<array<mixed>>` and `$h->rows[0]` iterates. Under the
+/// sentinel null representation `int|null` is already `mixed`, and every other type is
+/// returned unchanged.
 pub(crate) fn box_tagged_scalar_array_elements(php_type: PhpType) -> PhpType {
     match php_type {
-        PhpType::Array(element) if element.codegen_repr() == PhpType::TaggedScalar => {
-            PhpType::Array(Box::new(PhpType::Mixed))
+        PhpType::Array(element) => {
+            PhpType::Array(Box::new(box_tagged_scalar_element_type(*element)))
         }
-        PhpType::AssocArray { key, value } if value.codegen_repr() == PhpType::TaggedScalar => {
-            PhpType::AssocArray { key, value: Box::new(PhpType::Mixed) }
-        }
+        PhpType::AssocArray { key, value } => PhpType::AssocArray {
+            key,
+            value: Box::new(box_tagged_scalar_element_type(*value)),
+        },
         other => other,
+    }
+}
+
+/// Boxes one array element type for `box_tagged_scalar_array_elements`.
+///
+/// A tagged scalar becomes `mixed`; a nested array or hash is walked in turn; anything else
+/// keeps its type, so `array<int>` and `array<Foo>` slots are untouched.
+fn box_tagged_scalar_element_type(element: PhpType) -> PhpType {
+    if element.codegen_repr() == PhpType::TaggedScalar {
+        PhpType::Mixed
+    } else {
+        box_tagged_scalar_array_elements(element)
     }
 }
 
