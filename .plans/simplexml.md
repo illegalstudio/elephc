@@ -6,9 +6,9 @@
 - [x] Update generated coverage, user documentation, and a runnable example.
 - [x] Open a draft PR and route heavy validation and regression checks through CI.
 - [ ] Resolve confirmed SimpleXML correctness defects and regressions in this PR, preserving every test and check.
-- [ ] Obtain a clean full-work installed-default Grok review and green CI on the same final head.
+- [ ] Obtain three independent full-branch reviews (GLM 5.3-flash, MiniMax M3.1-flash, Mistral Large 4) and green CI on the same final head.
 
-The current priority is closing SimpleXML. Do not extend the generalized native-reference refactor. Finish the running Grok review and let CI terminate on the stable published candidate before grouping necessary corrections into another push. Keep the PR draft.
+The current priority is closing SimpleXML. Do not extend the generalized native-reference refactor. The php-src 8.5.8 corpus runs at 154/154 and the branch is pushed; the three-model review is the remaining gate. Group necessary corrections into one push, keep the PR draft, and let CI terminate on the stable published candidate.
 
 Deferred generalized native-reference follow-up:
 
