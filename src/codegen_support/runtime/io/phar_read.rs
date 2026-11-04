@@ -175,32 +175,32 @@ pub fn emit_phar_read(emitter: &mut Emitter) {
     // -- a registered user wrapper reaches __rt_fopen so PHP's wrapper setup runs; an XML
     //    class raises the chained context-resource exception there before stream_open.
     emitter.instruction("sub sp, sp, #32");                                     // frame: [0] path ptr, [8] fd, [16] x29/x30
-    emitter.instruction("stp x29, x30, [sp, #16]");                            // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                   // establish the helper frame pointer
-    emitter.instruction("stp x1, x2, [sp, #0]");                               // save the path across the wrapper probe
-    emitter.instruction("mov x0, x1");                                         // path ptr → __rt_path_is_wrapper arg0
-    emitter.instruction("mov x1, x2");                                         // path len → __rt_path_is_wrapper arg1
-    emitter.instruction("bl __rt_path_is_wrapper");                            // does this path name a registered user wrapper?
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
+    emitter.instruction("stp x1, x2, [sp, #0]");                                // save the path across the wrapper probe
+    emitter.instruction("mov x0, x1");                                          // path ptr → __rt_path_is_wrapper arg0
+    emitter.instruction("mov x1, x2");                                          // path len → __rt_path_is_wrapper arg1
+    emitter.instruction("bl __rt_path_is_wrapper");                             // does this path name a registered user wrapper?
     emitter.instruction("cbz x0, __rt_fgc_plain_regular");                      // no wrapper: use the ordinary file reader
-    emitter.instruction("ldp x1, x2, [sp, #0]");                               // restore the wrapper path
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // restore the wrapper path
     abi::emit_symbol_address(emitter, "x3", "_meta_mode_r");                   // mode pointer "r"
-    emitter.instruction("mov x4, #1");                                         // strlen("r")
-    emitter.instruction("bl __rt_fopen");                                      // runs wrapper setup; XML classes throw here
-    emitter.instruction("cmp x0, #0");                                         // did the wrapper open fail?
-    emitter.instruction("b.lt __rt_fgc_plain_wrapper_fail");                   // failure keeps the previous false result
-    emitter.instruction("bl __rt_user_wrapper_fclose");                        // close the opened wrapper before returning false
+    emitter.instruction("mov x4, #1");                                          // strlen("r")
+    emitter.instruction("bl __rt_fopen");                                       // runs wrapper setup; XML classes throw here
+    emitter.instruction("cmp x0, #0");                                          // did the wrapper open fail?
+    emitter.instruction("b.lt __rt_fgc_plain_wrapper_fail");                    // failure keeps the previous false result
+    emitter.instruction("bl __rt_user_wrapper_fclose");                         // close the opened wrapper before returning false
     emitter.label("__rt_fgc_plain_wrapper_fail");
-    emitter.instruction("mov x1, #0");                                         // null string ptr → file_get_contents boxes false
-    emitter.instruction("mov x2, #0");                                         // null string length
-    emitter.instruction("ldp x29, x30, [sp, #16]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                    // release the helper frame
-    emitter.instruction("ret");                                                // return the failure (boxed false)
+    emitter.instruction("mov x1, #0");                                          // null string ptr → file_get_contents boxes false
+    emitter.instruction("mov x2, #0");                                          // null string length
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the failure (boxed false)
 
     emitter.label("__rt_fgc_plain_regular");
-    emitter.instruction("ldp x1, x2, [sp, #0]");                               // restore the ordinary path
-    emitter.instruction("ldp x29, x30, [sp, #16]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                    // release the helper frame
-    emitter.instruction("b __rt_file_get_contents");                           // tail-call the generic reader (args intact)
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // restore the ordinary path
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("b __rt_file_get_contents");                            // tail-call the generic reader (args intact)
 }
 
 /// x86_64 Linux variant of the runtime `phar://` read helpers.
@@ -342,7 +342,7 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     //    class raises the chained context-resource exception there before stream_open.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame base
-    emitter.instruction("sub rsp, 32");                                         // frame: [rbp-8] path ptr, [rbp-16] len, [rbp-24] fd
+    emitter.instruction("sub rsp, 32");                                         // frame: [rbp-8] path ptr, [rbp-16] len
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the path pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the path length
     emitter.instruction("mov rdi, rax");                                        // path ptr → __rt_path_is_wrapper arg0
@@ -355,21 +355,21 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rdi", "_meta_mode_r");                   // mode pointer "r"
     emitter.instruction("mov rsi, 1");                                          // strlen("r")
     emitter.instruction("call __rt_fopen");                                     // runs wrapper setup; XML classes throw here
-    emitter.instruction("cmp rax, 0");                                           // did the wrapper open fail?
+    emitter.instruction("cmp rax, 0");                                          // did the wrapper open fail?
     emitter.instruction("jl __rt_fgc_plain_wrapper_fail_x86");                  // failure keeps the previous false result
     emitter.instruction("mov rdi, rax");                                        // fd → __rt_user_wrapper_fclose
     emitter.instruction("call __rt_user_wrapper_fclose");                       // close the opened wrapper before returning false
     emitter.label("__rt_fgc_plain_wrapper_fail_x86");
-    emitter.instruction("xor eax, eax");                                         // null string pointer → file_get_contents boxes false
-    emitter.instruction("xor edx, edx");                                         // null string length
-    emitter.instruction("add rsp, 32");                                          // release the helper frame
+    emitter.instruction("xor eax, eax");                                        // null string pointer → file_get_contents boxes false
+    emitter.instruction("xor edx, edx");                                        // null string length
+    emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure (boxed false)
 
     emitter.label("__rt_fgc_plain_regular_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the ordinary path pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the ordinary path length
-    emitter.instruction("add rsp, 32");                                          // release the helper frame
+    emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("jmp __rt_file_get_contents");                          // tail-call the generic reader (args intact)
 }

@@ -206,9 +206,11 @@ def expected_assertion(stem: str, sections: dict[str, str]) -> str:
         assertion = "assert_fatal_format" if expected.startswith("Fatal error:") else "assert_format"
         return f"    {assertion}(&out, {rust_raw(expected)});"
     if "EXPECTREGEX" in sections:
-        expected = sections["EXPECTREGEX"].replace("\r\n", "\n")
-        expected = expected.replace(f"{stem}.php", "test.php").strip()
-        return f"    assert_regex(&out, {rust_raw(expected)});"
+        # php-src applies EXPECTREGEX as a raw PCRE pattern; the migrated runner has no
+        # equivalent helper yet, so fail generation instead of emitting a non-compiling test.
+        raise SystemExit(
+            f"{stem}: EXPECTREGEX is not supported by the SimpleXML corpus generator"
+        )
     raise SystemExit(f"{stem}: missing EXPECT/EXPECTF/EXPECTREGEX section")
 
 

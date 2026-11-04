@@ -64,7 +64,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and return address
     emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     abi::emit_call_label(emitter, "__rt_throw_current");                        // unwind to the nearest PHP catch handler
-    emitter.instruction("ret");                                                // unreachable: throw_current does not return here
+    emitter.instruction("ret");                                                 // unreachable: throw_current does not return here
 }
 
 /// Allocates and initializes one compact AArch64 Throwable in `x0`.
@@ -94,7 +94,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame base
     emitter.instruction("sub rsp, 16");                                         // reserve the saved callee register slot
-    emitter.instruction("mov QWORD PTR [rbp - 8], r12");                       // preserve the callee-saved previous-exception owner
+    emitter.instruction("mov QWORD PTR [rbp - 8], r12");                        // preserve the callee-saved previous-exception owner
 
     // -- allocate the initialization Error --
     emit_error_x86_64(emitter, "_spl_error_class_id",
@@ -104,33 +104,33 @@ fn emit_x86_64(emitter: &mut Emitter) {
     // -- allocate the TypeError with the Error as previous --
     emit_error_x86_64(emitter, "_spl_type_error_class_id",
         "_simplexml_wrapper_context_message", SIMPLEXML_WRAPPER_CONTEXT_MESSAGE.len());
-    emitter.instruction("mov QWORD PTR [rax + 40], r12");                      // transfer the fresh Error reference into previous
+    emitter.instruction("mov QWORD PTR [rax + 40], r12");                       // transfer the fresh Error reference into previous
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);            // publish the TypeError for the unwinder
 
-    emitter.instruction("mov r12, QWORD PTR [rbp - 8]");                       // restore the callee-saved register
-    emitter.instruction("mov rsp, rbp");                                       // release the helper frame
-    emitter.instruction("pop rbp");                                            // restore the caller frame pointer
+    emitter.instruction("mov r12, QWORD PTR [rbp - 8]");                        // restore the callee-saved register
+    emitter.instruction("mov rsp, rbp");                                        // release the helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     abi::emit_call_label(emitter, "__rt_throw_current");                        // unwind to the nearest PHP catch handler
-    emitter.instruction("ret");                                                // unreachable: throw_current does not return here
+    emitter.instruction("ret");                                                 // unreachable: throw_current does not return here
 }
 
 /// Allocates and initializes one compact x86_64 Throwable in `rax`.
 fn emit_error_x86_64(emitter: &mut Emitter, class_id: &str, message: &str, length: usize) {
-    emitter.instruction(&format!("mov rax, {THROWABLE_PAYLOAD_SIZE}"));        // request one compact Throwable payload
+    emitter.instruction(&format!("mov rax, {THROWABLE_PAYLOAD_SIZE}"));         // request one compact Throwable payload
     abi::emit_call_label(emitter, "__rt_heap_alloc");                          // rax = fresh payload storage
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         x86_64_heap_kind_word(6)
-    ));                                                                        // materialize the x86_64 Throwable heap kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                       // stamp the heap header before the payload
+    ));                                                                         // materialize the x86_64 Throwable heap kind word
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap header before the payload
     abi::emit_call_label(emitter, "__rt_object_handle_acquire");               // bind the new object to its PHP handle
     abi::emit_load_symbol_to_reg(emitter, "r10", class_id, 0);                 // load the runtime Throwable class id
-    emitter.instruction("mov QWORD PTR [rax], r10");                           // store the class id at payload offset zero
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at payload offset zero
     abi::emit_symbol_address(emitter, "r10", message);                         // load the static message pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                       // store the message pointer
+    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the message pointer
     abi::emit_load_int_immediate(emitter, "r10", length as i64);               // load the message byte length
-    emitter.instruction("mov QWORD PTR [rax + 16], r10");                      // store the message length
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                        // exception code defaults to zero
+    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // store the message length
+    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
     emit_throwable_creation_line_unknown(emitter, "rax");                      // no user `new` location for this internal throwable
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                        // previous defaults to null
+    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
 }
