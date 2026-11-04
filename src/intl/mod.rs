@@ -2428,11 +2428,27 @@ fn typed_intl_override(spec: &IntlFunction) -> Option<(TypeExpr, Vec<Stmt>)> {
         ])),        "intlcal_get_error_message" => Some((TypeExpr::Str, vec![
             s_return(e_method_call(e_var("calendar"), "getErrorMessage", vec![])),
         ])),
-        "intlgregcal_create_instance" => Some((t_class("IntlGregorianCalendar"), vec![
+        "intlgregcal_create_instance" => Some((
+            t_class("IntlGregorianCalendar"),
+            intlgregcal_create_instance_body(),
+        )),
+        _ => None,
+    }
+}
+
+/// Builds the `intlgregcal_create_instance()` override body.
+fn intlgregcal_create_instance_body() -> Vec<Stmt> {
+    let mut body = vec![
             s_expr(e_call("trigger_error", vec![
                 e_str("Function intlgregcal_create_instance() is deprecated since 8.4, use IntlGregorianCalendar::__construct(), IntlGregorianCalendar::createFromDate(), or IntlGregorianCalendar::createFromDateTime() instead"),
                 e_const("E_USER_DEPRECATED"),
             ])),
+            s_if(e_binop(e_call("func_num_args", vec![]), BinOp::Gt, e_int(6)), vec![
+                s_throw(e_new("ArgumentCountError", vec![e_str("Too many arguments")])),
+            ], vec![], None),
+    ];
+    body.extend(gregorian_calendar_variant_guard());
+    body.push(
             s_if(e_call("is_int", vec![e_var("timezoneOrYear")]), vec![
                 s_if(e_binop(e_var("timezoneOrYear"), BinOp::StrictNotEq, e_null()), vec![int32_guard(e_cast(CastType::Int, e_var("timezoneOrYear")), "intlgregcal_create_instance()", 1, "timezoneOrYear")], vec![], None),
                 s_if(e_binop(e_var("localeOrMonth"), BinOp::StrictNotEq, e_null()), vec![int32_guard(e_cast(CastType::Int, e_var("localeOrMonth")), "intlgregcal_create_instance()", 2, "localeOrMonth")], vec![], None),
@@ -2453,9 +2469,8 @@ fn typed_intl_override(spec: &IntlFunction) -> Option<(TypeExpr, Vec<Stmt>)> {
             ], vec![], Some(vec![
                 s_return(e_new("IntlGregorianCalendar", vec![e_var("timezoneOrYear"), e_var("localeOrMonth")])),
             ])),
-        ])),
-        _ => None,
-    }
+    );
+    body
 }
 
 /// Applies one generated parameter to a free-function builder.
@@ -3058,8 +3073,8 @@ fn build_date_formatter_class() -> Stmt {
     builder = builder
         .method(method("__construct")
             .param("locale", t_nullable(TypeExpr::Str))
-            .param_default("dateType", TypeExpr::Int, e_int(0))
-            .param_default("timeType", TypeExpr::Int, e_int(0))
+            .param_default("dateType", t_nullable(TypeExpr::Int), e_null())
+            .param_default("timeType", t_nullable(TypeExpr::Int), e_null())
             .param_default("timezone", t_union(vec![t_class("IntlTimeZone"), t_class("DateTimeZone"), TypeExpr::Str, TypeExpr::Void]), e_null())
             .param_default("calendar", t_mixed(), e_null())
             .param_default("pattern", t_nullable(TypeExpr::Str), e_null())
@@ -3191,6 +3206,8 @@ fn build_date_formatter_class() -> Stmt {
 /// Builds the `IntlDateFormatter::__construct` body.
 fn date_formatter_constructor_body() -> Vec<Stmt> {
     vec![
+        intl_present_null_guard("IntlDateFormatter::__construct()", "dateType", 2, "int", e_int(0)),
+        intl_present_null_guard("IntlDateFormatter::__construct()", "timeType", 3, "int", e_int(0)),
         s_if(e_binop(e_this_prop("__elephc_handle"), BinOp::StrictNotEq, e_int(0)), vec![
             s_throw(e_new("IntlException", vec![e_str("IntlDateFormatter::__construct(): cannot call constructor twice")])),
         ], vec![], None),
@@ -4769,10 +4786,12 @@ fn build_rule_based_break_iterator_class() -> Stmt {
     }
     builder = builder
         .method(method("__construct")
-            .param_default("rules", t_mixed(), e_null())
-            .param_default("compiled", t_mixed(), crate::synthetic_class::e_bool(false))
+            .param_default("rules", t_nullable(TypeExpr::Str), e_null())
+            .param_default("compiled", t_nullable(TypeExpr::Bool), e_null())
             .variadic("extra", Some(t_mixed()))
             .body(vec![
+                intl_present_null_guard("IntlRuleBasedBreakIterator::__construct()", "rules", 1, "string", e_str("")),
+                intl_present_null_guard("IntlRuleBasedBreakIterator::__construct()", "compiled", 2, "bool", crate::synthetic_class::e_bool(false)),
                 s_if(e_binop(e_this_prop("__elephc_handle"), BinOp::StrictNotEq, e_int(0)), vec![
                     s_throw(e_new("Error", vec![e_str("IntlRuleBasedBreakIterator object is already constructed")])),
                 ], vec![], None),
@@ -4783,7 +4802,7 @@ fn build_rule_based_break_iterator_class() -> Stmt {
                         e_str(" given"),
                     ])])),
                 ], vec![], None),
-                s_if(e_binop(e_var("rules"), BinOp::StrictEq, e_null()), vec![
+                s_if(e_binop(e_call("func_num_args", vec![]), BinOp::Lt, e_int(1)), vec![
                     s_throw(e_new("ArgumentCountError", vec![e_str("IntlRuleBasedBreakIterator::__construct() expects at least 1 argument, 0 given")])),
                 ], vec![], None),
                 s_if(
@@ -5660,7 +5679,7 @@ fn build_gregorian_calendar_class() -> Stmt {
             .param_untyped_default("second", e_null())
             .body(vec![
                 s_if(e_binop(e_this_prop("__elephc_handle"), BinOp::StrictNotEq, e_int(0)), vec![
-                    s_throw(e_new("IntlException", vec![e_str("IntlGregorianCalendar::__construct(): cannot call constructor twice")])),
+                    s_throw(e_new("Error", vec![e_str("IntlGregorianCalendar object is already constructed")])),
                 ], vec![], None),
                 s_assign("_count", e_call("func_num_args", vec![])),
                 s_assign("_zone", e_call("date_default_timezone_get", vec![])),
@@ -5690,7 +5709,68 @@ fn build_gregorian_calendar_class() -> Stmt {
                         e_const("E_USER_DEPRECATED"),
                     ])),
                 ], vec![], None),
+                s_assign("_trimmed", e_var("_count")),
+                s_while(
+                    e_binop(
+                        e_binop(e_var("_trimmed"), BinOp::Gt, e_int(0)),
+                        BinOp::And,
+                        e_binop(
+                            e_call("func_get_arg", vec![e_binop(e_var("_trimmed"), BinOp::Sub, e_int(1))]),
+                            BinOp::StrictEq,
+                            e_null(),
+                        ),
+                    ),
+                    vec![s_assign("_trimmed", e_binop(e_var("_trimmed"), BinOp::Sub, e_int(1)))],
+                ),
+                s_if(
+                    e_binop(
+                        e_binop(
+                            e_binop(
+                                e_binop(e_var("_trimmed"), BinOp::StrictNotEq, e_int(0)),
+                                BinOp::And,
+                                e_binop(e_var("_trimmed"), BinOp::StrictNotEq, e_int(1)),
+                            ),
+                            BinOp::And,
+                            e_binop(
+                                e_binop(e_var("_trimmed"), BinOp::StrictNotEq, e_int(2)),
+                                BinOp::And,
+                                e_binop(e_var("_trimmed"), BinOp::StrictNotEq, e_int(3)),
+                            ),
+                        ),
+                        BinOp::And,
+                        e_binop(
+                            e_binop(e_var("_trimmed"), BinOp::StrictNotEq, e_int(5)),
+                            BinOp::And,
+                            e_binop(e_var("_trimmed"), BinOp::StrictNotEq, e_int(6)),
+                        ),
+                    ),
+                    vec![s_throw(e_new("ArgumentCountError", vec![e_concat_all(vec![
+                        e_str("No variant with "),
+                        e_cast(CastType::String, e_var("_trimmed")),
+                        e_str(" arguments (excluding trailing NULLs)"),
+                    ])]))],
+                    vec![],
+                    None,
+                ),
                 s_if(e_binop(e_call("is_int", vec![e_var("timezoneOrYear")]), BinOp::StrictEq, crate::synthetic_class::e_bool(true)), vec![
+                    s_if(e_binop(e_var("_count"), BinOp::GtEq, e_int(1)), vec![
+                        intl_int_guard("IntlGregorianCalendar::__construct()", "timezoneOrYear", 1),
+                    ], vec![], None),
+                    s_if(e_binop(e_var("_count"), BinOp::GtEq, e_int(2)), vec![
+                        intl_int_guard("IntlGregorianCalendar::__construct()", "localeOrMonth", 2),
+                    ], vec![], None),
+                    s_if(e_binop(e_var("_count"), BinOp::GtEq, e_int(3)), vec![
+                        intl_int_guard("IntlGregorianCalendar::__construct()", "day", 3),
+                    ], vec![], None),
+                    s_if(e_binop(e_var("_count"), BinOp::GtEq, e_int(4)), vec![
+                        intl_int_guard("IntlGregorianCalendar::__construct()", "hour", 4),
+                    ], vec![], None),
+                    s_if(e_binop(e_var("_count"), BinOp::GtEq, e_int(5)), vec![
+                        intl_int_guard("IntlGregorianCalendar::__construct()", "minute", 5),
+                    ], vec![], None),
+                    s_if(e_binop(e_var("_count"), BinOp::GtEq, e_int(6)), vec![
+                        intl_int_guard("IntlGregorianCalendar::__construct()", "second", 6),
+                    ], vec![], None),
                     s_if(e_binop(e_var("timezoneOrYear"), BinOp::StrictNotEq, e_null()), vec![int32_guard(e_cast(CastType::Int, e_var("timezoneOrYear")), "IntlGregorianCalendar::__construct()", 1, "timezoneOrYear")], vec![], None),
                     s_if(e_binop(e_var("localeOrMonth"), BinOp::StrictNotEq, e_null()), vec![int32_guard(e_cast(CastType::Int, e_var("localeOrMonth")), "IntlGregorianCalendar::__construct()", 2, "localeOrMonth")], vec![], None),
                     s_if(e_binop(e_var("day"), BinOp::StrictNotEq, e_null()), vec![int32_guard(e_cast(CastType::Int, e_var("day")), "IntlGregorianCalendar::__construct()", 3, "day")], vec![], None),
@@ -5755,7 +5835,8 @@ fn build_collator_class() -> Stmt {
         builder = builder.constant(constant, const_value_expr(value));
     }
     builder = builder
-        .method(method("__construct").param("locale", TypeExpr::Str).body(vec![
+        .method(method("__construct").param_default("locale", t_nullable(TypeExpr::Str), e_null()).body(vec![
+            intl_present_null_guard("Collator::__construct()", "locale", 1, "string", e_str("")),
             s_if(e_binop(e_this_prop("__elephc_handle"), BinOp::StrictNotEq, e_int(0)), vec![
                 s_throw(e_new("Error", vec![e_str("Collator object is already constructed")])),
             ], vec![], None),
@@ -6073,6 +6154,59 @@ fn numfmt_type_guards(caller: &str, argument: i64, currency_hint: &str) -> Vec<S
     ]
 }
 
+/// Builds the IntlGregorianCalendar variant arity guard.
+///
+/// php-src accepts 0, 1, 2, 3, 5, or 6 arguments after trimming trailing NULLs and rejects other
+/// counts with its "No variant with N arguments" ArgumentCountError.
+fn gregorian_calendar_variant_guard() -> Vec<Stmt> {
+    vec![
+        s_assign("_count", e_call("func_num_args", vec![])),
+        s_assign("_trimmed", e_var("_count")),
+        s_while(
+            e_binop(
+                e_binop(e_var("_trimmed"), BinOp::Gt, e_int(0)),
+                BinOp::And,
+                e_binop(
+                    e_call("func_get_arg", vec![e_binop(e_var("_trimmed"), BinOp::Sub, e_int(1))]),
+                    BinOp::StrictEq,
+                    e_null(),
+                ),
+            ),
+            vec![s_assign("_trimmed", e_binop(e_var("_trimmed"), BinOp::Sub, e_int(1)))],
+        ),
+        s_if(
+            e_binop(
+                e_binop(
+                    e_binop(
+                        e_binop(e_var("_trimmed"), BinOp::StrictNotEq, e_int(0)),
+                        BinOp::And,
+                        e_binop(e_var("_trimmed"), BinOp::StrictNotEq, e_int(1)),
+                    ),
+                    BinOp::And,
+                    e_binop(
+                        e_binop(e_var("_trimmed"), BinOp::StrictNotEq, e_int(2)),
+                        BinOp::And,
+                        e_binop(e_var("_trimmed"), BinOp::StrictNotEq, e_int(3)),
+                    ),
+                ),
+                BinOp::And,
+                e_binop(
+                    e_binop(e_var("_trimmed"), BinOp::StrictNotEq, e_int(5)),
+                    BinOp::And,
+                    e_binop(e_var("_trimmed"), BinOp::StrictNotEq, e_int(6)),
+                ),
+            ),
+            vec![s_throw(e_new("ArgumentCountError", vec![e_concat_all(vec![
+                e_str("No variant with "),
+                e_cast(CastType::String, e_var("_trimmed")),
+                e_str(" arguments (excluding trailing NULLs)"),
+            ])]))],
+            vec![],
+            None,
+        ),
+    ]
+}
+
 /// Builds one `NumberFormatter::parse*` body with write-back outputs.
 fn numfmt_parse_body(method_name: &str) -> Vec<Stmt> {
     let mut body = Vec::new();
@@ -6120,12 +6254,34 @@ fn intl_null_guard(caller: &str, parameter: &str, index: i64, ty: &str, replacem
     s_if(
         e_binop(e_var(parameter), BinOp::StrictEq, e_null()),
         vec![
-            s_expr(e_call("trigger_error", vec![
-                e_str(&format!(
+            s_expr(e_call("__elephc_builtin_deprecated", vec![e_str(&format!(
+                "{caller}: Passing null to parameter #{index} (${parameter}) of type {ty} is deprecated"
+            ))])),
+            s_assign(parameter, replacement),
+        ],
+        vec![],
+        None,
+    )
+}
+
+/// Coerces an optional null parameter and emits the deprecation only when it was supplied.
+///
+/// Optional parameters default to null so the body can tell a supplied null apart from an
+/// omitted argument; the deprecation still respects php's "only when passed" rule.
+fn intl_present_null_guard(
+    caller: &str, parameter: &str, index: i64, ty: &str, replacement: Expr,
+) -> Stmt {
+    s_if(
+        e_binop(e_var(parameter), BinOp::StrictEq, e_null()),
+        vec![
+            s_if(
+                e_binop(e_call("func_num_args", vec![]), BinOp::GtEq, e_int(index)),
+                vec![s_expr(e_call("__elephc_builtin_deprecated", vec![e_str(&format!(
                     "{caller}: Passing null to parameter #{index} (${parameter}) of type {ty} is deprecated"
-                )),
-                e_const("E_USER_DEPRECATED"),
-            ])),
+                ))]))],
+                vec![],
+                None,
+            ),
             s_assign(parameter, replacement),
         ],
         vec![],
@@ -6299,8 +6455,9 @@ fn build_resource_bundle_class() -> Stmt {
         .method(method("__construct")
             .param("locale", t_nullable(TypeExpr::Str))
             .param("bundle", t_nullable(TypeExpr::Str))
-            .param_default("fallback", TypeExpr::Bool, crate::synthetic_class::e_bool(true))
+            .param_default("fallback", t_nullable(TypeExpr::Bool), e_null())
             .body(vec![
+                intl_present_null_guard("ResourceBundle::__construct()", "fallback", 3, "bool", crate::synthetic_class::e_bool(true)),
                 s_if(e_binop(e_this_prop("__elephc_handle"), BinOp::StrictNotEq, e_int(0)), vec![
                     s_throw(e_new("Error", vec![e_str("ResourceBundle object is already constructed")])),
                 ], vec![], None),
