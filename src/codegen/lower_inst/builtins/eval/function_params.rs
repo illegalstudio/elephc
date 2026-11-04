@@ -277,6 +277,7 @@ pub(super) fn register_eval_native_function_param_default(
         param_index as i64,
     );
     let symbol = match default {
+        EvalNativeCallableDefault::EnumCase { .. } | EvalNativeCallableDefault::Evaluated { .. } => return,
         EvalNativeCallableDefault::Scalar { kind, payload } => {
             abi::emit_load_int_immediate(
                 ctx.emitter,

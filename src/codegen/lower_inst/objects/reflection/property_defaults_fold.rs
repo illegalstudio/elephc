@@ -16,8 +16,8 @@ pub(super) fn reflection_folded_property_default(
     ctx: &FunctionContext<'_>, declaring_class: Option<&str>, default: &Expr,
 ) -> Option<ReflectionParameterDefaultValue> {
     let context = ConstDefaultContext { module: ctx.module, current_class: declaring_class };
-    if let Some((enum_name, case_name)) = const_default_values::resolve_enum_case_default(default, &context) {
-        return Some(ReflectionParameterDefaultValue::EnumCase { enum_name, case_name });
+    if let Some(value) = const_default_values::resolve_enum_case_default(default, &context) {
+        return Some(ReflectionParameterDefaultValue::EnumCase(value));
     }
     let mut default = default.clone();
     fold(&mut default, &context);
@@ -44,6 +44,7 @@ fn fold(expr: &mut Expr, context: &ConstDefaultContext<'_>) {
         ExprKind::Ternary { condition, then_expr, else_expr } => {
             fold(condition, context); fold(then_expr, context); fold(else_expr, context);
             if let Some(truthy) = const_default_values::resolve_const_default(condition, context)
+                .filter(|value| !const_default_values::const_default_contains_enum(value))
                 .and_then(|value| const_default_values::const_default_truthy(&value))
             {
                 *expr = if truthy { *then_expr.clone() } else { *else_expr.clone() };
@@ -51,7 +52,8 @@ fn fold(expr: &mut Expr, context: &ConstDefaultContext<'_>) {
         }
         ExprKind::NullCoalesce { value, default } => {
             fold(value, context); fold(default, context);
-            if let Some(resolved) = const_default_values::resolve_const_default(value, context) {
+            if let Some(resolved) = const_default_values::resolve_const_default(value, context)
+                .filter(|value| !const_default_values::const_default_contains_enum(value)) {
                 *expr = if const_default_values::const_default_is_null(&resolved) {
                     *default.clone()
                 } else { *value.clone() };
@@ -60,6 +62,7 @@ fn fold(expr: &mut Expr, context: &ConstDefaultContext<'_>) {
         ExprKind::ShortTernary { value, default } => {
             fold(value, context); fold(default, context);
             if let Some(truthy) = const_default_values::resolve_const_default(value, context)
+                .filter(|value| !const_default_values::const_default_contains_enum(value))
                 .and_then(|value| const_default_values::const_default_truthy(&value))
             {
                 *expr = if truthy { *value.clone() } else { *default.clone() };

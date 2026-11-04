@@ -39,10 +39,7 @@ pub(super) fn collect_property_initialization(
         let context = crate::codegen::const_default_values::ConstDefaultContext {
             module, current_class: declaring_class,
         };
-        let resolved = crate::codegen::const_default_values::resolve_enum_case_default(default_expr, &context)
-            .map(|(enum_name, name)| crate::parser::ast::ExprKind::ScopedConstantAccess {
-                receiver: crate::parser::ast::StaticReceiver::Named(enum_name.into()), name,
-            });
+        let resolved = crate::codegen::const_default_values::resolve_enum_case_default(default_expr, &context);
         // Other scoped constants keep ordinary EIR initialization; their spelling alone does
         // not identify an enum case, especially in a mixed or union property slot.
         if resolved.is_none() && matches!(default_expr.kind,
@@ -50,12 +47,13 @@ pub(super) fn collect_property_initialization(
         {
             return PropertyInitialization::Thunk { class_id: class_info.class_id };
         }
-        let Ok(value) = literal_default_value(
-            &format!("property ${}", property),
-            php_type,
-            resolved.as_ref().unwrap_or(&default_expr.kind),
-            inst.op.name(),
-        ) else {
+        let context = format!("property ${}", property);
+        let value = if let Some(value) = resolved {
+            crate::codegen::literal_defaults::enum_case_default_value(&context, php_type, value, inst.op.name())
+        } else {
+            literal_default_value(&context, php_type, &default_expr.kind, inst.op.name())
+        };
+        let Ok(value) = value else {
             // The class initializer is ordinary EIR and can preserve lazy branches in constant
             // expressions that the direct literal copier deliberately does not interpret.
             return PropertyInitialization::Thunk {
@@ -98,7 +96,7 @@ pub(super) fn emit_stacked_property_initialization(
             let object_reg = abi::secondary_scratch_reg(ctx.emitter);
             for default in defaults {
                 abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, object_stack_offset);
-                emit_property_default(ctx, object_reg, default)?;
+                emit_property_slot_default(ctx, object_reg, default)?;
             }
             Ok(())
         }
@@ -142,21 +140,24 @@ pub(super) fn emit_property_defaults(
     for default in defaults {
         let object_reg = abi::secondary_scratch_reg(ctx.emitter);
         ctx.load_value_to_reg(object, object_reg)?;
-        if default.is_reference {
-            // Write the default THROUGH the property's ref-cell: load the cell pointer
-            // from the slot, then write the value at the cell's value/tag words (offset 0).
-            abi::emit_load_from_address(ctx.emitter, object_reg, object_reg, default.offset);
-            let cell_default = PropertyDefault {
-                offset: 0,
-                value: default.value.clone(),
-                is_reference: false,
-            };
-            emit_property_default(ctx, object_reg, &cell_default)?;
-        } else {
-            emit_property_default(ctx, object_reg, default)?;
-        }
+        emit_property_slot_default(ctx, object_reg, default)?;
     }
     Ok(())
+}
+
+/// Initializes a physical property or writes through its existing owned reference cell.
+fn emit_property_slot_default(
+    ctx: &mut FunctionContext<'_>, object_reg: &str, default: &PropertyDefault,
+) -> Result<()> {
+    if default.is_reference {
+        abi::emit_load_from_address(ctx.emitter, object_reg, object_reg, default.offset);
+        let cell_default = PropertyDefault {
+            offset: 0, value: default.value.clone(), is_reference: false,
+        };
+        emit_property_default(ctx, object_reg, &cell_default)
+    } else {
+        emit_property_default(ctx, object_reg, default)
+    }
 }
 
 /// Writes one literal property default into its object slot.
@@ -205,10 +206,11 @@ pub(super) fn emit_property_default(
             abi::emit_store_to_address(ctx.emitter, len_reg, object_reg, default.offset + 8);
         }
         LiteralDefaultValue::EnumCase {
-            enum_name,
-            case_name,
+            value,
             boxed,
         } => {
+            let enum_name = &value.enum_name;
+            let case_name = &value.case_name;
             // The receiver was taken on shape alone by `literal_default_value`, which has no
             // module. This is where that is settled: a scoped constant in an object slot whose
             // receiver is not an enum, or whose name is not one of its cases, has no singleton
@@ -229,12 +231,11 @@ pub(super) fn emit_property_default(
             // materializer rather than read the slot: a default written before the case's
             // first use would otherwise store the still-null slot and every
             // `$obj->prop === Enum::Case` after it would be false.
-            crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
-                ctx.emitter,
-                ctx.module,
-                enum_name,
-                case_name,
-            );
+            for (enum_name, case_name) in &value.evaluated {
+                crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+                    ctx.emitter, ctx.module, enum_name, case_name,
+                );
+            }
             // The slot becomes a new OWNER of the singleton, so it has to retain it —
             // exactly as an ordinary `Enum::Case` read does (`lower_inst::scoped_constants`,
             // issue #349). Without this, the first thing that releases the slot consumes the

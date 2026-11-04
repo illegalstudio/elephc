@@ -10,6 +10,28 @@
 
 use super::*;
 
+/// Ordered enum registration copies every lookup and returns the final selected case.
+#[test]
+fn register_native_property_default_enum_case_preserves_read_order() {
+    use crate::eval_ir::{EvalArrayElement, EvalConst, EvalExpr};
+    let mut context = ElephcEvalContext::new();
+    let key = b"Config::level";
+    let cases = b"Level::Low\nLevel::High\nLevel::Low";
+    assert_eq!(unsafe { __elephc_eval_register_native_property_default_enum_case(
+        &mut context, key.as_ptr(), key.len() as u64, cases.as_ptr(), cases.len() as u64,
+    ) }, 1);
+    let expression = EvalExpr::ArrayGet {
+        array: Box::new(EvalExpr::Array(["Low", "High", "Low"].iter().map(|case|
+            EvalArrayElement::Value(EvalExpr::ClassConstantFetch {
+                class_name: "Level".into(), constant: (*case).into(),
+            })).collect())),
+        index: Box::new(EvalExpr::Const(EvalConst::Int(2))),
+    };
+    assert_eq!(context.native_property_default("Config", "level"), Some(NativeCallableDefault::Expression {
+        expression: Box::new(expression), lexical_class: "Level".into(), reflection_factory: None,
+    }));
+}
+
 /// Enum property defaults own their lookup names and reject malformed ABI registrations.
 #[test]
 fn register_native_property_default_enum_case_owns_metadata() {
@@ -27,7 +49,7 @@ fn register_native_property_default_enum_case_owns_metadata() {
         }),
         lexical_class: "Level".into(), reflection_factory: None,
     });
-    for invalid in ["Level", "Level::", "::Low", "\\::Low"] {
+    for invalid in ["Level", "Level::", "::Low", "\\::Low", "Level::Low\n"] {
         assert_eq!(unsafe { __elephc_eval_register_native_property_default_enum_case(
             &mut context, key.as_ptr(), key.len() as u64, invalid.as_ptr(), invalid.len() as u64,
         ) }, 0);

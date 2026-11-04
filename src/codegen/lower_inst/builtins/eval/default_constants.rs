@@ -36,13 +36,13 @@ pub(super) fn eval_native_property_default(
         if let Some(message) = crate::types::deferred_defaults::unconditional_error_message(default) {
             return Some(EvalNativePropertyDefault::DeferredError(message.to_string()));
         }
-        if let Some((enum_name, case_name)) =
+        if let Some(value) =
             crate::codegen::const_default_values::resolve_enum_case_default(default,
                 &crate::codegen::const_default_values::ConstDefaultContext {
                     module: default_context.module, current_class: default_context.current_class,
                 })
         {
-            return Some(EvalNativePropertyDefault::EnumCase { enum_name, case_name });
+            return Some(EvalNativePropertyDefault::EnumCase(value));
         }
         return eval_native_literal_default(default)
             .or_else(|| eval_native_array_default(default, default_context, 0))
@@ -128,6 +128,9 @@ pub(super) fn encode_eval_native_object_default_arg_value(
     default: &EvalNativeCallableDefault,
 ) {
     match default {
+        EvalNativeCallableDefault::EnumCase { .. } | EvalNativeCallableDefault::Evaluated { .. } => {
+            unreachable!("enum singletons are excluded from compact callable default metadata")
+        }
         EvalNativeCallableDefault::Scalar { kind, payload } => {
             bytes.push(NATIVE_OBJECT_DEFAULT_ARG_SCALAR);
             bytes.extend_from_slice(&(*kind as u64).to_le_bytes());

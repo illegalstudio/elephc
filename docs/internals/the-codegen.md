@@ -862,7 +862,12 @@ aliases in each constant's declaration scope and returns the canonical enum/case
 Instance and static initialization retain the lazy singleton; nullable, union and
 mixed slots box that borrowed object. Reflection uses the same lookup, and eval
 registers an owned constant-fetch expression so reading a default preserves singleton
-identity without constructing another enum object.
+identity without constructing another enum object. Constant array projections and
+branch selectors retain evaluated enum reads in `ConstDefaultValue::Evaluated`, even
+when the selected value is scalar. Property metadata emits these reads in first-access
+order and reloads the selected case last. Eval represents multiple reads as an owned
+array expression followed by a final-element read. Compact callable-default codecs
+decline such trees rather than silently erase their observable materialization.
 
 Static Reflection metadata folds constant expressions at compile time in
 `reflection_constant_value` (`src/codegen/lower_inst/objects/reflection/names_constants.rs`),

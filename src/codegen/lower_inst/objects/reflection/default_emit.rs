@@ -88,10 +88,11 @@ pub(super) fn emit_reflection_default_value_as_mixed(
     value: &ReflectionParameterDefaultValue,
 ) {
     match value {
-        ReflectionParameterDefaultValue::EnumCase { enum_name, case_name } => {
-            emit_reflection_constant_value_as_mixed(ctx, &ReflectionConstantValue::EnumCase {
-                enum_name: enum_name.clone(), case_name: case_name.clone(),
-            });
+        ReflectionParameterDefaultValue::EnumCase(value) => {
+            for (enum_name, case_name) in &value.evaluated {
+                crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            }
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(value.enum_name.clone()));
         }
         ReflectionParameterDefaultValue::Int(value) => {
             emit_boxed_int_literal_to_result(ctx, *value)

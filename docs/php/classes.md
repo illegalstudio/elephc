@@ -957,6 +957,10 @@ inherited properties and properties shadowing a private parent slot. PHP forbids
 `ReflectionProperty::getDefaultValue()` return the enum case object for both pure
 and backed enums, including when these APIs are called inside `eval()`.
 
+Aliases can also select a case from a constant array, such as
+`const DEFAULT = self::CASES[0]`. Evaluated cases retain PHP's materialization
+order; cases on an untaken conditional branch remain lazy.
+
 A default naming a case that does not exist is a compile error (`Undefined enum case: Level::Missing`), and a scoped constant that resolves to a scalar is still rejected for an enum-typed slot.
 
 ### Built-in `SortDirection`

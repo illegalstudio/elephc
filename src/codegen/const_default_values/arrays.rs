@@ -48,23 +48,28 @@ pub(in crate::codegen) fn resolve_array_const_default(
     };
     let mut elements = Vec::with_capacity(entries.len());
     let mut highest = None;
+    let mut reads = Vec::new();
     for entry in entries {
         match entry {
             ArrayEntry::Keyed(key, value) => {
                 let key = resolve_array_const_default_key(&key, context, depth + 1)?;
                 let value = resolve_const_default_at(&value, context, depth + 1)?;
                 if contains_object(&value) { return None; }
+                collect_enum_reads(&value, &mut reads);
                 insert_array_element(&mut elements, &mut highest, key, value);
             }
             ArrayEntry::Value(value) => {
                 let key = next_integer_key(highest)?;
                 let value = resolve_const_default_at(&value, context, depth + 1)?;
                 if contains_object(&value) { return None; }
+                collect_enum_reads(&value, &mut reads);
                 insert_array_element(&mut elements, &mut highest, ConstDefaultArrayKey::Int(key), value);
             }
             ArrayEntry::Spread(value) => {
                 let source = match &value.kind { ExprKind::Spread(inner) => inner.as_ref(), _ => &value };
-                let source = match resolve_const_default_at(source, context, depth + 1)? {
+                let source = resolve_const_default_at(source, context, depth + 1)?;
+                collect_enum_reads(&source, &mut reads);
+                let source = match without_enum_effects(source) {
                     ConstDefaultValue::Array(elements) => elements,
                     ConstDefaultValue::Scalar { kind: CONST_DEFAULT_EMPTY_ARRAY, .. } => Vec::new(),
                     _ => return None,
@@ -91,7 +96,7 @@ pub(in crate::codegen) fn resolve_array_const_default(
         element.key == Some(ConstDefaultArrayKey::Int(index as i64))) {
         for element in &mut elements { element.key = None; }
     }
-    Some(ConstDefaultValue::Array(elements))
+    Some(with_enum_reads(ConstDefaultValue::Array(elements), reads))
 }
 
 /// Selects the next append key lazily, including PHP's pre-8.3 negative-key rule.
@@ -122,6 +127,33 @@ fn insert_array_element(
     } else {
         elements.push(ConstDefaultArrayElement { key: Some(key), default: value });
     }
+}
+
+/// Selects a constant array element without dropping observable object construction.
+pub(super) fn resolve_array_offset_default(
+    array: &Expr, index: &Expr, context: &ConstDefaultContext<'_>, depth: usize,
+) -> Option<ConstDefaultValue> {
+    let value = resolve_const_default_at(array, context, depth + 1)?;
+    if contains_object(&value) { return None; }
+    let mut reads = Vec::new();
+    collect_enum_reads(&value, &mut reads);
+    let ConstDefaultValue::Array(source) = without_enum_effects(value) else { return None; };
+    let requested = resolve_array_const_default_key(index, context, depth + 1)?;
+    let mut normalized = Vec::with_capacity(source.len());
+    let mut highest = None;
+    for element in source {
+        let key = match element.key {
+            Some(key) => key,
+            None => ConstDefaultArrayKey::Int(next_integer_key(highest)?),
+        };
+        insert_array_element(&mut normalized, &mut highest, key, element.default);
+    }
+    normalized.into_iter().find(|element| match (&element.key, &requested) {
+        (Some(ConstDefaultArrayKey::String(existing)), ConstDefaultArrayKey::String(requested)) =>
+            elephc_builtin_contract::string_literal::literal_bytes(existing)
+                == elephc_builtin_contract::string_literal::literal_bytes(requested),
+        (key, requested) => key.as_ref() == Some(requested),
+    }).map(|element| with_enum_reads(element.default, reads))
 }
 
 /// Resolves one supported static array key.
@@ -181,6 +213,7 @@ pub(in crate::codegen) fn resolve_literal_array_const_default_key(
 fn contains_object(value: &ConstDefaultValue) -> bool {
     match value {
         ConstDefaultValue::Object { .. } => true,
+        ConstDefaultValue::Evaluated { value, .. } => contains_object(value),
         ConstDefaultValue::Array(elements) => elements.iter().any(|element| contains_object(&element.default)),
         _ => false,
     }

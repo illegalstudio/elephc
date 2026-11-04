@@ -119,7 +119,7 @@ pub(super) fn reflection_literal_parameter_default_non_object_value(
 pub(super) fn reflection_default_value_contains_object(value: &ReflectionParameterDefaultValue) -> bool {
     match value {
         ReflectionParameterDefaultValue::Object { .. }
-        | ReflectionParameterDefaultValue::EnumCase { .. } => true,
+        | ReflectionParameterDefaultValue::EnumCase(_) => true,
         ReflectionParameterDefaultValue::Array(elements) => elements
             .iter()
             .any(reflection_default_value_contains_object),

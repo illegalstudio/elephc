@@ -279,7 +279,7 @@ enum ReflectionParameterDefaultValue {
     Float(f64),
     Str(String),
     Null,
-    EnumCase { enum_name: String, case_name: String },
+    EnumCase(crate::codegen::const_default_values::EnumCaseDefault),
     DeferredError(String),
     EirHelper(String),
     Object {

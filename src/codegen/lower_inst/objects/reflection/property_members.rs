@@ -392,7 +392,7 @@ pub(super) fn reflection_default_value_to_string(
     default: &ReflectionParameterDefaultValue,
 ) -> Option<String> {
     match default {
-        ReflectionParameterDefaultValue::EnumCase { .. } => Some(reflection_dump_default_value(default)),
+        ReflectionParameterDefaultValue::EnumCase(_) => Some(reflection_dump_default_value(default)),
         ReflectionParameterDefaultValue::Int(value) => Some(value.to_string()),
         ReflectionParameterDefaultValue::Bool(value) => Some(value.to_string()),
         ReflectionParameterDefaultValue::Float(value) => Some(value.to_string()),

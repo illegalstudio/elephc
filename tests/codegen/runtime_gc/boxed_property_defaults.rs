@@ -16,6 +16,38 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Dynamic construction initializes enum defaults through owned property reference cells.
+#[test]
+fn test_enum_property_defaults_review_dynamic_references() {
+    let source = r#"<?php
+enum Level { case Low; case High; }
+class Config {
+    public ?Level $value = Level::Low;
+    public function touch(): void {
+        $r = &$this->value;
+        var_dump($r === Level::Low);
+        $r = Level::High;
+    }
+}
+$fixed = new Config();
+$fixed->touch();
+var_dump($fixed->value === Level::High);
+$class = $argc > 0 ? Config::class : '';
+for ($i = 0; $i < ITERATIONS; $i++) {
+    $dynamic = new $class();
+    $dynamic->touch();
+    var_dump($dynamic->value === Level::High);
+}
+"#;
+    for iterations in [8, 64] {
+        let out = compile_and_run_with_heap_debug(&source.replace("ITERATIONS", &iterations.to_string()));
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, "bool(true)\n".repeat(2 * (iterations + 1)), "{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: live_blocks=2 live_bytes=80"),
+            "{}", out.stderr);
+    }
+}
+
 /// Verifies the boxed array-literal defaults release the container they allocate.
 ///
 /// Each object allocates the literal and boxes it into a Mixed cell, and the box takes its own

@@ -10,6 +10,20 @@
 
 use super::*;
 
+/// Interface self aliases cannot borrow the consumer's same-named constant to evade typing.
+#[test]
+fn test_enum_property_defaults_review_reject_wrong_enum_alias() {
+    for ty in ["F", "?F", "F|string"] {
+        for modifier in ["", "static "] {
+            let source = format!("<?php
+                enum E {{ case A; }} enum F {{ case B; }}
+                interface I {{ const A = E::A; const DEFAULT = self::A; }}
+                class C {{ const A = F::B; public {modifier}{ty} $value = I::DEFAULT; }}");
+            expect_error(&source, "got E");
+        }
+    }
+}
+
 /// Deferring private-shadow defaults still rejects missing cases and incompatible aliases.
 #[test]
 fn test_enum_property_defaults_reject_invalid_shadow_defaults() {

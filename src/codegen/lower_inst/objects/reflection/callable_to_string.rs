@@ -236,8 +236,8 @@ fn reflection_parameter_default_to_string(parameter: &ReflectionParameterMember)
 /// Renders one default value, including the array and object forms PHP prints in a dump.
 pub(super) fn reflection_dump_default_value(default: &ReflectionParameterDefaultValue) -> String {
     match default {
-        ReflectionParameterDefaultValue::EnumCase { enum_name, case_name } =>
-            format!("{}::{}", reflection_dump_text(enum_name), reflection_dump_text(case_name)),
+        ReflectionParameterDefaultValue::EnumCase(value) =>
+            format!("{}::{}", reflection_dump_text(&value.enum_name), reflection_dump_text(&value.case_name)),
         ReflectionParameterDefaultValue::Int(value) => value.to_string(),
         ReflectionParameterDefaultValue::Bool(value) => value.to_string(),
         ReflectionParameterDefaultValue::Float(value) => reflection_dump_float(*value),

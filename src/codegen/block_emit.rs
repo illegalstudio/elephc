@@ -1203,19 +1203,14 @@ fn emit_static_property_default(
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
     let default = crate::parser::ast::Expr::new(expr.clone(), crate::span::Span::synthetic());
     let context = super::const_default_values::ConstDefaultContext::for_class(ctx.module, class_name);
-    let resolved = super::const_default_values::resolve_enum_case_default(&default, &context)
-        .map(|(enum_name, name)| crate::parser::ast::ExprKind::ScopedConstantAccess {
-            receiver: crate::parser::ast::StaticReceiver::Named(enum_name.into()), name,
-        })
-        .or_else(|| super::const_default_values::resolve_const_default(&default, &context)
-            .and_then(super::const_default_values::resolved_literal_default));
-    let expr = resolved.as_ref().unwrap_or(expr);
-    let value = literal_default_value(
-        &format!("static property {}::${}", class_name, property),
-        php_type,
-        expr,
-        "static property initializer",
-    )?;
+    let description = format!("static property {}::${}", class_name, property);
+    let value = if let Some(value) = super::const_default_values::resolve_enum_case_default(&default, &context) {
+        super::literal_defaults::enum_case_default_value(&description, php_type, value, "static property initializer")?
+    } else {
+        let resolved = super::const_default_values::resolve_const_default(&default, &context)
+            .and_then(super::const_default_values::resolved_literal_default);
+        literal_default_value(&description, php_type, resolved.as_ref().unwrap_or(expr), "static property initializer")?
+    };
     ctx.emitter.comment(&format!(
         "initialize static property {}::${}",
         class_name, property
@@ -1278,10 +1273,11 @@ fn emit_static_property_default_value(
         // path loads, into the result register this function's caller then stores. See
         // `LiteralDefaultValue::EnumCase` for why the receiver is only settled here.
         LiteralDefaultValue::EnumCase {
-            enum_name,
-            case_name,
+            value,
             boxed,
         } => {
+            let enum_name = &value.enum_name;
+            let case_name = &value.case_name;
             let is_case = ctx
                 .module
                 .enum_infos
@@ -1293,12 +1289,11 @@ fn emit_static_property_default_value(
                     enum_name, case_name, class_name, property
                 )));
             }
-            crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
-                ctx.emitter,
-                ctx.module,
-                enum_name,
-                case_name,
-            );
+            for (enum_name, case_name) in &value.evaluated {
+                crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+                    ctx.emitter, ctx.module, enum_name, case_name,
+                );
+            }
             // The static slot becomes a new OWNER, so it retains, exactly as the instance
             // path and an ordinary `Enum::Case` read do (issue #349). Without it,
             // `Config::$shared = Level::High;` releases the global's only reference. There is

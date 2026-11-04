@@ -225,7 +225,7 @@ struct EvalNativePropertyDefaultRegistration {
 /// Property default metadata separates stored values from deferred materialization failures.
 enum EvalNativePropertyDefault {
     Value(EvalNativeCallableDefault),
-    EnumCase { enum_name: String, case_name: String },
+    EnumCase(crate::codegen::const_default_values::EnumCaseDefault),
     DeferredError(String),
 }
 

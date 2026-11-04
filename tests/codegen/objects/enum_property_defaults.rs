@@ -9,6 +9,85 @@
 
 use crate::support::*;
 
+/// Runtime eval materializes projected defaults in source order before returning the case.
+#[test]
+fn test_enum_property_defaults_review_runtime_eval_order() {
+    let out = compile_and_run(r#"<?php
+enum EvalLevel { case Low; case High; }
+class EvalHolder { const ALL = [EvalLevel::Low, EvalLevel::High]; const DEFAULT = self::ALL[1]; }
+class EvalConfig { public EvalLevel $value = EvalHolder::DEFAULT; }
+$code = $argc > 0 ? '$defaults = (new ReflectionClass("EvalConfig"))->getDefaultProperties();
+var_dump($defaults["value"] === EvalLevel::High);
+var_dump(spl_object_id(EvalLevel::Low) < spl_object_id(EvalLevel::High));' : '';
+eval($code);
+"#);
+    assert_eq!(out, "bool(true)\n".repeat(2));
+}
+
+/// Enum projections and selectors preserve evaluated cases and leave untaken cases lazy.
+#[test]
+fn test_enum_property_defaults_review_materialization_order() {
+    let out = compile_and_run(r#"<?php
+enum E { case A; case B; }
+class H { const ALL = [E::A, E::B]; const DEFAULT = self::ALL[1]; }
+class C { public E $value = H::DEFAULT; }
+$c = new C();
+var_dump($c->value === E::B, spl_object_id(E::A) < spl_object_id(E::B));
+enum T { case A; case B; case Untaken; }
+class TH { const DEFAULT = T::A ? T::B : T::Untaken; }
+class TC { public static T $value = TH::DEFAULT; }
+var_dump(TC::$value === T::B, spl_object_id(T::A) < spl_object_id(T::B));
+$fresh = new stdClass();
+var_dump(spl_object_id($fresh) < spl_object_id(T::Untaken));
+"#);
+    assert_eq!(out, "bool(true)\n".repeat(5));
+}
+
+/// Interface self aliases keep the original declaration scope through overriding interfaces.
+#[test]
+fn test_enum_property_defaults_review_interface_scope() {
+    let out = compile_and_run(r#"<?php
+enum E { case A; }
+enum F { case B; }
+interface Origin { const ITEM = E::A; const DEFAULT = self::ITEM; }
+interface Alias extends Origin { const ITEM = F::B; }
+class Config {
+    const ITEM = F::B;
+    public E $value = Alias::DEFAULT;
+    public static ?E $shared = Alias::DEFAULT;
+}
+$c = new Config();
+var_dump($c->value === E::A, Config::$shared === E::A);
+$defaults = (new ReflectionClass(Config::class))->getDefaultProperties();
+var_dump($defaults['value'] === E::A);
+"#);
+    assert_eq!(out, "bool(true)\n".repeat(3));
+}
+
+/// Enum-valued constant expressions resolve before instance and static slot selection.
+#[test]
+fn test_enum_property_defaults_review_constant_expressions() {
+    let out = compile_and_run(r#"<?php
+enum Level { case Low; case High; }
+class Holder {
+    const ALL = [Level::Low, 'last' => Level::High];
+    const FIRST = self::ALL[0];
+    const NESTED = ['value' => [Level::High]];
+    const DEFAULT = self::NESTED['value'][0];
+}
+class Config {
+    public Level $value = Holder::FIRST;
+    public static ?Level $shared = Holder::DEFAULT;
+    public mixed $other = Holder::ALL['last'];
+}
+$c = new Config();
+var_dump($c->value === Level::Low, Config::$shared === Level::High, $c->other === Level::High);
+$defaults = (new ReflectionClass(Config::class))->getDefaultProperties();
+var_dump($defaults['value'] === Level::Low, $defaults['shared'] === Level::High);
+"#);
+    assert_eq!(out, "bool(true)\n".repeat(5));
+}
+
 /// Nullable, union and mixed slots retain the enum singleton on every allocation path.
 #[test]
 fn test_enum_property_defaults_boxed_slots() {

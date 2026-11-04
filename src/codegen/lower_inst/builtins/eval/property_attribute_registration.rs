@@ -55,8 +55,9 @@ pub(super) fn register_eval_native_property_default(
     );
     let default = match &registration.default {
         EvalNativePropertyDefault::Value(default) => default,
-        EvalNativePropertyDefault::EnumCase { enum_name, case_name } => {
-            let key = format!("{enum_name}::{case_name}");
+        EvalNativePropertyDefault::EnumCase(value) => {
+            let key = value.evaluated.iter().map(|(class, case)| format!("{class}::{case}"))
+                .collect::<Vec<_>>().join("\n");
             let (label, len) = ctx.data.add_string(key.as_bytes());
             abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), &label);
             abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), len as i64);
@@ -74,6 +75,7 @@ pub(super) fn register_eval_native_property_default(
         }
     };
     let symbol = match default {
+        EvalNativeCallableDefault::EnumCase { .. } | EvalNativeCallableDefault::Evaluated { .. } => return,
         EvalNativeCallableDefault::Scalar { kind, payload } => {
             abi::emit_load_int_immediate(
                 ctx.emitter,

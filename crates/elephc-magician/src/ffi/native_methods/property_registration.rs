@@ -11,7 +11,7 @@
 
 use super::*;
 
-/// Registers a resolved enum case as lazy singleton lookup data for property reflection.
+/// Registers ordered enum reads, returning the final singleton as a property default.
 ///
 /// # Safety
 /// The context and borrowed UTF-8 buffers must be valid for their declared lengths.
@@ -22,13 +22,28 @@ pub unsafe extern "C" fn __elephc_eval_register_native_property_default_enum_cas
 ) -> i32 {
     let outcome = std::panic::catch_unwind(|| unsafe {
         let Ok(case_key) = abi_name_to_string(case_key, case_key_len) else { return 0; };
-        let Some((class_name, constant)) = split_property_key(&case_key) else { return 0; };
-        if class_name.trim_start_matches('\\').is_empty() { return 0; }
-        let default = NativeCallableDefault::Expression {
-            expression: Box::new(crate::eval_ir::EvalExpr::ClassConstantFetch {
+        let mut cases = Vec::new();
+        let mut lexical_class = String::new();
+        for key in case_key.split('\n') {
+            let Some((class_name, constant)) = split_property_key(key) else { return 0; };
+            if class_name.trim_start_matches('\\').is_empty() { return 0; }
+            lexical_class = class_name.to_string();
+            cases.push(crate::eval_ir::EvalExpr::ClassConstantFetch {
                 class_name: class_name.to_string(), constant: constant.to_string(),
-            }),
-            lexical_class: class_name.to_string(), reflection_factory: None,
+            });
+        }
+        let expression = if cases.len() == 1 {
+            cases.pop().unwrap()
+        } else {
+            let last = cases.len() as i64 - 1;
+            crate::eval_ir::EvalExpr::ArrayGet {
+                array: Box::new(crate::eval_ir::EvalExpr::Array(cases.into_iter()
+                    .map(crate::eval_ir::EvalArrayElement::Value).collect())),
+                index: Box::new(crate::eval_ir::EvalExpr::Const(crate::eval_ir::EvalConst::Int(last))),
+            }
+        };
+        let default = NativeCallableDefault::Expression {
+            expression: Box::new(expression), lexical_class, reflection_factory: None,
         };
         register_native_property_default_inner(ctx, key, key_len, default).unwrap_or(0)
     }).ok();
