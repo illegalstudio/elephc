@@ -188,6 +188,7 @@ impl Proof<'_> {
                 }
                 let user = &self.function.instructions[id.as_raw() as usize];
                 match user.op {
+                    Op::PropertyBoundaryCheckedToInt => int_property_observation(user),
                     Op::Release => true,
                     Op::Acquire | Op::Borrow if user.immediate.is_none() => user
                         .result
@@ -342,6 +343,9 @@ impl Proof<'_> {
         self.uses.get(&value).is_none_or(|uses| {
             uses.iter().all(|&user| {
                 let inst = &self.function.instructions[user.as_raw() as usize];
+                if int_property_observation(inst) {
+                    return self.stable_read(load, user);
+                }
                 if inst.op == Op::Release {
                     return true;
                 }
@@ -445,6 +449,15 @@ fn scalar_observation(inst: &crate::ir::Instruction) -> bool {
                 | (Some(Immediate::CastTarget(IrType::F64)), PhpType::Float)
                 | (Some(Immediate::CastTarget(IrType::Str)), PhpType::Str)
         ))
+}
+
+/// Copies a checked payload into a declared `int` property word; the narrowing keeps PHP's
+/// typed-property TypeError and never retains or frees the cell.
+fn int_property_observation(inst: &crate::ir::Instruction) -> bool {
+    inst.op == Op::PropertyBoundaryCheckedToInt
+        && inst.operands.len() == 1
+        && inst.result_type == IrType::I64
+        && inst.result_php_type == PhpType::Int
 }
 
 /// Finds the defining instruction for a non-parameter SSA value.

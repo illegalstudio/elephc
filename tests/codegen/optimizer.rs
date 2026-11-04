@@ -90,6 +90,7 @@ mod checked_numeric_chain;
 mod integer_destinations;
 mod counter_fast_paths;
 mod counter_region_comparisons;
+mod integer_property_updates;
 #[path = "optimizer/concat_reset.rs"]
 mod concat_reset;
 #[path = "optimizer/eir_common_subexpression.rs"]

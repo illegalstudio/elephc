@@ -353,6 +353,25 @@ fn stack_numeric_chained_producers_copy_numeric_payloads() {
     assert_eq!(candidates(&function), vec![product, sum]);
 }
 
+/// A declared int property narrowing copies the checked payload, so its producer stays private.
+#[test]
+fn stack_numeric_int_property_boundary_copies_checked_payload() {
+    let mut function = Function::new("property_boundary".into(), IrType::I64, PhpType::Int);
+    let mut builder = Builder::new(&mut function);
+    let entry = builder.create_named_block("entry", vec![]);
+    builder.set_entry(entry); builder.position_at_end(entry);
+    let one = builder.emit_const_i64(1);
+    let sum = builder.emit(Op::ICheckedAdd, vec![one, one], None,
+        IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned).unwrap();
+    let result = builder.emit(Op::PropertyBoundaryCheckedToInt, vec![sum],
+        Some(Immediate::Data(crate::ir::DataId::from_raw(0))),
+        IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+    builder.emit(Op::Release, vec![sum], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+    builder.terminate(Terminator::Return { value: Some(result) });
+    crate::ir::validate_function(&function).unwrap();
+    assert_eq!(candidates(&function), vec![sum]);
+}
+
 /// A published temporary retains only a numeric cell, and its borrow copies a scalar payload.
 #[test]
 fn stack_numeric_scoped_operand_keeps_numeric_cell_private() {

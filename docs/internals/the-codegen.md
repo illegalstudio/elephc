@@ -209,8 +209,10 @@ cells described below, without allocating heap cells.
 add/subtract/multiply results from checked integer or proven numeric Mixed
 operations, plus numeric increments or decrements, whose complete pointer lifetime
 remains in the current activation. Numeric observations and one ordinary local
-are permitted, including a declared integer return check whose result copies the
-payload and preserves its TypeError guard. A checked result may also feed another
+are permitted, including a declared integer return check or a declared `int`
+property narrowing (`PropertyBoundaryCheckedToInt`), whose result copies the payload
+and preserves its TypeError guard. That narrowing is why `$this->count++` on a
+declared `int` property stores a raw word without a heap cell. A checked result may also feed another
 closed numeric add/subtract/multiply or increment; every input must be proven
 integer or float, including all local writers. A float tag remains floating point
 on subsequent operations. A same-block ordered comparison may consume the result

@@ -2,12 +2,14 @@
 //! Exposes implicit integer conversions of checked arithmetic as scalar EIR sinks.
 //!
 //! Called from:
+//! - Declared `int` instance-property stores in `stmt::instance_property_writes`.
 //! - Typed destination and declared-local assignment lowering.
 //!
 //! Key details:
 //! - Only closed add/sub/mul trees with concrete integer leaves are accepted.
 //! - Conversion happens after the whole tree, preserving intermediate float promotion.
 //! - Unknown Mixed values and reference places retain their existing boundary handling.
+//! - A declared `int` property receives a PHP-checked narrowing, never a silent cast.
 
 use super::*;
 
@@ -67,4 +69,64 @@ fn checked_integer_tree(ctx: &LoweringContext<'_, '_>, root: ValueId) -> bool {
         pending.extend(inst.operands.iter().copied());
     }
     true
+}
+
+/// Narrows checked integer arithmetic stored into a declared `int` property before the store.
+///
+/// The boxed result otherwise reaches `PropSet` as `Mixed`, where the backend's weak
+/// typed-property guard unboxes it after the producer has already allocated its heap cell.
+/// `Op::PropertyBoundaryCheckedToInt` performs the same verdict (an int stores; an overflowed
+/// float throws `Cannot assign float to property C::$p of type int`) while handing the store a
+/// raw word, so the frame-cell planner can keep the producer off the heap.
+///
+/// Only a concrete declared, non-readonly, non-reference `int` slot qualifies. Callers invoke
+/// this after the magic `__set`, property-hook and inherited-setter routes have been selected,
+/// so those paths keep the original PHP tag. Unions, nullable types and dynamic receivers keep
+/// the guard on the boxed value. The message names the declaring class, as php-src does.
+pub(crate) fn narrow_checked_integer_for_int_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: ValueId,
+    property: &str,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if ctx.builder.value_php_type(value.value).codegen_repr() != PhpType::Mixed
+        || !checked_integer_tree(ctx, value.value)
+    {
+        return value;
+    }
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return value;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(info) = ctx.classes.get(normalized) else { return value; };
+    let Some((index, (name, php_type))) = info.visible_property(property) else { return value; };
+    if *php_type != PhpType::Int
+        || !info.property_slot_is_declared(index, name)
+        || info.property_slot_is_reference(index, name)
+        || info.is_readonly_class
+        || info.readonly_properties.contains(name)
+    {
+        return value;
+    }
+    let declaring = info
+        .property_declaring_classes
+        .get(name)
+        .map(String::as_str)
+        .unwrap_or(normalized)
+        .trim_start_matches('\\');
+    let message = format!("Cannot assign float to property {declaring}::${name} of type int");
+    let data = ctx.intern_string(&message);
+    let narrowed = ctx.emit_value(
+        Op::PropertyBoundaryCheckedToInt,
+        vec![value.value],
+        Some(Immediate::Data(data)),
+        PhpType::Int,
+        Op::PropertyBoundaryCheckedToInt.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    narrowed
 }
