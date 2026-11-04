@@ -68,8 +68,9 @@ pub(super) fn decl_fn_mysqli_connect() -> Stmt {
         .returns(t_union(vec![t_class("mysqli"), TypeExpr::False]))
         .body(vec![
             s_assign("_link", e_new("mysqli", vec![])),
+            s_expr(e_method_call(e_var("_link"), "__elephcDetachHandle", vec![])),
             s_if(
-                e_method_call(e_var("_link"), "real_connect", vec![e_var("hostname"), e_var("username"), e_var("password"), e_var("database"), e_var("port"), e_var("socket"), e_int(0)]),
+                e_method_call(e_var("_link"), "__elephcConnectProcedural", vec![e_var("hostname"), e_var("username"), e_var("password"), e_var("database"), e_var("port"), e_var("socket")]),
                 vec![
                     s_return(e_var("_link")),
                 ],
@@ -631,6 +632,7 @@ pub(super) fn decl_fn_mysqli_get_host_info() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "host_info")),
         ])
         .build()
@@ -650,6 +652,7 @@ pub(super) fn decl_fn_mysqli_get_proto_info() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "protocol_version")),
         ])
         .build()
@@ -669,6 +672,7 @@ pub(super) fn decl_fn_mysqli_get_server_version() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "server_version")),
         ])
         .build()
@@ -706,7 +710,7 @@ pub(super) fn decl_fn_mysqli_get_client_stats() -> Stmt {
             s_assign("_out", e_array(vec![])),
             s_foreach(e_static_call("mysqli", "__elephcStatKeys", vec![]), None, "_key", vec![
                 s_assign("_name", e_cast(CastType::String, e_var("_key"))),
-                s_array_assign("_out", e_var("_name"), e_null_coalesce(e_static_call("mysqli", "__elephcWireStat", vec![e_neg(e_int(1)), e_var("_name")]), e_cast(CastType::String, e_null_coalesce(e_index(e_var("_counters"), e_var("_name")), e_int(0))))),
+                s_array_assign("_out", e_var("_name"), e_null_coalesce(e_static_call("mysqli", "__elephcWireStat", vec![e_neg(e_int(1)), e_var("_name")]), e_static_call("mysqli", "__elephcStatString", vec![e_cast(CastType::Int, e_null_coalesce(e_index(e_var("_counters"), e_var("_name")), e_int(0)))]))),
             ]),
             s_return(e_var("_out")),
         ])
@@ -718,7 +722,7 @@ pub(super) fn decl_fn_mysqli_get_links_stats() -> Stmt {
     function("mysqli_get_links_stats")
         .returns(t_array())
         .body(vec![
-            s_return(e_array_assoc(vec![(e_str("total"), e_static_prop("mysqli", "openLinks")), (e_str("active_plinks"), e_static_prop("mysqli", "openPersistentLinks")), (e_str("cached_plinks"), e_int(0))])),
+            s_return(e_array_assoc(vec![(e_str("total"), e_static_prop("mysqli", "openLinks")), (e_str("active_plinks"), e_static_prop("mysqli", "openPersistentLinks")), (e_str("cached_plinks"), e_static_prop("mysqli", "cachedPlinks"))])),
         ])
         .build()
 }
@@ -775,6 +779,7 @@ pub(super) fn decl_fn_mysqli_thread_id() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "thread_id")),
         ])
         .build()
@@ -822,6 +827,7 @@ pub(super) fn decl_fn_mysqli_errno() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "errno")),
         ])
         .build()
@@ -841,6 +847,7 @@ pub(super) fn decl_fn_mysqli_error() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "error")),
         ])
         .build()
@@ -860,6 +867,7 @@ pub(super) fn decl_fn_mysqli_error_list() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "error_list")),
         ])
         .build()
@@ -879,6 +887,7 @@ pub(super) fn decl_fn_mysqli_sqlstate() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "sqlstate")),
         ])
         .build()
@@ -898,6 +907,7 @@ pub(super) fn decl_fn_mysqli_affected_rows() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "affected_rows")),
         ])
         .build()
@@ -917,6 +927,7 @@ pub(super) fn decl_fn_mysqli_insert_id() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "insert_id")),
         ])
         .build()
@@ -936,6 +947,7 @@ pub(super) fn decl_fn_mysqli_field_count() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "field_count")),
         ])
         .build()
@@ -955,6 +967,7 @@ pub(super) fn decl_fn_mysqli_warning_count() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "warning_count")),
         ])
         .build()
@@ -974,6 +987,7 @@ pub(super) fn decl_fn_mysqli_info() -> Stmt {
                 vec![],
                 None,
             ),
+            s_expr(e_method_call(e_var("mysql"), "__elephcRequireValid", vec![])),
             s_return(e_prop(e_var("mysql"), "info")),
         ])
         .build()

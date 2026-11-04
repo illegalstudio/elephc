@@ -52,6 +52,13 @@ class mysqli {
     public static array $clientStats = [];
     public static int $openLinks = 0;
     public static int $openPersistentLinks = 0;
+    // Persistent (`p:`) links parked in the pool, the bridge handles the pool
+    // has handed out (a handle id is never recycled, so seeing one again means
+    // a pool hit), and each pooled handle's mysqlnd connection statistics, which
+    // belong to the handle and survive its trips through the pool.
+    public static int $cachedPlinks = 0;
+    public static array $seenPlinks = [];
+    public static array $plinkStats = [];
 
     // Public properties refreshed after operations (writes stick; documented
     // divergence — no write barriers).
@@ -91,6 +98,17 @@ class mysqli {
     private string $sslCapath = "";
     private string $sslCipher = "";
     private bool $persistent = false;
+    // php-src's link status: 0 initialized (mysqli_init / argument-less
+    // constructor, or a real_connect that failed on such a link), 1 connected
+    // (also a link whose reconnect failed: it stays connected to nothing and
+    // answers 2014), 2 closed (close(), or a constructor that failed).
+    private int $linkStatus = 0;
+    // The mysqlnd handle behind the link: whether one is allocated (a failed
+    // real_connect keeps it, a failed constructor frees it), and whether
+    // mysqlnd allocated it persistent — mysqli_init() always does (so the link
+    // could still connect to a `p:` host), and a `p:` host does.
+    private bool $handleAllocated = false;
+    private bool $handlePersistent = false;
     // The live bridge statement of real_query() / multi_query() /
     // query(MYSQLI_USE_RESULT), kept until every result set is consumed; -1
     // when the link is idle. Its CURRENT set is either unclaimed
@@ -127,9 +145,11 @@ class mysqli {
         // until real_connect() (php-src behavior).
         if ($hostname === null && $username === null && $password === null
             && $database === null && $port === null && $socket === null) {
+            $this->handleAllocated = true;
+            $this->handlePersistent = true;
             return;
         }
-        $this->real_connect($hostname, $username, $password, $database, $port, $socket, 0);
+        $this->connectLink($hostname, $username, $password, $database, $port, $socket, 0, false);
     }
 
     public function real_connect(
@@ -141,12 +161,49 @@ class mysqli {
         ?string $socket = null,
         int $flags = 0
     ): bool {
-        if ($this->conn >= 0) {
-            // php-src reconnect semantics: mysqlnd closes the existing
-            // connection before dialing the new one, so a second real_connect
-            // never strands the previous bridge handle (or leaves a persistent
-            // handle checked out of the pool).
-            $this->releaseConnection();
+        return $this->connectLink($hostname, $username, $password, $database, $port, $socket, $flags, true);
+    }
+
+    // mysqli_common_connect: the constructor / connect() ($isRealConnect false)
+    // and real_connect() (true) differ only in what a failure leaves behind.
+    // Drops the argument-less constructor's mysqlnd handle without accounting
+    // for it: the internal placeholder links never had one in php, and
+    // mysqli_connect() allocates its own (persistent only for a `p:` host).
+    private function __elephcDetachHandle(): void {
+        $this->handleAllocated = false;
+        $this->handlePersistent = false;
+    }
+
+    // mysqli_connect(): the constructor's connect path on a detached link.
+    private function __elephcConnectProcedural(?string $hostname, ?string $username, ?string $password, ?string $database, ?int $port, ?string $socket): bool {
+        return $this->connectLink($hostname, $username, $password, $database, $port, $socket, 0, false);
+    }
+
+    // The calls php allows on an unconnected link but not on a closed one.
+    private function requireNotClosed(): void {
+        if ($this->linkStatus == 2) {
+            throw new Error("mysqli object is already closed");
+        }
+    }
+
+    private function connectLink(
+        ?string $hostname,
+        ?string $username,
+        ?string $password,
+        ?string $database,
+        ?int $port,
+        ?string $socket,
+        int $flags,
+        bool $isRealConnect
+    ): bool {
+        if ($this->linkStatus == 2) {
+            if ($isRealConnect) {
+                throw new Error("mysqli object is already closed");
+            }
+            // connect() on a closed object starts it over on a new link.
+            $this->linkStatus = 0;
+            $this->resetOptions();
+            $this->connStats = [];
         }
         $_host = $hostname === null ? "localhost" : $hostname;
         $_persistent = 0;
@@ -156,6 +213,18 @@ class mysqli {
         if (strlen($_host) >= 2 && strtolower(substr($_host, 0, 2)) === "p:") {
             $_persistent = 1;
             $_host = substr($_host, 2);
+        }
+        if ($this->linkStatus == 1) {
+            // Connecting a link that is already connected: php-src closes it
+            // implicitly and starts over on a fresh mysqlnd handle, so every
+            // option and the connection statistics are back to their defaults.
+            $this->closeLink(false);
+            $this->resetOptions();
+            $this->connStats = [];
+        }
+        if (!$this->handleAllocated) {
+            $this->handleAllocated = true;
+            $this->handlePersistent = $_persistent == 1;
         }
         $_port = $port === null ? 3306 : $port;
         $_socket = $socket === null ? "" : $socket;
@@ -298,6 +367,11 @@ class mysqli {
                 $_code = 2002;
             }
             $this->bump("connect_failure");
+            if (!$isRealConnect) {
+                // A failed constructor frees the handle: the object is closed.
+                $this->freeHandle();
+                $this->linkStatus = 2;
+            }
             return $this->connectFailure($_code, $_message, $_state);
         }
         // Cannot happen while the DSN prefix is forced to mysql:, but keep the
@@ -307,6 +381,7 @@ class mysqli {
             return $this->connectFailure(2002, "elephc mysqli opened a non-mysql bridge connection", "HY000");
         }
         $this->conn = $_conn;
+        $this->linkStatus = 1;
         $this->multiStatementsOn = false;
         $this->persistent = $_persistent == 1;
         $this->connect_errno = 0;
@@ -314,14 +389,28 @@ class mysqli {
         mysqli::$lastConnectErrno = 0;
         mysqli::$lastConnectError = "";
         mysqli::$openLinks = mysqli::$openLinks + 1;
+        $_pooled = false;
         if ($this->persistent) {
             mysqli::$openPersistentLinks = mysqli::$openPersistentLinks + 1;
-            $this->bump("pconnect_success");
+            $_pooled = in_array($_conn, mysqli::$seenPlinks, true);
+            if ($_pooled) {
+                // A pool hit hands back the cached handle and its statistics;
+                // mysqlnd records no new connection.
+                mysqli::$cachedPlinks = mysqli::$cachedPlinks - 1;
+                $this->connStats = (array) (mysqli::$plinkStats[$_conn] ?? []);
+            } else {
+                $_seen = mysqli::$seenPlinks;
+                $_seen[] = $_conn;
+                mysqli::$seenPlinks = $_seen;
+            }
         }
-        $this->bump("connect_success");
-        $this->bump("active_connections");
-        if ($this->persistent) {
-            $this->bump("active_persistent_connections");
+        if (!$_pooled) {
+            if ($this->handlePersistent) {
+                $this->bump("pconnect_success");
+                $this->bump("active_persistent_connections");
+            }
+            $this->bump("connect_success");
+            $this->bump("active_connections");
         }
         $this->clearError();
         // Connection information, refreshed once per connect.
@@ -340,7 +429,13 @@ class mysqli {
         for ($_i = 1; $_i < $_n; $_i++) {
             if (elephc_pdo_exec($_conn, (string) $this->optInitCommands[$_i]) < 0) {
                 $this->opFailed();
+                mysqli::$openLinks = mysqli::$openLinks - 1;
+                $this->dropActive();
                 $this->releaseConnection();
+                if (!$isRealConnect) {
+                    $this->freeHandle();
+                    $this->linkStatus = 2;
+                }
                 return false;
             }
         }
@@ -361,7 +456,7 @@ class mysqli {
     ): bool {
         // Alias of the constructor's connect path (php-src keeps it for
         // backwards compatibility with the old procedural object).
-        return $this->real_connect($hostname, $username, $password, $database, $port, $socket, 0);
+        return $this->connectLink($hostname, $username, $password, $database, $port, $socket, 0, false);
     }
 
     // php 8.1 deprecated: re-initializes an unconnected object; a no-op on a
@@ -371,22 +466,85 @@ class mysqli {
     }
 
     public function close(): bool {
-        // php 8: closing a never-connected or already-closed object is an Error
-        // ("mysqli object is already closed") only through the procedural
-        // validation; the method form on an initialized object returns true.
-        if ($this->conn >= 0) {
-            $this->bump("explicit_close");
-            $this->bump("com_quit");
-            $this->releaseConnection();
+        // php 8: closing a closed object is an Error; a never-connected one
+        // just frees its handle.
+        if ($this->linkStatus == 2) {
+            throw new Error("mysqli object is already closed");
         }
+        $this->closeLink(true);
+        $this->linkStatus = 2;
         return true;
     }
 
     public function __destruct() {
+        // php-src frees a link through the same close path, recorded as an
+        // explicit close.
+        if ($this->linkStatus != 2) {
+            $this->closeLink(true);
+        }
+    }
+
+    // php_mysqli_close: a pooled persistent link goes back to the pool without
+    // touching mysqlnd's statistics; any other link quits a live connection
+    // (explicit_close / implicit_close, com_quit, one active_connections) and
+    // frees its mysqlnd handle (another active_connections — mysqlnd decrements
+    // it twice for a connection it closes).
+    private function closeLink(bool $explicit): void {
+        if ($this->linkStatus == 1) {
+            mysqli::$openLinks = mysqli::$openLinks - 1;
+        }
+        if ($this->conn >= 0 && $this->persistent) {
+            $_stats = mysqli::$plinkStats;
+            $_stats[$this->conn] = $this->connStats;
+            mysqli::$plinkStats = $_stats;
+            mysqli::$cachedPlinks = mysqli::$cachedPlinks + 1;
+            $this->releaseConnection();
+            $this->handleAllocated = false;
+            return;
+        }
         if ($this->conn >= 0) {
-            $this->bump("implicit_close");
+            $this->bump($explicit ? "explicit_close" : "implicit_close");
+            $this->bump("com_quit");
+            $this->dropActive();
             $this->releaseConnection();
         }
+        $this->freeHandle();
+    }
+
+    // Frees the link's mysqlnd handle (mysqlnd's dtor drops one
+    // active_connections — and one active_persistent_connections for a
+    // persistent handle — whether or not it ever connected).
+    private function freeHandle(): void {
+        if (!$this->handleAllocated) {
+            return;
+        }
+        $this->handleAllocated = false;
+        $_client = mysqli::$clientStats;
+        $_client["active_connections"] = ((int) ($_client["active_connections"] ?? 0)) - 1;
+        if ($this->handlePersistent) {
+            $_client["active_persistent_connections"] = ((int) ($_client["active_persistent_connections"] ?? 0)) - 1;
+        }
+        mysqli::$clientStats = $_client;
+    }
+
+    // A fresh mysqlnd handle starts from the default options: every
+    // mysqli_options() / ssl_set() value set on the previous one is gone.
+    private function resetOptions(): void {
+        $this->optConnectTimeout = 0;
+        $this->optInitCommands = [];
+        $this->optCharsetName = "";
+        $this->optLocalInfile = 0;
+        $this->optLocalInfileDir = "";
+        $this->optServerPublicKey = "";
+        $this->optSslVerify = -1;
+        $this->optIntAndFloatNative = false;
+        $this->optReadTimeout = 0;
+        $this->sslRequested = false;
+        $this->sslKey = "";
+        $this->sslCert = "";
+        $this->sslCa = "";
+        $this->sslCapath = "";
+        $this->sslCipher = "";
     }
 
     public function ping(): bool {
@@ -475,6 +633,7 @@ class mysqli {
     }
 
     public function ssl_set(?string $key, ?string $certificate, ?string $ca_certificate, ?string $ca_path, ?string $cipher_algos): bool {
+        $this->requireNotClosed();
         // Collected for the next real_connect(), which then negotiates TLS
         // (mysqlnd enables SSL as soon as ssl_set() ran).
         $this->sslRequested = true;
@@ -516,9 +675,25 @@ class mysqli {
             $_name = (string) $_key;
             // A closed link (handle -1) keeps its recorded counters only.
             $_out[$_name] = mysqli::__elephcWireStat($this->conn < 0 ? -2 : $this->conn, $_name)
-                ?? (string) ($this->connStats[$_name] ?? 0);
+                ?? mysqli::__elephcStatString((int) ($this->connStats[$_name] ?? 0));
         }
         return $_out;
+    }
+
+    // mysqlnd keeps its statistics as uint64_t: a counter driven below zero
+    // (active_connections is decremented twice per close) wraps around.
+    private static function __elephcStatString(int $value): string {
+        if ($value >= 0) {
+            return (string) $value;
+        }
+        $_magnitude = -$value;
+        $_low = 709551616 - ($_magnitude % 1000000000);
+        $_high = 18446744073 - intdiv($_magnitude, 1000000000);
+        if ($_low < 0) {
+            $_low = $_low + 1000000000;
+            $_high = $_high - 1;
+        }
+        return (string) $_high . str_pad((string) $_low, 9, "0", STR_PAD_LEFT);
     }
 
     // mysqlnd's wire-level statistics, which the patched bridge client counts
@@ -765,6 +940,7 @@ class mysqli {
     }
 
     public function options(int $option, mixed $value): bool {
+        $this->requireNotClosed();
         // mysqlnd's option ids. Connect-time options are collected and applied
         // by the next real_connect(); unknown ids return false like php-src.
         if ($option == 0) {
@@ -1349,7 +1525,7 @@ class mysqli {
     private function dropActive(): void {
         $_client = mysqli::$clientStats;
         $_client["active_connections"] = ((int) ($_client["active_connections"] ?? 0)) - 1;
-        if ($this->persistent) {
+        if ($this->handlePersistent) {
             $_client["active_persistent_connections"] = ((int) ($_client["active_persistent_connections"] ?? 0)) - 1;
         }
         mysqli::$clientStats = $_client;
@@ -1398,11 +1574,9 @@ class mysqli {
         elephc_pdo_release($this->conn, 0);
         $this->conn = -1;
         $this->asyncPending = false;
-        mysqli::$openLinks = mysqli::$openLinks - 1;
         if ($this->persistent) {
             mysqli::$openPersistentLinks = mysqli::$openPersistentLinks - 1;
         }
-        $this->dropActive();
         $this->persistent = false;
     }
 
@@ -1567,16 +1741,29 @@ class mysqli {
     // php 8 raises `Error: mysqli object is not fully initialized` for any
     // operation on a `mysqli_init()` / argument-less `new mysqli()` object (or a
     // failed/closed connection), regardless of mysqli_report mode.
+    // The procedural accessors' link validation (MYSQLI_FETCH_RESOURCE_CONN).
+    private function __elephcRequireValid(): void {
+        $this->requireInitialized();
+    }
+
     private function requireInitialized(): void {
-        if ($this->conn < 0) {
+        if ($this->linkStatus == 2) {
+            throw new Error("mysqli object is already closed");
+        }
+        if ($this->linkStatus == 0) {
             throw new Error("mysqli object is not fully initialized");
         }
     }
 
-    // Guards every operation that needs a live connection; always returns true
-    // when it does not throw so `if (!requireConnection())` call sites stay valid.
+    // Guards every operation that needs a live connection. A link whose
+    // reconnect failed is still "connected" for php but has no connection:
+    // mysqlnd answers CR_COMMANDS_OUT_OF_SYNC (2014) and the call fails.
     private function requireConnection(): bool {
         $this->requireInitialized();
+        if ($this->conn < 0) {
+            $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
+            return false;
+        }
         return true;
     }
 
@@ -1603,7 +1790,13 @@ class mysqli {
         $this->error_list = [["errno" => $errno, "sqlstate" => $sqlstate, "error" => $message]];
         mysqli::$lastConnectErrno = $errno;
         mysqli::$lastConnectError = $message;
-        $this->report($message, $errno, $sqlstate);
+        // php_mysqli_throw_sql_exception: a connect failure throws under
+        // MYSQLI_REPORT_STRICT and is otherwise always an E_WARNING, whatever
+        // the report mode.
+        if ((mysqli::$reportMode & 2) != 0) {
+            throw mysqli_sql_exception::__elephcCreate($message, $errno, $sqlstate);
+        }
+        mysqli::__elephcWarn("(" . $sqlstate . "/" . $errno . "): " . $message);
         return false;
     }
 

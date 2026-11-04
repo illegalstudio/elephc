@@ -51,8 +51,19 @@ $db->close();
   stalled server fails the statement with errno 2006 "MySQL server has gone
   away", like mysqlnd); the other
   mysqlnd option ids are accepted (`true`) and unknown ids return `false`.
-- Calling `real_connect()` on an already-connected object closes the previous
-  connection first (php-src's mysqlnd reconnect semantics).
+- Calling `real_connect()` (or `connect()`) on an already-connected object
+  closes the previous connection implicitly and starts over on a fresh mysqlnd
+  handle, as php-src does: every option and `ssl_set()` value set before goes
+  back to its default (set them again after reconnecting), and the connection
+  statistics restart. A reconnect that fails leaves a link that is still
+  "connected" but has no connection: its operations fail with errno 2014.
+- The link's state follows php-src: a failed constructor (or
+  `mysqli_connect()`) closes the object; a failed `real_connect()` on a
+  `mysqli_init()` object leaves it unconnected (`… is not fully initialized`);
+  after `close()`, every method — `real_connect()`, `options()`, `close()`
+  itself, and the procedural accessors such as `mysqli_errno()` — throws
+  `Error: mysqli object is already closed`, while `connect()` reopens the
+  object on a new link.
 - Connect-time failures populate `connect_errno` / `connect_error` (distinct
   from `errno` / `error`), and the no-argument procedural
   `mysqli_connect_errno()` / `mysqli_connect_error()` read the process-wide
@@ -280,8 +291,8 @@ picked up by `store_result()`), issuing a new statement — `query()`,
 fails with errno 2014, php-src's "Commands out of sync; you can't run this
 command now". The two-step statement form honors the same guard:
 `mysqli_stmt::prepare()` and `mysqli_stmt::execute()` on a busy link fail with
-2014 recorded on the statement. `close()` discards any unconsumed result with
-the connection, so a later `real_connect()` on the same object starts clean.
+2014 recorded on the statement. Closing or reconnecting discards any
+unconsumed result with the connection, so the next link starts clean.
 
 ## Connection maintenance
 
@@ -331,7 +342,15 @@ the connection, so a later `real_connect()` on the same object starts clean.
   `result_set_queries` / `non_result_set_queries` with the index flags, and the
   connection-level counters (connections, closes, `COM_*` commands). The
   counters mysqlnd records only process-wide (buffered client-side row fetches,
-  statement closes) move only in `mysqli_get_client_stats()`, as in php.
+  statement closes) move only in `mysqli_get_client_stats()`, as in php. The
+  connection counters keep mysqlnd's own accounting quirks too: a
+  `mysqli_init()` handle counts as persistent (`pconnect_success`,
+  `active_persistent_connections`), closing a connection — `close()` or the
+  object's destruction, both `explicit_close` — drops `active_connections`
+  twice, a pooled `p:` link enters and leaves the pool without touching them,
+  and a counter driven below zero wraps like mysqlnd's `uint64_t`
+  (`"18446744073709551615"`). `mysqli_get_links_stats()` reports
+  `cached_plinks` for links parked in the pool.
 - `debug()` returns `true`: mysqlnd's client-side debug tracing is compiled out
   of release builds (`MYSQLI_DEBUG_TRACE_ENABLED` is `0`), where php does the same.
 
@@ -353,6 +372,11 @@ default is `MYSQLI_REPORT_OFF`).
 | `MYSQLI_REPORT_STRICT` set | throw `mysqli_sql_exception` (extends `RuntimeException`) |
 | `MYSQLI_REPORT_ERROR` only | raise an `E_WARNING`, return `false` |
 | `MYSQLI_REPORT_OFF` | silent `false` |
+
+A connect failure is the exception: like php-src it throws under
+`MYSQLI_REPORT_STRICT` and is otherwise always an `E_WARNING`
+(`mysqli::real_connect(): (HY000/1045): Access denied …`), even with
+`MYSQLI_REPORT_OFF`.
 
 `MYSQLI_REPORT_INDEX` (part of `MYSQLI_REPORT_ALL`) reads the server status
 flags of each statement's final OK/EOF packet: a query or prepared statement
@@ -427,7 +451,12 @@ they keep working (elephc raises no runtime `E_DEPRECATED`).
   (`mysqli_result::data_seek(): Argument #1`) rather than the procedural one.
 - **Property writes stick**: the public `mysqli` / `mysqli_result` /
   `mysqli_stmt` properties are refreshed after operations but are not
-  write-barriered; assigning to them is not rejected.
+  write-barriered; assigning to them is not rejected. Likewise, reading them
+  on a closed or never-connected `mysqli` returns their last value where php
+  throws (`… is already closed`, `Property access is not allowed yet`); the
+  methods and procedural accessors do throw. (On a link whose reconnect
+  failed, php itself crashes reading `host_info` / `server_info` or calling
+  `character_set_name()`; elephc returns the previous connection's values.)
 - **`insert_id` / `affected_rows` / `num_rows` are `int|string`**, as php
   declares them. elephc type-checks calls statically, so passing one straight
   to an `int` parameter needs an `(int)` cast where php would coerce at run

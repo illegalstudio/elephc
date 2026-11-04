@@ -46,7 +46,8 @@ function mysqli_connect(
     // attempts the connection (php-src behavior; null arguments take their
     // defaults inside real_connect).
     $_link = new mysqli();
-    if ($_link->real_connect($hostname, $username, $password, $database, $port, $socket, 0)) {
+    $_link->__elephcDetachHandle();
+    if ($_link->__elephcConnectProcedural($hostname, $username, $password, $database, $port, $socket)) {
         return $_link;
     }
     return false;
@@ -264,6 +265,8 @@ function mysqli_get_host_info(mixed $mysql): string {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_get_host_info(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->host_info;
 }
 
@@ -271,6 +274,8 @@ function mysqli_get_proto_info(mixed $mysql): int {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_get_proto_info(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->protocol_version;
 }
 
@@ -278,6 +283,8 @@ function mysqli_get_server_version(mixed $mysql): int {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_get_server_version(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->server_version;
 }
 
@@ -299,14 +306,14 @@ function mysqli_get_client_stats(): array {
     $_out = [];
     foreach (mysqli::__elephcStatKeys() as $_key) {
         $_name = (string) $_key;
-        $_out[$_name] = mysqli::__elephcWireStat(-1, $_name) ?? (string) ($_counters[$_name] ?? 0);
+        $_out[$_name] = mysqli::__elephcWireStat(-1, $_name) ?? mysqli::__elephcStatString((int) ($_counters[$_name] ?? 0));
     }
     return $_out;
 }
 
 // php: total open links plus the persistent-link pool counters.
 function mysqli_get_links_stats(): array {
-    return ["total" => mysqli::$openLinks, "active_plinks" => mysqli::$openPersistentLinks, "cached_plinks" => 0];
+    return ["total" => mysqli::$openLinks, "active_plinks" => mysqli::$openPersistentLinks, "cached_plinks" => mysqli::$cachedPlinks];
 }
 
 function mysqli_get_warnings(mixed $mysql): mysqli_warning|false {
@@ -327,6 +334,8 @@ function mysqli_thread_id(mixed $mysql): int {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_thread_id(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->thread_id;
 }
 
@@ -345,6 +354,8 @@ function mysqli_errno(mixed $mysql): int {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_errno(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->errno;
 }
 
@@ -352,6 +363,8 @@ function mysqli_error(mixed $mysql): string {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_error(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->error;
 }
 
@@ -359,6 +372,8 @@ function mysqli_error_list(mixed $mysql): array {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_error_list(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->error_list;
 }
 
@@ -366,6 +381,8 @@ function mysqli_sqlstate(mixed $mysql): string {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_sqlstate(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->sqlstate;
 }
 
@@ -373,6 +390,8 @@ function mysqli_affected_rows(mixed $mysql): int|string {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_affected_rows(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->affected_rows;
 }
 
@@ -380,6 +399,8 @@ function mysqli_insert_id(mixed $mysql): int|string {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_insert_id(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->insert_id;
 }
 
@@ -387,6 +408,8 @@ function mysqli_field_count(mixed $mysql): int {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_field_count(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->field_count;
 }
 
@@ -394,6 +417,8 @@ function mysqli_warning_count(mixed $mysql): int {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_warning_count(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->warning_count;
 }
 
@@ -401,6 +426,8 @@ function mysqli_info(mixed $mysql): ?string {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_info(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
     }
+    // php validates the link first: an Error on an unconnected or closed one.
+    $mysql->__elephcRequireValid();
     return $mysql->info;
 }
 

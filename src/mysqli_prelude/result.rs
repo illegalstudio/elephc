@@ -99,7 +99,9 @@ class mysqli_result implements IteratorAggregate {
     // because the factory flag makes it skip the pending-result pickup.
     private static function __elephcFromDrain(array $cells, int $rowCount, array $names, array $tables, array $nativeTypes, array $flags, array $lens, array $decimals): mysqli_result {
         mysqli_result::$fromFactory = true;
-        $_result = new mysqli_result(new mysqli());
+        $_placeholder = new mysqli();
+        $_placeholder->__elephcDetachHandle();
+        $_result = new mysqli_result($_placeholder);
         mysqli_result::$fromFactory = false;
         $_result->cells = $cells;
         $_result->rowCount = $rowCount;
@@ -118,7 +120,9 @@ class mysqli_result implements IteratorAggregate {
     // current set of $stmt from the server (its first step verdict is $firstStep).
     private static function __elephcFromStream(mysqli $link, int $stmt, int $firstStep, array $names, array $tables, array $nativeTypes, array $flags, array $lens, array $decimals, array $kinds): mysqli_result {
         mysqli_result::$fromFactory = true;
-        $_result = new mysqli_result(new mysqli());
+        $_placeholder = new mysqli();
+        $_placeholder->__elephcDetachHandle();
+        $_result = new mysqli_result($_placeholder);
         mysqli_result::$fromFactory = false;
         $_result->names = $names;
         $_result->metaTables = $tables;

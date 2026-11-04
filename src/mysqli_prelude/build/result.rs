@@ -147,7 +147,9 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .returns(t_class("mysqli_result"))
                 .body(vec![
                     s_static_prop_assign("mysqli_result", "fromFactory", e_bool(true)),
-                    s_assign("_result", e_new("mysqli_result", vec![e_new("mysqli", vec![])])),
+                    s_assign("_placeholder", e_new("mysqli", vec![])),
+                    s_expr(e_method_call(e_var("_placeholder"), "__elephcDetachHandle", vec![])),
+                    s_assign("_result", e_new("mysqli_result", vec![e_var("_placeholder")])),
                     s_static_prop_assign("mysqli_result", "fromFactory", e_bool(false)),
                     s_prop_assign(e_var("_result"), "cells", e_var("cells")),
                     s_prop_assign(e_var("_result"), "rowCount", e_var("rowCount")),
@@ -179,7 +181,9 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                 .returns(t_class("mysqli_result"))
                 .body(vec![
                     s_static_prop_assign("mysqli_result", "fromFactory", e_bool(true)),
-                    s_assign("_result", e_new("mysqli_result", vec![e_new("mysqli", vec![])])),
+                    s_assign("_placeholder", e_new("mysqli", vec![])),
+                    s_expr(e_method_call(e_var("_placeholder"), "__elephcDetachHandle", vec![])),
+                    s_assign("_result", e_new("mysqli_result", vec![e_var("_placeholder")])),
                     s_static_prop_assign("mysqli_result", "fromFactory", e_bool(false)),
                     s_prop_assign(e_var("_result"), "names", e_var("names")),
                     s_prop_assign(e_var("_result"), "metaTables", e_var("tables")),

@@ -557,10 +557,10 @@ echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : ("no:" . $db->er
     assert_eq!(out, "F|1064|F|1064|F|1064|3");
 }
 
-/// `close()` discards an unconsumed buffered result, so `real_connect` +
-/// `query` on the same object afterwards starts clean instead of raising a
-/// spurious 2014 (php-src frees all pending state with the connection).
-/// Covers both the `real_query` and `multi_query` pending shapes.
+/// Reconnecting discards an unconsumed result: `connect()` on a closed object
+/// (php reopens it) and `real_connect()` on a link with a pending multi_query
+/// batch both start clean instead of raising a spurious 2014. `real_connect()`
+/// on a closed object is php's "already closed" Error.
 #[test]
 #[ignore]
 fn test_mysqli_close_clears_pending_result_for_reconnect() {
@@ -569,17 +569,22 @@ fn test_mysqli_close_clears_pending_result_for_reconnect() {
 mysqli_report(MYSQLI_REPORT_OFF);
 $db->real_query("SELECT 1");
 $db->close();
-echo $db->real_connect($host, $user, $pass, $dbname, $port) ? "re" : "no";
+echo $db->connect($host, $user, $pass, $dbname, $port) ? "re" : "no";
 $r = $db->query("SELECT 2");
 echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : ("no:" . $db->errno);
 $db->multi_query("SELECT 3 AS a; SELECT 4 AS b");
-$db->close();
 echo "|", $db->real_connect($host, $user, $pass, $dbname, $port) ? "re" : "no";
 $r2 = $db->query("SELECT 5");
 echo "|", ($r2 instanceof mysqli_result) ? $r2->fetch_column(0) : ("no:" . $db->errno);
+$db->close();
+try {
+    $db->real_connect($host, $user, $pass, $dbname, $port);
+} catch (Error $e) {
+    echo "|", $e->getMessage();
+}
 "#,
     ));
-    assert_eq!(out, "re|2|re|5");
+    assert_eq!(out, "re|2|re|5|mysqli object is already closed");
 }
 
 /// The two-step `stmt_init()` + `prepare()` form honors the
@@ -1859,6 +1864,142 @@ binary: string('00007') string('003') string('00000000000000000012') string('202
 binary: string('00000') string('000') string('00000000000000000000') string('1999') integer(0) integer(0) integer(1) double(0.0) integer(1) string('0.0') NULL(NULL) integer(4)
 bound: string('00007') string('003') string('00000000000000000012') string('2024') integer(5) string('18446744073709551615') integer(300) double(1.5) string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
 native: string('00007') string('003') string('00000000000000000012') string('2024') integer(5) string('18446744073709551615') integer(300) double(1.5) string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
+"#
+    );
+}
+
+/// The link lifecycle follows php-src's mysqli_common_connect and mysqlnd:
+/// connecting a connected link closes it implicitly and starts over on a fresh
+/// handle (every option back to its default), a failed reconnect leaves a
+/// connected link that answers 2014, a failed constructor closes the object
+/// while a failed real_connect() on mysqli_init() leaves it unconnected,
+/// connect() reopens a closed object, and the connection counters move like
+/// mysqlnd's (mysqli_init() handles count as persistent, active_connections
+/// drops twice per close). Golden output from php 8.3 + mysqlnd.
+#[test]
+#[ignore]
+fn test_mysqli_link_lifecycle_follows_mysqlnd() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$keys = ["connect_success", "connect_failure", "implicit_close", "explicit_close", "pconnect_success", "active_connections", "active_persistent_connections", "com_quit"];
+$signed = function (string $v): int {
+    if (strlen($v) < 19) {
+        return (int) $v;
+    }
+    return -((18446744073 - (int) substr($v, 0, -9)) * 1000000000 + (709551616 - (int) substr($v, -9)));
+};
+$prev = mysqli_get_client_stats();
+$delta = function (string $label) use (&$prev, $keys, $signed): void {
+    $now = mysqli_get_client_stats();
+    echo $label, ":";
+    foreach ($keys as $k) {
+        $d = $signed((string) $now[$k]) - $signed((string) $prev[$k]);
+        if ($d != 0) {
+            echo " ", $k, "=", $d;
+        }
+    }
+    echo "\n";
+    $prev = $now;
+};
+$kind = function (mysqli $link): string {
+    $row = $link->query("SELECT 1, @elephc_init")->fetch_row();
+    return gettype($row[0]) . "/" . var_export($row[1], true);
+};
+$attempt = function (string $label, Closure $call): void {
+    try {
+        $result = (string) $call();
+        echo $label, ": ", $result, "\n";
+    } catch (Error $e) {
+        echo $label, ": ", get_class($e), " ", $e->getMessage(), "\n";
+    }
+};
+// Reconnecting a connected link starts over on a fresh handle: options gone.
+$a = new mysqli($host, $user, $pass, $dbname, $port);
+$a->options(MYSQLI_OPT_INT_AND_FLOAT_NATIVE, 1);
+echo "before: ", $kind($a), "\n";
+$a->query("SELECT 2");
+$delta("connected");
+$a->real_connect($host, $user, $pass, $dbname, $port);
+echo "after: ", $kind($a), " q=", $a->get_connection_stats()["com_query"], "\n";
+$delta("reconnected");
+$b = mysqli_init();
+$b->options(MYSQLI_OPT_INT_AND_FLOAT_NATIVE, 1);
+$b->options(MYSQLI_INIT_COMMAND, "SET @elephc_init = 5");
+$b->real_connect($host, $user, $pass, $dbname, $port);
+echo "init: ", $kind($b), "\n";
+$b->connect($host, $user, $pass, $dbname, $port);
+echo "connect: ", $kind($b), "\n";
+$delta("init+connect");
+// A failed reconnect leaves a connected link with no connection: 2014.
+@$a->real_connect($host, $user, "elephc-wrong", $dbname, $port);
+$delta("failed reconnect");
+echo "dead: ", var_export($a->ping(), true), " ", $a->errno, " ", var_export($a->query("SELECT 1"), true), " ", $a->errno, "\n";
+$a->real_connect($host, $user, $pass, $dbname, $port);
+echo "revived: ", $kind($a), "\n";
+$delta("revived");
+$a->close();
+$delta("closed");
+$attempt("closed real_connect", fn() => var_export($a->real_connect($host, $user, $pass, $dbname, $port), true));
+$attempt("closed options", fn() => var_export($a->options(MYSQLI_OPT_CONNECT_TIMEOUT, 1), true));
+$attempt("closed ping", fn() => var_export($a->ping(), true));
+$attempt("closed errno", fn() => (string) mysqli_errno($a));
+$attempt("closed close", fn() => var_export($a->close(), true));
+$attempt("closed connect", fn() => var_export($a->connect($host, $user, $pass, $dbname, $port), true));
+echo "reopened: ", $kind($a), "\n";
+$delta("reopened");
+unset($a);
+$delta("destroyed");
+// A failed constructor frees the handle; a failed real_connect on
+// mysqli_init() keeps an unconnected one.
+$c = @new mysqli($host, $user, "elephc-wrong", $dbname, $port);
+$delta("failed constructor");
+$attempt("failed ctor ping", fn() => var_export($c->ping(), true));
+$e = mysqli_init();
+@$e->real_connect($host, $user, "elephc-wrong", $dbname, $port);
+$delta("failed init");
+$attempt("failed init ping", fn() => var_export($e->ping(), true));
+$attempt("failed init error", fn() => mysqli_error($e));
+echo "init retry: ", var_export($e->real_connect($host, $user, $pass, $dbname, $port), true), "\n";
+$delta("init retry");
+$f = mysqli_init();
+unset($f);
+$delta("unused init");
+echo "links: ", json_encode(mysqli_get_links_stats()), "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        r#"before: integer/NULL
+connected: connect_success=1 active_connections=1
+after: string/NULL q=1
+reconnected: connect_success=1 implicit_close=1 active_connections=-1 com_quit=1
+init: integer/5
+connect: string/NULL
+init+connect: connect_success=2 implicit_close=1 pconnect_success=1 active_persistent_connections=-1 com_quit=1
+failed reconnect: connect_failure=1 implicit_close=1 active_connections=-2 com_quit=1
+dead: false 2014 false 2014
+revived: string/NULL
+revived: connect_success=1
+closed: explicit_close=1 active_connections=-2 com_quit=1
+closed real_connect: Error mysqli object is already closed
+closed options: Error mysqli object is already closed
+closed ping: Error mysqli object is already closed
+closed errno: Error mysqli object is already closed
+closed close: Error mysqli object is already closed
+closed connect: true
+reopened: string/NULL
+reopened: connect_success=1 active_connections=1
+destroyed: explicit_close=1 active_connections=-2 com_quit=1
+failed constructor: connect_failure=1 active_connections=-1
+failed ctor ping: Error mysqli object is already closed
+failed init: connect_failure=1
+failed init ping: Error mysqli object is not fully initialized
+failed init error: Error mysqli object is not fully initialized
+init retry: true
+init retry: connect_success=1 pconnect_success=1 active_connections=1 active_persistent_connections=1
+unused init: active_connections=-1 active_persistent_connections=-1
+links: {"total":2,"active_plinks":0,"cached_plinks":0}
 "#
     );
 }

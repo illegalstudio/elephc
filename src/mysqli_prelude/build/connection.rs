@@ -82,6 +82,9 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .static_prop("clientStats", t_array(), Some(e_array(vec![])))
         .static_prop("openLinks", TypeExpr::Int, Some(e_int(0)))
         .static_prop("openPersistentLinks", TypeExpr::Int, Some(e_int(0)))
+        .static_prop("cachedPlinks", TypeExpr::Int, Some(e_int(0)))
+        .static_prop("seenPlinks", t_array(), Some(e_array(vec![])))
+        .static_prop("plinkStats", t_array(), Some(e_array(vec![])))
         .prop("affected_rows", t_union(vec![TypeExpr::Int, TypeExpr::Str]), Some(e_int(0)))
         .prop("client_info", TypeExpr::Str, Some(e_str("")))
         .prop("client_version", TypeExpr::Int, Some(e_int(0)))
@@ -116,6 +119,9 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .private_prop("sslCapath", TypeExpr::Str, Some(e_str("")))
         .private_prop("sslCipher", TypeExpr::Str, Some(e_str("")))
         .private_prop("persistent", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("linkStatus", TypeExpr::Int, Some(e_int(0)))
+        .private_prop("handleAllocated", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("handlePersistent", TypeExpr::Bool, Some(e_bool(false)))
         .private_prop("liveStmt", TypeExpr::Int, Some(e_neg(e_int(1))))
         .private_prop("liveStep", TypeExpr::Int, Some(e_int(0)))
         .private_prop("liveSetPending", TypeExpr::Bool, Some(e_bool(false)))
@@ -138,12 +144,14 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_if(
                         e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_var("hostname"), BinOp::StrictEq, e_null()), BinOp::And, e_binop(e_var("username"), BinOp::StrictEq, e_null())), BinOp::And, e_binop(e_var("password"), BinOp::StrictEq, e_null())), BinOp::And, e_binop(e_var("database"), BinOp::StrictEq, e_null())), BinOp::And, e_binop(e_var("port"), BinOp::StrictEq, e_null())), BinOp::And, e_binop(e_var("socket"), BinOp::StrictEq, e_null())),
                         vec![
+                            s_prop_assign(e_this(), "handleAllocated", e_bool(true)),
+                            s_prop_assign(e_this(), "handlePersistent", e_bool(true)),
                             s_return_void(),
                         ],
                         vec![],
                         None,
                     ),
-                    s_expr(e_method_call(e_this(), "real_connect", vec![e_var("hostname"), e_var("username"), e_var("password"), e_var("database"), e_var("port"), e_var("socket"), e_int(0)])),
+                    s_expr(e_method_call(e_this(), "connectLink", vec![e_var("hostname"), e_var("username"), e_var("password"), e_var("database"), e_var("port"), e_var("socket"), e_int(0), e_bool(false)])),
                 ]),
         )
         .method(
@@ -157,10 +165,74 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .param_default("flags", TypeExpr::Int, e_int(0))
                 .returns(TypeExpr::Bool)
                 .body(vec![
+                    s_return(e_method_call(e_this(), "connectLink", vec![e_var("hostname"), e_var("username"), e_var("password"), e_var("database"), e_var("port"), e_var("socket"), e_var("flags"), e_bool(true)])),
+                ]),
+        )
+        .method(
+            method("__elephcDetachHandle")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "handleAllocated", e_bool(false)),
+                    s_prop_assign(e_this(), "handlePersistent", e_bool(false)),
+                ]),
+        )
+        .method(
+            method("__elephcConnectProcedural")
+                .private()
+                .param("hostname", t_nullable(TypeExpr::Str))
+                .param("username", t_nullable(TypeExpr::Str))
+                .param("password", t_nullable(TypeExpr::Str))
+                .param("database", t_nullable(TypeExpr::Str))
+                .param("port", t_nullable(TypeExpr::Int))
+                .param("socket", t_nullable(TypeExpr::Str))
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_method_call(e_this(), "connectLink", vec![e_var("hostname"), e_var("username"), e_var("password"), e_var("database"), e_var("port"), e_var("socket"), e_int(0), e_bool(false)])),
+                ]),
+        )
+        .method(
+            method("requireNotClosed")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
                     s_if(
-                        e_binop(e_this_prop("conn"), BinOp::GtEq, e_int(0)),
+                        e_binop(e_this_prop("linkStatus"), BinOp::Eq, e_int(2)),
                         vec![
-                            s_expr(e_method_call(e_this(), "releaseConnection", vec![])),
+                            s_throw(e_new("Error", vec![e_str("mysqli object is already closed")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
+        )
+        .method(
+            method("connectLink")
+                .private()
+                .param("hostname", t_nullable(TypeExpr::Str))
+                .param("username", t_nullable(TypeExpr::Str))
+                .param("password", t_nullable(TypeExpr::Str))
+                .param("database", t_nullable(TypeExpr::Str))
+                .param("port", t_nullable(TypeExpr::Int))
+                .param("socket", t_nullable(TypeExpr::Str))
+                .param("flags", TypeExpr::Int)
+                .param("isRealConnect", TypeExpr::Bool)
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("linkStatus"), BinOp::Eq, e_int(2)),
+                        vec![
+                            s_if(
+                                e_var("isRealConnect"),
+                                vec![
+                                    s_throw(e_new("Error", vec![e_str("mysqli object is already closed")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_prop_assign(e_this(), "linkStatus", e_int(0)),
+                            s_expr(e_method_call(e_this(), "resetOptions", vec![])),
+                            s_prop_assign(e_this(), "connStats", e_array(vec![])),
                         ],
                         vec![],
                         None,
@@ -172,6 +244,25 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![
                             s_assign("_persistent", e_int(1)),
                             s_assign("_host", e_call("substr", vec![e_var("_host"), e_int(2)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_this_prop("linkStatus"), BinOp::Eq, e_int(1)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "closeLink", vec![e_bool(false)])),
+                            s_expr(e_method_call(e_this(), "resetOptions", vec![])),
+                            s_prop_assign(e_this(), "connStats", e_array(vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_not(e_this_prop("handleAllocated")),
+                        vec![
+                            s_prop_assign(e_this(), "handleAllocated", e_bool(true)),
+                            s_prop_assign(e_this(), "handlePersistent", e_binop(e_var("_persistent"), BinOp::Eq, e_int(1))),
                         ],
                         vec![],
                         None,
@@ -416,6 +507,15 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                                 None,
                             ),
                             s_expr(e_method_call(e_this(), "bump", vec![e_str("connect_failure")])),
+                            s_if(
+                                e_not(e_var("isRealConnect")),
+                                vec![
+                                    s_expr(e_method_call(e_this(), "freeHandle", vec![])),
+                                    s_prop_assign(e_this(), "linkStatus", e_int(2)),
+                                ],
+                                vec![],
+                                None,
+                            ),
                             s_return(e_method_call(e_this(), "connectFailure", vec![e_var("_code"), e_var("_message"), e_var("_state")])),
                         ],
                         vec![],
@@ -431,6 +531,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_prop_assign(e_this(), "conn", e_var("_conn")),
+                    s_prop_assign(e_this(), "linkStatus", e_int(1)),
                     s_prop_assign(e_this(), "multiStatementsOn", e_bool(false)),
                     s_prop_assign(e_this(), "persistent", e_binop(e_var("_persistent"), BinOp::Eq, e_int(1))),
                     s_prop_assign(e_this(), "connect_errno", e_int(0)),
@@ -438,21 +539,43 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_static_prop_assign("mysqli", "lastConnectErrno", e_int(0)),
                     s_static_prop_assign("mysqli", "lastConnectError", e_str("")),
                     s_static_prop_assign("mysqli", "openLinks", e_binop(e_static_prop("mysqli", "openLinks"), BinOp::Add, e_int(1))),
+                    s_assign("_pooled", e_bool(false)),
                     s_if(
                         e_this_prop("persistent"),
                         vec![
                             s_static_prop_assign("mysqli", "openPersistentLinks", e_binop(e_static_prop("mysqli", "openPersistentLinks"), BinOp::Add, e_int(1))),
-                            s_expr(e_method_call(e_this(), "bump", vec![e_str("pconnect_success")])),
+                            s_assign("_pooled", e_call("in_array", vec![e_var("_conn"), e_static_prop("mysqli", "seenPlinks"), e_bool(true)])),
+                            s_if(
+                                e_var("_pooled"),
+                                vec![
+                                    s_static_prop_assign("mysqli", "cachedPlinks", e_binop(e_static_prop("mysqli", "cachedPlinks"), BinOp::Sub, e_int(1))),
+                                    s_prop_assign(e_this(), "connStats", e_cast(CastType::Array, e_null_coalesce(e_index(e_static_prop("mysqli", "plinkStats"), e_var("_conn")), e_array(vec![])))),
+                                ],
+                                vec![],
+                                Some(vec![
+                                s_assign("_seen", e_static_prop("mysqli", "seenPlinks")),
+                                s_array_push("_seen", e_var("_conn")),
+                                s_static_prop_assign("mysqli", "seenPlinks", e_var("_seen")),
+                            ]),
+                            ),
                         ],
                         vec![],
                         None,
                     ),
-                    s_expr(e_method_call(e_this(), "bump", vec![e_str("connect_success")])),
-                    s_expr(e_method_call(e_this(), "bump", vec![e_str("active_connections")])),
                     s_if(
-                        e_this_prop("persistent"),
+                        e_not(e_var("_pooled")),
                         vec![
-                            s_expr(e_method_call(e_this(), "bump", vec![e_str("active_persistent_connections")])),
+                            s_if(
+                                e_this_prop("handlePersistent"),
+                                vec![
+                                    s_expr(e_method_call(e_this(), "bump", vec![e_str("pconnect_success")])),
+                                    s_expr(e_method_call(e_this(), "bump", vec![e_str("active_persistent_connections")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_expr(e_method_call(e_this(), "bump", vec![e_str("connect_success")])),
+                            s_expr(e_method_call(e_this(), "bump", vec![e_str("active_connections")])),
                         ],
                         vec![],
                         None,
@@ -472,7 +595,18 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                             e_binop(e_call("elephc_pdo_exec", vec![e_var("_conn"), e_cast(CastType::String, e_index(e_this_prop("optInitCommands"), e_var("_i")))]), BinOp::Lt, e_int(0)),
                             vec![
                                 s_expr(e_method_call(e_this(), "opFailed", vec![])),
+                                s_static_prop_assign("mysqli", "openLinks", e_binop(e_static_prop("mysqli", "openLinks"), BinOp::Sub, e_int(1))),
+                                s_expr(e_method_call(e_this(), "dropActive", vec![])),
                                 s_expr(e_method_call(e_this(), "releaseConnection", vec![])),
+                                s_if(
+                                    e_not(e_var("isRealConnect")),
+                                    vec![
+                                        s_expr(e_method_call(e_this(), "freeHandle", vec![])),
+                                        s_prop_assign(e_this(), "linkStatus", e_int(2)),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
                                 s_return(e_bool(false)),
                             ],
                             vec![],
@@ -500,7 +634,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .param_default("socket", t_nullable(TypeExpr::Str), e_null())
                 .returns(TypeExpr::Bool)
                 .body(vec![
-                    s_return(e_method_call(e_this(), "real_connect", vec![e_var("hostname"), e_var("username"), e_var("password"), e_var("database"), e_var("port"), e_var("socket"), e_int(0)])),
+                    s_return(e_method_call(e_this(), "connectLink", vec![e_var("hostname"), e_var("username"), e_var("password"), e_var("database"), e_var("port"), e_var("socket"), e_int(0), e_bool(false)])),
                 ]),
         )
         .method(
@@ -514,15 +648,15 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_if(
-                        e_binop(e_this_prop("conn"), BinOp::GtEq, e_int(0)),
+                        e_binop(e_this_prop("linkStatus"), BinOp::Eq, e_int(2)),
                         vec![
-                            s_expr(e_method_call(e_this(), "bump", vec![e_str("explicit_close")])),
-                            s_expr(e_method_call(e_this(), "bump", vec![e_str("com_quit")])),
-                            s_expr(e_method_call(e_this(), "releaseConnection", vec![])),
+                            s_throw(e_new("Error", vec![e_str("mysqli object is already closed")])),
                         ],
                         vec![],
                         None,
                     ),
+                    s_expr(e_method_call(e_this(), "closeLink", vec![e_bool(true)])),
+                    s_prop_assign(e_this(), "linkStatus", e_int(2)),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -530,14 +664,104 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
             method("__destruct")
                 .body(vec![
                     s_if(
+                        e_binop(e_this_prop("linkStatus"), BinOp::NotEq, e_int(2)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "closeLink", vec![e_bool(true)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
+        )
+        .method(
+            method("closeLink")
+                .private()
+                .param("explicit", TypeExpr::Bool)
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_binop(e_this_prop("linkStatus"), BinOp::Eq, e_int(1)),
+                        vec![
+                            s_static_prop_assign("mysqli", "openLinks", e_binop(e_static_prop("mysqli", "openLinks"), BinOp::Sub, e_int(1))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_binop(e_this_prop("conn"), BinOp::GtEq, e_int(0)), BinOp::And, e_this_prop("persistent")),
+                        vec![
+                            s_assign("_stats", e_static_prop("mysqli", "plinkStats")),
+                            s_array_assign("_stats", e_this_prop("conn"), e_this_prop("connStats")),
+                            s_static_prop_assign("mysqli", "plinkStats", e_var("_stats")),
+                            s_static_prop_assign("mysqli", "cachedPlinks", e_binop(e_static_prop("mysqli", "cachedPlinks"), BinOp::Add, e_int(1))),
+                            s_expr(e_method_call(e_this(), "releaseConnection", vec![])),
+                            s_prop_assign(e_this(), "handleAllocated", e_bool(false)),
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
                         e_binop(e_this_prop("conn"), BinOp::GtEq, e_int(0)),
                         vec![
-                            s_expr(e_method_call(e_this(), "bump", vec![e_str("implicit_close")])),
+                            s_expr(e_method_call(e_this(), "bump", vec![e_ternary(e_var("explicit"), e_str("explicit_close"), e_str("implicit_close"))])),
+                            s_expr(e_method_call(e_this(), "bump", vec![e_str("com_quit")])),
+                            s_expr(e_method_call(e_this(), "dropActive", vec![])),
                             s_expr(e_method_call(e_this(), "releaseConnection", vec![])),
                         ],
                         vec![],
                         None,
                     ),
+                    s_expr(e_method_call(e_this(), "freeHandle", vec![])),
+                ]),
+        )
+        .method(
+            method("freeHandle")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_if(
+                        e_not(e_this_prop("handleAllocated")),
+                        vec![
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_prop_assign(e_this(), "handleAllocated", e_bool(false)),
+                    s_assign("_client", e_static_prop("mysqli", "clientStats")),
+                    s_array_assign("_client", e_str("active_connections"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_var("_client"), e_str("active_connections")), e_int(0))), BinOp::Sub, e_int(1))),
+                    s_if(
+                        e_this_prop("handlePersistent"),
+                        vec![
+                            s_array_assign("_client", e_str("active_persistent_connections"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_var("_client"), e_str("active_persistent_connections")), e_int(0))), BinOp::Sub, e_int(1))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_static_prop_assign("mysqli", "clientStats", e_var("_client")),
+                ]),
+        )
+        .method(
+            method("resetOptions")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "optConnectTimeout", e_int(0)),
+                    s_prop_assign(e_this(), "optInitCommands", e_array(vec![])),
+                    s_prop_assign(e_this(), "optCharsetName", e_str("")),
+                    s_prop_assign(e_this(), "optLocalInfile", e_int(0)),
+                    s_prop_assign(e_this(), "optLocalInfileDir", e_str("")),
+                    s_prop_assign(e_this(), "optServerPublicKey", e_str("")),
+                    s_prop_assign(e_this(), "optSslVerify", e_neg(e_int(1))),
+                    s_prop_assign(e_this(), "optIntAndFloatNative", e_bool(false)),
+                    s_prop_assign(e_this(), "optReadTimeout", e_int(0)),
+                    s_prop_assign(e_this(), "sslRequested", e_bool(false)),
+                    s_prop_assign(e_this(), "sslKey", e_str("")),
+                    s_prop_assign(e_this(), "sslCert", e_str("")),
+                    s_prop_assign(e_this(), "sslCa", e_str("")),
+                    s_prop_assign(e_this(), "sslCapath", e_str("")),
+                    s_prop_assign(e_this(), "sslCipher", e_str("")),
                 ]),
         )
         .method(
@@ -713,6 +937,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .param("cipher_algos", t_nullable(TypeExpr::Str))
                 .returns(TypeExpr::Bool)
                 .body(vec![
+                    s_expr(e_method_call(e_this(), "requireNotClosed", vec![])),
                     s_prop_assign(e_this(), "sslRequested", e_bool(true)),
                     s_prop_assign(e_this(), "sslKey", e_ternary(e_binop(e_var("key"), BinOp::StrictEq, e_null()), e_str(""), e_var("key"))),
                     s_prop_assign(e_this(), "sslCert", e_ternary(e_binop(e_var("certificate"), BinOp::StrictEq, e_null()), e_str(""), e_var("certificate"))),
@@ -758,9 +983,39 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_assign("_out", e_array(vec![])),
                     s_foreach(e_static_call("mysqli", "__elephcStatKeys", vec![]), None, "_key", vec![
                         s_assign("_name", e_cast(CastType::String, e_var("_key"))),
-                        s_array_assign("_out", e_var("_name"), e_null_coalesce(e_static_call("mysqli", "__elephcWireStat", vec![e_ternary(e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0)), e_neg(e_int(2)), e_this_prop("conn")), e_var("_name")]), e_cast(CastType::String, e_null_coalesce(e_index(e_this_prop("connStats"), e_var("_name")), e_int(0))))),
+                        s_array_assign("_out", e_var("_name"), e_null_coalesce(e_static_call("mysqli", "__elephcWireStat", vec![e_ternary(e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0)), e_neg(e_int(2)), e_this_prop("conn")), e_var("_name")]), e_static_call("mysqli", "__elephcStatString", vec![e_cast(CastType::Int, e_null_coalesce(e_index(e_this_prop("connStats"), e_var("_name")), e_int(0)))]))),
                     ]),
                     s_return(e_var("_out")),
+                ]),
+        )
+        .method(
+            method("__elephcStatString")
+                .private()
+                .static_()
+                .param("value", TypeExpr::Int)
+                .returns(TypeExpr::Str)
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("value"), BinOp::GtEq, e_int(0)),
+                        vec![
+                            s_return(e_cast(CastType::String, e_var("value"))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_magnitude", e_neg(e_var("value"))),
+                    s_assign("_low", e_binop(e_int(709551616), BinOp::Sub, e_binop(e_var("_magnitude"), BinOp::Mod, e_int(1000000000)))),
+                    s_assign("_high", e_binop(e_int(18446744073), BinOp::Sub, e_call("intdiv", vec![e_var("_magnitude"), e_int(1000000000)]))),
+                    s_if(
+                        e_binop(e_var("_low"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_assign("_low", e_binop(e_var("_low"), BinOp::Add, e_int(1000000000))),
+                            s_assign("_high", e_binop(e_var("_high"), BinOp::Sub, e_int(1))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_binop(e_cast(CastType::String, e_var("_high")), BinOp::Concat, e_call("str_pad", vec![e_cast(CastType::String, e_var("_low")), e_int(9), e_str("0"), e_const("STR_PAD_LEFT")]))),
                 ]),
         )
         .method(
@@ -1207,6 +1462,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .param("value", t_mixed())
                 .returns(TypeExpr::Bool)
                 .body(vec![
+                    s_expr(e_method_call(e_this(), "requireNotClosed", vec![])),
                     s_if(
                         e_binop(e_var("option"), BinOp::Eq, e_int(0)),
                         vec![
@@ -2150,7 +2406,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_assign("_client", e_static_prop("mysqli", "clientStats")),
                     s_array_assign("_client", e_str("active_connections"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_var("_client"), e_str("active_connections")), e_int(0))), BinOp::Sub, e_int(1))),
                     s_if(
-                        e_this_prop("persistent"),
+                        e_this_prop("handlePersistent"),
                         vec![
                             s_array_assign("_client", e_str("active_persistent_connections"), e_binop(e_cast(CastType::Int, e_null_coalesce(e_index(e_var("_client"), e_str("active_persistent_connections")), e_int(0))), BinOp::Sub, e_int(1))),
                         ],
@@ -2229,7 +2485,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_expr(e_call("elephc_pdo_release", vec![e_this_prop("conn"), e_int(0)])),
                     s_prop_assign(e_this(), "conn", e_neg(e_int(1))),
                     s_prop_assign(e_this(), "asyncPending", e_bool(false)),
-                    s_static_prop_assign("mysqli", "openLinks", e_binop(e_static_prop("mysqli", "openLinks"), BinOp::Sub, e_int(1))),
                     s_if(
                         e_this_prop("persistent"),
                         vec![
@@ -2238,7 +2493,6 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_expr(e_method_call(e_this(), "dropActive", vec![])),
                     s_prop_assign(e_this(), "persistent", e_bool(false)),
                 ]),
         )
@@ -2506,12 +2760,28 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 ]),
         )
         .method(
+            method("__elephcRequireValid")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "requireInitialized", vec![])),
+                ]),
+        )
+        .method(
             method("requireInitialized")
                 .private()
                 .returns(TypeExpr::Void)
                 .body(vec![
                     s_if(
-                        e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0)),
+                        e_binop(e_this_prop("linkStatus"), BinOp::Eq, e_int(2)),
+                        vec![
+                            s_throw(e_new("Error", vec![e_str("mysqli object is already closed")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_this_prop("linkStatus"), BinOp::Eq, e_int(0)),
                         vec![
                             s_throw(e_new("Error", vec![e_str("mysqli object is not fully initialized")])),
                         ],
@@ -2526,6 +2796,15 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 .returns(TypeExpr::Bool)
                 .body(vec![
                     s_expr(e_method_call(e_this(), "requireInitialized", vec![])),
+                    s_if(
+                        e_binop(e_this_prop("conn"), BinOp::Lt, e_int(0)),
+                        vec![
+                            s_expr(e_method_call(e_this(), "syntheticFailure", vec![e_int(2014), e_str("Commands out of sync; you can't run this command now"), e_str("HY000")])),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_return(e_bool(true)),
                 ]),
         )
@@ -2560,7 +2839,15 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_this(), "error_list", e_array(vec![e_array_assoc(vec![(e_str("errno"), e_var("errno")), (e_str("sqlstate"), e_var("sqlstate")), (e_str("error"), e_var("message"))])])),
                     s_static_prop_assign("mysqli", "lastConnectErrno", e_var("errno")),
                     s_static_prop_assign("mysqli", "lastConnectError", e_var("message")),
-                    s_expr(e_method_call(e_this(), "report", vec![e_var("message"), e_var("errno"), e_var("sqlstate")])),
+                    s_if(
+                        e_binop(e_binop(e_static_prop("mysqli", "reportMode"), BinOp::BitAnd, e_int(2)), BinOp::NotEq, e_int(0)),
+                        vec![
+                            s_throw(e_static_call("mysqli_sql_exception", "__elephcCreate", vec![e_var("message"), e_var("errno"), e_var("sqlstate")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_expr(e_static_call("mysqli", "__elephcWarn", vec![e_binop(e_binop(e_binop(e_binop(e_binop(e_str("("), BinOp::Concat, e_var("sqlstate")), BinOp::Concat, e_str("/")), BinOp::Concat, e_var("errno")), BinOp::Concat, e_str("): ")), BinOp::Concat, e_var("message"))])),
                     s_return(e_bool(false)),
                 ]),
         )
