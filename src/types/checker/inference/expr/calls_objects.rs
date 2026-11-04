@@ -146,6 +146,9 @@ impl Checker {
                         "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937",
                     ));
                 }
+                if let Some(message) = crate::types::checker::deprecated_constant_message(constant_name) {
+                    self.warnings.push(crate::errors::CompileWarning::deprecation(expr.span, message));
+                }
                 if pcntl_int_constants(self.target)
                     .iter()
                     .any(|(constant, _)| *constant == constant_name)

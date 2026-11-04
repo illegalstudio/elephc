@@ -1854,9 +1854,18 @@ fn function_from_spec(spec: &IntlFunction) -> Stmt {
         body.push(s_assign("_result", e_call("__elephc_intl_invoke_outputs", vec![
             e_str(spec.family), e_str(spec.method), e_array(args),
         ])));
+        let failed_outputs = if matches!(spec.name, "idn_to_ascii" | "idn_to_utf8") {
+            // php leaves the info array empty (not unset/null) for length failures.
+            vec![
+                s_assign("idna_info", e_array(vec![])),
+                s_return(crate::synthetic_class::e_bool(false)),
+            ]
+        } else {
+            vec![s_return(crate::synthetic_class::e_bool(false))]
+        };
         body.push(s_if(
             e_binop(e_var("_result"), BinOp::StrictEq, e_array(vec![])),
-            vec![s_return(crate::synthetic_class::e_bool(false))],
+            failed_outputs,
             vec![],
             None,
         ));
@@ -4222,7 +4231,7 @@ fn build_time_zone_class() -> Stmt {
             ]));
     for (name, params, outputs) in [
         ("countEquivalentIDs", vec![("timezoneId", TypeExpr::Str, None, false)], vec![]),
-        ("createEnumeration", vec![("countryOrRawOffset", t_union(vec![TypeExpr::Str, TypeExpr::Int, TypeExpr::Void]), Some(e_null()), false)], vec![]),
+        ("createEnumeration", vec![("countryOrRawOffset", t_mixed(), Some(e_null()), false)], vec![]),
         ("createTimeZoneIDEnumeration", vec![("type", TypeExpr::Int, None, false), ("region", t_nullable(TypeExpr::Str), Some(e_null()), false), ("rawOffset", t_nullable(TypeExpr::Int), Some(e_null()), false)], vec![]),
         ("getCanonicalID", vec![("timezoneId", TypeExpr::Str, None, false), ("isSystemId", TypeExpr::Bool, Some(e_null()), true)], vec!["isSystemId"]),
         ("getDisplayName", vec![("dst", TypeExpr::Bool, Some(crate::synthetic_class::e_bool(false)), false), ("style", TypeExpr::Int, Some(e_int(2)), false), ("locale", t_nullable(TypeExpr::Str), Some(e_null()), false)], vec![]),
@@ -4243,6 +4252,25 @@ fn build_time_zone_class() -> Stmt {
     ] {
         let body = if name == "createEnumeration" || name == "createTimeZoneIDEnumeration" {
             let mut statements = Vec::new();
+            if name == "createEnumeration" {
+                // PHP reports an invalid scalar shape at runtime; accept mixed storage and
+                // raise the same TypeError instead of rejecting it in the checker.
+                statements.push(s_if(
+                    e_not(e_binop(
+                        e_binop(e_call("is_null", vec![e_var("countryOrRawOffset")]), BinOp::Or,
+                            e_call("is_string", vec![e_var("countryOrRawOffset")])),
+                        BinOp::Or,
+                        e_call("is_int", vec![e_var("countryOrRawOffset")]),
+                    )),
+                    vec![s_throw(e_new("TypeError", vec![e_concat_all(vec![
+                        e_str("IntlTimeZone::createEnumeration(): Argument #1 ($countryOrRawOffset) must be of type string|int|null, "),
+                        e_call("__elephc_intl_debug_type", vec![e_var("countryOrRawOffset")]),
+                        e_str(" given"),
+                    ])]))],
+                    vec![],
+                    None,
+                ));
+            }
             if name == "createTimeZoneIDEnumeration" {
                 statements.push(s_if(
                     e_binop(
@@ -4438,7 +4466,7 @@ fn build_iterator_class() -> Stmt {
         .method(method("__elephc_from_array").static_().param("items", t_mixed()).returns(t_class("static")).body(vec![
             s_assign("_object", e_new_static(vec![])),
             s_prop_assign(e_var("_object"), "__elephc_items", e_var("items")),
-            s_prop_assign(e_var("_object"), "__elephc_keys", e_call("array_keys", vec![e_var("items")])),
+            s_prop_assign(e_var("_object"), "__elephc_keys", e_call("array_keys", vec![e_cast(CastType::Array, e_var("items"))])),
             s_return(e_var("_object")),
         ]))
         .method(method("__elephc_from_handle").static_().param("handle", TypeExpr::Int).returns(t_class("static")).body(vec![
@@ -4635,34 +4663,10 @@ fn build_break_iterator_class() -> Stmt {
                     vec![],
                     None,
                 ),
-                s_assign("_text", e_cast(CastType::String, e_method_call(e_var("this"), "getText", vec![]))),
-                s_assign("_items", e_array(vec![])),
-                s_assign("_position", e_method_call(e_var("this"), "current", vec![])),
-                s_assign("_p", e_method_call(e_var("this"), "first", vec![])),
-                s_assign("_prev", e_var("_p")),
-                s_while(e_binop(e_var("_p"), BinOp::StrictNotEq, e_class_const("IntlBreakIterator", "DONE")), vec![
-                    s_assign("_next", e_method_call(e_var("this"), "next", vec![e_null()])),
-                    s_if(e_binop(e_var("_next"), BinOp::StrictEq, e_class_const("IntlBreakIterator", "DONE")), vec![
-                        crate::synthetic_class::s_break(1),
-                    ], vec![], None),
-                    s_assign("_part", e_call("substr", vec![e_var("_text"), e_var("_prev"), e_binop(e_var("_next"), BinOp::Sub, e_var("_prev"))])),
-                    s_if(e_binop(e_var("type"), BinOp::StrictEq, e_int(1)), vec![
-                        s_array_assign("_items", e_var("_prev"), e_var("_part")),
-                    ], vec![], Some(vec![
-                        s_if(e_binop(e_var("type"), BinOp::StrictEq, e_int(2)), vec![
-                            s_array_assign("_items", e_var("_next"), e_var("_part")),
-                        ], vec![], Some(vec![
-                            s_array_push("_items", e_var("_part")),
-                        ])),
-                    ])),
-                    s_assign("_prev", e_var("_next")),
-                    s_assign("_p", e_var("_next")),
-                ]),
-                s_if(e_binop(e_var("_position"), BinOp::GtEq, e_int(0)), vec![
-                    s_expr(e_method_call(e_var("this"), "following", vec![e_var("_position")])),
-                ], vec![], None),
+                // PHP's parts iterator follows the break iterator lazily: the caller may set
+                // the text after getPartsIterator(), so the parts are built on first rewind.
                 s_return(e_static_call("IntlPartsIterator", "__elephc_from_parts", vec![
-                    e_var("_items"), e_var("this"), e_int(0),
+                    e_array(vec![]), e_var("this"), e_var("type"),
                 ])),
             ]));
     builder = builder.method(method("__elephc_compare").static_()
@@ -4805,6 +4809,8 @@ fn build_parts_iterator_class() -> Stmt {
     let mut builder = class("IntlPartsIterator")
         .extends("IntlIterator")
         .prop("__elephc_break_iterator", t_mixed(), Some(e_null()))
+        .prop("__elephc_type", TypeExpr::Int, Some(e_int(0)))
+        .prop("__elephc_positions", t_array(), Some(e_array(vec![])))
         .prop("__elephc_rule_status", TypeExpr::Int, Some(e_int(0)));
     for (constant, value) in constants_for("IntlPartsIterator") {
         builder = builder.constant(constant, const_value_expr(value));
@@ -4812,17 +4818,102 @@ fn build_parts_iterator_class() -> Stmt {
     builder = builder
         .method(method("__elephc_from_parts")
             .static_()
-            .param("items", t_mixed())
+            .param("items", t_array())
             .param("iterator", t_mixed())
             .param("status", TypeExpr::Int)
             .returns(t_class("static"))
             .body(vec![
                 s_assign("_object", e_new("IntlPartsIterator", vec![])),
                 s_prop_assign(e_var("_object"), "__elephc_items", e_var("items")),
-                s_prop_assign(e_var("_object"), "__elephc_keys", e_call("array_keys", vec![e_var("items")])),
+                s_prop_assign(e_var("_object"), "__elephc_keys", e_call("array_keys", vec![e_cast(CastType::Array, e_var("items"))])),
                 s_prop_assign(e_var("_object"), "__elephc_break_iterator", e_var("iterator")),
-                s_prop_assign(e_var("_object"), "__elephc_rule_status", e_var("status")),
+                s_prop_assign(e_var("_object"), "__elephc_type", e_var("status")),
+                s_prop_assign(e_var("_object"), "__elephc_rule_status", e_int(0)),
                 s_return(e_var("_object")),
+            ]))
+        .method(method("__elephc_ensure")
+            .body(vec![
+                s_if(
+                    e_binop(e_call("count", vec![e_cast(CastType::Array, e_this_prop("__elephc_items"))]), BinOp::StrictNotEq, e_int(0)),
+                    vec![crate::synthetic_class::s_return_void()],
+                    vec![],
+                    None,
+                ),
+                s_assign("_owner", e_this_prop("__elephc_break_iterator")),
+                s_if(
+                    e_not(e_instance_of(e_var("_owner"), "IntlBreakIterator")),
+                    vec![crate::synthetic_class::s_return_void()],
+                    vec![],
+                    None,
+                ),
+                s_assign("_text", e_cast(CastType::String, e_method_call(e_var("_owner"), "getText", vec![]))),
+                s_assign("_items", e_array(vec![])),
+                s_assign("_positions", e_array(vec![])),
+                s_assign("_p", e_method_call(e_var("_owner"), "first", vec![])),
+                s_assign("_prev", e_var("_p")),
+                s_while(
+                    e_binop(e_var("_p"), BinOp::StrictNotEq, e_class_const("IntlBreakIterator", "DONE")),
+                    vec![
+                        s_assign("_next", e_method_call(e_var("_owner"), "next", vec![e_null()])),
+                        s_if(
+                            e_binop(e_var("_next"), BinOp::StrictEq, e_class_const("IntlBreakIterator", "DONE")),
+                            vec![crate::synthetic_class::s_break(1)],
+                            vec![],
+                            None,
+                        ),
+                        s_assign("_part", e_call("substr", vec![
+                            e_var("_text"), e_var("_prev"),
+                            e_binop(e_var("_next"), BinOp::Sub, e_var("_prev")),
+                        ])),
+                        s_if(
+                            e_binop(e_this_prop("__elephc_type"), BinOp::StrictEq, e_int(1)),
+                            vec![s_array_assign("_items", e_var("_prev"), e_var("_part"))],
+                            vec![],
+                            Some(vec![s_if(
+                                e_binop(e_this_prop("__elephc_type"), BinOp::StrictEq, e_int(2)),
+                                vec![s_array_assign("_items", e_var("_next"), e_var("_part"))],
+                                vec![],
+                                Some(vec![s_array_push("_items", e_var("_part"))]),
+                            )]),
+                        ),
+                        s_array_push("_positions", e_var("_prev")),
+                        s_assign("_prev", e_var("_next")),
+                        s_assign("_p", e_var("_next")),
+                    ],
+                ),
+                s_prop_assign(e_var("this"), "__elephc_items", e_var("_items")),
+                s_prop_assign(e_var("this"), "__elephc_positions", e_var("_positions")),
+                s_prop_assign(e_var("this"), "__elephc_keys", e_call("array_keys", vec![e_cast(CastType::Array, e_var("_items"))])),
+                s_prop_assign(e_var("this"), "__elephc_index", e_int(0)),
+            ]))
+        .method(method("__elephc_sync")
+            .body(vec![
+                s_if(
+                    e_not(call_isset(e_index(e_this_prop("__elephc_positions"), e_this_prop("__elephc_index")))),
+                    vec![crate::synthetic_class::s_return_void()],
+                    vec![],
+                    None,
+                ),
+                s_assign("_pos", e_index(e_this_prop("__elephc_positions"), e_this_prop("__elephc_index"))),
+                s_assign("_owner", e_this_prop("__elephc_break_iterator")),
+                s_if(e_instance_of(e_var("_owner"), "IntlBreakIterator"), vec![
+                    s_expr(e_method_call(e_var("_owner"), "following", vec![e_var("_pos")])),
+                ], vec![], None),
+            ]))
+        .method(method("current")
+            .returns(t_mixed())
+            .body(vec![
+                s_expr(e_method_call(e_var("this"), "__elephc_sync", vec![])),
+                s_return(e_index(
+                    e_this_prop("__elephc_items"),
+                    e_index(e_this_prop("__elephc_keys"), e_this_prop("__elephc_index")),
+                )),
+            ]))
+        .method(method("rewind")
+            .returns(TypeExpr::Void)
+            .body(vec![
+                s_expr(e_method_call(e_var("this"), "__elephc_ensure", vec![])),
+                s_prop_assign(e_var("this"), "__elephc_index", e_int(0)),
             ]))
         .method(method("getBreakIterator")
             .returns(t_class("IntlBreakIterator"))

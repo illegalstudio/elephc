@@ -224,6 +224,43 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                     }
                 }
             }
+            // `str_replace()` with a literal search array and a scalar replacement is a chain of
+            // scalar replacements; lowering it as nested calls keeps the runtime's string path.
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("str_replace")
+                && args.len() == 3
+            {
+                if let (
+                    ExprKind::ArrayLiteral(items),
+                    ExprKind::StringLiteral(replacement),
+                ) = (&args[0].kind, &args[1].kind)
+                {
+                    if !items.is_empty()
+                        && items.iter().all(|item| matches!(item.kind, ExprKind::StringLiteral(_)))
+                    {
+                        let mut subject = args[2].clone();
+                        for item in items.iter().rev() {
+                            subject = Expr::new(
+                                ExprKind::FunctionCall {
+                                    name: name.clone(),
+                                    args: vec![
+                                        item.clone(),
+                                        Expr::new(
+                                            ExprKind::StringLiteral(replacement.clone()),
+                                            args[1].span,
+                                        ),
+                                        subject,
+                                    ],
+                                },
+                                span,
+                            );
+                        }
+                        return subject;
+                    }
+                }
+            }
             if let Some(rebound) = namespace_fallbacks::resolve_call(&name, &args, span) {
                 return fold_expr(rebound);
             }

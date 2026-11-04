@@ -80,6 +80,19 @@ use schema::propagate_abstract_return_types;
 /// Checker carries program-wide type-checking state including function signatures,
 /// class/interface/enum definitions, variable environments, and warnings collected
 /// during type checking.
+/// Returns PHP 8.5's deprecation text for a global constant, when it is deprecated.
+///
+/// The synthetic Intl prelude declares these constants, so the message lives here rather than
+/// in the shared catalog (which only carries compiler-registered constants).
+pub(crate) fn deprecated_constant_message(name: &str) -> Option<&'static str> {
+    match name {
+        "U_MULTIPLE_DECIMAL_SEPERATORS" => Some(
+            "Constant U_MULTIPLE_DECIMAL_SEPERATORS is deprecated since 8.3, use U_MULTIPLE_DECIMAL_SEPARATORS instead",
+        ),
+        _ => None,
+    }
+}
+
 pub(crate) struct Checker {
     /// Target platform for codegen (affects ABI, sizes, and platform checks).
     /// Full compilation target. `platform` drives OS constants; `apple_variant`

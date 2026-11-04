@@ -4641,6 +4641,11 @@ Value idn_operation(const std::string &operation, const std::vector<Value> &args
     }
     uidna_close(idna);
     if (U_FAILURE(status)) return Value::boolean(false);
+    // php-src leaves the by-reference info array untouched when the domain or one of its
+    // labels is too long (the details would be unrepresentable anyway).
+    if (info.errors & (UIDNA_ERROR_LABEL_TOO_LONG | UIDNA_ERROR_DOMAIN_NAME_TOO_LONG)) {
+        return Value::boolean(false);
+    }
     Value details = Value::array();
     details.entries = {
         {Value::from_string("result"), Value::from_string(result)},

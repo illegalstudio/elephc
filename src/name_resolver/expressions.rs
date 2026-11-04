@@ -51,36 +51,44 @@ fn in_constant_expression() -> bool {
     CONSTANT_EXPRESSION.with(|flag| flag.get())
 }
 
-/// Reports whether one resolved constant name is PHP's deprecated `MT_RAND_PHP`.
-fn is_mt_rand_php(name: &crate::names::Name) -> bool {
-    name.as_canonical().trim_start_matches('\\') == "MT_RAND_PHP"
+/// Returns the value and deprecation text for a global constant PHP 8.5 deprecates.
+fn deprecated_constant(name: &str) -> Option<(i64, &'static str)> {
+    match name.trim_start_matches('\\') {
+        "MT_RAND_PHP" => Some((
+            1,
+            "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937",
+        )),
+        "U_MULTIPLE_DECIMAL_SEPERATORS" => Some((
+            65793,
+            "Constant U_MULTIPLE_DECIMAL_SEPERATORS is deprecated since 8.3, use U_MULTIPLE_DECIMAL_SEPARATORS instead",
+        )),
+        _ => None,
+    }
 }
 
-/// Builds the expression PHP evaluates when the program reads `MT_RAND_PHP`.
+/// Builds the expression PHP evaluates when the program reads `name`.
 ///
 /// php-src emits `E_DEPRECATED` from the constant fetch itself, so the diagnostic has to
 /// carry the read's own file and line. A prelude helper would report the helper's synthetic
-/// span instead, hence the inline `trigger_error(...) ? 1 : 1`: the call runs at this
-/// expression's span, and both branches keep the constant's value so the read still yields
-/// `1` whichever way a user error handler answers.
-fn mt_rand_php_read(span: Span) -> ExprKind {
+/// span instead, hence the inline `trigger_error(...) ? <value> : <value>`: the call runs at
+/// this expression's span, and both branches keep the constant's value whichever way a user
+/// error handler answers.
+fn deprecated_constant_read(name: &str, span: Span) -> Option<ExprKind> {
+    let (value, message) = deprecated_constant(name)?;
     let at = |kind| Expr { kind, span };
-    ExprKind::Ternary {
+    Some(ExprKind::Ternary {
         condition: Box::new(at(ExprKind::FunctionCall {
             name: resolved_name("trigger_error".to_string()),
             args: vec![
-                at(ExprKind::StringLiteral(
-                    "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937"
-                        .to_string(),
-                )),
+                at(ExprKind::StringLiteral(message.to_string())),
                 at(ExprKind::ConstRef(resolved_name(
                     "E_USER_DEPRECATED".to_string(),
                 ))),
             ],
         })),
-        then_expr: Box::new(at(ExprKind::IntLiteral(1))),
-        else_expr: Box::new(at(ExprKind::IntLiteral(1))),
-    }
+        then_expr: Box::new(at(ExprKind::IntLiteral(value))),
+        else_expr: Box::new(at(ExprKind::IntLiteral(value))),
+    })
 }
 
 /// Recursively resolves names in an expression, returning a new expression with
@@ -148,6 +156,24 @@ pub(super) fn resolve_expr(
         },
         ExprKind::FunctionCall { name, args } => {
             let function_name = resolve_function_reference(name, current_namespace, imports, symbols);
+            if function_name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("constant")
+            {
+                if let Some(Expr {
+                    kind: ExprKind::StringLiteral(name),
+                    ..
+                }) = args.first()
+                {
+                    if let Some(read) = deprecated_constant_read(name, expr.span) {
+                        return Expr {
+                            kind: read,
+                            span: expr.span,
+                        };
+                    }
+                }
+            }
             let resolved_args: Vec<Expr> = rewrite_callback_literal_args(
                 &function_name,
                 args,
@@ -327,10 +353,12 @@ pub(super) fn resolve_expr(
                 imports,
                 symbols,
             ));
-            if !in_constant_expression() && is_mt_rand_php(&resolved) {
-                mt_rand_php_read(expr.span)
-            } else {
-                ExprKind::ConstRef(resolved)
+            match (!in_constant_expression())
+                .then(|| deprecated_constant_read(&resolved.as_canonical(), expr.span))
+                .flatten()
+            {
+                Some(read) => read,
+                None => ExprKind::ConstRef(resolved),
             }
         }
         // `new Box<int>(...)`. Both halves need resolving and the CATCH-ALL below would resolve
