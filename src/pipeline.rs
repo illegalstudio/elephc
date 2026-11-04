@@ -1421,6 +1421,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             deferred_class_files.insert(path);
         }
     }
+    // The re-run is a new process: what the round that found them decided about them comes along.
+    for path in crate::autoload::deferral::inherited_harmless_deferred_files() {
+        probe_only_deferred.insert(path.canonicalize().unwrap_or(path));
+    }
     // Files an earlier build of this same program handed back, while their bytes are unchanged:
     // deferring them now saves the type-check rounds and the backend re-run that found them.
     // A remembered file is classified like a newly refused one: closed world keeps a file whose
@@ -2150,6 +2154,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
                 &deferral_class_files,
                 &deferrable_class_files,
                 &deferred_class_files,
+                &probe_only_deferred,
                 &eager_function_files,
             )
             .rerun_without_refused_bodies(&failures);
@@ -2376,6 +2381,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             &deferral_class_files,
             &deferrable_class_files,
             &deferred_class_files,
+            &probe_only_deferred,
             &eager_function_files,
         ))
     };

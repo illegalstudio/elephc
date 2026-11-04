@@ -558,6 +558,39 @@ fn closed_world_class_file_php_refuses_to_load_is_a_note() {
     assert!(text(&run.stderr).contains("HEAP DEBUG: leak summary: clean"), "{}", text(&run.stderr));
 }
 
+/// A backend re-run is a new process: a file the first round classified as harmless (here, one
+/// php refuses to load) stays harmless, while one it inherits with no such verdict still refuses
+/// the build. `KernelBrowser` was a note in the first round of the Symfony Demo build and a
+/// reason to refuse it in the second.
+#[test]
+fn closed_world_rerun_keeps_the_harmless_verdict_of_a_deferred_file() {
+    let dir = make_test_dir("cw_rerun_harmless");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nspl_autoload_register(function (string $class): void {\n    $file = __DIR__ . \"/src/\" . $class . \".php\";\n    if (is_file($file)) { require $file; }\n});\nfunction never(): string { return (new Browser())->name(); }\necho \"ok\\n\";\nif ($argc > 5) { echo never(), \"\\n\"; }\n",
+    )
+    .unwrap();
+    fs::write(dir.join("src/Browser.php"), "<?php\nclass Browser extends AbstractBrowserFromDevPackage {}\n").unwrap();
+    let file = dir.join("src/Browser.php").canonicalize().unwrap();
+    let rerun = |harmless: bool| {
+        let mut cmd = Command::new(elephc_bin());
+        cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+        cmd.env("ELEPHC_DEFERRED_CLASS_FILES", &file);
+        if harmless {
+            cmd.env("ELEPHC_HARMLESS_DEFERRED_CLASS_FILES", &file);
+        }
+        cmd.current_dir(&dir).arg("--closed-world").arg("--php-version").arg("8.5").arg(dir.join("main.php"));
+        cmd.output().expect("failed to spawn elephc")
+    };
+    let refused = rerun(false);
+    let refused_text = format!("{}{}", text(&refused.stdout), text(&refused.stderr));
+    assert!(!refused.status.success(), "{refused_text}");
+    assert!(refused_text.contains("handed to the runtime autoloader"), "{refused_text}");
+    let kept = rerun(true);
+    assert!(kept.status.success(), "{}{}", text(&kept.stdout), text(&kept.stderr));
+}
+
 /// A class file whose parent no file declares (symfony/framework-bundle's `KernelBrowser` over
 /// the dev-only browser-kit) is one php refuses to load (`Class "…" not found`), so it and its
 /// subclasses are notes, not a refused closed-world build.

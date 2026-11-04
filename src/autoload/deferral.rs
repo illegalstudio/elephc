@@ -512,6 +512,11 @@ fn eager_function_key(name: &str) -> String {
 /// round of the same build already handed to the runtime (newline-separated paths).
 const DEFERRED_FILES_ENV: &str = "ELEPHC_DEFERRED_CLASS_FILES";
 
+/// Environment variable carrying the deferred files that do not count against a closed world
+/// (only probed, or refused by php itself): the classification rests on what the round that
+/// found them saw, and a re-run starts from an empty set.
+const HARMLESS_DEFERRED_FILES_ENV: &str = "ELEPHC_HARMLESS_DEFERRED_CLASS_FILES";
+
 /// Environment variable counting re-runs, so a build that keeps finding new files still ends.
 const DEFERRAL_ROUND_ENV: &str = "ELEPHC_DEFERRAL_ROUND";
 
@@ -520,7 +525,17 @@ const MAX_DEFERRAL_ROUNDS: u32 = 6;
 
 /// The class files an earlier round of this build handed to the runtime, if any.
 pub fn inherited_deferred_files() -> Vec<PathBuf> {
-    std::env::var(DEFERRED_FILES_ENV)
+    paths_from_env(DEFERRED_FILES_ENV)
+}
+
+/// The inherited files that do not count against a closed world.
+pub fn inherited_harmless_deferred_files() -> Vec<PathBuf> {
+    paths_from_env(HARMLESS_DEFERRED_FILES_ENV)
+}
+
+/// Reads one newline-separated path list from the environment.
+fn paths_from_env(name: &str) -> Vec<PathBuf> {
+    std::env::var(name)
         .map(|joined| {
             joined
                 .lines()
@@ -541,6 +556,8 @@ pub struct BackendDeferral {
     pub body_files: HashMap<String, PathBuf>,
     /// The files this round has already handed back.
     pub already_deferred: HashSet<PathBuf>,
+    /// The already deferred files that do not count against a closed world.
+    pub harmless_deferred: HashSet<PathBuf>,
     /// For a body that cannot be handed back, the class it belongs to and why, for the report.
     pub owners: HashMap<String, String>,
 }
@@ -557,6 +574,7 @@ impl BackendDeferral {
         class_files: &HashMap<String, String>,
         deferrable: &HashSet<PathBuf>,
         already_deferred: &HashSet<PathBuf>,
+        harmless_deferred: &HashSet<PathBuf>,
         eager_function_files: &HashMap<String, PathBuf>,
     ) -> Self {
         let class_by_id: HashMap<u64, &str> = module
@@ -642,6 +660,7 @@ impl BackendDeferral {
         Self {
             body_files,
             already_deferred: already_deferred.clone(),
+            harmless_deferred: harmless_deferred.clone(),
             owners,
         }
     }
@@ -704,6 +723,8 @@ impl BackendDeferral {
             .chain(new_files.keys())
             .map(|path| path.display().to_string())
             .collect();
+        let harmless: Vec<String> =
+            self.harmless_deferred.iter().map(|path| path.display().to_string()).collect();
         crate::progress::clear();
         eprintln!(
             "note: recompiling with {} class file(s) left to the runtime autoloader (round {})",
@@ -717,6 +738,7 @@ impl BackendDeferral {
         command
             .args(std::env::args_os().skip(1))
             .env(DEFERRED_FILES_ENV, all.join("\n"))
+            .env(HARMLESS_DEFERRED_FILES_ENV, harmless.join("\n"))
             .env(DEFERRAL_ROUND_ENV, (round + 1).to_string());
         // Replace this process rather than wait on a child: a waiting parent kept its whole
         // compiled program resident (~10 GB on the Symfony demo) beside the re-run's, which
