@@ -70,7 +70,7 @@ fn inject_if_used_on_compiler_stack(
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
-    if !force && !detect::program_uses_testing(&program) {
+    if !force && (crate::closed_world::is_enabled() || !detect::program_uses_testing(&program)) {
         return program;
     }
     let mut combined = testing_declarations();
@@ -92,7 +92,11 @@ pub fn inject_after_autoload(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Result<Program, crate::errors::CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
-        if inventory.groups.contains_key(INVENTORY_GROUP)
+        // A closed world compiles every class of the project, PHPUnit-based helpers shipped by
+        // its dependencies included. Without phpunit installed php fails to load them, which
+        // only stays true if the alias does not declare their parent.
+        if crate::closed_world::is_enabled()
+            || inventory.groups.contains_key(INVENTORY_GROUP)
             || !detect::program_uses_testing(&program)
         {
             return Ok(program);

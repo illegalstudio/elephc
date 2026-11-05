@@ -696,6 +696,55 @@ try { var_dump(class_exists('App\Fix')); } catch (Throwable $t) { echo get_class
     assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
 }
 
+/// php evaluates a class constant when it is read, so a class naming a constant of an extension
+/// that is not installed still loads: symfony's `RedisCaster` and `\Redis::FAILOVER_NONE`.
+#[test]
+fn closed_world_reflects_a_class_whose_constant_names_an_absent_extension() {
+    let dir = make_test_dir("cw_absent_constant");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+class Caster { public const OK = 1; public const MODES = [\AbsentExt::NONE => 'none']; }
+$class = new ReflectionClass(class_exists($argv[1] ?? 'Caster') ? ($argv[1] ?? 'Caster') : 'stdClass');
+echo $class->getName(), ' ', Caster::OK, ' ', var_export($class->hasConstant('OK'), true), "\n";
+"#,
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+}
+
+/// PHPUnit-based helpers ship with production packages (`Symfony\Component\Form\Test\TypeTestCase`)
+/// while phpunit stays uninstalled. A closed world compiles them, and php fails to load them: the
+/// compiler's `PHPUnit\Framework\TestCase` alias, whose API is partial, must not stand in for it.
+#[test]
+fn closed_world_declares_no_phpunit_alias() {
+    let dir = make_test_dir("cw_phpunit_alias");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\\\":"src/"}}}"#).unwrap();
+    fs::write(
+        dir.join("src/Helper.php"),
+        "<?php\nnamespace App;\nuse PHPUnit\\Framework\\TestCase;\nabstract class Helper extends TestCase {\n    public function mock(): object { return $this->createMock(\\stdClass::class); }\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+spl_autoload_register(function (string $c): void {
+    $f = __DIR__ . '/src/' . substr($c, 4) . '.php';
+    if (str_starts_with($c, 'App\\') && is_file($f)) { require $f; }
+});
+var_dump(class_exists('PHPUnit\Framework\TestCase'));
+try { var_dump(class_exists('App\Helper')); } catch (Throwable $t) { echo get_class($t), ': ', $t->getMessage(), "\n"; }
+"#,
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+}
+
 /// A function no code calls can still be reached by the name a string holds: a closed world keeps
 /// it for `ReflectionFunction`, `function_exists()` and a call through the name.
 #[test]

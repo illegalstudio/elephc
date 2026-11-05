@@ -62,6 +62,7 @@ fn expand_trait(
     stack.push(trait_name.to_string());
     let (imported_props, imported_methods, imported_constants) = resolve_trait_uses(
         &trait_info.trait_uses,
+        &trait_info.methods,
         trait_map,
         cache,
         stack,
@@ -109,6 +110,7 @@ fn expand_trait(
 /// used for error location. Returns the properties, methods, and constants on success.
 pub(super) fn resolve_trait_uses(
     trait_uses: &[TraitUse],
+    own_methods: &[ClassMethod],
     trait_map: &HashMap<String, TraitDeclInfo>,
     cache: &mut HashMap<String, ExpandedTrait>,
     stack: &mut Vec<String>,
@@ -287,6 +289,7 @@ pub(super) fn resolve_trait_uses(
 
         let selected_methods = select_methods(
             candidates,
+            own_methods,
             method_order,
             suppressed,
             visibility_overrides,
@@ -322,6 +325,7 @@ pub(super) fn resolve_trait_uses(
 /// a fatal error; the caller must have already emitted insteadof to disambiguate.
 fn select_methods(
     mut candidates: HashMap<String, Vec<ImportedMethod>>,
+    own_methods: &[ClassMethod],
     method_order: Vec<String>,
     suppressed: HashMap<String, HashSet<String>>,
     visibility_overrides: HashMap<(String, String), Visibility>,
@@ -351,6 +355,15 @@ fn select_methods(
                 .position(|candidate| !candidate.decl.is_abstract)
                 .unwrap_or(0);
             remaining.into_iter().nth(keep).into_iter().collect()
+        } else {
+            remaining
+        };
+        // A method the owner declares itself replaces every import, so nothing conflicts:
+        // symfony's `DnsResolvingHttpClient` gets `withOptions()` from two traits and writes its own.
+        let declared_by_owner =
+            own_methods.iter().any(|method| php_symbol_key(&method.name) == method_name);
+        let remaining: Vec<ImportedMethod> = if declared_by_owner {
+            remaining.into_iter().take(1).collect()
         } else {
             remaining
         };

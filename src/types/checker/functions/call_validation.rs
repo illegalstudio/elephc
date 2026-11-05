@@ -858,8 +858,18 @@ impl Checker {
                     || self.class_implements_interface(expected_name, actual_name)
                     || self.interface_extends_interface(expected_name, actual_name))
         };
+        // The object behind an interface may declare `__toString()`, which outside strict types
+        // converts to the `string` php then checks at run time: symfony's `CommandTester` hands
+        // an `InputInterface` to `ExecutionResult::$input`, a `string`.
+        let actual_is_interface = self.interfaces.contains_key(actual_name);
         match expected {
+            PhpType::Str => actual_is_interface,
             PhpType::Object(expected_name) => narrows_to(expected_name),
+            PhpType::Union(members)
+                if actual_is_interface && members.contains(&PhpType::Str) =>
+            {
+                true
+            }
             PhpType::Union(members) => {
                 members.iter().all(|member| matches!(member, PhpType::Object(_) | PhpType::Void))
                     && members.iter().any(|member| {

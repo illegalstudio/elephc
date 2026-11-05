@@ -394,6 +394,20 @@ fn recursive_iterator_iterator_advance_children_first_or_leaves_body() -> Vec<St
             ],
             None,
         ),
+        // Past the maximum depth an element with children is no leaf: LEAVES_ONLY skips it.
+        if_stmt(
+            binary_expr(
+                binary_expr(recursive_iterator_iterator_mode_expr(), BinOp::StrictEq, int_expr(0)),
+                BinOp::And,
+                method_call(var_expr("iterator"), "hasChildren", Vec::new()),
+            ),
+            vec![
+                property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
+                expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
+                return_void_stmt(),
+            ],
+            None,
+        ),
         property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
         property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
         return_void_stmt(),

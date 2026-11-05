@@ -296,7 +296,12 @@ impl Checker {
         // interpreter.
         if !arity_matched.is_empty()
             && self.method_owners_of("__call").is_some_and(|magic| {
-                magic.iter().any(|class_name| !owners.contains(class_name))
+                // `RecursiveIteratorIterator::__call` is php's own forwarding, not a user's
+                // catch-all: declared in every program, it says nothing about this receiver.
+                magic.iter().any(|class_name| {
+                    !owners.contains(class_name)
+                        && class_name.as_str() != "RecursiveIteratorIterator"
+                })
             })
         {
             return Some(PhpType::Mixed);

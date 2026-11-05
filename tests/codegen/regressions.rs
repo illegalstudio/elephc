@@ -73,6 +73,8 @@ mod large_runtime_outputs;
 mod symfony_merge_deferrals;
 #[path = "regressions/agent_backend_deferrals.rs"]
 mod agent_backend_deferrals;
+#[path = "regressions/closed_world_refusals.rs"]
+mod closed_world_refusals;
 #[path = "regressions/dyn_prop_tables.rs"]
 mod dyn_prop_tables;
 #[path = "regressions/frame_slot_base.rs"]

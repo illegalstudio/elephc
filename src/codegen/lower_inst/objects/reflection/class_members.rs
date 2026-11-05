@@ -239,8 +239,20 @@ pub(super) fn reflection_class_constant_members(
                 continue;
             }
             let value_expr = &current_info.constants[constant_name];
-            let value =
-                reflection_constant_value(ctx, resolved_name, Some(current_info), value_expr, 0)?;
+            // php evaluates a constant when it is read, so a class naming an extension's constant
+            // (`RedisCaster` and `\Redis::FAILOVER_NONE`) loads without that extension. The world
+            // of a closed build holds every such class: its value simply has no static form.
+            let value = match reflection_constant_value(
+                ctx,
+                resolved_name,
+                Some(current_info),
+                value_expr,
+                0,
+            ) {
+                Ok(value) => value,
+                Err(_) if ctx.module.closed_world => continue,
+                Err(error) => return Err(error),
+            };
             push_unique_constant_member(constant_name, value, &mut members, &mut seen);
         }
         for interface_name in &current_info.interfaces {
@@ -414,8 +426,18 @@ pub(super) fn reflection_class_constant_reflection_members(
                 continue;
             }
             let value_expr = &current_info.constants[constant_name];
-            let value =
-                reflection_constant_value(ctx, resolved_name, Some(current_info), value_expr, 0)?;
+            // As in `reflection_class_constant_members`: no static form in a closed world.
+            let value = match reflection_constant_value(
+                ctx,
+                resolved_name,
+                Some(current_info),
+                value_expr,
+                0,
+            ) {
+                Ok(value) => value,
+                Err(_) if ctx.module.closed_world => continue,
+                Err(error) => return Err(error),
+            };
             push_unique_constant_reflection_member(
                 constant_name,
                 resolved_name,

@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use crate::parser::ast::{ClassConst, ClassMethod, ClassProperty, TypeExpr};
+use crate::parser::ast::{BinOp, ClassConst, ClassMethod, ClassProperty, ExprKind, Stmt, TypeExpr};
 use crate::types::traits::FlattenedClass;
 
 use super::common::*;
@@ -132,6 +132,12 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
             recursive_iterator_iterator_get_sub_iterator_body(),
         ),
         method_with_body(
+            "__call",
+            vec![param("name", TypeExpr::Str), param("arguments", array_type())],
+            Some(mixed_type()),
+            forward_to_inner_iterator_body(),
+        ),
+        method_with_body(
             "__elephcAdvance",
             Vec::new(),
             Some(TypeExpr::Void),
@@ -149,6 +155,34 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
             Some(named_type("RecursiveIterator")),
             return_body(var_expr("iterator")),
         ),
+    ]
+}
+
+/// php hands a method the class lacks to the iterator of the current level
+/// (`spl_recursive_it_get_method`): `$files->getSubPathname()` is the directory iterator's.
+fn forward_to_inner_iterator_body() -> Vec<Stmt> {
+    let undefined_method = binary_expr(
+        binary_expr(
+            binary_expr(
+                string_expr("Call to undefined method "),
+                BinOp::Concat,
+                function_call("get_class", vec![this_expr()]),
+            ),
+            BinOp::Concat,
+            string_expr("::"),
+        ),
+        BinOp::Concat,
+        binary_expr(var_expr("name"), BinOp::Concat, string_expr("()")),
+    );
+    let target = expr(ExprKind::ArrayLiteral(vec![var_expr("inner"), var_expr("name")]));
+    vec![
+        assign_stmt("inner", method_call(this_expr(), "getInnerIterator", Vec::new())),
+        if_stmt(
+            not_expr(function_call("method_exists", vec![var_expr("inner"), var_expr("name")])),
+            vec![throw_stmt(new_object_expr("Error", vec![undefined_method]))],
+            None,
+        ),
+        return_stmt(function_call("call_user_func_array", vec![target, var_expr("arguments")])),
     ]
 }
 

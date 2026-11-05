@@ -171,6 +171,7 @@ pub fn flatten_classes(
                 let (imported_props, imported_methods, imported_constants) =
                     match expand::resolve_trait_uses(
                         trait_uses,
+                        methods,
                         &trait_map,
                         &mut cache,
                         &mut stack,
@@ -271,6 +272,7 @@ pub fn flatten_classes(
                 let (imported_props, imported_methods, imported_constants) =
                     match expand::resolve_trait_uses(
                         trait_uses,
+                        methods,
                         &trait_map,
                         &mut cache,
                         &mut stack,
