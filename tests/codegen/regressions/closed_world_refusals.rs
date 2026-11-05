@@ -212,16 +212,21 @@ echo (new Loop(new Client, $pool))->wait(), (new Loop(new Client, null))->wait()
     assert_eq!(out, "1-1\n");
 }
 
-/// `array_column()` over rows that are lists: flex's `Downloader` takes `array_column($retries, 0)`.
+/// `array_column()` over a list only a closure fills, as flex's `Downloader` fills `$retries`.
 #[test]
-fn test_array_column_over_list_rows() {
+fn test_array_column_over_a_list_a_closure_fills() {
     let out = compile_and_run(
         r#"<?php
-$retries = [[1, 'a'], [2, 'b']];
-echo implode(',', array_column($retries, 0)), ' ', implode(',', array_column($retries, 1, 0)), "\n";
+function collect(bool $add): array {
+    $retries = [];
+    $note = function (string $url) use (&$retries) { $retries[] = [$url, 1]; };
+    if ($add) { $note('a'); $note('b'); }
+    return array_column($retries, 0);
+}
+echo implode(',', collect(true)), '|', implode(',', collect(false)), "\n";
 "#,
     );
-    assert_eq!(out, "1,2 a,b\n");
+    assert_eq!(out, "a,b|\n");
 }
 
 /// A container pointer has no null, so a by-reference array parameter that stores one takes a

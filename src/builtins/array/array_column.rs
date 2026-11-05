@@ -65,8 +65,6 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             PhpType::Mixed | PhpType::Union(_) => {
                 Ok(PhpType::Array(Box::new(PhpType::Mixed)))
             }
-            // Rows of a list: flex's `Downloader` takes `array_column($retries, 0)`.
-            PhpType::Array(row) => Ok(PhpType::Array(row)),
             _ => Err(CompileError::new(
                 cx.span,
                 "array_column() requires an array of associative arrays",
@@ -96,6 +94,8 @@ pub(crate) fn rows_need_generic_helper(ty: &PhpType) -> bool {
     matches!(
         ty,
         PhpType::Array(inner)
-            if matches!(**inner, PhpType::Object(_) | PhpType::Array(_))
+            // `Never` is a list only something else fills: flex's `Downloader` starts `$retries`
+            // empty and appends to it from a closure.
+            if matches!(**inner, PhpType::Object(_) | PhpType::Array(_) | PhpType::Never | PhpType::Void)
     )
 }
