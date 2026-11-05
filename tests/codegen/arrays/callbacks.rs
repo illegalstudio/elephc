@@ -2528,3 +2528,35 @@ echo $n, '|', array_sum(array_map(fn(int $x): int => $x + 1, $negative)), "\n";
         out.stderr
     );
 }
+
+/// Unsupported Stringable coercion keeps explode's diagnostic in the fused count shape.
+#[test]
+fn test_count_explode_fusion_preserves_diagnostic() {
+    let source = r#"<?php
+class CountExplodeStringable {
+    public function __toString(): string { return "a,b"; }
+}
+echo count(explode(",", new CountExplodeStringable()));
+"#;
+    for mode in ["--ir-opt=on", "--ir-opt=off"] {
+        let error = compile_cli_file_with_flags_expect_failure(source, &[mode]);
+        assert!(error.contains("explode string coercion"), "{error}");
+        assert!(!error.contains("substr_count"), "{error}");
+    }
+}
+
+/// Refusing a mixed subject preserves its single evaluation and generic explode ownership.
+#[test]
+fn test_count_explode_fusion_mixed_subject_once() {
+    let check = || {
+        let out = compile_and_run_with_heap_debug(r#"<?php
+function countExplodeSubject(mixed $value): mixed { echo "side|"; return $value; }
+echo count(explode(",", countExplodeSubject("a,b,c"))), "\n";
+"#);
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, "side|3\n");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    };
+    check();
+    without_ir_opt(check);
+}

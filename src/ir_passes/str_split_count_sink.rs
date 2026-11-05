@@ -134,6 +134,15 @@ fn specialize(function: &mut Function, count_id: InstId, data: &DataPool) -> boo
         return false;
     }
     let mut operands = split.operands.clone();
+    let Some(Immediate::RuntimeCall(mut retargeted)) = split.immediate.clone() else {
+        return false;
+    };
+    match &mut retargeted {
+        RuntimeCallTarget::Function(target)
+        | RuntimeCallTarget::ProfiledFunction { target, .. } => *target = count_target,
+        _ => return false,
+    };
+
     let Some(removable) = removable_split_scaffolding(function, split_value, count_id) else {
         return false;
     };
@@ -146,9 +155,7 @@ fn specialize(function: &mut Function, count_id: InstId, data: &DataPool) -> boo
     let Some(count) = function.instruction_mut(count_id) else {
         return false;
     };
-    count.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-        count_target,
-    )));
+    count.immediate = Some(Immediate::RuntimeCall(retargeted));
     count.operands = operands;
     count.result_type = IrType::I64;
     count.result_php_type = PhpType::Int;

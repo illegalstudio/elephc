@@ -282,9 +282,11 @@ fn specialize(function: &mut Function, call_id: InstId, data: &DataPool) -> bool
     let Some(call) = function.instruction_mut(call_id) else {
         return false;
     };
-    call.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-        RuntimeFnId::MbDetectOrderSingle,
-    )));
+    let Some(Immediate::RuntimeCall(
+        RuntimeCallTarget::Function(target)
+        | RuntimeCallTarget::ProfiledFunction { target, .. },
+    )) = &mut call.immediate else { return false; };
+    *target = RuntimeFnId::MbDetectOrderSingle;
     call.operands = vec![element];
     call.effects = RuntimeFnId::MbDetectOrderSingle.intrinsic_effects();
     if let Some((cast_id, cast_result)) = cast {

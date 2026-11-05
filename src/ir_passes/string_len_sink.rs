@@ -197,6 +197,21 @@ fn specialize(function: &mut Function, candidate: InstId, data: &DataPool) -> bo
         ))
     );
     let mb_case_length = if is_mb_case {
+        // An ASCII result preserves length only after mb_convert_case validates its mode.
+        if matches!(
+            call.immediate,
+            Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(RuntimeFnId::MbConvertCase)
+                    | RuntimeCallTarget::ProfiledFunction {
+                        target: RuntimeFnId::MbConvertCase,
+                        ..
+                    }
+            ))
+        ) && !call.operands.get(1).is_some_and(|&value| {
+            const_i64(function, value).is_some_and(|mode| (0..=7).contains(&mode))
+        }) {
+            return false;
+        }
         let Some(encoding_operand) = call.operands.last().copied() else {
             return false;
         };
@@ -326,11 +341,13 @@ fn specialize(function: &mut Function, candidate: InstId, data: &DataPool) -> bo
         if !subject.is_ascii() || !pad.is_ascii() || width < 0 {
             return false;
         }
-        let length = if pad.is_empty() {
-            subject.len()
-        } else {
-            subject.len().max(width as usize)
-        };
+        // Keep the producer whenever its padding validation can fail at runtime.
+        if pad.is_empty()
+            || !const_i64(function, call.operands[3]).is_some_and(|mode| (0..=2).contains(&mode))
+        {
+            return false;
+        }
+        let length = subject.len().max(width as usize);
         Some(length as i64)
     } else {
         None
@@ -577,7 +594,7 @@ fn detach_operand_pin(
             | Op::PushCallOperandOwner
             | Op::PopCallOperandOwner
             | Op::UnsetLocal => removable.push(InstId::from_raw(raw as u32)),
-            _ => { eprintln!("string_len detach: bad slot op {:?}", inst.op); return None; }
+            _ => return None,
         }
     }
     for id in removable {

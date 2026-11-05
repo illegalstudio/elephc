@@ -51,7 +51,8 @@ pub use coercion::{elephc_mbstring_arity_v1, elephc_mbstring_prepare_v1};
 pub use invoke::{elephc_mbstring_invoke_v1, elephc_mbstring_capture_v1, elephc_mbstring_output_v1, elephc_mbstring_output_invoke_v1};
 pub use invoke::elephc_mbstring_callback_invoke_v1;
 pub use response::{elephc_mbstring_response_header_v1, elephc_mbstring_response_info_v1, elephc_mbstring_response_commit_v1};
-pub use regex::{elephc_mbstring_regex_available_v1, elephc_mbstring_regex_provider_v1};
+pub use regex::{elephc_mbstring_regex_available_v1, elephc_mbstring_regex_provider_v1,
+    elephc_mbstring_regex_ascii_defaults_v1};
 pub use ini::{elephc_mbstring_ini_v1, elephc_mbstring_configure_v1, elephc_mbstring_core_encoding_v1, elephc_mbstring_mime_provider_v1,
     elephc_mbstring_core_ini_v1, elephc_mbstring_query_configuration_v1,
     elephc_mbstring_ini_string_retain_v1, elephc_mbstring_ini_string_release_v1,
