@@ -83,7 +83,10 @@ abstract class EvalProtectedMagicFactoryXml extends EvalMagicFactoryXml {
 }
 $protectedMagic = simplexml_load_string('<r/>', 'EvalProtectedMagicFactoryXml');
 $protectedMagic->marker(factoryProbeMarkerArgument());
-unset($protectedMagic);
+$protectedMethod = 'MaRkEr';
+$protectedMagic->$protectedMethod(factoryProbeMarkerArgument());
+$protectedMagic?->$protectedMethod(factoryProbeMarkerArgument());
+unset($protectedMagic, $protectedMethod);
 $evalReflected = new ReflectionClass('EvalAbstractFactoryXml');
 try { $evalReflected->newInstanceWithoutConstructor(); }
 catch (Error $error) { echo 'eval-reflection:', get_class($error), '|'; }
@@ -137,7 +140,7 @@ try {
         "1Error0|1Error0|1Error0|held|",
         "vm-abstract|vm-abstract|vm-abstract|vm-abstract|",
         "vm-abstract|vm-abstract|",
-        "argument|vm-magic|",
+        "argument|vm-magic|argument|vm-magic|argument|vm-magic|",
         "eval-reflection:Error|aot-eval-reflection:Error|",
         "NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:ok|",
         "abstract|abstract|abstract|abstract|",

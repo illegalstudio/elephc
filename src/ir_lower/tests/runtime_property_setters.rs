@@ -12,8 +12,10 @@ use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::types::PhpType;
 
 /// Every target selects the hook through EIR and retains the ordinary storage fallback.
+/// The base permits property names supplied only by its runtime subclasses.
 fn verify_runtime_property_setters(target: &str) {
     let module = super::lower_source_at_for_target(r#"<?php
+#[\AllowDynamicProperties]
 class RuntimeHookBase {}
 class RuntimeHookTarget extends RuntimeHookBase {
     public mixed $value = null { set { $this->value = $value; } }

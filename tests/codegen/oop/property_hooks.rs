@@ -47,9 +47,11 @@ for ($i = 0; $i < 3; $i++) {
 }
 
 /// A raw base-class receiver still reaches a property setter introduced by its runtime subclass.
+/// The base permits property names supplied only by its runtime subclasses.
 #[test]
 fn test_base_class_property_write_reaches_subclass_setter() {
     let out = compile_and_run_with_heap_debug(r#"<?php
+#[\AllowDynamicProperties]
 class RuntimeSetterBase {}
 class RuntimeSetterDerived extends RuntimeSetterBase {
     public string $stored = '';
