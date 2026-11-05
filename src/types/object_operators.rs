@@ -373,6 +373,10 @@ impl ObjectOperatorPlan {
         if !self.comparison {
             if self.class.operators.is_some_and(|ops| ops.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number) {
                 PhpType::Union(vec![PhpType::Int, PhpType::Float])
+            } else if self.class.name.eq_ignore_ascii_case("FFI\\CData") && matches!(op, BinOp::Sub) {
+                // `FFI\CData` pointer subtraction can yield an integer element difference or a
+                // new pointer, so its result is dynamically tagged.
+                PhpType::Mixed
             } else { PhpType::Object(self.class.name.to_string()) }
         }
         else if matches!(op, BinOp::Spaceship) { PhpType::Int }

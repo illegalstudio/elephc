@@ -48,6 +48,15 @@ pub fn name_part_from_token(token: &Token, metadata: &crate::lexer::TokenMetadat
     stmt::name_part_from_token(token, metadata)
 }
 
+/// Returns a process-unique id for parser-generated incdec capture locals.
+pub(crate) fn next_generated_incdec_id() -> u64 {
+    GENERATED_INCDEC_ID.with(|id| {
+        let next = id.get().wrapping_add(1);
+        id.set(next);
+        next
+    })
+}
+
 /// Caps syntactic delimiter nesting before recursive expression parsing can
 /// consume the compiler process stack.
 const MAX_COMPILER_NESTING: usize = 1024;
@@ -56,6 +65,11 @@ thread_local! {
     /// Anonymous-class declarations (`new class {}`) hoisted out of expression position during
     /// the current parse. Drained into the program by `parse_with_recovery`.
     static ANONYMOUS_CLASSES: RefCell<Vec<Stmt>> = const { RefCell::new(Vec::new()) };
+    /// Monotonic id for parser-generated incdec capture locals.
+    ///
+    /// Two statements in different included files can share a span line/column, so a
+    /// span-derived name is not unique across the merged program.
+    static GENERATED_INCDEC_ID: Cell<u64> = const { Cell::new(0) };
     /// Monotonic counter producing unique synthetic class names. Never reset within a process so
     /// that anonymous classes from different files (e.g. includes) cannot collide once merged.
     static ANONYMOUS_CLASS_COUNTER: Cell<usize> = const { Cell::new(0) };

@@ -34,9 +34,9 @@ use crate::codegen_support::platform::Arch;
 ///
 /// Dispatches to `emit_stdout_write_x86_64` on x86_64; uses the AArch64 path
 /// for every supported AArch64 target otherwise.
-pub fn emit_stdout_write(emitter: &mut Emitter, web: bool, mbstring: bool) {
+pub fn emit_stdout_write(emitter: &mut Emitter, web: bool, mbstring: bool, ffi: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_stdout_write_x86_64(emitter, web, mbstring);
+        emit_stdout_write_x86_64(emitter, web, mbstring, ffi);
         return;
     }
 
@@ -78,7 +78,21 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool, mbstring: bool) {
 
     if mbstring { super::response_metadata::commit(emitter); }
 
+    // -- replaceable zend_write hook (FFI programs): call the current C function --
+    if ffi {
+        let hook = emitter.target.extern_symbol("elephc_zend_write_current");
+        let fallback = if web { "__rt_stdout_write_no_hook" } else { "__rt_stdout_write_syscall" };
+        crate::codegen::abi::emit_symbol_address(emitter, "x9", &hook);         // resolve the replaceable zend_write slot
+        emitter.instruction("ldr x9, [x9]");                                    // load the current writer (0 = built-in sink)
+        emitter.instruction(&format!("cbz x9, {fallback}"));                    // no hook - use the web response sink or syscall
+        emitter.instruction("blr x9");                                          // call the writer with (ptr=x0, len=x1)
+        emitter.instruction("b __rt_stdout_write_done");                        // the writer handled the bytes
+    }
+
     if web {
+        if ffi {
+            emitter.label("__rt_stdout_write_no_hook");                        // hook absent - fall through to the web response sink
+        }
         // -- web build: route through elephc_web_write when capture is enabled --
         let capture_symbol = emitter.target.extern_symbol("elephc_web_capture");
         crate::codegen_support::abi::emit_symbol_address(emitter, "x9", &capture_symbol);
@@ -110,7 +124,7 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool, mbstring: bool) {
 /// `rbp` frame (which leaves `rsp` 16-byte aligned for the capture branch's
 /// `call`), then either tail-calls `elephc_web_write` or performs the Linux
 /// `write` syscall (`rax=1`, `rdi=fd`, `rsi=buf`, `rdx=len`).
-fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool, mbstring: bool) {
+fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool, mbstring: bool, ffi: bool) {
     emitter.blank();
     emitter.comment("--- runtime: stdout_write ---");
     emitter.label_global("__rt_stdout_write");
@@ -148,7 +162,22 @@ fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool, mbstring: bool) {
 
     if mbstring { super::response_metadata::commit(emitter); }
 
+    // -- replaceable zend_write hook (FFI programs): call the current C function --
+    if ffi {
+        let hook = emitter.target.extern_symbol("elephc_zend_write_current");
+        let fallback = if web { "__rt_stdout_write_no_hook" } else { "__rt_stdout_write_syscall" };
+        crate::codegen::abi::emit_symbol_address(emitter, "r11", &hook);        // resolve the replaceable zend_write slot
+        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the current writer (0 = built-in sink)
+        emitter.instruction("test r11, r11");                                   // is a writer installed?
+        emitter.instruction(&format!("jz {fallback}"));                         // no hook - use the web response sink or syscall
+        emitter.instruction("call r11");                                        // call the writer with (ptr=rdi, len=rsi)
+        emitter.instruction("jmp __rt_stdout_write_done");                      // the writer handled the bytes
+    }
+
     if web {
+        if ffi {
+            emitter.label("__rt_stdout_write_no_hook");                        // hook absent - fall through to the web response sink
+        }
         // -- web build: route through elephc_web_write when capture is enabled --
         let capture_symbol = emitter.target.extern_symbol("elephc_web_capture");
         crate::codegen_support::abi::emit_symbol_address(emitter, "r11", &capture_symbol);
@@ -184,7 +213,14 @@ mod tests {
     /// Renders the `__rt_stdout_write` helper for one target and web mode.
     fn render(platform: Platform, arch: Arch, web: bool) -> String {
         let mut emitter = Emitter::new(Target::new(platform, arch));
-        emit_stdout_write(&mut emitter, web, false);
+        emit_stdout_write(&mut emitter, web, false, false);
+        emitter.output()
+    }
+
+    /// Renders the helper with the FFI `zend_write` hook enabled.
+    fn render_ffi(platform: Platform, arch: Arch, web: bool) -> String {
+        let mut emitter = Emitter::new(Target::new(platform, arch));
+        emit_stdout_write(&mut emitter, web, false, true);
         emitter.output()
     }
 
@@ -254,6 +290,35 @@ mod tests {
         assert!(linux_x86.contains("elephc_web_capture"));
         assert!(!linux_x86.contains("_elephc_web_capture"));
         assert!(linux_x86.contains("call elephc_web_write"));
+    }
+
+    /// Verifies web + FFI output honors the zend_write hook first, then falls back to the
+    /// web response sink when no hook is installed.
+    #[test]
+    fn web_ffi_routes_through_the_hook_then_web_sink() {
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = render_ffi(platform, arch, true);
+            let hook = asm.find("elephc_zend_write_current").expect("hook symbol");
+            let fallback = asm.find("__rt_stdout_write_no_hook:").expect("no-hook label");
+            let web = asm.find("elephc_web_write").expect("web sink");
+            assert!(hook < fallback, "hook block must precede its web fallback for {:?}/{:?}", platform, arch);
+            assert!(fallback < web, "web fallback must precede the web sink call for {:?}/{:?}", platform, arch);
+            assert!(asm.contains("__rt_stdout_write_no_hook"), "missing no-hook branch for {:?}/{:?}", platform, arch);
+        }
+    }
+
+    /// Verifies non-web FFI output still honors the hook and never names web symbols.
+    #[test]
+    fn non_web_ffi_keeps_the_hook_without_web_symbols() {
+        let asm = render_ffi(Platform::Linux, Arch::X86_64, false);
+        assert!(asm.contains("elephc_zend_write_current"));
+        assert!(!asm.contains("elephc_web_write"));
+        assert!(!asm.contains("elephc_web_capture"));
+        assert!(asm.contains("__rt_stdout_write_syscall"));
     }
 
     /// Verifies both web and non-web emissions keep the plain `write(1, …)` syscall

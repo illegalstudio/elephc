@@ -88,6 +88,7 @@ use super::*;
             RuntimeFeatures { handler_state: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { object_clone: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { native_reference_validation: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { ffi: true, ..RuntimeFeatures::none() },
         ];
 
         let mut keys = std::collections::HashSet::from([baseline]);

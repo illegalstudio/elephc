@@ -57,6 +57,11 @@ impl Drop for SourceModeGuard {
     }
 }
 
+/// Returns the language mode of the physical source currently being checked.
+pub fn current_source_mode() -> crate::source::SourceMode {
+    SOURCE_MODE.with(Cell::get)
+}
+
 /// Runs one source-sensitive compiler operation under the physical file's mode.
 ///
 /// Nested calls restore their caller's mode even when the operation unwinds.

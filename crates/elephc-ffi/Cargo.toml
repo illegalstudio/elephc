@@ -1,0 +1,25 @@
+[package]
+name = "elephc-ffi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Runtime bridge implementing PHP's ext/ffi C declaration parser, CData/CType model, and dynamic C calls for the elephc PHP-to-native compiler"
+publish = false
+
+# Built as a C-callable staticlib linked into compiled PHP programs whose FFI
+# prelude declares the `extern "elephc_ffi"` block, and as an rlib so the parser,
+# layout and ownership engines are unit-testable with `cargo test -p elephc-ffi`.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+# Enables the php-src regression corpus' test-extension symbols. The codegen test
+# harness turns this on; production builds leave it off.
+php-src-fixtures = []
+
+[dependencies]
+# libffi-sys compiles the bundled libffi C sources with `cc`, so every supported
+# Apple/Linux target gets its native call and closure machinery without relying
+# on a system libffi package.
+libffi = "5.2"
+libc = "0.2"
