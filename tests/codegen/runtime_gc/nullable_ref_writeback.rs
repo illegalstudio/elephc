@@ -311,3 +311,60 @@ run();
     );
     assert!(!out.stdout.contains("unreachable"), "stdout: {}", out.stdout);
 }
+
+/// The class check of a declared-type object array runs in a function that also calls `eval()`
+/// (on another branch), so a foreign instance cannot be read with the declared class's layout.
+#[test]
+fn test_nullable_array_reference_checks_classes_beside_eval() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Item { public int $id = 1; }
+class Other { public string $z = "zz"; }
+function corrupt(?array &$items): void { $items = [new Other()]; }
+function run(bool $dynamic): void {
+    if ($dynamic) {
+        eval('echo "e";');
+        return;
+    }
+    array<Item> $items = [new Item()];
+    corrupt($items);
+    echo $items[0]->id, "unreachable";
+}
+run(false);
+"#,
+    );
+    assert!(
+        out.stderr.contains("replaced by an object of a class its typed variable cannot hold"),
+        "stdout: {} stderr: {}",
+        out.stdout,
+        out.stderr
+    );
+    assert!(!out.stdout.contains("unreachable"), "stdout: {}", out.stdout);
+}
+
+/// A declared nested-array local accepts nested arrays the callee rebuilt from `mixed` reads:
+/// every level whose slots are boxed cells is converted into the declared layout (two and
+/// three levels deep), the shared outer array is separated first, and nothing leaks.
+#[test]
+fn test_nullable_array_reference_converts_nested_mixed_arrays() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rebuild(?array &$a): void { $a = [[$a[0][0]], [$a[1][1], 9]]; }
+function deepen(?array &$a): void { $a = [[[$a[0][0][0] + 1, 7]], [[8]]]; }
+function run(): void {
+    for ($i = 0; $i < 3; $i++) {
+        array<array<int>> $rows = [[1, 2], [3, 4]];
+        rebuild($rows);
+        array<array<array<int>>> $cube = [[[5]]];
+        deepen($cube);
+        if ($i == 2) {
+            echo count($rows), $rows[0][0], $rows[1][0], $rows[1][1], "|";
+            echo $cube[0][0][0], $cube[0][0][1], $cube[1][0][0], "\n";
+        }
+    }
+}
+run();
+"#,
+    );
+    assert_clean(out, "2149|678\n");
+}

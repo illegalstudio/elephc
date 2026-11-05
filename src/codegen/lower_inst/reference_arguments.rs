@@ -912,14 +912,13 @@ const FOREIGN_OBJECT_WRITEBACK_MESSAGE: &[u8] =
     b"Fatal error: a by-reference argument was replaced by an object of a class its typed variable cannot hold\n";
 
 /// Resolves the class or interface id and kind `__rt_exception_matches` checks a writeback
-/// object against, or `None` when no check applies.
+/// object against, or `None` when the declared class has no static metadata.
 ///
-/// Inside an eval context a class declared by `eval()` has no static metadata, so the static
-/// matcher cannot answer for its instances; the check is skipped there.
+/// The check runs in eval contexts too: the typed slot reads the static class's layout, so a
+/// foreign instance must be stopped wherever `eval()` appears in the function. An instance of
+/// a class that `eval()` itself declared is unknown to the static matcher and stops the
+/// program as well, which is conservative but never reads a wrong layout.
 fn writeback_class_target(ctx: &FunctionContext<'_>, class_name: &str) -> Option<(u64, i64)> {
-    if super::builtins::has_eval_context(ctx) {
-        return None;
-    }
     let normalized = class_name.trim_start_matches('\\');
     if let Some(class_info) = ctx.module.class_infos.get(normalized) {
         return Some((class_info.class_id, 0));
@@ -974,13 +973,16 @@ fn array_elements_need_writeback_guard(element: &PhpType) -> bool {
 }
 
 /// Fatals unless every element of the owned `array<element>` in the result register fits the
-/// typed element contract; the result register still holds the array afterwards.
+/// typed element contract; the result register holds the (possibly separated) array afterwards.
 ///
 /// The slot-layout check of the outer array proves each element has the element's runtime
 /// kind, not what it contains: an object element must be an instance of the element class
 /// (the local reads its properties at that class's offsets), and a nested array's own slots
 /// must have the nested element layout, checked recursively. Empty nested arrays fit every
-/// layout.
+/// layout. A nested array whose slots are boxed Mixed cells (the callee built it from `mixed`
+/// reads) is converted into the nested layout like the outer array: the outer array is first
+/// separated from other owners (copy-on-write), then the converted copy replaces the nested
+/// array in its slot, and the same happens one level down.
 fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &PhpType) {
     let object_target = match element {
         PhpType::Object(class_name) => match writeback_class_target(ctx, class_name) {
@@ -994,6 +996,16 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
     let next = ctx.next_label("ref_writeback_elements_next");
     let fail = ctx.next_label("ref_writeback_elements_fail");
     let done = ctx.next_label("ref_writeback_elements_done");
+    // A nested array may be replaced in its slot (converted here, or separated one level
+    // down), so the outer array must not be shared with another owner first.
+    let nested_convertible = matches!(element, PhpType::Array(inner)
+        if inner.codegen_repr() != PhpType::Mixed);
+    if nested_convertible {
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the owned outer array to the COW splitter
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
+    }
     // -- temporary frame: [0] owned array, [8] element index --
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -1039,6 +1051,8 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
     } else if let PhpType::Array(inner) = element {
         let inner = inner.codegen_repr();
         let inner_tag = crate::codegen_support::container_value_tag(&inner);
+        let boxed_tag = crate::codegen_support::runtime_value_tag(&PhpType::Mixed) as i64;
+        let fits = ctx.next_label("ref_writeback_nested_fits");
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 ctx.emitter.instruction("ldr x9, [x0]");                        // load the nested array's element count
@@ -1047,7 +1061,27 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                 ctx.emitter.instruction("lsr x9, x9, #8");                      // shift the runtime value_type tag into the low bits
                 ctx.emitter.instruction("and x9, x9, #0x7f");                   // isolate the value_type, dropping the COW bit
                 ctx.emitter.instruction(&format!("cmp x9, #{}", inner_tag));    // do the nested slots have the nested element layout?
-                ctx.emitter.instruction(&format!("b.ne {}", fail));             // no: the typed local cannot read them
+                ctx.emitter.instruction(&format!("b.eq {}", fits));             // yes: check what they hold
+                if nested_convertible {
+                    ctx.emitter.instruction(&format!("cmp x9, #{}", boxed_tag)); // are the nested slots boxed Mixed cells?
+                    ctx.emitter.instruction(&format!("b.ne {}", fail));         // any other layout cannot be converted
+                    ctx.emitter.instruction(&format!("mov x1, #{}", inner_tag)); // pass the nested element tag the local expects
+                    ctx.emitter.instruction("bl __rt_array_unbox_slots");       // build an owned raw-slot copy of the nested array
+                    ctx.emitter.instruction(&format!("cbz x0, {}", fail));      // a nested element of another kind cannot be held
+                    ctx.emitter.instruction("str x0, [sp, #-16]!");             // keep the converted copy while the boxed one is released
+                    ctx.emitter.instruction("ldr x10, [sp, #16]");              // reload the (unique) outer array
+                    ctx.emitter.instruction("ldr x9, [sp, #24]");               // reload the element index
+                    ctx.emitter.instruction("add x10, x10, #24");               // skip the 24-byte array header to the slots
+                    ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");       // load the boxed nested array the slot still owns
+                    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+                    ctx.emitter.instruction("ldr x0, [sp], #16");               // recover the converted copy
+                    ctx.emitter.instruction("ldr x10, [sp]");                   // reload the outer array
+                    ctx.emitter.instruction("ldr x9, [sp, #8]");                // reload the element index
+                    ctx.emitter.instruction("add x10, x10, #24");               // skip the 24-byte array header to the slots
+                    ctx.emitter.instruction("str x0, [x10, x9, lsl #3]");       // the slot now owns the converted copy
+                } else {
+                    ctx.emitter.instruction(&format!("b {}", fail));            // no: the typed local cannot read them
+                }
             }
             Arch::X86_64 => {
                 ctx.emitter.instruction("cmp QWORD PTR [rax], 0");              // is the nested array empty?
@@ -1056,11 +1090,48 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                 ctx.emitter.instruction("shr r11, 8");                          // shift the runtime value_type tag into the low bits
                 ctx.emitter.instruction("and r11, 0x7f");                       // isolate the value_type, dropping the COW bit
                 ctx.emitter.instruction(&format!("cmp r11, {}", inner_tag));    // do the nested slots have the nested element layout?
-                ctx.emitter.instruction(&format!("jne {}", fail));              // no: the typed local cannot read them
+                ctx.emitter.instruction(&format!("je {}", fits));               // yes: check what they hold
+                if nested_convertible {
+                    ctx.emitter.instruction(&format!("cmp r11, {}", boxed_tag)); // are the nested slots boxed Mixed cells?
+                    ctx.emitter.instruction(&format!("jne {}", fail));          // any other layout cannot be converted
+                    abi::emit_load_int_immediate(ctx.emitter, "rdi", inner_tag);
+                    ctx.emitter.instruction("call __rt_array_unbox_slots");     // build an owned raw-slot copy of the nested array
+                    ctx.emitter.instruction("test rax, rax");                   // did every nested element match?
+                    ctx.emitter.instruction(&format!("je {}", fail));           // a nested element of another kind cannot be held
+                    ctx.emitter.instruction("sub rsp, 16");                     // keep the converted copy while the boxed one is released
+                    ctx.emitter.instruction("mov QWORD PTR [rsp], rax");        // remember the converted copy
+                    ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");   // reload the (unique) outer array
+                    ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 24]");   // reload the element index
+                    ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 24 + rcx * 8]"); // load the boxed nested array the slot still owns
+                    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
+                    ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");        // recover the converted copy
+                    ctx.emitter.instruction("add rsp, 16");                     // release the conversion spill slot
+                    ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");        // reload the outer array
+                    ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 8]");    // reload the element index
+                    ctx.emitter.instruction("mov QWORD PTR [r10 + 24 + rcx * 8], rax"); // the slot now owns the converted copy
+                } else {
+                    ctx.emitter.instruction(&format!("jmp {}", fail));          // no: the typed local cannot read them
+                }
             }
         }
+        ctx.emitter.label(&fits);
         if array_elements_need_writeback_guard(&inner) {
             emit_array_elements_writeback_guard(ctx, &inner);
+            // The nested check may have separated or converted the nested array: the slot
+            // owns whatever it hands back.
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("ldr x10, [sp]");                   // reload the outer array
+                    ctx.emitter.instruction("ldr x9, [sp, #8]");                // reload the element index
+                    ctx.emitter.instruction("add x10, x10, #24");               // skip the 24-byte array header to the slots
+                    ctx.emitter.instruction("str x0, [x10, x9, lsl #3]");       // store the nested array the check returned
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");        // reload the outer array
+                    ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 8]");    // reload the element index
+                    ctx.emitter.instruction("mov QWORD PTR [r10 + 24 + rcx * 8], rax"); // store the nested array the check returned
+                }
+            }
         }
         abi::emit_jump(ctx.emitter, &next);
         ctx.emitter.label(&fail);
