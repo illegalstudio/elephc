@@ -10,8 +10,9 @@
 //! Key details:
 //! - Every element must unbox to the expected runtime tag; on the first mismatch the helper
 //!   returns 0 and the caller raises the diagnostic (the partial copy is abandoned to the exit).
-//! - Refcounted payloads (indexed arrays, hashes, objects) are retained by the new array; the
-//!   source array keeps its own boxed references, so the caller still owns and releases it.
+//! - Refcounted payloads (indexed arrays, hashes, objects, callable descriptors) are retained
+//!   by the new array; the source array keeps its own boxed references, so the caller still
+//!   owns and releases it.
 //! - Scalars and heap pointers fill 8-byte slots; strings (tag 1) fill 16-byte `(ptr, len)`
 //!   slots holding an owned copy made by `__rt_str_persist`, the layout `__rt_array_push_str`
 //!   produces.
@@ -76,7 +77,10 @@ pub fn emit_array_unbox_slots(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #4");                                          // tags below 4 are unmanaged scalars
     emitter.instruction("b.lt __rt_array_unbox_slots_store");                   // scalars need no retain
     emitter.instruction("cmp x0, #6");                                          // tags 4..6 are arrays, hashes, and objects
-    emitter.instruction("b.gt __rt_array_unbox_slots_store");                   // anything above is not retained here
+    emitter.instruction("b.le __rt_array_unbox_slots_retain");                  // retain the heap payload
+    emitter.instruction("cmp x0, #10");                                         // tag 10 is a callable descriptor
+    emitter.instruction("b.ne __rt_array_unbox_slots_store");                   // any other tag is not retained here
+    emitter.label("__rt_array_unbox_slots_retain");
     emitter.instruction("mov x0, x1");                                          // pass the heap payload to the retain helper
     emitter.instruction("bl __rt_incref");                                      // the destination owns its own reference
 
@@ -160,7 +164,10 @@ fn emit_array_unbox_slots_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 4");                                          // tags below 4 are unmanaged scalars
     emitter.instruction("jl __rt_array_unbox_slots_store");                     // scalars need no retain
     emitter.instruction("cmp rax, 6");                                          // tags 4..6 are arrays, hashes, and objects
-    emitter.instruction("jg __rt_array_unbox_slots_store");                     // anything above is not retained here
+    emitter.instruction("jle __rt_array_unbox_slots_retain");                   // retain the heap payload
+    emitter.instruction("cmp rax, 10");                                         // tag 10 is a callable descriptor
+    emitter.instruction("jne __rt_array_unbox_slots_store");                    // any other tag is not retained here
+    emitter.label("__rt_array_unbox_slots_retain");
     emitter.instruction("mov rax, rdi");                                        // pass the heap payload to the retain helper
     emitter.instruction("call __rt_incref");                                    // the destination owns its own reference
 

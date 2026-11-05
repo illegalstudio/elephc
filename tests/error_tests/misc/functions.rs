@@ -571,6 +571,17 @@ fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
     );
 }
 
+/// A declared `array<?int>` local has no by-reference writeback conversion for its tagged
+/// nullable-int slots, so binding it to `?array &$a` is a clean compile error (it used to
+/// crash the compiler while lowering the writeback).
+#[test]
+fn test_error_declared_nullable_int_array_by_ref_requires_boxed_storage() {
+    expect_error(
+        "<?php function keep(?array &$a): void {} function run(): void { array<?int> $vals = [1, null]; keep($vals); } run();",
+        "requires a variable with mixed/union/nullable storage when passed by reference",
+    );
+}
+
 /// Mixed-local widening does not relabel an existing concrete reference set.
 #[test]
 fn test_error_mixed_by_ref_shared_scalar_cell_still_requires_boxed_storage() {

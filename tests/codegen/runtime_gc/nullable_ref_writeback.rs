@@ -392,3 +392,27 @@ run();
     );
     assert_clean(out, "33y5\n");
 }
+
+/// A declared `array<callable>` local whose callee rebuilt the array from `mixed` reads keeps
+/// its capturing closures alive: the converted array retains each callable descriptor, so the
+/// closure still runs after the boxed copy is released, and nothing leaks.
+#[test]
+fn test_nullable_array_reference_retains_callables_on_conversion() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function rebuild(?array &$a): void { $a = [$a[0]]; }
+function run(): void {
+    for ($i = 0; $i < 3; $i++) {
+        $n = $i;
+        array<callable> $fns = [function () use ($n) { return $n * 10; }];
+        rebuild($fns);
+        if ($i == 2) {
+            echo $fns[0](), "\n";
+        }
+    }
+}
+run();
+"#,
+    );
+    assert_clean(out, "20\n");
+}

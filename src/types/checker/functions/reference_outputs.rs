@@ -395,7 +395,7 @@ impl Checker {
             .collect();
         match actual {
             PhpType::Array(element) => {
-                !matches!(element.codegen_repr(), PhpType::Str)
+                writeback_element_supported(element, false)
                     && non_null.iter().all(|member| {
                         member.is_php_array()
                             || matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })
@@ -417,5 +417,26 @@ impl Checker {
         let local = local_class.trim_start_matches('\\');
         crate::names::php_symbol_key(member) == crate::names::php_symbol_key(local)
             || self.is_subclass_of(member, local)
+    }
+}
+
+/// Whether the by-reference writeback can rebuild an `array<element>` slot from the boxed cell:
+/// it converts boxed Mixed slots into int, float, bool, object, callable, hash and (nested)
+/// string layouts, widens raw slots into `mixed`, and recurses into nested indexed arrays.
+/// Other element representations (`?int`'s tagged scalars, pointers, buffers) have no
+/// conversion, so such a local follows the ordinary by-reference storage rules instead.
+/// A top-level string element is excluded too: the writeback keeps 8-byte payload slots there.
+fn writeback_element_supported(element: &PhpType, nested: bool) -> bool {
+    match element.codegen_repr() {
+        PhpType::Int
+        | PhpType::Float
+        | PhpType::Bool
+        | PhpType::Mixed
+        | PhpType::Object(_)
+        | PhpType::Callable
+        | PhpType::AssocArray { .. } => true,
+        PhpType::Str => nested,
+        PhpType::Array(inner) => writeback_element_supported(&inner, true),
+        _ => false,
     }
 }
