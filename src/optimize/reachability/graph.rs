@@ -291,6 +291,8 @@ struct GraphState {
     /// with the emitted assembly byte-identical (sha256 76cf50e5…, 6,787,310 bytes both sides).
     checker_magic_methods_by_class: HashMap<String, Vec<(String, bool, String)>>,
     vtable_slots: HashSet<(String, String, bool)>,
+    /// The classes owning at least one entry of `vtable_slots`.
+    vtable_slot_classes: HashSet<String>,
     /// Every injected prelude group, rooted whole whenever a literal eval fragment runs. The
     /// interpreter conjures core classes without the fragment naming them, and the builtin
     /// method bodies the eval-only lowering surfaces materialize (`DateTimeZone::getLocation`
@@ -362,7 +364,7 @@ impl GraphState {
                     }))
             })
             .collect();
-        let vtable_slots = check_result
+        let vtable_slots: HashSet<(String, String, bool)> = check_result
             .classes
             .iter()
             .flat_map(|(class, info)| {
@@ -406,6 +408,7 @@ impl GraphState {
             ),
             checker_interface_methods,
             checker_method_implementations,
+            vtable_slot_classes: vtable_slots.iter().map(|(class, _, _)| class.clone()).collect(),
             vtable_slots,
             literal_eval_baseline,
             applied_hazards: [false; 4],
@@ -759,7 +762,7 @@ impl GraphState {
     ///   candidates in the same order it did, inserting the same pairs;
     /// * every other test in the loop (`has_vtable_slot`, the behavioral lookup) is untouched.
     fn seed_vtable_slot_families(&mut self) {
-        let live_classes: Vec<_> = self.reach.classes.iter().cloned().collect();
+        let live_classes = classes_with_vtable_slots(&self.reach.classes, &self.vtable_slot_classes);
         let kept_methods: Vec<_> = self.reach.methods.iter().cloned().collect();
         let descendants_by_root = live_descendants_by_root(&self.index, &live_classes);
         for (class, method, is_static) in kept_methods {
@@ -1392,6 +1395,21 @@ fn magic_methods_by_visible_class(
 /// `class_is_or_descends_from(class, root)` answers `true`, and no other: both come from
 /// `walk_class_ancestors`. Positions are pushed in ascending order, so iterating one root's list
 /// visits candidates in the same order a scan of `live_classes` did.
+/// The live classes a vtable family can reach: only they can pass `has_vtable_slot` below.
+///
+/// `reach.classes` also holds every name a string might denote, 278 392 entries on the Symfony
+/// Demo against ~4 000 classes. Cloning them each fixed-point round was most of the prune phase.
+fn classes_with_vtable_slots(
+    live_classes: &HashSet<String>,
+    vtable_slot_classes: &HashSet<String>,
+) -> Vec<String> {
+    live_classes
+        .iter()
+        .filter(|class| vtable_slot_classes.contains(*class))
+        .cloned()
+        .collect()
+}
+
 fn live_descendants_by_root(
     index: &DeclarationIndex,
     live_classes: &[String],
@@ -1412,6 +1430,14 @@ fn live_descendants_by_root(
 #[cfg(test)]
 mod vtable_lineage_index_tests {
     use super::*;
+
+    /// A name that owns no slot stays out of the list the seeding round clones and walks.
+    #[test]
+    fn vtable_seeding_only_lists_classes_owning_a_slot() {
+        let live: HashSet<String> = ["base", "afar", "abkhaze"].iter().map(|n| n.to_string()).collect();
+        let slots: HashSet<String> = ["base", "not_live"].iter().map(|n| n.to_string()).collect();
+        assert_eq!(classes_with_vtable_slots(&live, &slots), vec!["base".to_string()]);
+    }
 
     /// The pre-patch predicate, copied verbatim, so the index below is compared against the code
     /// it replaced rather than against a refactoring of itself.
