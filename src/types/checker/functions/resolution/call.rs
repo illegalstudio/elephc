@@ -10,6 +10,7 @@
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
+use std::collections::HashSet;
 
 use crate::types::checker::Checker;
 
@@ -158,6 +159,14 @@ impl Checker {
                     return self.check_function_call(&instantiated, args, span, caller_env);
                 }
             }
+        }
+
+        self.refresh_completed_inferred_callee(name);
+        if self.rewalk_failed_body_at_next_call.contains(name)
+            && !self.resolving_functions.contains(name)
+            && self.fn_decls.contains_key(name)
+        {
+            return self.rewalk_failed_function_body_at_call(name, args, span, caller_env);
         }
 
         if let Some(mut sig) = self.functions.get(name).cloned() {
@@ -671,6 +680,81 @@ impl Checker {
         }
 
         self.resolve_function_signature(name, &decl, param_types)
+    }
+}
+
+impl Checker {
+    /// Walks the body of a failed untyped-parameter function again from this call's settled
+    /// argument types, as the first call did, instead of reusing its provisional signature.
+    ///
+    /// The driver marks the function (`recheck_failed_function_bodies`) when its failed walk
+    /// raised an initial top-level error the final pass may drop as stale. The provisional
+    /// signature is set aside so the call resolves through the first-call path, which binds
+    /// every untyped parameter to its argument type; a clean walk publishes the full
+    /// signature, and a failed one leaves its own provisional signature and returns the body
+    /// errors to the calling statement. The previous signature comes back only when the walk
+    /// published none.
+    fn rewalk_failed_function_body_at_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        self.rewalk_failed_body_at_next_call.remove(name);
+        let provisional = self.remove_function_signature(name);
+        let outer_walk = self.refreshed_inferred_callees.is_none();
+        if outer_walk {
+            self.refreshed_inferred_callees = Some(HashSet::new());
+        }
+        let result = self.check_function_call(name, args, span, caller_env);
+        if outer_walk {
+            self.refreshed_inferred_callees = None;
+        }
+        if !self.functions.contains_key(name) {
+            if let Some(sig) = provisional {
+                self.publish_function_signature(name.to_string(), sig);
+            }
+        }
+        result
+    }
+
+    /// Walks a completed callee with an inferred return once more, from its stored parameter
+    /// types, when a failed body is being walked again, so the caller reads a return type built
+    /// from the settled property types.
+    ///
+    /// `function b(int $n) { return C::$v; }` completes with a `void` return when the first
+    /// pass reaches it before `C::$v = [9]`, and a caller indexing `b($n)[0]` would fail again
+    /// on that stale return although the final pass drops its error. A clean walk keeps the
+    /// refreshed signature; a failed one restores the previous signature and completion, so a
+    /// function that already checked is never failed by a later assignment. Each callee is
+    /// refreshed once per re-walk, and outside one this does nothing.
+    fn refresh_completed_inferred_callee(&mut self, name: &str) {
+        let Some(refreshed) = self.refreshed_inferred_callees.as_ref() else {
+            return;
+        };
+        if refreshed.contains(name)
+            || !self.completed_function_signatures.contains(name)
+            || self.resolving_functions.contains(name)
+        {
+            return;
+        }
+        let (Some(decl), Some(sig)) =
+            (self.fn_decls.get(name).cloned(), self.functions.get(name).cloned())
+        else {
+            return;
+        };
+        if sig.declared_return {
+            return;
+        }
+        if let Some(refreshed) = self.refreshed_inferred_callees.as_mut() {
+            refreshed.insert(name.to_string());
+        }
+        if self.resolve_function_signature(name, &decl, sig.params.clone()).is_err() {
+            self.failed_function_body_errors.remove(name);
+            self.publish_function_signature(name.to_string(), sig);
+            self.completed_function_signatures.insert(name.to_string());
+        }
     }
 }
 

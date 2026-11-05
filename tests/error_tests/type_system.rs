@@ -231,6 +231,24 @@ fn test_error_string_offset_write_on_property() {
     );
 }
 
+/// A key that is not provably an integer on a declared packed `array<T>` property, instance or
+/// static, is refused: the slot keeps packed storage, so the write used to coerce the key into
+/// an index and a string key overwrote element 0 in silence (`$o->xs["s"] = 2` printed `[2]`).
+#[test]
+fn test_error_non_int_key_on_declared_packed_array_property() {
+    let expected = "is a packed array<int>; cast the key with (int) or declare it array<K, V>";
+    for source in [
+        "<?php class O { public array<int> $xs = []; } $o = new O; $o->xs[\"s\"] = 2;",
+        "<?php class O { public array<int> $xs = []; } function f(O $o, mixed $k): void { $o->xs[$k] = 1; } f(new O, 0);",
+        "<?php class O { public array<int> $xs = []; } function f(O $o, string $k): void { $o->xs[$k] = 1; } f(new O, \"a\");",
+        "<?php class C { public static array<int> $xs = []; } function f(mixed $k): void { C::$xs[$k] = 1; } f(0);",
+        "<?php class C { public static array<int> $xs = []; } function f(?int $k): void { C::$xs[$k] = 1; } f(null);",
+        "<?php class C { public static array<int> $xs = []; } C::$xs[\"s\"] = 1;",
+    ] {
+        expect_error(source, expected);
+    }
+}
+
 /// Verifies that by-reference foreach over a parameter typed `iterable` is rejected.
 /// Input: `function f(iterable $items) { foreach ($items as &$value) {} }`
 #[test]

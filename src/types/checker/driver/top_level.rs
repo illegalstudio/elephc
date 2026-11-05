@@ -181,7 +181,7 @@ impl Checker {
     /// Suppressible messages include array-index, property-access, and callable-related diagnostics
     /// that arise before method bodies refine property and return types. A parameter mismatch
     /// caused by provisional null metadata is discarded only when the final statement has no errors.
-    fn is_suppressible_initial_top_level_error(message: &str) -> bool {
+    pub(super) fn is_suppressible_initial_top_level_error(message: &str) -> bool {
         matches!(
             message,
             "Array index must be integer"
