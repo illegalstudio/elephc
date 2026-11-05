@@ -243,3 +243,20 @@ echo $registers[0], "\n";
 restore_error_handler();
 "#, "warning|false|0|empty\nwarning|false|0|empty\n2|3\n123\n");
 }
+
+/// Padding fast paths retain argument TypeErrors while weak numeric strings use the bridge.
+#[test]
+fn test_mb_fast_semantics_padding_type_validation() {
+    assert_mb_fast_semantics(r#"<?php
+$invalid = $argc > 0 ? "nope" : "0";
+try { echo mb_str_pad("hello", 10, "-", $invalid, "UTF-8"); }
+catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { echo mb_str_pad("hello", $invalid, "-", STR_PAD_RIGHT, "UTF-8"); }
+catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { echo mb_str_pad("hello", 3, "", $invalid, "UTF-8"); }
+catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$width = $argc > 0 ? "8" : "7";
+$mode = $argc > 0 ? "0" : "1";
+echo mb_str_pad("hello", $width, "-", $mode, "UTF-8"), "\n";
+"#, "mb_str_pad(): Argument #4 ($pad_type) must be of type int, string given\nmb_str_pad(): Argument #2 ($length) must be of type int, string given\nmb_str_pad(): Argument #4 ($pad_type) must be of type int, string given\n---hello\n");
+}

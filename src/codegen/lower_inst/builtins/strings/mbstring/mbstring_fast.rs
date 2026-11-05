@@ -397,7 +397,9 @@ fn try_lower_str_pad(
     if inst.operands.len() != 5
         || !super::explicit_utf8_encoding(ctx, inst.operands[4])?
         || ctx.value_php_type(inst.operands[0])?.codegen_repr() != PhpType::Str
+        || ctx.value_php_type(inst.operands[1])? != PhpType::Int
         || ctx.value_php_type(inst.operands[2])?.codegen_repr() != PhpType::Str
+        || ctx.value_php_type(inst.operands[3])? != PhpType::Int
     {
         return Ok(false);
     }
