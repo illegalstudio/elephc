@@ -27,6 +27,7 @@ function factoryProbeHandle(): int { return elephc_xml_sx_load('<r/>', 4, 0, '',
 function factoryProbePresent(int $handle): int { return elephc_xml_sx_int($handle, 1); }
 function factoryProbeRelease(int $handle): void { elephc_xml_sx_free($handle); }
 function factoryProbeAllocate(int $handle, string $class): void { __elephc_simplexml_wrap($handle, $class); }
+function factoryProbeStrictAllocate(string $class): mixed { return __elephc_new_without_constructor($class); }
 "#;
     let evaluated = r#"
 interface FactoryAllocationFailureInterface {}
@@ -46,6 +47,12 @@ for ($i = 0; $i < 3; $i++) {
 }
 echo $held->getName(), '|';
 unset($held, $handle, $i);
+$evalReflected = new ReflectionClass('EvalAbstractFactoryXml');
+try { $evalReflected->newInstanceWithoutConstructor(); }
+catch (Error $error) { echo 'eval-reflection:', get_class($error), '|'; }
+try { factoryProbeStrictAllocate('EvalAbstractFactoryXml'); }
+catch (Error $error) { echo 'aot-eval-reflection:', get_class($error), '|'; }
+unset($evalReflected, $error);
 "#;
     let body = r#"
 $document = new DOMDocument();
@@ -65,7 +72,7 @@ try {
         echo (string)$imported->item, '|';
         unset($root, $file, $imported, $children, $paths, $cloned);
     }
-    $reflected = new ReflectionClass('EvalAbstractFactoryXml');
+    $reflected = new ReflectionClass(NativeAbstractFactoryXml::class);
     try { $reflected->newInstanceWithoutConstructor(); }
     catch (Error $error) { echo 'reflection:', get_class($error), '|'; }
     set_error_handler(function(int $level, string $message): bool { return true; });
@@ -78,6 +85,7 @@ try {
     let source = format!("<?php {declarations} $source = $argc > 0 ? '{escaped}' : ''; eval($source); unset($source); {body}");
     let expected = concat!(
         "1Error0|1Error0|1Error0|held|",
+        "eval-reflection:Error|aot-eval-reflection:Error|",
         "NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:ok|",
         "EvalAbstractFactoryXml:EvalAbstractFactoryXml:EvalAbstractFactoryXml:EvalAbstractFactoryXml:EvalAbstractFactoryXml:EvalAbstractFactoryXml:EvalAbstractFactoryXml:ok|",
         "PrivateConstructorFactoryXml:PrivateConstructorFactoryXml:PrivateConstructorFactoryXml:PrivateConstructorFactoryXml:PrivateConstructorFactoryXml:PrivateConstructorFactoryXml:PrivateConstructorFactoryXml:ok|",

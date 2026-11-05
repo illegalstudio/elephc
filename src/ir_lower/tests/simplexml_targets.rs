@@ -18,7 +18,7 @@ $native = new SimpleXMLElement('<r><item/></r>');
 echo get_class($native->item);
 $abstract = simplexml_load_string('<r/>', NativeAbstractFactoryTargetXml::class);
 echo get_class($abstract);
-$reflected = new ReflectionClass($argc > 0 ? 'EvalConstructorlessTargetXml' : 'SimpleXMLElement');
+$reflected = new ReflectionClass(NativeAbstractFactoryTargetXml::class);
 $without = $reflected->newInstanceWithoutConstructor();
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
