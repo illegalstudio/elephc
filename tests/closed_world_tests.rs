@@ -732,6 +732,43 @@ foreach (['routes', 'dbal'] as $name) {
     assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
 }
 
+/// A rebuild starts from the refusals the first build remembered. A class php cannot load, and
+/// what extends it at any depth, must then come out the same as on the first build: the memo used
+/// to hand them to a run-time autoloader that a closed world does not have, and every rebuild of
+/// the Symfony Demo failed.
+#[test]
+fn closed_world_rebuild_keeps_what_php_cannot_load() {
+    let dir = make_test_dir("cw_rebuild_memo");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\\\":"src/"}}}"#).unwrap();
+    fs::write(
+        dir.join("src/Base.php"),
+        "<?php\nnamespace App;\nuse Vendor\\Missing\\Parent1;\nabstract class Base extends Parent1 {}\n",
+    )
+    .unwrap();
+    fs::write(dir.join("src/Middle.php"), "<?php\nnamespace App;\nabstract class Middle extends Base {}\n").unwrap();
+    fs::write(dir.join("src/Leaf.php"), "<?php\nnamespace App;\nclass Leaf extends Middle {}\n").unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+spl_autoload_register(function (string $c): void {
+    $f = __DIR__ . '/src/' . substr($c, 4) . '.php';
+    if (str_starts_with($c, 'App\\') && is_file($f)) { require $f; }
+});
+foreach (['App\Leaf', 'App\Middle'] as $name) {
+    try { var_dump(class_exists($name)); } catch (Throwable $t) { echo get_class($t), ': ', $t->getMessage(), "\n"; }
+}
+"#,
+    )
+    .unwrap();
+    let expected = php_stdout(&dir);
+    for round in 0..2 {
+        let output = compile(&dir, &["--closed-world"]);
+        assert!(output.status.success(), "build {round}: {}{}", text(&output.stdout), text(&output.stderr));
+        assert_eq!(text(&run(&dir).stdout), expected, "build {round}");
+    }
+}
+
 /// A framework reaches a dependency's classes by listing its directory, as symfony's `FileLoader`
 /// does when `debug:container` rebuilds the container: every production class is compiled. Scripts
 /// of a package are not classes, and a package installed for development stays out.

@@ -1444,6 +1444,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // deferring them now saves the type-check rounds and the backend re-run that found them.
     // A remembered file is classified like a newly refused one: closed world keeps a file whose
     // classes are only probed out of the reasons it refuses the build.
+    let mut remembered_refusals: Vec<(PathBuf, String)> = Vec::new();
     for remembered in crate::autoload::deferral_memo::load(Path::new(filename)) {
         let path = remembered.path.canonicalize().unwrap_or(remembered.path);
         let missing = crate::opcache_preload_sources::parent_of_missing_parent_refusal(&remembered.reason);
@@ -1466,7 +1467,57 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
                 deferral_reasons.insert(path, remembered.reason);
                 continue;
             }
+            if php_refuses_to_load(&remembered.reason) {
+                php_load_fatal.insert(path.clone());
+                probe_only_deferred.insert(path.clone());
+                errors::report_note(&format!(
+                    "autoload: '{}' is not compiled ({}; remembered from an earlier build); php \
+                     refuses to load it, so it never runs",
+                    path.display(),
+                    remembered.reason
+                ));
+                deferral_reasons.insert(path, remembered.reason);
+                continue;
+            }
         }
+        remembered_refusals.push((path, remembered.reason));
+    }
+    // What extends a class php cannot load cannot load either, at any depth: symfony's
+    // `TypeTestCase` over `FormIntegrationTestCase` over an uninstalled PHPUnit. The first build
+    // decides this as it finds each file, in dependency order; a memo comes in file order.
+    if crate::closed_world::is_enabled() {
+        loop {
+            let (fatal, rest): (Vec<_>, Vec<_>) =
+                remembered_refusals.into_iter().partition(|(path, _)| {
+                    extends_a_php_load_fatal_class(
+                        path,
+                        &deferral_class_files,
+                        &class_parent_edges,
+                        &php_load_fatal,
+                    )
+                });
+            remembered_refusals = rest;
+            if fatal.is_empty() {
+                break;
+            }
+            for (path, reason) in fatal {
+                php_load_fatal.insert(path.clone());
+                probe_only_deferred.insert(path.clone());
+                if let Some(parent) =
+                    first_parent_declared_by(&path, &deferral_class_files, &class_parent_edges)
+                {
+                    add_missing_parent_unit(&mut ast, &mut preload_include_units, &path, &parent);
+                }
+                errors::report_note(&format!(
+                    "autoload: '{}' is not compiled; a class it declares extends one php refuses \
+                     to load, so it never runs",
+                    path.display()
+                ));
+                deferral_reasons.insert(path, reason);
+            }
+        }
+    }
+    for (path, reason) in remembered_refusals {
         errors::report_warning(&errors::CompileWarning::new(
             Span::dummy(),
             &format!(
@@ -1474,10 +1525,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
                  ELEPHC_DEFERRAL_MEMO=0 retries it); its classes are loaded at run time by the \
                  autoloader instead",
                 path.display(),
-                remembered.reason
+                reason
             ),
         ));
-        deferral_reasons.insert(path, remembered.reason);
+        deferral_reasons.insert(path, reason);
     }
     let by_ref_reason = "it passes a property or array element to a by-reference constructor \
                          parameter, which a native call cannot keep linked";
@@ -1718,6 +1769,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
                 {
                     php_load_fatal.insert(path.clone());
                     probe_only_deferred.insert(path.clone());
+                    if let Some(parent) =
+                        first_parent_declared_by(&path, &deferral_class_files, &class_parent_edges)
+                    {
+                        add_missing_parent_unit(&mut ast, &mut preload_include_units, &path, &parent);
+                    }
                     errors::report_note(&format!(
                         "autoload: '{}' is not compiled; a class it declares extends one php \
                          refuses to load, so it never runs",
@@ -2798,6 +2854,28 @@ fn php_refuses_to_load(message: &str) -> bool {
     message.contains("when overriding")
         || message.contains("must be compatible with")
         || message.contains("Unknown class referenced during inheritance flattening")
+}
+
+/// The first parent of a class declared in `path`: what loading that file asks the autoloaders
+/// for, so the unit of a file over an unloadable ancestor fails down the chain as php's load does.
+fn first_parent_declared_by(
+    path: &Path,
+    class_files: &HashMap<String, String>,
+    parent_edges: &[(String, Vec<String>)],
+) -> Option<String> {
+    let mut classes: Vec<&String> = class_files
+        .iter()
+        .filter(|(_, file)| Path::new(file).canonicalize().is_ok_and(|file| file == path))
+        .map(|(name, _)| name)
+        .collect();
+    classes.sort();
+    classes.iter().find_map(|class| {
+        let key = crate::names::php_symbol_key(class.trim_start_matches('\\'));
+        parent_edges
+            .iter()
+            .find(|(name, _)| crate::names::php_symbol_key(name.trim_start_matches('\\')) == key)
+            .and_then(|(_, parents)| parents.first().cloned())
+    })
 }
 
 /// Whether a class declared in `path` has, among its ancestors, a class declared in a file php
