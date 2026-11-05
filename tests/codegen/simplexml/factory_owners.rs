@@ -108,7 +108,7 @@ try {
         unset($root, $file, $imported, $children, $paths, $cloned, $abstractOwner);
     }
     try { factoryProbeStrictAllocate(NativeAbstractFactoryXml::class); }
-    catch (Error $error) { echo 'native-reflection:', get_class($error), '|'; }
+    catch (Error $error) { echo 'native-reflection:', $error->getMessage() === 'Cannot instantiate abstract class NativeAbstractFactoryXml' ? get_class($error) : $error->getMessage(), '|'; }
     set_error_handler(function(int $level, string $message): bool { return true; });
     echo (int)(simplexml_load_string('<r>', NativeAbstractFactoryXml::class) === false), '|';
     restore_error_handler();
@@ -143,7 +143,7 @@ try {
     assert_eq!(without_ir_opt(run), expected);
 }
 
-/// Public AOT Reflection keeps its abstract native target refusal in an independent heap.
+/// A public declaring-class reflector keeps its abstract native target refusal in both modes.
 #[test]
 fn test_simplexml_aot_reflection_keeps_abstract_factories_strict_bundle() {
     if skip_without_xml_native("test_simplexml_aot_reflection_keeps_abstract_factories_strict_bundle") { return; }
@@ -155,10 +155,12 @@ abstract class ReflectionAbstractFactoryXml extends SimpleXMLElement implements 
 }
 $root = simplexml_load_string('<r><item>ok</item></r>', ReflectionAbstractFactoryXml::class);
 echo get_class($root), ':', (string)$root->item, '|';
-$reflected = new ReflectionClass(ReflectionAbstractFactoryXml::class);
+$member = new ReflectionMethod(ReflectionAbstractFactoryXml::class, 'marker');
+$reflected = $member->getDeclaringClass();
+echo $reflected->getName(), ':', (int)$reflected->isAbstract(), '|';
 try { $reflected->newInstanceWithoutConstructor(); }
-catch (Error $error) { echo get_class($error), '|'; }
-unset($root, $reflected, $error);
+catch (Error $error) { echo $error->getMessage() === 'Cannot instantiate abstract class ReflectionAbstractFactoryXml' ? get_class($error) : $error->getMessage(), '|'; }
+unset($root, $member, $reflected, $error);
 "#;
     let run = || {
         let output = compile_and_run_with_heap_debug(source);
@@ -166,7 +168,7 @@ unset($root, $reflected, $error);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
         output.stdout
     };
-    let expected = "ReflectionAbstractFactoryXml:ok|Error|";
+    let expected = "ReflectionAbstractFactoryXml:ok|ReflectionAbstractFactoryXml:1|Error|";
     assert_eq!(run(), expected);
     assert_eq!(without_ir_opt(run), expected);
 }

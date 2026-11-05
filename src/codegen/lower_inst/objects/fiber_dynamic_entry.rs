@@ -300,6 +300,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
 
     let fallback_label = ctx.next_label("dynamic_new_no_ctor_mixed_fallback");
+    super::constructorless_refusals::emit_constructorless_abstract_refusals(ctx, inst);
     let candidates = dynamic_new_without_constructor_mixed_candidates(ctx, inst)?;
     let case_labels = candidates
         .iter()

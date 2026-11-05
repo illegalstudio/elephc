@@ -31,6 +31,7 @@ $without = __elephc_new_without_constructor($argc > 0 ? 'EvalConstructorlessTarg
     assert!(lookup < argument, "{target}: abstract lookup must precede argument effects");
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("__elephc_eval_try_allocate_object_v1"), "{target}: missing eval allocation probe");
+    assert!(assembly.contains("Cannot instantiate abstract class NativeAbstractFactoryTargetXml"), "{target}: missing strict abstract allocation refusal");
     assert!(assembly.contains("__elephc_eval_try_allocate_native_object_v1"), "{target}: missing native factory allocation probe");
     assert!(assembly.contains("__elephc_eval_method_lookup_v1"), "{target}: missing early abstract method lookup probe");
     assert!(assembly.contains("__elephc_eval_class_string_relation_v1"), "{target}: missing eval subclass relation probe");

@@ -169,6 +169,7 @@ mod clone_and_spl;
 mod iterator_iterator;
 pub(in crate::codegen::lower_inst) mod throwable_new;
 mod fiber_dynamic_entry;
+mod constructorless_refusals;
 mod dynamic_mixed_candidates;
 mod dynamic_factory;
 mod reflection_constructor;
