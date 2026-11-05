@@ -212,6 +212,15 @@ pub fn execute_context_string_outcome(
     }
 }
 
+/// Probes PHP object stringability without invoking the object's `__toString()` method.
+pub fn execute_context_object_has_to_string(
+    context: &mut ElephcEvalContext,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    eval_object_has_to_string(value, context, values)
+}
+
 /// Calls a static method on a class-like symbol known to the shared eval context.
 pub fn execute_context_static_method_call_outcome(
     context: &mut ElephcEvalContext,

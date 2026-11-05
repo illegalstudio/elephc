@@ -9,6 +9,7 @@
 //! - Generated EIR backend assembly through `__elephc_eval_object_is_a_dynamic`.
 //! - Generated EIR backend assembly through `__elephc_eval_member_exists`.
 //! - Generated EIR backend assembly through `__elephc_eval_class_relation`.
+//! - Generated EIR backend assembly through `__elephc_eval_dynamic_object_has_to_string`.
 //!
 //! Key details:
 //! - Class-name and relation lookups return boxed Mixed cells through `ElephcEvalResult`.
@@ -128,6 +129,37 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_object_class_name(
         status
     })
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Probes an eval-created object's stringability without invoking user code.
+///
+/// Compiled argument guards can consult this when the raw object's synthetic class id cannot
+/// index the native `__toString` table. The owning eval context is recovered from the dynamic
+/// object registry. Returns 1 when conversion is available, or 0 on a missing owner, invalid
+/// ABI, failed lookup, or panic, matching the fail-closed contract of the other predicates.
+///
+/// # Safety
+/// `object` must be null or a live object payload that remains valid throughout the probe.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_dynamic_object_has_to_string(
+    object: *mut RuntimeCell,
+) -> u64 {
+    std::panic::catch_unwind(|| unsafe {
+        if object.is_null() { return 0; }
+        let Some(context) =
+            crate::ffi::dynamic_destructors::dynamic_object_owner_context(object as u64)
+        else { return 0; };
+        let Some(context) = context.as_mut() else { return 0; };
+        if context.abi_version() != ABI_VERSION { return 0; }
+        let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+        let Ok(boxed) = values.raw_heap_word_value(object as u64) else { return 0; };
+        let available = interpreter::execute_context_object_has_to_string(
+            context, boxed.borrowed(), &mut values,
+        );
+        let released = values.release(boxed);
+        u64::from(matches!((available, released), (Ok(true), Ok(()))))
+    }).unwrap_or(0)
 }
 
 /// Tests whether an object satisfies a class/interface relation in the eval context.

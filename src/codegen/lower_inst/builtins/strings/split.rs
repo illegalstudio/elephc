@@ -313,7 +313,7 @@ fn lower_str_split_impl(
 /// argument count rather than the source spelling: a single operand is the ARRAY and the glue
 /// is the empty string (`join(["a","b"]) === "ab"`), while two operands keep the ordinary
 /// `(glue, array)` order. The reversed PHP 7 order was removed in PHP 8.0 and is not accepted.
-pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction, name: &str) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "implode expected 1 or 2 args, got {}",
@@ -326,7 +326,7 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        emit_boxed_implode_array_type_guard(ctx, array)?;
+        emit_boxed_implode_array_type_guard(ctx, inst, array, name)?;
     }
     let runtime_label = implode_runtime_label(ctx, inst, array_index)?;
     let normalized_copy = implode_normalized_value_type(ctx, inst, array_index)?;

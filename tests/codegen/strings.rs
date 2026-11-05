@@ -32,6 +32,8 @@ mod mbstring_exception;
 mod search;
 #[path = "strings/transform.rs"]
 mod transform;
+#[path = "strings/implode_arguments.rs"]
+mod implode_arguments;
 #[path = "strings/implode_boxed.rs"]
 mod implode_boxed;
 #[path = "strings/encoding.rs"]

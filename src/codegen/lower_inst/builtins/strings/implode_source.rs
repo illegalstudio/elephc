@@ -19,12 +19,16 @@ use crate::codegen::lower_inst::builtins::scalar_metadata::emit_branch_on_gettyp
 
 /// Reference PHP's wording when the payload is null: the separator's type is named too,
 /// because that is the overload PHP reports against.
-const IMPLODE_NULL_TYPE_ERROR: &str = "implode(): If argument #1 ($separator) is of type string, \
+const IMPLODE_NULL_TYPE_ERROR: &str = "If argument #1 ($separator) is of type string, \
 argument #2 ($array) must be of type array, null given";
 
 /// Reference PHP's wording for every other non-array payload, completed by the type name.
 const IMPLODE_TYPE_ERROR_PREFIX: &str =
-    "implode(): Argument #2 ($array) must be of type ?array, ";
+    "Argument #2 ($array) must be of type ?array, ";
+
+/// The first parameter accepts arrays or separators before overload selection.
+const IMPLODE_SINGLE_TYPE_ERROR_PREFIX: &str =
+    "Argument #1 ($separator) must be of type array|string, ";
 
 /// Raises PHP's `TypeError` unless the boxed operand really holds an array, and returns to its
 /// caller when it does.
@@ -40,7 +44,9 @@ const IMPLODE_TYPE_ERROR_PREFIX: &str =
 /// null `?array` segfault, and made an object print its header words (issue #689).
 pub(super) fn emit_boxed_implode_array_type_guard(
     ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
     array: ValueId,
+    name: &str,
 ) -> Result<()> {
     let is_array = ctx.next_label("implode_guard_array");
     let int_case = ctx.next_label("implode_guard_int");
@@ -49,38 +55,66 @@ pub(super) fn emit_boxed_implode_array_type_guard(
     let bool_case = ctx.next_label("implode_guard_bool");
     let true_case = ctx.next_label("implode_guard_true");
     let object_case = ctx.next_label("implode_guard_object");
+    let resource_case = ctx.next_label("implode_guard_resource");
+    let callable_case = ctx.next_label("implode_guard_callable");
+    let single = inst.operands.len() == 1;
+    let strict = matches!(inst.immediate, Some(Immediate::RuntimeCall(
+        crate::ir::RuntimeCallTarget::ProfiledFunction { strict_types: Some(true), .. }
+    )));
+    let prefix = if single { IMPLODE_SINGLE_TYPE_ERROR_PREFIX } else { IMPLODE_TYPE_ERROR_PREFIX };
+    let overload_error = format!("{name}(): {IMPLODE_NULL_TYPE_ERROR}");
 
     ctx.load_value_to_result(array)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_on_gettype_mixed_tag(ctx, 4, &is_array);
     emit_branch_on_gettype_mixed_tag(ctx, 5, &is_array);
+    if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::PositionalImplode))) {
+        super::super::exceptions::emit_type_error(ctx, &overload_error);
+        ctx.emitter.label(&is_array);
+        return Ok(());
+    }
     emit_branch_on_gettype_mixed_tag(ctx, 0, &int_case);
     emit_branch_on_gettype_mixed_tag(ctx, 1, &string_case);
     emit_branch_on_gettype_mixed_tag(ctx, 2, &float_case);
     emit_branch_on_gettype_mixed_tag(ctx, 3, &bool_case);
     emit_branch_on_gettype_mixed_tag(ctx, 6, &object_case);
-    // Every remaining tag is PHP's null, including the legacy sentinel payloads
-    // `__rt_mixed_unbox` canonicalizes.
-    super::super::exceptions::emit_type_error(ctx, IMPLODE_NULL_TYPE_ERROR);
+    emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 10, &callable_case);
+    // Mixed unboxing canonicalizes null container sentinels to PHP's null tag.
+    if single && strict {
+        emit_implode_type_error(ctx, name, prefix, "null");
+    } else {
+        super::super::exceptions::emit_type_error(ctx, &overload_error);
+    }
 
     ctx.emitter.label(&int_case);
-    emit_implode_type_error(ctx, "int");
+    emit_implode_scalar_type_error(ctx, name, prefix, "int", single && !strict);
     ctx.emitter.label(&string_case);
-    emit_implode_type_error(ctx, "string");
+    emit_implode_scalar_type_error(ctx, name, prefix, "string", single);
     ctx.emitter.label(&float_case);
-    emit_implode_type_error(ctx, "float");
+    emit_implode_scalar_type_error(ctx, name, prefix, "float", single && !strict);
 
     // PHP names a boolean by value: "true given" / "false given", never "bool given".
     ctx.emitter.label(&bool_case);
     let payload = unboxed_payload_reg(ctx);
     abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), payload);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &true_case);
-    emit_implode_type_error(ctx, "false");
+    emit_implode_scalar_type_error(ctx, name, prefix, "false", single && !strict);
     ctx.emitter.label(&true_case);
-    emit_implode_type_error(ctx, "true");
+    emit_implode_scalar_type_error(ctx, name, prefix, "true", single && !strict);
 
     ctx.emitter.label(&object_case);
-    emit_implode_object_type_error(ctx);
+    if single && !strict {
+        emit_implode_stringable_separator(ctx, array, name)?;
+    }
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_implode_object_type_error(ctx, name, prefix);
+
+    ctx.emitter.label(&callable_case);
+    emit_implode_type_error(ctx, name, prefix, "Closure");
+    ctx.emitter.label(&resource_case);
+    emit_implode_resource_type_error(ctx, name, prefix);
 
     ctx.emitter.label(&is_array);
     Ok(())
@@ -112,11 +146,95 @@ fn unboxed_payload_reg(ctx: &FunctionContext<'_>) -> &'static str {
 }
 
 /// Raises `implode()`'s `TypeError` naming `type_name`, exactly as php-src words it.
-fn emit_implode_type_error(ctx: &mut FunctionContext<'_>, type_name: &str) {
+fn emit_implode_type_error(ctx: &mut FunctionContext<'_>, name: &str, prefix: &str, type_name: &str) {
     super::super::exceptions::emit_type_error(
         ctx,
-        &format!("{IMPLODE_TYPE_ERROR_PREFIX}{type_name} given"),
+        &format!("{name}(): {prefix}{type_name} given"),
     );
+}
+
+/// Reports the missing array after a weak scalar separator has been accepted.
+fn emit_implode_scalar_type_error(
+    ctx: &mut FunctionContext<'_>, name: &str, prefix: &str, type_name: &str, separator: bool,
+) {
+    if separator {
+        super::super::exceptions::emit_type_error(ctx, &format!("{name}(): {IMPLODE_NULL_TYPE_ERROR}"));
+    } else {
+        emit_implode_type_error(ctx, name, prefix, type_name);
+    }
+}
+
+/// Native extension handles use resource storage but expose PHP object class names.
+fn emit_implode_resource_type_error(ctx: &mut FunctionContext<'_>, name: &str, prefix: &str) {
+    let cases: Vec<_> = [(2, "HashContext"), (5, "HashContext"), (6, "CurlHandle"),
+        (7, "CurlMultiHandle"), (8, "CurlShareHandle")].into_iter()
+        .map(|(kind, class)| (kind, class, ctx.next_label("implode_guard_handle"))).collect();
+    for (kind, _, label) in &cases {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp x2, #{}", kind));         // distinguish PHP object handles from genuine resources
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // name the extension object's PHP class
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp rdx, {}", kind));         // distinguish PHP object handles from genuine resources
+                ctx.emitter.instruction(&format!("je {}", label));              // name the extension object's PHP class
+            }
+        }
+    }
+    emit_implode_type_error(ctx, name, prefix, "resource");
+    for (_, class, label) in cases {
+        ctx.emitter.label(&label);
+        emit_implode_type_error(ctx, name, prefix, class);
+    }
+}
+
+/// A weak one-argument Stringable runs its conversion before the missing-array error.
+fn emit_implode_stringable_separator(ctx: &mut FunctionContext<'_>, array: ValueId, name: &str) -> Result<()> {
+    let missing = ctx.next_label("implode_separator_not_stringable");
+    let fallback = ctx.next_label("implode_separator_eval_stringable");
+    let convert = ctx.next_label("implode_separator_convert");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_tostring_count", 0);
+            ctx.emitter.instruction("ldr x9, [x1]");                            // read the class id after the symbol helper has used x9 as scratch
+            ctx.emitter.instruction("cmp x9, x10");                             // reject synthetic and out-of-range class ids before indexing
+            ctx.emitter.instruction(&format!("b.hs {}", fallback));             // probe the owning eval context for a non-native class id
+            abi::emit_symbol_address(ctx.emitter, "x10", "_class_tostring_ptrs");
+            ctx.emitter.instruction("ldr x10, [x10, x9, lsl #3]");              // find the concrete or inherited conversion hook
+            ctx.emitter.instruction(&format!("cbz x10, {}", fallback));         // eval objects may use a native carrier without its own string hook
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rdi]");                 // inspect the object's concrete class without consuming it
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_class_tostring_count", 0);
+            ctx.emitter.instruction("cmp r9, r10");                             // reject synthetic and out-of-range class ids before indexing
+            ctx.emitter.instruction(&format!("jae {}", fallback));              // probe the owning eval context for a non-native class id
+            abi::emit_symbol_address(ctx.emitter, "r10", "_class_tostring_ptrs");
+            ctx.emitter.instruction("mov r10, QWORD PTR [r10 + r9*8]");         // find the concrete or inherited conversion hook
+            ctx.emitter.instruction("test r10, r10");                           // test whether the receiver has a native string conversion hook
+            ctx.emitter.instruction(&format!("jz {}", fallback));               // eval objects may use a native carrier without its own string hook
+        }
+    }
+    abi::emit_jump(ctx.emitter, &convert);
+    ctx.emitter.label(&fallback);
+    if ctx.module.required_runtime_features.eval_bridge {
+        ctx.load_value_to_result(array)?;
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), unboxed_payload_reg(ctx));
+        let probe = ctx.emitter.target.extern_symbol("__elephc_eval_dynamic_object_has_to_string");
+        abi::emit_call_label(ctx.emitter, &probe);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &missing);
+    } else {
+        abi::emit_jump(ctx.emitter, &missing);
+    }
+    ctx.emitter.label(&convert);
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_implode_cast_string");
+    let (ptr, _) = abi::string_result_regs(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), ptr);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+    super::super::exceptions::emit_type_error(ctx, &format!("{name}(): {IMPLODE_NULL_TYPE_ERROR}"));
+    ctx.emitter.label(&missing);
+    Ok(())
 }
 
 /// Raises `implode()`'s `TypeError` for an object, naming its class.
@@ -124,31 +242,20 @@ fn emit_implode_type_error(ctx: &mut FunctionContext<'_>, type_name: &str) {
 /// PHP prints the CLASS, not the word "object", and the class is only known at run time here —
 /// the operand is a `mixed` slot. The name comes from the same dense metadata table
 /// `get_class()` reads, so the message is php-src's wording verbatim.
-fn emit_implode_object_type_error(ctx: &mut FunctionContext<'_>) {
-    let (name_ptr_reg, name_len_reg) = abi::string_result_regs(ctx.emitter);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [x1]");                            // load the receiver class id from the unboxed object payload
-            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
-            ctx.emitter.instruction("lsl x11, x9, #4");                         // scale the class id to the 16-byte class-name row
-            ctx.emitter.instruction("add x10, x10, x11");                       // address the receiver's class-name metadata
-            ctx.emitter
-                .instruction(&format!("ldr {}, [x10]", name_ptr_reg));          // borrow the class-name pointer
-            ctx.emitter
-                .instruction(&format!("ldr {}, [x10, #8]", name_len_reg));      // borrow the class-name byte length
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov r9, QWORD PTR [rdi]");                 // load the receiver class id from the unboxed object payload
-            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
-            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to the 16-byte class-name row
-            ctx.emitter
-                .instruction(&format!("mov {}, QWORD PTR [r10 + r9]", name_ptr_reg)); // borrow the class-name pointer
-            ctx.emitter
-                .instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", name_len_reg)); // borrow the class-name byte length
-        }
-    }
-    emit_implode_error_concat_prefix(ctx, IMPLODE_TYPE_ERROR_PREFIX);
+fn emit_implode_object_type_error(ctx: &mut FunctionContext<'_>, name: &str, prefix: &str) {
+    let object = unboxed_payload_reg(ctx);
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, result, object);
+    super::super::types::emit_dynamic_object_class_name(ctx, "get_class");
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+    emit_implode_error_concat_prefix(ctx, &format!("{name}(): {prefix}"));
     emit_implode_error_concat_suffix(ctx, " given");
+    abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+    abi::emit_pop_reg_pair(ctx.emitter, ptr, len);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     super::super::exceptions::emit_type_error_from_string_result(ctx);
 }
