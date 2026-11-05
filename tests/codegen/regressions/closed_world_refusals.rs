@@ -257,6 +257,22 @@ var_dump($p);
     assert_eq!(out, "1 NULL 1\nNULL\n");
 }
 
+/// A subclass of `CachingIterator` with `__set()` sends the built-in constructor's write through
+/// the run-time ladder, which needs the inner iterator's slot to be visible there.
+#[test]
+fn test_caching_iterator_subclass_with_magic_set() {
+    let out = compile_and_run(
+        r#"<?php
+class Caching extends \CachingIterator {
+    public function __set(string $name, mixed $value): void { throw new LogicException("no $name"); }
+    public function __construct(iterable $items) { parent::__construct(new \ArrayIterator($items), 0); }
+}
+foreach ($c = new Caching([1, 2]) as $v) { echo $v, ':', var_export($c->hasNext(), true), "\n"; }
+"#,
+    );
+    assert_eq!(out, "1:true\n2:false\n");
+}
+
 /// `&__get()` hands the magic read its value (nette's `SmartObject`).
 #[test]
 fn test_by_reference_magic_get_reads_the_value() {

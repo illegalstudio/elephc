@@ -98,7 +98,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
 
 /// Builds the property list for iterator iterator.
 fn iterator_iterator_properties() -> Vec<ClassProperty> {
-    vec![storage_property("inner", named_type("Iterator"))]
+    vec![protected_storage_property("inner", named_type("Iterator"))]
 }
 
 /// Builds the property list for limit iterator.
