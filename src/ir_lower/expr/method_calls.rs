@@ -47,12 +47,7 @@ pub(super) fn lower_method_call(
     // the receiver is evaluated for its side effects, then the call is emitted through the
     // static-method path so codegen never passes the object as `$this`.
     if op == Op::MethodCall {
-        if let Some(class_name) = static_only_method_class(ctx, object.value, method) {
-            let receiver = static_receiver_for_class_name(&class_name);
-            let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
-            let result = lower_static_method_call(ctx, &receiver, method, args, expr);
-            unpin_in_flight_owners(ctx, pins, expr.span);
-            release_owning_receiver_temporary(ctx, object, expr.span);
+        if let Some(result) = try_static_only_method_through_receiver(ctx, object, method, args, expr) {
             return result;
         }
     }

@@ -415,8 +415,15 @@ fn prelude_contracts_match_their_injected_signatures() {
             let at = format!("{name}(${}) in {prelude}", param.name);
             assert_eq!(actual.by_ref, param.by_ref, "{at}: by-reference marker");
             assert!(!actual.variadic, "{at}: fixed parameter declared variadic");
+            // Tidy's prelude widens its configuration and encoding parameters to `mixed`
+            // so its explicit adapter can reproduce internal Tidy's weak scalar coercion
+            // and TypeError ordering. The public contract keeps PHP's documented union
+            // types; docs/php/tidy.md records the reflection difference.
+            let tidy_adapter = name.starts_with("tidy_")
+                && matches!(param.name, "config" | "encoding")
+                && actual.php_type == "mixed";
             assert!(
-                php_type_matches(param.ty, &actual.php_type),
+                tidy_adapter || php_type_matches(param.ty, &actual.php_type),
                 "{at}: declared type `{}` is not the contract's {:?}",
                 actual.php_type,
                 param.ty

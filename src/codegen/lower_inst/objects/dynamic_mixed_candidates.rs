@@ -59,7 +59,7 @@ pub(super) fn dynamic_new_mixed_candidates(
             continue;
         }
         if let Some(candidate) =
-            dynamic_new_candidate(ctx, class_name, class_info, arg_count, inst)?
+            dynamic_new_candidate(ctx, class_name, class_info, arg_count, inst, false)?
         {
             candidates.push(candidate);
         }

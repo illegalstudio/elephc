@@ -497,19 +497,11 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     // the strict path for the same reason.
     let bindable = sig.declared_params.get(index).copied().unwrap_or(false)
         && !sig.ref_params.get(index).copied().unwrap_or(false);
-    // Keep the declared union for parameter binding: `codegen_repr()` flattens it to
-    // `Mixed`, which would hide the scalar member PHP actually chooses.
-    let declared_param_ty = param_ty;
     let param_ty = param_ty.codegen_repr();
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
     }
-    // Preserve the checker-facing type for scalar binding. `codegen_repr()` collapses
-    // `false` to `bool`, which would make `string|false` cast a literal `false` to `""`.
-    let source_php_ty = argument_static_type(ctx, arg)
-        .or_else(|| crate::types::param_binding::literal_php_type(&arg.kind))
-        .unwrap_or_else(|| ctx.builder.value_php_type(value.value));
-    let source_ty = source_php_ty.codegen_repr();
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
     if param_ty == PhpType::Callable
         && !sig.ref_params.get(index).copied().unwrap_or(false)
         && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
@@ -526,9 +518,7 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         return coerce_to_string(ctx, value, arg);
     }
     if bindable {
-        if let Some(cast) =
-            crate::types::param_binding::scalar_param_cast(declared_param_ty, &source_php_ty)
-        {
+        if let Some(cast) = crate::types::param_binding::scalar_param_cast(&param_ty, &source_ty) {
             return apply_scalar_param_cast(ctx, cast, value, Some(arg.span));
         }
     }
@@ -786,12 +776,8 @@ fn apply_scalar_param_cast(
     match cast {
         CastType::String => coerce_to_string_at_span(ctx, value, span),
         CastType::Bool => lower_truthy_bool(ctx, value, span),
-        // A union's int/float preference is total for the sources the classifier admits
-        // (bool to int, int/bool to float); partial conversions stay on the checker's
-        // runtime-check diagnostic path and never reach here.
-        CastType::Int => coerce_to_int_at_span(ctx, value, span),
-        CastType::Float => coerce_to_float_at_span(ctx, value, span),
-        CastType::Array | CastType::Object => value,
+        // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
+        CastType::Int | CastType::Float | CastType::Array | CastType::Object => value,
     }
 }
 
@@ -832,9 +818,7 @@ pub(super) fn coerce_operands_to_params(
             continue;
         };
         let value = operands[index];
-        let operand_php_ty = ctx.builder.value_php_type(value);
-        let operand_ty = operand_php_ty.codegen_repr();
-        let declared_param_ty = param_ty;
+        let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
         let param_ty = param_ty.codegen_repr();
         if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
             let lowered = LoweredValue {
@@ -880,7 +864,7 @@ pub(super) fn coerce_operands_to_params(
             // parameter order because named and spread arguments are lowered in source order
             // and only reordered afterwards.
             if let Some(cast) =
-                crate::types::param_binding::scalar_param_cast(declared_param_ty, &operand_php_ty)
+                crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty)
             {
                 let lowered = LoweredValue {
                     value,
@@ -908,9 +892,7 @@ fn operand_needs_param_coercion(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return false;
     };
-    let operand_php_ty = ctx.builder.value_php_type(operands[index]);
-    let operand_ty = operand_php_ty.codegen_repr();
-    let declared_param_ty = param_ty;
+    let operand_ty = ctx.builder.value_php_type(operands[index]).codegen_repr();
     let param_ty = param_ty.codegen_repr();
     (param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool))
         || (param_ty == PhpType::Str
@@ -922,8 +904,7 @@ fn operand_needs_param_coercion(
         || (matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (sig.declared_params.get(index).copied().unwrap_or(false)
-            && crate::types::param_binding::scalar_param_cast(declared_param_ty, &operand_php_ty)
-                .is_some())
+            && crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty).is_some())
 }
 
 /// Normalizes concrete local arrays to the storage required by their by-reference parameter.
