@@ -696,6 +696,42 @@ try { var_dump(class_exists('App\Fix')); } catch (Throwable $t) { echo get_class
     assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
 }
 
+/// A config file returning a closure is reached by a computed path, as a framework's loader does
+/// with ux-live-component's `config/routes.php`, and the closure needs no `static` to be a unit.
+#[test]
+fn closed_world_answers_a_computed_include_of_a_file_returning_a_closure() {
+    let dir = make_test_dir("cw_config_closure");
+    fs::create_dir_all(dir.join("config")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\\\":"src/"}}}"#).unwrap();
+    fs::write(
+        dir.join("config/routes.php"),
+        "<?php\nreturn function (array $routes) {\n    $routes[] = 'live';\n    return $routes;\n};\n",
+    )
+    .unwrap();
+    // doctrine-bundle's config files open with this directive.
+    fs::write(
+        dir.join("config/dbal.php"),
+        "<?php\n\ndeclare(strict_types=1);\n\nnamespace App\\Config;\n\nreturn static function (array $routes) {\n    $routes[] = 'dbal';\n    return $routes;\n};\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+class Loader {
+    public function load(string $path): mixed { return include $path; }
+}
+foreach (['routes', 'dbal'] as $name) {
+    $configure = (new Loader)->load(__DIR__ . '/config/' . $name . '.php');
+    echo get_debug_type($configure), ' ', implode(',', $configure(['home'])), "\n";
+}
+"#,
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+}
+
 /// php evaluates a class constant when it is read, so a class naming a constant of an extension
 /// that is not installed still loads: symfony's `RedisCaster` and `\Redis::FAILOVER_NONE`.
 #[test]

@@ -65,6 +65,9 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
         }
         return super::boxed_unshift::lower_assoc_array_unshift(ctx, inst, array);
     }
+    if is_string_array(&ctx.value_php_type(array)?) {
+        return lower_string_array_unshift(ctx, inst, array);
+    }
     let elem_ty = array_unshift_element_type(ctx.value_php_type(array)?)?;
     for index in 1..inst.operands.len() {
         let value = expect_operand(inst, index)?;
@@ -102,6 +105,44 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
     // The helper already returns the running count, but the local-slot write-back above may
     // clobber the result register, and the value-less form never calls the helper at all.
     // Re-reading the logical length after every mutation covers both cases identically.
+    load_array_unshift_length_to_result(ctx, array)?;
+    store_if_result(ctx, inst)
+}
+
+/// Whether `ty` is an indexed array of 16-byte string slots.
+fn is_string_array(ty: &PhpType) -> bool {
+    matches!(ty.codegen_repr(), PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str)
+}
+
+/// Prepends strings: each value is appended by the machinery of `array_push()`, which owns
+/// copy-on-write, persistence, growth and the store-back, then moved to the front. Values go last
+/// to first, as in the scalar path, so they keep their source order.
+fn lower_string_array_unshift(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    require_array_unshift_result_type(&inst.result_php_type.codegen_repr())?;
+    for index in (1..inst.operands.len()).rev() {
+        let value = expect_operand(inst, index)?;
+        let value_ty = ctx.value_php_type(value)?.codegen_repr();
+        if value_ty != PhpType::Str {
+            return Err(CodegenIrError::unsupported(format!(
+                "array_unshift value PHP type {:?} for indexed-array element PHP type Str",
+                value_ty
+            )));
+        }
+        super::super::super::arrays::lower_array_push_value(ctx, inst, array, value)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.load_value_to_reg(array, "x0")?;
+            }
+            Arch::X86_64 => {
+                ctx.load_value_to_reg(array, "rdi")?;
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_array_rotate_last_string_to_front");
+    }
     load_array_unshift_length_to_result(ctx, array)?;
     store_if_result(ctx, inst)
 }

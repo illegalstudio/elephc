@@ -604,11 +604,35 @@ fn closure_bind_to_as_static_bind(
     // the same way, but only in a world where nothing else answers `bindTo()`: an object of a
     // class declaring its own `bindTo` must keep its method call.
     let receiver_repr = materialized_expr_type_for_merge(ctx, object).codegen_repr();
-    let mixed_closure_receiver = receiver_repr == PhpType::Mixed
-        && !ctx
-            .classes
-            .values()
-            .any(|class| class.methods.contains_key("bindto"));
+    let class_answers_bind_to = ctx
+        .classes
+        .iter()
+        .any(|(name, class)| name.as_str() != "Closure" && class.methods.contains_key("bindto"));
+    // Where a class does declare `bindTo` (symfony's `HttpOptions`), php decides on the object the
+    // receiver holds, so the two calls are split at run time. The method call of the `else` arm
+    // comes back here with the span already seen, and takes the ordinary path.
+    if receiver_repr == PhpType::Mixed && class_answers_bind_to {
+        if !is_repeatable_receiver(object) || !ctx.closure_bind_splits.insert(expr.span) {
+            return None;
+        }
+        let closure_bind = closure_bind_call(object, args, expr);
+        let is_closure = Expr::new(
+            ExprKind::InstanceOf {
+                value: Box::new(object.clone()),
+                target: InstanceOfTarget::Name(Name::from("Closure".to_string())),
+            },
+            expr.span,
+        );
+        return Some(Expr::new(
+            ExprKind::Ternary {
+                condition: Box::new(is_closure),
+                then_expr: Box::new(closure_bind),
+                else_expr: Box::new(expr.clone()),
+            },
+            expr.span,
+        ));
+    }
+    let mixed_closure_receiver = receiver_repr == PhpType::Mixed && !class_answers_bind_to;
     // A `callable` receiver keeps the instance form: `lower_closure_bind_method` classifies the
     // scope itself, and only the instance form retires a temporary receiver AFTER the receiver and
     // scope arguments, the order php destroys them in (`f()->bindTo(new A, new S)` runs `S`'s
@@ -617,17 +641,38 @@ fn closure_bind_to_as_static_bind(
     if !mixed_closure_receiver {
         return None;
     }
+    Some(closure_bind_call(object, args, expr))
+}
+
+/// Spells `$object->bindTo(...)` as `Closure::bind($object, ...)`.
+fn closure_bind_call(object: &Expr, args: &[Expr], expr: &Expr) -> Expr {
     let mut bind_args = Vec::with_capacity(args.len() + 1);
     bind_args.push(object.clone());
     bind_args.extend(args.iter().cloned());
-    Some(Expr::new(
+    Expr::new(
         ExprKind::StaticMethodCall {
             receiver: StaticReceiver::Named(Name::from("Closure".to_string())),
             method: "bind".to_string(),
             args: bind_args,
         },
         expr.span,
-    ))
+    )
+}
+
+/// Whether reading `object` twice cannot run anything: a variable, or a property or element of one.
+fn is_repeatable_receiver(object: &Expr) -> bool {
+    match &object.kind {
+        ExprKind::Variable(_) | ExprKind::This => true,
+        ExprKind::PropertyAccess { object, .. } => is_repeatable_receiver(object),
+        ExprKind::ArrayAccess { array, index } => {
+            is_repeatable_receiver(array)
+                && matches!(
+                    index.kind,
+                    ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_) | ExprKind::Variable(_)
+                )
+        }
+        _ => false,
+    }
 }
 
 /// Returns the effect set for one arithmetic opcode, dropping `MAY_THROW` when the right

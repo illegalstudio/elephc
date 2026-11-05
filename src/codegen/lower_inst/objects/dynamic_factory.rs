@@ -371,8 +371,9 @@ pub(super) fn emit_compare_dynamic_new_class_id(
     abi::emit_load_temporary_stack_slot(ctx.emitter, scratch, 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {}, #{}", scratch, class_id)); // compare the requested factory class with this candidate class id
+            // `cmp` takes 12 bits, and a large world has more classes than that.
+            abi::emit_load_int_immediate(ctx.emitter, "x11", class_id as i64);
+            ctx.emitter.instruction(&format!("cmp {}, x11", scratch));          // compare the requested factory class with this candidate class id
             ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // branch when the runtime class-string selected this constructor
         }
         Arch::X86_64 => {

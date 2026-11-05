@@ -18,6 +18,10 @@ pub(super) fn lower_match(
     expr: &Expr,
 ) -> LoweredValue {
     let subject_span = subject.span;
+    let subject_literal = match subject.kind {
+        ExprKind::BoolLiteral(value) => Some(value),
+        _ => None,
+    };
     let subject = lower_expr(ctx, subject);
     let (subject, subject_owner) = root_owned_call_operand(ctx, subject, subject_span);
     let result_type = match_merge_result_type(ctx, arms, default, expr);
@@ -49,6 +53,18 @@ pub(super) fn lower_match(
             fallthrough = Some(next_test);
         }
         ctx.builder.position_at_end(result_block);
+        // `match (true) { $it instanceof Foo => $it->m() }` narrows like a ternary does: nette's
+        // `Iterables::toIterator()` calls a method on an `iterable` parameter this way.
+        let narrowing = match (subject_literal, conditions.as_slice()) {
+            (Some(matches), [condition]) => {
+                crate::ir_lower::expr::instanceof_branch_local_type(ctx, condition, matches)
+            }
+            _ => None,
+        };
+        let previous = narrowing.as_ref().map(|(name, _)| (name.clone(), ctx.local_type(name)));
+        if let Some((name, ty)) = narrowing {
+            ctx.set_local_logical_type(&name, ty);
+        }
         super::lazy_branches::store_branch_expr_into_temp(
             ctx,
             &temp_name,
@@ -56,6 +72,9 @@ pub(super) fn lower_match(
             result,
             expr.span,
         );
+        if let Some((name, ty)) = previous {
+            ctx.set_local_logical_type(&name, ty);
+        }
         branch_to(ctx, merge);
         if let Some(fallthrough) = fallthrough {
             ctx.builder.position_at_end(fallthrough);

@@ -620,6 +620,9 @@ fn unit_body_is_eligible(body: &[Stmt]) -> bool {
         }
         match &stmt.kind {
             StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => {}
+            // `declare(strict_types=1);` parses to an empty statement; doctrine-bundle's
+            // `config/*.php` all open with one.
+            StmtKind::Synthetic(body) if body.is_empty() => {}
             StmtKind::Return(Some(value)) if unit_expr_is_eligible(value, &locals) => returned = true,
             // A file-level local written before any read (Symfony's dumped translation catalogues:
             // `$catalogue = new MessageCatalogue(...); ...; return $catalogue;`). It reads nothing
@@ -687,12 +690,14 @@ fn unit_expr_is_eligible(expr: &Expr, locals: &HashSet<String>) -> bool {
         ExprKind::NewObject { args, .. } => args.iter().all(|arg| unit_expr_is_eligible(arg, locals)),
         ExprKind::Negate(inner) | ExprKind::Not(inner) => unit_expr_is_eligible(inner, locals),
         ExprKind::FunctionCall { args, .. } => args.iter().all(|arg| unit_expr_is_eligible(arg, locals)),
-        // A static closure without captures that names no calling class: its body is its own
-        // scope (`return static function (array $context) { return new Kernel(...); }`).
+        // A closure without captures that names no calling class: its body is its own scope
+        // (`return static function (array $context) { return new Kernel(...); }`). `static` is
+        // not needed: without `$this` in the body the object it would bind shows nowhere, and
+        // ux-live-component's `config/routes.php` is a plain `return function (...) {...};`.
         // The check reads the body's debug form for the receiver variants, as WHOLE words: a
         // substring test also matched class names (`StaticEnvVarLoader` in framework-bundle's
         // `Resources/config/secrets.php`) and kept every such config file out of the build.
-        ExprKind::Closure { is_static: true, captures, body, .. } if captures.is_empty() => {
+        ExprKind::Closure { captures, body, .. } if captures.is_empty() => {
             let text = format!("{body:?}");
             !["This", "Self_", "Static", "Parent", "ThisExpr"]
                 .iter()

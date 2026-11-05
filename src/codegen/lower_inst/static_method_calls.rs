@@ -16,6 +16,14 @@ use super::*;
 pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let target = method_name_data(ctx, inst)?.to_string();
     let (receiver_label, method_name) = parse_static_method_target(&target)?;
+    // The copy of a closure for the scope-less binding of `Closure::bind($f, null, null)`.
+    if matches!(receiver_label, "self" | "static" | "parent") && current_method_class(ctx).is_err() {
+        exceptions::emit_error(
+            ctx,
+            &format!("Cannot access \"{receiver_label}\" when no class scope is active"),
+        );
+        return Ok(());
+    }
     let receiver = resolve_static_method_receiver(ctx, receiver_label)?;
     if is_static_fiber_get_current_call(&receiver, method_name) {
         return lower_static_fiber_get_current(ctx, inst);
@@ -84,6 +92,16 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
                 receiver.as_str(),
                 method_name,
             );
+        }
+        // php resolves the call when it runs. A closure is lowered once per scope it may be bound
+        // to, and `self::` in the copy for a class without that method is such a call: the
+        // closure of `ProgressIndicator` must not stop every other class of the world.
+        if !receiver_info.static_methods.contains_key("__callstatic") {
+            exceptions::emit_error(
+                ctx,
+                &format!("Call to undefined method {}::{}()", receiver, method_name),
+            );
+            return Ok(());
         }
         return Err(CodegenIrError::unsupported(format!(
             "static method call to unknown method {}",

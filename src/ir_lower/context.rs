@@ -670,6 +670,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// `static::method()` calls whose late-static dispatch ladder is already built: the copy that
     /// ends the ladder (the `__callStatic` fallback) must lower as an ordinary call. One-shot.
     pub late_static_ladder_fallbacks: HashSet<Span>,
+    /// `->bindTo()` calls already split on the receiver being a closure at run time.
+    pub closure_bind_splits: HashSet<Span>,
     /// Class whose implementation the NEXT instance `MethodCall` must run without virtual
     /// dispatch (`ReflectionMethod::invoke()` binds the reflected declaring class's method, not
     /// the receiver's override). Set and cleared around one call by the reflected-invoke lowering;
@@ -960,6 +962,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             closure_signature_scope: None,
             offset_dispatch_bypass: HashSet::new(),
             late_static_ladder_fallbacks: HashSet::new(),
+            closure_bind_splits: HashSet::new(),
             direct_method_call_class: None,
             constants: ConstantScope::new(constants),
             top_level_env,

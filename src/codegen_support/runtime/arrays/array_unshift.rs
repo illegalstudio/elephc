@@ -17,6 +17,7 @@ use crate::codegen_support::platform::Arch;
 /// Behavior: shifts all existing elements right by one position, inserts value at index 0,
 /// and increments the array length. Respects COW: the caller ensures the array is unique.
 pub fn emit_array_unshift(emitter: &mut Emitter) {
+    emit_array_rotate_last_string_to_front(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_array_unshift_linux_x86_64(emitter);
         return;
@@ -82,4 +83,66 @@ fn emit_array_unshift_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rdi], r10");                            // persist the incremented indexed-array logical length back into the array header
     emitter.instruction("mov rax, r10");                                        // return the new indexed-array length in the x86_64 integer result register
     emitter.instruction("ret");                                                 // return to the caller after prepending the scalar payload
+}
+
+/// Emits `__rt_array_rotate_last_string_to_front`: a string slot is 16 bytes, so `array_unshift()`
+/// appends through `__rt_array_push_str`, which owns copy-on-write, persistence and growth, and
+/// then moves that last slot to index 0.
+/// Input: x0/rdi = indexed string array holding at least one element.
+/// A receiver promoted to hash storage has no slots to move and is left as it is.
+fn emit_array_rotate_last_string_to_front(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_rotate_last_string_to_front ---");
+    emitter.label_global("__rt_array_rotate_last_string_to_front");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [x0, #-8]");                           // load the packed heap kind word
+            emitter.instruction("and x9, x9, #0xff");                           // isolate the heap kind
+            emitter.instruction("cmp x9, #3");                                  // kind 3 is hash storage, without slots
+            emitter.instruction("b.eq __rt_array_rotate_string_done");          // nothing to move in a promoted receiver
+            emitter.instruction("ldr x9, [x0]");                                // load the length, the appended slot included
+            emitter.instruction("sub x9, x9, #1");                              // index of the appended slot
+            emitter.instruction("add x10, x0, #24");                            // first slot of the payload
+            emitter.instruction("add x11, x10, x9, lsl #4");                    // address of the appended slot
+            emitter.instruction("ldp x12, x13, [x11]");                         // keep the appended string pointer and length
+            emitter.label("__rt_array_rotate_string_loop");
+            emitter.instruction("cmp x11, x10");                                // reached the first slot?
+            emitter.instruction("b.ls __rt_array_rotate_string_store");         // every older slot has moved right
+            emitter.instruction("ldp x14, x15, [x11, #-16]");                   // load the previous slot
+            emitter.instruction("stp x14, x15, [x11]");                         // move it one slot right
+            emitter.instruction("sub x11, x11, #16");                           // step one slot towards the front
+            emitter.instruction("b __rt_array_rotate_string_loop");             // continue with the previous slot
+            emitter.label("__rt_array_rotate_string_store");
+            emitter.instruction("stp x12, x13, [x10]");                         // the appended string becomes element 0
+            emitter.label("__rt_array_rotate_string_done");
+            emitter.instruction("ret");                                         // return to the caller
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                // load the packed heap kind word
+            emitter.instruction("and r10, 0xff");                               // isolate the heap kind
+            emitter.instruction("cmp r10, 3");                                  // kind 3 is hash storage, without slots
+            emitter.instruction("je __rt_array_rotate_string_done_x86");        // nothing to move in a promoted receiver
+            emitter.instruction("mov r10, QWORD PTR [rdi]");                    // load the length, the appended slot included
+            emitter.instruction("sub r10, 1");                                  // index of the appended slot
+            emitter.instruction("shl r10, 4");                                  // byte offset of the appended slot
+            emitter.instruction("lea r11, [rdi + 24]");                         // first slot of the payload
+            emitter.instruction("add r10, r11");                                // address of the appended slot
+            emitter.instruction("mov rcx, QWORD PTR [r10]");                    // keep the appended string pointer
+            emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                // keep the appended string length
+            emitter.label("__rt_array_rotate_string_loop_x86");
+            emitter.instruction("cmp r10, r11");                                // reached the first slot?
+            emitter.instruction("jbe __rt_array_rotate_string_store_x86");      // every older slot has moved right
+            emitter.instruction("mov r8, QWORD PTR [r10 - 16]");                // load the previous slot pointer
+            emitter.instruction("mov r9, QWORD PTR [r10 - 8]");                 // load the previous slot length
+            emitter.instruction("mov QWORD PTR [r10], r8");                     // move the pointer one slot right
+            emitter.instruction("mov QWORD PTR [r10 + 8], r9");                 // move the length one slot right
+            emitter.instruction("sub r10, 16");                                 // step one slot towards the front
+            emitter.instruction("jmp __rt_array_rotate_string_loop_x86");       // continue with the previous slot
+            emitter.label("__rt_array_rotate_string_store_x86");
+            emitter.instruction("mov QWORD PTR [r11], rcx");                    // the appended string pointer becomes element 0
+            emitter.instruction("mov QWORD PTR [r11 + 8], rdx");                // the appended string length becomes element 0
+            emitter.label("__rt_array_rotate_string_done_x86");
+            emitter.instruction("ret");                                         // return to the caller
+        }
+    }
 }
