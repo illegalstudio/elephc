@@ -144460,6 +144460,2178 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_access_count",
+    "description": "Returns the number of accessibility warnings encountered for the document.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_access_count.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_access_count",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_access_count",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_access_count",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_clean_repair",
+    "description": "Executes the configured cleanup and repair operations on the document.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_clean_repair.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_clean_repair",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_clean_repair",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_clean_repair",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_config_count",
+    "description": "Returns the number of configuration errors encountered for the document.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_config_count.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_config_count",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_config_count",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_config_count",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_diagnose",
+    "description": "Runs the configured accessibility and compatibility diagnostics on a parsed document.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_diagnose.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_diagnose",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_diagnose",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_diagnose",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_error_count",
+    "description": "Returns the number of errors encountered for the document.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_error_count.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_error_count",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_error_count",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_error_count",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_get_body",
+    "description": "Returns the document's body element node, or null when there is none.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_get_body.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_get_body",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_get_body",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_get_body",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_get_config",
+    "description": "Returns the document's complete configuration as an associative array.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_get_config.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_get_config",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_get_config",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_get_config",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_get_error_buffer",
+    "description": "Returns the warnings and errors produced while parsing the document, or false when there are none.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_get_error_buffer.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_get_error_buffer",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_get_error_buffer",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_get_error_buffer",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_get_head",
+    "description": "Returns the document's head element node, or null when there is none.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_get_head.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_get_head",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_get_head",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_get_head",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_get_html",
+    "description": "Returns the document's html element node, or null when there is none.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_get_html.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_get_html",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_get_html",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_get_html",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_get_html_ver",
+    "description": "Returns the detected HTML version of the document.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_get_html_ver.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_get_html_ver",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_get_html_ver",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_get_html_ver",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_get_opt_doc",
+    "description": "Returns libtidy's documentation for a configuration option, or false when it has none.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_get_opt_doc.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_get_opt_doc",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_get_opt_doc",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_get_opt_doc",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_get_output",
+    "description": "Returns the repaired markup of the document.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_get_output.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_get_output",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_get_output",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_get_output",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_get_release",
+    "description": "Returns the release date of the linked libtidy.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_get_release.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_get_release",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_get_release",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_get_release",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_get_root",
+    "description": "Returns the root node of the document tree, or null when there is none.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_get_root.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_get_root",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_get_root",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_get_root",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_get_status",
+    "description": "Returns the document status: 0 for clean, 1 for warnings, 2 for errors.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_get_status.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_get_status",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_get_status",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_get_status",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_getopt",
+    "description": "Returns the current value of one configuration option.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_getopt.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_getopt",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_getopt",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string|int|bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_getopt",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_is_xhtml",
+    "description": "Returns whether the document was detected as XHTML.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_is_xhtml.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_is_xhtml",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_is_xhtml",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_is_xhtml",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_is_xml",
+    "description": "Returns whether the document was detected as generic XML.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_is_xml.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_is_xml",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_is_xml",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_is_xml",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "config",
+          "optional": true,
+          "type": "array|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "encoding",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "useIncludePath",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_parse_file",
+    "description": "Parses an HTML file, optionally searching the include path, and returns a tidy document object.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_parse_file.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "config",
+          "optional": true,
+          "type": "array|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "encoding",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "useIncludePath",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_parse_file",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_parse_file",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "config",
+          "optional": true,
+          "type": "array|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "encoding",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "useIncludePath",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_parse_file",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "config",
+          "optional": true,
+          "type": "array|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "encoding",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_parse_string",
+    "description": "Parses a string of HTML, applies the optional configuration and returns a tidy document object.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_parse_string.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "config",
+          "optional": true,
+          "type": "array|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "encoding",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_parse_string",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_parse_string",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "config",
+          "optional": true,
+          "type": "array|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "encoding",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_parse_string",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "config",
+          "optional": true,
+          "type": "array|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "encoding",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "useIncludePath",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_repair_file",
+    "description": "Repairs an HTML file and returns the repaired markup.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_repair_file.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "config",
+          "optional": true,
+          "type": "array|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "encoding",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "useIncludePath",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_repair_file",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_repair_file",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "config",
+          "optional": true,
+          "type": "array|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "encoding",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "useIncludePath",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_repair_file",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "config",
+          "optional": true,
+          "type": "array|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "encoding",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_repair_string",
+    "description": "Repairs a string of HTML and returns the repaired markup.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_repair_string.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "config",
+          "optional": true,
+          "type": "array|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "encoding",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_repair_string",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_repair_string",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "config",
+          "optional": true,
+          "type": "array|string|null"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "encoding",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "return_type": "string|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_repair_string",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Tidy",
+    "canonical_name": "tidy_warning_count",
+    "description": "Returns the number of warnings encountered for the document.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "tidy",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/tidy/tidy_warning_count.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/tidy_prelude/build/functions.rs",
+      "codegen_function": "tidy_warning_count",
+      "notes": [
+        "Implemented by the compiler-injected tidy prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_tidy.rs"
+    },
+    "module": "tidy",
+    "name": "tidy_warning_count",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tidy",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "tidy_warning_count",
+    "sub_area": "Tidy"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [],
       "required_param_count": 0,

@@ -244,7 +244,10 @@ echo get_class($object), ":", get_parent_class($object);
         crate::codegen::platform::Target::parse(target).unwrap(),
     );
     let mut lookups = 0;
-    for function in &module.functions {
+    // Union parameter binding now lowers the prelude's exception-class constructors too;
+    // those bodies call get_class for their diagnostics. This ownership assertion is about
+    // the two eval results consumed by the user program.
+    for function in module.functions.iter().filter(|function| function.name == "main") {
         for call in &function.instructions {
             if !matches!(call.immediate, Some(Immediate::RuntimeCall(
                 RuntimeCallTarget::Function(RuntimeFnId::GetClass | RuntimeFnId::GetParentClass)

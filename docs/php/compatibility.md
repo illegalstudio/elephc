@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **1053 / 2169** (49%), classes **185 / 329** (56%), constants **1349 / 3180** (42%).
+Overall coverage: functions **1077 / 2169** (50%), classes **187 / 329** (57%), constants **1510 / 3180** (47%).
 
 ## Coverage by PHP module
 
@@ -74,7 +74,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
-| `tidy` | 0 / 24 · 0% | 0 / 2 · 0% | 0 / 161 · 0% |
+| [`tidy`](./tidy.md#functions) | 24 / 24 · 100% | 2 / 2 · 100% | 161 / 161 · 100% |
 | [`tokenizer`](./tokenizer.md#functions) | 2 / 2 · 100% | 1 / 1 · 100% | 154 / 154 · 100% |
 | `uri` | - | 0 / 9 · 0% | - |
 | [`xml`](./xml.md#functions) | 22 / 22 · 100% | 1 / 1 · 100% | 28 / 28 · 100% |
@@ -157,6 +157,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |
 | [PCNTL](./pcntl.md) ([PHP](https://www.php.net/manual/en/book.pcntl.php)) | ✅ Supported | Target-aware Unix process control; auto-linked or forced with --with-pcntl |
 | [XML](./xml.md) ([PHP](https://www.php.net/manual/en/book.xml.php)) | ✅ Supported | ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost |
+| [Tidy](./tidy.md) ([PHP](https://www.php.net/manual/en/book.tidy.php)) | ✅ Supported | ext/tidy (24 functions, tidy/tidyNode, 161 TIDY_* constants) on a pinned static libtidy 5.8.0 from the native catalog (elephc native add libtidy); auto-linked or forced with --with-tidy; the full php-src ext/tidy PHPT corpus is migrated under tests/php_src/tidy |
 | [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 34 shared-contract functions; curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract and is the one function the row does not count. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compiled-script manifest plus a runtime parsed-script cache for dynamic include/require through eval(), with optional persistent file caching; ordinary code remains AOT-compiled and there is no tracing JIT |

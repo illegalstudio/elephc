@@ -916,10 +916,24 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     {
         return;
     }
-    let Some(constructor) = class_info.methods.get(&php_symbol_key("__construct")) else {
+    // A runtime-selected descendant of a private constructor carries no `__construct` entry of
+    // its own; PHP still runs the ancestor's. Resolve the owner here too, otherwise the child has
+    // no thunk and `new $class()` falls back to constructor-less allocation despite an allowed
+    // scope.
+    let Some((constructor_class_name, constructor_class_info)) =
+        crate::types::constructor_owner(&module.class_infos, class_name)
+    else {
         return;
     };
-    let regular = crate::types::call_args::regular_param_count(constructor);
+    let constructor_class_name = constructor_class_name.to_string();
+    let Some(constructor) = constructor_class_info
+        .methods
+        .get(&php_symbol_key("__construct"))
+        .cloned()
+    else {
+        return;
+    };
+    let regular = crate::types::call_args::regular_param_count(&constructor);
     let is_variadic = constructor.variadic.is_some();
     if is_variadic {
         // A VARIADIC constructor needs a thunk at EVERY arity, including its declared one. The
@@ -989,14 +1003,14 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         }
     };
     let slot_type = |index: usize| -> Option<PhpType> {
-        crate::types::call_args::positional_param_type(constructor, index)
+        crate::types::call_args::positional_param_type(&constructor, index)
     };
     if (0..provided_args).any(|index| slot_type(index).is_none()) {
         return;
     }
     // What the collector declares one element to be. `None` means it collects anything, and the
     // overflow is passed through untouched.
-    let element = crate::types::call_args::variadic_element_type(constructor);
+    let element = crate::types::call_args::variadic_element_type(&constructor);
     let cast = match element.as_ref().map(PhpType::codegen_repr) {
         None | Some(PhpType::Mixed) => None,
         Some(PhpType::Int) => Some(CastType::Int),
@@ -1009,7 +1023,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     };
 
     let span = Span::dummy();
-    let this_type = PhpType::Object(class_name.to_string());
+    let this_type = PhpType::Object(constructor_class_name.clone());
     let mut args = Vec::with_capacity(provided_args.max(constructor.params.len()));
     let mut guards = Vec::new();
     for index in 0..provided_args {
@@ -1025,7 +1039,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
                 // The guard is what keeps that from becoming a silent `(int)"x" === 0`: php raises
                 // a TypeError for a value it cannot read as a number, and so does this.
                 guards.push(coercible_or_throw_stmt(
-                    class_name,
+                    &constructor_class_name,
                     &variable,
                     index + 1,
                     target.clone(),

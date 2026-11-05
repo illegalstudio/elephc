@@ -84,6 +84,9 @@ pub(in crate::interpreter) fn eval_extension_is_loaded_in(
     if eval_gmp_bridge_extension(name, context) {
         return true;
     }
+    if eval_tidy_bridge_extension(name, context) {
+        return true;
+    }
     eval_extension_is_loaded(name)
 }
 

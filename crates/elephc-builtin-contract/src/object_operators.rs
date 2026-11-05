@@ -117,6 +117,29 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
     accepts_any_operands: false,
 };
 
+/// `tidy` and `tidyNode` scalar casts: both render as their text through `__toString`,
+/// cast to `0`/`0.0` for integer and float, and are always truthy. php-src installs
+/// `cast_object` handlers returning exactly those values.
+pub const TIDY_CASTS: ClassCasts = ClassCasts {
+    to_int: Some("__elephc_to_int"),
+    to_float: Some("__elephc_to_float"),
+    to_number: Some("__elephc_to_number"),
+    to_bool: Some("__elephc_to_bool"),
+};
+
+/// The tidy object handlers. They declare casts only: identity, comparison and
+/// arithmetic keep PHP's ordinary object behavior, and truthiness is the default
+/// object-true result.
+pub const TIDY_OPERATORS: ClassOperators = ClassOperators {
+    arithmetic: &[],
+    bitwise: &[],
+    shift: &[],
+    compare: None,
+    boolean: None,
+    casts: Some(&TIDY_CASTS),
+    accepts_any_operands: false,
+};
+
 /// GMP's PHP 8.5 object handlers: arithmetic, bitwise, shifts, ordering and casts.
 pub const GMP_CASTS: ClassCasts = ClassCasts {
     to_int: Some("__elephc_to_int"),

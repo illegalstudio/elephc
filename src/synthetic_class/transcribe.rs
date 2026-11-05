@@ -735,24 +735,39 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             receiver,
             property,
             value,
-        } => format!(
-            "s_static_prop_array_push({}, {}, {})",
-            lit(&static_receiver_name(receiver)),
-            lit(property),
-            expr(value, depth)
-        ),
+        } => match receiver {
+            StaticReceiver::Self_ => format!(
+                "s_self_static_prop_array_push({}, {})",
+                lit(property),
+                expr(value, depth)
+            ),
+            other => format!(
+                "s_static_prop_array_push({}, {}, {})",
+                lit(&static_receiver_name(other)),
+                lit(property),
+                expr(value, depth)
+            ),
+        },
         StmtKind::StaticPropertyArrayAssign {
             receiver,
             property,
             index,
             value,
-        } => format!(
-            "s_static_prop_array_assign({}, {}, {}, {})",
-            lit(&static_receiver_name(receiver)),
-            lit(property),
-            expr(index, depth),
-            expr(value, depth)
-        ),
+        } => match receiver {
+            StaticReceiver::Self_ => format!(
+                "s_self_static_prop_array_assign({}, {}, {})",
+                lit(property),
+                expr(index, depth),
+                expr(value, depth)
+            ),
+            other => format!(
+                "s_static_prop_array_assign({}, {}, {}, {})",
+                lit(&static_receiver_name(other)),
+                lit(property),
+                expr(index, depth),
+                expr(value, depth)
+            ),
+        },
         StmtKind::DoWhile { body, condition } => format!(
             "s_do_while({}, {})",
             stmt_vec(body, depth),
@@ -908,6 +923,7 @@ fn expr(value: &Expr, depth: usize) -> String {
         ExprKind::PostIncrement(name) => format!("e_post_inc({})", lit(name)),
         ExprKind::Negate(inner) => format!("e_neg({})", expr(inner, depth)),
         ExprKind::Not(inner) => format!("e_not({})", expr(inner, depth)),
+        ExprKind::ErrorSuppress(inner) => format!("e_error_suppress({})", expr(inner, depth)),
         ExprKind::Cast { target, expr: inner } => format!(
             "e_cast(CastType::{}, {})",
             cast_type(target),
@@ -1356,9 +1372,15 @@ class Demo implements Iterator {
     const MODE = 2;
     private int $handle;
     private $target;
+    private static array $items = [];
     public function __construct(int $handle) {
         $this->handle = $handle;
         $this->target = null;
+    }
+    public static function collect(): void {
+        self::$items[] = 1;
+        self::$items[0] = 2;
+        @file_get_contents("missing");
     }
     private function fail(string $message): void {
         if ($this->handle == 2) {
@@ -1400,6 +1422,9 @@ function demo_match($value) {
             "e_null_coalesce",
             "s_for(",
             "s_foreach(",
+            "s_self_static_prop_array_push(",
+            "s_self_static_prop_array_assign(",
+            "e_error_suppress(",
             "e_ternary(",
             "e_match(e_var(\"value\"), vec![(vec![e_int(1), e_int(2)], e_str(\"one\"))], Some(e_match(e_var(\"value\"), vec![], None)))",
             "t_union(vec![TypeExpr::Str, TypeExpr::Bool])",

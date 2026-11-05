@@ -158,6 +158,9 @@ relative-to = "target"
 path = "debug/libelephc_xml.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_tidy.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_tokenizer.a"
 relative-to = "target"
 [[profile.ci.archive.include]]

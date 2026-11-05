@@ -7,8 +7,9 @@
 //! Key details:
 //! - Reports the PHP LANGUAGE version, not the elephc compiler's package version, matching
 //!   native `codegen::lower_inst::builtins::lower_phpversion`.
-//! - `phpversion($extension)` answers over the same core extension set eval's
-//!   `extension_loaded` uses, and returns `false` for anything else.
+//! - `phpversion($extension)` answers over the same effective extension set eval's
+//!   `extension_loaded` uses, including host-linked bridge extensions such as `tidy`,
+//!   and returns `false` for anything else.
 
 use super::*;
 
@@ -30,7 +31,7 @@ pub(in crate::interpreter) fn eval_builtin_phpversion(
         [] => eval_phpversion_result(values),
         [extension] => {
             let extension = eval_expr(extension, context, scope, values)?;
-            eval_phpversion_extension_result(extension, values)
+            eval_phpversion_extension_result(extension, context, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -53,11 +54,12 @@ pub(in crate::interpreter) fn eval_phpversion_result(
 /// (`phpversion('core')` and `phpversion('Core')` both answer).
 pub(in crate::interpreter) fn eval_phpversion_extension_result(
     extension: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let name = values.string_bytes(extension)?;
     let name = String::from_utf8_lossy(&name);
-    if eval_extension_is_loaded(name.as_ref()) {
+    if eval_extension_is_loaded_in(name.as_ref(), context) {
         values.string(crate::eval_php_profile::eval_php_version_string())
     } else {
         values.bool_value(false)

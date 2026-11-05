@@ -96,6 +96,11 @@ pub(super) fn dynamic_new_candidate(
     if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
         return Ok(None);
     }
+    if super::dynamic_mixed_candidates::constructor_visibility_refusal(ctx, class_name, class_info)
+        .is_some()
+    {
+        return Ok(None);
+    }
     let constructor_key = php_symbol_key("__construct");
     let mut padding_thunk = None;
     // Same reason as the fixed-class path: a runtime-selected descendant of a class with a

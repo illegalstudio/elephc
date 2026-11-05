@@ -589,6 +589,7 @@ crates/
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
 ├── elephc-probe/              Sampled profiling and authenticated service endpoint
 ├── elephc-random/             Pure-Rust `ext/random` engines, CSPRNG, and global Mt19937 state bridge
+├── elephc-tidy/               ext/tidy bridge over the catalog's static libtidy 5.8.0
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
 ├── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation

@@ -115,3 +115,84 @@ fn test_coercive_binding_applies_to_named_arguments() {
     );
     assert_eq!(out, "4.5|7");
 }
+
+/// Verifies weak-mode union parameters choose PHP's preferred scalar member after an exact
+/// match: nullable string takes a string, `float|string` takes a float, `bool|string` takes a
+/// string, and `int|string` keeps the exact integer. Runtime values exercise EIR conversion
+/// rather than AST literal folding.
+#[test]
+fn test_scalars_bind_to_union_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+        function nullableString(?string $value) { var_dump($value); }
+        function floatOrString(float|string $value) { var_dump($value); }
+        function boolOrString(bool|string $value) { var_dump($value); }
+        function intOrString(int|string $value) { var_dump($value); }
+        $n = intdiv(40 + $argc, 1);
+        nullableString($n);
+        floatOrString($n);
+        boolOrString($n);
+        intOrString($n);
+        "#,
+    );
+    assert_eq!(
+        out,
+        "string(2) \"41\"\nfloat(41)\nstring(2) \"41\"\nint(41)\n"
+    );
+}
+
+/// A boxed `Mixed` source (an untyped parameter) still selects the right union member at
+/// runtime, including array/string/null unions and the catchable `TypeError` fallback.
+#[test]
+fn test_mixed_source_binds_to_union_parameters_at_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+        function nullableString(?string $value) { var_dump($value); }
+        function arrayStringNull(array|string|null $value) { var_dump($value); }
+        function forwardNullable($value) { nullableString($value); }
+        function forwardArray($value) { arrayStringNull($value); }
+        class Box { public mixed $value = 5; }
+        forwardNullable(5);
+        forwardNullable(true);
+        forwardNullable((new Box)->value);
+        forwardArray(5);
+        forwardArray([1]);
+        forwardArray(null);
+        try { forwardNullable([]); } catch (TypeError $e) { echo $e::class, "\n"; }
+        try { forwardArray(new stdClass); } catch (TypeError $e) { echo $e::class, "\n"; }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"5\"\nstring(1) \"1\"\nstring(1) \"5\"\nstring(1) \"5\"\narray(1) {\n  [0]=>\n  int(1)\n}\nNULL\nTypeError\nTypeError\n"
+    );
+}
+
+/// Strict mode keeps exact union members and PHP's sole `int`→`float` widening, including a
+/// union that contains `float` and `string`.
+#[test]
+fn test_strict_union_parameters_keep_exact_members_and_int_to_float() {
+    let out = compile_and_run(
+        r#"<?php declare(strict_types=1);
+        function intOrString(int|string $value) { var_dump($value); }
+        function floatOrString(float|string $value) { var_dump($value); }
+        intOrString(5);
+        floatOrString(5);
+        "#,
+    );
+    assert_eq!(out, "int(5)\nfloat(5)\n");
+}
+
+/// Verifies the union binding also runs on the named-argument path.
+#[test]
+fn test_scalars_bind_to_union_named_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+        function nullableString(?string $value) { var_dump($value); }
+        function floatOrString(float|string $value) { var_dump($value); }
+        nullableString(value: 5);
+        floatOrString(value: 5);
+        "#,
+    );
+    assert_eq!(out, "string(1) \"5\"\nfloat(5)\n");
+}

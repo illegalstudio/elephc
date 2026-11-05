@@ -69,6 +69,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("image_prelude", crate::image_prelude::image_declarations()),
         ("curl_prelude", parsed_curl_prelude()),
         ("xml_prelude", crate::xml_prelude::xml_declarations()),
+        ("tidy_prelude", crate::tidy_prelude::tidy_declarations()),
         ("fileinfo_prelude", crate::fileinfo_prelude::fileinfo_declarations()),
         ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations()),
         ("testing_prelude", crate::testing_prelude::testing_declarations()),
@@ -218,16 +219,25 @@ fn catalog_hosted_preludes() -> Vec<(&'static str, String, bool)> {
 
 /// PHP-visible functions a catalog-hosted prelude declares WITHOUT a shared contract,
 /// with the reason each exclusion is correct rather than an oversight.
-const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
-    "curl_file_create",
-    "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
-     is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
-     resolves through the native-class fallback, see elephc-magician's \
-     interpreter::builtins::curl module doc. A contract would need an eval binding that \
-     does not exist, or an EvalImplementationPending label that would be false because \
-     eval() can already call it. Consequence, accepted: the PHP comparison page counts \
-     the curl module 34/35 rather than 35/35.",
-)];
+const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[
+    (
+        "curl_file_create",
+        "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
+         is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
+         resolves through the native-class fallback, see elephc-magician's \
+         interpreter::builtins::curl module doc. A contract would need an eval binding that \
+         does not exist, or an EvalImplementationPending label that would be false because \
+         eval() can already call it. Consequence, accepted: the PHP comparison page counts \
+         the curl module 34/35 rather than 35/35.",
+    ),
+    (
+        "ob_tidyhandler",
+        "the output-buffering callback registered by ob_start('ob_tidyhandler'). php-src \
+         exposes it as an output-handler alias, not as a function in ext/tidy's stub, so \
+         the shared builtin catalog has no row for it. The tidy prelude declares it so the \
+         handler string resolves at compile time and eval() sees the same name.",
+    ),
+];
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
 ///

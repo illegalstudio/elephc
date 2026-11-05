@@ -472,6 +472,11 @@ pub fn e_neg(value: Expr) -> Expr {
     Expr::negate(value)
 }
 
+/// `@value`, PHP's error-suppression expression.
+pub fn e_error_suppress(value: Expr) -> Expr {
+    Expr::new(ExprKind::ErrorSuppress(Box::new(value)), Span::dummy())
+}
+
 /// `condition ? then_value : else_value`.
 pub fn e_ternary(condition: Expr, then_value: Expr, else_value: Expr) -> Expr {
     Expr::new(
@@ -844,6 +849,31 @@ pub fn s_static_prop_array_assign(
             receiver: StaticReceiver::Named(class_name_spelled(class_name)),
             property: property.to_string(),
             index,
+            value,
+        },
+        Span::dummy(),
+    )
+}
+
+/// `self::$prop[<index>] = <value>;` in statement position.
+pub fn s_self_static_prop_array_assign(property: &str, index: Expr, value: Expr) -> Stmt {
+    Stmt::new(
+        StmtKind::StaticPropertyArrayAssign {
+            receiver: StaticReceiver::Self_,
+            property: property.to_string(),
+            index,
+            value,
+        },
+        Span::dummy(),
+    )
+}
+
+/// `self::$prop[] = <value>;` in statement position.
+pub fn s_self_static_prop_array_push(property: &str, value: Expr) -> Stmt {
+    Stmt::new(
+        StmtKind::StaticPropertyArrayPush {
+            receiver: StaticReceiver::Self_,
+            property: property.to_string(),
             value,
         },
         Span::dummy(),
@@ -2160,7 +2190,7 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
                 audit_expr(arg, out);
             }
         }
-        ExprKind::Spread(inner) => audit_expr(inner, out),
+        ExprKind::Spread(inner) | ExprKind::ErrorSuppress(inner) => audit_expr(inner, out),
         // Leaves: nothing to descend into. A class-constant read names no function.
         ExprKind::ScopedConstantAccess { .. } | ExprKind::ClassConstant { .. } => {}
         ExprKind::Variable(_)
