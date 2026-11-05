@@ -32,7 +32,7 @@ fn mbstring_response_assembles_on_all_supported_targets() {
                 if emitter.target.arch == Arch::X86_64 { emitter.raw(".intel_syntax noprefix"); }
                 emitter.raw(".text");
                 super::super::http_response::emit_header(&mut emitter, web, mbstring);
-                super::super::stdout_write::emit_stdout_write(&mut emitter, web, mbstring);
+                super::super::stdout_write::emit_stdout_write(&mut emitter, web, mbstring, false);
                 super::super::ob_handler::emit_ob_result_to_bytes(&mut emitter);
                 super::super::ob_handler::emit_ob_apply_handler(&mut emitter);
                 super::super::ob_handler::emit_ob_invoke_descriptor(&mut emitter);

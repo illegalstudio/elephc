@@ -243,6 +243,8 @@ impl Checker {
         label: &str,
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
+        let mut sig = sig.clone();
+        crate::func_args::strip_hidden_args_collector(&mut sig);
         if sig.variadic.is_some() {
             return Err(CompileError::new(
                 span,
@@ -320,8 +322,9 @@ impl Checker {
                     &format!("Undefined callback function: {}", callback_name),
                 )
             })?;
-
-        if decl.variadic.is_some() {
+        if decl.variadic.is_some()
+            && decl.variadic.as_deref() != Some(crate::func_args::HIDDEN_ARGS_PARAM)
+        {
             return Err(CompileError::new(
                 span,
                 &format!("Callback function '{}' cannot be variadic", callback_name),
@@ -346,6 +349,8 @@ impl Checker {
             ));
         }
         if let Some(sig) = self.functions.get(&canonical_callback_name) {
+            let mut sig = sig.clone();
+            crate::func_args::strip_hidden_args_collector(&mut sig);
             if !Self::callback_type_is_c_compatible(&sig.return_type) {
                 return Err(CompileError::new(
                     span,
@@ -371,12 +376,13 @@ impl Checker {
         } else {
             let param_types = self.initial_function_param_types(&canonical_callback_name, &decl)?;
             self.resolve_function_signature(&canonical_callback_name, &decl, param_types)?;
-            let sig = self.functions.get(&canonical_callback_name).cloned().ok_or_else(|| {
+            let mut sig = self.functions.get(&canonical_callback_name).cloned().ok_or_else(|| {
                 CompileError::new(
                     span,
                     &format!("Undefined callback function: {}", callback_name),
                 )
             })?;
+            crate::func_args::strip_hidden_args_collector(&mut sig);
             if !Self::callback_type_is_c_compatible(&sig.return_type) {
                 return Err(CompileError::new(
                     span,

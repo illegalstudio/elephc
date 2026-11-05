@@ -106,6 +106,38 @@ pub struct ClassContract {
     pub php_manual: Option<&'static str>,
 }
 
+/// Returns whether one declared interface belongs to PHP's reflection/`instanceof` surface.
+///
+/// `FFI\CData` is an internal-handler class in php-src: array access, `count()` and
+/// `foreach` work without `ArrayAccess`, `Countable` or `Iterator`, and its `__toString`
+/// handler does not imply `Stringable`. The `FFI` context itself supports an empty `foreach`
+/// through its internal iterator handler while reporting no `Traversable`. Elephc keeps those
+/// interfaces in `ClassInfo` for its own dispatch, then filters them out of every PHP-visible
+/// answer.
+pub fn interface_is_php_visible(class_name: &str, interface: &str) -> bool {
+    let interface = interface.trim_start_matches('\\').to_ascii_lowercase();
+    let class_name = class_name.trim_start_matches('\\');
+    // php-src's internal FFI context supports `foreach` through its own iterator handler but
+    // reports no PHP-visible `Traversable`/`IteratorAggregate`; the prelude implements the
+    // interface for the compiler's foreach lowering and this filter hides it from reflection,
+    // `instanceof`, `is_iterable`, and `class_implements`.
+    if class_name.eq_ignore_ascii_case("FFI") {
+        return !matches!(interface.as_str(), "iteratoraggregate" | "traversable");
+    }
+    if !class_name.eq_ignore_ascii_case("FFI\\CData") {
+        return true;
+    }
+    !matches!(
+        interface.as_str(),
+        "arrayaccess"
+            | "countable"
+            | "iterator"
+            | "iteratoraggregate"
+            | "traversable"
+            | "stringable"
+    )
+}
+
 impl ClassContract {
     /// Returns the canonical lowercase lookup key.
     pub fn canonical_name(&self) -> String {

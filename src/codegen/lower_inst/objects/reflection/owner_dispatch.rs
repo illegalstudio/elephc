@@ -323,7 +323,8 @@ pub(super) fn reflection_class_implements_interface(
             return false;
         };
         if class_info.interfaces.iter().any(|interface_name| {
-            reflection_interface_extends_interface(ctx, interface_name, target_interface)
+            elephc_builtin_contract::interface_is_php_visible(&name, interface_name)
+                && reflection_interface_extends_interface(ctx, interface_name, target_interface)
         }) {
             return true;
         }

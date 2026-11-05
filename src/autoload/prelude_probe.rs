@@ -57,6 +57,7 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("weak_map", crate::core_prelude::program_uses_weak_map),
     ("weak_reference", crate::core_prelude::program_uses_weak_reference),
     ("pcre", crate::pcre_prelude::program_uses_surface),
+    ("ffi", crate::ffi_prelude::detect::program_uses_ffi),
 ];
 
 /// Returns the prelude groups some file of the autoload closure uses.
