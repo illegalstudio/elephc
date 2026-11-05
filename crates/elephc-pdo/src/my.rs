@@ -448,6 +448,22 @@ struct MyAsyncQuery {
     work: MyAsyncWork,
     /// Readiness flag + condvar the poller waits on.
     done: AsyncReady,
+    /// The worker-owned client's socket, shut down when the connection closes with the
+    /// query still pending so the worker's blocked read returns at once.
+    #[cfg(unix)]
+    socket: std::os::unix::io::RawFd,
+}
+
+/// Shuts down both directions of the socket `fd` without closing the descriptor, which
+/// stays owned by its `Conn`: a read blocked on it returns at once and later writes fail
+/// with an error (the standard library sends with `MSG_NOSIGNAL` / `SO_NOSIGPIPE`).
+#[cfg(unix)]
+fn shutdown_socket(fd: std::os::unix::io::RawFd) {
+    use std::os::unix::io::FromRawFd;
+    // SAFETY: `fd` is an open socket owned by a live `Conn` (the async worker returns it
+    // only through the join below); ManuallyDrop keeps this view from closing it.
+    let view = std::mem::ManuallyDrop::new(unsafe { std::net::TcpStream::from_raw_fd(fd) });
+    let _ = view.shutdown(std::net::Shutdown::Both);
 }
 
 /// Readiness flag + condvar of an async query: set once its result can be reaped.
@@ -2635,6 +2651,8 @@ impl MyConn {
         };
         self.server_version = client.server_version();
         self.no_backslash_escapes = client.no_backslash_escape();
+        #[cfg(unix)]
+        let socket = std::os::unix::io::AsRawFd::as_raw_fd(&client);
         let done: AsyncReady = Arc::new((Mutex::new(false), Condvar::new()));
         let signal = Arc::clone(&done);
         let text = sql.to_string();
@@ -2670,6 +2688,8 @@ impl MyConn {
             sql: sql.to_string(),
             work,
             done,
+            #[cfg(unix)]
+            socket,
         });
         self.errcode = 0;
         self.sqlstate = "00000".to_string();
@@ -2754,12 +2774,16 @@ impl MyConn {
         Ok(stmt)
     }
 
-    /// Waits for and discards an in-flight async query (close / reset paths), so the client
-    /// is never stranded on the worker thread.
+    /// Discards an in-flight async query when the connection closes, so the client is never
+    /// stranded on the worker thread. Like mysqlnd, which closes the socket of a link with a
+    /// pending query, the socket is shut down first: the worker's read fails at once instead
+    /// of waiting for the server to finish the query.
     fn finish_async(&mut self) {
         let Some(query) = self.async_query.take() else {
             return;
         };
+        #[cfg(unix)]
+        shutdown_socket(query.socket);
         match query.work {
             MyAsyncWork::Buffered(worker) => {
                 if let Ok((client, _, warnings)) = worker.join() {

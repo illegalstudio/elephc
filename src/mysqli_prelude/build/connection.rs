@@ -2469,6 +2469,14 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 ]),
         )
         .method(
+            method("__elephcReportError")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_expr(e_method_call(e_this(), "report", vec![e_this_prop("error"), e_this_prop("errno"), e_this_prop("sqlstate")])),
+                ]),
+        )
+        .method(
             method("__elephcConn")
                 .private()
                 .returns(TypeExpr::Int)
@@ -3187,11 +3195,12 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
         .method(
             method("__elephcStreamFinished")
                 .private()
+                .param("stmt", TypeExpr::Int)
                 .param("rows", TypeExpr::Int)
                 .returns(TypeExpr::Void)
                 .body(vec![
                     s_if(
-                        e_binop(e_not(e_this_prop("streaming")), BinOp::Or, e_binop(e_this_prop("liveStmt"), BinOp::Lt, e_int(0))),
+                        e_binop(e_binop(e_not(e_this_prop("streaming")), BinOp::Or, e_binop(e_this_prop("liveStmt"), BinOp::Lt, e_int(0))), BinOp::Or, e_binop(e_this_prop("liveStmt"), BinOp::NotEq, e_var("stmt"))),
                         vec![
                             s_return_void(),
                         ],

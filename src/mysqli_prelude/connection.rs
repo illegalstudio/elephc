@@ -1578,6 +1578,12 @@ class mysqli {
         $this->error_list = [["errno" => $this->errno, "sqlstate" => $this->sqlstate, "error" => $this->error]];
     }
 
+    // Dispatches mysqli_report for the link's recorded error (a streaming
+    // result's failed read, after it copied the error and released the set).
+    private function __elephcReportError(): void {
+        $this->report($this->error, $this->errno, $this->sqlstate);
+    }
+
     // Returns the bridge handle (for mysqli_stmt through the friend channel).
     private function __elephcConn(): int {
         return $this->conn;
@@ -2042,9 +2048,11 @@ class mysqli {
         return mysqli_result::__elephcFromStream($this, $_stmt, $this->liveStep, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals, $_kinds);
     }
 
-    // Called by a streaming mysqli_result once its set is exhausted or freed.
-    private function __elephcStreamFinished(int $rows): void {
-        if (!$this->streaming || $this->liveStmt < 0) {
+    // Called by a streaming mysqli_result once its set is exhausted or freed. A
+    // result kept across a reconnect names a statement the link no longer streams,
+    // so it must not finish the link's current stream.
+    private function __elephcStreamFinished(int $stmt, int $rows): void {
+        if (!$this->streaming || $this->liveStmt < 0 || $this->liveStmt != $stmt) {
             return;
         }
         $this->affected_rows = $rows;

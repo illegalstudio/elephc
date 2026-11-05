@@ -1153,6 +1153,89 @@ echo $ready, "|", $polled < 0.5 ? "early" : "late", "|", $result->num_rows, "|",
     assert_eq!(out, "1|early|2|100000\n");
 }
 
+/// Closing a link with a pending `MYSQLI_ASYNC` query (buffered or `MYSQLI_USE_RESULT`) returns
+/// at once, like mysqlnd, which closes the socket instead of waiting for the server to finish
+/// the query. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_close_does_not_wait_for_a_pending_async_query() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$a = new mysqli($host, $user, $pass, $dbname, $port);
+$a->query("SELECT SLEEP(3)", MYSQLI_ASYNC);
+$start = microtime(true);
+$a->close();
+echo microtime(true) - $start < 1.0 ? "buffered:early" : "buffered:late";
+$b = new mysqli($host, $user, $pass, $dbname, $port);
+$b->query("SELECT SLEEP(3)", MYSQLI_ASYNC | MYSQLI_USE_RESULT);
+$start = microtime(true);
+$b->close();
+echo "|", microtime(true) - $start < 1.0 ? "streaming:early" : "streaming:late";
+echo "|", $db->query("SELECT 5")->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "buffered:early|streaming:early|5\n");
+}
+
+/// An unbuffered result kept across a reconnect of its link does not finish the link's newer
+/// stream when it is freed: the newer result still reads its remaining rows. Expected output
+/// is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_old_stream_result_leaves_the_new_stream_alone() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$link = new mysqli($host, $user, $pass, $dbname, $port);
+$old = $link->query("SELECT 1 UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+echo $old->fetch_row()[0];
+$link->real_connect($host, $user, $pass, $dbname, $port);
+$new = $link->query("SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9", MYSQLI_USE_RESULT);
+echo "|", $new->fetch_row()[0];
+$old->free();
+$rest = [];
+while ($row = $new->fetch_row()) {
+    $rest[] = $row[0];
+}
+echo "|", implode(",", $rest), "|", $new->num_rows, "|", $link->errno, "\n";
+"#,
+    ));
+    assert_eq!(out, "1|7|8,9|3|0\n");
+}
+
+/// A read that times out midway through an unbuffered result is reported (errno 2006 on the
+/// link, `mysqli_sql_exception` under STRICT) instead of ending the set as if it were complete.
+/// Expected output is php 8.5 + mysqlnd's, except that with reporting off elephc's fetch
+/// returns `null` where php returns `false` (documented in docs/php/mysqli.md).
+#[test]
+#[ignore]
+fn test_mysqli_unbuffered_read_failure_is_reported() {
+    let out = compile_and_run(&my_program(
+        r#"
+$slow = mysqli_init();
+$slow->options(MYSQLI_OPT_READ_TIMEOUT, 1);
+$slow->real_connect($host, $user, $pass, $dbname, $port);
+$r = $slow->query("SELECT REPEAT('x', 100000) AS v UNION ALL SELECT SLEEP(3)", MYSQLI_USE_RESULT);
+echo strlen($r->fetch_row()[0]);
+try {
+    $row = $r->fetch_row();
+    echo "|no-throw:", var_export($row, true);
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode(), ":", $e->getMessage();
+}
+echo "|", $slow->errno, "\n";
+mysqli_report(MYSQLI_REPORT_OFF);
+$slow2 = mysqli_init();
+$slow2->options(MYSQLI_OPT_READ_TIMEOUT, 1);
+$slow2->real_connect($host, $user, $pass, $dbname, $port);
+$r = $slow2->query("SELECT REPEAT('x', 100000) AS v UNION ALL SELECT SLEEP(3)", MYSQLI_USE_RESULT);
+echo strlen($r->fetch_row()[0]), "|", var_export($r->fetch_row(), true), "|", $slow2->errno, "|", $slow2->error, "|", $r->num_rows, "\n";
+"#,
+    ));
+    assert_eq!(out, "100000|2006:MySQL server has gone away|2006\n100000|NULL|2006|MySQL server has gone away|1\n");
+}
+
 /// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
 /// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
 /// the set is unread, and the statistics count one unbuffered set. Expected output is

@@ -594,6 +594,21 @@ class mysqli_result implements IteratorAggregate {
         if ($this->streamStmt >= 0 && $this->streamStep == 2) {
             $this->streamStep = elephc_pdo_step($this->streamStmt);
         }
+        if ($this->streamStmt >= 0 && $this->streamStep < 0) {
+            // A failed read (timeout, lost connection) is an error, not the set's end:
+            // like mysqli's fetch path, the link records it and reports it.
+            $_link = $this->streamLink;
+            if ($_link !== null) {
+                $_link->__elephcAdoptBridgeError();
+            }
+            $this->endStream();
+            $this->lengths = null;
+            $this->num_rows = $this->streamRows;
+            if ($_link !== null) {
+                $_link->__elephcReportError();
+            }
+            return null;
+        }
         if ($this->streamStmt < 0 || $this->streamStep != 1) {
             $this->endStream();
             $this->lengths = null;
@@ -653,11 +668,12 @@ class mysqli_result implements IteratorAggregate {
         if ($this->streamStmt < 0) {
             return;
         }
+        $_stmt = $this->streamStmt;
         $this->streamStmt = -1;
         $_link = $this->streamLink;
         $this->streamLink = null;
         if ($_link !== null) {
-            $_link->__elephcStreamFinished($this->streamRows);
+            $_link->__elephcStreamFinished($_stmt, $this->streamRows);
         }
     }
 

@@ -921,6 +921,30 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         None,
                     ),
                     s_if(
+                        e_binop(e_binop(e_this_prop("streamStmt"), BinOp::GtEq, e_int(0)), BinOp::And, e_binop(e_this_prop("streamStep"), BinOp::Lt, e_int(0))),
+                        vec![
+                            s_assign("_link", e_this_prop("streamLink")),
+                            s_if(
+                                e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
+                                vec![s_expr(e_method_call(e_var("_link"), "__elephcAdoptBridgeError", vec![]))],
+                                vec![],
+                                None,
+                            ),
+                            s_expr(e_method_call(e_this(), "endStream", vec![])),
+                            s_prop_assign(e_this(), "lengths", e_null()),
+                            s_prop_assign(e_this(), "num_rows", e_this_prop("streamRows")),
+                            s_if(
+                                e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
+                                vec![s_expr(e_method_call(e_var("_link"), "__elephcReportError", vec![]))],
+                                vec![],
+                                None,
+                            ),
+                            s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
                         e_binop(e_binop(e_this_prop("streamStmt"), BinOp::Lt, e_int(0)), BinOp::Or, e_binop(e_this_prop("streamStep"), BinOp::NotEq, e_int(1))),
                         vec![
                             s_expr(e_method_call(e_this(), "endStream", vec![])),
@@ -1022,13 +1046,14 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                         vec![],
                         None,
                     ),
+                    s_assign("_stmt", e_this_prop("streamStmt")),
                     s_prop_assign(e_this(), "streamStmt", e_neg(e_int(1))),
                     s_assign("_link", e_this_prop("streamLink")),
                     s_prop_assign(e_this(), "streamLink", e_null()),
                     s_if(
                         e_binop(e_var("_link"), BinOp::StrictNotEq, e_null()),
                         vec![
-                            s_expr(e_method_call(e_var("_link"), "__elephcStreamFinished", vec![e_this_prop("streamRows")])),
+                            s_expr(e_method_call(e_var("_link"), "__elephcStreamFinished", vec![e_var("_stmt"), e_this_prop("streamRows")])),
                         ],
                         vec![],
                         None,

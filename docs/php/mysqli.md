@@ -139,7 +139,11 @@ mysqlnd, the link answers every other command (`query()`, `prepare()`, …) with
 errno 2014 "Commands out of sync" until the set is exhausted or the result is
 freed (or destroyed), `num_rows` reads `0` until the last row was fetched
 (`affected_rows` is `-1` meanwhile), and `data_seek()` / `mysqli_num_rows()`
-throw.
+throw. A row read that fails midway (a read timeout, a lost connection) is
+reported like mysqli's fetch path (errno on the link, `mysqli_sql_exception`
+under `MYSQLI_REPORT_STRICT`, a warning under `MYSQLI_REPORT_ERROR`) instead of
+ending the set silently. Difference from PHP: with reporting off that fetch
+returns `null` where PHP returns `false`; both end a `while ($row = ...)` loop.
 
 Non-select statements return `true` and refresh `affected_rows`,
 `insert_id`, `warning_count`, and `info` (the server's "Records: … Duplicates:
