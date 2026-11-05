@@ -438,6 +438,9 @@ pub(super) fn check_ref_assign(
             }
             env.insert(target.to_string(), target_ty);
             checker.active_ref_params.insert(target.to_string());
+            checker
+                .property_ref_aliased_locals
+                .insert(target.to_string());
             clear_callable_metadata(checker, target);
             Ok(())
         }

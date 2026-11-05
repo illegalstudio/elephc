@@ -3852,7 +3852,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "isSystemId",
-                ty: TypeSpec::Bool,
+                ty: TypeSpec::Mixed,
                 default: Some(DefaultSpec::Null),
                 by_ref: true,
             },
@@ -4195,13 +4195,13 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "rawOffset",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Mixed,
                 default: None,
                 by_ref: true,
             },
             ParamSpec {
                 name: "dstOffset",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Mixed,
                 default: None,
                 by_ref: true,
             },

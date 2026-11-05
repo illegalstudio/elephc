@@ -559,6 +559,12 @@ pub(crate) struct Checker {
     /// A reference can escape through a callee, so the alias is permanent for the rest of the
     /// body.
     pub ref_aliased_locals: HashSet<String>,
+    /// Locals bound by `$local =& $object->property`.
+    ///
+    /// Passing one to a mixed by-reference parameter cannot hand over the property's concrete
+    /// cell; the call boundary rewrites it to the property place and writes a boxed temporary
+    /// back through the property.
+    pub property_ref_aliased_locals: HashSet<String>,
     /// Reference-aliased locals whose alias did not arise solely from a registry builtin call.
     ///
     /// Registry builtins can mutate by-reference arguments but do not retain their cells. Direct

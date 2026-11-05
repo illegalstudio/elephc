@@ -489,6 +489,7 @@ impl Checker {
                                     self.active_external_ref_bindings.remove(var);
                                     self.by_ref_captured_locals.remove(var);
                                     self.ref_aliased_locals.remove(var);
+                                    self.property_ref_aliased_locals.remove(var);
                                     self.non_builtin_ref_aliased_locals.remove(var);
                                     self.ref_assign_aliased_locals.remove(var);
                                 } else if let Some(names) = self.local_ref_detach_sites.get_mut(&arg.span) {

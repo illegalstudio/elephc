@@ -55,7 +55,10 @@ struct RefPlacePlan {
     index: usize,
     place: Expr,
     temp: String,
+    /// Storage type of the hidden temporary handed to the callee.
     temp_type: PhpType,
+    /// Declared type of the target property, used by the writeback coercion/TypeError guard.
+    property_type: PhpType,
     /// The temporary was promoted to a boxed Mixed ref cell for the callee ABI.
     promoted: bool,
     /// `Class::$property` label used by PHP's typed-reference assignment diagnostic.
@@ -111,6 +114,8 @@ pub(super) fn rewrite_typed_property_ref_args(
             } else {
                 continue;
             };
+        let mapped_place = alias_property_place(ctx, place_arg);
+        let place_arg = mapped_place.as_ref().unwrap_or(place_arg);
         match &place_arg.kind {
             // `stabilize_place` retains a nested receiver in a synthetic local, so the
             // rewrite targets the same object PHP resolved when it bound the reference.
@@ -122,10 +127,12 @@ pub(super) fn rewrite_typed_property_ref_args(
         };
         // The call ABI boxes typed references as Mixed; the write-back narrows the cell back
         // to the property's declared storage before the ordinary assignment runs.
-        let accepted = crate::types::param_binding::by_ref_property_storage_compatible(
-            &expected_ty,
-            &place_ty,
-        );
+        let mixed_expected = expected_ty.codegen_repr() == PhpType::Mixed;
+        let accepted = mixed_expected
+            || crate::types::param_binding::by_ref_property_storage_compatible(
+                &expected_ty,
+                &place_ty,
+            );
         if !accepted {
             continue;
         }
@@ -135,6 +142,7 @@ pub(super) fn rewrite_typed_property_ref_args(
             .unwrap_or(PhpType::Mixed);
         let variadic_tail = variadic_by_ref && index >= regular_count;
         let promoted = variadic_tail
+            || mixed_expected
             || matches!(
                 value_type.codegen_repr(),
                 PhpType::Object(_) | PhpType::Mixed
@@ -142,7 +150,13 @@ pub(super) fn rewrite_typed_property_ref_args(
         // A variadic collector transports reference markers in a boxed array, so its property
         // places always travel as boxed Mixed cells. Fixed scalar/string/array slots are passed
         // by address and must stay unboxed; fixed object/mixed slots need the same boxed cell.
-        let temp_type = if variadic_tail { PhpType::Mixed } else { value_type.clone() };
+        // A mixed parameter always takes a boxed cell too, and the property write-back then
+        // applies PHP's typed-property coercion (or its exact TypeError).
+        let temp_type = if variadic_tail || mixed_expected {
+            PhpType::Mixed
+        } else {
+            value_type.clone()
+        };
         let temp = ctx.declare_synthetic_php_local(temp_type.clone());
         if promoted {
             ctx.promote_local_mixed_ref_cell(&temp, Some(place_arg.span));
@@ -189,7 +203,8 @@ pub(super) fn rewrite_typed_property_ref_args(
             place_label: property_place_label(ctx, place_arg),
             place,
             temp,
-            temp_type: value_type,
+            temp_type,
+            property_type: value_type,
             promoted,
             snapshot: Some(snapshot),
         });
@@ -201,6 +216,26 @@ pub(super) fn rewrite_typed_property_ref_args(
         args: call_args,
         plans,
     })
+}
+
+/// Maps a local that aliases `$object->property` to the property place for a call boundary.
+fn alias_property_place(ctx: &LoweringContext<'_, '_>, place: &Expr) -> Option<Expr> {
+    let ExprKind::Variable(name) = &place.kind else { return None; };
+    ctx.property_ref_alias_sources.get(name).cloned()
+}
+
+/// Returns whether a property place can be rewritten for a mixed by-reference parameter.
+fn is_mixed_property_place(
+    ctx: &LoweringContext<'_, '_>,
+    place: &Expr,
+    expected: &PhpType,
+) -> bool {
+    expected.codegen_repr() == PhpType::Mixed
+        && matches!(
+            place.kind,
+            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+        )
+        && static_place_type(ctx, place).is_some()
 }
 
 /// Formats the `Class::$property` label php-src uses in typed-reference diagnostics.
@@ -266,22 +301,28 @@ pub(super) fn finish_ref_place_rewrite(
     for plan in rewrite.plans {
         // The callee wrote through a boxed ref cell. Narrow it back to the property's
         // declared storage before the ordinary assignment runs.
+        // A boxed temporary (the mixed-parameter path) keeps the callee's raw value; the
+        // typed-property guard must still run before the ordinary property assignment coerces
+        // or rejects it, so the diagnostic names the property type, not `mixed`. The accepted
+        // value is then narrowed to the property type, which also gives PHP's weak coercion
+        // (a numeric string written to an int property) the typed storage it expects.
         let needs_typed_local = plan.promoted
             && !matches!(
-                plan.temp_type.codegen_repr(),
+                plan.property_type.codegen_repr(),
                 PhpType::Mixed | PhpType::AssocArray { .. }
             );
+        let needs_guard = needs_typed_local;
         let next = needs_typed_local
             .then(|| ctx.builder.create_named_block("ref.writeback.next", vec![]));
-        if needs_typed_local {
+        if needs_guard {
             guard_typed_writeback(ctx, &plan, span);
         }
         let writeback = if needs_typed_local {
             let temp_value = ctx.load_local(&plan.temp, Some(span));
             let converted =
-                lower_place_writeback_value(ctx, temp_value, &plan.temp_type, span);
-            let name = ctx.declare_synthetic_php_local(plan.temp_type.clone());
-            ctx.store_local(&name, converted, plan.temp_type.clone(), Some(span));
+                lower_place_writeback_value(ctx, temp_value, &plan.property_type, span);
+            let name = ctx.declare_synthetic_php_local(plan.property_type.clone());
+            ctx.store_local(&name, converted, plan.property_type.clone(), Some(span));
             Some(name)
         } else {
             None
@@ -291,10 +332,10 @@ pub(super) fn finish_ref_place_rewrite(
         let release_writeback = |ctx: &mut LoweringContext<'_, '_>| {
             release_plan_local(ctx, &plan.temp, &plan.temp_type, span);
             if let Some(writeback) = &writeback {
-                release_plan_local(ctx, writeback, &plan.temp_type, span);
+                release_plan_local(ctx, writeback, &plan.property_type, span);
             }
             if let Some(snapshot) = &plan.snapshot {
-                release_plan_local(ctx, snapshot, &plan.temp_type, span);
+                release_plan_local(ctx, snapshot, &plan.property_type, span);
             }
         };
         if let Some(snapshot) = &plan.snapshot {
@@ -363,14 +404,14 @@ fn guard_typed_writeback(
     // range check: a numeric string or float outside [-2^63, 2^63) is rejected instead of
     // being truncated into the reference cell.
     let condition = if matches!(
-        plan.temp_type.codegen_repr(),
+        plan.property_type.codegen_repr(),
         PhpType::Int | PhpType::Narrow(_)
     ) {
         let temp = Expr::new(ExprKind::Variable(plan.temp.clone()), span);
         let accepted = crate::types::param_binding::runtime_weak_int_param_acceptance(&temp);
         Some(lower_expr(ctx, &accepted).value)
     } else {
-        writeback_accepts_type(ctx, loaded.value, &plan.temp_type, span)
+        writeback_accepts_type(ctx, loaded.value, &plan.property_type, span)
     };
     let Some(condition) = condition else {
         return;
@@ -527,7 +568,7 @@ fn emit_typed_reference_error(
     // reference cell the callee wrote. Read that cell, not the place.
     let rejected = Expr::new(ExprKind::Variable(plan.temp.clone()), span);
     let given = super::enum_argument_guards::runtime_debug_type(&rejected, span);
-    let expected = crate::types::diagnostic_names::php_type_name(&plan.temp_type);
+    let expected = crate::types::diagnostic_names::php_type_name(&plan.property_type);
     let literal = |text: &str| Expr::new(ExprKind::StringLiteral(text.to_string()), span);
     let message = [
         literal("Cannot assign "),
@@ -630,7 +671,10 @@ pub(super) fn lower_builtin_ref_place_call(
                 is_candidate_place_shape(place)
             } else {
                 ref_param_binding(&sig, *index, arg).is_some_and(|(param_index, place)| {
+                    let mapped = alias_property_place(ctx, place);
+                    let place = mapped.as_ref().unwrap_or(place);
                     is_array_place(ctx, place, &sig.params[param_index].1)
+                        || is_mixed_property_place(ctx, place, &sig.params[param_index].1)
                 })
             }
         })
@@ -649,11 +693,25 @@ pub(super) fn lower_builtin_ref_place_call(
                 _ => arg,
             }
         } else { ref_param_place(&sig, index, arg)? };
+        let mapped_place = alias_property_place(ctx, place_arg);
+        let place_arg = mapped_place.as_ref().unwrap_or(place_arg);
         let place = stabilize_place(ctx, place_arg);
         let read = lower_expr(ctx, &place);
         let value_type = normalize_value_php_type(ctx.builder.value_php_type(read.value));
-        let temp = ctx.declare_synthetic_php_local(value_type.clone());
-        ctx.store_local(&temp, read, value_type.clone(), Some(place_arg.span));
+        // Only a property place needs the boxed-cell treatment. An array element keeps its
+        // concrete storage type so the builtin's result and write-back stay typed.
+        let mixed_expected = matches!(
+            place.kind,
+            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+        ) && ref_param_binding(&sig, index, arg)
+            .and_then(|(param_index, _)| sig.params.get(param_index))
+            .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed);
+        let temp_type = if mixed_expected { PhpType::Mixed } else { value_type.clone() };
+        let temp = ctx.declare_synthetic_php_local(temp_type.clone());
+        if mixed_expected {
+            ctx.promote_local_mixed_ref_cell(&temp, Some(place_arg.span));
+        }
+        ctx.store_local(&temp, read, temp_type.clone(), Some(place_arg.span));
         let variable = Expr::new(ExprKind::Variable(temp.clone()), place_arg.span);
         call_args[index] = match &arg.kind {
             ExprKind::NamedArg { name, .. } => Expr::new(
@@ -670,8 +728,9 @@ pub(super) fn lower_builtin_ref_place_call(
             place_label: property_place_label(ctx, place_arg),
             place,
             temp,
-            temp_type: value_type,
-            promoted: false,
+            temp_type,
+            property_type: value_type,
+            promoted: mixed_expected,
             snapshot: None,
         });
     }
@@ -689,6 +748,14 @@ pub(super) fn lower_builtin_ref_place_call(
     let result = lower_function_call(ctx, name, &call_args, expr);
     for plan in plans {
         let writeback = |ctx: &mut LoweringContext<'_, '_>| {
+            if plan.promoted
+                && !matches!(
+                    plan.property_type.codegen_repr(),
+                    PhpType::Mixed | PhpType::AssocArray { .. }
+                )
+            {
+                guard_typed_writeback(ctx, &plan, plan.place.span);
+            }
             let value = Expr::new(ExprKind::Variable(plan.temp.clone()), plan.place.span);
             lower_non_local_assignment_write(ctx, &plan.place, &value, plan.place.span);
         };
@@ -722,11 +789,11 @@ pub(super) fn lower_builtin_ref_place_call(
             ctx.builder.position_at_end(write);
             writeback(ctx);
             release_plan_local(ctx, &plan.temp, &plan.temp_type, expr.span);
-            release_plan_local(ctx, snapshot, &plan.temp_type, expr.span);
+            release_plan_local(ctx, snapshot, &plan.property_type, expr.span);
             super::merge_temps::branch_to(ctx, merge);
             ctx.builder.position_at_end(skip);
             release_plan_local(ctx, &plan.temp, &plan.temp_type, expr.span);
-            release_plan_local(ctx, snapshot, &plan.temp_type, expr.span);
+            release_plan_local(ctx, snapshot, &plan.property_type, expr.span);
             super::merge_temps::branch_to(ctx, merge);
             ctx.builder.position_at_end(merge);
         } else {

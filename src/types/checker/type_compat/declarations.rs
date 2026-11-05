@@ -307,6 +307,23 @@ impl Checker {
             if expected_ty.codegen_repr() == PhpType::Mixed && can_widen_local {
                 return Ok(());
             }
+            // A property-backed reference cannot be passed as the property's concrete cell to a
+            // mixed by-reference parameter. EIR lowering rewrites the argument to the property
+            // place, passes a boxed temporary, and writes it back through the property with
+            // PHP's typed-property coercion. Direct property arguments use the same rewrite.
+            if expected_ty.codegen_repr() == PhpType::Mixed {
+                match &arg.kind {
+                    ExprKind::Variable(name)
+                        if self.property_ref_aliased_locals.contains(name) =>
+                    {
+                        return Ok(());
+                    }
+                    ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. } => {
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
             // A previous by-reference call already promoted this local to a boxed Mixed cell
             // (for example the OO parseCurrency call followed by the procedural one on the same
             // offset). The static value type stays concrete, but the storage is the boxed cell

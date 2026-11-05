@@ -872,3 +872,40 @@ var_dump($isSystem);
     );
     assert_eq!(out, "string(13) \"Europe/Lisbon\"\nbool(true)\n");
 }
+
+/// A `[&$x]` element shares one reference set with the local in both directions, and copies of
+/// the array keep sharing that set the way php references do.
+#[test]
+fn test_array_literal_reference_element_aliases_local_both_ways() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 24;
+$arr = ['k' => &$a, 'x' => 1];
+$a = 9;
+echo $arr['k'], "|";
+$arr['k'] = 21;
+echo $a, "|";
+$copy = $arr;
+$copy['k'] = 5;
+echo $a, ":", $arr['k'], ":", $copy['k'], "|";
+echo $arr['x'];
+"#,
+    );
+    assert_eq!(out, "9|21|5:5:5|1");
+}
+
+/// An automatic integer key is materialized when a reference element appears in a list literal.
+#[test]
+fn test_array_literal_reference_element_with_automatic_key() {
+    let out = compile_and_run(
+        r#"<?php
+$en = 'en';
+$data = ['de', &$en];
+$en = 'fr';
+echo $data[1], "|";
+$data[1] = 'it';
+echo $en;
+"#,
+    );
+    assert_eq!(out, "fr|it");
+}

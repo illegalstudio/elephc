@@ -293,9 +293,12 @@ fn resolve(mut expr: Expr, constants: &HashMap<String, (ExprKind, PhpType)>,
             use crate::parser::ast::ArrayEntry;
             for entry in entries {
                 match entry {
-                    ArrayEntry::Value(value) | ArrayEntry::Spread(value) =>
+                    ArrayEntry::Value(value)
+                    | ArrayEntry::Spread(value)
+                    | ArrayEntry::Reference(value) =>
                         *value = resolve(value.clone(), constants, active, depth + 1)?,
-                    ArrayEntry::Keyed(key, value) => {
+                    ArrayEntry::Keyed(key, value)
+                    | ArrayEntry::KeyedReference(key, value) => {
                         *key = resolve(key.clone(), constants, active, depth + 1)?;
                         *value = resolve(value.clone(), constants, active, depth + 1)?;
                     }

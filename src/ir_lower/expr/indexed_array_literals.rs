@@ -399,7 +399,38 @@ pub(super) fn lower_mixed_array_literal(
     entries: &[ArrayEntry],
     expr: &Expr,
 ) -> LoweredValue {
-    let hash_ty = assoc_array_literal_type_from_entries(ctx, entries, expr);
+    let mut hash_ty = assoc_array_literal_type_from_entries(ctx, entries, expr);
+    // A reference entry stores a tag-11 cell in the hash. Building the literal with a concrete
+    // value type and later converting it with `__rt_hash_to_mixed` would re-box that cell and
+    // separate the variable from its array slot, so reference literals are Mixed hashes from
+    // the start.
+    let has_references = entries.iter().any(|entry| entry.is_reference());
+    if has_references {
+        // Only the VALUE storage needs to be Mixed. Keeping a concrete key type is what stops
+        // integer keys from being boxed and rendered as pointers by the hash walkers.
+        let literal_keys: Vec<&Expr> = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                ArrayEntry::Keyed(key, _) | ArrayEntry::KeyedReference(key, _) => Some(key),
+                _ => None,
+            })
+            .collect();
+        let key_ty = if literal_keys.len() == entries.len()
+            && literal_keys.iter().all(|key| matches!(key.kind, ExprKind::IntLiteral(_)))
+        {
+            PhpType::Int
+        } else if literal_keys.len() == entries.len()
+            && literal_keys.iter().all(|key| matches!(key.kind, ExprKind::StringLiteral(_)))
+        {
+            PhpType::Str
+        } else {
+            PhpType::Mixed
+        };
+        hash_ty = PhpType::AssocArray {
+            key: Box::new(key_ty),
+            value: Box::new(PhpType::Mixed),
+        };
+    }
     let value_ty = match hash_ty.codegen_repr() {
         PhpType::AssocArray { value, .. } => value.codegen_repr(),
         _ => PhpType::Mixed,
@@ -409,10 +440,15 @@ pub(super) fn lower_mixed_array_literal(
         Op::HashNew,
         Vec::new(),
         Some(Immediate::Capacity(entries.len() as u32)),
-        hash_ty,
+        hash_ty.clone(),
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
+    // Reference entries bind a local to the array slot's cell after the literal is built. The
+    // key and value are evaluated once, in source order, exactly like a plain entry; the cell
+    // promotion then makes the variable and the slot share one PHP reference set.
+    let mut references: Vec<(crate::ir::ValueId, Option<crate::ir::LocalSlotId>, String, Span)> =
+        Vec::new();
     for entry in entries {
         match entry {
             ArrayEntry::Spread(source) => {
@@ -427,7 +463,7 @@ pub(super) fn lower_mixed_array_literal(
                 };
                 lower_hash_spread_into_hash_from_value(ctx, hash, source, span);
             }
-            ArrayEntry::Keyed(key, value) => {
+            ArrayEntry::Keyed(key, value) | ArrayEntry::KeyedReference(key, value) => {
                 let span = key.span;
                 let key = lower_expr(ctx, key);
                 let (key, key_owner) = root_owned_call_operand(ctx, key, span);
@@ -441,9 +477,30 @@ pub(super) fn lower_mixed_array_literal(
                     Op::HashSet.default_effects(),
                     Some(span),
                 );
-                if let Some(owner) = key_owner {
+                if let ArrayEntry::KeyedReference(_, reference) = entry {
+                    let ExprKind::Variable(name) = &reference.kind else {
+                        // The parser only admits local-variable reference targets.
+                        unreachable!("reference array element target is a local variable");
+                    };
+                    references.push((key.value, key_owner, name.clone(), span));
+                } else if let Some(owner) = key_owner {
                     retire_owned_call_operand(ctx, owner, span);
                 }
+            }
+            ArrayEntry::Reference(value) => {
+                // The parser materializes an explicit key for every reference entry, so this
+                // arm exists only for totality.
+                let span = value.span;
+                let value = lower_expr(ctx, value);
+                let value = retype_pointer_literal_value(ctx, value, pointer_elem.as_ref(), span);
+                ctx.emit_void(
+                    Op::RuntimeCall,
+                    vec![hash.value, value.value],
+                    None,
+                    effects_lookup::runtime_effects(),
+                    Some(span),
+                );
+                release_value_after_retaining_insert(ctx, Some(&value_ty), value, span);
             }
             ArrayEntry::Value(value) => {
                 let span = value.span;
@@ -460,7 +517,30 @@ pub(super) fn lower_mixed_array_literal(
             }
         }
     }
-    hash
+    if references.is_empty() {
+        return hash;
+    }
+    // The receiver must be a writable local for promotion: growth and copy-on-write relocate the
+    // hash, and the write-back republishes the new pointer into this slot. Returning the slot's
+    // fresh load then observes the relocated storage.
+    let slot = ctx.declare_synthetic_php_local(hash_ty.clone());
+    ctx.store_local(&slot, hash, hash_ty, Some(expr.span));
+    for (key, key_owner, name, span) in references {
+        let array = ctx.load_local(&slot, Some(span));
+        let cell = ctx.emit_value(
+            Op::LoadArrayElemRefCell,
+            vec![array.value, key],
+            None,
+            PhpType::Mixed,
+            Op::LoadArrayElemRefCell.default_effects(),
+            Some(span),
+        );
+        ctx.bind_owned_local_ref_cell_ptr(&name, cell, PhpType::Mixed, Some(span));
+        if let Some(owner) = key_owner {
+            retire_owned_call_operand(ctx, owner, span);
+        }
+    }
+    ctx.load_local(&slot, Some(expr.span))
 }
 
 /// Returns the hash type for a mixed literal, merging every entry's value type.
@@ -482,16 +562,20 @@ pub(super) fn assoc_array_literal_type_from_entries(
         .iter()
         .map(|entry| match entry {
             ArrayEntry::Spread(_) => None,
-            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => {
-                Some(array_literal_element_type_for_ir(ctx, value))
-            }
+            ArrayEntry::Keyed(_, value)
+            | ArrayEntry::KeyedReference(_, value)
+            | ArrayEntry::Value(value)
+            | ArrayEntry::Reference(value) => Some(array_literal_element_type_for_ir(ctx, value)),
         })
         .collect();
     if let Some(pointer) = pointer_literal_entries_element_type(
         ctx,
         entries.iter().zip(&value_types).map(|(entry, value_ty)| match entry {
             ArrayEntry::Spread(source) => (spread_entry_source(source), true, None),
-            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => (value, false, value_ty.clone()),
+            ArrayEntry::Keyed(_, value)
+            | ArrayEntry::KeyedReference(_, value)
+            | ArrayEntry::Value(value)
+            | ArrayEntry::Reference(value) => (value, false, value_ty.clone()),
         }),
         false,
     ) {
@@ -507,9 +591,13 @@ pub(super) fn assoc_array_literal_type_from_entries(
                 spread_storage_probe_element_type(&spread_source_storage_type_for_ir(ctx, inner))
             }
             (_, Some(ty)) => ty.codegen_repr(),
-            (ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value), None) => {
-                array_literal_element_type_for_ir(ctx, value).codegen_repr()
-            }
+            (
+                ArrayEntry::Keyed(_, value)
+                | ArrayEntry::KeyedReference(_, value)
+                | ArrayEntry::Value(value)
+                | ArrayEntry::Reference(value),
+                None,
+            ) => array_literal_element_type_for_ir(ctx, value).codegen_repr(),
         };
         value_ty = crate::ir_lower::expr::assoc_array_literals::merge_ir_assoc_value_type(
             value_ty, next,

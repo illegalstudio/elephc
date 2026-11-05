@@ -315,7 +315,17 @@ pub(super) fn resolve_expr(
                         imports,
                         symbols,
                     )),
+                    ArrayEntry::Reference(value) => ArrayEntry::Reference(resolve_expr(
+                        value,
+                        current_namespace,
+                        imports,
+                        symbols,
+                    )),
                     ArrayEntry::Keyed(key, value) => ArrayEntry::Keyed(
+                        resolve_expr(key, current_namespace, imports, symbols),
+                        resolve_expr(value, current_namespace, imports, symbols),
+                    ),
+                    ArrayEntry::KeyedReference(key, value) => ArrayEntry::KeyedReference(
                         resolve_expr(key, current_namespace, imports, symbols),
                         resolve_expr(value, current_namespace, imports, symbols),
                     ),

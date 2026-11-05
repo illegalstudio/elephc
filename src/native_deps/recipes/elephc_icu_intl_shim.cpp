@@ -3826,57 +3826,74 @@ Value grapheme_operation(const std::string &operation, const std::vector<Value> 
         if (!argument_int(args, 1, size)) return Value::boolean(false);
         optional_int(args, 2, 0, extract_type);
         optional_int(args, 3, 0, offset);
-        if (offset < 0 || offset > int32_t(input.size())) return Value::boolean(false);
+        if (extract_type < 0 || extract_type > 2) return Value::boolean(false);
+
+        auto report = [&](Value value, int64_t next) {
+            Value array = Value::array();
+            array.entries = {
+                {Value::from_int(0), value},
+                {Value::from_int(1), Value::from_int(next)},
+            };
+            return array;
+        };
+
+        // php reports the raw (possibly negative) start through `$next` before any
+        // validation, then counts a negative start from the end of the haystack.
+        int64_t lstart = offset;
+        if (lstart < 0) lstart += int64_t(input.size());
+        if (lstart < 0 || size_t(lstart) >= input.size() || lstart > INT32_MAX)
+            return report(Value::boolean(false), lstart);
+        if (size < 0) return Value::boolean(false);
+        if (size == 0) return report(Value::from_string(""), lstart);
+
+        // A byte inside a multi-byte sequence moves forward to the next character start;
+        // running off the end is an invalid start. This is what makes a continuation-byte
+        // offset skip the rest of that character instead of failing or substituting U+FFFD.
+        int32_t start = int32_t(lstart);
+        while (start < int32_t(input.size())) {
+            unsigned char byte = (unsigned char)input[start];
+            if (U8_IS_SINGLE(byte) || U8_IS_LEAD(byte)) break;
+            start++;
+        }
+        if (start >= int32_t(input.size())) return report(Value::boolean(false), lstart);
+
+        std::string suffix = input.substr(size_t(start));
+        UErrorCode suffix_status = U_ZERO_ERROR;
+        std::vector<int32_t> suffix_boundaries = grapheme_boundaries(suffix, suffix_status);
+        if (U_FAILURE(suffix_status) || suffix_boundaries.size() < 2)
+            return report(Value::boolean(false), lstart);
+        size_t suffix_clusters = suffix_boundaries.size() - 1;
+        UnicodeString text = from_utf8(suffix);
         auto utf16_to_byte = [&](int32_t index) -> int32_t {
             std::string prefix;
             text.tempSubString(0, index).toUTF8String(prefix);
             return int32_t(prefix.size());
         };
-        // Convert the byte start offset to a UTF-16 boundary index.
-        int32_t start = 0;
-        if (offset > 0) {
-            int32_t units = 0;
-            int32_t bytes = 0;
-            while (bytes < offset && bytes < int32_t(input.size())) {
-                UChar32 code = 0;
-                U8_NEXT(input.data(), bytes, int32_t(input.size()), code);
-                if (code < 0) return Value::boolean(false);
-                units += U16_LENGTH(code);
-            }
-            start = units;
-        }
-        int32_t end = start;
-        for (size_t index = 0; index + 1 < boundaries.size(); index++) {
-            if (boundaries[index] >= start) {
-                size_t cluster = index;
-                size_t consumed = 0;
-                while (cluster < clusters && consumed < size_t(size)) {
-                    int32_t next = boundaries[cluster + 1];
-                    int32_t bytes = utf16_to_byte(next) - utf16_to_byte(boundaries[cluster]);
-                    size_t units = 1;
-                    if (extract_type == 2) {
-                        units = 0;
-                        for (int32_t point = boundaries[cluster]; point < next;
-                             point += U16_LENGTH(text.char32At(point))) {
-                            units++;
-                        }
-                    }
-                    size_t addition = extract_type == 0 ? 1
-                        : (extract_type == 1 ? size_t(bytes) : units);
-                    if (consumed + addition > size_t(size)) break;
-                    consumed += addition;
-                    cluster++;
+
+        int32_t end = 0;
+        size_t cluster = 0;
+        size_t consumed = 0;
+        while (cluster < suffix_clusters && consumed < size_t(size)) {
+            int32_t next = suffix_boundaries[cluster + 1];
+            int32_t bytes = utf16_to_byte(next) - utf16_to_byte(suffix_boundaries[cluster]);
+            size_t units = 1;
+            if (extract_type == 2) {
+                units = 0;
+                for (int32_t point = suffix_boundaries[cluster]; point < next;
+                     point += U16_LENGTH(text.char32At(point))) {
+                    units++;
                 }
-                end = boundaries[cluster];
-                break;
             }
+            size_t addition = extract_type == 0 ? 1
+                : (extract_type == 1 ? size_t(bytes) : units);
+            if (consumed + addition > size_t(size)) break;
+            consumed += addition;
+            end = next;
+            cluster++;
         }
-        Value array = Value::array();
-        array.entries = {
-            {Value::from_int(0), Value::from_string(to_utf8(text.tempSubStringBetween(start, end)))},
-            {Value::from_int(1), Value::from_int(utf16_to_byte(end))},
-        };
-        return array;
+        return report(
+            Value::from_string(to_utf8(text.tempSubStringBetween(0, end))),
+            int64_t(start) + utf16_to_byte(end));
     }
     if (operation == "grapheme_levenshtein") {
         std::string second;

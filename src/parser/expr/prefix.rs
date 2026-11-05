@@ -721,16 +721,49 @@ fn parse_array_literal_with_terminator(
             first = false;
             continue;
         }
-        reject_reference_array_element(tokens, pos, closing)?;
+        // -- `&$var` binds the element to the variable's reference cell --
+        let leading_reference = tokens
+            .get(*pos)
+            .is_some_and(|(token, _)| *token == Token::Ampersand);
+        if leading_reference {
+            *pos += 1;
+        }
         let expr = parse_expr(tokens, pos)?;
+        if leading_reference {
+            require_reference_array_target(&expr)?;
+            if auto_key_unknown || elems.iter().any(|elem| matches!(elem.kind, ExprKind::Spread(_)))
+            {
+                return Err(CompileError::new(
+                    expr.span,
+                    "Reference elements after a spread or a runtime-derived key are not supported",
+                ));
+            }
+            promote_entries_to_mixed(&mut elems, &mut assoc_elems, &mut mixed_elems);
+            is_assoc = true;
+            let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
+            mixed_elems.push(ArrayEntry::KeyedReference(key, expr));
+            auto_key_overflowed |= next_auto_key == i64::MAX;
+            next_auto_key = next_auto_key.saturating_add(1);
+            auto_key_initialized = true;
+            first = false;
+            continue;
+        }
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
             if !is_assoc {
                 promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems, &mut mixed_elems);
             }
             is_assoc = true;
             *pos += 1;
-            reject_reference_array_element(tokens, pos, closing)?;
+            let value_reference = tokens
+                .get(*pos)
+                .is_some_and(|(token, _)| *token == Token::Ampersand);
+            if value_reference {
+                *pos += 1;
+            }
             let value = parse_expr(tokens, pos)?;
+            if value_reference {
+                require_reference_array_target(&value)?;
+            }
             auto_key_overflowed |= explicit_integer_array_key(&expr) == Some(i64::MAX);
             auto_key_unknown |= explicit_key_may_hide_auto_index(&expr);
             update_next_auto_key_from_explicit_key(
@@ -738,7 +771,10 @@ fn parse_array_literal_with_terminator(
                 &mut next_auto_key,
                 &mut auto_key_initialized,
             );
-            if mixed_elems.is_empty() {
+            if value_reference {
+                promote_entries_to_mixed(&mut elems, &mut assoc_elems, &mut mixed_elems);
+                mixed_elems.push(ArrayEntry::KeyedReference(expr, value));
+            } else if mixed_elems.is_empty() {
                 assoc_elems.push((expr, value));
             } else {
                 mixed_elems.push(ArrayEntry::Keyed(expr, value));
@@ -785,56 +821,51 @@ fn parse_array_literal_with_terminator(
     }
 }
 
-/// Rejects a by-reference array-literal element (`[&$x]`, `[$k => &$x]`, `array(&$x)`) with a
-/// diagnostic that names the construct instead of a bare "Unexpected token: Ampersand".
+/// Requires a reference array element to name a plain local variable.
 ///
-/// PHP stores such an element as a reference cell that aliases the source variable's storage,
-/// so `$r = [&$a]; $r[0] = 9;` writes through to `$a`. elephc arrays hold plain values and its
-/// only reference form points *into* array storage (`$b =& $a[0]`), never out of it, so the
-/// construct cannot be honoured without either silently copying or leaving the array holding a
-/// pointer to a stack slot it can outlive. Returns `Ok(())` when the element is not a reference.
-///
-/// On rejection `pos` is advanced past the rest of the literal so statement recovery resumes
-/// after it and does not report cascading errors for the remaining elements.
-fn reject_reference_array_element(
-    tokens: &[SpannedToken],
-    pos: &mut usize,
-    closing: &Token,
-) -> Result<(), CompileError> {
-    let Some((Token::Ampersand, metadata)) = tokens.get(*pos) else {
+/// Lowering binds the local to the array entry's reference cell (the same operation as
+/// `$var =& $array[$key]`), so a property or nested element target would need a different
+/// addressable-cell path. Those remain rejected with a diagnostic instead of being copied.
+fn require_reference_array_target(expr: &Expr) -> Result<(), CompileError> {
+    if matches!(expr.kind, ExprKind::Variable(_)) {
         return Ok(());
-    };
-    let span = metadata.span;
-    skip_to_array_literal_end(tokens, pos, closing);
+    }
     Err(CompileError::new(
-        span,
-        "Reference elements in array literals (`[&$x]`) are not supported: an array element \
-         cannot alias a variable's storage. Assign the value instead, or use `$b =& $a[0]` \
-         to alias an existing array element",
+        expr.span,
+        "Reference array elements currently require a local variable target",
     ))
 }
 
-/// Advances `pos` past the remainder of the current array literal, including its `closing`
-/// token, tracking nested `[`/`(` pairs so inner literals and calls are skipped whole.
+/// Moves every entry collected so far into the ordered mixed entry list.
 ///
-/// Stops at end-of-input if the literal is unterminated, leaving `pos` at `Eof`.
-fn skip_to_array_literal_end(tokens: &[SpannedToken], pos: &mut usize, closing: &Token) {
-    let mut depth = 0usize;
-    while let Some((token, _)) = tokens.get(*pos) {
-        match token {
-            Token::Eof => return,
-            Token::LBracket | Token::LParen => depth += 1,
-            Token::RBracket | Token::RParen => {
-                if depth == 0 && token == closing {
-                    *pos += 1;
-                    return;
-                }
-                depth = depth.saturating_sub(1);
+/// A reference element forces the literal into the mixed representation because only that form
+/// records the reference marker. Positional elements before any spread receive their explicit
+/// automatic integer keys; a spread keeps its runtime-derived keys.
+fn promote_entries_to_mixed(
+    elems: &mut Vec<Expr>,
+    assoc_elems: &mut Vec<(Expr, Expr)>,
+    mixed_elems: &mut Vec<ArrayEntry>,
+) {
+    let positional = std::mem::take(elems);
+    if !positional.is_empty() {
+        let mut next_key = 0i64;
+        let mut after_spread = false;
+        for elem in positional {
+            if matches!(elem.kind, ExprKind::Spread(_)) {
+                after_spread = true;
+                mixed_elems.push(ArrayEntry::Spread(elem));
+                continue;
             }
-            _ => {}
+            if after_spread {
+                mixed_elems.push(ArrayEntry::Value(elem));
+            } else {
+                let key = Expr::new(ExprKind::IntLiteral(next_key), elem.span);
+                mixed_elems.push(ArrayEntry::Keyed(key, elem));
+                next_key += 1;
+            }
         }
-        *pos += 1;
     }
+    migrate_assoc_pairs_to_mixed(assoc_elems, mixed_elems);
 }
 
 /// Converts positional items parsed before a keyed array entry into integer-keyed pairs.

@@ -36,6 +36,13 @@ pub enum ArrayEntry {
     Keyed(Expr, Expr),
     /// A bare element, which takes the next free integer key.
     Value(Expr),
+    /// `&$variable`: the entry shares the variable's reference cell with the array slot.
+    ///
+    /// The parser materializes the automatic key when it turns the literal into a mixed entry
+    /// list, so lowering always receives an explicit key.
+    Reference(Expr),
+    /// `key => &$variable`: a keyed reference entry.
+    KeyedReference(Expr, Expr),
 }
 
 impl ArrayEntry {
@@ -47,16 +54,37 @@ impl ArrayEntry {
     /// and re-ordered, in thirty different places.
     pub fn exprs(&self) -> std::vec::IntoIter<&Expr> {
         match self {
-            Self::Spread(expr) | Self::Value(expr) => vec![expr].into_iter(),
-            Self::Keyed(key, value) => vec![key, value].into_iter(),
+            Self::Spread(expr) | Self::Value(expr) | Self::Reference(expr) => {
+                vec![expr].into_iter()
+            }
+            Self::Keyed(key, value) | Self::KeyedReference(key, value) => {
+                vec![key, value].into_iter()
+            }
+        }
+    }
+
+    /// Returns whether this entry stores its value as a reference cell shared with a variable.
+    pub fn is_reference(&self) -> bool {
+        matches!(self, Self::Reference(_) | Self::KeyedReference(_, _))
+    }
+
+    /// Returns the value expression of a reference entry, if it is one.
+    pub fn reference_value(&self) -> Option<&Expr> {
+        match self {
+            Self::Reference(value) | Self::KeyedReference(_, value) => Some(value),
+            _ => None,
         }
     }
 
     /// Mutable counterpart of [`ArrayEntry::exprs`], for the rewriting passes.
     pub fn exprs_mut(&mut self) -> std::vec::IntoIter<&mut Expr> {
         match self {
-            Self::Spread(expr) | Self::Value(expr) => vec![expr].into_iter(),
-            Self::Keyed(key, value) => vec![key, value].into_iter(),
+            Self::Spread(expr) | Self::Value(expr) | Self::Reference(expr) => {
+                vec![expr].into_iter()
+            }
+            Self::Keyed(key, value) | Self::KeyedReference(key, value) => {
+                vec![key, value].into_iter()
+            }
         }
     }
 
@@ -69,7 +97,11 @@ impl ArrayEntry {
         match self {
             Self::Spread(expr) => Self::Spread(rewrite(expr)),
             Self::Value(expr) => Self::Value(rewrite(expr)),
+            Self::Reference(expr) => Self::Reference(rewrite(expr)),
             Self::Keyed(key, value) => Self::Keyed(rewrite(key), rewrite(value)),
+            Self::KeyedReference(key, value) => {
+                Self::KeyedReference(rewrite(key), rewrite(value))
+            }
         }
     }
 
@@ -84,7 +116,10 @@ impl ArrayEntry {
         Ok(match self {
             Self::Spread(expr) => Self::Spread(rewrite(expr)?),
             Self::Value(expr) => Self::Value(rewrite(expr)?),
+            Self::Reference(expr) => Self::Reference(rewrite(expr)?),
             Self::Keyed(key, value) => Self::Keyed(rewrite(key)?, rewrite(value)?),
+            Self::KeyedReference(key, value) =>
+                Self::KeyedReference(rewrite(key)?, rewrite(value)?),
         })
     }
 }

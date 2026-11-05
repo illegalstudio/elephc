@@ -163,6 +163,22 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let previous_description = is_user_function
         .then(|| ctx.call_description.replace(canonical.to_string()));
     begin_call_argument_evaluation(ctx);
+    if !is_extern && !is_user_function
+        && matches!(
+            php_symbol_key(canonical.trim_start_matches('\\')).as_str(),
+            "array_walk" | "array_walk_recursive"
+        )
+    {
+        if let Some(arg) = args.first() {
+            let arg = match &arg.kind {
+                ExprKind::NamedArg { value, .. } => value.as_ref(),
+                _ => arg,
+            };
+            if let ExprKind::Variable(name) = &arg.kind {
+                super::call_arg_coercion::box_heap_element_array_local(ctx, name, arg.span);
+            }
+        }
+    }
     let mut operands = if is_user_function {
         // A source-declared `array` has packed-or-hash Mixed storage. Its unpack must walk
         // runtime keys and bind each boxed cell before entering the direct function ABI, just

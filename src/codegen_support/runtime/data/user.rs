@@ -4349,9 +4349,22 @@ fn serprop_widens_int_to_float(prop_ty: &PhpType) -> bool {
 /// inline `{payload, tag}` pair gets `TAGGED_SCALAR_PROPERTY_TAG`. A `Closure`
 /// property holds its callable descriptor directly (tag 10), never a Mixed box.
 fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
+    let declared = declared_property_value_tag(prop_ty);
     if class_info.reference_properties.contains(prop_name) {
-        return 7;
+        // A reference property slot holds a cell pointer, not the value. Keep the reference
+        // marker in the low byte and the declared runtime tag in the next byte: the cell
+        // header only says how the payload is stored (raw vs boxed), while the declaration
+        // distinguishes int/float/bool raw scalars.
+        return 14 | (declared << 8);
     }
+    declared
+}
+
+/// Maps a declared property type to the runtime value tag used by the renderers.
+///
+/// Scalar slots store their payload inline, but integer, float and bool all share payload
+/// descriptor `0`; renderers therefore need the declared tag to format the raw words correctly.
+fn declared_property_value_tag(prop_ty: &PhpType) -> u64 {
     if prop_ty.codegen_repr() == PhpType::TaggedScalar {
         return TAGGED_SCALAR_PROPERTY_TAG;
     }

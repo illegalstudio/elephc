@@ -1607,6 +1607,11 @@ pub(crate) fn emit_runtime_data_fixed(
     // builtin sets it to 2 around a top-level array body and back to 0 after;
     // `__rt_var_dump_value` bumps it by 2 across each nested container walk.
     out.push_str(&comm_directive("_vd_indent", 8, target));
+    // `_vd_ref_prefix` is the one-byte `&` var_dump prints before a reference property's
+    // value; `_vd_ref_pending` is a one-shot flag set by the tag-14 decoder, consumed by the
+    // next `__rt_vd_pad`.
+    out.push_str(".globl _vd_ref_prefix\n_vd_ref_prefix:\n    .ascii \"&\"\n");
+    out.push_str(&comm_directive("_vd_ref_pending", 8, target));
     // var_dump object delimiters: `object(` + class name + `)#` + the PHP object
     // handle + ` (` + initialized property count + `) {\n` opens an object on its
     // value line; the shared `_vd_brace_close` closes it. The handle is the same

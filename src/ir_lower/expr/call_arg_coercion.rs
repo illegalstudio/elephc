@@ -24,6 +24,52 @@ pub(super) fn lower_args(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) -> Ve
         .collect()
 }
 
+/// Boxes an array_walk receiver whose elements need the boxed walker.
+///
+/// `array_walk()` and `array_walk_recursive()` take `mixed &$array`. Their static callback path
+/// handles one-word scalar elements, while object or nested-container elements are only
+/// representable through the boxed runtime walker. Widening the local to a boxed `Mixed` value
+/// keeps the same PHP value and lets the walker mutate it and publish the result back.
+pub(super) fn box_heap_element_array_local(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    span: crate::span::Span,
+) {
+    if ctx.is_ref_bound_local(name) {
+        return;
+    }
+    let source_ty = ctx.local_type(name).codegen_repr();
+    let element_ty = match &source_ty {
+        PhpType::Array(element) => element.codegen_repr(),
+        PhpType::AssocArray { value: element, .. } => element.codegen_repr(),
+        _ => return,
+    };
+    if !matches!(
+        element_ty,
+        PhpType::Object(_)
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Union(_)
+            | PhpType::Callable
+    ) {
+        return;
+    }
+    let loaded = ctx.load_local(name, Some(span));
+    let boxed = ctx.emit_owned_value(
+        Op::MixedBox,
+        vec![loaded.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(span),
+    );
+    let slot = ctx.declare_local(name, PhpType::Mixed);
+    ctx.builder.widen_local_storage_type(slot, PhpType::Mixed);
+    ctx.set_local_type(name, PhpType::Mixed);
+    ctx.set_local_logical_type(name, PhpType::Mixed);
+    ctx.store_local(name, boxed, PhpType::Mixed, Some(span));
+}
+
 /// Lowers one argument while applying by-reference storage normalization from a signature.
 pub(super) fn lower_arg_with_signature(
     ctx: &mut LoweringContext<'_, '_>,

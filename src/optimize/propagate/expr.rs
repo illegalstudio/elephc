@@ -148,7 +148,19 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ),
         ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
             entries.into_iter()
-                .map(|entry| entry.map_exprs(|expr| propagate_expr(expr, env)))
+                .map(|entry| match entry {
+                    // A reference entry names the variable whose storage the array aliases.
+                    // Propagating a constant into it would turn `[&$x]` into `[42]` and lose the
+                    // binding the lowering needs.
+                    crate::parser::ast::ArrayEntry::Reference(value) =>
+                        crate::parser::ast::ArrayEntry::Reference(value),
+                    crate::parser::ast::ArrayEntry::KeyedReference(key, value) =>
+                        crate::parser::ast::ArrayEntry::KeyedReference(
+                            propagate_expr(key, env),
+                            value,
+                        ),
+                    other => other.map_exprs(|expr| propagate_expr(expr, env)),
+                })
                 .collect(),
         ),
         ExprKind::Match {
