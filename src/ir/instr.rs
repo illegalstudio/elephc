@@ -709,6 +709,8 @@ pub enum CoreBuiltinOp {
     BuiltinDeprecated = 18,
     /// Reads the nearest source call site through compiler-generated diagnostic frames.
     DiagnosticCallerLine = 19,
+    /// Wipes a uniquely owned PHP string payload before `sodium_memzero` resets it.
+    StrZero = 20,
 }
 
 impl CoreBuiltinOp {
@@ -733,7 +735,7 @@ impl CoreBuiltinOp {
             | Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
             | Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated
-            | Self::DiagnosticCallerLine => BuiltinResultOwnership::NonHeap,
+            | Self::DiagnosticCallerLine | Self::StrZero => BuiltinResultOwnership::NonHeap,
         }
     }
 
@@ -765,6 +767,7 @@ impl CoreBuiltinOp {
             17 => Some(Self::BuiltinWarning),
             18 => Some(Self::BuiltinDeprecated),
             19 => Some(Self::DiagnosticCallerLine),
+            20 => Some(Self::StrZero),
             _ => None,
         }
     }
@@ -777,7 +780,8 @@ impl CoreBuiltinOp {
             | Self::GetDefinedConstants
             | Self::GetExtensionFuncs
             | Self::GetMangledObjectVars
-            | Self::GetResources => 1,
+            | Self::GetResources
+            | Self::StrZero => 1,
             Self::SetErrorHandler => 3,
             Self::SetExceptionHandler => 2,
             Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated => 4,
@@ -796,6 +800,9 @@ impl CoreBuiltinOp {
     pub const fn effects(self) -> Effects {
         use Effects as E;
         match self {
+            Self::StrZero => Effects::from_bits_retain(
+                E::READS_HEAP.bits() | E::WRITES_HEAP.bits(),
+            ),
             Self::DiagnosticCallerLine => Effects::from_bits_retain(
                 E::READS_GLOBAL.bits() | E::READS_HEAP.bits(),
             ),

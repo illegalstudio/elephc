@@ -61,7 +61,7 @@ fn memzero() -> Stmt {
         .returns(TypeExpr::Void)
         .body(vec![
             expr(call("__elephc_sodium_memzero", vec![b(false), v("string")])),
-            expr(call("_rt_str_zero", vec![v("string")])),
+            expr(call("__elephc_str_zero", vec![v("string")])),
             assign("string", e_null()),
         ])
         .build()

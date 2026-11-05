@@ -435,8 +435,9 @@ mod tests {
         // differs by `$force` and the non-forced arm reads the cache's recorded mtime.
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
-        // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        assert_eq!(eval_internal, 134);
+        // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`), nor the
+        // internal `__elephc_str_zero` payload-wipe helper.
+        assert_eq!(eval_internal, 135);
         // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 364);
@@ -447,9 +448,9 @@ mod tests {
         // `ptr_write_f64`) and `buffer_ptr` are ordinary registry builtins on both backends.
         // The tokenizer location helper is a typed ordinary registry operation.
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
-        // internal aliases the extension-hosting prelude calls.
+        // internal aliases the extension-hosting prelude calls and `__elephc_str_zero`.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
-        assert_eq!(aot_registry, 926);
+        assert_eq!(aot_registry, 927);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 437 + curl_surface);
@@ -507,8 +508,8 @@ mod tests {
         assert_eq!(interpreter_adapter, 770 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
-        // internal aliases the extension-hosting prelude calls.
-        assert_eq!(unsupported, 498);
+        // internal aliases the extension-hosting prelude calls and `__elephc_str_zero`.
+        assert_eq!(unsupported, 499);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

@@ -27,6 +27,7 @@
 
 pub mod __elephc_builtin_deprecated;
 pub mod __elephc_builtin_warning;
+pub mod __elephc_str_zero;
 pub mod __elephc_class_has_constructor;
 pub mod __elephc_class_is_abstract;
 pub mod __elephc_gmmktime_raw;

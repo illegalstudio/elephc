@@ -178,6 +178,7 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                         Some(Immediate::I64(value)) => CoreBuiltinOp::from_i64(value),
                         _ => None,
                     };
+                    features.sodium |= operation == Some(CoreBuiltinOp::StrZero);
                     features.handler_state |= matches!(
                         operation,
                         Some(

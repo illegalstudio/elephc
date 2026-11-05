@@ -86,10 +86,6 @@ fn extern_declarations() -> Vec<Stmt> {
             .param("algorithm", CType::Int)
             .returns(CType::Str)
             .build(),
-        extern_fn("_rt_str_zero", "elephc_sodium")
-            .param("string", CType::Str)
-            .returns(CType::Void)
-            .build(),
         extern_fn("elephc_sodium_version", "elephc_sodium")
             .returns(CType::Str)
             .build(),
