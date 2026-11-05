@@ -195,6 +195,11 @@ pub(super) fn lower_array_access_with_missing_warning(
                     Some(expr.span),
                 );
             }
+            crate::ir_lower::diagnostics::refuse(
+                index.span,
+                "Computed $GLOBALS keys are not supported yet; use a literal string key",
+            );
+            return lower_null(ctx, &Expr::new(ExprKind::Null, expr.span));
         }
     }
     let array_value = if warn_on_missing {

@@ -400,3 +400,44 @@ fclose($stream);
     );
     assert_eq!(out, "string(2) \"xy\"\n");
 }
+
+/// Unsupported `$GLOBALS` shapes fail compilation with a targeted diagnostic instead of
+/// emitting a program that reads an uninitialized slot.
+#[test]
+fn test_unsupported_globals_shapes_are_rejected_php86() {
+    let cases = [
+        (
+            "<?php $x = 1; var_dump(count($GLOBALS));",
+            "The $GLOBALS array itself is not supported yet",
+        ),
+        (
+            "<?php $x = 1; $k = 'x'; var_dump($GLOBALS[$k]);",
+            "Computed $GLOBALS keys are not supported yet",
+        ),
+        (
+            "<?php $x = 1; $GLOBALS['y'] = 9;",
+            "Writes through $GLOBALS are not supported yet",
+        ),
+        (
+            "<?php $x = 1; $GLOBALS[] = 9;",
+            "Writes through $GLOBALS are not supported yet",
+        ),
+        (
+            "<?php $x = 1; $GLOBALS['a']['b'] = 9;",
+            "Writes through $GLOBALS are not supported yet",
+        ),
+    ];
+    for (source, expected) in cases {
+        let payload = std::panic::catch_unwind(|| run86(source))
+            .expect_err("unsupported $GLOBALS shape compiled successfully");
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("<non-string panic>");
+        assert!(
+            message.contains(expected),
+            "expected {expected:?}, got: {message}"
+        );
+    }
+}

@@ -214,12 +214,35 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             index,
             value,
         } => {
-            lower_array_assign(ctx, array, index, value, stmt.span);
+            if array == "GLOBALS" {
+                crate::ir_lower::diagnostics::refuse(
+                    stmt.span,
+                    "Writes through $GLOBALS are not supported yet; assign the top-level variable directly",
+                );
+            } else {
+                lower_array_assign(ctx, array, index, value, stmt.span);
+            }
         }
         StmtKind::NestedArrayAssign { target, value } => {
-            lower_nested_array_assign(ctx, target, value, stmt.span);
+            if write_target_is_globals(target) {
+                crate::ir_lower::diagnostics::refuse(
+                    stmt.span,
+                    "Writes through $GLOBALS are not supported yet; assign the top-level variable directly",
+                );
+            } else {
+                lower_nested_array_assign(ctx, target, value, stmt.span);
+            }
         }
-        StmtKind::ArrayPush { array, value } => lower_array_push(ctx, array, value, stmt.span),
+        StmtKind::ArrayPush { array, value } => {
+            if array == "GLOBALS" {
+                crate::ir_lower::diagnostics::refuse(
+                    stmt.span,
+                    "Writes through $GLOBALS are not supported yet; assign the top-level variable directly",
+                );
+            } else {
+                lower_array_push(ctx, array, value, stmt.span);
+            }
+        }
         StmtKind::TypedAssign {
             type_expr,
             name,
@@ -355,3 +378,20 @@ fn local_slot_is_convertible_here(ctx: &LoweringContext<'_, '_>, name: &str) -> 
 
 /// Exposes captured writable parent cells to compiler-generated append expressions.
 pub(crate) use nested_array_writes::lower_nested_assign_parent;
+
+/// Returns whether a nested assignment target is rooted at the `$GLOBALS` superglobal.
+fn write_target_is_globals(target: &Expr) -> bool {
+    let mut expr = target;
+    loop {
+        match &expr.kind {
+            ExprKind::ArrayAccess { array, .. } => {
+                if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                    return true;
+                }
+                expr = array;
+            }
+            ExprKind::Variable(name) => return name == "GLOBALS",
+            _ => return false,
+        }
+    }
+}
