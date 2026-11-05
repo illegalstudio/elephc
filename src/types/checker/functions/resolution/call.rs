@@ -725,11 +725,15 @@ impl Checker {
     /// Such a call cannot bind a by-reference parameter from a spread of the list, so its first
     /// walk did not specialize from argument types either; the walk here runs once the final
     /// pass has settled property and return types, so a stale error vanishes and a real one is
-    /// reported for the calling statement. Completed callees with an inferred return are
-    /// refreshed as for any other re-walk (`refresh_completed_inferred_callee`).
+    /// reported for the calling statement. An untyped by-value parameter takes the list's
+    /// value type (`list_value_ty`) instead of the initial `int` placeholder, which would
+    /// refuse `$n[0]` for a list of arrays; by-reference and declared parameters keep their
+    /// initial types. Completed callees with an inferred return are refreshed as for any other
+    /// re-walk (`refresh_completed_inferred_callee`).
     pub(in crate::types::checker) fn rewalk_marked_function_from_initial_params(
         &mut self,
         name: &str,
+        list_value_ty: Option<&PhpType>,
     ) -> Result<(), CompileError> {
         if !self.failed_body_rewalk_is_due(name) {
             return Ok(());
@@ -738,7 +742,16 @@ impl Checker {
             return Ok(());
         };
         self.rewalk_failed_body_at_next_call.remove(name);
-        let param_types = self.initial_function_param_types(name, &decl)?;
+        let mut param_types = self.initial_function_param_types(name, &decl)?;
+        if let Some(value_ty) = list_value_ty {
+            for (idx, (_, ty)) in param_types.iter_mut().enumerate().take(decl.params.len()) {
+                let untyped = decl.param_types.get(idx).is_some_and(Option::is_none);
+                let by_ref = decl.ref_params.get(idx).copied().unwrap_or(false);
+                if untyped && !by_ref {
+                    *ty = value_ty.clone();
+                }
+            }
+        }
         let outer_walk = self.refreshed_inferred_callees.is_none();
         if outer_walk {
             self.refreshed_inferred_callees = Some(HashSet::new());
@@ -805,8 +818,8 @@ impl Checker {
     /// signature is set aside so the call resolves through the first-call path, which binds
     /// every untyped parameter to its argument type; a clean walk publishes the full
     /// signature, and a failed one leaves its own provisional signature and returns the body
-    /// errors to the calling statement. The previous signature comes back only when the walk
-    /// published none.
+    /// errors to the calling statement. The previous signature, and the mark, come back only
+    /// when the walk published none.
     fn rewalk_failed_function_body_at_call(
         &mut self,
         name: &str,
@@ -825,6 +838,9 @@ impl Checker {
             self.refreshed_inferred_callees = None;
         }
         if !self.functions.contains_key(name) {
+            // The call failed before walking the body (an arity refusal), so the next call
+            // still has to walk it.
+            self.rewalk_failed_body_at_next_call.insert(name.to_string());
             if let Some(sig) = provisional {
                 self.publish_function_signature(name.to_string(), sig);
             }

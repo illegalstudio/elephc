@@ -413,7 +413,8 @@ fn test_rewalk_refreshes_helper_return_built_from_late_static_property() {
 }
 
 /// A body error of an untyped function is reported once when the program reaches the function
-/// only through a callback or a first-class callable. The string-callback check discarded the
+/// only through a callback or a first-class callable, also after such a call failed on its
+/// arity before walking the body. The string-callback check discarded the
 /// failed walk's errors, and the other paths read the provisional signature that walk left
 /// instead of walking the body again in the final pass, so each program compiled a body that
 /// `f(1)` refuses.
@@ -435,6 +436,14 @@ fn test_untyped_function_body_error_reached_through_callbacks_is_reported() {
         "<?php function f(&$n) { $x = 5; return $x[0] + $n; } $a = [1]; \
             var_dump(call_user_func_array('f', $a));"
             .to_string(),
+        "<?php function f($n, &$r) { $x = 5; return $x[0] + $n; } $a = [[1], 2]; \
+            var_dump(call_user_func_array('f', $a));"
+            .to_string(),
+        "<?php function f($n, $m) { $x = 5; return $x[0] + $n; } $a = [1, 'x']; \
+            var_dump(call_user_func_array('f', $a));"
+            .to_string(),
+        format!("<?php {f} var_dump(call_user_func('f', 1, 2)); echo f(1);"),
+        format!("<?php {f} $h = f(...); var_dump($h(1, 2)); echo f(1);"),
         "<?php function id<T>(T $x) { $a = 5; return $a[0]; } \
             print_r(array_map('id', [1, 2])); echo id(1);"
             .to_string(),
@@ -498,12 +507,22 @@ fn test_failed_body_rewalk_survives_calls_under_eval_barrier() {
     }
 }
 
-/// `call_user_func_array` over a variable list of arrays binds an untyped parameter to the
-/// element type, so a body that indexes it stays accepted when the re-walk runs from it.
+/// `call_user_func_array` over a variable list binds an untyped by-value parameter to the
+/// list's value type, so a body that indexes it stays accepted when the re-walk runs from it,
+/// also beside a by-reference parameter (whose first walk bound the by-value one to `int`), for
+/// a `mixed` list, and for an empty list, which binds nothing.
 #[test]
 fn test_call_user_func_array_variable_list_rewalk_accepts_valid_body() {
-    expect_no_error(
+    for program in [
         "<?php function f($n) { return $n[0]; } $a = [[1], [2]]; \
          var_dump(call_user_func_array('f', $a));",
-    );
+        "<?php function f($n, &$r) { return $n[0]; } $a = [[1], [2]]; \
+         var_dump(call_user_func_array('f', $a));",
+        "<?php function f($n) { return $n[0]; } $a = [1, 'x']; \
+         var_dump(call_user_func_array('f', $a));",
+        "<?php function f($n) { return $n[0]; } $a = []; \
+         var_dump(call_user_func_array('f', $a));",
+    ] {
+        expect_no_error(program);
+    }
 }
