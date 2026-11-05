@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use std::cell::RefCell;
 
 /// Lowers first-class callable creation.
 pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
@@ -136,6 +137,49 @@ pub(super) fn lower_object_class_name(
     )
 }
 
+thread_local! {
+    /// Tracks the class constants whose initializers are currently being lowered.
+    ///
+    /// A cyclic class constant (`const A = [self::B]; const B = [self::A];`) is accepted far
+    /// enough by the checker to reach lowering; expanding one initializer into the other would
+    /// recurse until the compiler overflows its stack. Re-entry of the same key falls back to
+    /// the runtime scoped-constant read, which the backend reports as an unsupported constant
+    /// instead of crashing.
+    static CONSTANT_LOWERING_KEYS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Pops a class-constant key from the lowering cycle detector on every return path.
+struct ConstantLoweringGuard {
+    key: String,
+}
+
+impl ConstantLoweringGuard {
+    /// Enters one class-constant initializer, or reports that it is already being lowered.
+    fn enter(key: String) -> Option<Self> {
+        CONSTANT_LOWERING_KEYS.with(|keys| {
+            let mut keys = keys.borrow_mut();
+            if keys.iter().any(|current| current == &key) || keys.len() >= 32 {
+                None
+            } else {
+                keys.push(key.clone());
+                Some(Self { key })
+            }
+        })
+    }
+}
+
+impl Drop for ConstantLoweringGuard {
+    /// Releases the class-constant key after its initializer is lowered.
+    fn drop(&mut self) {
+        CONSTANT_LOWERING_KEYS.with(|keys| {
+            let mut keys = keys.borrow_mut();
+            if let Some(position) = keys.iter().rposition(|current| current == &self.key) {
+                keys.remove(position);
+            }
+        });
+    }
+}
+
 /// Lowers a scoped constant read.
 pub(super) fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, name: &str, expr: &Expr) -> LoweredValue {
     let class_name = scoped_constant_receiver_name(ctx, receiver);
@@ -156,6 +200,10 @@ pub(super) fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver:
             Some(expr.span),
         );
     }
+    let key = format!("{}::{}", normalized_class_name, name);
+    let Some(_guard) = ConstantLoweringGuard::enter(key) else {
+        return lower_scoped_constant_fallback(ctx, &class_name, name, expr);
+    };
     if matches!(receiver, StaticReceiver::Static) {
         return lower_late_static_scoped_constant(ctx, name, expr);
     }

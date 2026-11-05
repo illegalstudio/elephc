@@ -9,11 +9,53 @@
 //! - Expression inference shares environments with statement checking, so variable and effect updates must stay synchronized.
 
 use crate::errors::CompileError;
+use std::cell::RefCell;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
+
+thread_local! {
+    /// Tracks the class constants whose initializers are currently being inferred.
+    ///
+    /// A cyclic declaration (`class C { const A = [self::B]; const B = [self::A]; }`) is
+    /// otherwise accepted by the class schema and recurses through `infer_type` until the
+    /// compiler overflows its stack. Re-entry reports a clean diagnostic instead.
+    static CONSTANT_INFERENCE_KEYS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Pops a class-constant key from the inference cycle detector on every return path.
+struct ConstantInferenceGuard {
+    key: String,
+}
+
+impl ConstantInferenceGuard {
+    /// Enters one class-constant initializer, or reports that it is already being inferred.
+    fn enter(key: String) -> Option<Self> {
+        CONSTANT_INFERENCE_KEYS.with(|keys| {
+            let mut keys = keys.borrow_mut();
+            if keys.iter().any(|current| current == &key) || keys.len() >= 32 {
+                None
+            } else {
+                keys.push(key.clone());
+                Some(Self { key })
+            }
+        })
+    }
+}
+
+impl Drop for ConstantInferenceGuard {
+    /// Releases the class-constant key after its initializer is inferred.
+    fn drop(&mut self) {
+        CONSTANT_INFERENCE_KEYS.with(|keys| {
+            let mut keys = keys.borrow_mut();
+            if let Some(position) = keys.iter().rposition(|current| current == &self.key) {
+                keys.remove(position);
+            }
+        });
+    }
+}
 
 impl Checker {
     /// Validates `new` expressions on late-bound static constructor targets by inferring
@@ -77,6 +119,28 @@ impl Checker {
         Ok(())
     }
 
+    /// Infers a class-constant initializer while rejecting a recursive definition.
+    fn infer_constant_initializer(
+        &mut self,
+        owner: &str,
+        name: &str,
+        value: &Expr,
+    ) -> Result<PhpType, CompileError> {
+        let normalized = owner.trim_start_matches('\\');
+        let Some(_guard) =
+            ConstantInferenceGuard::enter(format!("{}::{}", normalized, name))
+        else {
+            return Err(CompileError::new(
+                value.span,
+                &format!(
+                    "Cannot access class constant {}::{}: recursive definition",
+                    normalized, name
+                ),
+            ));
+        };
+        self.infer_type(value, &TypeEnv::default())
+    }
+
     /// Infers the type of a class constant or enum case accessed via scope resolution
     /// (e.g., `MyClass::CONSTANT` or `Color::Red`).
     ///
@@ -121,7 +185,7 @@ impl Checker {
                         self.warnings
                             .push(crate::errors::CompileWarning::new(expr.span, &message));
                     }
-                    return self.infer_type(&value_expr, &TypeEnv::default());
+                    return self.infer_constant_initializer(cn, name, &value_expr);
                 }
             }
             current_class = self.classes.get(cn).and_then(|i| i.parent.clone());
@@ -133,7 +197,7 @@ impl Checker {
                     if let Some(type_expr) = type_expr {
                         return self.resolve_type_expr(&type_expr, expr.span);
                     }
-                    return self.infer_type(&value, &TypeEnv::default());
+                    return self.infer_constant_initializer(iface_name, name, &value);
                 }
             }
         }
@@ -142,7 +206,7 @@ impl Checker {
             if let Some(type_expr) = type_expr {
                 return self.resolve_type_expr(&type_expr, expr.span);
             }
-            return self.infer_type(&value, &TypeEnv::default());
+            return self.infer_constant_initializer(&class_name, name, &value);
         }
         // On an enum, a `::name` that is neither a declared case nor a constant is an undefined
         // case — report that rather than the generic class-constant message.

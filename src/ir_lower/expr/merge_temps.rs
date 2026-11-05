@@ -445,7 +445,7 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             assignment_result_expr(value, result_target.as_deref(), prelude),
         ),
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| fallback_expr_type(expr)),
+            .unwrap_or(PhpType::Mixed),
         // Typed the way `lower_buffer_new` stamps the allocation, so `buffer_new<float>(1)[0]`
         // is read as a float element rather than the syntactic `int`.
         ExprKind::BufferNew { element_type, .. } => {
@@ -454,14 +454,35 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::PropertyAccess { object, property } => {
             nullable_pointer_property_type(ctx, object, property)
                 .or_else(|| property_access_expr_type_for_ir(ctx, object, property))
-                .unwrap_or_else(|| fallback_expr_type(expr))
+                .unwrap_or(PhpType::Mixed)
         }
         // A static property holding one raw word is resolved here: a `?ptr<T>` keeps its null
         // member through the merge, and a `buffer<T>` or `ptr<T>` keeps its handle or address
         // instead of the syntactic `int`. Other static reads keep the syntactic answer.
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_word_type(ctx, receiver, property, expr)
-                .unwrap_or_else(|| fallback_expr_type(expr))
+                .unwrap_or_else(|| static_property_result_type(ctx, receiver, property, expr))
+        }
+        // A class constant (including an enum case) has a readable declaration, so typing it
+        // from syntax made every scalar constant `Int` and every array constant an integer
+        // count. Resolve the constant the way its own lowering does; an unresolvable name
+        // merges as boxed `Mixed`.
+        ExprKind::ConstRef(name) => ctx
+            .constant_value(name.as_str())
+            .and_then(|(kind, _)| {
+                let initializer = Expr::new(kind, expr.span);
+                super::assoc_array_literals::constant_initializer_type_for_ir(
+                    ctx,
+                    &initializer,
+                    None,
+                )
+            })
+            .map(|ty| normalize_value_php_type(ty.codegen_repr()))
+            .unwrap_or(PhpType::Mixed),
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            super::assoc_array_literals::scoped_constant_value_type_for_ir(
+                ctx, receiver, name, expr,
+            )
         }
         // Calls are typed from the return metadata their own lowering uses. The syntactic
         // fallback answers `int` for every call outside its builtin allowlist, and a merge temp
@@ -480,7 +501,15 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             static_method_call_expr_type_for_ir(ctx, receiver, method).unwrap_or(PhpType::Mixed)
         }
         ExprKind::ClosureCall { var, .. } => closure_call_type_for_merge(ctx, var),
-        ExprKind::ExprCall { .. } => PhpType::Mixed,
+        // Shapes with no readable declaration before lowering: a dynamic call, pipe, dynamic
+        // member access, dynamic `new`, `clone`, or an `include` result. A boxed `Mixed` temp
+        // holds whatever they materialize; the syntactic `Int` guess cast arrays to counts.
+        ExprKind::ExprCall { .. }
+        | ExprKind::Pipe { .. }
+        | ExprKind::DynamicPropertyAccess { .. }
+        | ExprKind::NewDynamic { .. }
+        | ExprKind::Clone(_)
+        | ExprKind::IncludeValue { .. } => PhpType::Mixed,
         // A literal is typed by the context-aware literal typer, the element storage its own
         // lowering builds. The syntactic fallback types a buffer handle, a float local or a packed
         // field read `int`, so a merge temp typed from it stored the literal under an int element
@@ -489,6 +518,9 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
         ExprKind::ArrayLiteralAssoc(pairs) => {
             super::assoc_array_literals::assoc_array_literal_type_for_ir(ctx, pairs, expr)
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            assoc_array_literal_type_from_entries(ctx, entries, expr)
         }
         _ => fallback_expr_type(expr),
     }
