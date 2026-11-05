@@ -534,6 +534,14 @@ leak the nested receiver whenever the source destructor throws; retaining the
 source pin during its release would instead expose the same source to cleanup
 twice.
 
+A write routed to an accessor (`__set` through `DynamicPropSet`, or a set hook
+through its `__propset_<p>` method call) pins the owning source the same way
+for the call, because the accessor can throw: an explicit `throw`, or the
+typed-property guard on the hook's own raw backing write. The pin is detached
+after the call returns and before the source's normal release. The receiver
+lease stays with `PropertyWriteReceiver`, so the accessor call publishes no
+second record for it.
+
 Borrowed receivers and sources keep their existing owners. A source whose
 reference moves into a known slot follows that slot's transfer discipline rather
 than receiving an additional post-store release. These rules live in
