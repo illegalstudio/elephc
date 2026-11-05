@@ -10,6 +10,7 @@
 //! - Scope writes flow through shared scope-cell helpers so global aliases and reference aliases stay coherent.
 
 mod abstract_requirements;
+mod abstract_method_calls;
 mod array_updates;
 mod array_append;
 mod attributes_magic_validation;
@@ -70,6 +71,7 @@ use crate::context::{
 };
 
 use abstract_requirements::*;
+pub(in crate::interpreter) use abstract_method_calls::*;
 use array_append::eval_array_append_owned_value_with_type;
 pub(crate) use array_updates::*;
 // Re-exported under a distinct name so the `class_resolution::*` glob below and the crate-level

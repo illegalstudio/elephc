@@ -10,22 +10,30 @@
 /// Prelude factories without eval locals can reach constructorless eval allocation on one ABI.
 fn verify_simplexml_constructorless_factories_probe_active_eval_classes(target: &str) {
     let source = r#"<?php
-interface NativeFactoryTargetMarker { public function marker(): string; }
+interface NativeFactoryTargetMarker { public function marker(int $value): string; }
 abstract class NativeAbstractFactoryTargetXml extends SimpleXMLElement implements NativeFactoryTargetMarker {}
+function nativeAbstractTargetArgument(): int { echo 'argument'; return 1; }
+function nativeAbstractTargetMarker(NativeAbstractFactoryTargetXml $xml): string { return $xml->marker(nativeAbstractTargetArgument()); }
 $source = $argc > 0 ? 'class EvalConstructorlessTargetXml extends SimpleXMLElement {} $root = new EvalConstructorlessTargetXml("<r><item/></r>"); echo get_class($root->item);' : '';
 eval($source);
 $native = new SimpleXMLElement('<r><item/></r>');
 echo get_class($native->item);
 $abstract = simplexml_load_string('<r/>', NativeAbstractFactoryTargetXml::class);
 echo get_class($abstract);
+if ($abstract instanceof NativeAbstractFactoryTargetXml) { echo nativeAbstractTargetMarker($abstract); }
 $reflected = new ReflectionClass(NativeAbstractFactoryTargetXml::class);
 $without = $reflected->newInstanceWithoutConstructor();
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let call = module.functions.iter().find(|function| function.name == "nativeAbstractTargetMarker").unwrap();
+    let lookup = call.instructions.iter().position(|inst| inst.op == crate::ir::Op::MethodLookup).unwrap();
+    let argument = call.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
+    assert!(lookup < argument, "{target}: abstract lookup must precede argument effects");
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("__elephc_eval_try_allocate_object_v1"), "{target}: missing eval allocation probe");
     assert!(assembly.contains("__elephc_eval_try_allocate_native_object_v1"), "{target}: missing native factory allocation probe");
+    assert!(assembly.contains("__elephc_eval_method_lookup_v1"), "{target}: missing early abstract method lookup probe");
     assert!(assembly.contains("__elephc_eval_class_string_relation_v1"), "{target}: missing eval subclass relation probe");
 }
 

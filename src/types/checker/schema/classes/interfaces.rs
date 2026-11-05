@@ -513,7 +513,7 @@ fn validate_interface_method(
                 .insert(method_name.to_string(), Visibility::Public);
             state
                 .method_declaring_classes
-                .insert(method_name.to_string(), class.name.clone());
+                .insert(method_name.to_string(), interface_name.to_string());
             state.method_impl_classes.remove(method_name);
             state.abstract_methods.insert(method_name.to_string());
             if !state.vtable_slots.contains_key(method_name) {

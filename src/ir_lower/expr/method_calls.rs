@@ -191,6 +191,7 @@ pub(super) fn lower_method_call(
     // A concrete local load may later unbox physical Mixed storage after eval widens
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
     let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
+    emit_native_factory_method_lookup(ctx, object, dispatch_method, expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let call_description = receiver_class
@@ -263,6 +264,22 @@ pub(super) fn lower_method_call(
     }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
+}
+
+/// Native factories can create abstract wrappers, whose method error precedes argument effects.
+pub(super) fn emit_native_factory_method_lookup(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str, span: Span,
+) {
+    if !ctx.classes.contains_key("SimpleXMLElement") { return; }
+    let key = php_symbol_key(method);
+    let receiver_type = ctx.builder.value_php_type(object.value);
+    if let Some((class, _)) = singular_object_class(&receiver_type) {
+        if ctx.classes.get(class.trim_start_matches('\\'))
+            .is_some_and(|info| info.method_impl_classes.contains_key(&key)) { return; }
+    }
+    let data = ctx.intern_string(method);
+    ctx.emit_void(Op::MethodLookup, vec![object.value], Some(Immediate::Data(data)),
+        Op::MethodLookup.default_effects(), Some(span));
 }
 
 /// Builds synthetic `__call` arguments when a class lacks the requested method.

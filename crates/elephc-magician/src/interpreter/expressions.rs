@@ -152,8 +152,7 @@ fn eval_expr_with_result_ownership(
         } => {
             with_eval_operands(&[object], context, scope, values, |receiver, context, scope, values| {
                 let method = eval_dynamic_member_name(method, context, scope, values)?;
-                let modes = CallArgumentModes::for_method(receiver[0], &method, context, values).unwrap_or_default();
-                with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, _, values| {
+                with_eval_object_method_arguments(args, receiver[0], &method, context, scope, values, |arguments, context, _, values| {
                     eval_method_call_result_with_evaluated_args(receiver[0], &method, arguments, context, values)
                 })
             })
@@ -342,8 +341,7 @@ fn eval_expr_with_result_ownership(
             method,
             args,
         } => with_eval_operands(&[object], context, scope, values, |receiver, context, scope, values| {
-            let modes = CallArgumentModes::for_method(receiver[0], method, context, values).unwrap_or_default();
-            with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, _, values| {
+            with_eval_object_method_arguments(args, receiver[0], method, context, scope, values, |arguments, context, _, values| {
                 eval_method_call_result_with_evaluated_args(receiver[0], method, arguments, context, values)
             })
         }),
@@ -355,8 +353,7 @@ fn eval_expr_with_result_ownership(
             if values.is_null(receiver[0])? {
                 return values.null();
             }
-            let modes = CallArgumentModes::for_method(receiver[0], method, context, values).unwrap_or_default();
-            with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, _, values| {
+            with_eval_object_method_arguments(args, receiver[0], method, context, scope, values, |arguments, context, _, values| {
                 eval_method_call_result_with_evaluated_args(receiver[0], method, arguments, context, values)
             })
         }),
@@ -369,8 +366,7 @@ fn eval_expr_with_result_ownership(
                 return values.null();
             }
             let method = eval_dynamic_member_name(method, context, scope, values)?;
-            let modes = CallArgumentModes::for_method(receiver[0], &method, context, values).unwrap_or_default();
-            with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, _, values| {
+            with_eval_object_method_arguments(args, receiver[0], &method, context, scope, values, |arguments, context, _, values| {
                 eval_method_call_result_with_evaluated_args(receiver[0], &method, arguments, context, values)
             })
         }),

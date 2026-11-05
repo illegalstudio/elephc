@@ -205,6 +205,7 @@ pub(in crate::interpreter) fn with_eval_object_method_arguments<V: RuntimeValueO
     consume: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
         -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_abstract_instance_method_guard(object, method, context, values)?;
     let modes = CallArgumentModes::for_method(object, method, context, values).unwrap_or_default();
     with_eval_call_arguments_with_modes(args, &modes, context, scope, values, consume)
 }

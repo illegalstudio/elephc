@@ -699,7 +699,7 @@ fn validate_instruction_immediate(
         ConstI64 => require_immediate(inst_id, inst, "i64", |imm| matches!(imm, Imm::I64(_))),
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
-        ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
+        ConstStr | ConstClassName | DataAddr | Warn | MethodLookup | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
         | LoadPropRefCellChecked
         | LoadStaticPropertyRefCell
@@ -1251,6 +1251,7 @@ fn validate_opcode_rules(
             check_descriptor_from_buffer_resolve(function, inst_id, inst)?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64 buffer index")
         }
+        MethodLookup => check_count(inst_id, inst, 1, "1"),
         DynamicObjectNewWithoutConstructorMixed
         | PropGet
         | PropGetForWrite
@@ -1261,7 +1262,6 @@ fn validate_opcode_rules(
         | DynamicPropSet
         | NullsafePropGet
         | NullsafeMethodCall
-        | MethodLookup
         | MethodCall
         | InstanceOf
         | InstanceOfDynamic => {

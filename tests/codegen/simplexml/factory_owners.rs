@@ -15,11 +15,15 @@ use crate::support::*;
 fn test_simplexml_constructorless_factory_owners_bundle() {
     if skip_without_xml_native("test_simplexml_constructorless_factory_owners_bundle") { return; }
     let declarations = r#"
-interface NativeFactoryAllocationMarker { public function marker(): string; }
+interface NativeFactoryAllocationMarker { public function marker(int $value): string; }
 abstract class NativeAbstractFactoryXml extends SimpleXMLElement implements NativeFactoryAllocationMarker {
-    abstract public function marker(): string;
+    abstract public function marker(int $value): string;
     public function __construct() { throw new Exception('constructor called'); }
 }
+class NativeConcreteFactoryXml extends NativeAbstractFactoryXml {
+    public function marker(int $value): string { return 'concrete:' . $value; }
+}
+abstract class NativeImplicitFactoryXml extends SimpleXMLElement implements NativeFactoryAllocationMarker {}
 class PrivateConstructorFactoryXml extends SimpleXMLIterator {
     private function __construct() { throw new Exception('constructor called'); }
 }
@@ -28,11 +32,16 @@ function factoryProbePresent(int $handle): int { return elephc_xml_sx_int($handl
 function factoryProbeRelease(int $handle): void { elephc_xml_sx_free($handle); }
 function factoryProbeAllocate(int $handle, string $class): void { __elephc_simplexml_wrap($handle, $class); }
 function factoryProbeStrictAllocate(string $class): mixed { return __elephc_new_without_constructor($class); }
+function factoryProbeMarkerArgument(): int { echo 'argument|'; return 7; }
+function factoryProbeInterfaceMarker(NativeFactoryAllocationMarker $xml): string { return $xml->marker(factoryProbeMarkerArgument()); }
+function factoryProbeMixedMarker(mixed $xml): mixed { return $xml->marker(factoryProbeMarkerArgument()); }
+function factoryProbeNullableMarker(?NativeFactoryAllocationMarker $xml): ?string { return $xml?->marker(factoryProbeMarkerArgument()); }
+function factoryProbeTypedMarker(NativeAbstractFactoryXml $xml): string { return $xml->marker(factoryProbeMarkerArgument()); }
 "#;
     let evaluated = r#"
 interface FactoryAllocationFailureInterface {}
-abstract class EvalAbstractFactoryXml extends SimpleXMLElement {
-    abstract public function marker(): string;
+abstract class EvalAbstractFactoryXml extends SimpleXMLElement implements NativeFactoryAllocationMarker {
+    abstract public function marker(int $value): string;
     public function __construct() { throw new Exception('constructor called'); }
 }
 $held = new SimpleXMLElement('<held/>');
@@ -47,6 +56,19 @@ for ($i = 0; $i < 3; $i++) {
 }
 echo $held->getName(), '|';
 unset($held, $handle, $i);
+$evalMarker = simplexml_load_string('<r/>', 'EvalAbstractFactoryXml');
+$method = 'marker';
+foreach ([0, 1, 2, 3] as $call) {
+    try {
+        if ($call === 0) { $evalMarker->marker(factoryProbeMarkerArgument()); }
+        elseif ($call === 1) { $evalMarker->$method(factoryProbeMarkerArgument()); }
+        elseif ($call === 2) { $evalMarker?->marker(factoryProbeMarkerArgument()); }
+        else { $evalMarker?->$method(factoryProbeMarkerArgument()); }
+    } catch (Error $error) {
+        echo $error->getMessage() === 'Cannot call abstract method EvalAbstractFactoryXml::marker()' ? 'vm-abstract|' : $error->getMessage();
+    }
+}
+unset($evalMarker, $method, $call, $error);
 $evalReflected = new ReflectionClass('EvalAbstractFactoryXml');
 try { $evalReflected->newInstanceWithoutConstructor(); }
 catch (Error $error) { echo 'eval-reflection:', get_class($error), '|'; }
@@ -59,7 +81,7 @@ $document = new DOMDocument();
 $document->loadXML('<r><item>ok</item></r>');
 file_put_contents('factory-owners.xml', '<r><item>ok</item></r>');
 try {
-    foreach ([NativeAbstractFactoryXml::class, 'EvalAbstractFactoryXml', PrivateConstructorFactoryXml::class] as $class) {
+    foreach ([NativeAbstractFactoryXml::class, 'EvalAbstractFactoryXml', PrivateConstructorFactoryXml::class, NativeConcreteFactoryXml::class, NativeImplicitFactoryXml::class] as $class) {
         $root = simplexml_load_string('<r><item>ok</item></r>', $class);
         $file = simplexml_load_file('factory-owners.xml', $class);
         $imported = simplexml_import_dom($document, $class);
@@ -70,7 +92,20 @@ try {
         echo get_class($imported), ':', get_class($children), ':', get_class($paths[0]), ':';
         echo get_class($cloned), ':';
         echo (string)$imported->item, '|';
-        unset($root, $file, $imported, $children, $paths, $cloned);
+        if ($root instanceof NativeFactoryAllocationMarker) {
+            $abstractOwner = $root instanceof NativeImplicitFactoryXml ? 'NativeFactoryAllocationMarker' : get_class($root);
+            try { echo factoryProbeInterfaceMarker($root), '|'; }
+            catch (Error $error) { echo $error->getMessage() === 'Cannot call abstract method ' . $abstractOwner . '::marker()' ? 'abstract|' : $error->getMessage(); }
+            try { echo factoryProbeMixedMarker($root), '|'; }
+            catch (Error $error) { echo $error->getMessage() === 'Cannot call abstract method ' . $abstractOwner . '::marker()' ? 'abstract|' : $error->getMessage(); }
+            try { echo factoryProbeNullableMarker($root), '|'; }
+            catch (Error $error) { echo $error->getMessage() === 'Cannot call abstract method ' . $abstractOwner . '::marker()' ? 'abstract|' : $error->getMessage(); }
+            if ($root instanceof NativeAbstractFactoryXml) {
+                try { echo factoryProbeTypedMarker($root), '|'; }
+                catch (Error $error) { echo $error->getMessage() === 'Cannot call abstract method ' . $abstractOwner . '::marker()' ? 'abstract|' : $error->getMessage(); }
+            }
+        }
+        unset($root, $file, $imported, $children, $paths, $cloned, $abstractOwner);
     }
     $reflected = new ReflectionClass(NativeAbstractFactoryXml::class);
     try { $reflected->newInstanceWithoutConstructor(); }
@@ -78,6 +113,7 @@ try {
     set_error_handler(function(int $level, string $message): bool { return true; });
     echo (int)(simplexml_load_string('<r>', NativeAbstractFactoryXml::class) === false), '|';
     restore_error_handler();
+    echo 'null:', (int)(factoryProbeNullableMarker(null) === null), '|';
     unset($reflected, $error, $class, $document);
 } finally { unlink('factory-owners.xml'); }
 "#;
@@ -85,11 +121,18 @@ try {
     let source = format!("<?php {declarations} $source = $argc > 0 ? '{escaped}' : ''; eval($source); unset($source); {body}");
     let expected = concat!(
         "1Error0|1Error0|1Error0|held|",
+        "vm-abstract|vm-abstract|vm-abstract|vm-abstract|",
         "eval-reflection:Error|aot-eval-reflection:Error|",
         "NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:ok|",
+        "abstract|abstract|abstract|abstract|",
         "EvalAbstractFactoryXml:EvalAbstractFactoryXml:EvalAbstractFactoryXml:EvalAbstractFactoryXml:EvalAbstractFactoryXml:EvalAbstractFactoryXml:EvalAbstractFactoryXml:ok|",
+        "abstract|abstract|abstract|",
         "PrivateConstructorFactoryXml:PrivateConstructorFactoryXml:PrivateConstructorFactoryXml:PrivateConstructorFactoryXml:PrivateConstructorFactoryXml:PrivateConstructorFactoryXml:PrivateConstructorFactoryXml:ok|",
-        "reflection:Error|1|",
+        "NativeConcreteFactoryXml:NativeConcreteFactoryXml:NativeConcreteFactoryXml:NativeConcreteFactoryXml:NativeConcreteFactoryXml:NativeConcreteFactoryXml:NativeConcreteFactoryXml:ok|",
+        "argument|concrete:7|argument|concrete:7|argument|concrete:7|argument|concrete:7|",
+        "NativeImplicitFactoryXml:NativeImplicitFactoryXml:NativeImplicitFactoryXml:NativeImplicitFactoryXml:NativeImplicitFactoryXml:NativeImplicitFactoryXml:NativeImplicitFactoryXml:ok|",
+        "abstract|abstract|abstract|",
+        "reflection:Error|1|null:1|",
     );
     let run = || {
         let output = compile_and_run_with_heap_debug(&source);

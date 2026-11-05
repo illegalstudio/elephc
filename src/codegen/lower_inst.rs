@@ -102,6 +102,7 @@ mod method_call_types;
 mod method_dispatch;
 mod method_intrinsics;
 mod method_resolution;
+mod method_lookup;
 mod reference_return_dispatch;
 #[cfg(test)]
 #[path = "lower_inst/null_parameter_guard_tests.rs"]
@@ -442,6 +443,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ExprCall => callables::lower_expr_call(ctx, &inst),
         Op::CallableDescriptorInvoke => callables::lower_callable_descriptor_invoke(ctx, &inst),
         Op::PipeCall => callables::lower_pipe_call(ctx, &inst),
+        Op::MethodLookup => method_lookup::lower_method_lookup(ctx, &inst),
         Op::MethodCall => lower_method_call(ctx, &inst),
         Op::NullsafeMethodCall => lower_nullsafe_method_call(ctx, &inst),
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),

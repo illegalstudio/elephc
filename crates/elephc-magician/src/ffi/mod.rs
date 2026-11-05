@@ -30,6 +30,8 @@ pub mod native_methods;
 #[cfg(not(test))]
 pub mod object_construction;
 #[cfg(not(test))]
+mod method_lookup;
+#[cfg(not(test))]
 pub mod object_introspection;
 pub mod opcache_status;
 pub mod scope;

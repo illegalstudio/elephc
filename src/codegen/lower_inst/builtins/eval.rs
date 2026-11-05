@@ -359,6 +359,8 @@ pub(super) use dynamic_calls::{
 };
 mod constructorless;
 pub(super) use constructorless::lower_eval_constructorless_fallback;
+mod method_lookup;
+pub(super) use method_lookup::lower_eval_abstract_method_guard;
 pub(super) use introspection::{
     emit_context_free_object_class_name, lower_eval_callable_call_array,
     lower_eval_class_relation, lower_eval_is_callable, lower_eval_member_exists,

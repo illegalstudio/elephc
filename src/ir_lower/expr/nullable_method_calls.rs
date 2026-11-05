@@ -204,6 +204,7 @@ fn lower_method_call_with_binding(
     // A concrete local load may later unbox physical Mixed storage after eval widens
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
     let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
+    emit_native_factory_method_lookup(ctx, object, dispatch_method, expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))

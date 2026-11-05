@@ -84,6 +84,7 @@ fn dispatch(
     let span = expr.span;
     let result = published_slot(ctx, PhpType::Mixed, span);
     let (object, owner) = root_method_receiver(ctx, object, span);
+    emit_native_factory_method_lookup(ctx, object, method, span);
     let class_name = published_slot(ctx, PhpType::Str, span);
     let initial = ctx.initialized_slots_snapshot();
     let select = ctx.builder.create_named_block("method.variadic.select", vec![]);

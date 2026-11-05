@@ -1198,6 +1198,7 @@ pub enum Op {
     DynamicPropSet,
     NullsafePropGet,
     NullsafeMethodCall,
+    /// Rejects an abstract instance target before evaluating call arguments.
     MethodLookup,
     MethodCall,
     StaticMethodCall,
@@ -1614,7 +1615,7 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
-            MethodCall | NullsafeMethodCall => {
+            MethodLookup | MethodCall | NullsafeMethodCall => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_DEOPT
             }
             // These opcodes drive PHP's Iterator protocol through hidden method calls.
@@ -1628,7 +1629,7 @@ impl Op {
             DynamicObjectNewWithoutConstructorMixed => E::READS_HEAP | E::WRITES_HEAP
                 | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL | E::MAY_DEOPT,
             SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
-            | MethodLookup | StaticMethodCall
+            | StaticMethodCall
             | MixedNumericBinop | PhpRelCmp | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }

@@ -237,6 +237,19 @@ fn execute_context_try_allocate_object_inner(
     }
 }
 
+/// Publishes a lookup error without evaluating arguments or invoking the method.
+pub fn execute_context_abstract_method_guard_outcome(
+    context: &mut ElephcEvalContext, object: RuntimeCellHandle, method: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    match eval_abstract_instance_method_guard(object, method, context, values) {
+        Ok(()) => Ok(None),
+        Err(EvalStatus::UncaughtThrowable) => context.take_pending_throw()
+            .map(EvalOutcome::Throwable).map(Some).ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
 /// Calls a method on a value that may be an eval-created object.
 pub fn execute_context_method_call_outcome(
     context: &mut ElephcEvalContext,

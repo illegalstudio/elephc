@@ -518,7 +518,7 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         eval_dynamic_method_for_call(&called_class_name, method_name, context)
     {
         if method.is_abstract() {
-            return Err(EvalStatus::RuntimeFatal);
+            return eval_throw_abstract_method_call_error(&class_name, method.name(), context, values);
         }
         if validate_eval_member_access(&class_name, method.visibility(), context).is_ok() {
             if method.is_static() {

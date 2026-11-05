@@ -65,7 +65,7 @@ use property_helpers::*;
 pub(in crate::interpreter) use public_mirror_writes::validate_reflection_public_mirror_direct_write;
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
-const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
+pub(super) const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
 const EVAL_REFLECTION_CLASS_FLAG_INTERFACE: u64 = 4;
 const EVAL_REFLECTION_CLASS_FLAG_TRAIT: u64 = 8;
 const EVAL_REFLECTION_CLASS_FLAG_ENUM: u64 = 16;

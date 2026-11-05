@@ -94,6 +94,13 @@ pub(in crate::codegen::lower_inst) fn lower_eval_constructorless_fallback(
     eval::lower_eval_constructorless_fallback(ctx, miss_label, native_factory)
 }
 
+/// Rejects an eval-owned abstract method before any call arguments are evaluated.
+pub(in crate::codegen::lower_inst) fn lower_eval_abstract_method_guard(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, object: ValueId, method: &str,
+) -> Result<()> {
+    eval::lower_eval_abstract_method_guard(ctx, inst, object, method)
+}
+
 /// Lowers a post-eval method call that may target an eval-created object.
 pub(in crate::codegen::lower_inst) fn lower_eval_method_call(
     ctx: &mut FunctionContext<'_>,
