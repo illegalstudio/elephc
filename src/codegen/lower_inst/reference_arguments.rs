@@ -886,7 +886,17 @@ fn emit_heap_ref_writeback(ctx: &mut FunctionContext<'_>, writeback: &RefArgWrit
     emit_ref_writeback_tag_guard(ctx, crate::codegen_support::runtime_value_tag(&source_ty));
     move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
     match &source_ty {
-        PhpType::Array(element) => emit_typed_array_ref_writeback_payload(ctx, &element.codegen_repr()),
+        PhpType::Array(element) => {
+            let element = element.codegen_repr();
+            emit_typed_array_ref_writeback_payload(ctx, &element);
+            if array_elements_need_writeback_guard(&element) {
+                emit_array_elements_writeback_guard(ctx, &element);
+            }
+        }
+        PhpType::Object(class_name) => {
+            emit_object_writeback_class_guard(ctx, class_name);
+            abi::emit_incref_if_refcounted(ctx.emitter, &source_ty);
+        }
         _ => abi::emit_incref_if_refcounted(ctx.emitter, &source_ty),
     }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -894,6 +904,194 @@ fn emit_heap_ref_writeback(ctx: &mut FunctionContext<'_>, writeback: &RefArgWrit
     abi::emit_decref_if_refcounted(ctx.emitter, &source_ty);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     store_current_scalar_result_to_ref_source(ctx, writeback)
+}
+
+/// The fatal raised when a callee replaced a typed object argument (or an element of a typed
+/// object array) with an instance of a class the local's layout cannot describe.
+const FOREIGN_OBJECT_WRITEBACK_MESSAGE: &[u8] =
+    b"Fatal error: a by-reference argument was replaced by an object of a class its typed variable cannot hold\n";
+
+/// Resolves the class or interface id and kind `__rt_exception_matches` checks a writeback
+/// object against, or `None` when no check applies.
+///
+/// Inside an eval context a class declared by `eval()` has no static metadata, so the static
+/// matcher cannot answer for its instances; the check is skipped there.
+fn writeback_class_target(ctx: &FunctionContext<'_>, class_name: &str) -> Option<(u64, i64)> {
+    if super::builtins::has_eval_context(ctx) {
+        return None;
+    }
+    let normalized = class_name.trim_start_matches('\\');
+    if let Some(class_info) = ctx.module.class_infos.get(normalized) {
+        return Some((class_info.class_id, 0));
+    }
+    ctx.module
+        .interface_infos
+        .get(normalized)
+        .map(|interface_info| (interface_info.interface_id, 1))
+}
+
+/// Fatals unless the borrowed object in the result register is an instance of `class_name`.
+///
+/// The writeback tag guard only proves the callee left SOME object; a typed `Foo` slot reads
+/// its properties at `Foo`'s offsets, so an instance of an unrelated class must not land there.
+/// The result register still holds the object afterwards.
+fn emit_object_writeback_class_guard(ctx: &mut FunctionContext<'_>, class_name: &str) {
+    let Some((target_id, target_kind)) = writeback_class_target(ctx, class_name) else {
+        return;
+    };
+    let ok = ctx.next_label("ref_writeback_class_ok");
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {}
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the written-back object to the class matcher
+        }
+    }
+    emit_writeback_class_match_call(ctx, target_id, target_kind);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {}", ok));               // the object is an instance of the local's class
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test eax, eax");                           // did the matcher accept the object's class?
+            ctx.emitter.instruction(&format!("jne {}", ok));                    // the object is an instance of the local's class
+        }
+    }
+    super::objects::emit_fatal_message(ctx, FOREIGN_OBJECT_WRITEBACK_MESSAGE);
+    ctx.emitter.label(&ok);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+}
+
+/// The fatal raised when a callee left an array whose nested layout the typed local cannot read.
+const FOREIGN_ARRAY_WRITEBACK_MESSAGE: &[u8] =
+    b"Fatal error: a by-reference argument was replaced by an array whose elements its typed variable cannot hold\n";
+
+/// Whether the elements of an `array<element>` written back by reference need a per-element
+/// check beyond the array's own slot tag: an object element's class, or a nested array's slot
+/// layout (recursively).
+fn array_elements_need_writeback_guard(element: &PhpType) -> bool {
+    matches!(element, PhpType::Object(_) | PhpType::Array(_))
+}
+
+/// Fatals unless every element of the owned `array<element>` in the result register fits the
+/// typed element contract; the result register still holds the array afterwards.
+///
+/// The slot-layout check of the outer array proves each element has the element's runtime
+/// kind, not what it contains: an object element must be an instance of the element class
+/// (the local reads its properties at that class's offsets), and a nested array's own slots
+/// must have the nested element layout, checked recursively. Empty nested arrays fit every
+/// layout.
+fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &PhpType) {
+    let object_target = match element {
+        PhpType::Object(class_name) => match writeback_class_target(ctx, class_name) {
+            Some(target) => Some(target),
+            None => return,
+        },
+        PhpType::Array(_) => None,
+        _ => return,
+    };
+    let lp = ctx.next_label("ref_writeback_elements_loop");
+    let next = ctx.next_label("ref_writeback_elements_next");
+    let fail = ctx.next_label("ref_writeback_elements_fail");
+    let done = ctx.next_label("ref_writeback_elements_done");
+    // -- temporary frame: [0] owned array, [8] element index --
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #16");                         // reserve the array and index spill slots
+            ctx.emitter.instruction("str x0, [sp]");                            // remember the array across the element checks
+            ctx.emitter.instruction("str xzr, [sp, #8]");                       // start at element 0
+            ctx.emitter.label(&lp);
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // reload the element index
+            ctx.emitter.instruction("ldr x10, [sp]");                           // reload the array
+            ctx.emitter.instruction("ldr x11, [x10]");                          // load the element count
+            ctx.emitter.instruction("cmp x9, x11");                             // has every element been checked?
+            ctx.emitter.instruction(&format!("b.ge {}", done));                 // yes: the array fits the typed contract
+            ctx.emitter.instruction("add x10, x10, #24");                       // skip the 24-byte array header to the slots
+            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load this element's payload pointer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve the array and index spill slots
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // remember the array across the element checks
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 0");              // start at element 0
+            ctx.emitter.label(&lp);
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 8]");            // reload the element index
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the array
+            ctx.emitter.instruction("cmp rcx, QWORD PTR [r10]");                // has every element been checked?
+            ctx.emitter.instruction(&format!("jge {}", done));                  // yes: the array fits the typed contract
+            ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 24 + rcx * 8]"); // load this element's payload pointer
+        }
+    }
+    if let Some((target_id, target_kind)) = object_target {
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass this element's object to the class matcher
+        }
+        emit_writeback_class_match_call(ctx, target_id, target_kind);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbnz x0, {}", next));         // this element is an instance of the element class
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test eax, eax");                       // did the matcher accept this element's class?
+                ctx.emitter.instruction(&format!("jne {}", next));              // this element is an instance of the element class
+            }
+        }
+        super::objects::emit_fatal_message(ctx, FOREIGN_OBJECT_WRITEBACK_MESSAGE);
+    } else if let PhpType::Array(inner) = element {
+        let inner = inner.codegen_repr();
+        let inner_tag = crate::codegen_support::container_value_tag(&inner);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x9, [x0]");                        // load the nested array's element count
+                ctx.emitter.instruction(&format!("cbz x9, {}", next));          // an empty nested array fits every layout
+                ctx.emitter.instruction("ldr x9, [x0, #-8]");                   // load the nested array's packed kind word
+                ctx.emitter.instruction("lsr x9, x9, #8");                      // shift the runtime value_type tag into the low bits
+                ctx.emitter.instruction("and x9, x9, #0x7f");                   // isolate the value_type, dropping the COW bit
+                ctx.emitter.instruction(&format!("cmp x9, #{}", inner_tag));    // do the nested slots have the nested element layout?
+                ctx.emitter.instruction(&format!("b.ne {}", fail));             // no: the typed local cannot read them
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("cmp QWORD PTR [rax], 0");              // is the nested array empty?
+                ctx.emitter.instruction(&format!("je {}", next));               // an empty nested array fits every layout
+                ctx.emitter.instruction("mov r11, QWORD PTR [rax - 8]");        // load the nested array's packed kind word
+                ctx.emitter.instruction("shr r11, 8");                          // shift the runtime value_type tag into the low bits
+                ctx.emitter.instruction("and r11, 0x7f");                       // isolate the value_type, dropping the COW bit
+                ctx.emitter.instruction(&format!("cmp r11, {}", inner_tag));    // do the nested slots have the nested element layout?
+                ctx.emitter.instruction(&format!("jne {}", fail));              // no: the typed local cannot read them
+            }
+        }
+        if array_elements_need_writeback_guard(&inner) {
+            emit_array_elements_writeback_guard(ctx, &inner);
+        }
+        abi::emit_jump(ctx.emitter, &next);
+        ctx.emitter.label(&fail);
+        super::objects::emit_fatal_message(ctx, FOREIGN_ARRAY_WRITEBACK_MESSAGE);
+    }
+    ctx.emitter.label(&next);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // reload the element index
+            ctx.emitter.instruction("add x9, x9, #1");                          // advance to the next element
+            ctx.emitter.instruction("str x9, [sp, #8]");                        // remember the advanced index
+            ctx.emitter.instruction(&format!("b {}", lp));                      // check the next element
+            ctx.emitter.label(&done);
+            ctx.emitter.instruction("ldr x0, [sp]");                            // restore the array as the result
+            ctx.emitter.instruction("add sp, sp, #16");                         // release the spill slots
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("add QWORD PTR [rsp + 8], 1");              // advance to the next element
+            ctx.emitter.instruction(&format!("jmp {}", lp));                    // check the next element
+            ctx.emitter.label(&done);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the array as the result
+            ctx.emitter.instruction("add rsp, 16");                             // release the spill slots
+        }
+    }
+}
+
+/// Calls `__rt_exception_matches` for the object already in the first argument register.
+fn emit_writeback_class_match_call(ctx: &mut FunctionContext<'_>, target_id: u64, target_kind: i64) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), target_id as i64);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), target_kind);
+    abi::emit_call_label(ctx.emitter, "__rt_exception_matches");
 }
 
 /// Returns the low payload register produced by `__rt_mixed_unbox` on the active target.

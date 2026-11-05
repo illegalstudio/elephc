@@ -12,7 +12,6 @@
 mod call_validation;
 mod param_binding;
 mod reference_outputs;
-pub(crate) use reference_outputs::nullable_reference_keeps_concrete_storage;
 mod array_push_values;
 mod resolution;
 mod returns;

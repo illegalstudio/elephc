@@ -228,7 +228,9 @@ impl Checker {
         let array_value = actual.is_php_array()
             || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. });
         let guarded_storage = self.guarded_local_storage_type(arg, env).cloned();
-        if guarded_storage.is_none() && nullable_reference_keeps_concrete_storage(expected, actual) {
+        if guarded_storage.is_none()
+            && self.nullable_reference_keeps_concrete_storage(expected, actual, arg)
+        {
             return;
         }
         let actual = guarded_storage.as_ref().unwrap_or(actual);
@@ -338,38 +340,82 @@ impl Checker {
     }
 }
 
-/// Whether a concrete local bound to a NULLABLE typed by-reference parameter keeps its own
-/// concrete storage across the call (`?array &$read` given an `array<Foo>` local, `?Foo &$o`
-/// given an object, `?float &$f` given a float).
-///
-/// The parameter's boxed cell is written back into the typed slot after the call, and the
-/// writeback verifies the callee left a value of the local's own kind (converting an array
-/// built from Mixed values into the typed element layout) — so the local's type is unchanged and
-/// needs no promotion to boxed storage. The only other value such a parameter admits is `null`,
-/// which the typed slot cannot hold; the writeback stops the program there with a diagnostic.
-pub(crate) fn nullable_reference_keeps_concrete_storage(expected: &PhpType, actual: &PhpType) -> bool {
-    let PhpType::Union(members) = expected else {
-        return false;
-    };
-    if !members.iter().any(|member| matches!(member, PhpType::Void)) {
-        return false;
-    }
-    let non_null: Vec<&PhpType> = members
-        .iter()
-        .filter(|member| !matches!(member, PhpType::Void))
-        .collect();
-    match actual {
-        PhpType::Array(element) => {
-            !matches!(element.codegen_repr(), PhpType::Str)
-                && non_null.iter().all(|member| {
-                    member.is_php_array()
-                        || matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })
-                })
+impl Checker {
+    /// Whether a DECLARED-type local bound to a NULLABLE typed by-reference parameter keeps its
+    /// own concrete storage across the call (`?array &$read` given `array<Foo> $read = …`,
+    /// `?Foo &$o` given `Foo $o = …`, `?float &$f` given `float $f = …`).
+    ///
+    /// The declaration pins the local's storage, so it cannot take the parameter's boxed cell:
+    /// the cell is written back into the typed slot after the call, and the writeback verifies
+    /// the callee left a value of the local's own kind (converting an array built from Mixed
+    /// values into the typed element layout, and checking object classes and nested array
+    /// layouts). `null`, which the declared type does not admit, stops the program there with a
+    /// diagnostic. Every other local (parameters included) takes the boxed cell like php, and a
+    /// place without a frame slot of its own (a global, a static, a property, an element)
+    /// follows the ordinary by-reference storage rules, because the writeback only targets a
+    /// local slot.
+    ///
+    /// An object local keeps its class only when every class the parameter admits is that class
+    /// or one of its subclasses: `?Base &$v` given `A $v` may receive a sibling `B`, which `A`'s
+    /// property layout cannot describe, so that binding follows the ordinary rules instead.
+    pub(crate) fn nullable_reference_keeps_concrete_storage(
+        &self,
+        expected: &PhpType,
+        actual: &PhpType,
+        arg: &Expr,
+    ) -> bool {
+        let mut arg = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+            arg = value;
         }
-        PhpType::Object(_) => non_null
+        let ExprKind::Variable(name) = &arg.kind else {
+            return false;
+        };
+        if !self.typed_local_names.contains_key(name)
+            || self.active_ref_params.contains(name)
+            || self.ref_assign_aliased_locals.contains(name)
+            || self.by_ref_captured_locals.contains(name)
+            || self.boxed_ref_aliased_locals.contains(name)
+            || self.active_globals.contains(name)
+            || self.static_local_names.contains(name)
+            || self.name_is_seeded_program_storage(name)
+            || self.top_level_binding_is_program_global(name)
+        {
+            return false;
+        }
+        let PhpType::Union(members) = expected else {
+            return false;
+        };
+        if !members.iter().any(|member| matches!(member, PhpType::Void)) {
+            return false;
+        }
+        let non_null: Vec<&PhpType> = members
             .iter()
-            .all(|member| matches!(member, PhpType::Object(_))),
-        PhpType::Float => non_null.iter().all(|member| matches!(member, PhpType::Float)),
-        _ => false,
+            .filter(|member| !matches!(member, PhpType::Void))
+            .collect();
+        match actual {
+            PhpType::Array(element) => {
+                !matches!(element.codegen_repr(), PhpType::Str)
+                    && non_null.iter().all(|member| {
+                        member.is_php_array()
+                            || matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    })
+            }
+            PhpType::Object(local_class) => non_null.iter().all(|member| {
+                matches!(member, PhpType::Object(member_class)
+                    if self.object_class_stays_within(member_class, local_class))
+            }),
+            PhpType::Float => non_null.iter().all(|member| matches!(member, PhpType::Float)),
+            _ => false,
+        }
+    }
+
+    /// Whether every instance of `member_class` is also an instance of `local_class` (the same
+    /// class, or a subclass of it), so a typed `local_class` slot can hold it.
+    fn object_class_stays_within(&self, member_class: &str, local_class: &str) -> bool {
+        let member = member_class.trim_start_matches('\\');
+        let local = local_class.trim_start_matches('\\');
+        crate::names::php_symbol_key(member) == crate::names::php_symbol_key(local)
+            || self.is_subclass_of(member, local)
     }
 }
