@@ -793,6 +793,35 @@ echo (new $name)->hi(), "\n";
     assert_eq!(text(&run(&dir).stdout), "listed\n");
 }
 
+/// A bridge to an optional dependency is compiled too. Its class over the missing package cannot
+/// load, so what uses that class only has to compile: `AmpResponse` writes `AmpClientState`
+/// properties, and flex's `Downloader` indexes what a Composer method returns.
+#[test]
+fn closed_world_compiles_code_over_a_class_that_cannot_load() {
+    let dir = make_test_dir("cw_absent_bridge");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+class Gone { public function load(): void {} }
+function write(AbsentState $multi, int $id) {
+    $multi->lastTimeout = null;
+    $multi->openHandles[$id] = 1;
+    ++$multi->responseCount;
+}
+function read(Gone $repo) {
+    $result = $repo->load();
+    return $result['packages'] ?? [];
+}
+echo function_exists('write') ? "compiled\n" : "missing\n";
+if ($argc > 5) { write(new stdClass, 1); read(new Gone); }
+"#,
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), "compiled\n");
+}
+
 /// A builtin without a run-time wrapper stays reachable by the name a string holds: twig registers
 /// `'json_encode'` as a filter and `ReflectionCallable` turns the name into a closure.
 #[test]

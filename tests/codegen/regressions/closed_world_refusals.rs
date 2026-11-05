@@ -194,12 +194,41 @@ for ($i = 0; $i < 2; $i++, $last = $i) { echo isset($last) ? 'set' : 'unset', "\
 fn test_a_nullable_argument_reaches_a_wider_parameter() {
     let out = compile_and_run(
         r#"<?php
-function stream_like(iterable|int $r): int { return is_int($r) ? 1 : 2; }
-function pool(?SplObjectStorage $p): int { if (!$p) { return 0; } return stream_like($p); }
-echo pool(new SplObjectStorage), pool(null), "\n";
+class Client { public function stream(Countable|iterable $r): int { return count($r); } }
+class Loop {
+    public function __construct(private Client $client, private ?SplObjectStorage $pool) {}
+    public function wait(): int {
+        if (!$this->pool) { return -1; }
+        $sum = 0;
+        do { $sum += $this->client->stream($this->pool); } while ($sum < 0);
+        return $sum;
+    }
+}
+$pool = new SplObjectStorage;
+$pool->attach(new stdClass);
+echo (new Loop(new Client, $pool))->wait(), (new Loop(new Client, null))->wait(), "\n";
 "#,
     );
-    assert_eq!(out, "20\n");
+    assert_eq!(out, "1-1\n");
+}
+
+/// `&__get()` hands the magic read its value (nette's `SmartObject`).
+#[test]
+fn test_by_reference_magic_get_reads_the_value() {
+    let out = compile_and_run(
+        r#"<?php
+trait Smart {
+    public function &__get(string $name) {
+        $m = 'get' . ucfirst($name);
+        if (method_exists($this, $m)) { return $this->$m(); }
+        throw new LogicException("Cannot read $name");
+    }
+}
+class Page { use Smart; public function getTitle(): string { return 'computed'; } }
+echo (new Page)->title, "\n";
+"#,
+    );
+    assert_eq!(out, "computed\n");
 }
 
 /// A generator declared by reference still returns its generator object.

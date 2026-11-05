@@ -712,7 +712,7 @@ pub(crate) fn method_signature_from_ast(method: &ClassMethod) -> FunctionSig {
         method.variadic.as_deref(),
         method.variadic_by_ref,
     );
-    signature.by_ref_return = method.by_ref_return;
+    signature.by_ref_return = method.by_ref_return && !method.name.eq_ignore_ascii_case("__get");
     if !method.variadic_by_ref {
         if let Some(variadic_type) = &method.variadic_type {
             if let Some((_, php_type)) = signature.params.last_mut() {

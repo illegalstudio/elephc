@@ -904,6 +904,9 @@ fn validate_object_property_access(
     is_write: bool,
     span: Span,
 ) -> Result<(), CompileError> {
+    if crate::closed_world::is_enabled() && !checker.classes.contains_key(class_name) {
+        return Ok(());
+    }
     let class_info = checker.classes.get(class_name).ok_or_else(|| {
         CompileError::new(span, &format!("Undefined class: {}", class_name))
     })?;
@@ -1498,6 +1501,10 @@ fn resolve_object_array_property(
     property: &str,
     span: Span,
 ) -> Result<(PhpType, bool), CompileError> {
+    // The bridge of an optional dependency: php never gets here once loading that class failed.
+    if crate::closed_world::is_enabled() && !checker.classes.contains_key(class_name) {
+        return Ok((PhpType::Mixed, false));
+    }
     let class_info = checker
         .classes
         .get(class_name)

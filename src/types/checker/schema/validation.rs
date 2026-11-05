@@ -114,6 +114,7 @@ pub(crate) fn build_method_sig(
         return_type,
         declared_return: method.return_type.is_some(),
         by_ref_return: method.by_ref_return
+            && !method.name.eq_ignore_ascii_case("__get")
             && !crate::types::checker::yield_validation::body_contains_yield(&method.body),
         ref_params,
         declared_params: method

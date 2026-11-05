@@ -158,7 +158,9 @@ impl Checker {
                 }
                 let has_concrete_result =
                     result_members.iter().any(|member| *member != PhpType::Void);
-                if !has_concrete_result && saw_indexable_member {
+                if crate::closed_world::is_enabled() && !has_concrete_result {
+                    Ok(PhpType::Mixed)
+                } else if !has_concrete_result && saw_indexable_member {
                     Err(CompileError::new(
                         expr.span,
                         first_index_error.unwrap_or("Cannot index non-array"),
@@ -209,6 +211,9 @@ impl Checker {
             // `isset($n['k'])` / `$n['k'] ?? $d` reach through a null base in PHP and
             // answer `false` / the default; only a probe context may do so.
             PhpType::Void if self.null_probe_depth > 0 => Ok(PhpType::Void),
+            // Code over a dependency that is not installed: its types are guesses (flex's
+            // `Downloader` over Composer), and php decides when the read runs.
+            _ if crate::closed_world::is_enabled() => Ok(PhpType::Mixed),
             _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
         }
     }

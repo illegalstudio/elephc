@@ -68,6 +68,16 @@ pub(super) fn lower_property_array_runtime_set(
                 ),
             }
         }
+        // A closed world holds the bridge of an optional dependency: the class it writes to could
+        // not load, so no object of it exists and this write never runs.
+        PhpType::Object(class_name)
+            if ctx.module.closed_world
+                && !ctx.module.class_infos.contains_key(class_name.trim_start_matches('\\'))
+                && !ctx.module.interface_infos.contains_key(class_name.trim_start_matches('\\')) =>
+        {
+            super::exceptions::emit_error(ctx, &format!("Class \"{class_name}\" not found"));
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "runtime_call property array set with receiver PHP type {:?}",
             other
