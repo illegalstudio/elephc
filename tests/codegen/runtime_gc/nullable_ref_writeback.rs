@@ -416,3 +416,31 @@ run();
     );
     assert_clean(out, "20\n");
 }
+
+/// A `mixed` local bound to a nullable object parameter (`?A &$v`) is checked against the
+/// parameter like php: `null` and an `A` are accepted, a scalar or another class raises
+/// `TypeError` before the callee runs.
+#[test]
+fn test_nullable_object_reference_rejects_foreign_boxed_values() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A { public int $a = 1; }
+class B {}
+function src(int $k): mixed { return $k === 0 ? 7 : ($k === 1 ? new B() : ($k === 2 ? null : new A())); }
+function take(?A &$v): string { return $v === null ? "null" : get_class($v); }
+function run(): void {
+    foreach ([0, 1, 2, 3] as $k) {
+        $v = src($k);
+        try {
+            echo take($v), "|";
+        } catch (TypeError $e) {
+            echo "TypeError|";
+        }
+    }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "TypeError|TypeError|null|A|\n");
+}

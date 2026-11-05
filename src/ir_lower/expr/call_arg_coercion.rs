@@ -230,6 +230,10 @@ pub(super) fn capture_call_argument_value(
 }
 
 /// Rechecks a declared object reference when an earlier call has changed its boxed payload.
+///
+/// A nullable object parameter (`?A &$v`) admits `null` as well: the boxed value is accepted
+/// when it is `null` or an instance of the class, and anything else (a scalar, another class)
+/// raises `TypeError` before the callee runs, like php's parameter check.
 fn guard_boxed_object_reference_argument(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -239,8 +243,18 @@ fn guard_boxed_object_reference_argument(
     if !sig.ref_params.get(index).copied().unwrap_or(false) {
         return;
     }
+    let mut nullable = false;
     let declared_object = match sig.params.get(index).map(|(_, ty)| ty) {
         Some(PhpType::Object(class_name)) => Some(class_name.as_str()),
+        Some(PhpType::Union(members))
+            if members.len() == 2 && members.iter().any(|member| matches!(member, PhpType::Void)) =>
+        {
+            nullable = true;
+            members.iter().find_map(|member| match member {
+                PhpType::Object(class_name) => Some(class_name.as_str()),
+                _ => None,
+            })
+        }
         Some(PhpType::Mixed) => match sig.param_type_exprs.get(index).and_then(Option::as_ref) {
             Some(TypeExpr::Named(name)) if !name.as_str().eq_ignore_ascii_case("mixed") => {
                 Some(name.as_str())
@@ -257,6 +271,23 @@ fn guard_boxed_object_reference_argument(
     };
     if ctx.local_type(name).codegen_repr() != PhpType::Mixed {
         return;
+    }
+    let accepted = ctx.builder.create_named_block("object.ref.accepted", Vec::new());
+    let rejected = ctx.builder.create_named_block("object.ref.rejected", Vec::new());
+    if nullable {
+        let is_null = lower_expr(
+            ctx,
+            &Expr::binop(arg.clone(), crate::parser::ast::BinOp::StrictEq, Expr::new(ExprKind::Null, arg.span)),
+        );
+        let class_check = ctx.builder.create_named_block("object.ref.class_check", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: is_null.value,
+            then_target: accepted,
+            then_args: Vec::new(),
+            else_target: class_check,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(class_check);
     }
     let condition = if class_name.is_empty() || class_name.eq_ignore_ascii_case("object") {
         let value = lower_expr(ctx, arg);
@@ -280,8 +311,6 @@ fn guard_boxed_object_reference_argument(
             arg,
         )
     };
-    let accepted = ctx.builder.create_named_block("object.ref.accepted", Vec::new());
-    let rejected = ctx.builder.create_named_block("object.ref.rejected", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: condition.value,
         then_target: accepted,
@@ -291,7 +320,11 @@ fn guard_boxed_object_reference_argument(
     });
     ctx.builder.position_at_end(rejected);
     let message = Expr::new(
-        ExprKind::StringLiteral(format!("Argument must be of type {}", class_name)),
+        ExprKind::StringLiteral(format!(
+            "Argument must be of type {}{}",
+            if nullable { "?" } else { "" },
+            class_name
+        )),
         arg.span,
     );
     let exception = lower_expr(ctx, &Expr::new(
