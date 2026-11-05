@@ -582,6 +582,17 @@ fn test_error_declared_nullable_int_array_by_ref_requires_boxed_storage() {
     );
 }
 
+/// A declared array of typed hashes (`array<array<string, Item>>`) cannot keep its typed slot
+/// across `?array &$a`: the writeback does not check hash values, so a callee could leave an
+/// object of another class there. The binding is the ordinary compile error instead.
+#[test]
+fn test_error_declared_typed_hash_array_by_ref_requires_boxed_storage() {
+    expect_error(
+        "<?php class Item { public int $id = 1; } function keep(?array &$a): void {} function run(): void { array<array<string, Item>> $rows = [[\"k\" => new Item()]]; keep($rows); } run();",
+        "requires a variable with mixed/union/nullable storage when passed by reference",
+    );
+}
+
 /// Mixed-local widening does not relabel an existing concrete reference set.
 #[test]
 fn test_error_mixed_by_ref_shared_scalar_cell_still_requires_boxed_storage() {

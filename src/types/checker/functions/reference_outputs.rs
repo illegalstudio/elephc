@@ -421,10 +421,12 @@ impl Checker {
 }
 
 /// Whether the by-reference writeback can rebuild an `array<element>` slot from the boxed cell:
-/// it converts boxed Mixed slots into int, float, bool, object, callable, hash and (nested)
-/// string layouts, widens raw slots into `mixed`, and recurses into nested indexed arrays.
-/// Other element representations (`?int`'s tagged scalars, pointers, buffers) have no
-/// conversion, so such a local follows the ordinary by-reference storage rules instead.
+/// it converts boxed Mixed slots into int, float, bool, object, callable and (nested) string
+/// layouts, widens raw slots into `mixed`, and recurses into nested indexed arrays. A nested
+/// hash is accepted only with `mixed` values, which hold anything: the writeback checks a
+/// hash element's own tag, not its values, so `array<string, Item>` values could carry another
+/// class. Other element representations (`?int`'s tagged scalars, pointers, buffers) have no
+/// conversion either; such a local follows the ordinary by-reference storage rules instead.
 /// A top-level string element is excluded too: the writeback keeps 8-byte payload slots there.
 fn writeback_element_supported(element: &PhpType, nested: bool) -> bool {
     match element.codegen_repr() {
@@ -433,8 +435,8 @@ fn writeback_element_supported(element: &PhpType, nested: bool) -> bool {
         | PhpType::Bool
         | PhpType::Mixed
         | PhpType::Object(_)
-        | PhpType::Callable
-        | PhpType::AssocArray { .. } => true,
+        | PhpType::Callable => true,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
         PhpType::Str => nested,
         PhpType::Array(inner) => writeback_element_supported(&inner, true),
         _ => false,
