@@ -2645,6 +2645,17 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                 ]),
         )
         .method(
+            method("__elephcOutOfSync")
+                .private()
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_prop_assign(e_this(), "errno", e_int(2014)),
+                    s_prop_assign(e_this(), "error", e_str("Commands out of sync; you can't run this command now")),
+                    s_prop_assign(e_this(), "sqlstate", e_str("HY000")),
+                    s_prop_assign(e_this(), "error_list", e_array(vec![e_array_assoc(vec![(e_str("errno"), e_int(2014)), (e_str("sqlstate"), e_str("HY000")), (e_str("error"), e_str("Commands out of sync; you can't run this command now"))])])),
+                ]),
+        )
+        .method(
             method("__elephcStatementBusy")
                 .private()
                 .param("handle", TypeExpr::Int)

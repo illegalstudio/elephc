@@ -205,7 +205,13 @@ while ($sel->fetch()) {            // writes the row into $id / $userName
   queries and statements in between. `get_result()` / `store_result()` read
   every remaining row with one fetch, and `free_result()`, `reset()`,
   `close()` or a re-execution drain the rest. A statement without a result
-  set runs as usual.
+  set runs as usual. While another result owns the link (an unbuffered
+  query, an async query, another statement's unread set), a cursor's
+  `fetch()`, `get_result()` or `store_result()` fails with 2014 on the
+  statement and the link, and the cursor stays readable once that result is
+  consumed. Difference from mysqlnd: when that happens on the cursor's very
+  first `fetch()`, mysqlnd returns `NULL` without an error and abandons the
+  cursor; elephc answers 2014 there too.
 - `mysqli::execute_query($sql, $params)` (PHP 8.2+) is prepare + execute +
   get_result in one call.
 - Statement properties: `affected_rows`, `errno`, `error`, `error_list`,

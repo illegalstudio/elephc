@@ -584,12 +584,21 @@ impl MyRowset {
 
 /// Runs a text-protocol statement (or multi-statement batch) and buffers every result set,
 /// shared by buffered emulated statements and by mysqli's MYSQLI_ASYNC worker thread.
+///
+/// `ready` (the async worker's) is signalled as soon as the server's first response arrives,
+/// before the rows are read: mysqlnd's `mysqli_poll()` reports a link readable once its
+/// socket has data, and the rows are buffered when the query is reaped.
 fn collect_text_rowsets(
     client: &mut Conn,
     sql: String,
     fetch_table_names: bool,
+    ready: Option<&AsyncReady>,
 ) -> Result<Vec<MyRowset>, mysql::Error> {
-    let mut result = client.query_iter(sql)?;
+    let result = client.query_iter(sql);
+    if let Some(ready) = ready {
+        signal_ready(ready);
+    }
+    let mut result = result?;
     let mut rowsets = Vec::new();
     while let Some(mut set) = result.iter() {
         let last_id = set.last_insert_id();
@@ -2099,6 +2108,19 @@ impl MyConn {
         false
     }
 
+    /// Records mysqlnd's 2014 and returns true while an unbuffered stream or an async
+    /// worker owns the client, so a command that needs the wire (a cursor's
+    /// `COM_STMT_FETCH`) fails instead of dereferencing the empty client slot.
+    fn client_unavailable(&mut self) -> bool {
+        if self.conn.0.is_some() {
+            return false;
+        }
+        self.sqlstate = "HY000".to_string();
+        self.errcode = 2014;
+        self.errmsg = "Commands out of sync; you can't run this command now".to_string();
+        true
+    }
+
     /// Restores a worker-owned client and refreshes connection properties that
     /// may have changed while its statement ran.
     fn restore_stream_client(&mut self, conn: Conn, warnings: u16) {
@@ -2637,7 +2659,8 @@ impl MyConn {
             }
         } else {
             MyAsyncWork::Buffered(std::thread::spawn(move || {
-                let outcome = collect_text_rowsets(&mut client, text, fetch_table_names);
+                let outcome =
+                    collect_text_rowsets(&mut client, text, fetch_table_names, Some(&signal));
                 let warnings = client.warnings();
                 signal_ready(&signal);
                 (client, outcome, warnings)
@@ -3418,7 +3441,6 @@ impl MyStmt {
         1
     }
 
-    /// Resets the cursor and execution state, keeping the bound values.
     /// Releases the server-side statement when the connection keeps no statement cache
     /// (mysqli), sending COM_STMT_CLOSE like mysqlnd's mysqli_stmt_close().
     pub fn close_native(&mut self, conn: &mut MyConn) {
@@ -3430,6 +3452,7 @@ impl MyStmt {
         }
     }
 
+    /// Resets the cursor and execution state, keeping the bound values.
     pub fn reset(&mut self, conn: &mut MyConn) -> i64 {
         if let Some(stream_id) = self.stream_id {
             conn.finish_stream(stream_id);
@@ -3755,6 +3778,9 @@ impl MyStmt {
             .as_ref()
             .map(Statement::id)
             .expect("cursor statement missing its prepared handle");
+        if conn.client_unavailable() {
+            return -1;
+        }
         match conn.conn.stmt_fetch(stmt_id, 1, Arc::clone(&cursor.columns)) {
             Ok((rows, _)) => {
                 self.rows.clear();
@@ -3793,6 +3819,9 @@ impl MyStmt {
             .as_ref()
             .map(Statement::id)
             .expect("cursor statement missing its prepared handle");
+        if conn.client_unavailable() {
+            return -1;
+        }
         match conn.conn.stmt_fetch(stmt_id, u32::MAX, Arc::clone(&cursor.columns)) {
             Ok((rows, _)) => {
                 cursor.drained = true;
@@ -3857,7 +3886,7 @@ impl MyStmt {
             return Ok(());
         }
         let fetch_table_names = conn.fetch_table_names;
-        let outcome = collect_text_rowsets(&mut conn.conn, sql, fetch_table_names);
+        let outcome = collect_text_rowsets(&mut conn.conn, sql, fetch_table_names, None);
         let warnings = conn.conn.warnings();
         match outcome {
             Ok(mut rowsets) => {

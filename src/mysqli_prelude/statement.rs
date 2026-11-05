@@ -396,6 +396,9 @@ class mysqli_stmt {
             }
             return null;
         }
+        if ($this->cursorOpen && $this->cursorLinkBusy()) {
+            return false;
+        }
         // The first fetch of an unstored execution is mysqlnd's use_result().
         if (!$this->unbufferedCounted) {
             $this->unbufferedCounted = true;
@@ -445,6 +448,9 @@ class mysqli_stmt {
             return false;
         }
         if ($this->cursorOpen) {
+            if ($this->cursorLinkBusy()) {
+                return false;
+            }
             // mysqlnd reads every remaining cursor row with one COM_STMT_FETCH.
             $this->linkBump("com_stmt_fetch");
             if (elephc_pdo_mysql_cursor_fetch_all($this->stmt) < 0) {
@@ -491,6 +497,9 @@ class mysqli_stmt {
         // Buffer the remaining rows client-side so fetch() / data_seek() walk
         // them and num_rows is exact.
         if ($this->cursorOpen) {
+            if ($this->cursorLinkBusy()) {
+                return false;
+            }
             // mysqlnd reads every remaining cursor row with one COM_STMT_FETCH.
             $this->linkBump("com_stmt_fetch");
             if (elephc_pdo_mysql_cursor_fetch_all($this->stmt) < 0) {
@@ -943,6 +952,20 @@ class mysqli_stmt {
             return false;
         }
         return true;
+    }
+
+    // An open cursor reads its rows with COM_STMT_FETCH, which mysqlnd refuses
+    // while another result (an unbuffered query, an async query, another
+    // statement's unread set) owns the link: 2014 on the statement and the link,
+    // and the cursor stays readable once that result is consumed.
+    private function cursorLinkBusy(): bool {
+        $_link = $this->link;
+        if ($_link !== null && $_link->__elephcBusyFor($this->stmt)) {
+            $_link->__elephcOutOfSync();
+            $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
+            return true;
+        }
+        return false;
     }
 
     // Bumps a statistic on the owning connection (no-op once detached).

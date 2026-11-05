@@ -1088,6 +1088,71 @@ $db->query("DROP TABLE mcur");
     assert_eq!(out, "set|0|42|1:7,2:7,3:7,|3|false|8|3=1,2,3|3=1|re=1|empty=NULL|ins=1|20,18,12,6,3,5,1");
 }
 
+/// A read-only cursor statement refuses `fetch()` and `store_result()` with a reported 2014 (on
+/// the statement and the link) while an unbuffered query owns the link, then reads its remaining
+/// rows once that result is freed. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_cursor_waits_for_a_busy_link() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mcurb");
+$db->query("CREATE TABLE mcurb (id INT)");
+$db->query("INSERT INTO mcurb VALUES (1), (2), (3)");
+$st = $db->prepare("SELECT id FROM mcurb ORDER BY id");
+$st->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY);
+$st->execute();
+$id = 0;
+$st->bind_result($id);
+$st->fetch();
+echo $id;
+$u = $db->query("SELECT 7", MYSQLI_USE_RESULT);
+try {
+    $st->fetch();
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode();
+}
+echo ":", $st->errno, ":", $db->errno;
+try {
+    $st->store_result();
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode();
+}
+echo "|u=", $u->fetch_row()[0];
+$u->free();
+echo "|", var_export($st->fetch(), true), ":", $id;
+echo "|", var_export($st->fetch(), true), ":", $id;
+echo "|", var_export($st->fetch(), true), "\n";
+"#,
+    ));
+    assert_eq!(out, "1|2014:2014:2014|2014|u=7|true:2|true:3|NULL\n");
+}
+
+/// A buffered `MYSQLI_ASYNC` query is readable as soon as the server's first response arrives,
+/// not when every row has: the first row (100 KB) is flushed before the second row's
+/// `SLEEP(1)`, so `mysqli_poll()` reports the link at once and `reap_async_query()` then waits
+/// for the rest. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_async_poll_ready_before_rows_complete() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("SELECT REPEAT('x', 100000) AS v UNION ALL SELECT SLEEP(1)", MYSQLI_ASYNC);
+$start = microtime(true);
+$read = [$db];
+$error = [];
+$reject = [];
+$ready = mysqli_poll($read, $error, $reject, 0, 600000);
+$polled = microtime(true) - $start;
+$result = $db->reap_async_query();
+echo $ready, "|", $polled < 0.5 ? "early" : "late", "|", $result->num_rows, "|", strlen($result->fetch_row()[0]), "\n";
+"#,
+    ));
+    assert_eq!(out, "1|early|2|100000\n");
+}
+
 /// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
 /// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
 /// the set is unread, and the statistics count one unbuffered set. Expected output is

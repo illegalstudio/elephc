@@ -1686,6 +1686,16 @@ class mysqli {
             || ($this->busyStatement >= 0 && $this->busyStatement != $handle);
     }
 
+    // Records mysqlnd's 2014 on the link without reporting it: a cursor
+    // statement refused while another result owns the link reports on its own
+    // error state, and the link's errno reads 2014 too.
+    private function __elephcOutOfSync(): void {
+        $this->errno = 2014;
+        $this->error = "Commands out of sync; you can't run this command now";
+        $this->sqlstate = "HY000";
+        $this->error_list = [["errno" => 2014, "sqlstate" => "HY000", "error" => "Commands out of sync; you can't run this command now"]];
+    }
+
     // mysqli_stmt result bookkeeping: a statement whose result set (or further
     // CALL result sets) is still on the server keeps the link out of sync, like
     // mysqlnd's CONN_FETCHING_DATA / CONN_NEXT_RESULT_PENDING states.
