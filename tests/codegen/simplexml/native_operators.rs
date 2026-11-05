@@ -291,3 +291,19 @@ nativeForeignNumberAdd($xml, $number); nativeForeignNumberAdd($number, $xml);
         output.stdout
     });
 }
+
+/// Discarded property incdec keeps PHP's missing-node no-writeback for native XML.
+///
+/// A parser-generated `$xml->f++` capture must not fall back to the generic scalar incdec
+/// that stores `1` into a node PHP leaves empty, while an existing node still increments.
+#[test]
+fn test_simplexml_missing_property_incdec_statement() {
+    if skip_without_xml_native("test_simplexml_missing_property_incdec_statement") { return; }
+    let out = compile_and_run(r#"<?php
+$xml = new SimpleXMLElement('<r><f>5</f></r>');
+$xml->f++; $xml->missing++;
+$xml->g--; $xml->f--;
+echo $xml->asXML(), '|';
+"#);
+    assert_eq!(out, "<?xml version=\"1.0\"?>\n<r><f>5</f><missing/><g/></r>\n|");
+}

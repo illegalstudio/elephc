@@ -47,6 +47,17 @@ impl Checker {
         self.require_valid_unresolved_call_argument_order(args, &description)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
+            // php-src's CData object has no PHP methods at all: every method call raises
+            // `Error: Object of type FFI\CData does not support method calls` when it
+            // executes, so the call type is left open and EIR lowering emits the throw.
+            // The prelude's internal dispatch is checked under the Internal source mode and
+            // stays exempt.
+            let ffi_cdata = class_name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData");
+            if ffi_cdata
+                && crate::strict_php::current_source_mode() != crate::source::SourceMode::Internal
+            {
+                return Ok(PhpType::Mixed);
+            }
             if !class_name.is_empty() {
                 if self.interfaces.contains_key(class_name) {
                     return self
@@ -259,6 +270,16 @@ impl Checker {
         else {
             return Ok(PhpType::Void);
         };
+        if class_name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData")
+            && crate::strict_php::current_source_mode() != crate::source::SourceMode::Internal
+        {
+            let return_ty = if nullable {
+                self.normalize_union_type(vec![PhpType::Mixed, PhpType::Void])
+            } else {
+                PhpType::Mixed
+            };
+            return Ok(return_ty);
+        }
         let return_ty = if self.interfaces.contains_key(&class_name) {
             self.infer_method_call_on_interface_type(&class_name, method, args, expr, env)?
         } else {

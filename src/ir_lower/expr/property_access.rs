@@ -818,6 +818,11 @@ fn property_result_type(
         };
     }
     let Some((_, (_, property_ty))) = class_info.visible_property(property) else {
+        if normalized.eq_ignore_ascii_case("FFI\\CData") && property == "cdata" {
+            // php-src returns the scalar payload for a scalar CData and a CData view for
+            // aggregate/pointer storage; the prelude's `__get` selects between them.
+            return PhpType::Mixed;
+        }
         // A stored dynamic entry wins over `__get()` and keeps the type it was assigned. The
         // hash answers an undeclared name exactly like the attribute's or clone override's does,
         // so all of them reserve the same boxed `mixed` result rather than the accessor's type.
@@ -1170,6 +1175,25 @@ pub(super) fn lower_dynamic_property_fetch(
     mode: PropertyFetchMode,
     expr: &Expr,
 ) -> LoweredValue {
+    // A runtime name on CData reads a C field through the prelude's place view; the generic
+    // dynamic ladder treats CData as an object with no declared slot and answers null.
+    if mode == PropertyFetchMode::Read
+        && !matches!(property.kind, ExprKind::StringLiteral(_))
+        && matches!(
+            super::array_cast_source::array_cast_source_type_for_ir(ctx, object).codegen_repr(),
+            PhpType::Object(name) if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData")
+        )
+    {
+        let rewrite = Expr::new(
+            ExprKind::StaticMethodCall {
+                receiver: crate::parser::ast::StaticReceiver::Named(crate::names::Name::unqualified("FFI")),
+                method: "__elephc_read_field".to_string(),
+                args: vec![object.clone(), property.clone()],
+            },
+            expr.span,
+        );
+        return lower_expr(ctx, &rewrite);
+    }
     if matches!(object.kind, ExprKind::Variable(_))
         && !matches!(property.kind, ExprKind::StringLiteral(_))
     {
@@ -1186,6 +1210,21 @@ pub(super) fn lower_dynamic_property_fetch(
             .unwrap_or_else(|| { let name = lower_expr(ctx, property); coerce_runtime_property_name(ctx, name, expr.span) });
         let object = lower_member_receiver(ctx, object, expr);
         let ty = ctx.builder.value_php_type(object.value);
+        // A runtime name on an FFI context still reads a C global through the bridge.
+        if matches!(
+            ctx.builder.value_php_type(object.value).codegen_repr(),
+            PhpType::Object(class) if class.trim_start_matches('\\').eq_ignore_ascii_case("FFI")
+        ) {
+            let method = ctx.intern_string("__elephc_global_cdata");
+            return ctx.emit_value(
+                Op::MethodCall,
+                vec![object.value, name.value],
+                Some(Immediate::Data(method)),
+                PhpType::Mixed,
+                Op::MethodCall.default_effects(),
+                Some(expr.span),
+            );
+        }
         known_native |= singular_object_class(&ty).is_some_and(|(class, nullable)| !nullable
             && crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
         let result_type = dynamic_property_fetch_result_type(ctx, object.value, property, mode, expr);
@@ -1198,6 +1237,21 @@ pub(super) fn lower_dynamic_property_fetch(
     } else {
         lower_subscript_receiver_silently(ctx, object)
     };
+    if matches!(
+        ctx.builder.value_php_type(object.value).codegen_repr(),
+        PhpType::Object(class) if class.trim_start_matches('\\').eq_ignore_ascii_case("FFI")
+    ) {
+        let property_value = lower_expr(ctx, property);
+        let method = ctx.intern_string("__elephc_global_cdata");
+        return ctx.emit_value(
+            Op::MethodCall,
+            vec![object.value, property_value.value],
+            Some(Immediate::Data(method)),
+            PhpType::Mixed,
+            Op::MethodCall.default_effects(),
+            Some(expr.span),
+        );
+    }
     lower_dynamic_property_fetch_from_value(ctx, object, property, mode, expr)
 }
 

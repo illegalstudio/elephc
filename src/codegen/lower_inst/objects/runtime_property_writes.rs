@@ -1110,7 +1110,10 @@ fn emit_runtime_magic_set_call(
         ctx.emitter,
         MAGIC_SET_GUARD_FRAME_BYTES + staged_stack_bytes,
     );
-    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+    // Keep the unwinder a real call: a tail jump leaves SysV eight bytes off and every
+    // destructor that re-enters the Rust bridge faults. The test in `magic_set_unwind.rs`
+    // pins the `bl`/`call` on every target.
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
 
     ctx.emitter.label(&recursive_label);
     abi::emit_release_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES);

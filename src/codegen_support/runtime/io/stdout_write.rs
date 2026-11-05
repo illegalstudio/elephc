@@ -34,9 +34,9 @@ use crate::codegen_support::platform::Arch;
 ///
 /// Dispatches to `emit_stdout_write_x86_64` on x86_64; uses the AArch64 path
 /// for every supported AArch64 target otherwise.
-pub fn emit_stdout_write(emitter: &mut Emitter, web: bool, mbstring: bool) {
+pub fn emit_stdout_write(emitter: &mut Emitter, web: bool, mbstring: bool, ffi: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_stdout_write_x86_64(emitter, web, mbstring);
+        emit_stdout_write_x86_64(emitter, web, mbstring, ffi);
         return;
     }
 
@@ -78,30 +78,64 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool, mbstring: bool) {
 
     if mbstring { super::response_metadata::commit(emitter); }
 
+    if ffi {
+        // -- publish the built-in terminal writer for the bridge's default zend_write --
+        let sink = emitter.target.extern_symbol("elephc_stdout_terminal");
+        crate::codegen::abi::emit_symbol_address(emitter, "x9", &sink);          // resolve the terminal-writer slot
+        crate::codegen::abi::emit_local_symbol_address(emitter, "x10", "__rt_stdout_write_builtin"); // address of the built-in terminal writer
+        emitter.instruction("str x10, [x9]");                                   // publish the terminal writer for the default zend_write
+
+        // -- replaceable zend_write hook (FFI programs): call the current C function --
+        let hook = emitter.target.extern_symbol("elephc_zend_write_current");
+        crate::codegen::abi::emit_symbol_address(emitter, "x9", &hook);         // resolve the replaceable zend_write slot
+        emitter.instruction("ldr x9, [x9]");                                    // load the current writer (0 = built-in terminal)
+        emitter.instruction("cbz x9, __rt_stdout_write_no_hook");               // no hook - use the built-in terminal writer
+        emitter.instruction("blr x9");                                          // call the writer with (ptr=x0, len=x1)
+        emitter.instruction("b __rt_stdout_write_done");                        // the writer handled the bytes
+        emitter.label("__rt_stdout_write_no_hook");
+        emitter.instruction("bl __rt_stdout_write_builtin");                    // no writer installed - use the built-in terminal path
+        emitter.instruction("b __rt_stdout_write_done");                        // the terminal path handled the bytes
+    } else {
+        emit_terminal_arm(emitter, web, "__rt_stdout_write_done");
+    }
+
+    emitter.label("__rt_stdout_write_done");
+    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
+    emitter.instruction("ret");                                                 // return to caller
+
+    if ffi {
+        emitter.label("__rt_stdout_write_builtin");
+        emitter.instruction("stp x29, x30, [sp, #-16]!");                       // save frame pointer and return address for the terminal call
+        emitter.instruction("mov x29, sp");                                     // establish a frame pointer for the capture call
+        emit_terminal_arm(emitter, web, "__rt_stdout_write_builtin_done");
+        emitter.label("__rt_stdout_write_builtin_done");
+        emitter.instruction("ldp x29, x30, [sp], #16");                         // restore frame pointer and return address
+        emitter.instruction("ret");                                             // return to the default writer
+    }
+}
+
+/// Emits the AArch64 web/syscall terminal path.
+fn emit_terminal_arm(emitter: &mut Emitter, web: bool, done_label: &str) {
     if web {
         // -- web build: route through elephc_web_write when capture is enabled --
         let capture_symbol = emitter.target.extern_symbol("elephc_web_capture");
         crate::codegen_support::abi::emit_symbol_address(emitter, "x9", &capture_symbol);
         emitter.instruction("ldrb w9, [x9]");                                   // load the low byte of the output-capture flag
         emitter.instruction("cbz x9, __rt_stdout_write_syscall");               // capture disabled - fall through to the plain write syscall
-        emitter.bl_c("elephc_web_write");                                       // capture enabled - append the bytes to the current request's response body (ptr=x0, len=x1)
-        emitter.instruction("b __rt_stdout_write_done");                        // capture handled the bytes - skip the syscall path
+        emitter.bl_c("elephc_web_write");                                       // capture enabled - append the bytes to the current request's response body
+        emitter.instruction(&format!("b {done_label}"));                        // capture handled the bytes - skip the syscall path
     }
 
     // -- plain write(1, ptr, len) syscall path --
     emitter.label("__rt_stdout_write_syscall");
     if emitter.phpext_output {
         emitter.bl_c("elephc_php_write");                                        // park native state while PHP handles output and possible reentry
-        crate::codegen_support::cdylib::emit_host_callback_check(emitter, "__rt_stdout_write_done");
+        crate::codegen_support::cdylib::emit_host_callback_check(emitter, done_label);
     }
-    emitter.instruction("mov x2, x1");                                          // syscall len = incoming length (move before x1 is overwritten)
+    emitter.instruction("mov x2, x1");                                          // syscall len = incoming length
     emitter.instruction("mov x1, x0");                                          // syscall buf = incoming byte pointer
     emitter.instruction("mov x0, #1");                                          // syscall fd = stdout
     emitter.syscall(4);
-
-    emitter.label("__rt_stdout_write_done");
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
-    emitter.instruction("ret");                                                 // return to caller
 }
 
 /// Emits the x86_64 Linux variant of the `__rt_stdout_write` runtime helper.
@@ -110,7 +144,7 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool, mbstring: bool) {
 /// `rbp` frame (which leaves `rsp` 16-byte aligned for the capture branch's
 /// `call`), then either tail-calls `elephc_web_write` or performs the Linux
 /// `write` syscall (`rax=1`, `rdi=fd`, `rsi=buf`, `rdx=len`).
-fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool, mbstring: bool) {
+fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool, mbstring: bool, ffi: bool) {
     emitter.blank();
     emitter.comment("--- runtime: stdout_write ---");
     emitter.label_global("__rt_stdout_write");
@@ -148,6 +182,45 @@ fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool, mbstring: bool) {
 
     if mbstring { super::response_metadata::commit(emitter); }
 
+    if ffi {
+        // -- publish the built-in terminal writer for the bridge's default zend_write --
+        let sink = emitter.target.extern_symbol("elephc_stdout_terminal");
+        crate::codegen::abi::emit_symbol_address(emitter, "r11", &sink);        // resolve the terminal-writer slot
+        crate::codegen::abi::emit_local_symbol_address(emitter, "r10", "__rt_stdout_write_builtin"); // address of the built-in terminal writer
+        emitter.instruction("mov QWORD PTR [r11], r10");                        // publish the terminal writer for the default zend_write
+
+        // -- replaceable zend_write hook (FFI programs): call the current C function --
+        let hook = emitter.target.extern_symbol("elephc_zend_write_current");
+        crate::codegen::abi::emit_symbol_address(emitter, "r11", &hook);        // resolve the replaceable zend_write slot
+        emitter.instruction("mov r11, QWORD PTR [r11]");                        // load the current writer (0 = built-in terminal)
+        emitter.instruction("test r11, r11");                                   // is a writer installed?
+        emitter.instruction("jz __rt_stdout_write_no_hook");                    // no hook - use the built-in terminal writer
+        emitter.instruction("call r11");                                        // call the writer with (ptr=rdi, len=rsi)
+        emitter.instruction("jmp __rt_stdout_write_done");                      // the writer handled the bytes
+        emitter.label("__rt_stdout_write_no_hook");
+        emitter.instruction("call __rt_stdout_write_builtin");                  // no writer installed - use the built-in terminal path
+        emitter.instruction("jmp __rt_stdout_write_done");                      // the terminal path handled the bytes
+    } else {
+        emit_terminal_x86(emitter, web, "__rt_stdout_write_done");
+    }
+
+    emitter.label("__rt_stdout_write_done");
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to caller
+
+    if ffi {
+        emitter.label("__rt_stdout_write_builtin");
+        emitter.instruction("push rbp");                                        // preserve the caller frame pointer for the terminal call
+        emitter.instruction("mov rbp, rsp");                                    // establish a frame base
+        emit_terminal_x86(emitter, web, "__rt_stdout_write_builtin_done");
+        emitter.label("__rt_stdout_write_builtin_done");
+        emitter.instruction("pop rbp");                                         // restore the caller frame pointer
+        emitter.instruction("ret");                                             // return to the default writer
+    }
+}
+
+/// Emits the x86_64 web/syscall terminal path.
+fn emit_terminal_x86(emitter: &mut Emitter, web: bool, done_label: &str) {
     if web {
         // -- web build: route through elephc_web_write when capture is enabled --
         let capture_symbol = emitter.target.extern_symbol("elephc_web_capture");
@@ -155,25 +228,21 @@ fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool, mbstring: bool) {
         emitter.instruction("movzx r11d, BYTE PTR [r11]");                      // load the low byte of the output-capture flag, zero-extended
         emitter.instruction("test r11d, r11d");                                 // is per-request output capture enabled?
         emitter.instruction("jz __rt_stdout_write_syscall");                    // capture disabled - fall through to the plain write syscall
-        emitter.bl_c("elephc_web_write");                                       // capture enabled - append the bytes to the current request's response body (ptr=rdi, len=rsi)
-        emitter.instruction("jmp __rt_stdout_write_done");                      // capture handled the bytes - skip the syscall path
+        emitter.bl_c("elephc_web_write");                                       // capture enabled - append the bytes to the current request's response body
+        emitter.instruction(&format!("jmp {done_label}"));                      // capture handled the bytes - skip the syscall path
     }
 
     // -- plain write(1, ptr, len) syscall path --
     emitter.label("__rt_stdout_write_syscall");
     if emitter.phpext_output {
         emitter.bl_c("elephc_php_write");                                        // park native state while PHP handles output and possible reentry
-        crate::codegen_support::cdylib::emit_host_callback_check(emitter, "__rt_stdout_write_done");
+        crate::codegen_support::cdylib::emit_host_callback_check(emitter, done_label);
     }
-    emitter.instruction("mov rdx, rsi");                                        // syscall len = incoming length (move before rsi is overwritten)
+    emitter.instruction("mov rdx, rsi");                                        // syscall len = incoming length
     emitter.instruction("mov rsi, rdi");                                        // syscall buf = incoming byte pointer
     emitter.instruction("mov edi, 1");                                          // syscall fd = stdout
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // write the bytes to stdout
-
-    emitter.label("__rt_stdout_write_done");
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return to caller
 }
 
 #[cfg(test)]
@@ -184,7 +253,14 @@ mod tests {
     /// Renders the `__rt_stdout_write` helper for one target and web mode.
     fn render(platform: Platform, arch: Arch, web: bool) -> String {
         let mut emitter = Emitter::new(Target::new(platform, arch));
-        emit_stdout_write(&mut emitter, web, false);
+        emit_stdout_write(&mut emitter, web, false, false);
+        emitter.output()
+    }
+
+    /// Renders the helper with the FFI `zend_write` hook enabled.
+    fn render_ffi(platform: Platform, arch: Arch, web: bool) -> String {
+        let mut emitter = Emitter::new(Target::new(platform, arch));
+        emit_stdout_write(&mut emitter, web, false, true);
         emitter.output()
     }
 
@@ -254,6 +330,41 @@ mod tests {
         assert!(linux_x86.contains("elephc_web_capture"));
         assert!(!linux_x86.contains("_elephc_web_capture"));
         assert!(linux_x86.contains("call elephc_web_write"));
+    }
+
+    /// Verifies web + FFI output honors the zend_write hook first, then falls back to the
+    /// web response sink when no hook is installed.
+    #[test]
+    fn web_ffi_routes_through_the_hook_then_web_sink() {
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = render_ffi(platform, arch, true);
+            let sink = asm.find("elephc_stdout_terminal").expect("terminal sink");
+            let hook = asm.find("elephc_zend_write_current").expect("hook symbol");
+            let fallback = asm.find("__rt_stdout_write_no_hook:").expect("no-hook label");
+            let builtin = asm.find("__rt_stdout_write_builtin:").expect("builtin terminal");
+            let web = asm.find("elephc_web_write").expect("web sink");
+            assert!(sink < hook, "terminal sink must be published before the hook for {:?}/{:?}", platform, arch);
+            assert!(hook < fallback, "hook block must precede its web fallback for {:?}/{:?}", platform, arch);
+            assert!(fallback < builtin, "builtin terminal must follow its no-hook branch for {:?}/{:?}", platform, arch);
+            assert!(builtin < web, "web sink must live in the builtin terminal for {:?}/{:?}", platform, arch);
+            assert!(asm.contains("__rt_stdout_write_no_hook"), "missing no-hook branch for {:?}/{:?}", platform, arch);
+        }
+    }
+
+    /// Verifies non-web FFI output still honors the hook and never names web symbols.
+    #[test]
+    fn non_web_ffi_keeps_the_hook_without_web_symbols() {
+        let asm = render_ffi(Platform::Linux, Arch::X86_64, false);
+        assert!(asm.contains("elephc_zend_write_current"));
+        assert!(asm.contains("elephc_stdout_terminal"));
+        assert!(asm.contains("__rt_stdout_write_builtin"));
+        assert!(!asm.contains("elephc_web_write"));
+        assert!(!asm.contains("elephc_web_capture"));
+        assert!(asm.contains("__rt_stdout_write_syscall"));
     }
 
     /// Verifies both web and non-web emissions keep the plain `write(1, …)` syscall

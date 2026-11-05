@@ -46,13 +46,41 @@ pub(crate) fn lower_statement(
     if !crate::parser::ast::is_compound_property_assignment_self_read(value, object, property, span, &[]) {
         return false;
     }
-    let ExprKind::BinaryOp { op, right, .. } = &value.kind else { return false; };
-    if !possible(ctx, object, Property::Named(property)) || operation(op).is_none() { return false; }
-    let result = lower(ctx, object, Property::Named(property), op, right, false, false, false, "assign", value);
+    // A discarded `$xml->f++` is captured by the parser as `new = ++old` over a prelude
+    // `old = $xml->f`. Native XML owns the no-writeback rule for a missing node, so route
+    // the capture through the same update kernel as the compound statement form instead of
+    // letting the generic scalar incdec store `1` into a node PHP leaves empty.
+    let capture_step;
+    let (op, right) = match &value.kind {
+        ExprKind::BinaryOp { op, right, .. } => (op.clone(), right.as_ref()),
+        _ => match incdec_capture_step(value, span) {
+            Some(op) => {
+                capture_step = Expr::new(ExprKind::IntLiteral(1), span);
+                (op, &capture_step)
+            }
+            None => return false,
+        },
+    };
+    if !possible(ctx, object, Property::Named(property)) || operation(&op).is_none() { return false; }
+    let verb = if matches!(value.kind, ExprKind::BinaryOp { .. }) { "assign" } else { "increment/decrement" };
+    let result = lower(ctx, object, Property::Named(property), &op, right, false, false, false, verb, value);
     if !ctx.builder.insertion_block_is_terminated() {
         crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
     }
     true
+}
+
+/// Returns the step of a parser-generated `$xml->f++` capture in statement position.
+fn incdec_capture_step(value: &Expr, span: Span) -> Option<BinOp> {
+    if value.span.line != span.line || value.span.col != span.col { return None; }
+    let ExprKind::Assignment { value: operation, prelude, .. } = &value.kind else { return None; };
+    let [Stmt { kind: StmtKind::Assign { name, .. }, .. }] = prelude.as_slice() else { return None; };
+    if !name.contains("__elephc_element_incdec_old_") { return None; }
+    match &operation.kind {
+        ExprKind::PreIncrement(old) | ExprKind::PostIncrement(old) if old == name => Some(BinOp::Add),
+        ExprKind::PreDecrement(old) | ExprKind::PostDecrement(old) if old == name => Some(BinOp::Sub),
+        _ => None,
+    }
 }
 
 /// Recognizes native-capable compound expressions and canonical property inc/dec captures.

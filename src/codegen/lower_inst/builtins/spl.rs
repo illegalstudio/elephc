@@ -212,6 +212,23 @@ pub(crate) fn lower_iterator_count(
     store_if_result(ctx, inst)
 }
 
+/// Returns the php-src class spelling when an FFI object is not a Traversable source.
+///
+/// FFI objects expose internal iteration handlers for their own `foreach` surface, but
+/// `iterator_to_array()` must raise php-src's TypeError instead of entering those handlers.
+fn ffi_iterator_source_label(name: &str) -> Option<&'static str> {
+    let name = name.trim_start_matches('\\');
+    if name.eq_ignore_ascii_case("FFI\\CData") {
+        Some("FFI\\CData")
+    } else if name.eq_ignore_ascii_case("FFI\\CType") {
+        Some("FFI\\CType")
+    } else if name.eq_ignore_ascii_case("FFI") {
+        Some("FFI")
+    } else {
+        None
+    }
+}
+
 /// Lowers `iterator_to_array()` over arrays, `iterable`, and Traversable objects.
 pub(crate) fn lower_iterator_to_array(
     ctx: &mut FunctionContext<'_>,
@@ -221,6 +238,17 @@ pub(crate) fn lower_iterator_to_array(
     let source = expect_operand(inst, 0)?;
     let preserve = inst.operands.get(1).copied();
     let source_ty = ctx.value_php_type(source)?.codegen_repr();
+    if let PhpType::Object(name) = &source_ty {
+        if let Some(label) = ffi_iterator_source_label(name) {
+            super::exceptions::emit_type_error(
+                ctx,
+                &format!(
+                    "iterator_to_array(): Argument #1 ($iterator) must be of type Traversable|array, {label} given"
+                ),
+            );
+            return store_if_result(ctx, inst);
+        }
+    }
 
     if let Some(preserve) = preserve {
         if let Some(preserve_keys) = static_preserve_keys_operand(ctx, preserve)? {

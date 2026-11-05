@@ -5,11 +5,12 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for extern calls, memory, nullable `?string` parameters and returns, return normalization, SDL FFI and extern method calls, extern class struct layouts, syntax and callbacks.
+//! - Submodules group focused fixtures for extern calls, review regressions, memory, nullable `?string` parameters and returns, return normalization, SDL FFI and extern method calls, extern class struct layouts, syntax and callbacks.
 
 use crate::support::*;
 
 mod extern_calls;
+mod greptile_regressions;
 mod memory;
 mod nullable_strings;
 mod return_normalization;

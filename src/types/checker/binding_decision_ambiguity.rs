@@ -144,6 +144,12 @@ pub(super) fn reject_ambiguous_local_binding_decisions(
                 .map(|(span, name)| (span, name, &tally.unset_args)),
         );
     for (span, name, sites) in decisions {
+        // Parser-generated incdec captures are statement-local temporaries. The same
+        // include spliced twice clones the node and repeats its assignment, but the two
+        // captures never interact, so the position-ambiguity refusal does not apply.
+        if name.starts_with("__elephc_element_incdec_") {
+            continue;
+        }
         let count = sites.get(&(*span, name.clone())).copied().unwrap_or(0);
         if count > 1 {
             // ONE message for both shapes, deliberately. Structural equality of the sites would

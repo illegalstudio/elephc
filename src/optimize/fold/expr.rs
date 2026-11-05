@@ -267,6 +267,15 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             if name
                 .as_canonical()
                 .trim_start_matches('\\')
+                .eq_ignore_ascii_case("range")
+            {
+                if let Some(items) = fold_string_range(&args, span) {
+                    return Expr::new(ExprKind::ArrayLiteral(items), span);
+                }
+            }
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
                 .eq_ignore_ascii_case("function_exists")
             {
                 if let ([Expr { kind: ExprKind::StringLiteral(candidate), .. }], Some(target)) =
@@ -820,4 +829,53 @@ fn token_constant_name(id: i64) -> Option<&'static str> {
                 _ => None,
             }
         })
+}
+
+/// Folds `range()` over two single-byte string endpoints.
+///
+/// Only the single-byte ASCII form php-src treats as a character range is folded; multi-byte
+/// endpoints keep the runtime call so their coercion and increment rules stay in one place.
+/// A step larger than the spanned distance is also left to runtime, because PHP raises a
+/// `ValueError` there instead of returning the start element.
+fn fold_string_range(args: &[Expr], span: Span) -> Option<Vec<Expr>> {
+    if !(2..=3).contains(&args.len()) {
+        return None;
+    }
+    let start = match &args[0].kind {
+        ExprKind::StringLiteral(text) if text.chars().count() == 1 => text.chars().next()? as i64,
+        _ => return None,
+    };
+    let end = match &args[1].kind {
+        ExprKind::StringLiteral(text) if text.chars().count() == 1 => text.chars().next()? as i64,
+        _ => return None,
+    };
+    let step = match args.get(2) {
+        None => 1,
+        Some(Expr {
+            kind: ExprKind::IntLiteral(value),
+            ..
+        }) if *value > 0 => *value,
+        _ => return None,
+    };
+    if !(0x20..=0x7e).contains(&start) || !(0x20..=0x7e).contains(&end) {
+        return None;
+    }
+    // PHP rejects a step larger than the spanned distance; folding it would return the start
+    // element and swallow the ValueError.
+    if step > (end - start).abs() {
+        return None;
+    }
+    let step = step as usize;
+    let values: Vec<i64> = if start <= end {
+        (start..=end).step_by(step).collect()
+    } else {
+        (end..=start).rev().step_by(step).collect()
+    };
+    values
+        .into_iter()
+        .map(|value| {
+            let text = char::from_u32(value as u32)?.to_string();
+            Some(Expr::new(ExprKind::StringLiteral(text), span))
+        })
+        .collect()
 }

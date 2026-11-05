@@ -85,6 +85,51 @@ pub(super) fn lower_static_method_call_bound(
             return call;
         }
     }
+    // PHP 8.5 deprecates the static `FFI::new()`, `FFI::cast()`, and `FFI::type()` spellings.
+    // The deprecation is emitted after the argument expressions run, like php-src's method
+    // invocation, and only for the profiles that declare it.
+    let static_ffi_deprecation = match receiver {
+        StaticReceiver::Named(name)
+            if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI")
+                && crate::codegen_support::compile_php_version()
+                    >= crate::php_version::PhpVersion::Php85 =>
+        {
+            match php_symbol_key(method).as_str() {
+                "new" => Some("Calling FFI::new() statically is deprecated"),
+                "cast" => Some("Calling FFI::cast() statically is deprecated"),
+                "type" => Some("Calling FFI::type() statically is deprecated"),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+
+    // ext/ffi's memory and introspection entry points take `@prefer-ref` parameters. In PHP
+    // that makes a direct scalar field/element read produce a place view at that argument's
+    // evaluation point, so `FFI::memset($s->a, $s->b, 1)` writes `a`, not the last field read.
+    // Reproduce the same shape by materializing the view where the argument appears.
+    let rewritten_args = rewrite_ffi_place_arguments(ctx, receiver, method, args);
+    let args = rewritten_args.as_deref().unwrap_or(args);
+
+    // `FFI::addr(<fresh temporary>)` transfers ownership of the temporary's allocation,
+    // matching php-src's unshared-receiver rule. Only expressions that are provably freshly
+    // allocated qualify: a call, property read, or element read may alias storage reachable
+    // from PHP, and stealing its allocation would free a shared pointee. `FFI::addr($variable)`
+    // keeps the shared reference.
+    let (method, args) = if let StaticReceiver::Named(name) = receiver {
+        if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI")
+            && php_symbol_key(method) == "addr"
+            && args.len() == 1
+            && is_fresh_cdata_expression(ctx, &args[0])
+        {
+            ("__elephc_addr_temp", args)
+        } else {
+            (method, args)
+        }
+    } else {
+        (method, args)
+    };
+
     let magic_args;
     let (dispatch_method, call_args) = if let Some(args) = (binding
         != StaticCallBinding::ForwardedThis)
@@ -223,6 +268,19 @@ pub(super) fn lower_static_method_call_bound(
         &result_type,
         expr.span,
     );
+    if let Some(message) = static_ffi_deprecation {
+        let deprecation = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("trigger_error"),
+                args: vec![
+                    Expr::new(ExprKind::StringLiteral(message.into()), expr.span),
+                    Expr::new(ExprKind::IntLiteral(16_384), expr.span),
+                ],
+            },
+            expr.span,
+        );
+        let _ = lower_expr(ctx, &deprecation);
+    }
     super::object_construction::publish_static_constructor_call_strictness(
         ctx,
         receiver,
@@ -691,5 +749,146 @@ pub(super) fn emit_backed_enum_initialization(ctx: &mut LoweringContext<'_, '_>,
     let backed = ctx.enums.get(enum_name).is_some_and(|info| info.backing_type.is_some());
     if backed && crate::ir_lower::property_default_errors::class_initialization_reports(ctx, enum_name) {
         crate::ir_lower::property_default_errors::emit_initialization_deprecations(ctx, enum_name, span);
+    }
+}
+
+/// Returns whether an expression is an unshared CData temporary this call just allocated.
+///
+/// `FFI::addr()` transfers ownership only for an unshared receiver. The compiler cannot see
+/// PHP reference counts from the lowering pass, so it limits the transfer to constructors that
+/// always return a fresh allocation (`FFI::new()`, `$ffi->new()`, `FFI::cast()`); every other
+/// expression keeps the shared-reference path and never steals storage reachable from a field,
+/// element, variable, or returned object.
+fn is_fresh_cdata_expression(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StaticMethodCall { receiver: StaticReceiver::Named(name), method, .. } => {
+            name.trim_start_matches('\\').eq_ignore_ascii_case("FFI")
+                && matches!(php_symbol_key(method).as_str(), "new" | "cast")
+        }
+        ExprKind::MethodCall { object, method, .. } => {
+            php_symbol_key(method) == "new"
+                && matches!(
+                    super::array_cast_source::array_cast_source_type_for_ir(ctx, object).codegen_repr(),
+                    PhpType::Object(class) if class.trim_start_matches('\\').eq_ignore_ascii_case("FFI")
+                )
+        }
+        _ => false,
+    }
+}
+
+/// Returns the `@prefer-ref` argument positions of one ext/ffi method.
+fn ffi_place_argument_positions(method: &str) -> &'static [usize] {
+    match method {
+        "free" | "typeof" | "addr" | "sizeof" | "alignof" | "isnull" | "memset" | "string" => &[0],
+        "cast" => &[1],
+        "memcpy" | "memcmp" => &[0, 1],
+        _ => &[],
+    }
+}
+
+/// Returns the parameter names of one ext/ffi method that accept a CData place view.
+///
+/// Named arguments are matched by name, so a name outside this set (`memset`'s `value` or
+/// `size`) must keep its ordinary scalar read.
+fn ffi_place_parameter_names(method: &str) -> &'static [&'static str] {
+    match method {
+        "free" | "typeof" | "addr" | "sizeof" | "alignof" | "isNull" | "memset" | "string" | "cast" => &["ptr"],
+        "memcpy" => &["to", "from"],
+        "memcmp" => &["ptr1", "ptr2"],
+        _ => &[],
+    }
+}
+
+/// Rewrites direct CData place reads in `@prefer-ref` argument positions into place views.
+///
+/// Returns `None` when nothing changed so the caller keeps the original argument slice.
+fn rewrite_ffi_place_arguments(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    args: &[Expr],
+) -> Option<Vec<Expr>> {
+    let StaticReceiver::Named(name) = receiver else { return None };
+    if !name.trim_start_matches('\\').eq_ignore_ascii_case("FFI") {
+        return None;
+    }
+    let positions = ffi_place_argument_positions(&php_symbol_key(method));
+    if positions.is_empty() {
+        return None;
+    }
+    let place_names = ffi_place_parameter_names(&php_symbol_key(method));
+    let mut rewritten = args.to_vec();
+    let mut changed = false;
+    for (index, argument) in args.iter().enumerate() {
+        // Named arguments are matched to parameters by name, not by source position. Only a
+        // parameter that itself needs a place view may be rewritten; `memset(value: ...)` and
+        // `memset(size: ...)` must keep their numeric reads.
+        if let ExprKind::NamedArg { name, value } = &argument.kind {
+            if !place_names.contains(&name.as_str()) {
+                continue;
+            }
+            if let Some(place) = ffi_place_expression(ctx, value) {
+                rewritten[index] = Expr::new(
+                    ExprKind::NamedArg { name: name.clone(), value: Box::new(place) },
+                    argument.span,
+                );
+                changed = true;
+            }
+            continue;
+        }
+        if !positions.contains(&index) {
+            continue;
+        }
+        if let Some(place) = ffi_place_expression(ctx, argument) {
+            rewritten[index] = place;
+            changed = true;
+        }
+    }
+    changed.then_some(rewritten)
+}
+
+/// Builds the place-view call for one direct property/element read, or `None`.
+fn ffi_place_expression(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<Expr> {
+    let receiver = match &expr.kind {
+        ExprKind::PropertyAccess { object, .. }
+        | ExprKind::DynamicPropertyAccess { object, .. } => object.as_ref(),
+        ExprKind::ArrayAccess { array, .. } => array.as_ref(),
+        _ => return None,
+    };
+    // Ordinary PHP arrays and properties keep their normal reads. Only a receiver that is
+    // statically (or possibly) CData needs the place view; wrapping `$items[0]` or
+    // `$strings[0]` would hand the helper a non-CData value or lose its declared type.
+    if !(super::callable_probes::is_ffi_cdata_expr(ctx, receiver)
+        || super::callable_probes::may_hold_ffi_cdata(ctx, receiver))
+    {
+        return None;
+    }
+    let helper = |method: &str, arguments: Vec<Expr>| {
+        Expr::new(
+            ExprKind::StaticMethodCall {
+                receiver: StaticReceiver::Named(crate::names::Name::unqualified("FFI")),
+                method: method.to_string(),
+                args: arguments,
+            },
+            expr.span,
+        )
+    };
+    match &expr.kind {
+        ExprKind::PropertyAccess { object, property } => Some(helper(
+            "__elephc_field_view",
+            vec![
+                (**object).clone(),
+                Expr::new(ExprKind::StringLiteral(property.clone()), expr.span),
+            ],
+        )),
+        ExprKind::DynamicPropertyAccess { object, property } => Some(helper(
+            "__elephc_place",
+            vec![(**object).clone(), (**property).clone()],
+        )),
+        ExprKind::ArrayAccess { array, index } => Some(helper(
+            "__elephc_offset_view",
+            vec![(**array).clone(), (**index).clone()],
+        )),
+        _ => None,
     }
 }

@@ -182,6 +182,45 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
     accepts_any_operands: false,
 };
 
+/// FFI CData's pointer arithmetic, ordering, and truthiness handlers.
+///
+/// The adapters are static methods on `FFI\CData`; pointer addition/subtraction and
+/// pointer difference are distinguished at run time by the bridge.
+pub const FFI_CDATA_OPERATORS: ClassOperators = ClassOperators {
+    arithmetic: &[
+        (ObjectArithmetic::Add, "__elephc_add"),
+        (ObjectArithmetic::Sub, "__elephc_sub"),
+        // php-src's `do_operation` handler declines these; the adapters raise the engine's
+        // exact `Unsupported operand types` TypeError instead of letting the compiler reject
+        // the program or silently treating the pointer as a number.
+        (ObjectArithmetic::Mul, "__elephc_mul"),
+        (ObjectArithmetic::Div, "__elephc_div"),
+        (ObjectArithmetic::Mod, "__elephc_mod"),
+        (ObjectArithmetic::Pow, "__elephc_pow"),
+    ],
+    bitwise: &[
+        (ObjectBitwise::And, "__elephc_bitand"),
+        (ObjectBitwise::Or, "__elephc_bitor"),
+        (ObjectBitwise::Xor, "__elephc_bitxor"),
+    ],
+    shift: &[
+        (ObjectShift::Left, "__elephc_shl"),
+        (ObjectShift::Right, "__elephc_shr"),
+    ],
+    properties: &[],
+    dimensions: &[],
+    native_clone: None,
+    json: None,
+    native_casts: &[],
+    arithmetic_result: ObjectArithmeticResult::Object,
+    operand_dispatch: ObjectOperandDispatch::Handler,
+    bit_not: None,
+    compare: Some("__elephc_compare"),
+    boolean: Some("__elephc_bool"),
+    casts: None,
+    accepts_any_operands: false,
+};
+
 /// `tidy` and `tidyNode` scalar casts: both render as their text through `__toString`,
 /// cast to `0`/`0.0` for integer and float, and are always truthy. php-src installs
 /// `cast_object` handlers returning exactly those values.
