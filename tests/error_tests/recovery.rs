@@ -443,6 +443,20 @@ fn test_untyped_function_body_error_reached_through_callbacks_is_reported() {
             var_dump(call_user_func_array('f', $a));"
             .to_string(),
         format!("<?php {f} $a = []; var_dump(call_user_func_array('f', $a));"),
+        format!("<?php {f} $a = [1]; var_dump(call_user_func_array(f(...), $a));"),
+        format!("<?php {f} $h = f(...); $a = [1]; var_dump(call_user_func_array($h, $a));"),
+        format!(
+            "<?php {f} function arr(): array {{ return [1]; }} \
+             var_dump(call_user_func_array('f', arr()));"
+        ),
+        format!(
+            "<?php {f} function box(): mixed {{ return [1]; }} \
+             var_dump(call_user_func_array('f', box()));"
+        ),
+        format!(
+            "<?php {f} function arr(): array {{ return [1]; }} $a = arr(); \
+             var_dump(call_user_func('f', ...$a));"
+        ),
         format!("<?php {f} var_dump(call_user_func('f', 1, 2)); echo f(1);"),
         format!("<?php {f} $h = f(...); var_dump($h(1, 2)); echo f(1);"),
         "<?php function id<T>(T $x) { $a = 5; return $a[0]; } \
@@ -477,6 +491,10 @@ fn test_callback_rewalk_refreshes_helper_return_built_from_late_static_property(
         "$h = a(...); var_dump($h(1));",
         "$xs = [1]; var_dump(call_user_func_array('a', $xs));",
         "$xs = ['n' => 1]; var_dump(call_user_func_array('a', $xs));",
+        "$xs = [1]; var_dump(call_user_func_array(a(...), $xs));",
+        "$h = a(...); $xs = [1]; var_dump(call_user_func_array($h, $xs));",
+        "function arr(): array { return [1]; } var_dump(call_user_func_array('a', arr()));",
+        "function arr(): array { return [1]; } $xs = arr(); var_dump(call_user_func('a', ...$xs));",
     ] {
         expect_no_error(&format!("<?php {helpers} {call} C::$v = [9];"));
     }
