@@ -160,8 +160,16 @@ class mysqli_result implements IteratorAggregate {
         $target->streamStep = $this->streamStep;
         $target->streamLink = $this->streamLink;
         $target->streamKinds = $this->streamKinds;
+        $target->streamRows = $this->streamRows;
+        // The statistics follow the rows: the new result counts its fetches and
+        // its free, and the temporary source (destroyed right after) counts none.
+        $target->statLink = $this->statLink;
+        $target->statBinary = $this->statBinary;
+        $target->statKeys = $this->statKeys;
+        $target->statFreed = $this->statFreed;
         $this->streamStmt = -1;
         $this->streamLink = null;
+        $this->statLink = null;
     }
 
     // The conversion mysqlnd applies to a decoded cell of a column: 0 none,

@@ -713,6 +713,8 @@ class mysqli_stmt {
         $this->moreResults = false;
         $this->syncLink();
         $this->dropStored();
+        // mysqlnd reads num_rows from the result set, which is gone now.
+        $this->num_rows = 0;
     }
 
     public function reset(): bool {
@@ -723,14 +725,17 @@ class mysqli_stmt {
         }
         elephc_pdo_reset($this->stmt);
         // php's reset keeps the parameter and result bindings but discards
-        // long data and any pending rows.
+        // long data and any pending (unread) rows. A set store_result() already
+        // buffered survives with its position and num_rows, like mysqlnd's;
+        // re-execution, free_result() or close() drop it.
         $this->clearLongData();
         $this->hasPending = false;
         $this->syncLink();
         $this->moreResults = false;
         $this->syncLink();
-        $this->dropStored();
-        $this->num_rows = 0;
+        if (!$this->stored) {
+            $this->num_rows = 0;
+        }
         $this->clearError();
         return true;
     }

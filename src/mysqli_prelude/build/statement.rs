@@ -1142,6 +1142,7 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_this(), "moreResults", e_bool(false)),
                     s_expr(e_method_call(e_this(), "syncLink", vec![])),
                     s_expr(e_method_call(e_this(), "dropStored", vec![])),
+                    s_prop_assign(e_this(), "num_rows", e_int(0)),
                 ]),
         )
         .method(
@@ -1164,8 +1165,12 @@ pub(super) fn decl_class_mysqli_stmt(php_version: PhpVersion) -> Stmt {
                     s_expr(e_method_call(e_this(), "syncLink", vec![])),
                     s_prop_assign(e_this(), "moreResults", e_bool(false)),
                     s_expr(e_method_call(e_this(), "syncLink", vec![])),
-                    s_expr(e_method_call(e_this(), "dropStored", vec![])),
-                    s_prop_assign(e_this(), "num_rows", e_int(0)),
+                    s_if(
+                        e_not(e_this_prop("stored")),
+                        vec![s_prop_assign(e_this(), "num_rows", e_int(0))],
+                        vec![],
+                        None,
+                    ),
                     s_expr(e_method_call(e_this(), "clearError", vec![])),
                     s_return(e_bool(true)),
                 ]),

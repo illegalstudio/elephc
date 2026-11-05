@@ -224,8 +224,14 @@ pub(super) fn decl_class_mysqli_result(php_version: PhpVersion) -> Stmt {
                     s_prop_assign(e_var("target"), "streamStep", e_this_prop("streamStep")),
                     s_prop_assign(e_var("target"), "streamLink", e_this_prop("streamLink")),
                     s_prop_assign(e_var("target"), "streamKinds", e_this_prop("streamKinds")),
+                    s_prop_assign(e_var("target"), "streamRows", e_this_prop("streamRows")),
+                    s_prop_assign(e_var("target"), "statLink", e_this_prop("statLink")),
+                    s_prop_assign(e_var("target"), "statBinary", e_this_prop("statBinary")),
+                    s_prop_assign(e_var("target"), "statKeys", e_this_prop("statKeys")),
+                    s_prop_assign(e_var("target"), "statFreed", e_this_prop("statFreed")),
                     s_prop_assign(e_this(), "streamStmt", e_neg(e_int(1))),
                     s_prop_assign(e_this(), "streamLink", e_null()),
+                    s_prop_assign(e_this(), "statLink", e_null()),
                 ]),
         )
         .method(

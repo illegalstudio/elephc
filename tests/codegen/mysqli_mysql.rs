@@ -1454,6 +1454,71 @@ echo "|", $x->reap_async_query()->fetch_row()[0], "\n";
     assert_eq!(out, "false:2014|5\n");
 }
 
+/// `new mysqli_result($db, $mode)` after `real_query()` counts the statistics on the result it
+/// returns, in both modes: one explicit free, the rows read from the server, the unbuffered
+/// client rows and the data bytes, like mysqlnd. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_result_constructor_keeps_lifecycle_statistics() {
+    let out = compile_and_run(&my_program(
+        r#"
+$keys = ["explicit_free_result", "implicit_free_result", "rows_fetched_from_server_normal", "rows_fetched_from_client_normal_unbuffered", "rows_fetched_from_client_normal_buffered", "bytes_received_real_data_normal"];
+$deltas = function (array $before, array $after) use ($keys): string {
+    $out = [];
+    foreach ($keys as $key) {
+        $out[] = (int) $after[$key] - (int) $before[$key];
+    }
+    return implode(",", $out);
+};
+foreach ([MYSQLI_USE_RESULT, MYSQLI_STORE_RESULT] as $mode) {
+    $before = $db->get_connection_stats();
+    $db->real_query("SELECT 'abc' UNION ALL SELECT 'de'");
+    $r = new mysqli_result($db, $mode);
+    $rows = [];
+    while ($row = $r->fetch_row()) {
+        $rows[] = $row[0];
+    }
+    $r->free();
+    $after = $db->get_connection_stats();
+    echo implode(",", $rows), "=", $deltas($before, $after), "|";
+}
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "abc,de=1,0,2,2,0,5|abc,de=1,0,2,0,0,5|\n");
+}
+
+/// `reset()` keeps a set `store_result()` buffered: `num_rows`, the read position and
+/// `data_seek()` survive, and `free_result()` drops it. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_reset_keeps_stored_rows() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$st = $db->prepare("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3");
+$st->execute();
+$st->store_result();
+$v = 0;
+$st->bind_result($v);
+$st->fetch();
+echo $v, "|", $st->num_rows;
+echo "|", var_export($st->reset(), true), "|", $st->num_rows;
+$got = [];
+while ($st->fetch()) {
+    $got[] = $v;
+}
+echo "|", implode(",", $got), "|", $st->num_rows;
+$st->data_seek(0);
+$st->fetch();
+echo "|seek=", $v;
+$st->free_result();
+echo "|", $st->num_rows, "\n";
+"#,
+    ));
+    assert_eq!(out, "1|3|true|3|2,3|3|seek=1|0\n");
+}
+
 /// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
 /// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
 /// the set is unread, and the statistics count one unbuffered set. Expected output is
