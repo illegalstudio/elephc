@@ -31,12 +31,13 @@
 //!   case: an untyped receiver reads untyped data); any other result shape keeps the inline
 //!   ladder, whose arms materialize into the site's own representation.
 //! - A body with a runtime closure scope (`CLOSURE_SCOPE_LOCAL`) resolves names as each
-//!   property's declaring class would and relies on the scope gate at the site. Its reads are
-//!   never outlined: the read helper's frame holds no such local and could not tell. Its writes
-//!   and removals are: their synthetic helper takes the hidden scope capture as one more
-//!   parameter of the same name, so the lowering inside resolves and gates exactly as the site
+//!   property's declaring class would and relies on the scope gate at the site. The module-wide
+//!   read helper's frame holds no such local and could not tell, so such a body's reads, writes
+//!   and removals go through a synthetic helper taking the hidden scope capture as one more
+//!   parameter of the same name: the lowering inside resolves and gates exactly as the site
 //!   would. The DeepClone polyfill's hydrators (`Closure::bind`-scoped `$o->$name = $v`) were
-//!   ~3 M instructions on a small Symfony probe before this, one whole-program ladder per site.
+//!   ~3 M instructions on a small Symfony probe before this, one whole-program ladder per site;
+//!   a read was 830 000 lines per site in the Symfony Demo's `OptionsResolverIntrospector`.
 //! - Writes and removals (`$mixed->{$name} = $boxed`, `unset($mixed->{$name})`) are shared the same
 //!   way but are emitted as ordinary synthetic EIR functions holding the one instruction, taking the
 //!   receiver, the name and (for a write) the boxed value as parameters in that order. That runs the
@@ -95,11 +96,28 @@ pub(super) fn try_lower_outlined_mixed_prop_get(
     object: ValueId,
     property_value: ValueId,
 ) -> Result<bool> {
-    if outlining_disabled()
-        || inst.result_php_type.codegen_repr() != PhpType::Mixed
-        || ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL).is_some()
-    {
+    if outlining_disabled() || inst.result_php_type.codegen_repr() != PhpType::Mixed {
         return Ok(false);
+    }
+    if let Some(scope_slot) = ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL) {
+        if inside_function_helper(ctx, GET_PREFIX)
+            || ctx.value_php_type(object)?.codegen_repr() != PhpType::Mixed
+            || ctx.value_php_type(property_value)?.codegen_repr() != PhpType::Str
+        {
+            return Ok(false);
+        }
+        let mode = property_fetch_mode(inst);
+        let key = format!("{}:runtime-scope:{:?}", GET_PREFIX, mode);
+        let label = ctx.keyed_global_label(&key, GET_PREFIX);
+        ctx.shared.request_dynamic_prop_helper(
+            &key,
+            &label,
+            DynamicPropHelperKind::MixedGetRuntimeScope(mode),
+            None,
+        );
+        emit_runtime_scope_helper_call(ctx, object, property_value, None, scope_slot, &label)?;
+        store_if_result(ctx, inst)?;
+        return Ok(true);
     }
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;
@@ -305,6 +323,7 @@ pub(in crate::codegen) fn emit_pending_dynamic_property_helpers(
             ),
             DynamicPropHelperKind::MixedSet
             | DynamicPropHelperKind::MixedUnset
+            | DynamicPropHelperKind::MixedGetRuntimeScope(_)
             | DynamicPropHelperKind::MixedSetRuntimeScope
             | DynamicPropHelperKind::MixedUnsetRuntimeScope => {
                 emit_function_helper(module, emitter, data, shared, &pending)
@@ -1055,7 +1074,7 @@ fn request_runtime_scope_helper(
     label
 }
 
-/// Calls a runtime-scope write/removal helper: the ordinary operands, then the raw hidden scope
+/// Calls a runtime-scope helper: the ordinary operands, then the raw hidden scope
 /// capture in the next argument register.
 fn emit_runtime_scope_helper_call(
     ctx: &mut FunctionContext<'_>,
@@ -1124,7 +1143,7 @@ fn emit_function_helper_call(
     Ok(())
 }
 
-/// Emits a write/removal helper as an ordinary synthetic EIR function whose body is the one
+/// Emits a function helper as an ordinary synthetic EIR function whose body is the one
 /// instruction, so the existing lowering (frame, parameter spills, exception cleanup) runs
 /// unchanged and the ladder inside it is the same code the inline sites used.
 fn emit_function_helper(
@@ -1140,11 +1159,21 @@ fn emit_function_helper(
         pending.kind,
         DynamicPropHelperKind::MixedSet | DynamicPropHelperKind::MixedSetRuntimeScope
     );
-    let runtime_scope = matches!(
-        pending.kind,
-        DynamicPropHelperKind::MixedSetRuntimeScope | DynamicPropHelperKind::MixedUnsetRuntimeScope
-    );
-    let mut function = Function::new(pending.label.clone(), IrType::Void, PhpType::Void);
+    let read_mode = match pending.kind {
+        DynamicPropHelperKind::MixedGetRuntimeScope(mode) => Some(mode),
+        _ => None,
+    };
+    let runtime_scope = read_mode.is_some()
+        || matches!(
+            pending.kind,
+            DynamicPropHelperKind::MixedSetRuntimeScope | DynamicPropHelperKind::MixedUnsetRuntimeScope
+        );
+    let mixed = IrType::Heap(IrHeapKind::Mixed);
+    let (return_ir, return_php) = match read_mode {
+        Some(_) => (mixed.clone(), PhpType::Mixed),
+        None => (IrType::Void, PhpType::Void),
+    };
+    let mut function = Function::new(pending.label.clone(), return_ir.clone(), return_php.clone());
     function.flags.is_synthetic = true;
     function.lexical_class = pending.scope.clone();
     let mut params = vec![
@@ -1174,7 +1203,11 @@ fn emit_function_helper(
             LocalKind::PhpLocal,
         );
     }
-    let op = if is_set { Op::DynamicPropSet } else { Op::DynamicPropUnset };
+    let op = match (read_mode, is_set) {
+        (Some(_), _) => Op::DynamicPropGet,
+        (None, true) => Op::DynamicPropSet,
+        (None, false) => Op::DynamicPropUnset,
+    };
     {
         let mut builder = Builder::new(&mut function);
         let entry = builder.create_named_block("entry", Vec::new());
@@ -1191,19 +1224,19 @@ fn emit_function_helper(
                 )
             })
             .collect::<Vec<_>>();
-        builder.emit_with_effects(
+        let result = builder.emit_with_effects(
             op,
             operands,
-            None,
-            IrType::Void,
-            PhpType::Void,
-            Ownership::NonHeap,
+            read_mode.map(Immediate::PropertyFetchMode),
+            return_ir,
+            return_php,
+            if read_mode.is_some() { Ownership::Owned } else { Ownership::NonHeap },
             // The site already published the file and line of the PHP statement. This
             // instruction has no span, so letting it warn-publish would overwrite them with zero.
             op.default_effects() - crate::ir::Effects::MAY_WARN,
             None,
         );
-        builder.terminate(Terminator::Return { value: None });
+        builder.terminate(Terminator::Return { value: result });
     }
     crate::codegen::block_emit::emit_synthetic_function_with_label(
         module,

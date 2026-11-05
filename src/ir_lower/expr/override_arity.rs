@@ -17,6 +17,10 @@
 //!   override's own signature and pads its defaults. Every other class keeps the original call.
 //! - A shared vtable slot cannot carry this: sites typed against the subclass pass the full
 //!   argument list through the same slot, so an ancestor-arity thunk would drop their arguments.
+//! - Classes that inherit one implementation take one arm: the call it lowers is the same for all
+//!   of them. Symfony's dumped container has ~450 `getXxxService` classes extending the container,
+//!   so `$container->get($id)` was 456 identical arms, 57 000 lines per site. Their ids are mostly
+//!   consecutive, which makes the arm's test a few range compares.
 
 use super::*;
 
@@ -107,43 +111,22 @@ pub(super) fn lower_wider_override_dispatch(
         Op::ObjectClassId.default_effects(),
         Some(expr.span),
     );
-    for (class_name, id) in targets {
+    for arm in targets {
         let hit = ctx
             .builder
             .create_named_block("method.override_arity.hit", Vec::new());
-        let next = ctx
-            .builder
-            .create_named_block("method.override_arity.next", Vec::new());
-        let expected = ctx.emit_value(
-            Op::ConstI64,
-            Vec::new(),
-            Some(Immediate::I64(id as i64)),
-            PhpType::Int,
-            Op::ConstI64.default_effects(),
-            Some(expr.span),
-        );
-        let matches = ctx.emit_value(
-            Op::ICmp,
-            vec![class_id.value, expected.value],
-            Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Eq)),
-            PhpType::Bool,
-            Op::ICmp.default_effects(),
-            Some(expr.span),
-        );
-        ctx.builder.terminate(Terminator::CondBr {
-            cond: matches.value,
-            then_target: hit,
-            then_args: Vec::new(),
-            else_target: next,
-            else_args: Vec::new(),
-        });
+        let mut next = None;
+        for &(first, last) in &arm.id_ranges {
+            next = Some(emit_class_id_range_test(ctx, class_id.value, first, last, hit, expr));
+        }
+        let next = next.expect("an arm serves at least one class");
 
         ctx.builder.position_at_end(hit);
         let narrowed = ctx.emit_value(
             Op::Move,
             vec![object.value],
             None,
-            PhpType::Object(class_name),
+            PhpType::Object(arm.class_name),
             Op::Move.default_effects(),
             Some(expr.span),
         );
@@ -159,6 +142,58 @@ pub(super) fn lower_wider_override_dispatch(
 
     ctx.builder.position_at_end(merge);
     Some(take_owned_temp(ctx, &temp_name, expr.span))
+}
+
+/// Branches to `hit` when `class_id` lies in `first..=last`, and continues in the returned block
+/// otherwise.
+fn emit_class_id_range_test(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_id: crate::ir::ValueId,
+    first: u64,
+    last: u64,
+    hit: crate::ir::BlockId,
+    expr: &Expr,
+) -> crate::ir::BlockId {
+    let miss = ctx
+        .builder
+        .create_named_block("method.override_arity.next", Vec::new());
+    let mut compare = |ctx: &mut LoweringContext<'_, '_>, bound: u64, predicate, then_target| {
+        let bound = ctx.emit_value(
+            Op::ConstI64,
+            Vec::new(),
+            Some(Immediate::I64(bound as i64)),
+            PhpType::Int,
+            Op::ConstI64.default_effects(),
+            Some(expr.span),
+        );
+        let matches = ctx.emit_value(
+            Op::ICmp,
+            vec![class_id, bound.value],
+            Some(Immediate::CmpPredicate(predicate)),
+            PhpType::Bool,
+            Op::ICmp.default_effects(),
+            Some(expr.span),
+        );
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: matches.value,
+            then_target,
+            then_args: Vec::new(),
+            else_target: miss,
+            else_args: Vec::new(),
+        });
+    };
+    if first == last {
+        compare(ctx, first, crate::ir::CmpPredicate::Eq, hit);
+    } else {
+        let upper = ctx
+            .builder
+            .create_named_block("method.override_arity.upper", Vec::new());
+        compare(ctx, first, crate::ir::CmpPredicate::Sge, upper);
+        ctx.builder.position_at_end(upper);
+        compare(ctx, last, crate::ir::CmpPredicate::Sle, hit);
+    }
+    ctx.builder.position_at_end(miss);
+    miss
 }
 
 /// The object type a NULLABLE receiver must be narrowed to before the call, when the class-id
@@ -205,7 +240,7 @@ pub(super) fn nullable_receiver_ladder_type(
 /// it declares more than the site's parameters (every extra one defaulted and by value), its
 /// variadic tail sits at another position, or it stores one of the site's parameters in a
 /// different representation. Each class is matched by its exact id, so the order only needs to be
-/// deterministic.
+/// deterministic. Classes that share an implementation and a signature share an arm.
 ///
 /// The variadic case is the hidden `...$__elephc_func_args` tail that `func_get_args()` gives a
 /// whole method family: `Node::getAttribute(string $name)` reads `func_get_arg(1)`, so its tail is
@@ -229,7 +264,7 @@ fn wider_override_classes(
     method_key: &str,
     site_sig: &FunctionSig,
     table_sig: Option<&FunctionSig>,
-) -> Vec<(String, u64)> {
+) -> Vec<WiderOverrideArm> {
     let storage_sig = table_sig.unwrap_or(site_sig);
     // The answer depends only on the receiver type, the method and the storage the signature
     // promises, so every call site sharing them shares it: an interface every class implements
@@ -256,7 +291,7 @@ fn wider_override_classes(
     }) {
         return found;
     }
-    let found = compute_wider_override_classes(ctx, base, method_key, storage_sig);
+    let found = override_arms(ctx, method_key, compute_wider_override_classes(ctx, base, method_key, storage_sig));
     WIDER_OVERRIDE_MEMO.with(|cell| {
         let mut cell = cell.borrow_mut();
         if cell.as_ref().is_none_or(|(table, len, _)| (*table, *len) != identity) {
@@ -269,8 +304,64 @@ fn wider_override_classes(
     found
 }
 
+/// One arm of the ladder: the classes one lowered call serves.
+#[derive(Clone)]
+struct WiderOverrideArm {
+    /// The class the receiver is re-typed to. Any class of the arm lowers to the same call.
+    class_name: String,
+    /// Sorted inclusive class-id ranges holding exactly the arm's classes.
+    id_ranges: Vec<(u64, u64)>,
+}
+
+/// Groups `classes` by implementation and signature, in the order of each group's first class.
+///
+/// The signature is part of the key because a subclass carries its own copy of it, and a copy may
+/// have drifted from the implementing class's.
+fn override_arms(
+    ctx: &LoweringContext<'_, '_>,
+    method_key: &str,
+    classes: Vec<(String, u64)>,
+) -> Vec<WiderOverrideArm> {
+    let mut slots: crate::fast_hash::FastMap<String, usize> = Default::default();
+    let mut groups: Vec<(String, Vec<u64>)> = Vec::new();
+    for (class_name, id) in classes {
+        let info = ctx.classes.get(class_name.as_str());
+        let implementation = info
+            .and_then(|info| info.method_impl_classes.get(method_key))
+            .map_or(class_name.as_str(), String::as_str);
+        let sig = info.and_then(|info| info.methods.get(method_key));
+        let key = format!(
+            "{}\0{:?}\0{:?}\0{:?}\0{:?}",
+            php_symbol_key(implementation),
+            sig.map(|sig| sig.params.iter().map(|(_, ty)| ty.codegen_repr()).collect::<Vec<_>>()),
+            sig.map(|sig| &sig.ref_params),
+            sig.map(|sig| &sig.variadic),
+            sig.map(|sig| sig.return_type.codegen_repr()),
+        );
+        let slot = *slots.entry(key).or_insert_with(|| {
+            groups.push((class_name.clone(), Vec::new()));
+            groups.len() - 1
+        });
+        groups[slot].1.push(id);
+    }
+    groups
+        .into_iter()
+        .map(|(class_name, mut ids)| {
+            ids.sort_unstable();
+            let mut id_ranges: Vec<(u64, u64)> = Vec::new();
+            for id in ids {
+                match id_ranges.last_mut() {
+                    Some((_, last)) if *last + 1 == id => *last = id,
+                    _ => id_ranges.push((id, id)),
+                }
+            }
+            WiderOverrideArm { class_name, id_ranges }
+        })
+        .collect()
+}
+
 /// Per-program memo of [`wider_override_classes`], tagged with the class table it was built from.
-type WiderOverrideMemo = (usize, usize, crate::fast_hash::FastMap<String, Vec<(String, u64)>>);
+type WiderOverrideMemo = (usize, usize, crate::fast_hash::FastMap<String, Vec<WiderOverrideArm>>);
 
 thread_local! {
     static WIDER_OVERRIDE_MEMO: std::cell::RefCell<Option<WiderOverrideMemo>> =

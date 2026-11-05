@@ -272,6 +272,9 @@ pub(crate) enum DynamicPropHelperKind {
     MixedSet,
     /// `unset($mixed->{$name})`, emitted as a synthetic function.
     MixedUnset,
+    /// `$mixed->{$name}` read or probe from a body with a RUNTIME closure scope (see
+    /// [`Self::MixedSetRuntimeScope`]).
+    MixedGetRuntimeScope(crate::ir::PropertyFetchMode),
     /// `$mixed->{$name} = $boxed` from a body with a RUNTIME closure scope: the synthetic function
     /// also receives the caller's hidden scope capture, so its ladder and scope gate resolve as
     /// the caller's would.

@@ -828,7 +828,7 @@ pub(super) fn lower_new_dynamic_object(
     let class_name = lower_expr(ctx, class_name);
     crate::ir_lower::property_default_errors::for_dynamic_class(ctx, class_name, expr.span);
     if let Some(value) = lower_planned_collector_new(
-        ctx, class_name, fallback_class.as_str(), args, expr,
+        ctx, class_name, fallback_class.as_str(), None, args, expr,
     ) {
         return value;
     }
@@ -851,6 +851,7 @@ pub(super) fn lower_planned_collector_new(
     ctx: &mut LoweringContext<'_, '_>,
     class_name: LoweredValue,
     fallback: &str,
+    only_descendants_of: Option<&str>,
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
@@ -860,7 +861,13 @@ pub(super) fn lower_planned_collector_new(
     {
         return None;
     }
-    let candidates = dynamic_new_planned_candidate_classes(ctx, args, true);
+    let mut candidates = dynamic_new_planned_candidate_classes(ctx, args, true);
+    // `new static` only ever builds the lexical class or a descendant. Left unfiltered, every
+    // class of the program got a branch: Symfony's `RememberMeDetails::fromRawCookie()` (its
+    // constructor reads `func_num_args()`) grew to 8 M lines, 6% of the Demo's code.
+    if let Some(parent) = only_descendants_of {
+        candidates.retain(|class| is_same_or_descendant_class(ctx, class, parent));
+    }
     if candidates.is_empty() { return None; }
     let mixed = lower_new_dynamic_planned_value(ctx, class_name, &candidates, args, expr);
     let ty = PhpType::Object(fallback.to_string());

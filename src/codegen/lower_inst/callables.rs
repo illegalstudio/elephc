@@ -4441,18 +4441,20 @@ fn emit_mixed_callable_array_descriptor_lookup(
     // An OBJECT selector may name a static method — `[$obj, 'staticName']` is a valid PHP
     // callable — so the object branch gets the public static cases plus the ones this call site's
     // own class scope reaches. The string branch keeps exactly today's set.
-    let object_static_cases: Vec<callable_dispatch::RuntimeStaticMethodCallableCase> = static_cases
-        .iter()
-        .cloned()
-        .chain(runtime_scope_visible_static_method_cases(ctx))
-        .collect();
-    let object_static_cases = object_static_cases.as_slice();
+    //
+    // The two sets stay two tables. The public one has the same content at every site, so
+    // `DataSection::add_words` keeps a single copy; merged, every class scope owned a near-copy
+    // of it. Measured on the Symfony Demo: 357 tables of 917 KB that differed by 44 rows out of
+    // 4 151, 330 MB of `__data`. A method has one visibility, so the key sets never overlap and
+    // the search order changes nothing.
+    let scope_static_cases = runtime_scope_visible_static_method_cases(ctx);
     // Rows for the methods this scope cannot reach, consulted only after every reachable table
     // missed; see `emit_inaccessible_method_error`.
     let reports_inaccessible = !matches!(inaccessible, InaccessibleMethodError::Ignore)
         && module_has_unreachable_callable_methods(ctx);
     let instance_label = (!instance_targets.is_empty()
-        || !object_static_cases.is_empty()
+        || !static_cases.is_empty()
+        || !scope_static_cases.is_empty()
         || reports_inaccessible)
     .then(|| ctx.next_label("callable_array_lookup_instance"));
     let static_label = (!static_cases.is_empty())
@@ -4513,7 +4515,8 @@ fn emit_mixed_callable_array_descriptor_lookup(
             emit_runtime_descriptor_owned_flag(ctx, true);
             abi::emit_jump(ctx.emitter, &done_label);
             ctx.emitter.label(&instance_table_miss);
-            emit_object_selector_static_arms(ctx, object_static_cases, &done_label)?;
+            emit_object_selector_static_arms(ctx, static_cases, &done_label)?;
+            emit_object_selector_static_arms(ctx, &scope_static_cases, &done_label)?;
             emit_magic_call_forwarder(ctx, &done_label)?;
             emit_inaccessible_method_error(ctx, inaccessible)?;
             abi::emit_jump(ctx.emitter, miss_label);
@@ -4526,7 +4529,8 @@ fn emit_mixed_callable_array_descriptor_lookup(
                 abi::emit_jump(ctx.emitter, &done_label);
                 ctx.emitter.label(&next_label);
             }
-            emit_object_selector_static_arms(ctx, object_static_cases, &done_label)?;
+            emit_object_selector_static_arms(ctx, static_cases, &done_label)?;
+            emit_object_selector_static_arms(ctx, &scope_static_cases, &done_label)?;
             emit_magic_call_forwarder(ctx, &done_label)?;
             emit_inaccessible_method_error(ctx, inaccessible)?;
             abi::emit_jump(ctx.emitter, miss_label);

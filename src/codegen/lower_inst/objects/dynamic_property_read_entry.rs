@@ -365,28 +365,56 @@ pub(super) fn shared_read_arm_owners(
     let mut first_for_key: crate::fast_hash::FastMap<String, usize> = Default::default();
     let mut owners = Vec::with_capacity(candidates.len());
     for (index, candidate) in candidates.iter().enumerate() {
-        let slot = &candidate.candidate.slot;
         let key = if !grouping {
             format!("unique|{index}")
         } else if let Some(visibility) = read_arm_dynamic_refusal(ctx, class_names, candidate) {
             format!("refuse-dynamic|{visibility}")
         } else if matches!(candidate.kind, MixedPropertyReadKind::Slot) {
-            format!(
-                "slot|{}|{}|{:?}|{}|{}|{}|{}",
-                super::runtime_property_writes::message_class_for_slot(ctx, slot),
-                slot.property,
-                slot.php_type,
-                slot.offset,
-                slot.is_declared,
-                slot.is_packed,
-                slot.is_reference
-            )
+            slot_arm_key(ctx, &candidate.candidate.slot)
         } else {
             format!("unique|{index}")
         };
         owners.push(*first_for_key.entry(key).or_insert(index));
     }
     owners
+}
+
+/// What a slot read's code depends on. See [`shared_read_arm_owners`].
+fn slot_arm_key(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> String {
+    format!(
+        "slot|{}|{}|{:?}|{}|{}|{}|{}|{:?}",
+        super::runtime_property_writes::message_class_for_slot(ctx, slot),
+        slot.property,
+        slot.php_type,
+        slot.offset,
+        slot.is_declared,
+        slot.is_packed,
+        slot.is_reference,
+        slot.width,
+    )
+}
+
+/// [`shared_read_arm_owners`] for a ladder whose refusals carry a fixed message: only slot reads
+/// share, because a refusal names its own class.
+pub(super) fn shared_slot_arm_owners(
+    ctx: &FunctionContext<'_>,
+    candidates: &[MixedPropertyReadCandidate],
+) -> Vec<usize> {
+    let grouping = std::env::var_os("ELEPHC_NO_ARM_GROUPS").is_none();
+    let mut first_for_key: crate::fast_hash::FastMap<String, usize> = Default::default();
+    candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            if grouping && matches!(candidate.kind, MixedPropertyReadKind::Slot) {
+                *first_for_key
+                    .entry(slot_arm_key(ctx, &candidate.candidate.slot))
+                    .or_insert(index)
+            } else {
+                index
+            }
+        })
+        .collect()
 }
 
 /// For each class-hash read arm, the index of the first arm with the same hash offset.

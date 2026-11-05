@@ -704,7 +704,7 @@ pub(super) fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receive
         let class_name = lower_class_constant(ctx, receiver, expr);
         crate::ir_lower::property_default_errors::for_dynamic_class(ctx, class_name, expr.span);
         if let Some(value) = super::object_construction::lower_planned_collector_new(
-            ctx, class_name, &fallback_class, args, expr,
+            ctx, class_name, &fallback_class, Some(&fallback_class), args, expr,
         ) {
             return value;
         }

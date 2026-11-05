@@ -286,6 +286,10 @@ pub(super) fn lower_declared_mixed_prop_get(
             ))
         })
         .collect::<Vec<_>>();
+    let arm_owner = super::dynamic_property_read_entry::shared_slot_arm_owners(ctx, &candidates);
+    for (index, owner) in arm_owner.iter().enumerate() {
+        match_labels[index] = match_labels[*owner].clone();
+    }
     let mut dispatch = candidates
         .iter()
         .map(|candidate| candidate.candidate.class_id)
@@ -339,7 +343,10 @@ pub(super) fn lower_declared_mixed_prop_get(
         &miss_label,
     );
 
-    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+    for (index, (candidate, label)) in candidates.iter().zip(match_labels.iter()).enumerate() {
+        if arm_owner[index] != index {
+            continue;
+        }
         ctx.emitter.label(label);
         // Only `Slot` touches storage. php refuses the read from this scope, or answers an
         // accessor this compiler cannot dispatch for a runtime name yet; either way the private
@@ -389,7 +396,10 @@ pub(super) fn lower_declared_mixed_prop_get(
             }
             MixedPropertyReadKind::Slot => {}
         }
-        let slot = &candidate.candidate.slot;
+        // The arm may serve a whole subtree, so it names the declaring class, as php does.
+        let mut shared_slot = candidate.candidate.slot.clone();
+        shared_slot.class_name = super::runtime_property_writes::message_class_for_slot(ctx, &shared_slot);
+        let slot = &shared_slot;
         let base_reg = abi::int_result_reg(ctx.emitter);
         let read_done = emit_property_read_state_guard(
             ctx,
@@ -1373,6 +1383,9 @@ pub(super) fn emit_mixed_object_payload_or_null(ctx: &mut FunctionContext<'_>, n
 /// The arms are identified by CLASS ID alone. A slot is not required and deliberately not taken:
 /// an arm can answer from the runtime class's per-instance hash, which has no declared slot to
 /// name, and requiring one is what kept those arms out of the ladder in the first place.
+///
+/// Consecutive ids bound for one label take a single range test: the ~450 classes Symfony's dumped
+/// container derives from itself have consecutive ids and share every inherited property's arm.
 pub(super) fn emit_mixed_property_class_dispatch(
     ctx: &mut FunctionContext<'_>,
     class_ids: &[u64],
@@ -1380,27 +1393,97 @@ pub(super) fn emit_mixed_property_class_dispatch(
     stdclass_label: &str,
     miss_label: &str,
 ) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [x0]");                            // load the receiver class id for Mixed property dispatch
-            for (class_id, label) in class_ids.iter().zip(match_labels.iter()) {
-                abi::emit_load_int_immediate(ctx.emitter, "x10", *class_id as i64);
-                ctx.emitter.instruction("cmp x9, x10");                         // compare the receiver class id against this declared-property owner
-                ctx.emitter.instruction(&format!("b.eq {}", label));            // read the declared property when the class id matches
+    let tests = class_id_range_tests(class_ids, match_labels);
+    let (class_id_reg, scratch_reg, branch_equal, branch_below, branch_not_above) =
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x9, [x0]");                        // load the receiver class id for Mixed property dispatch
+                ("x9", "x10", "b.eq", "b.lt", "b.le")
             }
-            emit_branch_to_stdclass_candidate(ctx, "x9", "x10", stdclass_label);
-            abi::emit_jump(ctx.emitter, miss_label);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the receiver class id for Mixed property dispatch
-            for (class_id, label) in class_ids.iter().zip(match_labels.iter()) {
-                abi::emit_load_int_immediate(ctx.emitter, "r10", *class_id as i64);
-                ctx.emitter.instruction("cmp r11, r10");                        // compare the receiver class id against this declared-property owner
-                ctx.emitter.instruction(&format!("je {}", label));              // read the declared property when the class id matches
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov r11, QWORD PTR [rax]");            // load the receiver class id for Mixed property dispatch
+                ("r11", "r10", "je", "jl", "jle")
             }
-            emit_branch_to_stdclass_candidate(ctx, "r11", "r10", stdclass_label);
-            abi::emit_jump(ctx.emitter, miss_label);
+        };
+    for (first, last, label) in tests {
+        abi::emit_load_int_immediate(ctx.emitter, scratch_reg, first as i64);
+        ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, scratch_reg)); // compare the receiver class id against this declared-property owner
+        if first == last {
+            ctx.emitter.instruction(&format!("{} {}", branch_equal, label));    // read the declared property when the class id matches
+            continue;
         }
+        let next = ctx.next_label("mixed_prop_class_range_next");
+        ctx.emitter.instruction(&format!("{} {}", branch_below, next));         // an id below the range cannot match it
+        abi::emit_load_int_immediate(ctx.emitter, scratch_reg, last as i64);
+        ctx.emitter.instruction(&format!("cmp {}, {}", class_id_reg, scratch_reg)); // compare the receiver class id against the range's last id
+        ctx.emitter.instruction(&format!("{} {}", branch_not_above, label));    // read the declared property when the class id lies in the range
+        ctx.emitter.label(&next);
+    }
+    emit_branch_to_stdclass_candidate(ctx, class_id_reg, scratch_reg, stdclass_label);
+    abi::emit_jump(ctx.emitter, miss_label);
+}
+
+/// The inclusive `(first, last, label)` id ranges of a dispatch, sorted by id.
+///
+/// An id listed twice keeps its first label, as a ladder testing them in order would. A run of
+/// two stays two tests: a range test is no shorter.
+fn class_id_range_tests<'a>(class_ids: &[u64], labels: &'a [String]) -> Vec<(u64, u64, &'a str)> {
+    let mut ordered: Vec<(u64, &'a str)> = class_ids
+        .iter()
+        .zip(labels.iter())
+        .map(|(id, label)| (*id, label.as_str()))
+        .collect();
+    ordered.sort_by_key(|(id, _)| *id);
+    ordered.dedup_by_key(|(id, _)| *id);
+    let mut ranges: Vec<(u64, u64, &'a str)> = Vec::new();
+    for (id, label) in ordered {
+        match ranges.last_mut() {
+            Some((_, last, run_label)) if *last + 1 == id && *run_label == label => *last = id,
+            _ => ranges.push((id, id, label)),
+        }
+    }
+    let mut tests = Vec::with_capacity(ranges.len());
+    for (first, last, label) in ranges {
+        if last == first + 1 {
+            tests.push((first, first, label));
+            tests.push((last, last, label));
+        } else {
+            tests.push((first, last, label));
+        }
+    }
+    tests
+}
+
+#[cfg(test)]
+mod class_id_range_tests_tests {
+    use super::class_id_range_tests;
+
+    fn labels(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn consecutive_ids_of_one_label_become_one_range() {
+        let names = labels(&["a", "a", "a", "a"]);
+        assert_eq!(class_id_range_tests(&[7, 5, 6, 8], &names), vec![(5, 8, "a")]);
+    }
+
+    #[test]
+    fn a_gap_or_another_label_ends_a_range() {
+        let names = labels(&["a", "a", "a", "b", "b", "b", "a", "a", "a"]);
+        assert_eq!(
+            class_id_range_tests(&[1, 2, 3, 4, 5, 6, 8, 9, 10], &names),
+            vec![(1, 3, "a"), (4, 6, "b"), (8, 10, "a")]
+        );
+    }
+
+    #[test]
+    fn a_pair_stays_two_tests_and_a_repeated_id_keeps_its_first_label() {
+        let names = labels(&["a", "a", "b"]);
+        assert_eq!(
+            class_id_range_tests(&[1, 2, 1], &names),
+            vec![(1, 1, "a"), (2, 2, "a")]
+        );
     }
 }
 
