@@ -27,6 +27,31 @@ pub(super) fn lower_static_method_call(
         }
     }
 
+    // PHP 8.5 deprecates the static `FFI::new()` spelling. The deprecation is emitted after
+    // the argument expressions run, like php-src's method invocation, and only for the
+    // profiles that declare it.
+    let static_new_deprecation = matches!(receiver, StaticReceiver::Named(name)
+        if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI"))
+        && php_symbol_key(method) == "new"
+        && crate::codegen_support::compile_php_version()
+            >= crate::php_version::PhpVersion::Php85;
+
+    // `FFI::addr(<temporary>)` transfers ownership of the temporary's allocation, matching
+    // php-src's unshared-receiver rule. `FFI::addr($variable)` keeps the shared reference.
+    let (method, args) = if let StaticReceiver::Named(name) = receiver {
+        if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI")
+            && php_symbol_key(method) == "addr"
+            && args.len() == 1
+            && !matches!(args[0].kind, ExprKind::Variable(_))
+        {
+            ("__elephc_addr_temp", args)
+        } else {
+            (method, args)
+        }
+    } else {
+        (method, args)
+    };
+
     let magic_args;
     let (dispatch_method, call_args) = if let Some(args) =
         magic_static_call_dispatch_args(ctx, receiver, method, args, expr.span)
@@ -117,6 +142,24 @@ pub(super) fn lower_static_method_call(
         &result_type,
         expr.span,
     );
+    if static_new_deprecation {
+        let deprecation = Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::unqualified("trigger_error"),
+                args: vec![
+                    Expr::new(
+                        ExprKind::StringLiteral(
+                            "Calling FFI::new() statically is deprecated".into(),
+                        ),
+                        expr.span,
+                    ),
+                    Expr::new(ExprKind::IntLiteral(16_384), expr.span),
+                ],
+            },
+            expr.span,
+        );
+        let _ = lower_expr(ctx, &deprecation);
+    }
     let call = ctx.emit_value(
         Op::StaticMethodCall,
         operands.clone(),

@@ -565,6 +565,11 @@ fn property_result_type(
         };
     }
     let Some((_, (_, property_ty))) = class_info.visible_property(property) else {
+        if normalized.eq_ignore_ascii_case("FFI\\CData") && property == "cdata" {
+            // php-src returns the scalar payload for a scalar CData and a CData view for
+            // aggregate/pointer storage; the prelude's `__get` selects between them.
+            return PhpType::Mixed;
+        }
         if let Some(magic_ty) = magic_get_result_type(ctx, normalized) {
             return if nullable {
                 nullable_result_type(magic_ty)
@@ -917,6 +922,21 @@ pub(super) fn lower_dynamic_property_fetch(
     expr: &Expr,
 ) -> LoweredValue {
     let object = lower_expr(ctx, object);
+    if matches!(
+        ctx.builder.value_php_type(object.value).codegen_repr(),
+        PhpType::Object(class) if class.trim_start_matches('\\').eq_ignore_ascii_case("FFI")
+    ) {
+        let property_value = lower_expr(ctx, property);
+        let method = ctx.intern_string("__elephc_global_cdata");
+        return ctx.emit_value(
+            Op::MethodCall,
+            vec![object.value, property_value.value],
+            Some(Immediate::Data(method)),
+            PhpType::Object("FFI\\CData".to_string()),
+            Op::MethodCall.default_effects(),
+            Some(expr.span),
+        );
+    }
     lower_dynamic_property_fetch_from_value(ctx, object, property, mode, expr)
 }
 

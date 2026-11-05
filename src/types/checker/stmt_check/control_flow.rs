@@ -489,8 +489,14 @@ impl Checker {
                 if let Some(k) = key_var {
                     self.foreach_key_locals.insert(k.clone());
                 }
-                if *value_by_ref && (matches!(arr_ty, PhpType::Object(_))
-                    || (arr_ty == PhpType::Iterable && !boxed_iterable_source)) {
+                // FFI CData and FFI context objects accept `foreach (... as &$value)`: the
+                // prelude iterator keeps a writable CData view (CData) or iterates the empty
+                // aggregate (FFI), so there is no engine reference binding to reject.
+                let ffi_receiver = matches!(&arr_ty, PhpType::Object(name)
+                    if name.eq_ignore_ascii_case("FFI\\CData") || name.eq_ignore_ascii_case("FFI"));
+                if *value_by_ref && !ffi_receiver
+                    && (matches!(arr_ty, PhpType::Object(_))
+                        || (arr_ty == PhpType::Iterable && !boxed_iterable_source)) {
                     return Err(CompileError::new(
                         stmt.span,
                         "by-reference foreach over Iterator/IteratorAggregate objects or iterable-typed values is not supported; use an array source or remove &",

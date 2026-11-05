@@ -1272,6 +1272,29 @@ echo $c->f;
 }
 
 
+/// Verifies `++`/`--` on a string-valued property performs PHP's string increment instead of
+/// coercing the value to a number. This is the property equivalent of a local string `++` and
+/// the behavior FFI relies on for `$charCData->cdata++`.
+#[test]
+fn test_incdec_on_string_members_uses_string_semantics() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder { public string $value = "a"; }
+$holder = new Holder();
+$holder->value++;
+echo $holder->value, "|";
+++$holder->value;
+echo $holder->value, "\n";
+$dynamic = new stdClass();
+$dynamic->value = "x";
+$dynamic->value++;
+echo $dynamic->value;
+"#,
+    );
+    assert_eq!(out, "b|c\ny");
+}
+
+
 /// Verifies prefix `++`/`--` in statement position on the complex targets that previously
 /// only worked in postfix spelling: object properties and array elements.
 #[test]

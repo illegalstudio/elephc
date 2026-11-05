@@ -95,6 +95,16 @@ pub(crate) struct Usage {
     /// something different for the rest of its life. Nothing approximates that, so it disables
     /// pruning outright.
     pub(crate) introspects: bool,
+    /// Introspection that can reach PHP's `FFI` class surface.
+    ///
+    /// Only dynamic class construction can reach FFI without naming it:
+    /// `new $class` may hold the string `FFI`. Every other opaque route — a computed
+    /// function probe, a computed class probe, symbol-table enumeration, opaque eval, and a
+    /// runtime include — does not opt in. FFI code that only exists behind one of those
+    /// needs `--with-ffi`, which keeps the FFI prelude out of ordinary programs. The FFI
+    /// surface is optional exactly like the PDO, curl, and XML preludes, so its classes are
+    /// listed by `get_declared_classes()` only when the program actually links it.
+    pub(crate) ffi_introspects: bool,
     /// Walk state, not a finding: true while the parsed source of a literal `eval` is being
     /// scanned, where an `include` resolves at runtime and names nothing this walk can read.
     pub(crate) scanning_eval_fragment: bool,
@@ -442,6 +452,9 @@ fn scan_literal_eval_fragment(source: Option<&Expr>, usage: &mut Usage) -> bool 
     // whole surface stays registered, exactly as it did when every eval was opaque.
     if usage.dynamic_function_call || usage.constructs_dynamic_class {
         usage.introspects = true;
+    }
+    if usage.constructs_dynamic_class {
+        usage.ffi_introspects = true;
     }
     usage.dynamic_function_call |= dynamic_call_before;
     usage.constructs_dynamic_class |= dynamic_class_before;
@@ -1042,6 +1055,9 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 if literal_first {
                     record_literal_function(usage, args.first());
                 } else {
+                    // A computed FUNCTION probe cannot name FFI: ext/ffi exposes a class, not
+                    // free functions. Widening the callable domain must not drag the whole FFI
+                    // prelude into every `function_exists($name)` / `is_callable($value)`.
                     usage.introspects = true;
                 }
             } else if let Some(probe) = CLASS_PROBES.iter().find(|p| p.name == name) {
@@ -1062,6 +1078,10 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                     }
                 } else {
                     // The class it asks about cannot be read, and a wrong answer is silent.
+                    // It still does not opt into FFI: like PDO/curl/XML, FFI is an optional
+                    // prelude, and a name computed from data needs `--with-ffi`. Widening the
+                    // class domain must not make every `get_parent_class($object)` or
+                    // `method_exists($object, 'm')` compile the whole FFI surface.
                     usage.introspects = true;
                 }
                 // `is_a`/`is_subclass_of` accept a class NAME as their subject as well, so that
@@ -1087,9 +1107,17 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 // Only a runtime-sourced (or unparsable) eval hands the whole symbol table over;
                 // a literal one is scanned as the inline code it is.
                 if !scan_literal_eval_fragment(args.first(), usage) {
+                    // Opaque eval may reach any language construct but does not name the
+                    // FFI surface; --with-ffi remains the explicit opt-in for FFI code
+                    // that only exists inside a runtime-provided eval string.
                     usage.introspects = true;
                 }
             } else if INTROSPECTION_BUILTINS.contains(&name.as_str()) {
+                // Enumerating the symbol table widens the callable/class domains, but it does
+                // not NAME the FFI surface: like every other optional prelude, FFI is present
+                // only when the program uses it or passes `--with-ffi`. Pulling the whole FFI
+                // surface in for `get_declared_classes()` made every introspection program pay
+                // a multi-second compile.
                 usage.introspects = true;
             }
             for arg in args {
@@ -1316,6 +1344,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         }
         ExprKind::NewDynamic { name_expr, args } => {
             usage.constructs_dynamic_class = true;
+            usage.ffi_introspects = true;
             usage.callable_names.unknown_call();
             scan_expr(name_expr, usage);
             for arg in args {
@@ -1326,6 +1355,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             class_name, args, ..
         } => {
             usage.constructs_dynamic_class = true;
+            usage.ffi_introspects = true;
             usage.callable_names.unknown_call();
             scan_expr(class_name, usage);
             for arg in args {

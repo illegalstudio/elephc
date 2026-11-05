@@ -1179,12 +1179,16 @@ fn ty_expr(ty: &TypeExpr) -> String {
 fn c_type(ty: &CType) -> String {
     match ty {
         CType::Int => "CType::Int".to_string(),
+        CType::IntWidth(width) => format!("CType::IntWidth(crate::parser::ast::CIntWidth::{width:?})"),
         CType::Float => "CType::Float".to_string(),
+        CType::F32 => "CType::F32".to_string(),
         CType::Str => "CType::Str".to_string(),
+        CType::NullableStr => "CType::NullableStr".to_string(),
         CType::Bool => "CType::Bool".to_string(),
         CType::Void => "CType::Void".to_string(),
         CType::Ptr => "CType::Ptr".to_string(),
-        other => panic!("transcribe: unmodelled C type {:?}", other),
+        CType::TypedPtr(name) => format!("CType::TypedPtr({})", lit(name)),
+        CType::Callable => "CType::Callable".to_string(),
     }
 }
 

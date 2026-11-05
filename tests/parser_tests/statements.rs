@@ -121,31 +121,53 @@ fn test_bracket_assignment_still_selects_destructuring() {
     }
 }
 
-/// Verifies `$this->n++;` parses to the same read-modify-write statement as `$this->n += 1;`.
-/// Regression: the `$this` statement parser used to reject the trailing `++`.
+/// Verifies `$this->n++;` keeps the capture-once incdec form so string properties use PHP's
+/// `++`/`--` semantics, while the compound spelling remains a plain add.
 #[test]
-fn test_this_property_postfix_increment_parses_as_compound_assignment() {
-    assert_eq!(
-        parse_source("<?php $this->n++;"),
-        parse_source("<?php $this->n += 1;")
-    );
-    assert_eq!(
-        parse_source("<?php $this->n--;"),
-        parse_source("<?php $this->n -= 1;")
-    );
+fn test_this_property_postfix_increment_uses_capture_once_incdec() {
+    for (source, increment) in [("<?php $this->n++;", true), ("<?php $this->n--;", false)] {
+        let statements = parse_source(source);
+        let StmtKind::PropertyAssign { object, property, value, .. } = &statements[0].kind else {
+            panic!("{source}: expected a property assignment, got {statements:?}");
+        };
+        assert!(matches!(object.kind, ExprKind::This), "{source}");
+        assert_eq!(property, "n", "{source}");
+        let ExprKind::Assignment { target, value, prelude, .. } = &value.kind else {
+            panic!("{source}: expected a capture-once assignment, got {value:?}");
+        };
+        assert!(matches!(target.kind, ExprKind::Variable(_)), "{source}");
+        assert!(
+            if increment {
+                matches!(value.kind, ExprKind::PreIncrement(_))
+            } else {
+                matches!(value.kind, ExprKind::PreDecrement(_))
+            },
+            "{source}: unexpected increment shape {value:?}"
+        );
+        assert_eq!(prelude.len(), 1, "{source}");
+    }
+    assert!(matches!(
+        &parse_source("<?php $this->n += 1;")[0].kind,
+        StmtKind::PropertyAssign { value, .. } if matches!(value.kind, ExprKind::BinaryOp { .. })
+    ));
 }
 
-/// Property updates retain their lowering while array updates preserve PHP incdec semantics.
+/// Property prefix updates use the capture-once form while array updates preserve PHP
+/// incdec semantics.
 #[test]
 fn test_prefix_increment_on_complex_targets_retains_array_incdec() {
-    assert_eq!(
-        parse_source("<?php ++$this->n;"),
-        parse_source("<?php $this->n += 1;")
-    );
-    assert_eq!(
-        parse_source("<?php ++$obj->n;"),
-        parse_source("<?php $obj->n += 1;")
-    );
+    for source in ["<?php ++$this->n;", "<?php ++$obj->n;"] {
+        let statements = parse_source(source);
+        let StmtKind::PropertyAssign { property, value, .. } = &statements[0].kind else {
+            panic!("{source}: expected a property assignment, got {statements:?}");
+        };
+        assert_eq!(property, "n", "{source}");
+        let ExprKind::Assignment { value, prelude, .. } = &value.kind else {
+            panic!("{source}: expected a capture-once assignment, got {value:?}");
+        };
+        assert!(matches!(value.kind, ExprKind::PreIncrement(_)), "{source}");
+        assert_eq!(prelude.len(), 1, "{source}");
+    }
     let statements = parse_source("<?php --$a[0];");
     let StmtKind::ArrayAssign { array, index, value } = &statements[0].kind else {
         panic!("Expected array writeback, got {:?}", statements[0].kind);

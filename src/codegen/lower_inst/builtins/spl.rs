@@ -221,6 +221,13 @@ pub(crate) fn lower_iterator_to_array(
     let source = expect_operand(inst, 0)?;
     let preserve = inst.operands.get(1).copied();
     let source_ty = ctx.value_php_type(source)?.codegen_repr();
+    if matches!(&source_ty, PhpType::Object(name) if name.eq_ignore_ascii_case("FFI\\CData")) {
+        super::exceptions::emit_type_error(
+            ctx,
+            "iterator_to_array(): Argument #1 ($iterator) must be of type Traversable|array, FFI\\CData given",
+        );
+        return store_if_result(ctx, inst);
+    }
 
     if let Some(preserve) = preserve {
         if let Some(preserve_keys) = static_preserve_keys_operand(ctx, preserve)? {

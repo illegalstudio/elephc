@@ -813,12 +813,28 @@ pub(crate) fn lower_postfix_incdec_assignment(
     is_increment: bool,
     span: Span,
 ) -> Result<Stmt, CompileError> {
-    let op = if matches!(&lhs_expr.kind, ExprKind::ArrayAccess { .. }) {
-        AssignmentOperator::IncDec(is_increment)
-    } else if is_increment {
-        AssignmentOperator::Compound(BinOp::Add)
+    // `IncDec` captures the place once and runs PHP's `++`/`--` semantics on the captured
+    // value. Array elements and CData's `cdata` payload need that kernel (a string CData must
+    // string-increment); ordinary property increments keep the compound form, whose lowering
+    // already owns the read-modify-write and avoids a source-named capture temp that collides
+    // when the same include is spliced twice. A delayed static receiver also keeps the compound
+    // form so the shared-receiver expression path below stays valid.
+    let delayed_static_property = matches!(
+        &lhs_expr.kind,
+        ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. }
+            if has_delayed_static_receiver(object)
+    );
+    // Internal preludes are written with the compound shape their builders emit.
+    let internal_source =
+        crate::source::current_parse_mode() == crate::source::SourceMode::Internal;
+    let op = if delayed_static_property || internal_source {
+        if is_increment {
+            AssignmentOperator::Compound(BinOp::Add)
+        } else {
+            AssignmentOperator::Compound(BinOp::Sub)
+        }
     } else {
-        AssignmentOperator::Compound(BinOp::Sub)
+        AssignmentOperator::IncDec(is_increment)
     };
     let one = Expr::new(ExprKind::IntLiteral(1), span);
 

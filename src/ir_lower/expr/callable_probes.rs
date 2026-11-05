@@ -26,6 +26,116 @@ pub(super) fn lower_static_is_callable(
     if ctx.has_eval_barrier() {
         return None;
     }
+    // An array callable whose receiver is CData hits php-src's method-call fatal while
+    // probing the method name; it does not merely return false. Only a two-element array
+    // with a string method reaches that lookup.
+    if let ExprKind::ArrayLiteral(items) = &args[0].kind {
+        if let [receiver, method] = items.as_slice() {
+            if is_string_expr(ctx, method) && is_ffi_cdata_expr(ctx, receiver) {
+                // PHP evaluates both array elements before the method lookup fails.
+                for value in [receiver, method] {
+                    let value = lower_expr(ctx, value);
+                    if ctx.value_is_owning_temporary(value) {
+                        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+                    }
+                }
+                return Some(crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+                    ctx,
+                    "Object of type FFI\\CData does not support method calls",
+                    expr.span,
+                    PhpType::Bool,
+                ));
+            }
+            if is_string_expr(ctx, method)
+                && may_hold_ffi_cdata(ctx, receiver)
+                && ctx.classes.contains_key("FFI\\CData")
+            {
+                return Some(lower_mixed_cdata_array_is_callable(
+                    ctx,
+                    receiver,
+                    method,
+                    expr,
+                ));
+            }
+        }
+    }
+    // php-src's `get_closure` handler makes a function-pointer CData callable while scalar and
+    // non-function CData stay non-callable. The bridge owns that type check, so route the
+    // statically-typed receiver through the prelude adapter instead of the generic runtime
+    // object lookup (which only sees the public `__invoke` method).
+    let ffi_cdata_argument = is_ffi_cdata_expr(ctx, &args[0]);
+    if ffi_cdata_argument {
+        let call = Expr::new(
+            ExprKind::StaticMethodCall {
+                receiver: StaticReceiver::Named(Name::from("FFI".to_string())),
+                method: "__elephc_is_callable".to_string(),
+                args: vec![args[0].clone()],
+            },
+            expr.span,
+        );
+        return Some(lower_expr(ctx, &call));
+    }
+    // A `mixed` slot can still hold a CData. php-src decides callability from the CData's
+    // declared C type, not from the prelude's public `__invoke` method, so branch on the
+    // runtime class before the generic object probe.
+    if may_hold_ffi_cdata(ctx, &args[0]) && ctx.classes.contains_key("FFI\\CData") {
+        let value = lower_expr(ctx, &args[0]);
+        let value_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+        let value_local = ctx.declare_owned_hidden_temp(value_ty.clone());
+        ctx.store_local(&value_local, value, value_ty, Some(expr.span));
+        let class = ctx.intern_class_name("FFI\\CData");
+        let probe = ctx.load_local(&value_local, Some(expr.span));
+        let is_cdata = ctx.emit_value(
+            Op::InstanceOf,
+            vec![probe.value],
+            Some(Immediate::Data(class)),
+            PhpType::Bool,
+            Op::InstanceOf.default_effects(),
+            Some(expr.span),
+        );
+        let cdata_block = ctx.builder.create_named_block("is_callable.cdata", Vec::new());
+        let generic_block = ctx.builder.create_named_block("is_callable.generic", Vec::new());
+        let merge = ctx.builder.create_named_block("is_callable.merge", Vec::new());
+        let temp = ctx.declare_owned_hidden_temp(PhpType::Bool);
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: is_cdata.value,
+            then_target: cdata_block,
+            then_args: Vec::new(),
+            else_target: generic_block,
+            else_args: Vec::new(),
+        });
+
+        ctx.builder.position_at_end(cdata_block);
+        let call = Expr::new(
+            ExprKind::StaticMethodCall {
+                receiver: StaticReceiver::Named(Name::from("FFI".to_string())),
+                method: "__elephc_is_callable".to_string(),
+                args: vec![Expr::new(ExprKind::Variable(value_local.clone()), expr.span)],
+            },
+            expr.span,
+        );
+        let cdata_result = lower_expr(ctx, &call);
+        store_value_into_temp(ctx, &temp, PhpType::Bool, cdata_result, expr.span);
+        branch_to(ctx, merge);
+
+        ctx.builder.position_at_end(generic_block);
+        let value = ctx.load_local(&value_local, Some(expr.span));
+        let generic_result = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![value.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::IsCallable,
+            ))),
+            PhpType::Bool,
+            crate::ir_lower::effects_lookup::runtime_effects(),
+            Some(expr.span),
+        );
+        store_value_into_temp(ctx, &temp, PhpType::Bool, generic_result, expr.span);
+        branch_to(ctx, merge);
+
+        ctx.builder.position_at_end(merge);
+        return Some(take_owned_temp(ctx, &temp, expr.span));
+    }
     match &args[0].kind {
         ExprKind::FirstClassCallable(
             CallableTarget::Function(_) | CallableTarget::StaticMethod { .. },
@@ -43,6 +153,128 @@ pub(super) fn lower_static_is_callable(
         }),
         _ => None,
     }
+}
+
+/// Returns the checker-visible PHP type of an expression when lowering knows it directly.
+fn static_expr_type(ctx: &LoweringContext<'_, '_>, value: &Expr) -> Option<PhpType> {
+    match &value.kind {
+        ExprKind::Variable(name) => Some(ctx.local_type(name).clone()),
+        ExprKind::FunctionCall { name, .. } => {
+            ctx.functions.get(name.as_str()).map(|sig| sig.return_type.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether an expression is statically known to hold `FFI\CData`.
+pub(super) fn is_ffi_cdata_expr(ctx: &LoweringContext<'_, '_>, value: &Expr) -> bool {
+    matches!(
+        static_expr_type(ctx, value)
+            .unwrap_or_else(|| crate::ir_lower::expr::fallback_expr_type(value).codegen_repr()),
+        PhpType::Object(name)
+            if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData")
+    )
+}
+
+/// Returns whether an expression is statically known to be a string method name.
+fn is_string_expr(ctx: &LoweringContext<'_, '_>, value: &Expr) -> bool {
+    matches!(value.kind, ExprKind::StringLiteral(_))
+        || matches!(
+            static_expr_type(ctx, value)
+                .unwrap_or_else(|| crate::ir_lower::expr::fallback_expr_type(value).codegen_repr()),
+            PhpType::Str
+        )
+}
+
+/// Returns whether a `mixed`/union slot can hold `FFI\CData` at run time.
+pub(super) fn may_hold_ffi_cdata(ctx: &LoweringContext<'_, '_>, value: &Expr) -> bool {
+    if let ExprKind::Variable(name) = &value.kind {
+        if ctx.static_callable_local(name).is_some() {
+            return false;
+        }
+    }
+    matches!(
+        static_expr_type(ctx, value)
+            .unwrap_or_else(|| crate::ir_lower::expr::fallback_expr_type(value).codegen_repr()),
+        PhpType::Mixed | PhpType::Union(_)
+    )
+}
+
+/// Lowers `is_callable([$value, "method"])` when `$value` may hold CData.
+///
+/// The receiver is evaluated once, the runtime class decides between php-src's method-call
+/// fatal and the ordinary array-callable probe, and the hidden temporary keeps evaluation
+/// order intact.
+fn lower_mixed_cdata_array_is_callable(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &Expr,
+    method: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let value = lower_expr(ctx, receiver);
+    let value_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    let value_local = ctx.declare_owned_hidden_temp(value_ty.clone());
+    ctx.store_local(&value_local, value, value_ty, Some(expr.span));
+    let method_value = lower_expr(ctx, method);
+    let method_ty = ctx.builder.value_php_type(method_value.value).codegen_repr();
+    let method_local = ctx.declare_owned_hidden_temp(method_ty.clone());
+    ctx.store_local(&method_local, method_value, method_ty, Some(expr.span));
+    let class = ctx.intern_class_name("FFI\\CData");
+    let probe = ctx.load_local(&value_local, Some(expr.span));
+    let is_cdata = ctx.emit_value(
+        Op::InstanceOf,
+        vec![probe.value],
+        Some(Immediate::Data(class)),
+        PhpType::Bool,
+        Op::InstanceOf.default_effects(),
+        Some(expr.span),
+    );
+    let cdata_block = ctx.builder.create_named_block("is_callable.cdata_array", Vec::new());
+    let generic_block = ctx.builder.create_named_block("is_callable.array", Vec::new());
+    let merge = ctx.builder.create_named_block("is_callable.merge", Vec::new());
+    let temp = ctx.declare_owned_hidden_temp(PhpType::Bool);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_cdata.value,
+        then_target: cdata_block,
+        then_args: Vec::new(),
+        else_target: generic_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(cdata_block);
+    let thrown = crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+        ctx,
+        "Object of type FFI\\CData does not support method calls",
+        expr.span,
+        PhpType::Bool,
+    );
+    store_value_into_temp(ctx, &temp, PhpType::Bool, thrown, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(generic_block);
+    let array = Expr::new(
+        ExprKind::ArrayLiteral(vec![
+            Expr::new(ExprKind::Variable(value_local), expr.span),
+            Expr::new(ExprKind::Variable(method_local), expr.span),
+        ]),
+        expr.span,
+    );
+    let array = lower_expr(ctx, &array);
+    let result = ctx.emit_value(
+        Op::RuntimeCall,
+        vec![array.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::IsCallable,
+        ))),
+        PhpType::Bool,
+        crate::ir_lower::effects_lookup::runtime_effects(),
+        Some(expr.span),
+    );
+    store_value_into_temp(ctx, &temp, PhpType::Bool, result, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp, expr.span)
 }
 
 /// Returns whether straight-line callable-local metadata represents a public callable.
@@ -144,6 +376,44 @@ pub(super) fn lower_static_call_user_func(
                 if let Some(callback) = static_call_user_func_callback(ctx, callback_arg) {
                     return lower_static_callable_call(ctx, callback, &callback_args, expr);
                 }
+            }
+            let ffi_dynamic_callback = match &callback_arg.kind {
+                ExprKind::DynamicPropertyAccess { object, .. } => match &object.kind {
+                    ExprKind::Variable(receiver) => matches!(
+                        ctx.local_type(receiver),
+                        PhpType::Object(class)
+                            if class.trim_start_matches('\\').eq_ignore_ascii_case("FFI")
+                    ),
+                    _ => false,
+                },
+                _ => false,
+            };
+            if ffi_dynamic_callback || matches!(
+                crate::ir_lower::expr::fallback_expr_type(callback_arg).codegen_repr(),
+                PhpType::Object(name) if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData")
+            ) {
+                // Lower the FFI callback once into a hidden CData local, then invoke its
+                // `__invoke` method directly. Re-reading the dynamic property inside a plain
+                // `ExprCall` keeps the syntactic Mixed type and falls back to the descriptor
+                // invoker.
+                let callback = lower_expr(ctx, callback_arg);
+                let callback_ty = ctx.builder.value_php_type(callback.value).codegen_repr();
+                let temp = crate::names::generated_local_name(&format!(
+                    "__elephc_ffi_callback_{}_{}",
+                    expr.span.line, expr.span.col
+                ));
+                ctx.declare_local(&temp, callback_ty.clone());
+                ctx.store_local(&temp, callback, callback_ty, Some(expr.span));
+                let callee = Expr::new(ExprKind::Variable(temp), expr.span);
+                let call = Expr::new(
+                    ExprKind::StaticMethodCall {
+                        receiver: StaticReceiver::Named(Name::from("FFI".to_string())),
+                        method: "__elephc_invoke_array".to_string(),
+                        args: vec![callee, arg_array.clone()],
+                    },
+                    expr.span,
+                );
+                return Some(lower_expr(ctx, &call));
             }
             lower_eval_call_user_func_array_fallback(ctx, callback_arg, arg_array, expr)
         }

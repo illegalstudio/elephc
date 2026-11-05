@@ -89,6 +89,9 @@ pub struct RuntimeFeatures {
     /// `_munmap` still imported, binary unchanged at 52 064 bytes. Both arms have to go for the
     /// helper to become unreferenced and collectable.
     pub generator: bool,
+    /// True when the program uses `FFI`: selects the output writer that honors the
+    /// replaceable `zend_write` hook owned by the `elephc_ffi` bridge.
+    pub ffi: bool,
     /// True when the program can hold a `popen()` pipe resource, i.e. when its EIR calls
     /// `RuntimeFnId::Popen` — the only producer of resource kind 3.
     ///
@@ -144,6 +147,7 @@ impl RuntimeFeatures {
             | ((self.object_clone as u64) << 13)
             | ((self.mbregex as u64) << 14)
             | ((self.mbstring_mime as u64) << 15)
+            | ((self.ffi as u64) << 16)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -165,6 +169,7 @@ impl RuntimeFeatures {
             directory_resource: false,
             handler_state: false,
             object_clone: false,
+            ffi: false,
         }
     }
 
@@ -188,6 +193,7 @@ impl RuntimeFeatures {
             directory_resource: true,
             handler_state: true,
             object_clone: true,
+            ffi: true,
         }
     }
 }

@@ -62,6 +62,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, Composer/SPL autoloading, class introspection, constants, superglobals
 - [Core classes and constants](php/core-symbols.md) - weak references and maps, attributes, enum interfaces, exceptions, and predefined constants
 - [System & I/O](php/system-and-io.md) — system functions, date/time, JSON, filesystem, exec, debugging
+- [FFI](php/ffi.md) — C declarations, `FFI\CData`/`FFI\CType`, dynamic calls, memory helpers, preloading, and the supported callback surface
 - [Streams](php/streams.md) — stream resources, wrappers, contexts, filters, sockets, TLS, process pipes
 - [Sessions](php/sessions.md) — `session_start()`, `$_SESSION`, session ID and cookie management, file-based storage under `--web`
 - [OPcache](php/opcache.md): the Zend OPcache API over compiled scripts and the runtime cache for dynamic include/require, optional file caching, live statistics, and the `opcache.*` directive matrix

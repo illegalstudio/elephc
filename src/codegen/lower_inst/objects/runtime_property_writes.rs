@@ -48,7 +48,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
         return lower_nullable_prop_set(ctx, inst, object, value, &class_name, &property);
     }
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed) {
-        return lower_mixed_named_prop_set(ctx, object, value, &property, inst);
+        return lower_mixed_named_prop_set(ctx, object, None, value, &property, inst);
     }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, &property);
@@ -99,6 +99,24 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_set(
             lower_runtime_mixed_prop_set(ctx, object, property_value, value, inst)
         }
         PhpType::Object(class_name) => {
+            let normalized = class_name.trim_start_matches('\\');
+            if ctx
+                .module
+                .class_infos
+                .get(normalized)
+                .is_some_and(|info| info.methods.contains_key(&php_symbol_key("__set")))
+            {
+                return lower_direct_magic_set(
+                    ctx,
+                    object,
+                    property_value,
+                    value,
+                    normalized,
+                    dynamic_property_hash_offset_for_class(ctx, normalized, "")?,
+                    magic_set_recursive_refusal(ctx, normalized, "").as_deref(),
+                    inst.span.map_or(0, |span| span.line),
+                );
+            }
             lower_runtime_object_prop_set(ctx, object, property_value, value, &class_name, inst)
         }
         object_ty => Err(CodegenIrError::unsupported(format!(
@@ -122,7 +140,16 @@ pub(super) fn lower_const_dynamic_prop_set(
         ctx.value_php_type(object)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return lower_mixed_named_prop_set(ctx, object, value, property, inst);
+        // The runtime name is already a constant string operand here, so the named ladder can
+        // retain slot candidates and still add `__set` arms for magic classes.
+        return lower_mixed_named_prop_set(
+            ctx,
+            object,
+            Some(property_value),
+            value,
+            property,
+            inst,
+        );
     }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, property);
@@ -303,12 +330,18 @@ pub(super) fn lower_runtime_object_prop_set(
 pub(super) fn lower_mixed_named_prop_set(
     ctx: &mut FunctionContext<'_>,
     object: ValueId,
+    property_value: Option<ValueId>,
     value: ValueId,
     property: &str,
     inst: &Instruction,
 ) -> Result<()> {
     let candidates = declared_mixed_named_property_set_candidates(ctx, value, property, inst)?;
-    if candidates.is_empty() {
+    let magic_arms = if property_value.is_some() {
+        runtime_magic_set_arms(ctx)?
+    } else {
+        Vec::new()
+    };
+    if candidates.is_empty() && magic_arms.is_empty() {
         return lower_mixed_prop_set(ctx, object, value, property);
     }
     let done_label = ctx.next_label("mixed_named_prop_set_done");
@@ -323,6 +356,16 @@ pub(super) fn lower_mixed_named_prop_set(
             ))
         })
         .collect::<Vec<_>>();
+    let magic_labels = magic_arms
+        .iter()
+        .map(|arm| {
+            ctx.next_label(&format!(
+                "mixed_named_prop_set_magic_{}_{}",
+                arm.class_id,
+                label_fragment(property)
+            ))
+        })
+        .collect::<Vec<_>>();
 
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -331,6 +374,9 @@ pub(super) fn lower_mixed_named_prop_set(
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         emit_branch_if_stacked_object_class_matches(ctx, candidate.class_id, 0, label);
+    }
+    for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
+        emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 0, label);
     }
     abi::emit_jump(ctx.emitter, &miss_label);
 
@@ -375,6 +421,25 @@ pub(super) fn lower_mixed_named_prop_set(
                     "literal Mixed property write retained a runtime-name magic-set refusal",
                 ));
             }
+        }
+    }
+
+    if let Some(property_value) = property_value {
+        for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
+            ctx.emitter.label(label);
+            let recursive_refusal =
+                magic_set_recursive_refusal(ctx, &arm.class_name, property);
+            lower_mixed_direct_magic_set(
+                ctx,
+                object,
+                property_value,
+                value,
+                &arm.class_name,
+                arm.hash_offset,
+                recursive_refusal.as_deref(),
+                inst.span.map_or(0, |span| span.line),
+            )?;
+            abi::emit_jump(ctx.emitter, &done_label);
         }
     }
 
@@ -957,6 +1022,37 @@ pub(super) fn lower_direct_magic_set(
     )
 }
 
+/// Stages a Mixed receiver's unboxed object and a constant name for one `__set` call.
+fn lower_mixed_direct_magic_set(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    value: ValueId,
+    class_name: &str,
+    hash_offset: Option<usize>,
+    recursive_refusal: Option<&str>,
+    line: u32,
+) -> Result<()> {
+    // The call site already staged this Mixed receiver's unboxed payload at stack offset 0.
+    // Stage the constant property name at offset 0 (the object moves to 16) and reuse the
+    // shared guard/hash-aware setter, exactly like a statically-typed receiver.
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    lower_runtime_magic_set(
+        ctx,
+        object,
+        property_value,
+        value,
+        class_name,
+        hash_offset,
+        recursive_refusal,
+        16,
+        32,
+        line,
+    )
+}
+
 /// Invokes `__set` unless this receiver/name pair is already active.
 ///
 /// PHP's recursion guard is dynamic and pair-specific. A different name written by the same
@@ -1030,7 +1126,11 @@ fn emit_runtime_magic_set_call(
         ctx.emitter,
         MAGIC_SET_GUARD_FRAME_BYTES + staged_stack_bytes,
     );
-    abi::emit_jump(ctx.emitter, "__rt_throw_current");
+    // The caught path has just released its frame and holds an aligned stack. Entering the
+    // unwinder with `call` publishes the SysV return-address slot it expects; a tail jump from
+    // here left `rsp` eight bytes off, so a destructor that called back into a Rust bridge
+    // (CData/FFI, hash(), mb_strlen()) faulted on x86_64.
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
 
     ctx.emitter.label(&recursive_label);
     abi::emit_release_temporary_stack(ctx.emitter, MAGIC_SET_GUARD_FRAME_BYTES);

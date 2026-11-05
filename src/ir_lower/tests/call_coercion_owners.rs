@@ -245,6 +245,11 @@ echo get_class($object), ":", get_parent_class($object);
     );
     let mut lookups = 0;
     for function in &module.functions {
+        // The FFI prelude is injected for opaque eval and has its own get_class()
+        // diagnostics; only the user's top-level function is under test here.
+        if function.name.starts_with("__elephc_") || function.name.contains("::") {
+            continue;
+        }
         for call in &function.instructions {
             if !matches!(call.immediate, Some(Immediate::RuntimeCall(
                 RuntimeCallTarget::Function(RuntimeFnId::GetClass | RuntimeFnId::GetParentClass)

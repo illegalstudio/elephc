@@ -36,6 +36,14 @@ pub(super) fn lower_nullsafe_method_call(
     if value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    let nullable_receiver =
+        singular_object_class(&object_ty).is_some_and(|(_, nullable)| nullable);
+    if !nullable_receiver {
+        if let Some(value) = reject_ffi_cdata_method_call(ctx, object, Op::NullsafeMethodCall, expr)
+        {
+            return value;
+        }
+    }
     let Some((_, true)) = singular_object_class(&object_ty) else {
         return lower_method_call_with_receiver(
             ctx,
@@ -84,19 +92,102 @@ pub(super) fn lower_nullsafe_method_call(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(call_block);
-    let call = lower_method_call_with_receiver(
-        ctx,
-        object,
-        method,
-        args,
-        Op::NullsafeMethodCall,
-        expr,
-    );
+    let call = if nullable_receiver {
+        match reject_ffi_cdata_method_call(ctx, object, Op::NullsafeMethodCall, expr) {
+            Some(value) => value,
+            None => lower_method_call_with_receiver(
+                ctx,
+                object,
+                method,
+                args,
+                Op::NullsafeMethodCall,
+                expr,
+            ),
+        }
+    } else {
+        lower_method_call_with_receiver(
+            ctx,
+            object,
+            method,
+            args,
+            Op::NullsafeMethodCall,
+            expr,
+        )
+    };
     store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
     ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Emits php-src's catchable Error when a method call targets `FFI\CData`.
+///
+/// CData exposes no PHP methods; the throw happens when the call executes, after the
+/// receiver is evaluated and before any argument runs. Internal prelude dispatch is exempt.
+pub(super) fn reject_ffi_cdata_method_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    op: Op,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if !matches!(op, Op::MethodCall | Op::NullsafeMethodCall) {
+        return None;
+    }
+    if crate::strict_php::current_source_mode() == crate::source::SourceMode::Internal {
+        return None;
+    }
+    let is_cdata = matches!(
+        ctx.builder.value_php_type(receiver.value).codegen_repr(),
+        PhpType::Object(name)
+            if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData")
+    );
+    if !is_cdata {
+        return None;
+    }
+    release_owning_receiver_temporary(ctx, receiver, expr.span);
+    Some(crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+        ctx,
+        "Object of type FFI\\CData does not support method calls",
+        expr.span,
+        PhpType::Mixed,
+    ))
+}
+
+/// Returns whether a lowered value is statically `FFI\CData`.
+pub(super) fn is_ffi_cdata_value(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> bool {
+    matches!(
+        ctx.builder.value_php_type(value).codegen_repr(),
+        PhpType::Object(name)
+            if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData")
+    )
+}
+
+/// Emits the CData method-call Error for a dynamic call whose method name is unevaluated.
+///
+/// PHP evaluates the method name before the lookup fails, so that side effect is preserved.
+pub(super) fn reject_ffi_cdata_dynamic_method_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    method: &Expr,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if crate::strict_php::current_source_mode() == crate::source::SourceMode::Internal
+        || !is_ffi_cdata_value(ctx, receiver.value)
+    {
+        return None;
+    }
+    let method = lower_expr(ctx, method);
+    if ctx.value_is_owning_temporary(method) {
+        crate::ir_lower::ownership::release_if_owned(ctx, method, Some(expr.span));
+    }
+    release_owning_receiver_temporary(ctx, receiver, expr.span);
+    Some(crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+        ctx,
+        "Object of type FFI\\CData does not support method calls",
+        expr.span,
+        PhpType::Mixed,
+    ))
 }
 
 /// Lowers a method call using an already evaluated receiver value.

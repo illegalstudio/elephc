@@ -467,6 +467,7 @@ cargo run -- hello.php
 | [SDL audio](examples/sdl_audio/) | Audio playback with SDL2 via FFI |
 | [Hot-path buffers](examples/hot-path/) | `packed class` + `buffer<T>` for performance-critical data |
 | [FFI memory](examples/ffi-memory/) | Raw C memory patterns with `malloc`, `free`, `memcpy` via FFI |
+| [FFI callbacks](examples/ffi-callbacks/) | PHP closures called from C through libffi-backed function pointers (`qsort`) |
 
 ## FFI
 

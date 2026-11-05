@@ -163,6 +163,15 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
+        if let PhpType::Object(class_name) = &obj_ty {
+            if class_name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData")
+                && property == "cdata"
+            {
+                // Scalar CData yields the PHP scalar payload; aggregate/pointer CData yields
+                // a CData view, so the static result is dynamically tagged.
+                return Ok(PhpType::Mixed);
+            }
+        }
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
         }
@@ -197,6 +206,9 @@ impl Checker {
         self.record_member_receiver_type(expr.span, &obj_ty);
         if nullsafe && matches!(obj_ty, PhpType::Void) {
             return Ok(PhpType::Void);
+        }
+        if matches!(&obj_ty, PhpType::Object(name) if name.trim_start_matches('\\').eq_ignore_ascii_case("FFI")) {
+            return Ok(PhpType::Object("FFI\\CData".to_string()));
         }
 
         let property_ty = self.infer_type(property, env)?;

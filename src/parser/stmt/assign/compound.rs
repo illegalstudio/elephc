@@ -174,12 +174,13 @@ pub(super) fn assignment_value(
     match op {
         AssignmentOperator::Assign => rhs,
         AssignmentOperator::IncDec(increment) => {
+            let id = crate::parser::next_generated_incdec_id();
             let old = crate::names::generated_local_name(&format!(
-                "__elephc_element_incdec_old_{}_{}", span.line, span.col));
-            let new = crate::names::generated_local_name(&format!(
-                "__elephc_element_incdec_new_{}_{}", span.line, span.col));
+                "__elephc_element_incdec_old_{id}"));
             let operation = if increment { ExprKind::PreIncrement(old.clone()) }
                 else { ExprKind::PreDecrement(old.clone()) };
+            let new = crate::names::generated_local_name(&format!(
+                "__elephc_element_incdec_new_{id}"));
             Expr::new(ExprKind::Assignment {
                 target: Box::new(Expr::new(ExprKind::Variable(new), span)),
                 value: Box::new(Expr::new(operation, span)),

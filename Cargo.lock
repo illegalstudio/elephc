@@ -823,6 +823,7 @@ dependencies = [
  "elephc-builtin-contract",
  "elephc-crypto",
  "elephc-curl",
+ "elephc-ffi",
  "elephc-generics",
  "elephc-gmp",
  "elephc-image",
@@ -903,6 +904,14 @@ dependencies = [
  "elephc-monitoring-contract",
  "libc",
  "serde_json",
+]
+
+[[package]]
+name = "elephc-ffi"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "libffi",
 ]
 
 [[package]]
@@ -1952,6 +1961,25 @@ name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+
+[[package]]
+name = "libffi"
+version = "5.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a8d526bc07aa02e6826944ec446ecd8d228bd97b1cbd21e5bc5e3407a09a585"
+dependencies = [
+ "libc",
+ "libffi-sys",
+]
+
+[[package]]
+name = "libffi-sys"
+version = "4.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eab801a4ae9065bfea87f37204a7940523e752056e4a090eaaaab9b47fc826b5"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "libloading"

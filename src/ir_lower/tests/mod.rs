@@ -105,6 +105,8 @@ mod static_properties;
 mod nested_append_review;
 mod property_default_scope;
 mod asymmetric_properties;
+mod int_property_incdec;
+mod magic_set_unwind;
 mod static_receiver_writes;
 mod synthetic_arrays;
 mod throwable_constructors;

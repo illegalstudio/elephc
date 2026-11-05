@@ -54,7 +54,7 @@ fn run_publication_probe_with_ir_opt(source: &str, ir_opt: bool) -> String {
     output
 }
 
-/// The catalog stays absent through512 numeric evals, then publishes once before the next flush.
+/// The catalog stays absent through 512 numeric evals, then publishes once before the next flush.
 #[test]
 fn test_deferred_native_catalog_budget_publication_boundary() {
     let source = r#"<?php

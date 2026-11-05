@@ -345,6 +345,16 @@ fn lower_nullsafe_postfix_segment(
             } else if !guard_regular_method_receiver(ctx, current, method, expr) {
                 return None;
             }
+            if let Some(value) =
+                super::nullable_method_calls::reject_ffi_cdata_method_call(
+                    ctx,
+                    current,
+                    Op::MethodCall,
+                    expr,
+                )
+            {
+                return Some(value);
+            }
             Some(lower_method_call_with_receiver(
                 ctx,
                 current,
@@ -362,6 +372,13 @@ fn lower_nullsafe_postfix_segment(
         } => {
             if nullsafe && !guard_nullsafe_chain_receiver(ctx, current, null_block, expr) {
                 return None;
+            }
+            if let Some(value) =
+                super::nullable_method_calls::reject_ffi_cdata_dynamic_method_call(
+                    ctx, current, method, expr,
+                )
+            {
+                return Some(value);
             }
             Some(super::lower_dynamic_method_call_with_receiver(
                 ctx, current, method, args, expr,

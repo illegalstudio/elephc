@@ -117,6 +117,37 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
     accepts_any_operands: false,
 };
 
+/// FFI CData's pointer arithmetic, ordering, and truthiness handlers.
+///
+/// The adapters are static methods on `FFI\CData`; pointer addition/subtraction and
+/// pointer difference are distinguished at run time by the bridge.
+pub const FFI_CDATA_OPERATORS: ClassOperators = ClassOperators {
+    arithmetic: &[
+        (ObjectArithmetic::Add, "__elephc_add"),
+        (ObjectArithmetic::Sub, "__elephc_sub"),
+        // php-src's `do_operation` handler declines these; the adapters raise the engine's
+        // exact `Unsupported operand types` TypeError instead of letting the compiler reject
+        // the program or silently treating the pointer as a number.
+        (ObjectArithmetic::Mul, "__elephc_mul"),
+        (ObjectArithmetic::Div, "__elephc_div"),
+        (ObjectArithmetic::Mod, "__elephc_mod"),
+        (ObjectArithmetic::Pow, "__elephc_pow"),
+    ],
+    bitwise: &[
+        (ObjectBitwise::And, "__elephc_bitand"),
+        (ObjectBitwise::Or, "__elephc_bitor"),
+        (ObjectBitwise::Xor, "__elephc_bitxor"),
+    ],
+    shift: &[
+        (ObjectShift::Left, "__elephc_shl"),
+        (ObjectShift::Right, "__elephc_shr"),
+    ],
+    compare: Some("__elephc_compare"),
+    boolean: Some("__elephc_bool"),
+    casts: None,
+    accepts_any_operands: false,
+};
+
 /// GMP's PHP 8.5 object handlers: arithmetic, bitwise, shifts, ordering and casts.
 pub const GMP_CASTS: ClassCasts = ClassCasts {
     to_int: Some("__elephc_to_int"),
