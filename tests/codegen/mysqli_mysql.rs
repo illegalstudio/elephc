@@ -1262,6 +1262,27 @@ echo "\n";
     assert_eq!(out, "early:42:fast|early:42:fast|\n");
 }
 
+/// Opening a second `p:` link with the same credentials while the first still has a pending
+/// `MYSQLI_ASYNC` query leaves that query alone: the first link polls and reaps it. Expected
+/// output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_persistent_checkout_keeps_a_busy_owners_async_query() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$a = new mysqli("p:" . $host, $user, $pass, $dbname, $port);
+$a->query("SELECT 6 * 7, SLEEP(1)", MYSQLI_ASYNC);
+$b = new mysqli("p:" . $host, $user, $pass, $dbname, $port);
+$read = [$a];
+$error = [];
+$reject = [];
+echo mysqli_poll($read, $error, $reject, 3), "|", $a->reap_async_query()->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "1|42\n");
+}
+
 /// `mysqli_poll()` with links only in `$error` waits for its timeout (mysqlnd selects on them for
 /// exceptional conditions, which never come) instead of returning at once, validates those
 /// entries, and leaves readiness to `$read`. Expected output is php 8.5 + mysqlnd's.

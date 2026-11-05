@@ -2553,13 +2553,12 @@ impl MyConn {
     /// Pings an idle client; an active row worker already proves the connection
     /// is live enough to remain a valid persistent handle.
     pub fn is_alive(&mut self) -> bool {
-        if self.active_stream.is_some() {
+        // A row worker or a MYSQLI_ASYNC worker owns the client: the link is busy for a
+        // live owner, not dead, so it must not be pinged (its client slot is empty) nor
+        // evicted. A link whose last owner closes it with a pending async query is
+        // evicted at release instead (`release_connection`).
+        if self.active_stream.is_some() || self.async_query.is_some() || self.conn.0.is_none() {
             return true;
-        }
-        // A MYSQLI_ASYNC worker owns the client: the link cannot be checked out again
-        // until its query is cancelled, so a persistent pool replaces it.
-        if self.async_query.is_some() || self.conn.0.is_none() {
-            return false;
         }
         self.conn.ping().is_ok()
     }
