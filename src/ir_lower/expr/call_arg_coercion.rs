@@ -515,7 +515,6 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         return unbox_iterable_param_storage(ctx, value, Some(arg.span));
     }
     if param_ty == PhpType::Str
-        && !by_reference
         && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
     {
         return coerce_to_string(ctx, value, arg);

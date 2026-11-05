@@ -396,6 +396,26 @@ if (is_array($functions)) {
     assert_eq!(out, "bool(true)\n110\nbool(true)\nbool(true)\n");
 }
 
+/// By-reference mutators keep working when the caller's cell widened to Mixed storage.
+#[test]
+fn test_sodium_mutators_accept_mixed_reference_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$x = $argc > 0 ? "\x00\x01" : 0;
+sodium_increment($x);
+var_dump(bin2hex($x));
+$z = $argc > 0 ? "secret" : 1;
+sodium_memzero($z);
+var_dump($z);
+$k = str_repeat("k", 32);
+$s = $argc > 0 ? sodium_crypto_generichash_init($k) : 0;
+sodium_crypto_generichash_update($s, "m");
+var_dump(strlen(sodium_crypto_generichash_final($s)), $s);
+"#,
+    );
+    assert_eq!(out, "string(4) \"0101\"\nNULL\nint(32)\nNULL\n");
+}
+
 /// State-typed mutators and special-shape length checks match php-src's diagnostics.
 #[test]
 fn test_sodium_state_and_length_errors() {
