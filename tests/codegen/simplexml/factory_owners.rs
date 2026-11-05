@@ -36,7 +36,7 @@ function factoryProbeMarkerArgument(): int { echo 'argument|'; return 7; }
 function factoryProbeInterfaceMarker(NativeFactoryAllocationMarker $xml): string { return $xml->marker(factoryProbeMarkerArgument()); }
 function factoryProbeMixedMarker(mixed $xml): mixed { return $xml->marker(factoryProbeMarkerArgument()); }
 function factoryProbeDynamicMarker(mixed $xml, string $method): mixed { return $xml->$method(factoryProbeMarkerArgument()); }
-function factoryProbeNullsafeDynamicMarker(mixed $xml, string $method): mixed { return $xml?->$method(factoryProbeMarkerArgument()); }
+function factoryProbeNullsafeDynamicMarker(?NativeFactoryAllocationMarker $xml, string $method): mixed { return $xml?->$method(factoryProbeMarkerArgument()); }
 function factoryProbeNullableMarker(?NativeFactoryAllocationMarker $xml): ?string { return $xml?->marker(factoryProbeMarkerArgument()); }
 function factoryProbeTypedMarker(NativeAbstractFactoryXml $xml): string { return $xml->marker(factoryProbeMarkerArgument()); }
 "#;
@@ -218,6 +218,11 @@ function guardFactoryNullsafe(?GuardAbstractFactoryXml $xml, string $name): mixe
 function guardFactoryMagic(GuardMagicFactoryXml $xml): mixed { return $xml->marker(guardFactoryArgument()); }
 function guardFactoryMagicNullsafe(?GuardMagicFactoryXml $xml): mixed { return $xml?->marker(guardFactoryArgument()); }
 function guardFactoryMagicDynamic(GuardMagicFactoryXml $xml, string $name): mixed { return $xml->$name(guardFactoryArgument()); }
+function guardFactoryCreate(DOMDocument $document, int $factory, string $class): mixed {
+    if ($factory === 0) { return simplexml_load_string('<r/>', $class); }
+    if ($factory === 1) { return simplexml_load_file('factory-dispatch.xml', $class); }
+    return simplexml_import_dom($document, $class);
+}
 function guardFactoryError(Error $error, string $class): void {
     echo $error->getMessage() === 'Cannot call abstract method ' . $class . '::marker()' ? 'Error|' : $error->getMessage();
 }
@@ -227,9 +232,7 @@ file_put_contents('factory-dispatch.xml', '<r/>');
 try {
     foreach ([0, 1, 2] as $factory) {
         foreach ([GuardAbstractFactoryXml::class, GuardMagicChildFactoryXml::class] as $class) {
-            if ($factory === 0) { $xml = simplexml_load_string('<r/>', $class); }
-            elseif ($factory === 1) { $xml = simplexml_load_file('factory-dispatch.xml', $class); }
-            else { $xml = simplexml_import_dom($document, $class); }
+            $xml = guardFactoryCreate($document, $factory, $class);
             if ($xml instanceof GuardAbstractFactoryXml) {
                 try { guardFactoryDynamic($xml, guardFactoryName()); } catch (Error $error) { guardFactoryError($error, $class); }
                 try { guardFactoryMixed($xml, 'marker'); } catch (Error $error) { guardFactoryError($error, $class); }

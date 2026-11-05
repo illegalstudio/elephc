@@ -15,7 +15,7 @@ abstract class NativeAbstractFactoryTargetXml extends SimpleXMLElement implement
 function nativeAbstractTargetArgument(): int { echo 'argument'; return 1; }
 function nativeAbstractTargetMarker(NativeAbstractFactoryTargetXml $xml): string { return $xml->marker(nativeAbstractTargetArgument()); }
 function nativeAbstractTargetDynamic(NativeAbstractFactoryTargetXml $xml, string $name): mixed { return $xml->$name(nativeAbstractTargetArgument()); }
-function nativeAbstractTargetMixedName(mixed $xml, mixed $name): mixed { return $xml?->$name(nativeAbstractTargetArgument()); }
+function nativeAbstractTargetMixedName(?NativeFactoryTargetMarker $xml, mixed $name): mixed { return $xml?->$name(nativeAbstractTargetArgument()); }
 class NativeMagicFactoryTargetXml extends SimpleXMLElement {
     public function __call(string $name, array $args): mixed { return 'magic'; }
 }
@@ -35,7 +35,7 @@ $abstract = simplexml_load_string('<r/>', NativeAbstractFactoryTargetXml::class)
 echo get_class($abstract);
 if ($abstract instanceof NativeAbstractFactoryTargetXml) { echo nativeAbstractTargetMarker($abstract); }
 if ($abstract instanceof NativeAbstractFactoryTargetXml) { echo nativeAbstractTargetDynamic($abstract, 'marker'); }
-echo nativeAbstractTargetMixedName($abstract, 'marker');
+if ($abstract instanceof NativeFactoryTargetMarker) { echo nativeAbstractTargetMixedName($abstract, 'marker'); }
 $magic = simplexml_load_string('<r/>', NativeMagicChildTargetXml::class);
 if ($magic instanceof NativeMagicFactoryTargetXml) { echo nativeAbstractTargetMagic($magic), nativeAbstractTargetNullsafeMagic($magic); }
 $protectedMagic = simplexml_load_string('<r/>', NativeProtectedMagicTargetXml::class);
@@ -137,8 +137,7 @@ $xml = new SimpleXMLElement('<r/>');
 }
 
 /// Nullable native children bypass public ArrayAccess methods on every supported target.
-#[test]
-fn native_xml_child_reads_bypass_public_offset_get_on_every_target() {
+fn verify_native_xml_child_reads_bypass_public_offset_get_on_every_target(target: &str) {
     let source = r#"<?php
 class NativeChildReadXml extends SimpleXMLElement implements ArrayAccess {
     public function offsetGet(mixed $key): mixed { return 'public'; }
@@ -160,26 +159,26 @@ function nativeChildLiteral(NativeChildReadXml $xml): mixed {
 echo (string)nativeChildRead(new NativeChildReadXml('<r><item>native</item></r>'));
 echo (string)nativeChildLiteral(new NativeChildReadXml('<r><item id="old">native</item></r>'));
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
-            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-        let function = module.functions.iter().find(|function| function.name == "nativeChildRead").unwrap();
-        assert!(function.instructions.iter().any(|inst| {
-            inst.op == crate::ir::Op::MethodCall && matches!(inst.immediate,
-                Some(crate::ir::Immediate::Data(name)) if
-                    module.data.strings[name.as_raw() as usize] == "__elephc_dimension_get")
-        }), "{target}: native syntax must select the native adapter before interface dispatch");
-        for name in ["nativeNullableRead", "nativeNullableCoalesce"] {
-            let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::IsNull), "{target}: {name}");
-            let fallback = function.instructions.iter().find(|inst| inst.op == crate::ir::Op::RuntimeCall)
-                .expect("null reads retain their warning-aware fallback");
-            assert_eq!(function.value(fallback.operands[0]).unwrap().php_type, crate::types::PhpType::Mixed,
-                "{target}: {name}: null fallback must erase nullable interface dispatch metadata");
-        }
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let function = module.functions.iter().find(|function| function.name == "nativeChildRead").unwrap();
+    assert!(function.instructions.iter().any(|inst| {
+        inst.op == crate::ir::Op::MethodCall && matches!(inst.immediate,
+            Some(crate::ir::Immediate::Data(name)) if
+                module.data.strings[name.as_raw() as usize] == "__elephc_dimension_get")
+    }), "{target}: native syntax must select the native adapter before interface dispatch");
+    for name in ["nativeNullableRead", "nativeNullableCoalesce"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::IsNull), "{target}: {name}");
+        let fallback = function.instructions.iter().find(|inst| inst.op == crate::ir::Op::RuntimeCall)
+            .expect("null reads retain their warning-aware fallback");
+        assert_eq!(function.value(fallback.operands[0]).unwrap().php_type, crate::types::PhpType::Mixed,
+            "{target}: {name}: null fallback must erase nullable interface dispatch metadata");
     }
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
+
+supported_target_cases!(native_xml_child_reads_bypass_public_offset_get_on_every_target, verify_native_xml_child_reads_bypass_public_offset_get_on_every_target);
 
 /// Boxed write-select failures guard both final writes and intermediate property traversals.
 fn verify_boxed_native_write_receivers_guard_null(target: &str) {
