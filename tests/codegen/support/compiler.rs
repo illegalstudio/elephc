@@ -371,6 +371,9 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved =
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::uri_prelude::inject_if_used_for_version(
+        resolved, false, php_version, &mut prelude_inventory,
+    );
     let resolved = elephc::core_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::time_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::clamp_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
@@ -807,6 +810,34 @@ pub(crate) fn compile_and_run_capture_merged_with_heap(
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture_merged(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
+/// Compiles and runs a fixture with an explicit fixed heap, capturing stdout and stderr.
+pub(crate) fn compile_and_run_capture_with_heap_size(
+    source: &str,
+    heap_size: usize,
+) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options_and_regex(
+            source, &dir, heap_size, false, false, false, false,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture(
         &user_asm,
         &runtime_obj,
         &dir,

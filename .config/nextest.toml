@@ -106,6 +106,9 @@ relative-to = "target"
 path = "debug/libelephc_random.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_uri.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_mbstring.a"
 relative-to = "target"
 [[profile.ci.archive.include]]

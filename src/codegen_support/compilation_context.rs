@@ -110,6 +110,33 @@ pub fn set_ini_overrides(overrides: Vec<(String, String)>) {
     INI_OVERRIDES.with(|entries| *entries.borrow_mut() = overrides);
 }
 
+/// Parses one PHP `memory_limit` value into bytes; `-1`/`0` means unlimited (`None`).
+#[allow(dead_code)]
+pub fn parse_memory_limit_bytes(value: &str) -> Result<Option<usize>, String> {
+    let trimmed = value.trim();
+    if trimmed == "-1" || trimmed == "0" {
+        return Ok(None);
+    }
+    let (digits, multiplier) = match trimmed.as_bytes().last() {
+        Some(b'K' | b'k') => (&trimmed[..trimmed.len() - 1], 1024u64),
+        Some(b'M' | b'm') => (&trimmed[..trimmed.len() - 1], 1024u64 * 1024),
+        Some(b'G' | b'g') => (&trimmed[..trimmed.len() - 1], 1024u64 * 1024 * 1024),
+        _ => (trimmed, 1),
+    };
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(format!("invalid memory_limit value `{value}`"));
+    }
+    let number = digits
+        .parse::<u64>()
+        .map_err(|_| format!("invalid memory_limit value `{value}`"))?;
+    let bytes = number
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("memory_limit value `{value}` overflows"))?;
+    usize::try_from(bytes)
+        .map(Some)
+        .map_err(|_| format!("memory_limit value `{value}` overflows"))
+}
+
 /// Returns this compilation's `--ini` directive overrides (empty unless
 /// [`set_ini_overrides`] ran for it, which is the no-override default).
 pub(crate) fn ini_overrides() -> Vec<(String, String)> {

@@ -146,6 +146,7 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         "partial-application",
         "io-poll",
         "pack-unpack",
+        "uri-builder",
         "web-session-upload",
         // The application contract is injected only by --web-lifecycle=application;
         // web_application_example_reuses_its_counter covers its real compilation profile.

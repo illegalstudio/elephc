@@ -27,8 +27,23 @@ use super::NOT_SERIALIZABLE_BUILTIN_CLASSES;
 
 /// Returns whether a declared property is compiler storage hidden from PHP enumeration.
 fn class_property_is_hidden(class_name: &str, property: &str) -> bool {
-    elephc_builtin_contract::lookup_class(class_name)
-        .is_some_and(|class| class.property_is_hidden(property))
+    is_uri_opaque_handle(class_name, property)
+        || elephc_builtin_contract::lookup_class(class_name)
+            .is_some_and(|class| class.property_is_hidden(property))
+}
+
+/// Returns whether `declaring_class::$prop_name` is the URI prelude's opaque native handle slot.
+///
+/// PHP's internal `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url` expose no properties. The prelude
+/// keeps the bridge handle in this private slot, so every property walker omits it while the
+/// prelude itself can still read and write it. The check is gated on the DECLARING class:
+/// a user class may legitimately declare its own property with that name.
+pub(crate) fn is_uri_opaque_handle(declaring_class: &str, prop_name: &str) -> bool {
+    prop_name == "__elephc_uri_handle"
+        && matches!(
+            crate::names::php_symbol_key(declaring_class.trim_start_matches('\\')).as_str(),
+            "uri\\rfc3986\\uri" | "uri\\whatwg\\url"
+        )
 }
 
 
@@ -3877,7 +3892,9 @@ fn var_dump_descriptor_rows(
                 );
                 // Resolve the physical slot before filtering: a user property can shadow an
                 // inherited Reflection backing name without exposing the backing slot itself.
-                if is_reflection_backing_slot(metadata, owner_name, &prop_name) {
+                if is_reflection_backing_slot(metadata, owner_name, &prop_name)
+                    || is_uri_opaque_handle(owner_name, &prop_name)
+                {
                     return None;
                 }
                 Some(VarDumpRow {
@@ -3904,7 +3921,9 @@ fn var_dump_descriptor_rows(
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, layout_index, prop_name,
             );
-            if is_reflection_backing_slot(metadata, owner_name, prop_name) {
+            if is_reflection_backing_slot(metadata, owner_name, prop_name)
+                || is_uri_opaque_handle(owner_name, prop_name)
+            {
                 return None;
             }
             Some(VarDumpRow {

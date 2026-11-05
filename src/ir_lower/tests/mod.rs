@@ -196,6 +196,12 @@ fn try_lower_source_at_for_target(
     );
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::uri_prelude::inject_if_used_for_version(
+        ast,
+        false,
+        crate::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
     let ast = crate::core_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::time_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::clamp_prelude::inject_if_used(ast, false, &mut prelude_inventory);

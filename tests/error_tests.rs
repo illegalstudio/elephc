@@ -80,6 +80,12 @@ fn check_source_on_compiler_stack(
     // arity diagnostics. Injection is gated on usage, so no other test is affected.
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::uri_prelude::inject_if_used_for_version(
+        ast,
+        false,
+        elephc::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
     let ast = elephc::core_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::time_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::clamp_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -121,6 +127,12 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::autoload::collect_aliases(ast)?;
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::uri_prelude::inject_if_used_for_version(
+        ast,
+        false,
+        elephc::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
     let ast = elephc::core_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::time_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::clamp_prelude::inject_if_used(ast, false, &mut prelude_inventory);

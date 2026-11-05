@@ -57,6 +57,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [PCNTL](php/pcntl.md) — forking, child waits, signals, process replacement, process groups, sessions, daemonization, and target-specific controls
 - [File information](php/fileinfo.md) - MIME types, encodings, custom magic databases and the complete PHP fileinfo surface
 - [Tokenizer](php/tokenizer.md): PHP source inspection, lossless tokens, `PhpToken` and `TOKEN_PARSE`.
+- [URI](php/uri.md) — RFC 3986 and WHATWG URL parsing, normalization, mutation, builders, host/URI types, percent encoding, validation errors, and serialization
 - [XML](php/xml.md) — the `ext/xml` SAX parser (`XMLParser`, handlers, `xml_parse_into_struct()`, error codes) and `ext/xmlwriter` (`XMLWriter`, memory and URI output, DTDs, namespaces) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`)
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [SPL](php/spl.md) — SPL interfaces, exceptions, autoload/introspection helpers, and runtime-backed containers

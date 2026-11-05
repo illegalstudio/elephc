@@ -50,6 +50,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             "pack_prelude",
             crate::pack_prelude::declarations(crate::php_version::PhpVersion::Php86),
         ),
+        ("uri_prelude", crate::uri_prelude::uri_declarations()),
         ("bcmath_prelude", crate::bcmath_prelude::bcmath_declarations()),
         ("time_prelude", crate::time_prelude::time_declarations()),
         ("clamp_prelude", crate::clamp_prelude::clamp_declarations()),

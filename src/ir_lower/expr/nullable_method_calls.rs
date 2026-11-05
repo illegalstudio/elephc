@@ -146,7 +146,7 @@ fn lower_method_call_with_binding(
     if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
-        return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+        return lower_reflection_class_new_instance_without_constructor(ctx, None, object, args, expr);
     }
     let magic_args;
     let (dispatch_method, args) =
