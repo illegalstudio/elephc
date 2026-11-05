@@ -95,6 +95,14 @@ pub(crate) struct Checker {
     pub failed_variant_contracts: HashMap<String, CompileError>,
     /// Signatures whose body and return validation completed, rather than mere placeholders.
     pub completed_function_signatures: HashSet<String>,
+    /// Body errors of each function's latest failed walk, cleared when the body is walked again.
+    pub failed_function_body_errors: HashMap<String, Vec<CompileError>>,
+    /// Failed untyped-parameter functions the final top-level pass walks again at their next
+    /// direct call, with the argument types that call settles on.
+    pub rewalk_failed_body_at_next_call: HashSet<String>,
+    /// While a failed body is walked again, the completed callees with an inferred return
+    /// already refreshed from the settled property types; `None` outside such a walk.
+    pub refreshed_inferred_callees: Option<HashSet<String>>,
     /// Canonical function signatures indexed by fully-qualified name.
     pub functions: HashMap<String, FunctionSig>,
     function_name_indices: function_names::FunctionNameIndices,

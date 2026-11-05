@@ -1899,3 +1899,103 @@ echo f(), "\n";
     );
     assert_eq!(out, "{\"y\":\"z\",\"k\":\"p\"}\n");
 }
+
+/// A string-key write on an untyped `[]` static property stores a hash, like the instance form,
+/// for int, string and `int|null` values written from a method, a function and the top level.
+/// The slot used to stay indexed, so `C::$ints['k'] = 6` printed `[6]` and an `int|null` value
+/// failed in the backend (`array_set value PHP type TaggedScalar`).
+#[test]
+fn test_static_property_string_key_write_promotes_untyped_slot() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {
+    public static $ints = [];
+    public static $strs = [];
+    public static $nul = [];
+    public static function put(int $n): void { self::$ints['k'] = $n + 1; static::$strs['a'] = "x" . $n; }
+}
+function nul(?int $n): void { C::$nul['k'] = $n ?? null; }
+C::put(5);
+C::$ints['j'] = 7;
+C::$strs['b'] = "y";
+nul(3);
+nul(null);
+C::$nul['z'] = 4;
+C::$ints['k'] += 10;
+C::$strs['a'] .= "!";
+C::$ints['m'] ??= 3;
+echo json_encode(C::$ints), "\n", json_encode(C::$strs), "\n", json_encode(C::$nul), "\n";
+foreach (C::$ints as $k => $v) { echo "$k=$v "; }
+echo count(C::$strs), " ", C::$strs['b'], " ", isset(C::$ints['zz']) ? "y" : "n", "\n";
+"#,
+    );
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "{\"k\":16,\"j\":7,\"m\":3}\n{\"a\":\"x5!\",\"b\":\"y\"}\n{\"k\":null,\"z\":4}\nk=16 j=7 m=3 2 y n\n",
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A non-sequential literal key on an empty static array and a string key on a static property
+/// with no default both store a hash, as PHP keeps the written key.
+#[test]
+fn test_static_property_keyed_write_on_empty_or_null_slot_keeps_key() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public static $sparse = []; public static $bare; }
+C::$sparse[5] = 1;
+C::$bare['q'] = 9;
+echo json_encode(C::$sparse), json_encode(C::$bare), "\n";
+"#,
+    );
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "{\"5\":1}{\"q\":9}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An `int|string` key written through an instance and a static property inside a function
+/// keeps every key: the union key is the boxed key the hash store converts, and its refusal
+/// used to be dropped with the stale initial errors so the write lost the string keys.
+#[test]
+fn test_property_write_with_int_string_union_key_keeps_keys() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class O { public $m = []; }
+class C { public static $m = []; }
+function keyed(O $o, int|string $k, int $v): void { $o->m[$k] = $v; C::$m[$k] = $v * 10; }
+$o = new O;
+keyed($o, 'a', 1);
+keyed($o, 2, 2);
+keyed($o, '7', 3);
+echo json_encode($o->m), json_encode(C::$m), "\n";
+"#,
+    );
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "{\"a\":1,\"2\":2,\"7\":3}{\"a\":10,\"2\":20,\"7\":30}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// `?int` and `?bool` keys written through an untyped static and instance property inside a
+/// function promote the slot to hash storage and convert the key like PHP: null becomes `""`
+/// and `true` becomes `1`, instead of a refusal or an indexed write that coerced null to `0`.
+#[test]
+fn test_property_write_with_nullable_scalar_key_promotes_to_hash() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public static $map = []; }
+class O { public $m = []; }
+function put(?int $k, ?bool $b): void {
+    C::$map[$k] = 1;
+    C::$map[$b] = 2;
+    $o = new O;
+    $o->m[$k] = 3;
+    echo json_encode(C::$map), json_encode($o->m), "\n";
+}
+put(null, true);
+"#,
+    );
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "{\"\":1,\"1\":2}{\"\":3}\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
