@@ -1068,6 +1068,18 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // `ErrorException` is what a user error handler throws for a warning; Symfony's
     // `ErrorHandler` does it for every warning it is configured to throw on, from a class the
     // autoload pass splices in, so the gate has to read the complete program like the rest here.
+    // Before the preludes that follow: the wrappers call builtins that need their helpers.
+    let ast = match crate::builtin_callable_prelude::inject_if_used(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    if prelude_inventory.groups.contains_key(crate::builtin_callable_prelude::GROUP) {
+        forced_groups.insert(crate::builtin_callable_prelude::GROUP.to_string());
+    }
     let ast = crate::error_exception_prelude::inject_if_used(ast, &mut prelude_inventory);
     // `ext/sodium` sealed boxes: Symfony's `SodiumVault` is autoloaded, so this gate reads the
     // complete program too, and it keeps `SodiumException` for code the interpreter runs.

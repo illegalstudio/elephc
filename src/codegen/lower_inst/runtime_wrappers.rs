@@ -797,7 +797,7 @@ fn coerce_gradual_wrapper_operands(
 /// A builtin whose result aliases its arguments only on SOME paths has no single EIR ownership,
 /// so no wrapper exists for it. A dispatch table over every builtin (an open runtime callable
 /// name) skips those rather than failing the whole build on one it will never be asked for.
-pub(super) fn builtin_wrapper_result_is_representable(name: &str, return_ty: &PhpType) -> bool {
+pub(crate) fn builtin_wrapper_result_is_representable(name: &str, return_ty: &PhpType) -> bool {
     crate::builtins::registry::lookup(name).is_some_and(|def| {
         wrapper_result_ownership(def.spec.semantics.result_ownership, return_ty, name).is_ok()
     })

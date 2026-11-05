@@ -2440,7 +2440,12 @@ fn runtime_user_function_descriptor_cases(
     functions.sort_by(|left, right| left.name.cmp(&right.name));
     let mut entries: Vec<(&crate::ir::Function, String)> = functions
         .into_iter()
-        .map(|function| (function, function.name.clone()))
+        .map(|function| {
+            // A wrapper answers for the builtin it calls (`builtin_callable_prelude`).
+            let name = crate::builtin_callable_prelude::builtin_name_of_wrapper(&function.name)
+                .unwrap_or(&function.name);
+            (function, name.to_string())
+        })
         .collect();
     // An include-loaded function body is compiled under a generated variant symbol, and the name
     // PHP code writes (`'Lib\\Ext\\is_root'`) is a dispatcher thunk over it. A string callable
@@ -2473,9 +2478,17 @@ fn runtime_user_function_descriptor_cases(
         let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
         let owns_string_return = crate::codegen::runtime_callable_invoker::function_returns_owned_string(function);
         let invoker_label = emit_runtime_callable_invoker_with_string_owner(ctx, &case_sig, &[], owns_string_return, true);
+        // A builtin's wrapper is called under its own symbol, whatever name it answers to.
+        let callee = if crate::builtin_callable_prelude::builtin_name_of_wrapper(&function.name)
+            .is_some()
+        {
+            function.name.as_str()
+        } else {
+            php_name.as_str()
+        };
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
-            &function_symbol(&php_name),
+            &function_symbol(callee),
             Some(&php_name),
             callable_descriptor::CALLABLE_DESC_KIND_FUNCTION,
             Some(&case_sig),
@@ -2483,7 +2496,7 @@ fn runtime_user_function_descriptor_cases(
             &[],
             callable_descriptor::CallableDescriptorInvocation::named(
                 callable_descriptor::CallableDescriptorShape::Function,
-                &php_name,
+                callee,
             ),
             Some(&invoker_label),
         );

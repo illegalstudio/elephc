@@ -117,6 +117,7 @@ mod mixed_property_runtime;
 mod output_values;
 mod reference_arguments;
 mod runtime_wrappers;
+pub(crate) use runtime_wrappers::builtin_wrapper_result_is_representable;
 mod static_method_calls;
 mod throwable_methods;
 

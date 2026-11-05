@@ -732,6 +732,31 @@ foreach (['routes', 'dbal'] as $name) {
     assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
 }
 
+/// A builtin without a run-time wrapper stays reachable by the name a string holds: twig registers
+/// `'json_encode'` as a filter and `ReflectionCallable` turns the name into a closure.
+#[test]
+fn closed_world_calls_a_builtin_a_string_names() {
+    let dir = make_test_dir("cw_builtin_by_name");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+function close(mixed $name) { return \Closure::fromCallable($name); }
+foreach (['json_encode', 'max', 'min', 'range', 'implode', 'round', 'strip_tags', 'number_format'] as $name) {
+    echo (new ReflectionFunction(close($name)))->getNumberOfParameters(), ' ';
+}
+echo "\n", close('json_encode')(['a' => 1]), ' ', close('max')(1, 5, 3), ' ', close('max')([2, 9]), ' ';
+echo close('min')(4, 2), ' ', implode(',', close('range')(1, 3)), ' ', close('implode')('-', [1, 2]), ' ';
+echo close('round')(1.26, 1), ' ', close('strip_tags')('<b>x</b>'), ' ', close('number_format')(1234.5, 1), "\n";
+$name = 'json_encode';
+echo $name([1]), ' ', implode(',', array_map('round', [1.4, 2.6])), ' ', call_user_func('max', 3, 8), "\n";
+"#,
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+}
+
 /// php evaluates a class constant when it is read, so a class naming a constant of an extension
 /// that is not installed still loads: symfony's `RedisCaster` and `\Redis::FAILOVER_NONE`.
 #[test]

@@ -50,6 +50,31 @@ pub(crate) fn runtime_builtin_wrapper_supported(
     runtime_builtin_wrapper_supported_at_arity(name, source_arg_ty, features, None)
 }
 
+/// Whether a builtin can have a run-time wrapper at all, whichever runtime features a build enables.
+pub(crate) fn builtin_may_have_runtime_wrapper(name: &str) -> bool {
+    let Some(def) = crate::builtins::registry::lookup(name) else {
+        return false;
+    };
+    let Some(sig) = crate::types::first_class_callable_builtin_sig(name) else {
+        return false;
+    };
+    let return_ty = crate::types::callable_wrapper_sig(&sig).return_type;
+    if !crate::codegen::lower_inst::builtin_wrapper_result_is_representable(name, &return_ty) {
+        return false;
+    }
+    match def.spec.semantics.callable {
+        crate::builtins::semantics::BuiltinCallablePolicy::Dynamic(accepts) => accepts(None),
+        crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) => {
+            target.callable_accepts_arity(None, None)
+        }
+        crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_) => matches!(
+            def.spec.semantics.argument_lowering,
+            crate::builtins::semantics::BuiltinArgumentLowering::ArrayInternalPointer(_)
+        ),
+        crate::builtins::semantics::BuiltinCallablePolicy::DirectOnly(_) => false,
+    }
+}
+
 /// Selects a typed wrapper with the callback's known argument count when the caller can prove it.
 pub(crate) fn runtime_builtin_wrapper_supported_at_arity(
     name: &str, source_arg_ty: Option<&PhpType>,
