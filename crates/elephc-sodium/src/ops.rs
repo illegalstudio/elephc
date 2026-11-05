@@ -10,7 +10,9 @@
 //!   reading out of bounds.
 //! - Failure statuses distinguish PHP's observable `false` results from exception-shaped
 //!   failures (`invalid base64`, `invalid padding`, conversion and identity errors).
-//! - Secret material is zeroized through `sodium_memzero` on owned buffers after use.
+//! - `sodium_memzero` preserves PHP's observable null reset; the bridge zeroizes its own
+//!   decoded temporary buffers after each call. The caller PHP string storage is owned by
+//!   the generated runtime, not this library.
 
 use std::os::raw::{c_char, c_int, c_ulonglong};
 
@@ -52,6 +54,8 @@ pub(crate) fn dispatch(name: &str, a: [&[u8]; 4], i: [i64; 3]) -> Outcome {
         "sodium_increment" => increment(a[0]),
         "sodium_memcmp" => memcmp(a[0], a[1]),
         "sodium_memzero" => Outcome::Bytes(Vec::new()),
+        "password_hash_bcrypt" => password_hash_bcrypt(a[0], i[0]),
+        "password_verify_bcrypt" => password_verify_bcrypt(a[0], a[1]),
         "sodium_pad" => pad(a[0], i[0]),
         "sodium_unpad" => unpad(a[0], i[0]),
         "sodium_crypto_aead_aes256gcm_is_available" => {
@@ -210,20 +214,24 @@ fn base642bin(input: &[u8], variant: i64, ignore: &[u8]) -> Outcome {
     let mut output = vec![0u8; input.len() / 4 * 3 + 3];
     let mut output_len = 0usize;
     let mut end: *const c_char = std::ptr::null();
-    let ignore = nul_terminated(ignore);
+    let ignore = (!ignore.is_empty()).then(|| nul_terminated(ignore));
+    let ignore_ptr = ignore
+        .as_ref()
+        .map_or(std::ptr::null(), |ignore| ignore.as_ptr() as *const c_char);
+    let input_end = unsafe { input.as_ptr().add(input.len()) } as *const c_char;
     let result = unsafe {
         sodium_base642bin(
             output.as_mut_ptr(),
             output.len(),
             input.as_ptr() as *const c_char,
             input.len(),
-            ignore.as_ptr() as *const c_char,
+            ignore_ptr,
             &mut output_len,
             &mut end,
             variant as c_int,
         )
     };
-    if result != 0 {
+    if result != 0 || end != input_end {
         return Outcome::InvalidBase64;
     }
     output.truncate(output_len);
@@ -253,23 +261,53 @@ fn hex2bin(input: &[u8], ignore: &[u8]) -> Outcome {
     let mut output = vec![0u8; input.len() / 2 + 1];
     let mut output_len = 0usize;
     let mut end: *const c_char = std::ptr::null();
-    let ignore = nul_terminated(ignore);
+    let ignore = (!ignore.is_empty()).then(|| nul_terminated(ignore));
+    let ignore_ptr = ignore
+        .as_ref()
+        .map_or(std::ptr::null(), |ignore| ignore.as_ptr() as *const c_char);
+    let input_end = unsafe { input.as_ptr().add(input.len()) } as *const c_char;
     let result = unsafe {
         sodium_hex2bin(
             output.as_mut_ptr(),
             output.len(),
             input.as_ptr() as *const c_char,
             input.len(),
-            ignore.as_ptr() as *const c_char,
+            ignore_ptr,
             &mut output_len,
             &mut end,
         )
     };
-    if result != 0 {
+    if result != 0 || end != input_end {
         return Outcome::InvalidHex;
     }
     output.truncate(output_len);
     Outcome::Bytes(output)
+}
+
+/// Hashes a password with PHP's bcrypt provider (`$2y$`, cost 4..=31).
+fn password_hash_bcrypt(password: &[u8], cost: i64) -> Outcome {
+    if !(4..=31).contains(&cost) {
+        return Outcome::Internal;
+    }
+    match bcrypt::hash_with_result(password, cost as u32) {
+        Ok(parts) => Outcome::Bytes(
+            parts
+                .format_for_version(bcrypt::Version::TwoY)
+                .into_bytes(),
+        ),
+        Err(_) => Outcome::Internal,
+    }
+}
+
+/// Verifies a password against a bcrypt hash.
+fn password_verify_bcrypt(password: &[u8], hash: &[u8]) -> Outcome {
+    let Ok(hash) = std::str::from_utf8(hash) else {
+        return Outcome::Integer(0);
+    };
+    Outcome::Integer(i64::from(matches!(
+        bcrypt::verify(password, hash),
+        Ok(true)
+    )))
 }
 
 /// Pads a string with libsodium's ISO/IEC 7816-4 scheme.
@@ -1560,6 +1598,24 @@ mod native_tests {
             Outcome::Bytes(bytes) => assert_eq!(bytes.len(), 32),
             _ => panic!("pwhash failed"),
         }
+    }
+
+    /// Verifies PHP's bcrypt provider formats `$2y$` hashes and verifies them.
+    #[test]
+    fn password_bcrypt_round_trip() {
+        let Outcome::Bytes(hash) = password_hash_bcrypt(b"secret", 4) else {
+            panic!("bcrypt hash failed")
+        };
+        let hash = std::str::from_utf8(&hash).expect("bcrypt ASCII hash");
+        assert!(hash.starts_with("$2y$04$"), "{hash}");
+        assert_eq!(
+            matches!(password_verify_bcrypt(b"secret", hash.as_bytes()), Outcome::Integer(1)),
+            true
+        );
+        assert_eq!(
+            matches!(password_verify_bcrypt(b"wrong", hash.as_bytes()), Outcome::Integer(0)),
+            true
+        );
     }
 
     #[test]

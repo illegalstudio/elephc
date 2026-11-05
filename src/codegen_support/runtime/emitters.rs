@@ -65,6 +65,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_strcopy(emitter);
     strings::emit_str_dup_owned(emitter);
     strings::emit_str_persist(emitter, features.mbstring || features.eval_bridge);
+    if features.sodium {
+        strings::emit_str_zero(emitter);
+    }
     strings::emit_str_inc_dec(emitter);
     strings::emit_mixed_inc_dec(emitter);
     strings::emit_strtolower(emitter, features.mbstring || features.eval_bridge);

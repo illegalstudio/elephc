@@ -220,6 +220,21 @@ fn eval_support_json(contract: &BuiltinContract) -> Value {
         });
     }
 
+    // Sodium mutators are native prelude functions, not Magician registry bindings: eval
+    // resolves the same synthetic PHP declaration the AOT program calls.
+    if contract.area == Area::Sodium
+        && matches!(
+            eval_support(contract),
+            BackendSupport::Implemented(BackendImplementation::Prelude)
+        )
+    {
+        return json!({
+            "supported": true,
+            "kind": "native-prelude",
+            "home_file": "src/sodium_prelude/mutators.rs",
+        });
+    }
+
     match eval_support(contract) {
         BackendSupport::Unsupported(reason) => json!({
             "supported": false,

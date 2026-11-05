@@ -585,6 +585,13 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
         "version",
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
+    # The PHP-visible by-reference sodium mutators are ordinary prelude functions so
+    # both AOT and eval use the shared reference-call machinery.
+    "sodium": (
+        "sodium_prelude/mutators.rs",
+        "sodium",
+        "crates/elephc-builtin-contract/src/catalog_sodium.rs",
+    ),
     # The core password provider is declared by its own sodium-prelude module.
     "password": (
         "sodium_prelude/password.rs",

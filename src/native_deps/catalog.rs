@@ -704,7 +704,7 @@ mod tests {
     fn catalog_rejects_unknown_selection() {
         assert_eq!(
             package("libfoo").unwrap_err().to_string(),
-            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, openssl-crypto, nghttp2, libssh2, curl, oniguruma, libxml2, gmp"
+            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, openssl-crypto, nghttp2, libssh2, curl, oniguruma, libxml2, gmp, libsodium"
         );
         assert!(version("pcre2", Some("10.46")).is_err());
     }

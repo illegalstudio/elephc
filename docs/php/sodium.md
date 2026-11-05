@@ -59,28 +59,32 @@ var_dump(sodium_crypto_pwhash_str_verify($hash, 'correct horse battery staple'))
 
 - Binary strings are fully supported: every input and output crosses the bridge
   as binary data, never as a NUL-terminated C string.
-- The by-reference functions mutate their argument exactly like php-src, including
-  `sodium_memzero()` and `sodium_crypto_generichash_final()` converting the
-  argument to `null` after use.
+- The by-reference functions mutate their argument exactly like php-src for locals and
+  array elements. Object-property targets are refused with a compile-time diagnostic
+  when the prelude wrapper needs an untyped reference cell (BLAKE2b, secretstream and
+  `sodium_memzero`), instead of silently losing the writeback. `sodium_memzero()` wipes
+  a uniquely owned string payload before converting the argument to `null`; BLAKE2b
+  finalization and secretstream states also reset their reference to `null` after use.
 - Argument validation, exception classes, and messages match php-src 8.5,
   including `SodiumException` versus `TypeError` boundaries and the
-  `password_hash()` Argon2 string formats.
+  `password_hash()` Argon2 and bcrypt string formats.
 - `sodium_crypto_pwhash_str()` produces libsodium's `$argon2id$...` format, and
   `sodium_crypto_pwhash_str_verify()` also accepts the `$argon2i$...` hashes
   produced by `password_hash()`.
-- The compiled runtime does not render PHP's call stack, so the two php-src
-  fixtures that assert only backtrace redaction compare the uncaught exception
-  class and message instead of the omitted frames.
+- Uncaught sodium errors hide the generated prelude helper frames, so secret
+  operands do not reach stderr. The two php-src backtrace fixtures compare the
+  uncaught exception class and message because their frame numbering is
+  target-specific.
 
-The core `password` extension's Argon2 provider is implemented on top of the
-same bridge, so `password_hash()`, `password_verify()`, `password_get_info()`,
-`password_needs_rehash()`, `password_algos()` and the `PASSWORD_ARGON2*`
-constants are available whenever the Sodium prelude is loaded. The Argon2i /
-Argon2id string formats and option validation follow php-src 8.5's Argon2
-password provider. libsodium's own Argon2i limit applies (`time_cost >= 3` for Argon2i at
-the smallest memory sizes); the php-src sodium fixtures use `time_cost` 4 and 8.
-bcrypt (`2y`) is reported by `password_algos()`/`password_get_info()` but not
-implemented.
+The core `password` extension's provider is implemented on top of the same
+bridge, so `password_hash()`, `password_verify()`, `password_get_info()`,
+`password_needs_rehash()`, `password_algos()` and the `PASSWORD_*` constants are
+available whenever the Sodium prelude is loaded. Argon2i and Argon2id use
+libsodium's string format and option validation; bcrypt (`2y`) is implemented by
+the bridge's Rust provider, so `PASSWORD_DEFAULT` and `password_hash($password)`
+work. `PASSWORD_ARGON2_PROVIDER` reports `"sodium"`, matching the libsodium
+backed provider. libsodium's Argon2i limit applies (`time_cost >= 3` for Argon2i
+at the smallest memory sizes); the php-src sodium fixtures use `time_cost` 4 and 8.
 
 The full 31-case php-src Sodium corpus now runs, including the three
 `password_hash()` interoperability fixtures and `bug78516`.
@@ -91,7 +95,7 @@ A host program that linked Sodium registers the compiled prelude helpers in its
 eval context, so `eval()` code can call the non-mutating `sodium_*` functions
 exactly as compiled code can. The eight by-reference mutators (`sodium_add`,
 `sodium_increment`, `sodium_memzero`, the incremental BLAKE2b pair, and the
-three secretstream state functions) run through hidden prelude wrappers whose
-parameters are ordinary PHP references, so eval mutates the caller's variable
-exactly like AOT. A program that never linked Sodium keeps PHP's catchable
+three secretstream state functions) are ordinary PHP functions with `&$`
+parameters. Eval therefore mutates the same local, array element, or property
+the AOT call mutates, including through named and dynamic calls. A program that never linked Sodium keeps PHP's catchable
 `Error: Call to undefined function sodium_*()` for the whole surface.

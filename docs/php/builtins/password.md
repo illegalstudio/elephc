@@ -11,6 +11,6 @@ sidebar:
 |---|---|---|:-:|:-:|
 | [`password_algos()`](./password/password_algos.md) | `(): array` | `array` | ✓ | - |
 | [`password_get_info()`](./password/password_get_info.md) | `(string $hash): array` | `array` | ✓ | - |
-| [`password_hash()`](./password/password_hash.md) | `(string $password, string $algo = PASSWORD_DEFAULT, array $options = []): string|false` | `string|false` | ✓ | - |
-| [`password_needs_rehash()`](./password/password_needs_rehash.md) | `(string $hash, string $algo, array $options = []): bool` | `bool` | ✓ | - |
+| [`password_hash()`](./password/password_hash.md) | `(string $password, string|int|null $algo, array $options = []): string` | `string` | ✓ | - |
+| [`password_needs_rehash()`](./password/password_needs_rehash.md) | `(string $hash, string|int|null $algo, array $options = []): bool` | `bool` | ✓ | - |
 | [`password_verify()`](./password/password_verify.md) | `(string $password, string $hash): bool` | `bool` | ✓ | - |

@@ -19,7 +19,7 @@
 mod constants;
 mod detect;
 mod dsl;
-mod eval_wrappers;
+mod mutators;
 mod functions;
 mod password;
 mod spec;
@@ -44,14 +44,14 @@ pub fn inject_if_used(
 }
 
 /// Builds every declaration the injected sodium surface contributes.
-fn declarations() -> Vec<Stmt> {
+pub(crate) fn declarations() -> Vec<Stmt> {
     let mut program = extern_declarations();
     program.extend(constants::declarations());
     program.push(class("SodiumException").extends("Exception").build());
     program.extend(validators::declarations());
     program.extend(functions::declarations());
     program.extend(functions::framing_helpers());
-    program.extend(eval_wrappers::declarations());
+    program.extend(mutators::declarations());
     program.extend(password::declarations());
     program
 }
@@ -85,6 +85,10 @@ fn extern_declarations() -> Vec<Stmt> {
             .param("memlimit", CType::Int)
             .param("algorithm", CType::Int)
             .returns(CType::Str)
+            .build(),
+        extern_fn("_rt_str_zero", "elephc_sodium")
+            .param("string", CType::Str)
+            .returns(CType::Void)
             .build(),
         extern_fn("elephc_sodium_version", "elephc_sodium")
             .returns(CType::Str)

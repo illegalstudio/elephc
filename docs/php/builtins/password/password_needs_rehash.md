@@ -6,14 +6,14 @@ description: "Reports whether a password hash needs rehashing."
 ## password_needs_rehash()
 
 ```php
-function password_needs_rehash(string $hash, string $algo, array $options = []): bool
+function password_needs_rehash(string $hash, string|int|null $algo, array $options = []): bool
 ```
 
 Reports whether a password hash needs rehashing.
 
 **Parameters**:
 - `$hash` (`string`)
-- `$algo` (`string`)
+- `$algo` (`string|int|null`)
 - `$options` (`array`), default `[]`, optional
 
 **Returns**: `bool`

@@ -72,8 +72,8 @@ macro_rules! password_contract {
 pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     password_contract!("password_algos", [], TypeSpec::Array, "Returns the supported password hashing algorithms."),
     password_contract!("password_get_info", [param!("hash", TypeSpec::Str)], TypeSpec::Array, "Returns information about a password hash."),
-    password_contract!("password_hash", [param!("password", TypeSpec::Str), param!("algo", TypeSpec::Str, DefaultSpec::Constant("PASSWORD_DEFAULT")), param!("options", TypeSpec::Array, DefaultSpec::EmptyArray)], TypeSpec::Union(&[TypeSpec::Str, TypeSpec::False]), "Hashes a password."),
-    password_contract!("password_needs_rehash", [param!("hash", TypeSpec::Str), param!("algo", TypeSpec::Str), param!("options", TypeSpec::Array, DefaultSpec::EmptyArray)], TypeSpec::Bool, "Reports whether a password hash needs rehashing."),
+    password_contract!("password_hash", [param!("password", TypeSpec::Str), param!("algo", TypeSpec::Union(&[TypeSpec::Str, TypeSpec::Int, TypeSpec::Null])), param!("options", TypeSpec::Array, DefaultSpec::EmptyArray)], TypeSpec::Str, "Hashes a password."),
+    password_contract!("password_needs_rehash", [param!("hash", TypeSpec::Str), param!("algo", TypeSpec::Union(&[TypeSpec::Str, TypeSpec::Int, TypeSpec::Null])), param!("options", TypeSpec::Array, DefaultSpec::EmptyArray)], TypeSpec::Bool, "Reports whether a password hash needs rehashing."),
     password_contract!("password_verify", [param!("password", TypeSpec::Str), param!("hash", TypeSpec::Str)], TypeSpec::Bool, "Verifies a password against a hash."),
 ];
 

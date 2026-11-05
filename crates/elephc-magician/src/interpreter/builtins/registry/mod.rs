@@ -93,6 +93,11 @@ fn validate_shared_eval_coverage(by_name: &HashMap<String, usize>) {
                 "shared builtin contract {} requires an eval registry binding",
                 contract.name
             ),
+            BackendSupport::Implemented(BackendImplementation::Prelude) => assert!(
+                !registered,
+                "native-prelude contract {} must not shadow its prelude declaration with an eval registry binding",
+                contract.name
+            ),
             BackendSupport::Implemented(route) => panic!(
                 "shared builtin contract {} declares unsupported eval route {route:?}",
                 contract.name

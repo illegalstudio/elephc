@@ -27,12 +27,12 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function password_hash(string $password, string $algo = PASSWORD_DEFAULT, array $options = []): string|false
+function password_hash(string $password, string|int|null $algo, array $options = []): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–3 arguments (2 optional).
+- **Arity**: takes 2–3 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

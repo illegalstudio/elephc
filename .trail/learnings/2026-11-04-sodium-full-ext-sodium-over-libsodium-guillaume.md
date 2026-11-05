@@ -122,3 +122,49 @@ touches:
 - PHPT tests are heavy (Argon2 + many links). `tests/codegen/sodium_php_src.rs` raises the
   per-binary timeout to 300 seconds and the corpus is run with `--test-threads=2`.
   Higher parallelism produced transient `assembler failed` panics and 60-second timeouts.
+
+## Second review round (four-model audit)
+
+The branch was then reviewed independently by GLM 5.3-flash, MiniMax M3.1-flash,
+Mistral Large 4 and Kimi K3.1-pro. The synthesis found four committed tests failing,
+a `float &$x` miscompilation, non-local mutator writeback gaps, permissive decoders,
+password-provider gaps, eval dynamic/named gaps, skipped length checks, a false
+memzero zeroization claim, missing CI/release wiring and stale docs. Fixes landed:
+
+- **All focused tests pass**: constants 111/111 (102 SODIUM + 9 PASSWORD), the
+  Magician source-argument list, the prelude contract parity gate and the
+  `ir_lower` example corpus now cover sodium/password.
+- **By-reference sodium mutators are PHP-visible native prelude functions**, not
+  registry builtins. Eval resolves the same declaration, so named and dynamic calls
+  mutate the caller like direct calls. Array elements work through the ordinary
+  reference machinery. The wrappers keep untyped storage only where php-src's own zval
+  checks or null reset require it; their shared contracts still publish the real
+  `string &$...` signatures. Object-property targets for those untyped wrappers are a
+  loud compile-time diagnostic now, not a silent lost writeback.
+- **`float &$x` regression fixed**: the shared lowering no longer casts a by-ref
+  argument into a detached temporary, and the callee sees the converted float instead
+  of raw integer bits. Caller-side writeback for an int-to-float by-ref conversion
+  remains a pre-existing compiler limitation (callee is correct; caller stays int).
+- **Password provider**: `PASSWORD_ARGON2_PROVIDER` is `"sodium"`; bcrypt is implemented
+  through the pure-Rust `bcrypt` crate; `PASSWORD_DEFAULT`/`2y` works; `$algo` is the
+  required `string|int|null` selector; return type is `string`; cross-algorithm
+  `password_needs_rehash`, bcrypt length validation, null options, cost bounds and
+  `PASSWORD_BCRYPT_DEFAULT_COST` are implemented.
+- **Decoders** compare libsodium's `end` pointer so trailing garbage throws; ignored
+  characters still work. **State/length checks** run in the special KX/secretstream
+  shapes, with php-src's SodiumException texts.
+- **`sodium_memzero`** now wipes a uniquely owned runtime string through
+  `__rt_str_zero` before the null reset; the helper is emitted behind a new
+  `RuntimeFeatures::sodium` cache bit and has AArch64/x86_64 paths. Generated sodium
+  prelude frames no longer publish backtrace argument readers.
+- **CI/release**: libsodium is cached/materialized in all three executable shards,
+  `ELEPHC_TEST_REQUIRE_SODIUM_NATIVE=1` is fail-closed, the bridge tests run with
+  `ELEPHC_SODIUM_LIBSODIUM_LIB_DIR`, and release/nightly/Homebrew/tarball lists carry
+  `elephc-sodium`/`libelephc_sodium.a`. Linux Docker scripts do the same.
+- Final sodium suite: **51 passed, 0 failed, 0 ignored** (31 PHPT + focused + support).
+  `cargo test --lib`: 3634 passed, 0 failed, 13 ignored. Magician: 1810 passed,
+  1 ignored. Contract: 70 passed. Bridge: 4 passed. Docs audits: 0 errors.
+
+Residual, documented instead of hidden: float by-ref caller writeback, property
+targets for the untyped reference wrappers, the nested prelude TypeError trace, the
+pinned `SODIUM_LIBRARY_VERSION`, and the two backtrace fixtures' first-line comparison.

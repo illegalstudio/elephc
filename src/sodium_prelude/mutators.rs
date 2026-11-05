@@ -1,22 +1,21 @@
 //! Purpose:
-//! Declares hidden by-reference wrappers used by Magician's direct eval dispatch.
+//! Declares the PHP-visible by-reference sodium mutators as synthetic prelude functions.
 //!
 //! Called from:
 //! - `crate::sodium_prelude::declarations`.
 //!
 //! Key details:
-//! - Eval's declarative builtin values hook receives values, not caller lvalues. These
-//!   ordinary prelude functions take the same source expression by reference, so eval's
-//!   normal user-function call machinery mutates the caller variable exactly like AOT.
-//! - The wrappers are hidden (`__elephc_` prefix), never part of the PHP-visible surface,
-//!   and only registered in eval when the sodium prelude is present.
+//! - These are ordinary PHP functions with real `&$` parameters, so AOT and eval both use the
+//!   compiler's normal by-reference call machinery for locals, array elements and properties.
+//! - Their bodies delegate the cryptography to the hidden `__elephc_sodium_*` helpers, which
+//!   remain by-value implementation details.
 //! - No PHP source is parsed.
 
 use super::dsl::*;
 use crate::parser::ast::{BinOp, Stmt, TypeExpr};
 use crate::synthetic_class::*;
 
-/// Builds every hidden eval wrapper.
+/// Builds every PHP-visible by-reference sodium mutator.
 pub(super) fn declarations() -> Vec<Stmt> {
     vec![
         add(),
@@ -30,11 +29,11 @@ pub(super) fn declarations() -> Vec<Stmt> {
     ]
 }
 
-/// `__elephc_sodium_eval_add(&$string1, $string2): void`
+/// `sodium_add(string &$string1, string $string2): void`
 fn add() -> Stmt {
-    function("__elephc_sodium_eval_add")
+    function("sodium_add")
         .param_by_ref("string1", None)
-        .param("string2", t_mixed())
+        .param("string2", TypeExpr::Str)
         .returns(TypeExpr::Void)
         .body(vec![assign(
             "string1",
@@ -43,9 +42,9 @@ fn add() -> Stmt {
         .build()
 }
 
-/// `__elephc_sodium_eval_increment(&$string): void`
+/// `sodium_increment(string &$string): void`
 fn increment() -> Stmt {
-    function("__elephc_sodium_eval_increment")
+    function("sodium_increment")
         .param_by_ref("string", None)
         .returns(TypeExpr::Void)
         .body(vec![assign(
@@ -55,23 +54,24 @@ fn increment() -> Stmt {
         .build()
 }
 
-/// `__elephc_sodium_eval_memzero(&$string): void`
+/// `sodium_memzero(string &$string): void`
 fn memzero() -> Stmt {
-    function("__elephc_sodium_eval_memzero")
+    function("sodium_memzero")
         .param_by_ref("string", None)
         .returns(TypeExpr::Void)
         .body(vec![
             expr(call("__elephc_sodium_memzero", vec![b(false), v("string")])),
+            expr(call("_rt_str_zero", vec![v("string")])),
             assign("string", e_null()),
         ])
         .build()
 }
 
-/// `__elephc_sodium_eval_crypto_generichash_update(&$state, $message): bool`
+/// `sodium_crypto_generichash_update(string &$state, string $message): bool`
 fn generichash_update() -> Stmt {
-    function("__elephc_sodium_eval_crypto_generichash_update")
+    function("sodium_crypto_generichash_update")
         .param_by_ref("state", None)
-        .param("message", t_mixed())
+        .param("message", TypeExpr::Str)
         .returns(TypeExpr::Bool)
         .body(vec![
             assign(
@@ -86,9 +86,9 @@ fn generichash_update() -> Stmt {
         .build()
 }
 
-/// `__elephc_sodium_eval_crypto_generichash_final(&$state, $length = 32): string`
+/// `sodium_crypto_generichash_final(string &$state, int $length = 32): string`
 fn generichash_final() -> Stmt {
-    function("__elephc_sodium_eval_crypto_generichash_final")
+    function("sodium_crypto_generichash_final")
         .param_by_ref("state", None)
         .param_default("length", TypeExpr::Int, i(32))
         .returns(TypeExpr::Str)
@@ -106,11 +106,11 @@ fn generichash_final() -> Stmt {
         .build()
 }
 
-/// `__elephc_sodium_eval_crypto_secretstream_xchacha20poly1305_push(&$state, $message, $ad = '', $tag = 0): string`
+/// `sodium_crypto_secretstream_xchacha20poly1305_push(string &$state, string $message, string $additional_data = '', int $tag = 0): string`
 fn secretstream_push() -> Stmt {
-    function("__elephc_sodium_eval_crypto_secretstream_xchacha20poly1305_push")
+    function("sodium_crypto_secretstream_xchacha20poly1305_push")
         .param_by_ref("state", None)
-        .param("message", t_mixed())
+        .param("message", TypeExpr::Str)
         .param_default("additional_data", TypeExpr::Str, s(""))
         .param_default("tag", TypeExpr::Int, i(0))
         .returns(TypeExpr::Str)
@@ -128,11 +128,11 @@ fn secretstream_push() -> Stmt {
         .build()
 }
 
-/// `__elephc_sodium_eval_crypto_secretstream_xchacha20poly1305_pull(&$state, $ciphertext, $ad = ''): array|false`
+/// `sodium_crypto_secretstream_xchacha20poly1305_pull(string &$state, string $ciphertext, string $additional_data = ''): array|false`
 fn secretstream_pull() -> Stmt {
-    function("__elephc_sodium_eval_crypto_secretstream_xchacha20poly1305_pull")
+    function("sodium_crypto_secretstream_xchacha20poly1305_pull")
         .param_by_ref("state", None)
-        .param("ciphertext", t_mixed())
+        .param("ciphertext", TypeExpr::Str)
         .param_default("additional_data", TypeExpr::Str, s(""))
         .returns(t_union(vec![t_array(), TypeExpr::Bool]))
         .body(vec![
@@ -156,9 +156,9 @@ fn secretstream_pull() -> Stmt {
         .build()
 }
 
-/// `__elephc_sodium_eval_crypto_secretstream_xchacha20poly1305_rekey(&$state): void`
+/// `sodium_crypto_secretstream_xchacha20poly1305_rekey(string &$state): void`
 fn secretstream_rekey() -> Stmt {
-    function("__elephc_sodium_eval_crypto_secretstream_xchacha20poly1305_rekey")
+    function("sodium_crypto_secretstream_xchacha20poly1305_rekey")
         .param_by_ref("state", None)
         .returns(TypeExpr::Void)
         .body(vec![assign(

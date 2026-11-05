@@ -6,17 +6,17 @@ description: "Hashes a password."
 ## password_hash()
 
 ```php
-function password_hash(string $password, string $algo = PASSWORD_DEFAULT, array $options = []): string|false
+function password_hash(string $password, string|int|null $algo, array $options = []): string
 ```
 
 Hashes a password.
 
 **Parameters**:
 - `$password` (`string`)
-- `$algo` (`string`), default `PASSWORD_DEFAULT`, optional
+- `$algo` (`string|int|null`)
 - `$options` (`array`), default `[]`, optional
 
-**Returns**: `string|false`
+**Returns**: `string`
 
 ## Availability
 

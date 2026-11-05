@@ -22431,7 +22431,7 @@
       "name": "PASSWORD_ARGON2_PROVIDER",
       "route": "prelude",
       "since": null,
-      "value": "standard"
+      "value": "sodium"
     },
     {
       "aot": {
@@ -22450,6 +22450,24 @@
       "route": "prelude",
       "since": null,
       "value": "2y"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "PASSWORD_BCRYPT_DEFAULT_COST",
+      "route": "prelude",
+      "since": null,
+      "value": 12
     },
     {
       "aot": {

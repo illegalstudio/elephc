@@ -10735,7 +10735,7 @@
   },
   "PASSWORD_ARGON2_PROVIDER": {
    "extension": "standard",
-   "value": "standard"
+   "value": "sodium"
   },
   "PASSWORD_BCRYPT": {
    "extension": "standard",

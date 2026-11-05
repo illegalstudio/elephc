@@ -19,3 +19,4 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+bcrypt = "0.17"

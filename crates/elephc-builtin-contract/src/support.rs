@@ -157,9 +157,12 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
     // Prelude-declared and name-resolver-rewritten functions exist in eval only where
     // Magician binds them: the whole `ext/curl` surface, the hash prelude, and the xml
     // prelude (whose eval homes forward to the compiled declarations through the
-    // native-function bridge). The rest (mysqli, PDO, sessions, image, date/calendar
-    // procedural families, and the core password provider) is an explicit, auditable
-    // absence rather than a missing binding.
+    // native-function bridge). The sodium mutators are native prelude functions, not
+    // registry bindings. The rest (mysqli, PDO, sessions, image, date/calendar procedural
+    // families, and the core password provider) is an explicit, auditable absence.
+    if NATIVE_EVAL_PRELUDE_SURFACES.contains(&contract.name) {
+        return BackendSupport::Implemented(BackendImplementation::Prelude);
+    }
     if matches!(
         contract.kind,
         BuiltinKind::PreludeProvided | BuiltinKind::NameResolverRewrite
@@ -172,14 +175,44 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 }
 
 /// Prelude-provided surfaces outside `ext/curl` that Magician binds with its own eval homes.
-const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] =
-    &["hash_copy", "hash_final", "hash_init", "hash_update", "token_get_all", "token_name", "zend_version", "finfo_open", "finfo_close", "finfo_set_flags", "finfo_file", "finfo_buffer", "mime_content_type"];
+/// Prelude-provided sodium mutators resolved by eval as native prelude functions.
+///
+/// They are not Magician registry bindings: eval calls the same synthetic PHP function the
+/// AOT program calls, so named and dynamic calls keep the shared by-reference machinery.
+const NATIVE_EVAL_PRELUDE_SURFACES: &[&str] = &[
+    "sodium_add",
+    "sodium_crypto_generichash_final",
+    "sodium_crypto_generichash_update",
+    "sodium_crypto_secretstream_xchacha20poly1305_pull",
+    "sodium_crypto_secretstream_xchacha20poly1305_push",
+    "sodium_crypto_secretstream_xchacha20poly1305_rekey",
+    "sodium_increment",
+    "sodium_memzero",
+];
+
+const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
+    "hash_copy",
+    "hash_final",
+    "hash_init",
+    "hash_update",
+    "token_get_all",
+    "token_name",
+    "zend_version",
+    "finfo_open",
+    "finfo_close",
+    "finfo_set_flags",
+    "finfo_file",
+    "finfo_buffer",
+    "mime_content_type",
+];
 
 /// Returns the documented execution route for an eval-supported contract.
 pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
     if !matches!(
         eval_support(contract),
-        BackendSupport::Implemented(BackendImplementation::Registry)
+        BackendSupport::Implemented(
+            BackendImplementation::Registry | BackendImplementation::Prelude
+        )
     ) {
         return None;
     }
@@ -341,6 +374,7 @@ mod tests {
     #[test]
     fn every_contract_has_a_backend_support_record() {
         let mut eval_registry = 0;
+        let mut eval_native_prelude = 0;
         let mut eval_internal = 0;
         let mut eval_pending = 0;
         let mut aot_registry = 0;
@@ -350,6 +384,9 @@ mod tests {
             match eval_support(contract) {
                 BackendSupport::Implemented(BackendImplementation::Registry) => {
                     eval_registry += 1;
+                }
+                BackendSupport::Implemented(BackendImplementation::Prelude) => {
+                    eval_native_prelude += 1;
                 }
                 BackendSupport::Unsupported(UnsupportedReason::InternalCompilerSurface) => {
                     eval_internal += 1;
@@ -379,7 +416,8 @@ mod tests {
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
-        assert_eq!(eval_registry, 865 + curl_surface);
+        assert_eq!(eval_registry, 857 + curl_surface);
+        assert_eq!(eval_native_prelude, 8);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -411,10 +449,10 @@ mod tests {
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
-        assert_eq!(aot_registry, 934);
+        assert_eq!(aot_registry, 926);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 429 + curl_surface);
+        assert_eq!(aot_external, 437 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.

@@ -384,6 +384,7 @@ var_dump(strlen(sodium_crypto_scalarmult_ristretto255_base(str_repeat("r", 32)))
 fn test_sodium_extension_funcs() {
     let out = compile_and_run(
         r#"<?php
+sodium_bin2hex('probe');
 $functions = get_extension_funcs('sodium');
 var_dump(is_array($functions));
 if (is_array($functions)) {
@@ -393,6 +394,84 @@ if (is_array($functions)) {
 "#,
     );
     assert_eq!(out, "bool(true)\n110\nbool(true)\nbool(true)\n");
+}
+
+/// State-typed mutators and special-shape length checks match php-src's diagnostics.
+#[test]
+fn test_sodium_state_and_length_errors() {
+    let out = compile_and_run(
+        r#"<?php
+$a = "a"; $b = "bb";
+try { sodium_add($a, $b); } catch (Throwable $e) { echo $e->getMessage(), "\n"; }
+$state = "abc"; try { sodium_crypto_generichash_update($state, "m"); } catch (Throwable $e) { echo $e->getMessage(), "\n"; }
+try { sodium_crypto_secretstream_xchacha20poly1305_init_push("short"); } catch (Throwable $e) { echo $e->getMessage(), "\n"; }
+try { sodium_crypto_kx_client_session_keys("short", str_repeat("k", 32)); } catch (Throwable $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "sodium_add(): Argument #1 ($string1) and argument #2 ($string_2) must have the same length\nincorrect state length\nsodium_crypto_secretstream_xchacha20poly1305_init_push(): Argument #1 ($key) must be SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES bytes long\nsodium_crypto_kx_client_session_keys(): Argument #1 ($client_key_pair) must be SODIUM_CRYPTO_KX_KEYPAIRBYTES bytes long\n"
+    );
+}
+
+/// Hex and base64 decoders reject trailing garbage and still honor ignored characters.
+#[test]
+fn test_sodium_decoders_require_full_consumption() {
+    let out = compile_and_run(
+        r#"<?php
+try { sodium_hex2bin("00zz"); echo "accepted\n"; } catch (SodiumException $e) { echo "rejected\n"; }
+try { sodium_base642bin("YWJjZA==junk", SODIUM_BASE64_VARIANT_ORIGINAL); echo "accepted\n"; } catch (SodiumException $e) { echo "rejected\n"; }
+var_dump(bin2hex(sodium_hex2bin("00 01", " ")));
+var_dump(bin2hex(sodium_base642bin("YWJj ZA==", SODIUM_BASE64_VARIANT_ORIGINAL, " ")));
+"#,
+    );
+    assert_eq!(out, "rejected\nrejected\nstring(4) \"0001\"\nstring(8) \"61626364\"\n");
+}
+
+/// By-reference sodium mutators write back through array elements and properties.
+#[test]
+fn test_sodium_mutators_write_non_local_lvalues() {
+    let out = compile_and_run(
+        r#"<?php
+$arr = ["\x00\x01"];
+sodium_increment($arr[0]);
+var_dump(bin2hex($arr[0]));
+$secret = ["secret"];
+sodium_memzero($secret[0]);
+var_dump($secret[0]);
+$state = [sodium_crypto_generichash_init(str_repeat("k", 32))];
+var_dump(strlen(sodium_crypto_generichash_final($state[0])));
+var_dump($state[0]);
+"#,
+    );
+    assert_eq!(out, "string(4) \"0101\"\nNULL\nint(32)\nNULL\n");
+}
+
+/// A sodium type error must not print the secret key or hidden helper arguments.
+#[test]
+fn test_sodium_type_error_backtrace_hides_arguments() {
+    let output = compile_and_run_capture_merged_with_sodium(
+        r#"<?php
+declare(strict_types=1);
+$key = "SUPER_SECRET_KEY_0123456789ABCDEF";
+sodium_crypto_shorthash(12, $key);
+"#,
+    );
+    assert!(output.stdout.contains("Fatal error: Uncaught TypeError"), "{}", output.stdout);
+    assert!(!output.stdout.contains("SUPER_SECRET_KEY"), "{}", output.stdout);
+    assert!(!output.stdout.contains("__elephc_sodium_"), "{}", output.stdout);
+}
+
+/// An unlinked program does not advertise ext/sodium through introspection.
+#[test]
+fn test_sodium_extension_funcs_requires_linked_surface() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(extension_loaded('sodium'));
+var_dump(get_extension_funcs('sodium'));
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(false)\n");
 }
 
 /// The core password provider's Argon2i/Argon2id surface built on the sodium bridge.
@@ -430,7 +509,7 @@ var_dump(password_needs_rehash($hash, 'not-an-algorithm'));
     assert_eq!(lines[7], "int(1)");
     assert_eq!(lines[8], "bool(true)");
     assert_eq!(lines[9], "bool(true)");
-    assert_eq!(lines[10], "string(8) \"standard\"");
+    assert_eq!(lines[10], "string(6) \"sodium\"");
     assert_eq!(lines[11], "string(9) \"$argon2i$\"");
     assert_eq!(lines[12], "bool(true)");
     assert_eq!(lines[13], "bool(false)");
@@ -465,4 +544,37 @@ eval('$key = str_repeat("k", 32); $init = sodium_crypto_secretstream_xchacha20po
     assert_eq!(lines[4], "NULL");
     assert_eq!(lines[5], "hi 0 52");
     assert_eq!(lines[6], "52");
+}
+
+/// The bcrypt/default provider and algorithm-aware rehash decisions.
+#[test]
+fn test_password_bcrypt_and_algorithm_selection() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(PASSWORD_BCRYPT_DEFAULT_COST);
+foreach ([PASSWORD_DEFAULT, PASSWORD_BCRYPT, 1, null] as $algo) {
+    $hash = password_hash('x', $algo, ['cost' => 4]);
+    var_dump(substr($hash, 0, 7), password_verify('x', $hash));
+}
+$argon = password_hash('x', PASSWORD_ARGON2ID, ['memory_cost' => 8191, 'time_cost' => 4]);
+var_dump(password_needs_rehash($argon, PASSWORD_ARGON2I, ['memory_cost' => 8191, 'time_cost' => 4]));
+var_dump(password_needs_rehash($argon, PASSWORD_DEFAULT, ['cost' => 4]));
+var_dump(password_needs_rehash($argon, 'not-an-algorithm'));
+$bcrypt = password_hash('x', PASSWORD_BCRYPT, ['cost' => 4]);
+var_dump(password_needs_rehash($bcrypt, PASSWORD_BCRYPT, ['cost' => 5]));
+var_dump(password_needs_rehash($bcrypt, PASSWORD_BCRYPT, ['cost' => 4]));
+"#,
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "int(12)");
+    for group in 0..4 {
+        let base = 1 + group * 2;
+        assert_eq!(lines[base], "string(7) \"$2y$04$\"");
+        assert_eq!(lines[base + 1], "bool(true)");
+    }
+    assert_eq!(lines[9], "bool(true)");
+    assert_eq!(lines[10], "bool(true)");
+    assert_eq!(lines[11], "bool(false)");
+    assert_eq!(lines[12], "bool(true)");
+    assert_eq!(lines[13], "bool(false)");
 }

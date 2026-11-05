@@ -33,18 +33,7 @@ pub(super) fn function_has_eval_metadata(function: &Function) -> bool {
             .any(|name| name.strip_prefix("sodium_") == Some(helper))
             || matches!(
                 helper,
-                "take_state"
-                    | "take_payload"
-                    | "pull_state"
-                    | "pull_result"
-                    | "eval_add"
-                    | "eval_increment"
-                    | "eval_memzero"
-                    | "eval_crypto_generichash_update"
-                    | "eval_crypto_generichash_final"
-                    | "eval_crypto_secretstream_xchacha20poly1305_push"
-                    | "eval_crypto_secretstream_xchacha20poly1305_pull"
-                    | "eval_crypto_secretstream_xchacha20poly1305_rekey"
+                "take_state" | "take_payload" | "pull_state" | "pull_result"
             );
     }
     !function.name.starts_with('_')

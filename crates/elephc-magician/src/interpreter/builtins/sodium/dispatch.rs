@@ -63,21 +63,6 @@ pub(in crate::interpreter) fn eval_sodium_values_result(
     finish_eval_argument_values(result, [strict], context, values)
 }
 
-/// Returns whether one sodium builtin writes its first argument back through a reference.
-fn sodium_mutator(name: &str) -> bool {
-    matches!(
-        name,
-        "sodium_add"
-            | "sodium_increment"
-            | "sodium_memzero"
-            | "sodium_crypto_generichash_update"
-            | "sodium_crypto_generichash_final"
-            | "sodium_crypto_secretstream_xchacha20poly1305_push"
-            | "sodium_crypto_secretstream_xchacha20poly1305_pull"
-            | "sodium_crypto_secretstream_xchacha20poly1305_rekey"
-    )
-}
-
 /// Evaluates a source-level `sodium_*` call through the shared builtin argument boundary.
 ///
 /// By-reference mutators are routed to hidden prelude wrappers whose parameters are
@@ -95,12 +80,5 @@ pub(in crate::interpreter) fn eval_builtin_sodium_expr_call(
         .cloned()
         .map(EvalCallArg::positional)
         .collect::<Vec<_>>();
-    if sodium_mutator(name) {
-        let wrapper = format!(
-            "__elephc_sodium_eval_{}",
-            name.strip_prefix("sodium_").unwrap_or(name)
-        );
-        return eval_call(&wrapper, &arguments, context, scope, values);
-    }
     eval_builtin_call(name, &arguments, context, scope, values)
 }

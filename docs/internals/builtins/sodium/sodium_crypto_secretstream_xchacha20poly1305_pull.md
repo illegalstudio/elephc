@@ -7,30 +7,22 @@ description: "Compiler internals for sodium_crypto_secretstream_xchacha20poly130
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/sodium/bindings.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/sodium/bindings.rs)
-- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
-- **Function symbol**: `lower_registry_call()`
+- **Signature**: [`crates/elephc-builtin-contract/src/catalog_sodium.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_sodium.rs)
+- **Lowering**: [`src/sodium_prelude/mutators.rs`](https://github.com/illegalstudio/elephc/blob/main/src/sodium_prelude/mutators.rs) (`sodium_crypto_secretstream_xchacha20poly1305_pull`)
+- **Function symbol**: `sodium_crypto_secretstream_xchacha20poly1305_pull()`
 
 
 ### Lowering notes
 
-- Uses the `eir_graph` strategy from the single-source builtin descriptor.
-- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
+- Implemented by the compiler-injected sodium prelude.
 
 ## Semantic descriptor
 
-- **Target strategy**: `eir_graph`
-- **Validation**: `shared`
-- **Result type source**: `shared`
-- **Result ownership**: `fresh`
-- **Effects**: `static (20 declared effects)`
-- **Requirements**: `static (1 requirements)`
-- **Callable policy**: `dynamic`
-- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
+Shared contract implemented by an injected elephc-PHP prelude.
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
+_Implemented by an injected elephc-PHP prelude._
 
 ## Signature summary
 
@@ -45,11 +37,7 @@ function sodium_crypto_secretstream_xchacha20poly1305_pull(string &$state, strin
 
 ## Eval interpreter (magician)
 
-- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs) (`eval_builtin!`)
-- **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `by-reference-or-lvalue`.
-- **Dispatch hooks**: `direct`, `values`
-- **By-reference parameters**: `$state`.
+Eval resolves the same native prelude declaration the AOT program calls ([`src/sodium_prelude/mutators.rs`](https://github.com/illegalstudio/elephc/blob/main/src/sodium_prelude/mutators.rs)); there is no separate `eval_builtin!` binding, so named and dynamic calls share the compiled by-reference call machinery.
 
 ## Cross-references
 

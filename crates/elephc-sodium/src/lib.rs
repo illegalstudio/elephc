@@ -5,7 +5,7 @@
 //! - Compiled PHP programs through the `extern "elephc_sodium"` block in
 //!   `src/sodium_prelude`, with the managed `libsodium` package supplying the
 //!   `crypto_*`/`sodium_*` symbols at final link time.
-//! - `cargo test -p elephc-sodium` when `ELEPHC_SODIUM_LIB_DIR` points at a built libsodium.
+//! - `cargo test -p elephc-sodium` when `ELEPHC_SODIUM_LIBSODIUM_LIB_DIR` points at a built libsodium.
 //!
 //! Key details:
 //! - PHP strings cross the C boundary as hexadecimal text, because Elephc's `char*`
@@ -148,8 +148,8 @@ pub unsafe extern "C" fn elephc_sodium_call(
     } else {
         CStr::from_ptr(name).to_string_lossy().into_owned()
     };
-    let arguments = [arg_bytes(a0), arg_bytes(a1), arg_bytes(a2), arg_bytes(a3)];
-    contained(|| {
+    let mut arguments = [arg_bytes(a0), arg_bytes(a1), arg_bytes(a2), arg_bytes(a3)];
+    let result = contained(|| {
         let slices = [
             arguments[0].as_slice(),
             arguments[1].as_slice(),
@@ -157,7 +157,18 @@ pub unsafe extern "C" fn elephc_sodium_call(
             arguments[3].as_slice(),
         ];
         ops::dispatch(&name, slices, [i0, i1, i2])
-    })
+    });
+    for argument in &mut arguments {
+        zeroize_bytes(argument);
+    }
+    result
+}
+
+/// Overwrites a temporary byte buffer with volatile zeroes.
+fn zeroize_bytes(bytes: &mut [u8]) {
+    for byte in bytes {
+        unsafe { std::ptr::write_volatile(byte, 0) };
+    }
 }
 
 /// Hashes a password with the selected Argon2 algorithm (1 = argon2i, 2 = argon2id).
@@ -171,8 +182,10 @@ pub unsafe extern "C" fn elephc_sodium_pwhash_str_alg(
     mem_limit: i64,
     algorithm: i64,
 ) -> *const c_char {
-    let password = arg_bytes(password);
-    contained(|| ops::pwhash_str_alg(&password, ops_limit, mem_limit, algorithm))
+    let mut password = arg_bytes(password);
+    let result = contained(|| ops::pwhash_str_alg(&password, ops_limit, mem_limit, algorithm));
+    zeroize_bytes(&mut password);
+    result
 }
 
 /// Derives a key with Argon2 through a dedicated six-register entry point.

@@ -40,6 +40,7 @@ env:
     -p elephc-bcmath
     -p elephc-gmp
     -p elephc-random
+    -p elephc-sodium
     -p elephc-mbstring
     -p elephc-iconv
     -p elephc-phar
@@ -313,6 +314,33 @@ jobs:
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh macos-aarch64)
           ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+
+      - name: Test the sodium bridge against managed libsodium
+        # crates/elephc-sodium/build.rs reads ELEPHC_SODIUM_LIBSODIUM_LIB_DIR, links libsodium.a
+        # into the crate's test binary and compiles the libsodium-calling unit tests in
+        # behind cfg(elephc_sodium_native).
+        run: |
+          set -e
+          sodium_lib_dir=$(sh scripts/ci/sodium_lib_dir.sh linux-aarch64)
+          ELEPHC_SODIUM_LIBSODIUM_LIB_DIR="$sodium_lib_dir" cargo test -p elephc-sodium
+
+      - name: Test the sodium bridge against managed libsodium
+        # crates/elephc-sodium/build.rs reads ELEPHC_SODIUM_LIBSODIUM_LIB_DIR, links libsodium.a
+        # into the crate's test binary and compiles the libsodium-calling unit tests in
+        # behind cfg(elephc_sodium_native).
+        run: |
+          set -e
+          sodium_lib_dir=$(sh scripts/ci/sodium_lib_dir.sh linux-x86_64)
+          ELEPHC_SODIUM_LIBSODIUM_LIB_DIR="$sodium_lib_dir" cargo test -p elephc-sodium
+
+      - name: Test the sodium bridge against managed libsodium
+        # crates/elephc-sodium/build.rs reads ELEPHC_SODIUM_LIBSODIUM_LIB_DIR, links libsodium.a
+        # into the crate's test binary and compiles the libsodium-calling unit tests in
+        # behind cfg(elephc_sodium_native).
+        run: |
+          set -e
+          sodium_lib_dir=$(sh scripts/ci/sodium_lib_dir.sh macos-aarch64)
+          ELEPHC_SODIUM_LIBSODIUM_LIB_DIR="$sodium_lib_dir" cargo test -p elephc-sodium
       - name: Materialize managed native libmagic
         run: |
           ./target/debug/elephc native install --locked \
@@ -1419,6 +1447,20 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/gmp/elephc.toml
+      - name: Cache managed native libsodium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: libsodium-native-macos-aarch64-${{ hashFiles('examples/sodium/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/sodium.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            libsodium-native-macos-aarch64-
+
+      - name: Materialize managed native libsodium
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/sodium/elephc.toml
+
       - name: Materialize managed native libmagic
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
@@ -1436,6 +1478,7 @@ jobs:
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_SODIUM_NATIVE: "1"
         run: |
           "$RUNNER_TEMP/cargo-nextest" nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -1542,6 +1585,20 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/gmp/elephc.toml
+      - name: Cache managed native libsodium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: libsodium-native-linux-x86_64-${{ hashFiles('examples/sodium/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/sodium.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            libsodium-native-linux-x86_64-
+
+      - name: Materialize managed native libsodium
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/sodium/elephc.toml
+
       - name: Materialize managed native libmagic
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
@@ -1559,6 +1616,7 @@ jobs:
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_SODIUM_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
@@ -1665,6 +1723,20 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/gmp/elephc.toml
+      - name: Cache managed native libsodium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: libsodium-native-linux-aarch64-${{ hashFiles('examples/sodium/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/sodium.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            libsodium-native-linux-aarch64-
+
+      - name: Materialize managed native libsodium
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/sodium/elephc.toml
+
       - name: Materialize managed native libmagic
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
@@ -1682,6 +1754,7 @@ jobs:
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
           ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE: "1"
+          ELEPHC_TEST_REQUIRE_SODIUM_NATIVE: "1"
         run: |
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \

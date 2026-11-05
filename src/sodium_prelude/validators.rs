@@ -30,6 +30,7 @@ pub(super) fn declarations() -> Vec<Stmt> {
         bool_result(),
         int_result(),
         warning(),
+        deprecated(),
     ]
 }
 
@@ -82,7 +83,7 @@ fn same_length() -> Stmt {
         .body(vec![throw_new(
             "SodiumException",
             concat(
-                concat(v("function"), s("(): Argument #1 ($string1) and argument #2 ($string2)")),
+                concat(v("function"), s("(): Argument #1 ($string1) and argument #2 ($string_2)")),
                 s(" must have the same length"),
             ),
         )])
@@ -128,7 +129,7 @@ fn string_parameter() -> Stmt {
                         bin(v("value"), BinOp::StrictEq, e_null()),
                         vec![
                             expr(call(
-                                "__elephc_sodium_warning",
+                                "__elephc_sodium_deprecated",
                                 vec![
                                     v("function"),
                                     concat_all(vec![
@@ -202,7 +203,7 @@ fn int_parameter() -> Stmt {
                         bin(v("value"), BinOp::StrictEq, e_null()),
                         vec![
                             expr(call(
-                                "__elephc_sodium_warning",
+                                "__elephc_sodium_deprecated",
                                 vec![
                                     v("function"),
                                     concat_all(vec![
@@ -345,22 +346,27 @@ fn int_result() -> Stmt {
         .build()
 }
 
-/// `__elephc_sodium_warning(string $function, string $message): void`.
+/// `__elephc_sodium_warning(string $message): void` — php-src's unprefixed `E_WARNING`.
 fn warning() -> Stmt {
     function("__elephc_sodium_warning")
+        .param("message", TypeExpr::Str)
+        .returns(TypeExpr::Void)
+        .body(vec![expr(call(
+            "__elephc_builtin_warning",
+            vec![v("message")],
+        ))])
+        .build()
+}
+
+/// `__elephc_sodium_deprecated(string $function, string $message): void`.
+fn deprecated() -> Stmt {
+    function("__elephc_sodium_deprecated")
         .param("function", TypeExpr::Str)
         .param("message", TypeExpr::Str)
         .returns(TypeExpr::Void)
         .body(vec![expr(call(
-            "trigger_error",
-            vec![
-                e_ternary(
-                    bin(v("function"), BinOp::StrictEq, s("__global__")),
-                    v("message"),
-                    concat_all(vec![v("function"), s("(): "), v("message")]),
-                ),
-                e_const("E_USER_WARNING"),
-            ],
+            "__elephc_builtin_deprecated",
+            vec![concat_all(vec![v("function"), s("(): "), v("message")])],
         ))])
         .build()
 }

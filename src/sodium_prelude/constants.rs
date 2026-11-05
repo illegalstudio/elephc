@@ -20,8 +20,9 @@ pub(super) fn declarations() -> Vec<Stmt> {
         s_const("PASSWORD_ARGON2_DEFAULT_MEMORY_COST", e_int(65536)),
         s_const("PASSWORD_ARGON2_DEFAULT_THREADS", e_int(1)),
         s_const("PASSWORD_ARGON2_DEFAULT_TIME_COST", e_int(4)),
-        s_const("PASSWORD_ARGON2_PROVIDER", e_str("standard")),
+        s_const("PASSWORD_ARGON2_PROVIDER", e_str("sodium")),
         s_const("PASSWORD_BCRYPT", e_str("2y")),
+        s_const("PASSWORD_BCRYPT_DEFAULT_COST", e_int(12)),
         s_const("PASSWORD_DEFAULT", e_str("2y")),
         s_const("SODIUM_BASE64_VARIANT_ORIGINAL", e_int(1)),
         s_const("SODIUM_BASE64_VARIANT_ORIGINAL_NO_PADDING", e_int(3)),
@@ -124,6 +125,8 @@ pub(super) fn declarations() -> Vec<Stmt> {
         s_const("SODIUM_CRYPTO_STREAM_XCHACHA20_NONCEBYTES", e_int(24)),
         s_const("SODIUM_LIBRARY_MAJOR_VERSION", e_int(26)),
         s_const("SODIUM_LIBRARY_MINOR_VERSION", e_int(4)),
+        // Pinned to the managed libsodium package; the native recipe and lock file carry
+        // the same version, so the constant cannot drift while the package does not.
         s_const("SODIUM_LIBRARY_VERSION", e_str("1.0.22")),
     ]
 }
@@ -136,10 +139,12 @@ mod tests {
     #[test]
     fn exposes_the_php_85_surface() {
         let declarations = declarations();
-        assert_eq!(declarations.len(), 102);
         let names: Vec<&str> = declarations.iter().filter_map(|statement| {
             match &statement.kind { crate::parser::ast::StmtKind::ConstDecl { name, .. } => Some(name.as_str()), _ => None }
         }).collect();
+        assert_eq!(names.iter().filter(|name| name.starts_with("SODIUM_")).count(), 102);
+        assert_eq!(names.iter().filter(|name| name.starts_with("PASSWORD_")).count(), 9);
+        assert_eq!(declarations.len(), 111);
         for expected in ["SODIUM_LIBRARY_VERSION", "SODIUM_CRYPTO_PWHASH_OPSLIMIT_INTERACTIVE", "SODIUM_CRYPTO_AEAD_AEGIS256_KEYBYTES"] {
             assert!(names.contains(&expected), "missing {expected}");
         }

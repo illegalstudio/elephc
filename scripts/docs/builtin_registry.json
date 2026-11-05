@@ -112693,12 +112693,10 @@
         },
         {
           "by_ref": false,
-          "default": {
-            "constant": "PASSWORD_DEFAULT"
-          },
+          "default": null,
           "name": "algo",
-          "optional": true,
-          "type": "string"
+          "optional": false,
+          "type": "string|int|null"
         },
         {
           "by_ref": false,
@@ -112708,7 +112706,7 @@
           "type": "array"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 2,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
@@ -112751,10 +112749,10 @@
         },
         {
           "by_ref": false,
-          "default": "PASSWORD_DEFAULT",
+          "default": null,
           "name": "algo",
-          "optional": true,
-          "type": "string"
+          "optional": false,
+          "type": "string|int|null"
         },
         {
           "by_ref": false,
@@ -112764,7 +112762,7 @@
           "type": "array"
         }
       ],
-      "return_type": "string|false",
+      "return_type": "string",
       "variadic": null
     },
     "since": null,
@@ -112787,7 +112785,7 @@
           "default": null,
           "name": "algo",
           "optional": false,
-          "type": "string"
+          "type": "string|int|null"
         },
         {
           "by_ref": false,
@@ -112843,7 +112841,7 @@
           "default": null,
           "name": "algo",
           "optional": false,
-          "type": "string"
+          "type": "string|int|null"
         },
         {
           "by_ref": false,
@@ -130262,7 +130260,7 @@
   },
   {
     "aot": {
-      "kind": "registry",
+      "kind": "prelude",
       "params": [
         {
           "by_ref": true,
@@ -130288,36 +130286,9 @@
     "canonical_name": "sodium_add",
     "description": "Adds two strings as little-endian integers.",
     "eval": {
-      "adapter_reason": "by-reference-or-lvalue",
-      "area": "sodium",
-      "execution": "interpreter-adapter",
-      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
-      "hooks": [
-        "direct",
-        "values"
-      ],
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": true,
-          "default": null,
-          "name": "string1",
-          "optional": false,
-          "type": "string"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "string2",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "required_param_count": 2,
-      "runtime_builtin_id": null,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
+      "home_file": "src/sodium_prelude/mutators.rs",
+      "kind": "native-prelude",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -130326,79 +130297,18 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
+      "codegen_file": "src/sodium_prelude/mutators.rs",
+      "codegen_function": "sodium_add",
       "notes": [
-        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+        "Implemented by the compiler-injected sodium prelude."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/sodium/bindings.rs"
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_sodium.rs"
     },
     "module": "sodium",
     "name": "sodium_add",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "dynamic"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "writes_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "refcount_op",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt",
-          "blocking_io",
-          "network_io"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_sodium"
-          }
-        ]
-      },
-      "result_type": "shared",
-      "runtime_functions": [],
-      "target_strategy": "eir_graph",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "shared"
-      }
-    },
+    "semantics": null,
     "sig": {
       "params": [
         {
@@ -138458,7 +138368,7 @@
   },
   {
     "aot": {
-      "kind": "registry",
+      "kind": "prelude",
       "params": [
         {
           "by_ref": true,
@@ -138484,36 +138394,9 @@
     "canonical_name": "sodium_crypto_generichash_final",
     "description": "Finalizes an incremental BLAKE2b hash state.",
     "eval": {
-      "adapter_reason": "by-reference-or-lvalue",
-      "area": "sodium",
-      "execution": "interpreter-adapter",
-      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
-      "hooks": [
-        "direct",
-        "values"
-      ],
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": true,
-          "default": null,
-          "name": "state",
-          "optional": false,
-          "type": "string"
-        },
-        {
-          "by_ref": false,
-          "default": "32",
-          "name": "length",
-          "optional": true,
-          "type": "int"
-        }
-      ],
-      "required_param_count": 1,
-      "runtime_builtin_id": null,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
+      "home_file": "src/sodium_prelude/mutators.rs",
+      "kind": "native-prelude",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -138522,79 +138405,18 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
+      "codegen_file": "src/sodium_prelude/mutators.rs",
+      "codegen_function": "sodium_crypto_generichash_final",
       "notes": [
-        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+        "Implemented by the compiler-injected sodium prelude."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/sodium/bindings.rs"
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_sodium.rs"
     },
     "module": "sodium",
     "name": "sodium_crypto_generichash_final",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "dynamic"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "writes_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "refcount_op",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt",
-          "blocking_io",
-          "network_io"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_sodium"
-          }
-        ]
-      },
-      "result_type": "shared",
-      "runtime_functions": [],
-      "target_strategy": "eir_graph",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "shared"
-      }
-    },
+    "semantics": null,
     "sig": {
       "params": [
         {
@@ -138902,7 +138724,7 @@
   },
   {
     "aot": {
-      "kind": "registry",
+      "kind": "prelude",
       "params": [
         {
           "by_ref": true,
@@ -138928,36 +138750,9 @@
     "canonical_name": "sodium_crypto_generichash_update",
     "description": "Updates an incremental BLAKE2b hash state.",
     "eval": {
-      "adapter_reason": "by-reference-or-lvalue",
-      "area": "sodium",
-      "execution": "interpreter-adapter",
-      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
-      "hooks": [
-        "direct",
-        "values"
-      ],
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": true,
-          "default": null,
-          "name": "state",
-          "optional": false,
-          "type": "string"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "message",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "required_param_count": 2,
-      "runtime_builtin_id": null,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
+      "home_file": "src/sodium_prelude/mutators.rs",
+      "kind": "native-prelude",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -138966,79 +138761,18 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
+      "codegen_file": "src/sodium_prelude/mutators.rs",
+      "codegen_function": "sodium_crypto_generichash_update",
       "notes": [
-        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+        "Implemented by the compiler-injected sodium prelude."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/sodium/bindings.rs"
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_sodium.rs"
     },
     "module": "sodium",
     "name": "sodium_crypto_generichash_update",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "dynamic"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "writes_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "refcount_op",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt",
-          "blocking_io",
-          "network_io"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_sodium"
-          }
-        ]
-      },
-      "result_type": "shared",
-      "runtime_functions": [],
-      "target_strategy": "eir_graph",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "shared"
-      }
-    },
+    "semantics": null,
     "sig": {
       "params": [
         {
@@ -143128,7 +142862,7 @@
   },
   {
     "aot": {
-      "kind": "registry",
+      "kind": "prelude",
       "params": [
         {
           "by_ref": true,
@@ -143161,43 +142895,9 @@
     "canonical_name": "sodium_crypto_secretstream_xchacha20poly1305_pull",
     "description": "Performs a secretstream operation.",
     "eval": {
-      "adapter_reason": "by-reference-or-lvalue",
-      "area": "sodium",
-      "execution": "interpreter-adapter",
-      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
-      "hooks": [
-        "direct",
-        "values"
-      ],
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": true,
-          "default": null,
-          "name": "state",
-          "optional": false,
-          "type": "string"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "ciphertext",
-          "optional": false,
-          "type": "string"
-        },
-        {
-          "by_ref": false,
-          "default": "\"\"",
-          "name": "additional_data",
-          "optional": true,
-          "type": "string"
-        }
-      ],
-      "required_param_count": 2,
-      "runtime_builtin_id": null,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
+      "home_file": "src/sodium_prelude/mutators.rs",
+      "kind": "native-prelude",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -143206,79 +142906,18 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
+      "codegen_file": "src/sodium_prelude/mutators.rs",
+      "codegen_function": "sodium_crypto_secretstream_xchacha20poly1305_pull",
       "notes": [
-        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+        "Implemented by the compiler-injected sodium prelude."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/sodium/bindings.rs"
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_sodium.rs"
     },
     "module": "sodium",
     "name": "sodium_crypto_secretstream_xchacha20poly1305_pull",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "dynamic"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "writes_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "refcount_op",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt",
-          "blocking_io",
-          "network_io"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_sodium"
-          }
-        ]
-      },
-      "result_type": "shared",
-      "runtime_functions": [],
-      "target_strategy": "eir_graph",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "shared"
-      }
-    },
+    "semantics": null,
     "sig": {
       "params": [
         {
@@ -143312,7 +142951,7 @@
   },
   {
     "aot": {
-      "kind": "registry",
+      "kind": "prelude",
       "params": [
         {
           "by_ref": true,
@@ -143352,50 +142991,9 @@
     "canonical_name": "sodium_crypto_secretstream_xchacha20poly1305_push",
     "description": "Performs a secretstream operation.",
     "eval": {
-      "adapter_reason": "by-reference-or-lvalue",
-      "area": "sodium",
-      "execution": "interpreter-adapter",
-      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
-      "hooks": [
-        "direct",
-        "values"
-      ],
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": true,
-          "default": null,
-          "name": "state",
-          "optional": false,
-          "type": "string"
-        },
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "message",
-          "optional": false,
-          "type": "string"
-        },
-        {
-          "by_ref": false,
-          "default": "\"\"",
-          "name": "additional_data",
-          "optional": true,
-          "type": "string"
-        },
-        {
-          "by_ref": false,
-          "default": "0",
-          "name": "tag",
-          "optional": true,
-          "type": "int"
-        }
-      ],
-      "required_param_count": 2,
-      "runtime_builtin_id": null,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
+      "home_file": "src/sodium_prelude/mutators.rs",
+      "kind": "native-prelude",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -143404,79 +143002,18 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
+      "codegen_file": "src/sodium_prelude/mutators.rs",
+      "codegen_function": "sodium_crypto_secretstream_xchacha20poly1305_push",
       "notes": [
-        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+        "Implemented by the compiler-injected sodium prelude."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/sodium/bindings.rs"
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_sodium.rs"
     },
     "module": "sodium",
     "name": "sodium_crypto_secretstream_xchacha20poly1305_push",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "dynamic"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "writes_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "refcount_op",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt",
-          "blocking_io",
-          "network_io"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_sodium"
-          }
-        ]
-      },
-      "result_type": "shared",
-      "runtime_functions": [],
-      "target_strategy": "eir_graph",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "shared"
-      }
-    },
+    "semantics": null,
     "sig": {
       "params": [
         {
@@ -143517,7 +143054,7 @@
   },
   {
     "aot": {
-      "kind": "registry",
+      "kind": "prelude",
       "params": [
         {
           "by_ref": true,
@@ -143536,29 +143073,9 @@
     "canonical_name": "sodium_crypto_secretstream_xchacha20poly1305_rekey",
     "description": "Performs a secretstream operation.",
     "eval": {
-      "adapter_reason": "by-reference-or-lvalue",
-      "area": "sodium",
-      "execution": "interpreter-adapter",
-      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
-      "hooks": [
-        "direct",
-        "values"
-      ],
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": true,
-          "default": null,
-          "name": "state",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "required_param_count": 1,
-      "runtime_builtin_id": null,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
+      "home_file": "src/sodium_prelude/mutators.rs",
+      "kind": "native-prelude",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -143567,79 +143084,18 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
+      "codegen_file": "src/sodium_prelude/mutators.rs",
+      "codegen_function": "sodium_crypto_secretstream_xchacha20poly1305_rekey",
       "notes": [
-        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+        "Implemented by the compiler-injected sodium prelude."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/sodium/bindings.rs"
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_sodium.rs"
     },
     "module": "sodium",
     "name": "sodium_crypto_secretstream_xchacha20poly1305_rekey",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "dynamic"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "writes_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "refcount_op",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt",
-          "blocking_io",
-          "network_io"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_sodium"
-          }
-        ]
-      },
-      "result_type": "shared",
-      "runtime_functions": [],
-      "target_strategy": "eir_graph",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "shared"
-      }
-    },
+    "semantics": null,
     "sig": {
       "params": [
         {
@@ -147086,7 +146542,7 @@
   },
   {
     "aot": {
-      "kind": "registry",
+      "kind": "prelude",
       "params": [
         {
           "by_ref": true,
@@ -147105,29 +146561,9 @@
     "canonical_name": "sodium_increment",
     "description": "Increments a little-endian integer string.",
     "eval": {
-      "adapter_reason": "by-reference-or-lvalue",
-      "area": "sodium",
-      "execution": "interpreter-adapter",
-      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
-      "hooks": [
-        "direct",
-        "values"
-      ],
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": true,
-          "default": null,
-          "name": "string",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "required_param_count": 1,
-      "runtime_builtin_id": null,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
+      "home_file": "src/sodium_prelude/mutators.rs",
+      "kind": "native-prelude",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -147136,79 +146572,18 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
+      "codegen_file": "src/sodium_prelude/mutators.rs",
+      "codegen_function": "sodium_increment",
       "notes": [
-        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+        "Implemented by the compiler-injected sodium prelude."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/sodium/bindings.rs"
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_sodium.rs"
     },
     "module": "sodium",
     "name": "sodium_increment",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "dynamic"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "writes_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "refcount_op",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt",
-          "blocking_io",
-          "network_io"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_sodium"
-          }
-        ]
-      },
-      "result_type": "shared",
-      "runtime_functions": [],
-      "target_strategy": "eir_graph",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "shared"
-      }
-    },
+    "semantics": null,
     "sig": {
       "params": [
         {
@@ -147391,7 +146766,7 @@
   },
   {
     "aot": {
-      "kind": "registry",
+      "kind": "prelude",
       "params": [
         {
           "by_ref": true,
@@ -147410,29 +146785,9 @@
     "canonical_name": "sodium_memzero",
     "description": "Overwrites a string with zero bytes.",
     "eval": {
-      "adapter_reason": "by-reference-or-lvalue",
-      "area": "sodium",
-      "execution": "interpreter-adapter",
-      "home_file": "crates/elephc-magician/src/interpreter/builtins/sodium/mod.rs",
-      "hooks": [
-        "direct",
-        "values"
-      ],
-      "kind": "registry",
-      "params": [
-        {
-          "by_ref": true,
-          "default": null,
-          "name": "string",
-          "optional": false,
-          "type": "string"
-        }
-      ],
-      "required_param_count": 1,
-      "runtime_builtin_id": null,
-      "signature_override_reason": null,
-      "supported": true,
-      "variadic": null
+      "home_file": "src/sodium_prelude/mutators.rs",
+      "kind": "native-prelude",
+      "supported": true
     },
     "eval_only": false,
     "examples": [],
@@ -147441,79 +146796,18 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/builtins/semantics.rs",
-      "codegen_function": "lower_registry_call",
+      "codegen_file": "src/sodium_prelude/mutators.rs",
+      "codegen_function": "sodium_memzero",
       "notes": [
-        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+        "Implemented by the compiler-injected sodium prelude."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/sodium/bindings.rs"
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_sodium.rs"
     },
     "module": "sodium",
     "name": "sodium_memzero",
-    "semantics": {
-      "argument_lowering": "standard",
-      "callable": {
-        "kind": "dynamic"
-      },
-      "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "writes_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "refcount_op",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt",
-          "blocking_io",
-          "network_io"
-        ]
-      },
-      "lowering": {
-        "kind": "eir"
-      },
-      "ownership": {
-        "argument_indexes": [],
-        "kind": "fresh"
-      },
-      "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_sodium"
-          }
-        ]
-      },
-      "result_type": "shared",
-      "runtime_functions": [],
-      "target_strategy": "eir_graph",
-      "target_support": [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64"
-      ],
-      "target_support_kind": "all",
-      "validation": {
-        "kind": "shared"
-      }
-    },
+    "semantics": null,
     "sig": {
       "params": [
         {

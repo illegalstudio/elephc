@@ -11,11 +11,6 @@
 //!   function requires only its catalog entry and its prelude helper spec.
 
 builtin! {
-    contract: "sodium_add",
-    semantics: crate::builtins::sodium::sodium_semantics(),
-}
-
-builtin! {
     contract: "sodium_base642bin",
     semantics: crate::builtins::sodium::sodium_semantics(),
 }
@@ -266,22 +261,12 @@ builtin! {
 }
 
 builtin! {
-    contract: "sodium_crypto_generichash_final",
-    semantics: crate::builtins::sodium::sodium_semantics(),
-}
-
-builtin! {
     contract: "sodium_crypto_generichash_init",
     semantics: crate::builtins::sodium::sodium_semantics(),
 }
 
 builtin! {
     contract: "sodium_crypto_generichash_keygen",
-    semantics: crate::builtins::sodium::sodium_semantics(),
-}
-
-builtin! {
-    contract: "sodium_crypto_generichash_update",
     semantics: crate::builtins::sodium::sodium_semantics(),
 }
 
@@ -411,21 +396,6 @@ builtin! {
 }
 
 builtin! {
-    contract: "sodium_crypto_secretstream_xchacha20poly1305_pull",
-    semantics: crate::builtins::sodium::sodium_semantics(),
-}
-
-builtin! {
-    contract: "sodium_crypto_secretstream_xchacha20poly1305_push",
-    semantics: crate::builtins::sodium::sodium_semantics(),
-}
-
-builtin! {
-    contract: "sodium_crypto_secretstream_xchacha20poly1305_rekey",
-    semantics: crate::builtins::sodium::sodium_semantics(),
-}
-
-builtin! {
     contract: "sodium_crypto_shorthash",
     semantics: crate::builtins::sodium::sodium_semantics(),
 }
@@ -536,17 +506,7 @@ builtin! {
 }
 
 builtin! {
-    contract: "sodium_increment",
-    semantics: crate::builtins::sodium::sodium_semantics(),
-}
-
-builtin! {
     contract: "sodium_memcmp",
-    semantics: crate::builtins::sodium::sodium_semantics(),
-}
-
-builtin! {
-    contract: "sodium_memzero",
     semantics: crate::builtins::sodium::sodium_semantics(),
 }
 

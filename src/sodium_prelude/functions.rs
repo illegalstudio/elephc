@@ -42,8 +42,31 @@ fn build(spec: &Spec) -> Stmt {
         // php-src's increment/add/memzero read the first argument as an lvalue and reject a
         // non-string with `SodiumException`, not by coercing it through a `string` parameter.
         if index == 0
-            && matches!(spec.shape, Shape::Add | Shape::Increment | Shape::Memzero)
+            && matches!(
+                spec.shape,
+                Shape::Add
+                    | Shape::Increment
+                    | Shape::Memzero
+                    | Shape::GenerichashUpdate
+                    | Shape::GenerichashFinal
+                    | Shape::SecretstreamPush
+                    | Shape::SecretstreamPull
+                    | Shape::SecretstreamRekey
+            )
         {
+            // Mutating shapes validate the caller's zval in `string_lvalue_check`/`state_checks`
+            // instead of coercing it through a declared string parameter. Keep the raw value
+            // available to the shape body under its ordinary local name.
+            if matches!(
+                spec.shape,
+                Shape::GenerichashUpdate
+                    | Shape::GenerichashFinal
+                    | Shape::SecretstreamPush
+                    | Shape::SecretstreamPull
+                    | Shape::SecretstreamRekey
+            ) {
+                body.push(assign(&local(index), v(param.name)));
+            }
             continue;
         }
         body.push(assign(&local(index), coerce(param, index)));
@@ -552,6 +575,22 @@ fn generichash_final_body(spec: &Spec) -> Vec<Stmt> {
     body
 }
 
+/// Emits php-src's non-string state diagnostic for secretstream state parameters.
+fn state_lvalue_check() -> Stmt {
+    if_then(
+        not(call("is_string", vec![v(&local(0))])),
+        vec![expr(call(
+            "__elephc_sodium_arg_error",
+            vec![
+                v("_function"),
+                i(1),
+                s("state"),
+                s("must be a reference to a state"),
+            ],
+        ))],
+    )
+}
+
 /// Emits the shared incremental-state type and length check.
 fn state_checks(message: &str) -> Vec<Stmt> {
     vec![
@@ -576,7 +615,8 @@ fn state_checks(message: &str) -> Vec<Stmt> {
 
 /// Builds key-exchange session keys.
 fn kx_session_keys_body(spec: &Spec) -> Vec<Stmt> {
-    vec![
+    let mut body = length_checks(spec);
+    body.extend([
         packet_statement(spec),
         assign(
             "_keys",
@@ -589,7 +629,8 @@ fn kx_session_keys_body(spec: &Spec) -> Vec<Stmt> {
             call("substr", vec![v("_keys"), i(0), i(32)]),
             call("substr", vec![v("_keys"), i(32), i(32)]),
         ])),
-    ]
+    ]);
+    body
 }
 
 /// Builds `sodium_crypto_pwhash`.
@@ -886,7 +927,7 @@ fn scrypt_str_verify_body(spec: &Spec) -> Vec<Stmt> {
             vec![
                 expr(call(
                     "__elephc_sodium_warning",
-                    vec![v("_function"), s("wrong size for the hashed password")],
+                    vec![s("wrong size for the hashed password")],
                 )),
                 ret(e_bool(false)),
             ],
@@ -902,14 +943,15 @@ fn empty_password_warning(index: usize) -> Stmt {
         bin(call("strlen", vec![v(&local(index))]), BinOp::StrictEq, i(0)),
         vec![expr(call(
             "__elephc_sodium_warning",
-            vec![v("_function"), s("empty password")],
+            vec![s("empty password")],
         ))],
     )
 }
 
 /// Builds `sodium_crypto_secretstream_xchacha20poly1305_init_push`.
 fn secretstream_init_push_body(spec: &Spec) -> Vec<Stmt> {
-    vec![
+    let mut body = length_checks(spec);
+    body.extend([
         packet_statement(spec),
         assign(
             "_raw",
@@ -922,12 +964,14 @@ fn secretstream_init_push_body(spec: &Spec) -> Vec<Stmt> {
             call("substr", vec![v("_raw"), i(0), i(52)]),
             call("substr", vec![v("_raw"), i(52), i(24)]),
         ])),
-    ]
+    ]);
+    body
 }
 
 /// Builds the secretstream push helper, which returns `state || ciphertext`.
 fn secretstream_push_body(spec: &Spec) -> Vec<Stmt> {
     vec![
+        state_lvalue_check(),
         if_then(
             bin(call("strlen", vec![v(&local(0))]), BinOp::StrictNotEq, i(52)),
             vec![expr(call(
@@ -970,6 +1014,7 @@ fn secretstream_push_body(spec: &Spec) -> Vec<Stmt> {
 /// Builds the secretstream pull helper, which returns `state || plaintext || tag` or false.
 fn secretstream_pull_body(spec: &Spec) -> Vec<Stmt> {
     vec![
+        state_lvalue_check(),
         if_then(
             bin(call("strlen", vec![v(&local(0))]), BinOp::StrictNotEq, i(52)),
             vec![throw_new("SodiumException", s("incorrect state length"))],
@@ -985,6 +1030,7 @@ fn secretstream_pull_body(spec: &Spec) -> Vec<Stmt> {
 /// Builds the secretstream rekey helper, which returns the advanced state.
 fn secretstream_rekey_body(spec: &Spec) -> Vec<Stmt> {
     vec![
+        state_lvalue_check(),
         if_then(
             bin(call("strlen", vec![v(&local(0))]), BinOp::StrictNotEq, i(52)),
             vec![throw_new("SodiumException", s("incorrect state length"))],

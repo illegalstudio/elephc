@@ -72,6 +72,8 @@ pub struct RuntimeFeatures {
     /// this bit keeps the address-of reference resolvable without pulling the body
     /// into non-PDO programs.
     pub pdo_udf: bool,
+    /// True when the program links the ext/sodium prelude and needs its zeroization helper.
+    pub sodium: bool,
     /// True when the program registers the builtin `Fiber` class, and therefore when a Fiber
     /// object can exist to be collected.
     ///
@@ -144,6 +146,7 @@ impl RuntimeFeatures {
             | ((self.object_clone as u64) << 13)
             | ((self.mbregex as u64) << 14)
             | ((self.mbstring_mime as u64) << 15)
+            | ((self.sodium as u64) << 16)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -154,6 +157,7 @@ impl RuntimeFeatures {
             mbregex: false,
             mbstring_mime: false,
             phar_archive: false,
+            sodium: false,
             descriptor_invoker: false,
             eval_bridge: false,
             eval_scope: false,
@@ -177,6 +181,7 @@ impl RuntimeFeatures {
             mbregex: true,
             mbstring_mime: true,
             phar_archive: true,
+            sodium: true,
             descriptor_invoker: true,
             eval_bridge: true,
             eval_scope: true,

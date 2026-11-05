@@ -812,8 +812,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`curl_version()`](./builtins/network/curl_version.md) | `(): mixed` | `mixed` | ✓ | ✓ |
 | [`password_algos()`](./builtins/password/password_algos.md) | `(): array` | `array` | ✓ | - |
 | [`password_get_info()`](./builtins/password/password_get_info.md) | `(string $hash): array` | `array` | ✓ | - |
-| [`password_hash()`](./builtins/password/password_hash.md) | `(string $password, string $algo = PASSWORD_DEFAULT, array $options = []): string|false` | `string|false` | ✓ | - |
-| [`password_needs_rehash()`](./builtins/password/password_needs_rehash.md) | `(string $hash, string $algo, array $options = []): bool` | `bool` | ✓ | - |
+| [`password_hash()`](./builtins/password/password_hash.md) | `(string $password, string|int|null $algo, array $options = []): string` | `string` | ✓ | - |
+| [`password_needs_rehash()`](./builtins/password/password_needs_rehash.md) | `(string $hash, string|int|null $algo, array $options = []): bool` | `bool` | ✓ | - |
 | [`password_verify()`](./builtins/password/password_verify.md) | `(string $password, string $hash): bool` | `bool` | ✓ | - |
 | [`buffer_new()`](./builtins/pointer/buffer_new.md) | `(int $length): mixed` | `mixed` | ✓ | ✓ |
 | [`ptr()`](./builtins/pointer/ptr.md) | `(mixed $value): pointer` | `pointer` | ✓ | ✓ |
