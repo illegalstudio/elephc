@@ -161,6 +161,63 @@ echo bindEither(make('Target'), null, 'Target')(new Target), "\n";
     assert_eq!(out, "5\naddr\n5\n");
 }
 
+/// `stream_socket_server()` writes its two outputs, as symfony's `DumpServer` reads them.
+#[test]
+fn test_stream_socket_server_writes_its_error_outputs() {
+    let out = compile_and_run(
+        r#"<?php
+$errno = 99;
+$errstr = 'unset';
+$server = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+echo get_debug_type($server), ' ', $errno, ' [', $errstr, "]\n";
+"#,
+    );
+    assert_eq!(out, "resource (stream) 0 []\n");
+}
+
+/// Each clause of a `for` can define what the other reads.
+#[test]
+fn test_for_update_and_body_may_define_each_others_variables() {
+    let out = compile_and_run(
+        r#"<?php
+for ($written = 0, $i = 0; $written < 6; $written += $bytes) { $bytes = 2; $i++; }
+echo $written, ' ', $i, "\n";
+for ($i = 0; $i < 2; $i++, $last = $i) { echo isset($last) ? 'set' : 'unset', "\n"; }
+"#,
+    );
+    assert_eq!(out, "6 3\nunset\nset\n");
+}
+
+/// A nullable argument the caller tested is php's run-time check, not a refusal: symfony's
+/// `HttplugWaitLoop` hands its `?SplObjectStorage` to an `iterable` parameter.
+#[test]
+fn test_a_nullable_argument_reaches_a_wider_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function stream_like(iterable|int $r): int { return is_int($r) ? 1 : 2; }
+function pool(?SplObjectStorage $p): int { if (!$p) { return 0; } return stream_like($p); }
+echo pool(new SplObjectStorage), pool(null), "\n";
+"#,
+    );
+    assert_eq!(out, "20\n");
+}
+
+/// A generator declared by reference still returns its generator object.
+#[test]
+fn test_a_by_reference_generator_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag implements IteratorAggregate {
+    public array $items = [1, 2];
+    public function &getIterator(): Iterator { foreach ($this->items as $k => $v) { yield $k => $v; } }
+}
+foreach (new Bag as $k => $v) { echo $k, $v, ' '; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "01 12 \n");
+}
+
 /// A closure bound to no scope reaches `self::` only as php's run-time `Error`.
 #[test]
 fn test_a_closure_copy_without_a_scope_still_compiles() {

@@ -227,7 +227,7 @@ pub(crate) fn lower_user_function(
     );
     function.params = function_params(&eir_signature);
     function.flags.is_internal = is_internal;
-    function.flags.by_ref_return = signature.by_ref_return;
+    function.flags.by_ref_return = signature.by_ref_return && !signature.is_generator;
     function.source_signature = Some(source_signature(name, &eir_signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
     function.source_defaults = params.iter().map(|(_, _, default, _)| default.clone()).collect();
@@ -338,7 +338,7 @@ pub(crate) fn lower_class_method(
     function.flags = FunctionFlags {
         is_method: true,
         is_static,
-        by_ref_return: signature.by_ref_return,
+        by_ref_return: signature.by_ref_return && !signature.is_generator,
         ..FunctionFlags::default()
     };
     function.source_signature = Some(source_signature(&name, &signature));
@@ -1797,7 +1797,7 @@ fn lower_closure_function_with_signature(
         is_closure: true,
         is_synthetic: function.callable_default.is_some(),
         is_static,
-        by_ref_return: signature.by_ref_return,
+        by_ref_return: signature.by_ref_return && !signature.is_generator,
         ..FunctionFlags::default()
     };
     function.params = function_params(&signature);

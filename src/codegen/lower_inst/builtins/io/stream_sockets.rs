@@ -14,7 +14,7 @@ pub(crate) fn lower_stream_socket_server(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, "stream_socket_server", 1)?;
+    ensure_arg_count_between(inst, "stream_socket_server", 1, 5)?;
     let address = expect_operand(inst, 0)?;
     load_string_to_result(ctx, address, "stream_socket_server address")?;
     match ctx.emitter.target.arch {
@@ -28,6 +28,7 @@ pub(crate) fn lower_stream_socket_server(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_socket_server");
+    store_socket_error_outputs(ctx, inst, 1, 2)?;
     box_stream_fd_or_false_result(ctx, "stream_socket_server");
     store_if_result(ctx, inst)
 }

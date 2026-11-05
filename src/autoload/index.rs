@@ -108,30 +108,22 @@ impl AutoloadIndex {
         self.fqn_to_path.get(key).map(PathBuf::as_path)
     }
 
-    /// Every indexed class under the root manifest's own `autoload` PSR-4 directories, sorted.
+    /// Every class production code can load, sorted: the project's and its dependencies'.
     ///
-    /// Its `src/`, then: neither its dependencies nor `autoload-dev`, whose test classes bootstrap
-    /// by requiring `vendor/autoload.php` and belong to another program.
-    pub fn project_classes(&self, project_root: &Path) -> Vec<String> {
-        let manifest = std::fs::read_to_string(project_root.join("composer.json")).unwrap_or_default();
-        let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap_or_default();
-        let directories: Vec<PathBuf> = manifest["autoload"]["psr-4"]
-            .as_object()
-            .into_iter()
-            .flat_map(|prefixes| prefixes.values())
-            .flat_map(|value| match value {
-                serde_json::Value::Array(paths) => paths.clone(),
-                other => vec![other.clone()],
-            })
-            .filter_map(|value| value.as_str().map(|path| project_root.join(path)))
-            .map(|path| path.canonicalize().unwrap_or(path))
-            .collect();
+    /// Left out are `autoload-dev`, whose test classes bootstrap by requiring `vendor/autoload.php`
+    /// and belong to another program, the packages composer installed for development, and files
+    /// that do not declare the class their path names: the index maps every `.php` file of a PSR-4
+    /// directory, `Resources/bin/*.php` scripts included.
+    pub fn production_classes(&self, project_root: &Path) -> Vec<String> {
+        let mut excluded = manifest_dev_directories(project_root);
+        excluded.extend(dev_package_directories(project_root));
         let mut classes: Vec<String> = self
             .fqn_to_path
             .iter()
-            .filter(|(_, path)| {
+            .filter(|(name, path)| {
                 let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-                directories.iter().any(|directory| path.starts_with(directory))
+                !excluded.iter().any(|directory| path.starts_with(directory))
+                    && file_declares_class(&path, name)
             })
             .map(|(name, _)| name.clone())
             .collect();
@@ -148,6 +140,54 @@ impl AutoloadIndex {
     pub fn files(&self) -> &[PathBuf] {
         &self.files_to_include
     }
+}
+
+/// The root manifest's `autoload-dev` PSR-4 directories.
+fn manifest_dev_directories(project_root: &Path) -> Vec<PathBuf> {
+    let manifest = std::fs::read_to_string(project_root.join("composer.json")).unwrap_or_default();
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap_or_default();
+    manifest["autoload-dev"]["psr-4"]
+        .as_object()
+        .into_iter()
+        .flat_map(|prefixes| prefixes.values())
+        .flat_map(|value| match value {
+            serde_json::Value::Array(paths) => paths.clone(),
+            other => vec![other.clone()],
+        })
+        .filter_map(|value| value.as_str().map(|path| project_root.join(path)))
+        .map(|path| path.canonicalize().unwrap_or(path))
+        .collect()
+}
+
+/// The directories of the packages `vendor/composer/installed.json` lists for development.
+fn dev_package_directories(project_root: &Path) -> Vec<PathBuf> {
+    let installed = project_root.join("vendor/composer/installed.json");
+    let installed = std::fs::read_to_string(installed).unwrap_or_default();
+    let installed: serde_json::Value = serde_json::from_str(&installed).unwrap_or_default();
+    installed["dev-package-names"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|name| name.as_str())
+        .map(|name| project_root.join("vendor").join(name))
+        .map(|path| path.canonicalize().unwrap_or(path))
+        .collect()
+}
+
+/// Whether the source of `path` spells the declaration of the class `name` ends with.
+fn file_declares_class(path: &Path, name: &str) -> bool {
+    let short = name.rsplit('\\').next().unwrap_or(name);
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let source = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
+    let short = short.to_ascii_lowercase();
+    ["class", "interface", "trait", "enum"].iter().any(|kind| {
+        source.match_indices(&format!("{kind} {short}")).any(|(at, matched)| {
+            let next = source[at + matched.len()..].chars().next();
+            !next.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+    })
 }
 
 /// Reads the `name` of the package declared by the JSON manifest at `path`, if any.

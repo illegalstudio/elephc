@@ -822,8 +822,14 @@ impl Checker {
         // Carbon's `setTimezone(static::safeCreateDateTimeZone(...))` passes `?CarbonTimeZone` to
         // `DateTimeZone|string|int`, where `null` is the coercion `types_compatible` admits and
         // `CarbonTimeZone` the subclass only `type_accepts` knows; neither rule took both.
+        // php tests a nullable argument when the call runs, so a union whose only unaccepted
+        // member is null stays a run-time TypeError: symfony's `HttplugWaitLoop` hands a
+        // `?SplObjectStorage` it tested just before to `iterable`.
+        let member_may_pass = |member: &PhpType| *member == PhpType::Void || member_accepted(member);
         if member_accepted(actual)
-            || matches!(actual, PhpType::Union(members) if members.iter().all(|member| member_accepted(member)))
+            || matches!(actual, PhpType::Union(members)
+                if members.iter().any(|member| member_accepted(member))
+                    && members.iter().all(member_may_pass))
         {
             Ok(())
         } else {

@@ -732,6 +732,67 @@ foreach (['routes', 'dbal'] as $name) {
     assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
 }
 
+/// A framework reaches a dependency's classes by listing its directory, as symfony's `FileLoader`
+/// does when `debug:container` rebuilds the container: every production class is compiled. Scripts
+/// of a package are not classes, and a package installed for development stays out.
+#[test]
+fn closed_world_compiles_every_production_class_of_the_dependencies() {
+    let dir = make_test_dir("cw_vendor_roots");
+    fs::create_dir_all(dir.join("vendor/acme/lib/src/bin")).unwrap();
+    fs::create_dir_all(dir.join("vendor/acme/devtool/src")).unwrap();
+    fs::create_dir_all(dir.join("vendor/composer")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\\\":"src/"}}}"#).unwrap();
+    fs::write(
+        dir.join("vendor/composer/installed.json"),
+        r#"{"packages":[
+{"name":"acme/lib","autoload":{"psr-4":{"Acme\\Lib\\":"src/"}},"install-path":"../acme/lib"},
+{"name":"acme/devtool","autoload":{"psr-4":{"Acme\\Dev\\":"src/"}},"install-path":"../acme/devtool"}
+],"dev-package-names":["acme/devtool"]}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/acme/lib/composer.json"),
+        r#"{"name":"acme/lib","autoload":{"psr-4":{"Acme\\Lib\\":"src/"}}}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/acme/devtool/composer.json"),
+        r#"{"name":"acme/devtool","autoload":{"psr-4":{"Acme\\Dev\\":"src/"}}}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/acme/lib/src/Listed.php"),
+        "<?php\nnamespace Acme\\Lib;\nclass Listed { public function hi(): string { return 'listed'; } }\n",
+    )
+    .unwrap();
+    // A script whose require fails: compiling it as a class would stop the build.
+    fs::write(
+        dir.join("vendor/acme/lib/src/bin/tool.php"),
+        "<?php\nrequire __DIR__ . '/no-such-file.php';\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/acme/devtool/src/Dev.php"),
+        "<?php\nnamespace Acme\\Dev;\nclass Dev { public function hi(): int { return strlen(1, 2, 3); } }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+spl_autoload_register(function (string $class): void {
+    $file = __DIR__ . '/vendor/acme/lib/src/' . substr($class, strlen('Acme\Lib\\')) . '.php';
+    if (is_file($file)) { require $file; }
+});
+$name = 'Acme\Lib\\' . ($argc > 5 ? 'Other' : 'Listed');
+echo (new $name)->hi(), "\n";
+"#,
+    )
+    .unwrap();
+    let output = compile(&dir, &["--closed-world"]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), "listed\n");
+}
+
 /// A builtin without a run-time wrapper stays reachable by the name a string holds: twig registers
 /// `'json_encode'` as a filter and `ReflectionCallable` turns the name into a closure.
 #[test]

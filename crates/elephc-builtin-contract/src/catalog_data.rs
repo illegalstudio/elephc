@@ -34058,6 +34058,32 @@ echo memory_get_peak_usage();
                 default: None,
                 by_ref: false,
             },
+            // php's out-parameters, as for `stream_socket_client`.
+            ParamSpec {
+                name: "error_code",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::Null),
+                by_ref: true,
+            },
+            ParamSpec {
+                name: "error_message",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::Null),
+                by_ref: true,
+            },
+            // `STREAM_SERVER_BIND | STREAM_SERVER_LISTEN`, spelled as its value.
+            ParamSpec {
+                name: "flags",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(12)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "context",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
         ],
         variadic: None,
         min_args: None,

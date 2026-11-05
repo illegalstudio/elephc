@@ -79,10 +79,14 @@ impl Checker {
             PhpType::Object(class_name) => {
                 if self.object_type_implements_interface(class_name, "ArrayAccess") {
                     Ok(self.array_access_offset_get_type(class_name))
-                } else if self.object_type_may_gain_array_access(class_name) {
+                } else if self.object_type_may_gain_array_access(class_name)
+                    || crate::closed_world::is_enabled()
+                {
                     // The static type (a contract, a non-final base) does not say whether the
                     // object behind it is indexable; lowering reads it through the same boxed
-                    // run-time dispatch a `mixed` receiver uses.
+                    // run-time dispatch a `mixed` receiver uses. A closed world also holds code
+                    // over a dependency that is not installed (flex's `Downloader` over Composer),
+                    // whose types are guesses from same-named methods.
                     Ok(PhpType::Mixed)
                 } else {
                     Err(CompileError::new(expr.span, "Cannot index non-array"))

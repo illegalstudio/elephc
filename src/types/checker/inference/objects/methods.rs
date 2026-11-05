@@ -982,7 +982,9 @@ impl Checker {
             let rebindable_this = self.closure_depth > 0
                 && Self::method_call_receiver_expr(expr)
                     .is_some_and(|receiver| matches!(receiver.kind, ExprKind::This));
-            if !guarded && !defers_to_runtime && !rebindable_this {
+            // A closed world has nowhere to hand the file to: the call is php's run-time `Error`.
+            let closed_world = crate::closed_world::is_enabled();
+            if !guarded && !defers_to_runtime && !rebindable_this && !closed_world {
                 // php binds the method when the call RUNS, against the run-time class; see
                 // `RuntimeFault::UndefinedMethod` for who may compile this as that fault.
                 return Err(CompileError::new(

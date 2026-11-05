@@ -113,7 +113,8 @@ pub(crate) fn build_method_sig(
         defaults,
         return_type,
         declared_return: method.return_type.is_some(),
-        by_ref_return: method.by_ref_return,
+        by_ref_return: method.by_ref_return
+            && !crate::types::checker::yield_validation::body_contains_yield(&method.body),
         ref_params,
         declared_params: method
             .params

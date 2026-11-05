@@ -330,11 +330,12 @@ fn run_collecting_included_on_compiler_stack(
                 .into_iter()
                 .map(|name| (0, name)),
         );
-        // A closed world cannot load what it did not compile, and a framework reaches the
-        // project's classes by listing `src/` (Symfony's `FileLoader::findClasses()`), a path no
-        // reference in the code shows. Every class of the project is therefore a root.
+        // A closed world cannot load what it did not compile, and a framework reaches classes by
+        // listing a directory (Symfony's `FileLoader::findClasses()`), a path no reference in the
+        // code shows, its own included when a console command rebuilds the container. Every
+        // class php could load is therefore a root.
         if let (true, Some(root)) = (crate::closed_world::is_enabled(), project_root(base_dir)) {
-            reference_points.extend(registry.psr4().project_classes(&root).into_iter().map(|name| (0, name)));
+            reference_points.extend(registry.psr4().production_classes(&root).into_iter().map(|name| (0, name)));
         }
         let mut insertions: Vec<(usize, Program)> = Vec::new();
         // Class names are case-insensitive: `class_exists("demo\\thing")` names the declared

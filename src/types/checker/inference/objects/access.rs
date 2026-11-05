@@ -474,6 +474,12 @@ impl Checker {
             // round meaningful; the next sees an ordinary class and types the read properly.
             return Ok(PhpType::Mixed);
         }
+        // A closed world holds every class of an optional dependency's bridge, and only the class
+        // it needs can be missing (`AmpClientState` over an uninstalled amphp): php never reaches
+        // this read once loading that class has failed.
+        if crate::closed_world::is_enabled() {
+            return Ok(PhpType::Mixed);
+        }
         Err(CompileError::new(
             expr.span,
             &format!("Undefined class: {}", class_name),

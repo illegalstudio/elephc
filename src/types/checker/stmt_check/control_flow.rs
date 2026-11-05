@@ -1673,15 +1673,22 @@ impl Checker {
         if let Some(c) = condition {
             self.infer_type_with_assignment_effects(c, env)?;
         }
-        if let Some(s) = update {
-            self.check_stmt(s, env)?;
+        // Each clause can define what the other reads, so the update goes first unless it needs
+        // the body: nette's `Process` writes `$bytes` in the body of
+        // `for ($written = 0; $written < $length; $written += $bytes)`.
+        let before_update = env.clone();
+        let needs_body = update.is_some_and(|stmt| self.check_stmt(stmt, env).is_err());
+        if needs_body {
+            *env = before_update;
         }
         let errors = self.check_break_continue_target_body(body, env);
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(CompileError::from_many(errors))
+        if !errors.is_empty() {
+            return Err(CompileError::from_many(errors));
         }
+        if let (true, Some(stmt)) = (needs_body, update) {
+            self.check_stmt(stmt, env)?;
+        }
+        Ok(())
     }
 
     /// Checks a loop body with its control-flow depth and conservative property narrowings.
