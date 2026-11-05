@@ -29,6 +29,28 @@ impl Drop for ForceGmpGuard {
     }
 }
 
+/// Removes PHP's ` in <file> on line <n>` suffix and diagnostic framing blank lines.
+///
+/// Fixtures compile into per-test temporary directories, so exact stderr assertions compare
+/// the message text without the volatile path. The leading newline PHP prints before each
+/// diagnostic is dropped too, matching assertions written before location framing existed.
+pub(crate) fn normalize_diagnostic_text(stderr: &str) -> String {
+    static LOCATION: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let location = LOCATION.get_or_init(|| {
+        regex::Regex::new(r" in [^\n]* on line \d+").expect("diagnostic location regex")
+    });
+    let stripped = location.replace_all(stderr, "");
+    let mut normalized = String::new();
+    for line in stripped.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        normalized.push_str(line);
+        normalized.push('\n');
+    }
+    normalized
+}
+
 /// Compiles and runs one corpus fixture with ext/gmp guaranteed to be loaded.
 pub(crate) fn compile_and_run_capture_merged_with_gmp(source: &str) -> ProgramOutput {
     FORCE_GMP_PRELUDE.with(|flag| flag.set(true));
