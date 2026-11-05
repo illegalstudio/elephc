@@ -71,6 +71,7 @@ function pack(string $format, mixed ...$values): string {
                 __elephc_pack_reject_endian($code, $endian);
                 if ($star) { $repeat = 1; }
                 if ($repeat > strlen($out)) {
+                    trigger_error('pack(): Type X: outside of string', E_USER_WARNING);
                     $out = '';
                 } else {
                     $out = substr($out, 0, strlen($out) - $repeat);
@@ -124,6 +125,9 @@ function pack(string $format, mixed ...$values): string {
                 $text = (string) $values[$valueIndex];
                 $valueIndex++;
                 $nibbles = $star ? strlen($text) : $repeat;
+                if ($nibbles > strlen($text) * 2) {
+                    trigger_error('pack(): Type ' . $code . ': not enough characters in string', E_USER_WARNING);
+                }
                 $out .= __elephc_pack_hex($text, $nibbles, $code === 'H');
                 break;
             case 'c':
@@ -149,7 +153,11 @@ function pack(string $format, mixed ...$values): string {
                     throw new \ValueError('Type ' . $code . ': too few arguments');
                 }
                 for ($i = 0; $i < $repeat; $i++) {
-                    $value = (int) $values[$valueIndex];
+                    $value = $values[$valueIndex];
+                    if (is_float($value) && ($value >= 9223372036854775808.0 || $value < -9223372036854775808.0 || is_nan($value))) {
+                        trigger_error('The float ' . sprintf('%.16G', $value) . ' is not representable as an int, cast occurred', E_USER_WARNING);
+                    }
+                    $value = (int) $value;
                     $valueIndex++;
                     $out .= __elephc_pack_int_code($code, $value, $endian);
                 }
@@ -192,6 +200,9 @@ function pack(string $format, mixed ...$values): string {
                 throw new \ValueError('Type ' . $code . ': unknown format code');
         }
     }
+    if ($valueIndex < $valueCount) {
+        trigger_error('pack(): ' . ($valueCount - $valueIndex) . ' arguments unused', E_USER_WARNING);
+    }
     return $out;
 }
 
@@ -205,6 +216,7 @@ function unpack(string $format, string $string, int $offset = 0): array|false {
     $result = [];
     $formatLength = strlen($format);
     $index = 0;
+    $overflow = false;
     while ($index < $formatLength) {
         $code = $format[$index];
         $index++;
@@ -225,6 +237,7 @@ function unpack(string $format, string $string, int $offset = 0): array|false {
                 $digits .= $format[$index];
                 $index++;
             }
+            $overflow = strlen($digits) > 10 || (strlen($digits) === 10 && strcmp($digits, '2147483647') > 0);
             $repeat = (int) $digits;
         }
         $nameStart = $index;
@@ -239,6 +252,10 @@ function unpack(string $format, string $string, int $offset = 0): array|false {
         if ($endian !== '') {
             __elephc_pack_validate_endian($code, $endian);
         }
+        if ($overflow) {
+            trigger_error('unpack(): Type ' . $code . ': integer overflow', E_USER_WARNING);
+            return false;
+        }
 
         switch ($code) {
             case 'a':
@@ -247,6 +264,7 @@ function unpack(string $format, string $string, int $offset = 0): array|false {
                 __elephc_pack_reject_endian($code, $endian);
                 $take = $star ? $dataLength - $position : $repeat;
                 if ($take < 0 || $position + $take > $dataLength) {
+                    __elephc_pack_warn_short($code, $take, $dataLength - $position);
                     return false;
                 }
                 $value = substr($string, $offset + $position, $take);
@@ -265,6 +283,7 @@ function unpack(string $format, string $string, int $offset = 0): array|false {
                 $nibbles = $star ? ($dataLength - $position) * 2 : $repeat;
                 $bytes = intdiv($nibbles + 1, 2);
                 if ($position + $bytes > $dataLength) {
+                    __elephc_pack_warn_short($code, $bytes, $dataLength - $position);
                     return false;
                 }
                 $hex = '';
@@ -283,19 +302,27 @@ function unpack(string $format, string $string, int $offset = 0): array|false {
             case 'x':
                 __elephc_pack_reject_endian($code, $endian);
                 if ($star) { $repeat = 1; }
-                if ($position + $repeat > $dataLength) { return false; }
-                $position += $repeat;
+                for ($i = 0; $i < $repeat; $i++) {
+                    if ($position + 1 > $dataLength) {
+                        __elephc_pack_warn_short($code, 1, 0);
+                        return false;
+                    }
+                    $position++;
+                }
                 break;
             case 'X':
                 __elephc_pack_reject_endian($code, $endian);
                 if ($star) { $repeat = 1; }
-                if ($position - $repeat < 0) { return false; }
-                $position -= $repeat;
+                $position = max(0, $position - $repeat);
                 break;
             case '@':
                 __elephc_pack_reject_endian($code, $endian);
                 if ($star) { $repeat = 1; }
-                if ($repeat <= $dataLength) { $position = $repeat; }
+                if ($repeat <= $dataLength) {
+                    $position = $repeat;
+                } else {
+                    trigger_error('unpack(): Type @: outside of string', E_USER_WARNING);
+                }
                 break;
             case 'c':
             case 'C':
@@ -315,8 +342,11 @@ function unpack(string $format, string $string, int $offset = 0): array|false {
             case 'P':
                 $size = __elephc_pack_int_size($code);
                 $count = $star ? intdiv($dataLength - $position, $size) : $repeat;
-                if ($position + $count * $size > $dataLength) { return false; }
                 for ($i = 0; $i < $count; $i++) {
+                    if ($position + $size > $dataLength) {
+                        __elephc_pack_warn_short($code, $size, $dataLength - $position);
+                        return false;
+                    }
                     $signed = __elephc_pack_int_signed($code);
                     $little = __elephc_pack_int_little($code, $endian);
                     $value = __elephc_pack_read_int($string, $offset + $position, $size, $little, $signed);
@@ -330,8 +360,11 @@ function unpack(string $format, string $string, int $offset = 0): array|false {
             case 'G':
                 $size = 4;
                 $count = $star ? intdiv($dataLength - $position, $size) : $repeat;
-                if ($position + $count * $size > $dataLength) { return false; }
                 for ($i = 0; $i < $count; $i++) {
+                    if ($position + $size > $dataLength) {
+                        __elephc_pack_warn_short($code, $size, $dataLength - $position);
+                        return false;
+                    }
                     $little = $code !== 'G' && $endian !== '>';
                     $bits = __elephc_pack_read_int($string, $offset + $position, $size, $little, false);
                     if ($bits === false) { return false; }
@@ -344,8 +377,11 @@ function unpack(string $format, string $string, int $offset = 0): array|false {
             case 'E':
                 $size = 8;
                 $count = $star ? intdiv($dataLength - $position, $size) : $repeat;
-                if ($position + $count * $size > $dataLength) { return false; }
                 for ($i = 0; $i < $count; $i++) {
+                    if ($position + $size > $dataLength) {
+                        __elephc_pack_warn_short($code, $size, $dataLength - $position);
+                        return false;
+                    }
                     $little = $code !== 'E' && $endian !== '>';
                     $bits = __elephc_pack_read_int($string, $offset + $position, $size, $little, false);
                     if ($bits === false) { return false; }
@@ -358,6 +394,11 @@ function unpack(string $format, string $string, int $offset = 0): array|false {
         }
     }
     return $result;
+}
+
+function __elephc_pack_warn_short(string $code, int $need, int $have): void {
+    $verb = $have === 1 ? 'was' : 'were';
+    trigger_error('unpack(): Type ' . $code . ': not enough input values, need ' . $need . ' values but only ' . $have . ' ' . $verb . ' provided', E_USER_WARNING);
 }
 
 function __elephc_pack_validate_endian(string $code, string $endian): void {

@@ -9,9 +9,11 @@
 //!   `unpack*.phpt`. The float cases compare exact hex bytes produced by the bridge.
 //! - The pack/unpack implementation is a pay-for-use PHP prelude plus the small
 //!   `elephc_pack` IEEE-754 bridge.
-//! - PHP warnings are not asserted; fixtures compare stdout values and ValueError messages.
+//! - Warning diagnostics are asserted through merged-output fixtures for the cases the
+//!   upstream corpus checks (unused arguments, insufficient input, casts, and X/@).
 
 use elephc::php_version::PhpVersion;
+use regex::Regex;
 
 use crate::support::*;
 
@@ -280,5 +282,62 @@ var_dump(bin2hex(pack('e', 1.0)));
     assert_eq!(
         out,
         "string(8) \"12345678\"\nstring(8) \"78563412\"\nstring(6) \"010203\"\nstring(6) \"610000\"\nstring(6) \"612020\"\nint(305419896)\narray(3) {\n  [1]=>\n  int(1)\n  [2]=>\n  int(2)\n  [3]=>\n  int(3)\n}\narray(1) {\n  [1]=>\n  string(3) \"abc\"\n}\nstring(16) \"000000000000f03f\"\n"
+    );
+}
+
+
+/// Runs one fixture with stderr merged onto stdout, as the PHPT diagnostics expect.
+fn run86_merged(source: &str) -> String {
+    compile_and_run_capture_merged_with_php_version(source, PhpVersion::Php86)
+}
+
+/// Removes the absolute path and line number elephc appends to warnings emitted by the
+/// injected pack prelude; php-src reports the user call site instead.
+fn without_warning_location(output: &str) -> String {
+    Regex::new(r" in [^\n]* on line [0-9]+")
+        .expect("warning location regex")
+        .replace_all(output, "")
+        .into_owned()
+}
+
+/// php-src `pack_Z.phpt`, `pack64.phpt`, and the upstream warning diagnostics for
+/// insufficient unpack input, unused pack arguments, and float-to-int casts.
+#[test]
+fn test_pack_unpack_diagnostics_php86() {
+    let out = run86_merged(
+        r#"<?php
+var_dump(unpack('Z2', "\0"));
+var_dump(unpack('C2', "\x01"));
+var_dump(unpack('x5', 'abc'));
+var_dump(unpack('H9', 'abc'));
+var_dump(unpack('C2147483648', "\x01"));
+var_dump(unpack('X5', 'abc'));
+var_dump(unpack('@5', 'abc'));
+var_dump(pack('X'));
+var_dump(bin2hex(pack('C2', 1, 2, 3)));
+var_dump(bin2hex(pack('Q', 0x8000000000000002)));
+"#,
+    );
+    assert_eq!(
+        without_warning_location(&out),
+        "Warning: unpack(): Type Z: not enough input values, need 2 values but only 1 was provided\n\
+bool(false)\n\
+Warning: unpack(): Type C: not enough input values, need 1 values but only 0 were provided\n\
+bool(false)\n\
+Warning: unpack(): Type x: not enough input values, need 1 values but only 0 were provided\n\
+bool(false)\n\
+Warning: unpack(): Type H: not enough input values, need 5 values but only 3 were provided\n\
+bool(false)\n\
+Warning: unpack(): Type C: integer overflow\n\
+bool(false)\n\
+array(0) {\n}\n\
+Warning: unpack(): Type @: outside of string\n\
+array(0) {\n}\n\
+Warning: pack(): Type X: outside of string\n\
+string(0) \"\"\n\
+Warning: pack(): 1 arguments unused\n\
+string(4) \"0102\"\n\
+Warning: The float 9.223372036854776E+18 is not representable as an int, cast occurred\n\
+string(16) \"0000000000000080\"\n"
     );
 }

@@ -1167,6 +1167,44 @@ pub(crate) fn compile_and_run_with_env(
     output
 }
 
+/// Compiles and captures one PHP-versioned fixture with stderr merged onto stdout.
+pub(crate) fn compile_and_run_capture_merged_with_php_version(
+    source: &str,
+    php_version: elephc::php_version::PhpVersion,
+) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_test_php_merged_{}_{:?}_{}",
+        pid, tid, id
+    ));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, requirements) =
+        compile_source_to_asm_with_defines_repr_and_php_version(
+            source,
+            &dir,
+            &HashSet::new(),
+            8_388_608,
+            false,
+            false,
+            default_null_repr(),
+            php_version,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture_merged(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &requirements,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output.stdout
+}
+
 /// Compiles and runs PHP source with an explicit PHP compatibility version.
 pub(crate) fn compile_and_run_with_php_version(
     source: &str,
