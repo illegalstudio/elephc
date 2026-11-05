@@ -16,9 +16,10 @@ fn test_simplexml_initialization_state_bundle() {
     if skip_without_xml_native("test_simplexml_initialization_state_bundle") { return; }
     let source = r#"<?php
 class StateXmlNoParent extends SimpleXMLElement { public function __construct() {} }
-function StateXmlMissingNode(SimpleXMLElement $xml): void {
+function StateXmlMissingNode(SimpleXMLElement $xml, int $selectedOperation): void {
     echo 'scalars:', (int)$xml, ':', (float)$xml, ':[', (string)$xml, ']|';
     for ($operation = 0; $operation < 25; $operation++) {
+        if ($selectedOperation >= 0 && $operation !== $selectedOperation) { continue; }
         echo $operation, ':';
         try {
             if ($operation === 0) { var_dump(count($xml)); }
@@ -71,19 +72,20 @@ function StateXmlEmpty(SimpleXMLElement $xml): void {
     foreach ($xml as $item) { echo 'unexpected-item|'; }
 }
 set_error_handler(function(int $level, string $message): bool { echo 'warning|'; return true; });
+$selectedOperation = $argc > 1 ? (int)$argv[1] : -1;
 $loaded = simplexml_load_string('XXXXXXX^', options: LIBXML_RECOVER);
-if ($loaded instanceof SimpleXMLElement) { StateXmlMissingNode($loaded); } else { echo 'load-failed|'; }
+if ($loaded instanceof SimpleXMLElement) { StateXmlMissingNode($loaded, $selectedOperation); } else { echo 'load-failed|'; }
 file_put_contents('rootless-state.xml', 'XXXXXXX^');
 try {
     $file = simplexml_load_file('rootless-state.xml', options: LIBXML_RECOVER);
-    if ($file instanceof SimpleXMLElement) { StateXmlMissingNode($file); } else { echo 'file-failed|'; }
+    if ($file instanceof SimpleXMLElement) { StateXmlMissingNode($file, $selectedOperation); } else { echo 'file-failed|'; }
     $constructed = new SimpleXMLElement('XXXXXXX^', LIBXML_RECOVER);
-    StateXmlMissingNode($constructed);
+    StateXmlMissingNode($constructed, $selectedOperation);
     $url = new SimpleXMLElement('rootless-state.xml', LIBXML_RECOVER, true);
-    StateXmlMissingNode($url);
+    StateXmlMissingNode($url, $selectedOperation);
 } finally { unlink('rootless-state.xml'); }
 $bare = new StateXmlNoParent();
-StateXmlMissingNode($bare);
+StateXmlMissingNode($bare, $selectedOperation);
 $root = new SimpleXMLElement('<r/>');
 echo 'root:', count($root), ':', (int)(bool)$root, ':[', (string)$root, ']:', $root->getName(), '|';
 $children = $root->children();
@@ -96,12 +98,16 @@ restore_error_handler();
 unset($loaded, $file, $constructed, $url, $bare, $root, $children, $attributes, $missing);
 "#;
     let error = "Error:SimpleXMLElement is not properly initialized|";
-    let failures: String = (0..25).map(|index| format!("{index}:{error}")).collect();
-    let common = format!("scalars:0:0:[]|{failures}bool(false)\nbool(false)\nNULL\nIterator not initialized or already consumed|Iterator not initialized or already consumed|next|");
-    let recovered = format!("warning|warning|warning|{common}bool(false)\nbool(true)\ncopy:[]|bool(false)\n");
-    let bare = format!("{common}{error}{error}copy:[]|{error}");
-    let empty = "empty:0::0:[]:{}|bool(false)\nNULL\nNULL\nNULL\n[]:[]:[]|bool(true)\n";
-    let expected = format!("{}{bare}root:0:0:[]:r|{}", recovered.repeat(4), empty.repeat(3));
+    let expected_for = |selected: Option<usize>| {
+        let failures: String = (0..25).filter(|index| selected.is_none_or(|selected| selected == *index))
+            .map(|index| format!("{index}:{error}")).collect();
+        let common = format!("scalars:0:0:[]|{failures}bool(false)\nbool(false)\nNULL\nIterator not initialized or already consumed|Iterator not initialized or already consumed|next|");
+        let recovered = format!("warning|warning|warning|{common}bool(false)\nbool(true)\ncopy:[]|bool(false)\n");
+        let bare = format!("{common}{error}{error}copy:[]|{error}");
+        let empty = "empty:0::0:[]:{}|bool(false)\nNULL\nNULL\nNULL\n[]:[]:[]|bool(true)\n";
+        format!("{}{bare}root:0:0:[]:r|{}", recovered.repeat(4), empty.repeat(3))
+    };
+    let expected = expected_for(None);
     let evaluated = source.strip_prefix("<?php").unwrap().replace("StateXml", "EvalStateXml")
         .replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $activate = new SimpleXMLElement('<activate/>'); unset($activate); $source = $argc > 0 ? '{evaluated}' : ''; eval($source); unset($source);");
@@ -109,12 +115,30 @@ unset($loaded, $file, $constructed, $url, $bare, $root, $children, $attributes, 
         BundleCase { name: "initialization_aot", source, expected: &expected },
         BundleCase { name: "initialization_eval", source: &eval, expected: &expected },
     ];
-    let run = || assert_bundle_with(&cases, |source| {
-        let out = compile_and_run_with_heap_debug(source);
-        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-        out.stdout
-    });
+    let selections: Vec<String> = (0..=25).map(|index| index.to_string()).collect();
+    let mut argvs: Vec<Vec<&str>> = vec![vec![]];
+    argvs.extend(selections.iter().map(|selection| vec![selection.as_str()]));
+    let argvs: Vec<&[&str]> = argvs.iter().map(Vec::as_slice).collect();
+    let run = || {
+        let outputs = compile_and_run_with_heap_debug_per_argv(&bundle_source(&cases), &argvs);
+        assert_eq!(outputs.len(), argvs.len());
+        let mut failures = Vec::new();
+        for (index, out) in outputs.iter().enumerate() {
+            let selected = index.checked_sub(1);
+            let label = selected.map_or_else(|| "all operations".to_string(), |selected| format!("operation {selected}"));
+            let expected = expected_for(selected);
+            if !out.success || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+                failures.push(format!("{label}: stdout={} stderr={}", out.stdout, out.stderr));
+            }
+            match split_bundle_output(&cases, &out.stdout) {
+                Ok(actual) => for (case, actual) in cases.iter().zip(actual) {
+                    if actual != expected { failures.push(format!("{label}, {}: stdout={actual} expected={expected}", case.name)); }
+                },
+                Err(error) => failures.push(format!("{label}: {error}")),
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    };
     run();
     without_ir_opt(run);
 }
