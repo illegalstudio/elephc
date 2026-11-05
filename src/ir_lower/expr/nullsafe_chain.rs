@@ -398,12 +398,19 @@ fn lower_nullsafe_postfix_segment(
             } else if !guard_regular_method_receiver(ctx, current, method, expr) {
                 return None;
             }
+            // A nullsafe segment already passed its null guard; preserve that opcode so the
+            // shared static-only reroute in `lower_method_call_with_receiver` also runs here.
+            let op = if nullsafe {
+                Op::NullsafeMethodCall
+            } else {
+                Op::MethodCall
+            };
             Some(lower_method_call_with_receiver(
                 ctx,
                 current,
                 method,
                 args,
-                Op::MethodCall,
+                op,
                 expr,
             ))
         }

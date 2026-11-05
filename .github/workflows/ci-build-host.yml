@@ -51,6 +51,7 @@ env:
     -p elephc-image
     -p elephc-pcntl
     -p elephc-xml
+    -p elephc-tidy
     -p elephc-fileinfo
     -p elephc-tokenizer
     -p elephc-magician
@@ -266,6 +267,20 @@ jobs:
             ~/.cache/elephc/native/sources
           key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
 
+      - name: Cache managed native libtidy
+        if: inputs.scope == 'tests'
+        # The tidy bridge's parser is libtidy itself (the managed `libtidy` catalog
+        # package: pinned 5.8.0, see src/native_deps/recipes/libtidy.rs). Separate
+        # package artifacts, keyed on the committed lock plus all recipe sources that
+        # decide what gets built; the codegen shards restore the same key, so the
+        # from-source build happens here once and never in a shard.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/libtidy
+            ~/.cache/elephc/native/sources
+          key: libtidy-native-macos-aarch64-${{ hashFiles('examples/tidy/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libtidy.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+
       - name: Cache managed native gmp
         if: inputs.scope == 'tests'
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
@@ -298,6 +313,16 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native libtidy
+        if: inputs.scope == 'tests'
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/tidy/elephc.lock; a fast no-op once the cache above is warm, a
+        # ~1 minute from-source build otherwise.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/tidy/elephc.toml
 
       - name: Ensure GMP configure dependency
         if: inputs.scope == 'tests'
@@ -358,6 +383,18 @@ jobs:
         run: |
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh macos-aarch64)" \
             cargo test -p elephc-xml
+
+      - name: Test the tidy bridge against managed libtidy
+        if: inputs.scope == 'tests'
+        # crates/elephc-tidy/build.rs reads ELEPHC_TIDY_LIBTIDY_LIB_DIR, links libtidy.a
+        # into the crate's test binary and compiles the libtidy-calling unit tests in
+        # behind cfg(elephc_tidy_native). Without the variable those tests take the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the archive
+        # was taken so the plain libelephc_tidy.a every codegen shard links is never
+        # the variant this env-var-driven rebuild produces.
+        run: |
+          ELEPHC_TIDY_LIBTIDY_LIB_DIR="$(sh scripts/ci/libtidy_lib_dir.sh macos-aarch64)" \
+            cargo test -p elephc-tidy
 
       - name: Upload test archive
         if: inputs.scope == 'tests'
@@ -551,6 +588,20 @@ jobs:
             ~/.cache/elephc/native/sources
           key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
 
+      - name: Cache managed native libtidy
+        if: inputs.scope == 'tests'
+        # The tidy bridge's parser is libtidy itself (the managed `libtidy` catalog
+        # package: pinned 5.8.0, see src/native_deps/recipes/libtidy.rs). Separate
+        # package artifacts, keyed on the committed lock plus all recipe sources that
+        # decide what gets built; the codegen shards restore the same key, so the
+        # from-source build happens here once and never in a shard.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/libtidy
+            ~/.cache/elephc/native/sources
+          key: libtidy-native-linux-x86_64-${{ hashFiles('examples/tidy/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libtidy.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+
       - name: Cache managed native gmp
         if: inputs.scope == 'tests'
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
@@ -583,6 +634,16 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native libtidy
+        if: inputs.scope == 'tests'
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/tidy/elephc.lock; a fast no-op once the cache above is warm, a
+        # ~1 minute from-source build otherwise.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/tidy/elephc.toml
 
       - name: Ensure GMP configure dependency
         if: inputs.scope == 'tests'
@@ -643,6 +704,18 @@ jobs:
         run: |
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-x86_64)" \
             cargo test -p elephc-xml
+
+      - name: Test the tidy bridge against managed libtidy
+        if: inputs.scope == 'tests'
+        # crates/elephc-tidy/build.rs reads ELEPHC_TIDY_LIBTIDY_LIB_DIR, links libtidy.a
+        # into the crate's test binary and compiles the libtidy-calling unit tests in
+        # behind cfg(elephc_tidy_native). Without the variable those tests take the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the archive
+        # was taken so the plain libelephc_tidy.a every codegen shard links is never
+        # the variant this env-var-driven rebuild produces.
+        run: |
+          ELEPHC_TIDY_LIBTIDY_LIB_DIR="$(sh scripts/ci/libtidy_lib_dir.sh linux-x86_64)" \
+            cargo test -p elephc-tidy
 
       - name: Upload test archive
         if: inputs.scope == 'tests'
@@ -831,6 +904,20 @@ jobs:
             ~/.cache/elephc/native/sources
           key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
 
+      - name: Cache managed native libtidy
+        if: inputs.scope == 'tests'
+        # The tidy bridge's parser is libtidy itself (the managed `libtidy` catalog
+        # package: pinned 5.8.0, see src/native_deps/recipes/libtidy.rs). Separate
+        # package artifacts, keyed on the committed lock plus all recipe sources that
+        # decide what gets built; the codegen shards restore the same key, so the
+        # from-source build happens here once and never in a shard.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/libtidy
+            ~/.cache/elephc/native/sources
+          key: libtidy-native-linux-aarch64-${{ hashFiles('examples/tidy/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libtidy.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+
       - name: Cache managed native gmp
         if: inputs.scope == 'tests'
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
@@ -863,6 +950,16 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native libtidy
+        if: inputs.scope == 'tests'
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/tidy/elephc.lock; a fast no-op once the cache above is warm, a
+        # ~1 minute from-source build otherwise.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/tidy/elephc.toml
 
       - name: Ensure GMP configure dependency
         if: inputs.scope == 'tests'
@@ -923,6 +1020,18 @@ jobs:
         run: |
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-aarch64)" \
             cargo test -p elephc-xml
+
+      - name: Test the tidy bridge against managed libtidy
+        if: inputs.scope == 'tests'
+        # crates/elephc-tidy/build.rs reads ELEPHC_TIDY_LIBTIDY_LIB_DIR, links libtidy.a
+        # into the crate's test binary and compiles the libtidy-calling unit tests in
+        # behind cfg(elephc_tidy_native). Without the variable those tests take the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the archive
+        # was taken so the plain libelephc_tidy.a every codegen shard links is never
+        # the variant this env-var-driven rebuild produces.
+        run: |
+          ELEPHC_TIDY_LIBTIDY_LIB_DIR="$(sh scripts/ci/libtidy_lib_dir.sh linux-aarch64)" \
+            cargo test -p elephc-tidy
 
       - name: Upload test archive
         if: inputs.scope == 'tests'

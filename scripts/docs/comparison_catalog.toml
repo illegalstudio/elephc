@@ -267,6 +267,15 @@ modules  = ["simplexml"]
 notes    = "Three functions and two classes on the managed libxml2 bridge; supports element and attribute selections, mutation, namespace queries, XPath, and recursive iteration. Auto-linked or forced with --with-xml."
 
 [[extensions]]
+feature  = "Tidy"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.tidy.php"
+docs     = "docs/php/tidy.md"
+evidence = "tests/codegen/tidy.rs"
+modules  = ["tidy"]
+notes    = "ext/tidy (24 functions, tidy/tidyNode, 161 TIDY_* constants) on a pinned static libtidy 5.8.0 from the native catalog (elephc native add libtidy); auto-linked or forced with --with-tidy; the full php-src ext/tidy PHPT corpus is migrated under tests/php_src/tidy"
+
+[[extensions]]
 feature  = "cURL"
 status   = "supported"
 php      = "https://www.php.net/manual/en/book.curl.php"

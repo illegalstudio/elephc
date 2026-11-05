@@ -397,7 +397,17 @@ Add the explicit cast the call site means — `takesInt((int) $f)`, `takesFloat(
 - **Pass-by-reference parameters** (`function f(string &$s)`) stay strict. PHP converts the caller's variable in place and writes the converted value back; elephc would have to pass a converted temporary, silently dropping the callee's writes, so the call is rejected instead.
 - **Builtin functions** keep their own per-builtin argument rules.
 - **Classes injected by the compiler** (SPL, `Exception`, reflection) stay strict, because several of their members are lowered by dedicated emitters rather than the shared argument path.
-- **Nullable and union parameters** (`?string $s`, `int|string $v`) stay strict; only a plain declared scalar type binds coercively.
+
+### Scalar union parameters
+
+In weak mode PHP first takes an exact union member, then converts a scalar through the
+preference order `int`, `float`, `string`, `bool`; a nullable type is the same rule with
+`null` as an exact member. elephc applies that rule to user-declared parameters, including
+`?string` and `int|string` (`41` becomes `"41"` at `?string`, and stays `int` at
+`int|string`). A runtime `bool` passed to a union that contains both `false` and another
+non-bool scalar is refused at compile time: `false` must stay `false`, while `true` would
+convert, and choosing between them needs a runtime union binder. Pass the literal
+`false`/`true` or add an explicit cast at that call site.
 
 ### Strict types
 
@@ -454,7 +464,7 @@ echo coerceHere(true);      // compile error — this call lives in a strict fil
 - **Builtin function arguments** keep their own per-builtin rules; the directive does not tighten them. PHP throws `TypeError` for `strlen(42)` under `strict_types=1` while elephc still applies each builtin's own argument checking.
 - **Return types, typed property assignments and typed constants** are unaffected; PHP also applies `strict_types` to those.
 - **Positional spread arguments** (`f(...$args)`) and **variadic parameters of an inline closure literal** (`function (int ...$xs) {}`) are not checked against the declared parameter type, in strict or coercive mode.
-- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules. The exception is an **object union** in the exact shape `Class|false` or `Class|null` passed to a `Class` parameter of a user-declared method or constructor: elephc accepts it and inserts a runtime `instanceof` guard that throws `TypeError` for the other alternative.
+- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values): scalar union members follow the weak preference above when the source type is known, but a runtime `bool` that would have to choose between `false` and another scalar is refused with an actionable cast request. The exception is an **object union** in the exact shape `Class|false` or `Class|null` passed to a `Class` parameter of a user-declared method or constructor: elephc accepts it and inserts a runtime `instanceof` guard that throws `TypeError` for the other alternative.
 
 ### Callable strings
 

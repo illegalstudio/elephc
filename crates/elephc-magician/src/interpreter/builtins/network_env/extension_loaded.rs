@@ -88,6 +88,9 @@ pub(in crate::interpreter) fn eval_extension_is_loaded_in(
     if let Some(probe) = eval_prelude_surface_probe(name) {
         return context.native_function(probe).is_some();
     }
+    if eval_tidy_bridge_extension(name, context) {
+        return true;
+    }
     eval_extension_is_loaded(name)
 }
 

@@ -38,6 +38,15 @@ pub(in crate::codegen) fn emit_error(ctx: &mut FunctionContext<'_>, message: &st
     emit_static_exception(ctx, "Error", "_spl_error_class_id", message);
 }
 
+/// Throws a catchable PHP `Error` carrying a static message and a source location.
+pub(super) fn emit_error_at(
+    ctx: &mut FunctionContext<'_>,
+    message: &str,
+    location: Option<(String, u32)>,
+) {
+    emit_static_exception_at(ctx, "Error", "_spl_error_class_id", message, location);
+}
+
 /// Throws a catchable PHP `TypeError` carrying a static message.
 pub(in crate::codegen) fn emit_type_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "TypeError", "_spl_type_error_class_id", message);

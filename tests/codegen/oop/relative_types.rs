@@ -222,23 +222,12 @@ echo $reflected->newInstance()->n;
 }
 
 /// The REGRESSION test for `reflection_new_instance::constructor_signature_for_class_name`: a
-/// descendant of a class with a PRIVATE constructor, which is the only shape where the changed
-/// lookup differs from the direct one, because it is the only shape whose own `methods` map
-/// lacks the entry.
-///
-/// Measured both ways on this fixture: with the owner walk it prints `6` (the default is padded
-/// and the ancestor's constructor runs); reading the descendant's own map it prints `0` — no
-/// signature, so no padding and no constructor call at all, leaving the promoted property at
-/// its zero value.
-///
-/// NOTE ON THE SHAPE: php-src rejects this program outright with
-/// `Error: Call to private PrivOwner::__construct()`, because `newInstance()` enforces
-/// constructor visibility and elephc does not yet. That separate gap is what makes the shape
-/// reachable here at all. When it is closed this fixture should become a REJECTION test rather
-/// than being deleted — the lookup it pins is still the one doing the work, and it is what
-/// decides which class's constructor the visibility check will then be asked about.
+/// Reflection `newInstance()` enforces the same constructor visibility as `new`: a descendant
+/// of a class with a PRIVATE constructor is not instantiable from global scope, and the
+/// diagnostic names the class that declares the constructor. This is the rejection shape the
+/// old lookup test anticipated once visibility enforcement reached the reflection path.
 #[test]
-fn test_reflection_new_instance_resolves_an_inherited_private_constructor() {
+fn test_reflection_new_instance_rejects_an_inherited_private_constructor() {
     let out = compile_and_run(
         r#"<?php
 class PrivReflOwner {
@@ -246,10 +235,17 @@ class PrivReflOwner {
 }
 class PrivReflChild extends PrivReflOwner {}
 $reflected = new ReflectionClass('PrivReflChild');
-echo $reflected->newInstance()->n;
+try {
+    $reflected->newInstance();
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
 "#,
     );
-    assert_eq!(out, "6");
+    assert_eq!(
+        out,
+        "Call to private PrivReflOwner::__construct() from global scope\n"
+    );
 }
 
 /// An inherited PUBLIC constructor with defaults is unaffected — the owner walk stops at the

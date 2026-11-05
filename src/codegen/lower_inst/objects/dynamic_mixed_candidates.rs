@@ -162,7 +162,19 @@ pub(super) fn dynamic_new_mixed_refusals(
         {
             continue;
         }
-        let Some(constructor) = class_info.methods.get(&constructor_key) else {
+        if let Some(refusal) = constructor_visibility_refusal(ctx, class_name, class_info) {
+            refusals.push(refusal);
+            continue;
+        }
+        // A descendant of a class with a private constructor carries no `__construct` entry of
+        // its own, but PHP still runs the ancestor's. Resolve the owner here too, so an arity or
+        // collector refusal names and measures the signature that will actually run.
+        let Some((constructor_class_name, constructor_class_info)) =
+            crate::types::constructor_owner(&ctx.module.class_infos, class_name)
+        else {
+            continue;
+        };
+        let Some(constructor) = constructor_class_info.methods.get(&constructor_key) else {
             continue;
         };
         // SAME DEFINITION THE CHECKER USES for a static call — `checker::functions::
@@ -181,15 +193,16 @@ pub(super) fn dynamic_new_mixed_refusals(
         if arg_count < required {
             refusals.push(DynamicNewRefusal {
                 class_name: class_name.to_string(),
+                class_id: class_info.class_id,
                 message: too_few_arguments_message(
-                    class_name,
+                    constructor_class_name,
                     ctx.module.source_path.as_deref().unwrap_or(""),
                     line,
                     arg_count,
                     required,
                     required == regular && constructor.variadic.is_none(),
                 ),
-                argument_count: true,
+                kind: DynamicNewRefusalKind::ArgumentCount,
             });
             continue;
         }
@@ -201,21 +214,117 @@ pub(super) fn dynamic_new_mixed_refusals(
         if let Some(element) = dynamic_new_uncastable_collector(constructor, arg_count) {
             refusals.push(DynamicNewRefusal {
                 class_name: class_name.to_string(),
-                message: cannot_coerce_message(class_name, regular + 1, &element),
-                argument_count: false,
+                class_id: class_info.class_id,
+                message: cannot_coerce_message(constructor_class_name, regular + 1, &element),
+                kind: DynamicNewRefusalKind::TypeError,
             });
         }
     }
     refusals
 }
 
+/// Returns the Error refusal for a constructor the current lexical scope cannot access.
+///
+/// PHP checks constructor visibility after resolving a dynamic class name. The AOT ladder has
+/// already matched a known class at this point, so the check is a compile-time scope test and
+/// the branch only has to raise the same `Error` php-src would.
+pub(super) fn constructor_visibility_refusal(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    class_info: &ClassInfo,
+) -> Option<DynamicNewRefusal> {
+    let constructor_key = php_symbol_key("__construct");
+    let (owner_name, owner_info) =
+        crate::types::constructor_owner(&ctx.module.class_infos, class_name)?;
+    let visibility = owner_info.method_visibilities.get(&constructor_key)?;
+    let scope = ctx.lexical_class();
+    let allowed = match visibility {
+        Visibility::Public => true,
+        Visibility::Private => scope.is_some_and(|scope| {
+            php_symbol_key(scope) == php_symbol_key(owner_name)
+        }),
+        Visibility::Protected => scope.is_some_and(|scope| {
+            scope_is_same_or_descendant(ctx, scope, owner_name)
+                || scope_is_same_or_descendant(ctx, owner_name, scope)
+        }),
+    };
+    if allowed {
+        return None;
+    }
+    let label = match visibility {
+        Visibility::Private => "private",
+        Visibility::Protected => "protected",
+        Visibility::Public => return None,
+    };
+    let scope = scope.map_or_else(
+        || "from global scope".to_string(),
+        |scope| format!("from scope {scope}"),
+    );
+    Some(DynamicNewRefusal {
+        class_name: class_name.to_string(),
+        class_id: class_info.class_id,
+        message: format!("Call to {label} {owner_name}::__construct() {scope}"),
+        kind: DynamicNewRefusalKind::Error,
+    })
+}
+
+/// Returns every constructor this lexical scope cannot access under one dynamic-factory parent.
+pub(super) fn dynamic_new_visibility_refusals(
+    ctx: &FunctionContext<'_>,
+    required_parent: &str,
+) -> Vec<DynamicNewRefusal> {
+    let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    let mut refusals = Vec::new();
+    for (class_name, class_info) in sorted_classes {
+        if class_info.is_abstract
+            || ctx.module.enum_infos.contains_key(class_name)
+            || !class_is_same_or_descends_from(ctx, class_name, required_parent)
+        {
+            continue;
+        }
+        if let Some(refusal) = constructor_visibility_refusal(ctx, class_name, class_info) {
+            refusals.push(refusal);
+        }
+    }
+    refusals
+}
+
+/// Returns true when `class_name` is `ancestor` or descends from it.
+fn scope_is_same_or_descendant(ctx: &FunctionContext<'_>, class_name: &str, ancestor: &str) -> bool {
+    let mut cursor = Some(class_name);
+    while let Some(name) = cursor {
+        if php_symbol_key(name.trim_start_matches('\\'))
+            == php_symbol_key(ancestor.trim_start_matches('\\'))
+        {
+            return true;
+        }
+        cursor = ctx
+            .module
+            .class_infos
+            .get(name)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
+}
+
 /// One class a `new $c(...)` site NAMES but must refuse, and which throwable says why.
 pub(super) struct DynamicNewRefusal {
     pub(super) class_name: String,
+    pub(super) class_id: u64,
     pub(super) message: String,
-    /// `true` raises `ArgumentCountError`, `false` raises `TypeError` — php's two answers to the
-    /// two questions this ladder settles before it will construct anything.
-    pub(super) argument_count: bool,
+    pub(super) kind: DynamicNewRefusalKind,
+}
+
+/// The throwable a dynamic-new refusal raises.
+#[derive(Clone, Copy)]
+pub(super) enum DynamicNewRefusalKind {
+    /// Too few arguments to a user or internal constructor.
+    ArgumentCount,
+    /// An argument the constructor's collector cannot accept.
+    TypeError,
+    /// A constructor the current lexical scope cannot access.
+    Error,
 }
 
 /// php's wording for a constructor the site passes too few arguments to.

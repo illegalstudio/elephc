@@ -72,6 +72,13 @@ pub enum ThrowAccessKind {
         /// Method name without the trailing parentheses (e.g. `secret`).
         method: String,
     },
+    /// A private/protected constructor call from an inaccessible scope.
+    PrivateConstructor {
+        /// Visibility label (`private` or `protected`).
+        visibility: String,
+        /// Class declaring the constructor (e.g. `C`).
+        class_name: String,
+    },
     /// A readonly write requiring a runtime initialization check.
     ReadonlyProperty {
         /// Class holding the property (e.g. `Box`).

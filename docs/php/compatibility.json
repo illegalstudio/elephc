@@ -187,15 +187,15 @@
   ],
   "coverage": {
     "classes": {
-      "have": 191,
+      "have": 193,
       "total": 329
     },
     "constants": {
-      "have": 1420,
+      "have": 1581,
       "total": 3181
     },
     "functions": {
-      "have": 1078,
+      "have": 1102,
       "total": 2169
     }
   },
@@ -329,6 +329,16 @@
       ],
       "notes": "Three functions and two classes on the managed libxml2 bridge; supports element and attribute selections, mutation, namespace queries, XPath, and recursive iteration. Auto-linked or forced with --with-xml.",
       "php": "https://www.php.net/manual/en/book.simplexml.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/tidy.md",
+      "feature": "Tidy",
+      "modules": [
+        "tidy"
+      ],
+      "notes": "ext/tidy (24 functions, tidy/tidyNode, 161 TIDY_* constants) on a pinned static libtidy 5.8.0 from the native catalog (elephc native add libtidy); auto-linked or forced with --with-tidy; the full php-src ext/tidy PHPT corpus is migrated under tests/php_src/tidy",
+      "php": "https://www.php.net/manual/en/book.tidy.php",
       "status": "supported"
     },
     {
@@ -1564,20 +1574,20 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 2,
+        "have": 2,
         "total": 2
       },
       "constants": {
-        "eval": 0,
-        "have": 0,
+        "eval": 161,
+        "have": 161,
         "total": 161
       },
-      "docs": null,
+      "docs": "docs/php/tidy.md#functions",
       "extension": "tidy",
       "functions": {
-        "eval": 0,
-        "have": 0,
+        "eval": 24,
+        "have": 24,
         "total": 24
       },
       "name": "tidy",

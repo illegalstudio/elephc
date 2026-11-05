@@ -46,11 +46,11 @@ def run(family, target, shard, count, root, env):
             for tool in ("m4", "gdb"):
                 if not shutil.which(tool):
                     raise ValueError(f"CI image is missing preinstalled {tool}")
-        for example in ("gmp", "openssl-cipher", "fileinfo"):
+        for example in ("gmp", "openssl-cipher", "fileinfo", "tidy"):
             execute([compiler, "native", "install", "--locked", "--target", target,
                      "--manifest-path", f"examples/{example}/elephc.toml"], env)
         env.update({f"ELEPHC_TEST_REQUIRE_{package}_NATIVE": "1"
-                    for package in ("XML", "GMP", "FILEINFO", "OPENSSL")})
+                    for package in ("XML", "GMP", "FILEINFO", "OPENSSL", "TIDY")})
         phases = json.loads(Path("scripts/ci/shard_fixture_phases.json").read_text())
         env["ELEPHC_FIXTURE_PHASE_TIMING"] = phases["macos" if macos else "linux"]
     if family == "curl":

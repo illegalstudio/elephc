@@ -835,6 +835,7 @@ dependencies = [
  "elephc-probe",
  "elephc-random",
  "elephc-reference",
+ "elephc-tidy",
  "elephc-tls",
  "elephc-tz",
  "elephc-web",
@@ -1053,6 +1054,10 @@ version = "0.1.0"
 
 [[package]]
 name = "elephc-reference"
+version = "0.1.0"
+
+[[package]]
+name = "elephc-tidy"
 version = "0.1.0"
 
 [[package]]

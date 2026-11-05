@@ -92,7 +92,8 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new(
         CodegenIrError::invalid_module("dynamic_object_new missing class operand")
     })?;
     let candidates = dynamic_new_candidates(ctx, &required_parent, constructor_args.len(), inst)?;
-    if candidates.is_empty() {
+    let visibility_refusals = dynamic_new_visibility_refusals(ctx, &required_parent);
+    if candidates.is_empty() && visibility_refusals.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "dynamic object construction for {} without EIR-lowered candidates",
             required_parent
@@ -101,6 +102,11 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new(
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("dynamic_object_new missing result value"))?;
+    let refusal_location = ctx
+        .module
+        .source_path
+        .clone()
+        .map(|file| (file, inst.span.map_or(0, |span| span.line)));
     emit_dynamic_new_class_lookup(ctx, class_name_value, &required_parent)?;
     let invalid_label = ctx.next_label("dynamic_new_invalid");
     let unmatched_label = ctx.next_label("dynamic_new_unmatched");
@@ -115,6 +121,14 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new(
             label
         })
         .collect::<Vec<_>>();
+    let refusal_labels = visibility_refusals
+        .iter()
+        .map(|refusal| {
+            let label = ctx.next_label("dynamic_new_refused");
+            emit_compare_dynamic_new_class_id(ctx, refusal.class_id, &label);
+            label
+        })
+        .collect::<Vec<_>>();
     abi::emit_jump(ctx.emitter, &unmatched_label);
 
     ctx.emitter.label(&unmatched_label);
@@ -123,6 +137,16 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new(
 
     ctx.emitter.label(&invalid_label);
     emit_dynamic_new_fatal(ctx, &required_parent);
+
+    for (refusal, label) in visibility_refusals.iter().zip(refusal_labels.iter()) {
+        ctx.emitter.label(label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        super::super::exceptions::emit_error_at(
+            ctx,
+            &refusal.message,
+            refusal_location.clone(),
+        );
+    }
 
     for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
@@ -239,18 +263,28 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
     for (refusal, label) in refusals.iter().zip(refusal_labels.iter()) {
         ctx.emitter.label(label);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        if refusal.argument_count {
-            super::super::exceptions::emit_argument_count_error(
-                ctx,
-                &refusal.message,
-                refusal_location.clone(),
-            );
-        } else {
-            super::super::exceptions::emit_type_error_at(
-                ctx,
-                &refusal.message,
-                refusal_location.clone(),
-            );
+        match refusal.kind {
+            DynamicNewRefusalKind::ArgumentCount => {
+                super::super::exceptions::emit_argument_count_error(
+                    ctx,
+                    &refusal.message,
+                    refusal_location.clone(),
+                );
+            }
+            DynamicNewRefusalKind::TypeError => {
+                super::super::exceptions::emit_type_error_at(
+                    ctx,
+                    &refusal.message,
+                    refusal_location.clone(),
+                );
+            }
+            DynamicNewRefusalKind::Error => {
+                super::super::exceptions::emit_error_at(
+                    ctx,
+                    &refusal.message,
+                    refusal_location.clone(),
+                );
+            }
         }
     }
 

@@ -31,6 +31,9 @@ pub(super) fn lower_expr_for_parameter(
     destination: &PhpType,
     source_typed: bool,
 ) -> LoweredValue {
+    if let Some(lowered) = lower_mixed_union_parameter(ctx, expr, destination) {
+        return lowered;
+    }
     if destination.codegen_repr() == PhpType::Callable {
         let source = match &expr.kind {
             ExprKind::NamedArg { value, .. } => value.as_ref(),
@@ -63,6 +66,68 @@ fn coerce_float_arithmetic(
         return value;
     }
     coerce_to_float_at_span(ctx, value, Some(span))
+}
+
+/// Applies PHP's runtime union-member selection to a boxed `Mixed` place.
+///
+/// A local or declared property whose storage widened to `Mixed` (an untyped parameter,
+/// or a union-typed local) still has to honor the callee's declared union. The checker accepts those
+/// arguments because `Mixed` is compatible with every member, but the declared type is
+/// flattened to `Mixed` in the parameter slot, so the concrete EIR cast arm cannot see
+/// which member PHP would choose. Build the same weak-mode selection expression the enum
+/// argument path uses, guard it with the matching runtime acceptance predicate, and raise
+/// a catchable `TypeError` for a value that fits no member.
+///
+/// Only a side-effect-free place (a local, declared property, or element of those) is
+/// eligible: the generated predicate and selection expression read it more than once,
+/// exactly like the existing enum argument binding. `static_place_type` is what proves the
+/// read cannot invoke a magic accessor.
+fn lower_mixed_union_parameter(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    destination: &PhpType,
+) -> Option<LoweredValue> {
+    let PhpType::Union(members) = destination else {
+        return None;
+    };
+    if members.contains(&PhpType::Mixed) {
+        return None;
+    }
+    let source_ty = super::ref_place_args::static_place_type(ctx, expr)?;
+    if source_ty.codegen_repr() != PhpType::Mixed {
+        return None;
+    }
+    let bound = crate::types::param_binding::runtime_scalar_param_binding(destination, expr)?;
+    let accepted = super::enum_argument_guards::accepts_type(destination, expr, expr.span)?;
+    let accepted = lower_expr(ctx, &accepted);
+    let ok = ctx.builder.create_named_block("param.union.ok", Vec::new());
+    let bad = ctx.builder.create_named_block("param.union.bad", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: accepted.value,
+        then_target: ok,
+        then_args: Vec::new(),
+        else_target: bad,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(bad);
+    let expected = crate::types::diagnostic_names::php_type_name(destination);
+    let actual = super::enum_argument_guards::runtime_debug_type(expr, expr.span);
+    let message = super::enum_argument_guards::concat(
+        Expr::new(
+            ExprKind::StringLiteral(format!("Argument must be of type {expected}, ")),
+            expr.span,
+        ),
+        super::enum_argument_guards::concat(
+            actual,
+            Expr::new(ExprKind::StringLiteral(" given".to_string()), expr.span),
+            expr.span,
+        ),
+        expr.span,
+    );
+    super::enum_argument_guards::throw_message(ctx, "TypeError", message, expr.span);
+    ctx.builder.position_at_end(ok);
+    Some(lower_expr_for_destination(ctx, &bound, destination))
+
 }
 
 /// Makes a checked arithmetic tree's existing integer destination conversion explicit.

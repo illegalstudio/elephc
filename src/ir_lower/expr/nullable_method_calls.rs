@@ -146,6 +146,18 @@ pub(super) fn lower_method_call_with_receiver(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    // The ordinary call path applies this gate before dispatching; the nullsafe call reaches
+    // this helper directly after its own null check, so it needs the same static-only reroute.
+    if op == Op::NullsafeMethodCall {
+        if let Some(class_name) = static_only_method_class(ctx, object.value, method) {
+            let receiver = static_receiver_for_class_name(&class_name);
+            let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
+            let result = lower_static_method_call(ctx, &receiver, method, args, expr);
+            unpin_in_flight_owners(ctx, pins, expr.span);
+            release_owning_receiver_temporary(ctx, object, expr.span);
+            return result;
+        }
+    }
     let object = refine_member_receiver(ctx, object, expr);
     if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
         return call;

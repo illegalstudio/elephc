@@ -42,6 +42,20 @@ pub(super) fn lower_method_call(
     };
     let object_expr = object;
     let mut object = lower_member_receiver(ctx, object_expr, expr);
+    // PHP permits `$object->staticMethod()` and resolves the static method from the
+    // object's class. The checker accepts that shape alongside the instance table; here
+    // the receiver is evaluated for its side effects, then the call is emitted through the
+    // static-method path so codegen never passes the object as `$this`.
+    if op == Op::MethodCall {
+        if let Some(class_name) = static_only_method_class(ctx, object.value, method) {
+            let receiver = static_receiver_for_class_name(&class_name);
+            let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
+            let result = lower_static_method_call(ctx, &receiver, method, args, expr);
+            unpin_in_flight_owners(ctx, pins, expr.span);
+            release_owning_receiver_temporary(ctx, object, expr.span);
+            return result;
+        }
+    }
     if op == Op::MethodCall && args.is_empty()
         && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
         && matches!(php_symbol_key(method).as_str(),
@@ -314,6 +328,39 @@ fn method_receiver_single_class(ty: &PhpType) -> Option<&str> {
         }
         _ => None,
     }
+}
+
+/// Returns the receiver's class when `method` exists only in its static method table.
+///
+/// The checker accepts `$object->staticMethod()` because PHP resolves it statically; this
+/// predicate is the lowering-side half of that rule. A class that declares an instance
+/// method of the same name keeps ordinary instance dispatch.
+pub(super) fn static_only_method_class(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+) -> Option<String> {
+    let class_name = match ctx.builder.value_php_type(object).codegen_repr() {
+        PhpType::Object(class_name) => class_name.trim_start_matches('\\').to_string(),
+        _ => return None,
+    };
+    let key = php_symbol_key(method);
+    let class_info = ctx.classes.get(class_name.as_str())?;
+    if class_info.methods.contains_key(&key) {
+        return None;
+    }
+    class_info.static_methods.contains_key(&key).then_some(class_name)
+}
+
+/// Builds the static receiver naming `class_name` for a static call via an instance.
+pub(super) fn static_receiver_for_class_name(class_name: &str) -> crate::parser::ast::StaticReceiver {
+    use crate::parser::ast::StaticReceiver;
+    let parts = class_name
+        .trim_start_matches('\\')
+        .split('\\')
+        .map(str::to_string)
+        .collect();
+    StaticReceiver::Named(crate::names::Name::qualified(parts))
 }
 
 /// Returns the signature to use for method-call argument normalization.
