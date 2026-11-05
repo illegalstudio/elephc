@@ -226,29 +226,43 @@ jobs:
         # workspace is already built.
         run: cargo test --workspace --doc
 
+      # Restore exact package artifacts before installs. A shared native-root cache
+      # can replace current XML shims with another package's older snapshot.
       - name: Cache managed native libxml2
         # The xml bridge's parser is libxml2 itself (the managed `libxml2` catalog
         # package: pinned 2.15.3 plus the Elephc-owned shim, see
-        # src/native_deps/recipes/libxml2.rs). Shared default cache path, like the
-        # curl jobs, keyed on the committed lock plus the recipe sources that decide
+        # src/native_deps/recipes/libxml2.rs). Separate package artifacts, keyed on
+        # the committed locks plus all embedded shim and recipe sources that decide
         # what gets built; the codegen shards below restore the same key, so the
         # from-source build happens here once and never in a shard.
         uses: actions/cache@v6
         with:
-          path: ~/.cache/elephc/native
-          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            libxml2-native-macos-aarch64-
+          path: |
+            ~/.cache/elephc/native/artifacts/libxml2
+            ~/.cache/elephc/native/artifacts/libmagic
+            ~/.cache/elephc/native/sources
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
 
       - name: Cache managed native gmp
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
         # committed lock plus the recipe sources that decide what gets built.
         uses: actions/cache@v6
         with:
-          path: ~/.cache/elephc/native
+          path: |
+            ~/.cache/elephc/native/artifacts/gmp
+            ~/.cache/elephc/native/sources
           key: gmp-native-macos-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
-          restore-keys: |
-            gmp-native-macos-aarch64-
+
+      - name: Cache managed native openssl-crypto/zlib
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/openssl-crypto
+            ~/.cache/elephc/native/artifacts/zlib
+            ~/.cache/elephc/native/sources
+          key: openssl-crypto-native-macos-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
 
       - name: Materialize managed native libxml2
         # `install --locked` reproduces exactly the version pinned in the committed
@@ -287,16 +301,6 @@ jobs:
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh macos-aarch64)
           ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
-      - name: Cache managed native openssl-crypto/zlib
-        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
-        # Archive jobs build it once; codegen shards restore the same managed cache.
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/elephc/native
-          key: openssl-crypto-native-macos-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
-          restore-keys: |
-            openssl-crypto-native-macos-aarch64-
-
       - name: Materialize managed native openssl-crypto/zlib
         run: |
           ./target/debug/elephc native install --locked \
@@ -458,29 +462,43 @@ jobs:
         # workspace is already built.
         run: cargo test --workspace --doc
 
+      # Restore exact package artifacts before installs. A shared native-root cache
+      # can replace current XML shims with another package's older snapshot.
       - name: Cache managed native libxml2
         # The xml bridge's parser is libxml2 itself (the managed `libxml2` catalog
         # package: pinned 2.15.3 plus the Elephc-owned shim, see
-        # src/native_deps/recipes/libxml2.rs). Shared default cache path, like the
-        # curl jobs, keyed on the committed lock plus the recipe sources that decide
+        # src/native_deps/recipes/libxml2.rs). Separate package artifacts, keyed on
+        # the committed locks plus all embedded shim and recipe sources that decide
         # what gets built; the codegen shards below restore the same key, so the
         # from-source build happens here once and never in a shard.
         uses: actions/cache@v6
         with:
-          path: ~/.cache/elephc/native
-          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            libxml2-native-linux-x86_64-
+          path: |
+            ~/.cache/elephc/native/artifacts/libxml2
+            ~/.cache/elephc/native/artifacts/libmagic
+            ~/.cache/elephc/native/sources
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
 
       - name: Cache managed native gmp
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
         # committed lock plus the recipe sources that decide what gets built.
         uses: actions/cache@v6
         with:
-          path: ~/.cache/elephc/native
+          path: |
+            ~/.cache/elephc/native/artifacts/gmp
+            ~/.cache/elephc/native/sources
           key: gmp-native-linux-x86_64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
-          restore-keys: |
-            gmp-native-linux-x86_64-
+
+      - name: Cache managed native openssl-crypto/zlib
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/openssl-crypto
+            ~/.cache/elephc/native/artifacts/zlib
+            ~/.cache/elephc/native/sources
+          key: openssl-crypto-native-linux-x86_64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
 
       - name: Materialize managed native libxml2
         # `install --locked` reproduces exactly the version pinned in the committed
@@ -519,16 +537,6 @@ jobs:
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-x86_64)
           ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
-      - name: Cache managed native openssl-crypto/zlib
-        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
-        # Archive jobs build it once; codegen shards restore the same managed cache.
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/elephc/native
-          key: openssl-crypto-native-linux-x86_64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
-          restore-keys: |
-            openssl-crypto-native-linux-x86_64-
-
       - name: Materialize managed native openssl-crypto/zlib
         run: |
           ./target/debug/elephc native install --locked \
@@ -682,29 +690,43 @@ jobs:
         # workspace is already built.
         run: cargo test --workspace --doc
 
+      # Restore exact package artifacts before installs. A shared native-root cache
+      # can replace current XML shims with another package's older snapshot.
       - name: Cache managed native libxml2
         # The xml bridge's parser is libxml2 itself (the managed `libxml2` catalog
         # package: pinned 2.15.3 plus the Elephc-owned shim, see
-        # src/native_deps/recipes/libxml2.rs). Shared default cache path, like the
-        # curl jobs, keyed on the committed lock plus the recipe sources that decide
+        # src/native_deps/recipes/libxml2.rs). Separate package artifacts, keyed on
+        # the committed locks plus all embedded shim and recipe sources that decide
         # what gets built; the codegen shards below restore the same key, so the
         # from-source build happens here once and never in a shard.
         uses: actions/cache@v6
         with:
-          path: ~/.cache/elephc/native
-          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            libxml2-native-linux-aarch64-
+          path: |
+            ~/.cache/elephc/native/artifacts/libxml2
+            ~/.cache/elephc/native/artifacts/libmagic
+            ~/.cache/elephc/native/sources
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
 
       - name: Cache managed native gmp
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
         # committed lock plus the recipe sources that decide what gets built.
         uses: actions/cache@v6
         with:
-          path: ~/.cache/elephc/native
+          path: |
+            ~/.cache/elephc/native/artifacts/gmp
+            ~/.cache/elephc/native/sources
           key: gmp-native-linux-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
-          restore-keys: |
-            gmp-native-linux-aarch64-
+
+      - name: Cache managed native openssl-crypto/zlib
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/openssl-crypto
+            ~/.cache/elephc/native/artifacts/zlib
+            ~/.cache/elephc/native/sources
+          key: openssl-crypto-native-linux-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
 
       - name: Materialize managed native libxml2
         # `install --locked` reproduces exactly the version pinned in the committed
@@ -743,16 +765,6 @@ jobs:
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-aarch64)
           ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
-      - name: Cache managed native openssl-crypto/zlib
-        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
-        # Archive jobs build it once; codegen shards restore the same managed cache.
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/elephc/native
-          key: openssl-crypto-native-linux-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
-          restore-keys: |
-            openssl-crypto-native-linux-aarch64-
-
       - name: Materialize managed native openssl-crypto/zlib
         run: |
           ./target/debug/elephc native install --locked \
@@ -1409,16 +1421,41 @@ jobs:
         run: |
           sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
+      # Restore exact package artifacts before installs. A shared native-root cache
+      # can replace current XML shims with another package's older snapshot.
       - name: Cache managed native libxml2
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
         # libxml2 artifact (see tests/codegen/support/xml_native.rs). Same key as the
         # build-archive job that already materialized it, so this is a restore.
         uses: actions/cache@v6
         with:
-          path: ~/.cache/elephc/native
-          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            libxml2-native-macos-aarch64-
+          path: |
+            ~/.cache/elephc/native/artifacts/libxml2
+            ~/.cache/elephc/native/artifacts/libmagic
+            ~/.cache/elephc/native/sources
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
+
+      - name: Cache managed native gmp
+        # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
+        # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
+        # build-archive job that already materialized it, so this is a restore.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/gmp
+            ~/.cache/elephc/native/sources
+          key: gmp-native-macos-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+
+      - name: Cache managed native openssl-crypto/zlib
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/openssl-crypto
+            ~/.cache/elephc/native/artifacts/zlib
+            ~/.cache/elephc/native/sources
+          key: openssl-crypto-native-macos-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
 
       - name: Extract test archive
         # The same nextest archive that carries the codegen_tests binary also carries
@@ -1441,17 +1478,6 @@ jobs:
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
-      - name: Cache managed native gmp
-        # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
-        # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
-        # build-archive job that already materialized it, so this is a restore.
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/elephc/native
-          key: gmp-native-macos-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
-          restore-keys: |
-            gmp-native-macos-aarch64-
-
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this
         # installation; the guard makes the step a no-op on macOS and warm images.
@@ -1468,16 +1494,6 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/gmp/elephc.toml
-      - name: Cache managed native openssl-crypto/zlib
-        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
-        # Archive jobs build it once; codegen shards restore the same managed cache.
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/elephc/native
-          key: openssl-crypto-native-macos-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
-          restore-keys: |
-            openssl-crypto-native-macos-aarch64-
-
       - name: Materialize managed native openssl-crypto/zlib
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
@@ -1578,16 +1594,41 @@ jobs:
           name: nextest-archive-codegen-linux-x86_64
           path: ${{ runner.temp }}
 
+      # Restore exact package artifacts before installs. A shared native-root cache
+      # can replace current XML shims with another package's older snapshot.
       - name: Cache managed native libxml2
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
         # libxml2 artifact (see tests/codegen/support/xml_native.rs). Same key as the
         # build-archive job that already materialized it, so this is a restore.
         uses: actions/cache@v6
         with:
-          path: ~/.cache/elephc/native
-          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            libxml2-native-linux-x86_64-
+          path: |
+            ~/.cache/elephc/native/artifacts/libxml2
+            ~/.cache/elephc/native/artifacts/libmagic
+            ~/.cache/elephc/native/sources
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
+
+      - name: Cache managed native gmp
+        # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
+        # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
+        # build-archive job that already materialized it, so this is a restore.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/gmp
+            ~/.cache/elephc/native/sources
+          key: gmp-native-linux-x86_64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+
+      - name: Cache managed native openssl-crypto/zlib
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/openssl-crypto
+            ~/.cache/elephc/native/artifacts/zlib
+            ~/.cache/elephc/native/sources
+          key: openssl-crypto-native-linux-x86_64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
 
       - name: Extract test archive
         # The same nextest archive that carries the codegen_tests binary also carries
@@ -1610,17 +1651,6 @@ jobs:
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
 
-      - name: Cache managed native gmp
-        # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
-        # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
-        # build-archive job that already materialized it, so this is a restore.
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/elephc/native
-          key: gmp-native-linux-x86_64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
-          restore-keys: |
-            gmp-native-linux-x86_64-
-
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this
         # installation; the guard makes the step a no-op on macOS and warm images.
@@ -1637,16 +1667,6 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/gmp/elephc.toml
-      - name: Cache managed native openssl-crypto/zlib
-        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
-        # Archive jobs build it once; codegen shards restore the same managed cache.
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/elephc/native
-          key: openssl-crypto-native-linux-x86_64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
-          restore-keys: |
-            openssl-crypto-native-linux-x86_64-
-
       - name: Materialize managed native openssl-crypto/zlib
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
@@ -1737,16 +1757,41 @@ jobs:
           name: nextest-archive-codegen-linux-aarch64
           path: ${{ runner.temp }}
 
+      # Restore exact package artifacts before installs. A shared native-root cache
+      # can replace current XML shims with another package's older snapshot.
       - name: Cache managed native libxml2
         # tests/codegen/xml fixtures link the elephc_xml bridge against the managed
         # libxml2 artifact (see tests/codegen/support/xml_native.rs). Same key as the
         # build-archive job that already materialized it, so this is a restore.
         uses: actions/cache@v6
         with:
-          path: ~/.cache/elephc/native
-          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            libxml2-native-linux-aarch64-
+          path: |
+            ~/.cache/elephc/native/artifacts/libxml2
+            ~/.cache/elephc/native/artifacts/libmagic
+            ~/.cache/elephc/native/sources
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
+
+      - name: Cache managed native gmp
+        # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
+        # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
+        # build-archive job that already materialized it, so this is a restore.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/gmp
+            ~/.cache/elephc/native/sources
+          key: gmp-native-linux-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+
+      - name: Cache managed native openssl-crypto/zlib
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/openssl-crypto
+            ~/.cache/elephc/native/artifacts/zlib
+            ~/.cache/elephc/native/sources
+          key: openssl-crypto-native-linux-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
 
       - name: Extract test archive
         # The same nextest archive that carries the codegen_tests binary also carries
@@ -1769,17 +1814,6 @@ jobs:
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
 
-      - name: Cache managed native gmp
-        # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
-        # artifact (see tests/codegen/support/gmp_native.rs). Same key as the
-        # build-archive job that already materialized it, so this is a restore.
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/elephc/native
-          key: gmp-native-linux-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
-          restore-keys: |
-            gmp-native-linux-aarch64-
-
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this
         # installation; the guard makes the step a no-op on macOS and warm images.
@@ -1796,16 +1830,6 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/gmp/elephc.toml
-      - name: Cache managed native openssl-crypto/zlib
-        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
-        # Archive jobs build it once; codegen shards restore the same managed cache.
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/elephc/native
-          key: openssl-crypto-native-linux-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
-          restore-keys: |
-            openssl-crypto-native-linux-aarch64-
-
       - name: Materialize managed native openssl-crypto/zlib
         run: |
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
@@ -2606,10 +2630,10 @@ jobs:
       - name: Cache managed native libxml2 for iOS
         uses: actions/cache@v6
         with:
-          path: ${{ runner.temp }}/elephc-native
-          key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            xml-native-${{ matrix.elephc_target }}-
+          path: |
+            ${{ runner.temp }}/elephc-native/artifacts/libxml2
+            ${{ runner.temp }}/elephc-native/sources
+          key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
 
       - name: Build and link xml with the managed libxml2
         env:
