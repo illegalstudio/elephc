@@ -1040,6 +1040,10 @@ pub(super) fn set_hook_receiver_has_accessor(
 
 /// Lowers a write to a set-hooked property as a call to its `__propset_<p>($value)` accessor,
 /// passing the assigned value as the single argument and releasing it if it was an owning temporary.
+///
+/// The accessor can throw (its own `throw`, or the typed-property guard on its raw backing
+/// write), so an owning RHS temporary is pinned in the unwind chain for the call; otherwise
+/// the release after the call is skipped and a caught exception strands the temporary.
 pub(super) fn lower_property_hook_set(
     ctx: &mut LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
@@ -1048,6 +1052,9 @@ pub(super) fn lower_property_hook_set(
     span: Span,
 ) {
     let method_data = ctx.intern_string(&property_hook_set_method(property));
+    // The caller's `PropertyWriteReceiver` already publishes any independent receiver lease,
+    // so only the value operand needs a record; a second receiver record would release that
+    // lease twice when the accessor throws.
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
     ctx.emit_void(
         Op::MethodCall,
