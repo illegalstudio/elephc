@@ -44,7 +44,10 @@ multiple bytes.
 - `getTokenName(): ?string` returns a symbolic name, the character for a single-byte
   token, or `null` for an unknown named-token ID.
 - `is(int|string|array $kind): bool` compares IDs and text strictly. Arrays are tested
-  in order and must contain integer or string candidates.
+  in order and must contain integer or string candidates. The compiled prelude declares
+  the parameter as `mixed` internally so invalid bool/float/null/object values raise the
+  same internal `TypeError` instead of being weakly coerced; valid calls accept the three
+  documented shapes.
 - `isIgnorable(): bool` recognizes whitespace, comments, doc comments and full opening tags.
 - `__toString(): string` returns the current text. The class implements `Stringable`.
 
