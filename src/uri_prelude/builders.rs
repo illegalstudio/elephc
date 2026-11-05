@@ -207,10 +207,12 @@ namespace Uri\WhatWg {
         private string $path = "";
         private ?string $query = null;
         private ?string $fragment = null;
+        private array $warnings = [];
 
         public function reset(): static
         {
             $this->scheme = "";
+            $this->warnings = [];
             $this->username = null;
             $this->password = null;
             $this->host = null;
@@ -223,6 +225,7 @@ namespace Uri\WhatWg {
 
         public function setScheme(string $scheme): static
         {
+            $this->__elephc_record_invalid_unit($scheme);
             $scheme = self::__elephc_strip_newlines($scheme);
             if (\elephc_uri_validate(1, 0, \bin2hex($scheme)) !== 0) {
                 throw new \Uri\WhatWg\InvalidUrlException('The specified scheme is malformed (MissingSchemeNonRelativeUrl)');
@@ -268,24 +271,35 @@ namespace Uri\WhatWg {
 
         public function setPath(string $path): static
         {
-            $this->path = $path;
+            $this->__elephc_record_invalid_unit($path);
+            $this->path = self::__elephc_strip_newlines($path);
             return $this;
         }
 
         public function setQuery(?string $query): static
         {
+            if ($query !== null) {
+                $this->__elephc_record_invalid_unit($query);
+                $query = self::__elephc_strip_newlines($query);
+            }
             $this->query = $query;
             return $this;
         }
 
         public function setFragment(?string $fragment): static
         {
+            if ($fragment !== null) {
+                $this->__elephc_record_invalid_unit($fragment);
+                $fragment = self::__elephc_strip_newlines($fragment);
+            }
             $this->fragment = $fragment;
             return $this;
         }
 
         public function build(?\Uri\WhatWg\Url $baseUrl = null, &$softErrors = null): \Uri\WhatWg\Url
         {
+            $builderWarnings = $this->warnings;
+            $this->warnings = [];
             $normalizedHost = $this->host === null ? null : \trim($this->host, "\t\n\r");
             $special = \in_array($this->scheme, ['http', 'https', 'ws', 'wss', 'ftp', 'file'], true);
             $hostErrors = [];
@@ -297,7 +311,11 @@ namespace Uri\WhatWg {
                 );
             }
             if ($special && $this->scheme !== 'file' && $normalizedHost === null) {
-                throw new \Uri\WhatWg\InvalidUrlException('The specified host is malformed (HostMissing)');
+                $softErrors = [];
+                throw new \Uri\WhatWg\InvalidUrlException(
+                    'The specified host is malformed (HostMissing)',
+                    \array_merge((array) $builderWarnings, [new \Uri\WhatWg\UrlValidationError('', \Uri\WhatWg\UrlValidationErrorType::HostMissing, true)]),
+                );
             }
             if ($normalizedHost === null || $normalizedHost === '' || $this->scheme === 'file') {
                 if ($this->username !== null && $this->username !== '') {
@@ -316,17 +334,25 @@ namespace Uri\WhatWg {
                 && $baseUrl->getHostType() === null;
             if ($baseOpaque) {
                 $trimmedPath = self::__elephc_strip_newlines($this->path);
+                $pathWarnings = \array_slice((array) $builderWarnings, 0, 0);
+                if ($trimmedPath !== '') {
+                    $pathWarnings = (array) $builderWarnings;
+                }
                 if ($this->host !== null) {
-                    self::__elephc_throw_missing_scheme('host');
+                    $softErrors = [];
+                    self::__elephc_throw_missing_scheme('host', (array) $builderWarnings);
                 }
                 if ($trimmedPath !== '') {
-                    self::__elephc_throw_missing_scheme('path');
+                    $softErrors = [];
+                    self::__elephc_throw_missing_scheme('path', (array) $builderWarnings);
                 }
                 if ($this->query !== null) {
-                    self::__elephc_throw_missing_scheme('query');
+                    $softErrors = [];
+                    self::__elephc_throw_missing_scheme('query', $pathWarnings);
                 }
                 if ($this->fragment === null) {
-                    self::__elephc_throw_missing_scheme('path');
+                    $softErrors = [];
+                    self::__elephc_throw_missing_scheme('path', $pathWarnings);
                 }
             }
 
@@ -429,7 +455,16 @@ namespace Uri\WhatWg {
                 if ($this->fragment === '') {
                     $url = $url->withFragment('');
                 }
-                $extraErrors = [];
+                if (($this->username !== null || $this->password !== null) && \is_array($softErrors)) {
+                    $filtered = [];
+                    foreach ($softErrors as $entry) {
+                        if ($entry->type !== \Uri\WhatWg\UrlValidationErrorType::InvalidCredentials) {
+                            $filtered[] = $entry;
+                        }
+                    }
+                    $softErrors = $filtered;
+                }
+                $extraErrors = (array) $builderWarnings;
                 if ($this->path !== '' && \str_contains($this->path, '#')) {
                     $extraErrors[] = new \Uri\WhatWg\UrlValidationError(
                         \substr($this->path, (int) \strpos($this->path, '#')),
@@ -449,9 +484,10 @@ namespace Uri\WhatWg {
                 }
                 return $url;
             } catch (\Uri\WhatWg\InvalidUrlException $error) {
+                $softErrors = [];
                 throw new \Uri\WhatWg\InvalidUrlException(
                     self::__elephc_component_message($error->getMessage(), $this->path, $this->query, $this->fragment, $this->host),
-                    $error->errors,
+                    \array_merge($error->errors, (array) $builderWarnings),
                 );
             }
         }
@@ -476,18 +512,41 @@ namespace Uri\WhatWg {
             return \str_replace('The specified URI is malformed', 'The specified ' . $component . ' is malformed', $message);
         }
 
-        private static function __elephc_throw_missing_scheme(string $component): void
+        private static function __elephc_throw_missing_scheme(string $component, array $warnings = []): void
         {
+            $warnings[] = new \Uri\WhatWg\UrlValidationError(
+                '',
+                \Uri\WhatWg\UrlValidationErrorType::MissingSchemeNonRelativeUrl,
+                true,
+            );
             throw new \Uri\WhatWg\InvalidUrlException(
                 'The specified ' . $component . ' is malformed (MissingSchemeNonRelativeUrl)',
-                [
-                    new \Uri\WhatWg\UrlValidationError(
-                        '',
-                        \Uri\WhatWg\UrlValidationErrorType::MissingSchemeNonRelativeUrl,
-                        true,
-                    ),
-                ],
+                $warnings,
             );
+        }
+
+        private function __elephc_record_invalid_unit(string $value): void
+        {
+            $first = -1;
+            $tab = \strpos($value, "\t");
+            $newline = \strpos($value, "\n");
+            $carriage = \strpos($value, "\r");
+            if ($tab !== false) {
+                $first = (int) $tab;
+            }
+            if ($newline !== false && ($first < 0 || (int) $newline < $first)) {
+                $first = (int) $newline;
+            }
+            if ($carriage !== false && ($first < 0 || (int) $carriage < $first)) {
+                $first = (int) $carriage;
+            }
+            if ($first >= 0) {
+                $this->warnings[] = new \Uri\WhatWg\UrlValidationError(
+                    \substr($value, $first),
+                    \Uri\WhatWg\UrlValidationErrorType::InvalidUrlUnit,
+                    false,
+                );
+            }
         }
 
         private static function __elephc_strip_newlines(string $value): string
