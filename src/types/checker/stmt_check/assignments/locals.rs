@@ -2034,6 +2034,9 @@ pub(super) fn check_list_unpack(
         {
             PhpType::Mixed
         }
+        // An element of a list only something else fills (flex's `$retries`, appended to from a
+        // closure), and php destructures null into nulls.
+        PhpType::Never | PhpType::Void => PhpType::Mixed,
         _ => {
             for var in vars {
                 poison_unbound_local(env, var);

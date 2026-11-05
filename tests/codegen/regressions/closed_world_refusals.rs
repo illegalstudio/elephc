@@ -221,12 +221,13 @@ function collect(bool $add): array {
     $retries = [];
     $note = function (string $url) use (&$retries) { $retries[] = [$url, 1]; };
     if ($add) { $note('a'); $note('b'); }
+    foreach ($retries as [$url, $n]) { echo $url, $n, ' '; }
     return array_column($retries, 0);
 }
 echo implode(',', collect(true)), '|', implode(',', collect(false)), "\n";
 "#,
     );
-    assert_eq!(out, "a,b|\n");
+    assert_eq!(out, "a1 b1 a,b|\n");
 }
 
 /// A container pointer has no null, so a by-reference array parameter that stores one takes a
