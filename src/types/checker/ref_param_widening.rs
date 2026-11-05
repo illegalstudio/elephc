@@ -594,6 +594,13 @@ impl Checker {
         {
             return true;
         }
+        // A container pointer has no null: `array &$options` then `$options = null;`, which is how
+        // `AmpResponse::generateResponse()` drops what the request no longer needs.
+        if matches!(stored, PhpType::Void)
+            && matches!(declared.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
+            return true;
+        }
         match self.merged_assignment_type(declared, stored) {
             None => true,
             // An UNKNOWN value stored into a declared CONTAINER is not evidence. `mixed` is what

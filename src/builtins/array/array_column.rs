@@ -65,6 +65,8 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             PhpType::Mixed | PhpType::Union(_) => {
                 Ok(PhpType::Array(Box::new(PhpType::Mixed)))
             }
+            // Rows of a list: flex's `Downloader` takes `array_column($retries, 0)`.
+            PhpType::Array(row) => Ok(PhpType::Array(row)),
             _ => Err(CompileError::new(
                 cx.span,
                 "array_column() requires an array of associative arrays",

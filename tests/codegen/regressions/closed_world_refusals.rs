@@ -212,6 +212,45 @@ echo (new Loop(new Client, $pool))->wait(), (new Loop(new Client, null))->wait()
     assert_eq!(out, "1-1\n");
 }
 
+/// `array_column()` over rows that are lists: flex's `Downloader` takes `array_column($retries, 0)`.
+#[test]
+fn test_array_column_over_list_rows() {
+    let out = compile_and_run(
+        r#"<?php
+$retries = [[1, 'a'], [2, 'b']];
+echo implode(',', array_column($retries, 0)), ' ', implode(',', array_column($retries, 1, 0)), "\n";
+"#,
+    );
+    assert_eq!(out, "1,2 a,b\n");
+}
+
+/// A container pointer has no null, so a by-reference array parameter that stores one takes a
+/// boxed cell on both sides of the call: `AmpResponse::generateResponse()` does `$options = null`.
+#[test]
+fn test_a_by_reference_array_parameter_can_store_null() {
+    let out = compile_and_run(
+        r#"<?php
+function generate(array &$options, array &$info): int {
+    $n = count($options);
+    $options = null;
+    $info['n'] = $n;
+    return $n;
+}
+$o = ['a' => 1];
+$i = [];
+echo generate($o, $i), ' ', var_export($o, true), ' ', $i['n'], "\n";
+function outer(array &$options) {
+    $f = static function () use (&$options): void { $options = null; };
+    $f();
+}
+$p = [1];
+outer($p);
+var_dump($p);
+"#,
+    );
+    assert_eq!(out, "1 NULL 1\nNULL\n");
+}
+
 /// `&__get()` hands the magic read its value (nette's `SmartObject`).
 #[test]
 fn test_by_reference_magic_get_reads_the_value() {
