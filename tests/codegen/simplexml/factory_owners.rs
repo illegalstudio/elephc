@@ -35,6 +35,8 @@ function factoryProbeStrictAllocate(string $class): mixed { return __elephc_new_
 function factoryProbeMarkerArgument(): int { echo 'argument|'; return 7; }
 function factoryProbeInterfaceMarker(NativeFactoryAllocationMarker $xml): string { return $xml->marker(factoryProbeMarkerArgument()); }
 function factoryProbeMixedMarker(mixed $xml): mixed { return $xml->marker(factoryProbeMarkerArgument()); }
+function factoryProbeDynamicMarker(mixed $xml, string $method): mixed { return $xml->$method(factoryProbeMarkerArgument()); }
+function factoryProbeNullsafeDynamicMarker(mixed $xml, string $method): mixed { return $xml?->$method(factoryProbeMarkerArgument()); }
 function factoryProbeNullableMarker(?NativeFactoryAllocationMarker $xml): ?string { return $xml?->marker(factoryProbeMarkerArgument()); }
 function factoryProbeTypedMarker(NativeAbstractFactoryXml $xml): string { return $xml->marker(factoryProbeMarkerArgument()); }
 "#;
@@ -68,7 +70,20 @@ foreach ([0, 1, 2, 3] as $call) {
         echo $error->getMessage() === 'Cannot call abstract method EvalAbstractFactoryXml::marker()' ? 'vm-abstract|' : $error->getMessage();
     }
 }
+try { factoryProbeDynamicMarker($evalMarker, $method); }
+catch (Error $error) { echo $error->getMessage() === 'Cannot call abstract method EvalAbstractFactoryXml::marker()' ? 'vm-abstract|' : $error->getMessage(); }
+try { factoryProbeNullsafeDynamicMarker($evalMarker, $method); }
+catch (Error $error) { echo $error->getMessage() === 'Cannot call abstract method EvalAbstractFactoryXml::marker()' ? 'vm-abstract|' : $error->getMessage(); }
 unset($evalMarker, $method, $call, $error);
+class EvalMagicFactoryXml extends SimpleXMLElement {
+    public function __call(string $name, array $args): mixed { echo 'vm-magic|'; return null; }
+}
+abstract class EvalProtectedMagicFactoryXml extends EvalMagicFactoryXml {
+    abstract protected function marker(int $value): string;
+}
+$protectedMagic = simplexml_load_string('<r/>', 'EvalProtectedMagicFactoryXml');
+$protectedMagic->marker(factoryProbeMarkerArgument());
+unset($protectedMagic);
 $evalReflected = new ReflectionClass('EvalAbstractFactoryXml');
 try { $evalReflected->newInstanceWithoutConstructor(); }
 catch (Error $error) { echo 'eval-reflection:', get_class($error), '|'; }
@@ -121,6 +136,8 @@ try {
     let expected = concat!(
         "1Error0|1Error0|1Error0|held|",
         "vm-abstract|vm-abstract|vm-abstract|vm-abstract|",
+        "vm-abstract|vm-abstract|",
+        "argument|vm-magic|",
         "eval-reflection:Error|aot-eval-reflection:Error|",
         "NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:NativeAbstractFactoryXml:ok|",
         "abstract|abstract|abstract|abstract|",
@@ -169,6 +186,85 @@ unset($root, $member, $reflected, $error);
         output.stdout
     };
     let expected = "ReflectionAbstractFactoryXml:ok|ReflectionAbstractFactoryXml:1|Error|";
+    assert_eq!(run(), expected);
+    assert_eq!(without_ir_opt(run), expected);
+}
+
+/// AOT dynamic names and parent magic dispatch reject native abstract methods before arguments.
+#[test]
+fn test_simplexml_aot_abstract_factory_method_dispatch_bundle() {
+    if skip_without_xml_native("test_simplexml_aot_abstract_factory_method_dispatch_bundle") { return; }
+    let source = r#"<?php
+abstract class GuardAbstractFactoryXml extends SimpleXMLElement {
+    abstract public function marker(int $value): string;
+}
+class GuardConcreteFactoryXml extends GuardAbstractFactoryXml {
+    public function marker(int $value): string { return 'concrete:' . $value; }
+}
+class GuardMagicFactoryXml extends SimpleXMLElement {
+    public function __call(string $name, array $args): mixed { return 'magic:' . $name . ':' . $args[0]; }
+}
+abstract class GuardMagicChildFactoryXml extends GuardMagicFactoryXml {
+    abstract public function marker(int $value): string;
+}
+abstract class GuardProtectedMagicFactoryXml extends GuardMagicFactoryXml {
+    abstract protected function marker(int $value): string;
+}
+function guardFactoryArgument(): int { echo 'argument|'; return 7; }
+function guardFactoryName(): string { echo 'name|'; return 'MaRkEr'; }
+function guardFactoryDynamic(GuardAbstractFactoryXml $xml, string $name): mixed { return $xml->$name(guardFactoryArgument()); }
+function guardFactoryMixed(mixed $xml, mixed $name): mixed { return $xml->$name(guardFactoryArgument()); }
+function guardFactoryNullsafe(?GuardAbstractFactoryXml $xml, string $name): mixed { return $xml?->$name(guardFactoryArgument()); }
+function guardFactoryMagic(GuardMagicFactoryXml $xml): mixed { return $xml->marker(guardFactoryArgument()); }
+function guardFactoryMagicNullsafe(?GuardMagicFactoryXml $xml): mixed { return $xml?->marker(guardFactoryArgument()); }
+function guardFactoryMagicDynamic(GuardMagicFactoryXml $xml, string $name): mixed { return $xml->$name(guardFactoryArgument()); }
+function guardFactoryError(Error $error, string $class): void {
+    echo $error->getMessage() === 'Cannot call abstract method ' . $class . '::marker()' ? 'Error|' : $error->getMessage();
+}
+$document = new DOMDocument();
+$document->loadXML('<r/>');
+file_put_contents('factory-dispatch.xml', '<r/>');
+try {
+    foreach ([0, 1, 2] as $factory) {
+        foreach ([GuardAbstractFactoryXml::class, GuardMagicChildFactoryXml::class] as $class) {
+            if ($factory === 0) { $xml = simplexml_load_string('<r/>', $class); }
+            elseif ($factory === 1) { $xml = simplexml_load_file('factory-dispatch.xml', $class); }
+            else { $xml = simplexml_import_dom($document, $class); }
+            if ($xml instanceof GuardAbstractFactoryXml) {
+                try { guardFactoryDynamic($xml, guardFactoryName()); } catch (Error $error) { guardFactoryError($error, $class); }
+                try { guardFactoryMixed($xml, 'marker'); } catch (Error $error) { guardFactoryError($error, $class); }
+                try { guardFactoryNullsafe($xml, 'marker'); } catch (Error $error) { guardFactoryError($error, $class); }
+            }
+            if ($xml instanceof GuardMagicFactoryXml) {
+                try { guardFactoryMagic($xml); } catch (Error $error) { guardFactoryError($error, $class); }
+                try { guardFactoryMagicNullsafe($xml); } catch (Error $error) { guardFactoryError($error, $class); }
+                try { guardFactoryMagicDynamic($xml, 'marker'); } catch (Error $error) { guardFactoryError($error, $class); }
+            }
+            unset($xml, $error);
+        }
+    }
+    $concrete = simplexml_load_string('<r/>', GuardConcreteFactoryXml::class);
+    if ($concrete instanceof GuardAbstractFactoryXml) { echo guardFactoryDynamic($concrete, 'marker'), '|'; }
+    $magic = new GuardMagicFactoryXml('<r/>');
+    echo guardFactoryMagic($magic), '|';
+    $protectedMagic = simplexml_load_string('<r/>', GuardProtectedMagicFactoryXml::class);
+    if ($protectedMagic instanceof GuardMagicFactoryXml) { echo guardFactoryMagic($protectedMagic), '|'; }
+    echo 'null:', (int)(guardFactoryNullsafe(null, 'marker') === null), ':', (int)(guardFactoryMagicNullsafe(null) === null), '|';
+    unset($concrete, $magic, $protectedMagic, $class, $factory, $document);
+} finally { unlink('factory-dispatch.xml'); }
+"#;
+    let expected = concat!(
+        "name|Error|Error|Error|Error|Error|Error|",
+        "name|Error|Error|Error|Error|Error|Error|",
+        "name|Error|Error|Error|Error|Error|Error|",
+        "argument|concrete:7|argument|magic:marker:7|argument|magic:marker:7|null:1:1|",
+    );
+    let run = || {
+        let output = compile_and_run_with_heap_debug(source);
+        assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+        output.stdout
+    };
     assert_eq!(run(), expected);
     assert_eq!(without_ir_opt(run), expected);
 }

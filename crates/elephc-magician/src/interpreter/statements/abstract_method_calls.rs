@@ -33,6 +33,14 @@ pub(in crate::interpreter) fn eval_abstract_instance_method_guard(
     };
     if let Some((declaring, method, visibility)) = metadata {
         if validate_eval_member_access(&declaring, visibility, context).is_err() {
+            let name = context.dynamic_object_class(identity).map(|class| class.name().to_string())
+                .map(Ok).unwrap_or_else(|| runtime_object_class_name(object, values))?;
+            if context.class_method(&name, "__call").is_some_and(|(_, method)| !method.is_static() && !method.is_abstract())
+                || eval_dynamic_class_native_method_metadata(&name, "__call", context, values)?
+                    .is_some_and(|(_, _, is_static, is_abstract)| !is_static && !is_abstract)
+                || eval_native_instance_magic_method_available(&name, context, values)? {
+                return Ok(());
+            }
             return eval_throw_method_access_error(&declaring, &method, visibility, context, values);
         }
         return eval_throw_abstract_method_call_error(&declaring, &method, context, values);

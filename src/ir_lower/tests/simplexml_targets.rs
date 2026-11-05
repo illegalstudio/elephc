@@ -14,6 +14,19 @@ interface NativeFactoryTargetMarker { public function marker(int $value): string
 abstract class NativeAbstractFactoryTargetXml extends SimpleXMLElement implements NativeFactoryTargetMarker {}
 function nativeAbstractTargetArgument(): int { echo 'argument'; return 1; }
 function nativeAbstractTargetMarker(NativeAbstractFactoryTargetXml $xml): string { return $xml->marker(nativeAbstractTargetArgument()); }
+function nativeAbstractTargetDynamic(NativeAbstractFactoryTargetXml $xml, string $name): mixed { return $xml->$name(nativeAbstractTargetArgument()); }
+function nativeAbstractTargetMixedName(mixed $xml, mixed $name): mixed { return $xml?->$name(nativeAbstractTargetArgument()); }
+class NativeMagicFactoryTargetXml extends SimpleXMLElement {
+    public function __call(string $name, array $args): mixed { return 'magic'; }
+}
+abstract class NativeMagicChildTargetXml extends NativeMagicFactoryTargetXml {
+    abstract public function marker(int $value): string;
+}
+abstract class NativeProtectedMagicTargetXml extends NativeMagicFactoryTargetXml {
+    abstract protected function marker(int $value): string;
+}
+function nativeAbstractTargetMagic(NativeMagicFactoryTargetXml $xml): mixed { return $xml->marker(nativeAbstractTargetArgument()); }
+function nativeAbstractTargetNullsafeMagic(?NativeMagicFactoryTargetXml $xml): mixed { return $xml?->marker(nativeAbstractTargetArgument()); }
 $source = $argc > 0 ? 'class EvalConstructorlessTargetXml extends SimpleXMLElement {} $root = new EvalConstructorlessTargetXml("<r><item/></r>"); echo get_class($root->item);' : '';
 eval($source);
 $native = new SimpleXMLElement('<r><item/></r>');
@@ -21,6 +34,12 @@ echo get_class($native->item);
 $abstract = simplexml_load_string('<r/>', NativeAbstractFactoryTargetXml::class);
 echo get_class($abstract);
 if ($abstract instanceof NativeAbstractFactoryTargetXml) { echo nativeAbstractTargetMarker($abstract); }
+if ($abstract instanceof NativeAbstractFactoryTargetXml) { echo nativeAbstractTargetDynamic($abstract, 'marker'); }
+echo nativeAbstractTargetMixedName($abstract, 'marker');
+$magic = simplexml_load_string('<r/>', NativeMagicChildTargetXml::class);
+if ($magic instanceof NativeMagicFactoryTargetXml) { echo nativeAbstractTargetMagic($magic), nativeAbstractTargetNullsafeMagic($magic); }
+$protectedMagic = simplexml_load_string('<r/>', NativeProtectedMagicTargetXml::class);
+if ($protectedMagic instanceof NativeMagicFactoryTargetXml) { echo nativeAbstractTargetMagic($protectedMagic); }
 $without = __elephc_new_without_constructor($argc > 0 ? 'EvalConstructorlessTargetXml' : 'SimpleXMLElement');
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
@@ -29,6 +48,21 @@ $without = __elephc_new_without_constructor($argc > 0 ? 'EvalConstructorlessTarg
     let lookup = call.instructions.iter().position(|inst| inst.op == crate::ir::Op::MethodLookup).unwrap();
     let argument = call.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
     assert!(lookup < argument, "{target}: abstract lookup must precede argument effects");
+    for name in ["nativeAbstractTargetDynamic", "nativeAbstractTargetMixedName", "nativeAbstractTargetMagic", "nativeAbstractTargetNullsafeMagic"] {
+        let call = module.functions.iter().find(|function| function.name == name).unwrap();
+        let lookup = call.instructions.iter().position(|inst| inst.op == crate::ir::Op::MethodLookup).unwrap();
+        let argument = call.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
+        assert!(lookup < argument, "{target}: {name}: lookup must precede argument effects");
+        let guard = &call.instructions[lookup];
+        if name.contains("Magic") {
+            assert!(matches!(guard.immediate, Some(crate::ir::Immediate::Data(id))
+                if module.data.strings[id.as_raw() as usize] == "marker"),
+                "{target}: {name}: inspect the original method before __call rewriting");
+        } else {
+            assert_eq!(guard.operands.len(), 2, "{target}: {name}: inspect the evaluated runtime name");
+            assert!(guard.immediate.is_none(), "{target}: {name}: runtime name must not become a literal");
+        }
+    }
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     assert!(assembly.contains("__elephc_eval_try_allocate_object_v1"), "{target}: missing eval allocation probe");
     assert!(assembly.contains("Cannot instantiate abstract class NativeAbstractFactoryTargetXml"), "{target}: missing strict abstract allocation refusal");

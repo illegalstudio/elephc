@@ -1199,6 +1199,7 @@ pub enum Op {
     NullsafePropGet,
     NullsafeMethodCall,
     /// Rejects an abstract instance target before evaluating call arguments.
+    /// Operand: receiver and a Data method name, or receiver/runtime name without an immediate.
     MethodLookup,
     MethodCall,
     StaticMethodCall,

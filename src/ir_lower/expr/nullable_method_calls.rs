@@ -204,7 +204,7 @@ fn lower_method_call_with_binding(
     // A concrete local load may later unbox physical Mixed storage after eval widens
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
     let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
-    emit_native_factory_method_lookup(ctx, object, dispatch_method, expr.span);
+    emit_native_factory_method_lookup(ctx, object, method, expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))
@@ -306,9 +306,22 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
     }
     let receiver_slot = ctx.local_slots[&receiver_name];
     register_owned_call_operand(ctx, receiver_slot, expr.span);
+    let (method, method_slot) = if ctx.classes.contains_key("SimpleXMLElement") {
+        let method_value = lower_expr(ctx, method);
+        let method_type = ctx.builder.value_php_type(method_value.value);
+        let method_name = ctx.declare_hidden_temp(method_type.clone());
+        store_value_into_temp(ctx, &method_name, method_type, method_value, expr.span);
+        let method_slot = ctx.local_slots[&method_name];
+        register_owned_call_operand(ctx, method_slot, expr.span);
+        let receiver = ctx.load_local(&receiver_name, Some(expr.span));
+        let method = ctx.load_local(&method_name, Some(expr.span));
+        ctx.emit_void(Op::MethodLookup, vec![receiver.value, method.value], None,
+            Op::MethodLookup.default_effects(), Some(expr.span));
+        (Expr::new(ExprKind::Variable(method_name), expr.span), Some(method_slot))
+    } else { (method.clone(), None) };
     let receiver = Expr::new(ExprKind::Variable(receiver_name), expr.span);
     let callback = Expr::new(
-        ExprKind::ArrayLiteral(vec![receiver, method.clone()]),
+        ExprKind::ArrayLiteral(vec![receiver, method]),
         Span::dummy(),
     );
     let mut call_args = Vec::with_capacity(args.len() + 1);
@@ -322,6 +335,7 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
         expr.span,
     );
     let result = lower_expr(ctx, &call);
+    if let Some(slot) = method_slot { retire_owned_call_operand(ctx, slot, expr.span); }
     retire_owned_call_operand(ctx, receiver_slot, expr.span);
     result
 }

@@ -699,7 +699,7 @@ fn validate_instruction_immediate(
         ConstI64 => require_immediate(inst_id, inst, "i64", |imm| matches!(imm, Imm::I64(_))),
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
-        ConstStr | ConstClassName | DataAddr | Warn | MethodLookup | IncludeOnceMark | IncludeOnceGuard
+        ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
         | LoadPropRefCellChecked
         | LoadStaticPropertyRefCell
@@ -718,6 +718,10 @@ fn validate_instruction_immediate(
         | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
+        MethodLookup => match inst.immediate {
+            Some(Imm::Data(_)) | None => Ok(()),
+            _ => Err(ValidationError::UnexpectedImmediate(inst_id)),
+        },
         EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
         }),
@@ -1251,7 +1255,11 @@ fn validate_opcode_rules(
             check_descriptor_from_buffer_resolve(function, inst_id, inst)?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64 buffer index")
         }
-        MethodLookup => check_count(inst_id, inst, 1, "1"),
+        MethodLookup => if inst.immediate.is_some() {
+            check_count(inst_id, inst, 1, "1 for a literal method name")
+        } else {
+            check_count(inst_id, inst, 2, "2 for a runtime method name")
+        },
         DynamicObjectNewWithoutConstructorMixed
         | PropGet
         | PropGetForWrite
