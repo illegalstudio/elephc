@@ -444,3 +444,64 @@ run();
     );
     assert_clean(out, "TypeError|TypeError|null|A|\n");
 }
+
+/// A `mixed` local bound to a by-reference union of `null`, arrays and objects (`?array &$v`,
+/// `array|A &$v`) is checked against the union like php: matching values enter the callee,
+/// anything else raises `TypeError` before it runs.
+#[test]
+fn test_heap_union_reference_rejects_foreign_boxed_values() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A {}
+class B {}
+function src(int $k): mixed { return [7, [1, 2], null, new A(), new B()][$k]; }
+function takeList(?array &$v): string { return $v === null ? "null" : "list" . count($v); }
+function takeEither(array|A &$v): string { return is_array($v) ? "arr" : get_class($v); }
+function run(): void {
+    for ($k = 0; $k < 5; $k++) {
+        $a = src($k);
+        try { echo takeList($a); } catch (TypeError $e) { echo "TE"; }
+        echo ",";
+        $b = src($k);
+        try { echo takeEither($b); } catch (TypeError $e) { echo "TE"; }
+        echo "|";
+    }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "TE,TE|list2,arr|null,TE|TE,A|TE,TE|\n");
+}
+
+/// The boundary checks of by-reference `array`, `?array` and `?A` parameters raise a
+/// `TypeError` the caller's `try` catches even when the callee itself cannot throw: the
+/// exception-flow pass must keep those handlers (it used to drop them as unreachable).
+#[test]
+fn test_by_ref_boundary_checks_keep_their_catch_handlers() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A {}
+function src(int $k): mixed { return $k === 0 ? 7 : ($k === 1 ? [1] : null); }
+function takeArr(array &$v): string { return "in"; }
+function takeNArr(?array &$v): string { return "in"; }
+function takeNA(?A &$v): string { return "in"; }
+function run(): void {
+    foreach ([0, 1, 2] as $k) {
+        $a = src($k);
+        try { echo takeArr($a); } catch (TypeError $e) { echo "TE"; }
+        echo ",";
+        $b = src($k);
+        try { echo takeNArr($b); } catch (TypeError $e) { echo "TE"; }
+        echo ",";
+        $c = src($k);
+        try { echo takeNA($c); } catch (TypeError $e) { echo "TE"; }
+        echo "|";
+    }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "TE,TE,TE|in,in,TE|TE,in,in|\n");
+}

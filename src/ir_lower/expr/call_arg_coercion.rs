@@ -62,6 +62,7 @@ pub(super) fn lower_arg_with_signature(
         return value;
     }
     guard_boxed_object_reference_argument(ctx, sig, index, arg);
+    guard_boxed_heap_union_reference_argument(ctx, sig, index, arg);
     promote_boxed_reference_local_argument(ctx, sig, index, arg);
     promote_reference_return_local_argument(ctx, sig, index, arg);
     // A property by-reference rewrite stages `$temp = <place>` as the argument so the read
@@ -333,6 +334,112 @@ fn guard_boxed_object_reference_argument(
             args: vec![message],
         },
         arg.span,
+    ));
+    ctx.builder.terminate(Terminator::Throw { value: exception.value });
+    ctx.builder.position_at_end(accepted);
+}
+
+/// The members of a by-reference union parameter that holds only `null`, arrays and objects
+/// (`?array`, `array|A`, `A|B|null`), excluding the single nullable class `?A` that
+/// [`guard_boxed_object_reference_argument`] checks; `None` for any other declared type.
+fn heap_union_reference_members(ty: &PhpType) -> Option<&[PhpType]> {
+    let PhpType::Union(members) = ty else {
+        return None;
+    };
+    let heap_only = members.iter().all(|member| {
+        member.is_php_array()
+            || matches!(
+                member,
+                PhpType::Void | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+    });
+    let single_nullable_class = members.len() == 2
+        && members.iter().any(|member| matches!(member, PhpType::Void))
+        && members.iter().any(|member| matches!(member, PhpType::Object(_)));
+    (heap_only && !single_nullable_class).then_some(members.as_slice())
+}
+
+/// Checks a boxed (`mixed`) local bound to a by-reference union of `null`, arrays and objects
+/// (`?array &$read`) against that union before the callee runs: the value must be `null` (when
+/// admitted), an array (when any member is one) or an instance of a member class, else
+/// `TypeError`, like php's parameter check. These members never coerce, so the check is exact.
+fn guard_boxed_heap_union_reference_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return;
+    }
+    let Some((_, declared)) = sig.params.get(index) else {
+        return;
+    };
+    let Some(members) = heap_union_reference_members(declared) else {
+        return;
+    };
+    let ExprKind::Variable(name) = &arg.kind else {
+        return;
+    };
+    if ctx.local_type(name).codegen_repr() != PhpType::Mixed {
+        return;
+    }
+    let span = arg.span;
+    let mut checks: Vec<Expr> = Vec::new();
+    if members.iter().any(|member| matches!(member, PhpType::Void)) {
+        checks.push(Expr::binop(
+            arg.clone(),
+            crate::parser::ast::BinOp::StrictEq,
+            Expr::new(ExprKind::Null, span),
+        ));
+    }
+    if members.iter().any(|member| {
+        member.is_php_array() || matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })
+    }) {
+        checks.push(Expr::new(
+            ExprKind::FunctionCall { name: Name::unqualified("is_array"), args: vec![arg.clone()] },
+            span,
+        ));
+    }
+    for member in members {
+        if let PhpType::Object(class_name) = member {
+            checks.push(Expr::new(
+                ExprKind::InstanceOf {
+                    value: Box::new(arg.clone()),
+                    target: InstanceOfTarget::Name(Name::from(class_name.as_str())),
+                },
+                span,
+            ));
+        }
+    }
+    let Some(first) = checks.first().cloned() else {
+        return;
+    };
+    let condition_expr = checks
+        .into_iter()
+        .skip(1)
+        .fold(first, |acc, check| Expr::binop(acc, crate::parser::ast::BinOp::Or, check));
+    let condition = lower_expr(ctx, &condition_expr);
+    let accepted = ctx.builder.create_named_block("heap.ref.accepted", Vec::new());
+    let rejected = ctx.builder.create_named_block("heap.ref.rejected", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: condition.value,
+        then_target: accepted,
+        then_args: Vec::new(),
+        else_target: rejected,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(rejected);
+    let message = Expr::new(
+        ExprKind::StringLiteral(format!("Argument must be of type {}", declared)),
+        span,
+    );
+    let exception = lower_expr(ctx, &Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified("TypeError"),
+            args: vec![message],
+        },
+        span,
     ));
     ctx.builder.terminate(Terminator::Throw { value: exception.value });
     ctx.builder.position_at_end(accepted);

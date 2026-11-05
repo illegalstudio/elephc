@@ -116,7 +116,40 @@ fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
     // A by-value object parameter also runs the runtime union guard for a
     // `Class|false` / `Class|null` argument before entering the body. Treat every
     // object parameter conservatively so try/catch DCE keeps its handler reachable.
-    signature.params.iter().any(|(_, ty)| matches!(ty.codegen_repr(), PhpType::Object(_)))
+    //
+    // A by-reference parameter of a class (`?A &$v`), of an array (`array &$v`,
+    // `?array &$v`) or of a union of them checks a boxed (`mixed`) argument at the call
+    // boundary and raises `TypeError` there (the EIR reference-argument guards), so it can
+    // throw too.
+    signature.params.iter().enumerate().any(|(index, (_, ty))| {
+        matches!(ty.codegen_repr(), PhpType::Object(_))
+            || (signature.ref_params.get(index).copied().unwrap_or(false)
+                && by_ref_param_checks_boxed_argument(signature, index, ty))
+    })
+}
+
+/// Whether the EIR call lowering guards a boxed argument bound to by-reference parameter
+/// `index` of type `ty`: a php array, a union of `null`, arrays and objects, or a `mixed`
+/// slot declared with a class name.
+fn by_ref_param_checks_boxed_argument(signature: &FunctionSig, index: usize, ty: &PhpType) -> bool {
+    if ty.is_php_array() {
+        return true;
+    }
+    match ty {
+        PhpType::Union(members) => members.iter().all(|member| {
+            member.is_php_array()
+                || matches!(
+                    member,
+                    PhpType::Void | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
+                )
+        }),
+        PhpType::Mixed => matches!(
+            signature.param_type_exprs.get(index).and_then(Option::as_ref),
+            Some(crate::parser::ast::TypeExpr::Named(name))
+                if !name.as_str().eq_ignore_ascii_case("mixed")
+        ),
+        _ => false,
+    }
 }
 
 /// Installs exception summaries for one optimizer pass and restores the previous analysis.
