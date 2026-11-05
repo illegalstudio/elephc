@@ -48,10 +48,10 @@ platform = 'cfg(target_arch = "x86_64")'
 filter = 'test(=ir_lower::tests::eval_native_reference_layout::dynamic_eval_unset_keeps_numeric_alias_payloads_in_the_sync_inventory_on_every_target) or test(=ir_lower::tests::eval_native_reference_layout::dynamic_eval_object_aliases_guard_tags_and_classes_on_every_target) or test(=codegen::eval_property_helpers::reference_getter::tests::hidden_mixed_reference_cells_keep_physical_ownership_on_every_target)'
 threads-required = "num-test-threads"
 
-# Phase records show these single-program XML probes reached assembly or linking
-# at 180s under shared work. Reserve the pool without changing sources or budgets.
+# Phase records show these XML probes reached assembly or linking under shared work.
+# The factory pair reached its unchanged 360s limit in assembly. Keep every case and budget.
 [[profile.ci.overrides]]
-filter = 'test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_constructorless_factories) or test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_factories_after_eval_returns) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval)'
+filter = 'test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_constructorless_factories) or test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_factories_after_eval_returns) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval) or test(=codegen::simplexml::factory_owners::test_simplexml_constructorless_factory_owners_bundle)'
 threads-required = "num-test-threads"
 
 # A fixture bundle (tests/codegen/support/bundle.rs) compiles several opaque-eval programs as

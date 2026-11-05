@@ -21,8 +21,7 @@ echo get_class($native->item);
 $abstract = simplexml_load_string('<r/>', NativeAbstractFactoryTargetXml::class);
 echo get_class($abstract);
 if ($abstract instanceof NativeAbstractFactoryTargetXml) { echo nativeAbstractTargetMarker($abstract); }
-$reflected = new ReflectionClass(NativeAbstractFactoryTargetXml::class);
-$without = $reflected->newInstanceWithoutConstructor();
+$without = __elephc_new_without_constructor($argc > 0 ? 'EvalConstructorlessTargetXml' : 'SimpleXMLElement');
 "#;
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());

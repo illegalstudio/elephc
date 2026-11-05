@@ -107,14 +107,13 @@ try {
         }
         unset($root, $file, $imported, $children, $paths, $cloned, $abstractOwner);
     }
-    $reflected = new ReflectionClass(NativeAbstractFactoryXml::class);
-    try { $reflected->newInstanceWithoutConstructor(); }
-    catch (Error $error) { echo 'reflection:', get_class($error), '|'; }
+    try { factoryProbeStrictAllocate(NativeAbstractFactoryXml::class); }
+    catch (Error $error) { echo 'native-reflection:', get_class($error), '|'; }
     set_error_handler(function(int $level, string $message): bool { return true; });
     echo (int)(simplexml_load_string('<r>', NativeAbstractFactoryXml::class) === false), '|';
     restore_error_handler();
     echo 'null:', (int)(factoryProbeNullableMarker(null) === null), '|';
-    unset($reflected, $error, $class, $document);
+    unset($error, $class, $document);
 } finally { unlink('factory-owners.xml'); }
 "#;
     let escaped = evaluated.replace('\\', "\\\\").replace('\'', "\\'");
@@ -132,7 +131,7 @@ try {
         "argument|concrete:7|argument|concrete:7|argument|concrete:7|argument|concrete:7|",
         "NativeImplicitFactoryXml:NativeImplicitFactoryXml:NativeImplicitFactoryXml:NativeImplicitFactoryXml:NativeImplicitFactoryXml:NativeImplicitFactoryXml:NativeImplicitFactoryXml:ok|",
         "abstract|abstract|abstract|",
-        "reflection:Error|1|null:1|",
+        "native-reflection:Error|1|null:1|",
     );
     let run = || {
         let output = compile_and_run_with_heap_debug(&source);
@@ -140,6 +139,34 @@ try {
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
         output.stdout
     };
+    assert_eq!(run(), expected);
+    assert_eq!(without_ir_opt(run), expected);
+}
+
+/// Public AOT Reflection keeps its abstract native target refusal in an independent heap.
+#[test]
+fn test_simplexml_aot_reflection_keeps_abstract_factories_strict_bundle() {
+    if skip_without_xml_native("test_simplexml_aot_reflection_keeps_abstract_factories_strict_bundle") { return; }
+    let source = r#"<?php
+interface ReflectionAbstractFactoryMarker { public function marker(int $value): string; }
+abstract class ReflectionAbstractFactoryXml extends SimpleXMLElement implements ReflectionAbstractFactoryMarker {
+    abstract public function marker(int $value): string;
+    public function __construct() { throw new Exception('constructor called'); }
+}
+$root = simplexml_load_string('<r><item>ok</item></r>', ReflectionAbstractFactoryXml::class);
+echo get_class($root), ':', (string)$root->item, '|';
+$reflected = new ReflectionClass(ReflectionAbstractFactoryXml::class);
+try { $reflected->newInstanceWithoutConstructor(); }
+catch (Error $error) { echo get_class($error), '|'; }
+unset($root, $reflected, $error);
+"#;
+    let run = || {
+        let output = compile_and_run_with_heap_debug(source);
+        assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+        output.stdout
+    };
+    let expected = "ReflectionAbstractFactoryXml:ok|Error|";
     assert_eq!(run(), expected);
     assert_eq!(without_ir_opt(run), expected);
 }
