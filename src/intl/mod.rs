@@ -4359,7 +4359,7 @@ fn build_time_zone_class() -> Stmt {
         ("getDSTSavings", vec![], vec![]),
         ("getEquivalentID", vec![("timezoneId", TypeExpr::Str, None, false), ("offset", t_mixed(), None, false)], vec![]),
         ("getID", vec![], vec![]),
-        ("getOffset", vec![("timestamp", TypeExpr::Float, None, false), ("local", TypeExpr::Bool, None, false), ("rawOffset", TypeExpr::Int, None, true), ("dstOffset", TypeExpr::Int, None, true)], vec!["rawOffset", "dstOffset"]),
+        ("getOffset", vec![("timestamp", TypeExpr::Float, None, false), ("local", TypeExpr::Bool, None, false), ("rawOffset", t_mixed(), None, true), ("dstOffset", t_mixed(), None, true)], vec!["rawOffset", "dstOffset"]),
         ("getRawOffset", vec![], vec![]),
         ("getRegion", vec![("timezoneId", TypeExpr::Str, None, false)], vec![]),
         ("getTZDataVersion", vec![], vec![]),
