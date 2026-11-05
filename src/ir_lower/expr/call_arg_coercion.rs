@@ -403,13 +403,25 @@ fn guard_boxed_heap_union_reference_argument(
     }
     for member in members {
         if let PhpType::Object(class_name) = member {
-            checks.push(Expr::new(
-                ExprKind::InstanceOf {
-                    value: Box::new(arg.clone()),
-                    target: InstanceOfTarget::Name(Name::from(class_name.as_str())),
-                },
-                span,
-            ));
+            // The generic `object` member has no class to test against: any object fits.
+            let generic = class_name.is_empty() || class_name.eq_ignore_ascii_case("object");
+            checks.push(if generic {
+                Expr::new(
+                    ExprKind::FunctionCall {
+                        name: Name::unqualified("is_object"),
+                        args: vec![arg.clone()],
+                    },
+                    span,
+                )
+            } else {
+                Expr::new(
+                    ExprKind::InstanceOf {
+                        value: Box::new(arg.clone()),
+                        target: InstanceOfTarget::Name(Name::from(class_name.as_str())),
+                    },
+                    span,
+                )
+            });
         }
     }
     let Some(first) = checks.first().cloned() else {

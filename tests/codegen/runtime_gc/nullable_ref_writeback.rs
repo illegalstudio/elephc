@@ -505,3 +505,27 @@ run();
     );
     assert_clean(out, "TE,TE,TE|in,in,TE|TE,in,in|\n");
 }
+
+/// A by-reference union with the generic `object` type (`array|object &$v`) accepts any
+/// object (and any array) held by a `mixed` local, and rejects a scalar or `null` with
+/// `TypeError`, like php.
+#[test]
+fn test_generic_object_union_reference_accepts_any_object() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A {}
+function src(int $k): mixed { return [7, [1], new A(), null][$k]; }
+function take(array|object &$v): string { return is_array($v) ? "arr" : get_class($v); }
+function run(): void {
+    for ($k = 0; $k < 4; $k++) {
+        $v = src($k);
+        try { echo take($v); } catch (TypeError $e) { echo "TE"; }
+        echo "|";
+    }
+    echo "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "TE|arr|A|TE|\n");
+}
