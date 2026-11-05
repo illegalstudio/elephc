@@ -8281,3 +8281,38 @@ fn test_stream_context_set_option_nested_hash_retain_does_not_leak() {
         "repeated stream_context_set_option() calls grew the live heap"
     );
 }
+
+/// Verifies registering and attaching a user stream filter leaves a clean heap.
+///
+/// The registry persists the filter and class names and the attached filter keeps its own
+/// probe state; both must be released when the stream closes instead of accumulating for
+/// the process lifetime.
+#[test]
+fn test_user_filter_registry_and_attached_filter_are_clean() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class LeakProbeFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, bool $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $bucket->data = strtoupper($bucket->data);
+            $consumed += $bucket->datalen;
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register('leak.probe', LeakProbeFilter::class);
+$stream = fopen('php://memory', 'w+');
+stream_filter_append($stream, 'leak.probe', STREAM_FILTER_WRITE);
+fwrite($stream, 'abc');
+fclose($stream);
+echo "done\n";
+"#,
+    );
+    assert_eq!(output.stdout, "done\n", "stderr: {}", output.stderr);
+    assert!(
+        output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        output.stderr
+    );
+}

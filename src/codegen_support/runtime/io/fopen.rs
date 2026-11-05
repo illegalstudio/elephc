@@ -18,6 +18,10 @@ const FOPEN_FAILED_WARNING: &str = "Warning: fopen(): Failed to open stream\n";
 /// fopen: open a file and return its file descriptor.
 /// Input:  x1/x2=filename string, x3/x4=mode string
 /// Output: x0=file descriptor (or negative on error)
+///
+/// Runtime-unknown `php://memory` and `php://temp` paths back the descriptor with
+/// `__rt_tmpfile`, matching the literal-path lowering in `fopen_core`; user wrappers
+/// opened from a prelude wrapper only learn their path at run time.
 pub fn emit_fopen(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fopen_linux_x86_64(emitter);
@@ -83,6 +87,27 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #1");                                    // advance the slot index
     emitter.instruction("b __rt_fopen_uw_slot");                                // continue scanning slots
     emitter.label("__rt_fopen_uw_done");
+
+    // -- php://memory and php://temp open an unlinked temporary file --
+    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // save the filename pair across the scheme probes
+    emitter.instruction("stp x3, x4, [sp, #-16]!");                             // save the mode pair across the scheme probes
+    abi::emit_symbol_address(emitter, "x3", "_php_memory_url");
+    emitter.instruction("mov x4, #12");                                         // php://memory byte length
+    abi::emit_call_label(emitter, "__rt_str_eq");
+    emitter.instruction("cbnz x0, __rt_fopen_memory_open");                     // exact php://memory match
+    emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload the filename pair advanced by the probe
+    abi::emit_symbol_address(emitter, "x3", "_php_temp_url");
+    emitter.instruction("mov x4, #10");                                         // php://temp byte length
+    abi::emit_call_label(emitter, "__rt_str_eq");
+    emitter.instruction("cbz x0, __rt_fopen_memory_done");                      // not an in-memory stream
+    emitter.label("__rt_fopen_memory_open");
+    emitter.instruction("ldp x3, x4, [sp], #16");                               // restore the mode pair
+    emitter.instruction("ldp x1, x2, [sp], #16");                               // restore the filename pair
+    abi::emit_call_label(emitter, "__rt_tmpfile");
+    emitter.instruction("b __rt_fopen_opened");                                 // clear the EOF flag and share the frame-restoring return
+    emitter.label("__rt_fopen_memory_done");
+    emitter.instruction("ldp x3, x4, [sp], #16");                               // restore the mode pair
+    emitter.instruction("ldp x1, x2, [sp], #16");                               // restore the filename pair
 
     // -- save mode string for later parsing --
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save mode ptr and len on stack
@@ -317,6 +342,35 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r11");                                             // advance the slot index
     emitter.instruction("jmp __rt_fopen_uw_slot_x86");                          // continue scanning slots
     emitter.label("__rt_fopen_uw_done_x86");
+
+    // -- php://memory and php://temp open an unlinked temporary file --
+    emitter.instruction("push rdi");                                            // save the mode pointer across the scheme probes
+    emitter.instruction("push rsi");                                            // save the mode length across the scheme probes
+    emitter.instruction("push rax");                                            // save the filename pointer across the scheme probes
+    emitter.instruction("push rdx");                                            // save the filename length across the scheme probes
+    emitter.instruction("mov rdi, rax");                                        // probe the filename against php://memory
+    emitter.instruction("mov rsi, rdx");                                        // filename byte length
+    abi::emit_symbol_address(emitter, "rdx", "_php_memory_url");
+    emitter.instruction("mov ecx, 12");                                         // php://memory byte length
+    abi::emit_call_label(emitter, "__rt_str_eq");
+    emitter.instruction("test rax, rax");                                       // exact php://memory match?
+    emitter.instruction("jnz __rt_fopen_memory_open_x86");                      // open the in-memory stream
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                        // reload the filename pointer advanced by the probe
+    emitter.instruction("mov rsi, QWORD PTR [rsp]");                            // reload the filename length
+    abi::emit_symbol_address(emitter, "rdx", "_php_temp_url");
+    emitter.instruction("mov ecx, 10");                                         // php://temp byte length
+    abi::emit_call_label(emitter, "__rt_str_eq");
+    emitter.instruction("test rax, rax");                                       // exact php://temp match?
+    emitter.instruction("jz __rt_fopen_memory_done_x86");                       // not an in-memory stream
+    emitter.label("__rt_fopen_memory_open_x86");
+    emitter.instruction("add rsp, 32");                                         // discard the saved pairs
+    abi::emit_call_label(emitter, "__rt_tmpfile");
+    emitter.instruction("jmp __rt_fopen_opened_x86");                           // clear the EOF flag and share the frame-restoring return
+    emitter.label("__rt_fopen_memory_done_x86");
+    emitter.instruction("pop rdx");                                             // restore the filename length
+    emitter.instruction("pop rax");                                             // restore the filename pointer
+    emitter.instruction("pop rsi");                                             // restore the mode length
+    emitter.instruction("pop rdi");                                             // restore the mode pointer
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the elephc mode pointer while the filename string is converted to a C string
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the elephc mode length while the filename string is converted to a C string

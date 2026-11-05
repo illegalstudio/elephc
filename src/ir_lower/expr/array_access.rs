@@ -178,6 +178,25 @@ pub(super) fn lower_array_access_with_missing_warning(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
+    // `$GLOBALS['name']` reads the program-global slot directly. The full `$GLOBALS`
+    // array is not materialized; literal-key reads are the PHP shape stream wrappers
+    // use to reach a context created at the top level. `??`, `isset()`, and `empty()`
+    // share this path through their silent-read variants.
+    if let ExprKind::Variable(name) = &array.kind {
+        if name == "GLOBALS" {
+            if let ExprKind::StringLiteral(key) = &index.kind {
+                let data = ctx.intern_global_name(key);
+                return ctx.emit_value(
+                    Op::LoadGlobal,
+                    Vec::new(),
+                    Some(Immediate::GlobalName(data)),
+                    PhpType::Mixed,
+                    Op::LoadGlobal.default_effects(),
+                    Some(expr.span),
+                );
+            }
+        }
+    }
     let array_value = if warn_on_missing {
         lower_expr(ctx, array)
     } else {

@@ -401,8 +401,10 @@ classes, opaque writes forget the affected receiver, and interprocedural
 wildcard method edges. A literal `$GLOBALS['name']` access applies that rule to
 the matching top-level variable; a computed `$GLOBALS[$key]` makes every tracked
 receiver name opaque. This models PHP's aliasing conservatively for declaration
-retention, but does not implement the still-unsupported `$GLOBALS` runtime alias
-storage itself. Likewise, an expression call such as `($value)()` intentionally
+retention. Literal-key `$GLOBALS['name']` reads are now lowered directly to the
+matching program-global slot, so top-level assignments and reads share storage
+across scopes; computed keys, writes through `$GLOBALS`, and a materialized
+`$GLOBALS` array remain unsupported. Likewise, an expression call such as `($value)()` intentionally
 sets both the dynamic-function and dynamic-method hazards because the value may
 be a function, closure, or callable array. Keeping every method of every live
 class in that case is a documented precision cost, not a correctness defect.

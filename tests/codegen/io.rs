@@ -38,6 +38,8 @@ mod modify;
 mod streams_ext;
 #[path = "io/stream_errors_php86.rs"]
 mod stream_errors_php86;
+#[path = "io/stream_errors_corpus_php86.rs"]
+mod stream_errors_corpus_php86;
 #[path = "io/io_poll_php86.rs"]
 mod io_poll_php86;
 #[path = "io/symlinks.rs"]

@@ -140,6 +140,7 @@ mod touch_meta_array;
 mod user_wrapper;
 mod user_wrapper_unbox;
 mod user_wrapper_cast;
+mod user_wrapper_read_warning;
 mod user_wrapper_dir;
 mod user_wrapper_path_op;
 mod user_wrapper_set_option;
@@ -272,6 +273,7 @@ pub(crate) use user_wrapper_unbox::emit_wrapper_unbox_int;
 pub(crate) use path_is_wrapper::emit_path_is_wrapper;
 pub(crate) use readfile_wrapper::emit_readfile_wrapper;
 pub(crate) use user_wrapper_cast::emit_user_wrapper_stream_cast;
+pub(crate) use user_wrapper_read_warning::emit_user_wrapper_read_excess_warning;
 pub(crate) use user_wrapper_dir::{
     emit_user_wrapper_dir_closedir, emit_user_wrapper_dir_readdir, emit_user_wrapper_dir_rewinddir,
     emit_user_wrapper_opendir,

@@ -299,6 +299,13 @@ fn collect_in_expr(expr: &Expr, names: &mut HashSet<String>) {
             collect_in_expr(callable, names);
         }
         ExprKind::ArrayAccess { array, index } => {
+            // `$GLOBALS['name']` reaches the program-global slot even when no body wrote
+            // `global $name;`, so the top-level binding must use global storage too.
+            if matches!(&array.kind, ExprKind::Variable(base) if base == "GLOBALS") {
+                if let ExprKind::StringLiteral(key) = &index.kind {
+                    names.insert(key.clone());
+                }
+            }
             collect_in_expr(array, names);
             collect_in_expr(index, names);
         }

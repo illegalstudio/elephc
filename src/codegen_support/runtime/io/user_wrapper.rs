@@ -149,15 +149,14 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #24]");                                   // save the requested read length across the helper call
 
     emit_aarch64_handle_lookup(emitter, "__rt_uwfread_empty");                  // resolve obj into x0, fall through to empty-string on missing handles
+    emitter.instruction("str x0, [sp, #56]");                                   // keep the wrapper object for the excess warning
     emit_aarch64_method_lookup(emitter, "__rt_uwfread_empty", VTABLE_SLOT_READ); // resolve stream_read method pointer into x11, mask into x13
 
     // -- call stream_read($this, $count); the result shape follows the method's return type --
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the requested byte count
     emitter.instruction(&format!("tbnz x13, #{}, __rt_uwfread_boxed", VTABLE_SLOT_READ)); // a `string|false` return arrives boxed instead
     emitter.instruction("blr x11");                                             // invoke stream_read on the wrapper object
-    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
-    emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
+    emitter.instruction("b __rt_uwfread_finish");                               // share truncation and excess warning with the boxed path
 
     emitter.label("__rt_uwfread_boxed");
     emitter.instruction("blr x11");                                             // invoke stream_read; x0 = owned Mixed cell
@@ -170,6 +169,26 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_free_deep");                             // release the box storage only, never the string being returned
     emitter.label("__rt_uwfread_boxed_done");
     emitter.instruction("ldp x1, x2, [sp, #40]");                               // restore the converted read result
+    emitter.instruction("b __rt_uwfread_finish");                               // share truncation and excess warning with the raw path
+
+    emitter.label("__rt_uwfread_finish");
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the requested byte count
+    emitter.instruction("cmp x2, x9");                                          // did stream_read return more than requested?
+    emitter.instruction("b.hi __rt_uwfread_excess");                            // report and truncate the excess
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
+
+    emitter.label("__rt_uwfread_excess");
+    emitter.instruction("stp x1, x2, [sp, #40]");                               // preserve the returned pair across the warning
+    emitter.instruction("ldr x0, [sp, #56]");                                   // wrapper object for the class name
+    emitter.instruction("mov x1, x2");                                          // returned length
+    emitter.instruction("mov x2, x9");                                          // requested length
+    emitter.instruction("bl __rt_user_wrapper_read_excess_warning");            // emit PHP's userspace invalid-return warning
+    emitter.instruction("ldp x1, x2, [sp, #40]");                               // restore the returned pair
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the requested byte count
+    emitter.instruction("cmp x2, x9");                                          // re-test after the warning call clobbered flags
+    emitter.instruction("csel x2, x9, x2, hi");                                 // keep only the requested prefix, as PHP does
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
@@ -195,6 +214,7 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested read length
 
     emit_x86_handle_lookup(emitter, "__rt_uwfread_empty_x86");                  // resolve obj into rdi, fall through on missing handles
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // keep the wrapper object for the excess warning
     emit_x86_method_lookup(emitter, "__rt_uwfread_empty_x86", VTABLE_SLOT_READ); // resolve stream_read method pointer into r11, mask into r8
 
     // -- call stream_read($this, $count); the result shape follows the method's return type --
@@ -202,9 +222,7 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("bt r8, {}", VTABLE_SLOT_READ));               // does this class return a boxed `string|false`?
     emitter.instruction("jc __rt_uwfread_boxed_x86");                           // convert the boxed result instead of reading the pair
     emitter.instruction("call r11");                                            // invoke stream_read on the wrapper object
-    emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
+    emitter.instruction("jmp __rt_uwfread_finish_x86");                         // share truncation and excess warning with the boxed path
 
     emitter.label("__rt_uwfread_boxed_x86");
     emitter.instruction("call r11");                                            // invoke stream_read; rax = owned Mixed cell
@@ -221,6 +239,28 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uwfread_boxed_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // restore the converted read pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // restore the converted read length
+    emitter.instruction("jmp __rt_uwfread_finish_x86");                         // share truncation and excess warning with the raw path
+
+    emitter.label("__rt_uwfread_finish_x86");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
+    emitter.instruction("cmp rdx, rsi");                                        // did stream_read return more than requested?
+    emitter.instruction("ja __rt_uwfread_excess_x86");                          // report and truncate the excess
+    emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
+
+    emitter.label("__rt_uwfread_excess_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the returned pointer across the warning
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // preserve the returned length across the warning
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // wrapper object for the class name
+    emitter.instruction("mov rsi, rdx");                                        // returned length
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // requested length
+    emitter.instruction("call __rt_user_wrapper_read_excess_warning");          // emit PHP's userspace invalid-return warning
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // restore the returned pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // restore the returned length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
+    emitter.instruction("cmp rdx, rsi");                                        // did stream_read return more than requested?
+    emitter.instruction("cmova rdx, rsi");                                      // keep only the requested prefix, as PHP does
     emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller

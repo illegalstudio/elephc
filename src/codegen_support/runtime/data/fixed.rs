@@ -1796,6 +1796,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _stat_key_gid\n_stat_key_gid:\n    .ascii \"gid\"\n");
     out.push_str(".globl _stat_key_rdev\n_stat_key_rdev:\n    .ascii \"rdev\"\n");
     out.push_str(".globl _stat_key_size\n_stat_key_size:\n    .ascii \"size\"\n");
+    out.push_str(".globl _uwrw_prefix\n_uwrw_prefix:\n    .ascii \"Warning: fread(): \"\n");
+    out.push_str(".globl _uwrw_after_class\n_uwrw_after_class:\n    .ascii \"::stream_read - read \"\n");
+    out.push_str(".globl _uwrw_after_excess\n_uwrw_after_excess:\n    .ascii \" bytes more data than requested (\"\n");
+    out.push_str(".globl _uwrw_after_total\n_uwrw_after_total:\n    .ascii \" read, 8192 max) - excess data will be lost\\n\"\n");
+    out.push_str(".globl _php_memory_url\n_php_memory_url:\n    .ascii \"php://memory\"\n");
+    out.push_str(".globl _php_temp_url\n_php_temp_url:\n    .ascii \"php://temp\"\n");
     out.push_str(".globl _stat_key_atime\n_stat_key_atime:\n    .ascii \"atime\"\n");
     out.push_str(".globl _stat_key_mtime\n_stat_key_mtime:\n    .ascii \"mtime\"\n");
     out.push_str(".globl _stat_key_ctime\n_stat_key_ctime:\n    .ascii \"ctime\"\n");

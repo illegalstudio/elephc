@@ -296,3 +296,107 @@ echo count(stream_last_errors()), PHP_EOL;
         "Silent|All|OpenFailed\n1:OpenFailed:2:T\n0",
     );
 }
+
+/// `$GLOBALS['name']` reads the program-global slot from an arbitrary method scope,
+/// including through `isset()` and `??`.
+#[test]
+fn test_globals_literal_read_php86() {
+    let out = run86(r#"<?php
+$ctx = ['value' => 42];
+$count = 7;
+class GlobalsReader {
+    public function read(): mixed {
+        return $GLOBALS['ctx']['value'];
+    }
+    public function coalesce(): mixed {
+        return $GLOBALS['count'] ?? 'missing';
+    }
+    public function absent(): mixed {
+        return $GLOBALS['absent'] ?? 'fallback';
+    }
+}
+$reader = new GlobalsReader();
+echo $reader->read(), "\n";
+echo $reader->coalesce(), "\n";
+echo $reader->absent(), "\n";
+var_dump(isset($GLOBALS['count']), isset($GLOBALS['absent']));
+"#);
+    assert_eq!(out, "42\n7\nfallback\nbool(true)\nbool(false)\n");
+}
+
+/// A user wrapper's `stream_read()` result is truncated to the requested length, matching
+/// PHP's userspace invalid-return handling even before the warning/store path lands.
+#[test]
+fn test_user_wrapper_read_excess_is_truncated_php86() {
+    let out = run86(r#"<?php
+class ExcessStream {
+    public function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    public function stream_read($count): string { return str_repeat('A', $count + 1); }
+    public function stream_eof(): bool { return false; }
+}
+stream_wrapper_register('excess', 'ExcessStream');
+$stream = fopen('excess://x', 'r');
+var_dump(strlen(fread($stream, 3)));
+fclose($stream);
+"#);
+    assert_eq!(out, "int(3)\n");
+}
+
+/// A user wrapper's excess `stream_read()` data reports PHP's legacy warning with the
+/// wrapper class name and 8192-byte chunk accounting, then truncates to the request.
+#[test]
+fn test_user_wrapper_read_excess_warning_php86() {
+    let out = compile_and_run_capture_merged_with_php_version(
+        r#"<?php
+class ErrorStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_read(int $count): string { return str_repeat('A', $count + 1); }
+    public function stream_eof(): bool { return true; }
+    public function stream_stat(): array { return []; }
+}
+stream_wrapper_register('error-stream', ErrorStream::class);
+$stream = fopen('error-stream://x', 'r');
+set_error_handler(static function (int $severity, string $message): bool {
+    echo "handler: $message\n";
+    return true;
+});
+var_dump(fread($stream, 1));
+fclose($stream);
+"#,
+        PhpVersion::Php86,
+    );
+    assert_eq!(
+        out,
+        "handler: fread(): ErrorStream::stream_read - read 1 bytes more data than requested (8193 read, 8192 max) - excess data will be lost\nstring(1) \"A\"\n"
+    );
+}
+
+/// A wrapper's `stream_read()` may open an in-memory stream through the error-aware
+/// `fopen()` wrapper. The runtime must recognize `php://memory` even when the path is
+/// only known at run time.
+#[test]
+fn test_user_wrapper_nested_php_memory_open_php86() {
+    let out = run86(
+        r#"<?php
+class NestedMemoryStream {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_read(int $count): string {
+        $inner = fopen('php://memory', 'r+');
+        fwrite($inner, 'xy');
+        rewind($inner);
+        $data = fread($inner, 2);
+        fclose($inner);
+        return $data;
+    }
+    public function stream_eof(): bool { return true; }
+}
+stream_wrapper_register('nested-memory', NestedMemoryStream::class);
+$stream = fopen('nested-memory://x', 'r');
+var_dump(fread($stream, 2));
+fclose($stream);
+"#,
+    );
+    assert_eq!(out, "string(2) \"xy\"\n");
+}

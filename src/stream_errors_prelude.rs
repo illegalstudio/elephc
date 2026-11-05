@@ -434,20 +434,39 @@ fn fopen_wrapper() -> Stmt {
         .param_default("context", t_mixed(), e_null())
         .returns(t_mixed())
         .body(vec![
-            s_assign(
-                "stream",
-                Expr::new(
-                    ExprKind::ErrorSuppress(Box::new(e_call(
-                        "fopen",
-                        vec![
-                            e_var("filename"),
-                            e_var("mode"),
-                            e_var("use_include_path"),
-                            e_var("context"),
-                        ],
-                    ))),
-                    Span::dummy(),
-                ),
+            s_assign("stream", e_null()),
+            s_if(
+                e_binop(e_var("context"), BinOp::StrictEq, e_null()),
+                vec![s_assign(
+                    "stream",
+                    Expr::new(
+                        ExprKind::ErrorSuppress(Box::new(e_call(
+                            "fopen",
+                            vec![
+                                e_var("filename"),
+                                e_var("mode"),
+                                e_var("use_include_path"),
+                            ],
+                        ))),
+                        Span::dummy(),
+                    ),
+                )],
+                vec![],
+                Some(vec![s_assign(
+                    "stream",
+                    Expr::new(
+                        ExprKind::ErrorSuppress(Box::new(e_call(
+                            "fopen",
+                            vec![
+                                e_var("filename"),
+                                e_var("mode"),
+                                e_var("use_include_path"),
+                                e_var("context"),
+                            ],
+                        ))),
+                        Span::dummy(),
+                    ),
+                )]),
             ),
             s_if(
                 e_binop(e_var("stream"), BinOp::StrictEq, e_bool(false)),

@@ -33,6 +33,12 @@ impl Checker {
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
             ExprKind::Variable(name) => {
+                if name == "GLOBALS" {
+                    return Ok(PhpType::AssocArray {
+                        key: Box::new(PhpType::Str),
+                        value: Box::new(PhpType::Mixed),
+                    });
+                }
                 let ty = self.variable_type_or_eval_dynamic(name, expr.span, env)?;
                 self.record_local_value_read(name, expr.span, &ty, env);
                 Ok(ty)
