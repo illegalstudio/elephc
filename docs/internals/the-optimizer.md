@@ -535,9 +535,9 @@ the trial replaces the original function.
 The proof preserves the physical ABI of eligible by-value, nonvariadic `mixed`
 call parameters by rematerializing their integer arguments at the existing call
 boundary. It does not authorize a different closure call or change dispatch.
-Executable main, parameter slots, references, dynamic `eval`, suspension,
-exception handlers, escaping values and uncertain integer/type facts are
-excluded. See [Bounded mixed counters](../compiling/optimization.md#bounded-mixed-counters).
+Private executable main frames are eligible when runtime includes cannot expose
+their locals. Parameter slots, references, dynamic `eval`, suspension, exception
+handlers, escaping values and uncertain integer/type facts are excluded. See [Bounded mixed counters](../compiling/optimization.md#bounded-mixed-counters).
 
 The backend's [frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells)
 are a separate storage optimization and do not require this pass to run.
@@ -567,6 +567,11 @@ is discarded after every counter update is proven nonoverflowing; it authorizes
 ordinary lowering again, including with IR optimization disabled, rather than
 installing speculative trial instructions in the executable function. Integer
 storage and buffer bounds remain independent proofs.
+
+The validator keeps dominator membership in dense bitsets throughout each check.
+Precomputed singleton flags retain the existing unreachable-continuation rules.
+This avoids materializing a hash set for every block during storage trials and
+debug pass checks, while preserving same-block ordering and dominance diagnostics.
 
 For a canonical counter that lacks a static overflow proof,
 `bounded_mixed_counter/versioning.rs` can retain the original loop and add a
