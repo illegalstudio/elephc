@@ -945,7 +945,7 @@ Classes: `CairoAntialias`, `CairoContext`, `CairoException`, `CairoFillRule`, `C
 | [`exif_imagetype()`](./builtins/image/exif_imagetype.md) | `(string $filename): mixed` | `mixed` | ✓ | - |
 | [`exif_read_data()`](./builtins/image/exif_read_data.md) | `(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed` | `mixed` | ✓ | - |
 | [`exif_tagname()`](./builtins/image/exif_tagname.md) | `(int $index): mixed` | `mixed` | ✓ | - |
-| [`exif_thumbnail()`](./builtins/image/exif_thumbnail.md) | `(string $filename, mixed $width = 0, mixed $height = 0, mixed $image_type = 0): mixed` | `mixed` | ✓ | - |
+| [`exif_thumbnail()`](./builtins/image/exif_thumbnail.md) | `(string $filename, mixed &$width = 0, mixed &$height = 0, mixed &$image_type = 0): mixed` | `mixed` | ✓ | - |
 
 Constants: `EXIF_USE_MBSTRING`.
 
