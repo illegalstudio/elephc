@@ -34,6 +34,10 @@ pub const GROUP: &str = "builtin_callables";
 /// Name fragment of a wrapper, in front of the builtin's name.
 const WRAPPER_PREFIX: &str = "__elephc_callable_";
 
+/// Builtins whose checker demands a literal argument, which a wrapper's parameter is not.
+const LITERAL_ARGUMENT_BUILTINS: [&str; 6] =
+    ["array_chunk", "array_reverse", "array_slice", "class_implements", "class_parents", "class_uses"];
+
 /// The builtin name a compiled function answers for, when it is one of these wrappers.
 pub fn builtin_name_of_wrapper(function: &str) -> Option<&str> {
     function.strip_prefix(WRAPPER_PREFIX)
@@ -69,6 +73,7 @@ pub fn inject_if_used(
 fn wrapper_of(name: &str) -> Option<Stmt> {
     let contract = elephc_builtin_contract::lookup(name)?;
     if crate::codegen_support::callable_dispatch::builtin_may_have_runtime_wrapper(name)
+        || LITERAL_ARGUMENT_BUILTINS.contains(&name)
         || contract.name != name
         || contract.internal
         || contract.params.iter().any(|param| param.by_ref)

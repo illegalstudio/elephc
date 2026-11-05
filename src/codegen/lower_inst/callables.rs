@@ -2438,13 +2438,18 @@ fn runtime_user_function_descriptor_cases(
         })
         .collect::<Vec<_>>();
     functions.sort_by(|left, right| left.name.cmp(&right.name));
+    // A wrapper answers for the builtin it calls (`builtin_callable_prelude`), unless a compiled
+    // function already goes by that name: a prelude implements `error_log` itself.
+    let declared: std::collections::HashSet<String> =
+        functions.iter().map(|function| php_symbol_key(&function.name)).collect();
     let mut entries: Vec<(&crate::ir::Function, String)> = functions
         .into_iter()
-        .map(|function| {
-            // A wrapper answers for the builtin it calls (`builtin_callable_prelude`).
-            let name = crate::builtin_callable_prelude::builtin_name_of_wrapper(&function.name)
-                .unwrap_or(&function.name);
-            (function, name.to_string())
+        .filter_map(|function| {
+            match crate::builtin_callable_prelude::builtin_name_of_wrapper(&function.name) {
+                Some(name) if declared.contains(&php_symbol_key(name)) => None,
+                Some(name) => Some((function, name.to_string())),
+                None => Some((function, function.name.clone())),
+            }
         })
         .collect();
     // An include-loaded function body is compiled under a generated variant symbol, and the name
